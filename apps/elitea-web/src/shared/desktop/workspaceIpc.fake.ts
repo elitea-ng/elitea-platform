@@ -7,6 +7,7 @@ import type {
   AgentEvent,
   AgentEventHandler,
   ApprovalDecision,
+  AttachedImage,
   RestorePreview,
   StoredTurn,
   ThreadForkRequest,
@@ -28,6 +29,8 @@ type FailableCommand =
   | 'files'
   | 'commands'
   | 'startTurn'
+  | 'attachFile'
+  | 'attachBytes'
   | 'cancelTurn'
   | 'turnStatus'
   | 'respondApproval'
@@ -51,6 +54,10 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
     restores: { turnId: string; path?: string; confirmOlder?: boolean }[];
     fileQueries: { workspaceId: string; query: string; limit?: number }[];
     forks: ThreadForkRequest[];
+    /** `attachFile` paths, and `attachBytes` calls (mime, base64 length), in order. */
+    attachedFiles: { workspaceId: string; path: string }[];
+    attachedBytes: { workspaceId: string; mime: string; length: number; name?: string }[];
+    removedAttachments: { workspaceId: string; token: string }[];
   };
   /** What `turn_changes` answers; `latest` defaults to true, `undone` to false. */
   setChanges(turnId: string, changes: Pick<TurnChanges, 'files'> & Partial<TurnChanges>): void;
@@ -93,7 +100,12 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
   const statuses = new Map<string, TurnStatus>();
   const history = new Map<string, StoredTurn[]>();
   const historyKey = (workspaceId: string, conversationId: string): string => `${workspaceId}\u0000${conversationId}`;
-  const calls: FakeWorkspaceIpc['calls'] = { started: [], prewarmed: [], commitRetries: [], cancelled: [], approvals: [], restores: [], fileQueries: [], forks: [] };
+  const calls: FakeWorkspaceIpc['calls'] = { started: [], prewarmed: [], commitRetries: [], cancelled: [], approvals: [], restores: [], fileQueries: [], forks: [], attachedFiles: [], attachedBytes: [], removedAttachments: [] };
+  let attachments = 0;
+  const attached = (name: string, mime: string): AttachedImage => {
+    attachments += 1;
+    return { token: `att-${String(attachments)}`, name, mime, bytes: 1234, width: 40, height: 30, thumbnail: 'data:image/jpeg;base64,AAAA' };
+  };
   let turnCounter = 0;
   const failures = new Map<FailableCommand, WorkspaceIpcError>();
   const failure = (command: FailableCommand): Promise<never> | undefined => {
@@ -133,6 +145,18 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       const needle = query.toLowerCase();
       const found = (options.files ?? []).filter((file) => file.path.toLowerCase().includes(needle));
       return Promise.resolve(found.slice(0, limit ?? 50));
+    },
+    attachFile(workspaceId, path) {
+      calls.attachedFiles.push({ workspaceId, path });
+      return failure('attachFile') ?? Promise.resolve(attached(path.split('/').pop() ?? path, 'image/png'));
+    },
+    attachBytes(workspaceId, mime, data, name) {
+      calls.attachedBytes.push({ workspaceId, mime, length: data.length, ...(name === undefined ? {} : { name }) });
+      return failure('attachBytes') ?? Promise.resolve(attached(name ?? 'pasted-image', mime));
+    },
+    removeAttachment(workspaceId, token) {
+      calls.removedAttachments.push({ workspaceId, token });
+      return Promise.resolve();
     },
     commands() {
       return failure('commands') ?? Promise.resolve([...(options.commands ?? [])]);

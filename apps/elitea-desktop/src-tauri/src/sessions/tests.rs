@@ -768,6 +768,42 @@ async fn a_tool_response_is_cut_and_binary_content_is_not_kept() {
 }
 
 #[tokio::test]
+async fn a_tool_image_is_not_kept_but_its_metadata_is() {
+    let (_dir, state) = open();
+    let sessions = state.store();
+    let me = identity(1, "https://a.example");
+    let key = me.key();
+    sessions.open_session(&me, "fp").await.unwrap();
+    let image = json!({
+        "kind": "image", "path": "a.png", "mime": "image/png", "bytes": 3,
+        "image_base64": "z".repeat(MAX_TOOL_RESPONSE_BYTES * 2),
+    });
+    sessions
+        .seed(
+            &key,
+            vec![
+                new("t", call_event("i", "c")),
+                new("t", response_event("i", "c", image)),
+            ],
+            None,
+            &[],
+        )
+        .await
+        .unwrap();
+    let rows = sessions.rows(&key).await.unwrap();
+    let Part::FunctionResponse {
+        function_response, ..
+    } = &rows[1].event.llm_response.content.as_ref().unwrap().parts[0]
+    else {
+        panic!("a response")
+    };
+    assert_eq!(
+        function_response.response,
+        json!({"kind": "image", "path": "a.png", "mime": "image/png", "bytes": 3})
+    );
+}
+
+#[tokio::test]
 async fn a_path_deny_change_drops_the_tool_response_bodies_and_asks_for_a_seed() {
     let (_dir, state) = open();
     let sessions = state.store();

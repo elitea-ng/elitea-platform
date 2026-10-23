@@ -8,13 +8,13 @@
  * place for the two halves to drift apart.
  */
 import type { ContextMeter } from './contextMeter';
-import type { CustomCommand, TurnStartRequest } from './turnStart';
+import type { AttachedImage, CustomCommand, StoredImage, TurnStartRequest } from './turnStart';
 import type { HostInvoke } from './hostBridge';
 import type { PlanProposalPayload, PlanView } from './planIpc';
 import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel } from './turnModel';
 
 export type { ContextMeter } from './contextMeter';
-export type { CustomCommand, TurnCommand, TurnStartRequest } from './turnStart';
+export type { AttachedImage, CustomCommand, StoredImage, TurnCommand, TurnImagePick, TurnStartRequest } from './turnStart';
 
 export interface Workspace {
   id: string;
@@ -204,6 +204,8 @@ export interface StoredTurn {
   /** What the turn changed, as it ended (`null` before it ended). */
   changes: ChangedFile[] | null;
   events_truncated: boolean;
+  /** The images the turn carried: thumbnails only. Absent for a turn recorded before images. */
+  images?: StoredImage[];
   /** `interrupted`: it never ended (the app quit while it ran). */
   state: 'done' | 'running' | 'interrupted';
   /** The host still keeps it: `turn_changes` / `checkpoint_restore` answer for it. */
@@ -261,6 +263,12 @@ export interface WorkspaceIpc {
   /** The "/" menu's custom commands of the workspace and of the person's own folder, by name. */
   commands(workspaceId: string): Promise<CustomCommand[]>;
   startTurn(request: TurnStartRequest): Promise<TurnStarted>;
+  /** Attach the image file at `path` (absolute: a drop's, as `files_dropped` reports it) to the workspace's next turn; the host reads it confined and shrinks it. */
+  attachFile(workspaceId: string, path: string): Promise<AttachedImage>;
+  /** Attach a pasted image (`data`: base64, at most 10 MiB decoded). */
+  attachBytes(workspaceId: string, mime: string, data: string, name?: string): Promise<AttachedImage>;
+  /** Take an attached image off before it is sent. */
+  removeAttachment(workspaceId: string, token: string): Promise<void>;
   /** Send a turn's failed commit again (after `commit_failed`); resolves once it is saved. */
   retryCommit(executionId: string): Promise<void>;
   /** Have the host read ahead what a turn to this agent reads first (the composer got focus); starts nothing. */
@@ -315,6 +323,10 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
       invoke<WorkspaceFile[]>('workspace_files', limit === undefined ? { workspace_id: workspaceId, query } : { workspace_id: workspaceId, query, limit }),
     commands: (workspaceId) => invoke<CustomCommand[]>('commands_list', { workspace_id: workspaceId }),
     startTurn: (request) => invoke<TurnStarted>('agent_turn_start', { ...request }),
+    attachFile: (workspaceId, path) => invoke<AttachedImage>('attachment_add', { workspace_id: workspaceId, path }),
+    attachBytes: (workspaceId, mime, data, name) =>
+      invoke<AttachedImage>('attachment_add_bytes', { workspace_id: workspaceId, mime, data, ...(name === undefined ? {} : { name }) }),
+    removeAttachment: (workspaceId, token) => invoke<void>('attachment_remove', { workspace_id: workspaceId, token }),
     prewarm: (request) => invoke<TurnPrewarmed>('agent_prewarm', { ...request }),
     retryCommit: (executionId) => invoke<void>('turn_commit_retry', { execution_id: executionId }),
     cancelTurn: (turnId) => invoke<void>('agent_turn_cancel', { turn_id: turnId }),

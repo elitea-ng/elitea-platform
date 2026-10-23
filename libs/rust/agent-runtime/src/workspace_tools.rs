@@ -54,7 +54,7 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
     WorkspaceToolSpec {
         name: "read_file",
         read_only: true,
-        description: "Read a UTF-8 text file in the workspace, with line numbers. Page long files with offset/limit; a line too long for one page is cut, and next_offset with next_column continue inside it. Reading a file is required before changing it.",
+        description: "Read a UTF-8 text file in the workspace, with line numbers. Page long files with offset/limit; a line too long for one page is cut, and next_offset with next_column continue inside it. Reading a file is required before changing it. Images (PNG, JPEG, WebP, GIF) are returned as images when the model can see them.",
         parameters: || {
             json!({
                 "type": "object",

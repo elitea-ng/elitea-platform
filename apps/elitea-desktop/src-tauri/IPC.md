@@ -226,7 +226,10 @@ names instead of retrying. A rule imported from a repository leaves the
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "none" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}}` | `{turn_id, execution_id}` |
+| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "none" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}, images?: {source: "clipboard" \| "file", token: string}[]}` | `{turn_id, execution_id}` |
+| `attachment_add` | `{workspace_id, path}` | `{token, name, mime, bytes, width, height, thumbnail}` — attaches the image file at the **absolute** `path` (a `files_dropped` path, or a picked file) to the workspace's next turn ("Image input", below). Blocking work runs off the async workers. Rejects `path_denied`, `not_found`, `image_too_large`, `invalid_request` (not PNG/JPEG/WebP/GIF, a relative path, a link, not a regular file), `workspace_unknown`, `local_work_disabled`, `not_signed_in`. |
+| `attachment_add_bytes` | `{workspace_id, mime, data, name?}` | The same answer for a pasted image: `data` is base64, at most 10 MiB decoded; `mime` is what the clipboard said and is ignored (the type is sniffed from the bytes); `name` defaults to `pasted-image`. Rejects `image_too_large`, `invalid_request`, `workspace_unknown`, `local_work_disabled`. |
+| `attachment_remove` | `{workspace_id, token}` | `null`. Forgets an image the person took off the composer (an unknown token is not an error). |
 | `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
@@ -273,8 +276,56 @@ Refusal codes (the rejection's `code` and the `error` event's): `local_work_disa
 `model_override_disabled`, `agent_not_in_conversation`, `agent_version_mismatch`,
 `workspace_unknown`, `workspace_unbound` (no project bound yet),
 `workspace_project_mismatch`, `workspace_busy`, `skill_unknown`,
-`skill_invalid`, `skill_too_large`, `command_unknown`, `invalid_request`, `not_signed_in`, and the platform's own codes (`local_turn_conflict`,
+`skill_invalid`, `skill_too_large`, `command_unknown`, `model_no_vision`,
+`attachment_unknown`, `too_many_images`, `invalid_request`, `not_signed_in`, and the platform's own codes (`local_turn_conflict`,
 `not_found`, …).
+
+**Image input** (#1229). A message can carry up to five images; they go to
+the model with the prompt as `image_url` data URIs (`{"type":"image_url",
+"image_url":{"url":"data:<mime>;base64,…"}}` after the text part, the cloud
+worker's shape). The webview never sends a file's bytes over IPC: a dropped
+or picked file is registered by its path (`attachment_add`), a pasted image
+once (`attachment_add_bytes`); the host answers a `token`, which
+`agent_turn_start.images` names. The host checks, bounds and **holds the image
+in memory** (at most 32 images and 64 MiB; the oldest go first; dropped on
+sign-out; a token names one workspace and is used up by the turn that
+starts with it, a refused start keeps it):
+
+* **Types and limits**, enforced here and not only in the UI: PNG, JPEG,
+  WebP and GIF, sniffed from the bytes (never the extension); a source over
+  10 MiB is refused (`image_too_large`); an image over 2048 px on its longest
+  side or 5 MiB is shrunk (JPEG stays JPEG, any other becomes PNG, a GIF keeps
+  its first frame; a PNG that stays over 5 MiB is sent as JPEG on white; one
+  no quality brings under the limit is refused `image_too_large`); more than
+  five in a turn is `too_many_images`; an unknown, sent or other-workspace
+  token is `attachment_unknown`.
+* **Confined reads.** A path is read through a workspace rooted at its
+  parent folder (at the workspace itself when it is inside it, so `path_deny`
+  applies) with the session deny list: credentials and the app's own data are
+  refused `path_denied` wherever they are. The file is opened `O_NOFOLLOW`
+  and must be a regular file.
+* **Vision gate.** Images go only to a model the catalogue marks
+  `supports_vision: true` (`ConfigurationModelItem`; one the catalogue does not
+  describe does not count): the turn is refused `model_no_vision`, never
+  sent without them, and the images stay attached so the person can choose
+  another model (`model`) and send again. A model the person chose is checked
+  before the local turn starts; the agent's own (or the thread's kept) model
+  is known under the session, so its refusal comes after the start (the
+  execution expires, no model request is made).
+* **History and commit.** The commit's `user_message` gains `images:
+  [{name, mime, bytes}]` (a server that does not know it ignores it); the
+  bytes are not uploaded. `thread_history` turns carry `images: [{name, mime,
+  bytes, thumbnail}]`, a JPEG thumbnail of at most 64 KiB as a data URI
+  (`threads.sqlite`, schema 3). The session store keeps no image: a later
+  turn (and a "Continue?" after the step limit) sees a note for it.
+* **`read_file` on an image.** `read_file` on a PNG, JPEG, WebP or GIF
+  returns `{kind: "image", path, mime, bytes, width, height}` and the image
+  itself to a model that sees images (same bounds), and the same metadata
+  with a `hint` ("this model cannot view images") to one that does not. Any
+  other binary file answers `{kind: "binary", path, bytes, hint}`. Because
+  chat completions' tool messages are text-only, the model request carries
+  the image in a following user message named `tool_image`. The cloud
+  executor's `read_file` must return the same result (the handoff contract).
 
 A turn is held to the session it started under (the connected origin and
 the sign-in; a token refresh keeps it): once the person signs out, signs
@@ -660,6 +711,7 @@ type StoredTurn = {
   conversation_uuid: string | null;
   prompt: string;                   // as typed; the "@" list is `mentions`
   mentions: string[];
+  images: { name: string; mime: string; bytes: number; thumbnail: string | null }[]; // attached images: thumbnails only
   started_at: number;               // Unix ms
   finished_at: number | null;       // when `done` was recorded
   events: AgentEvent[];             // the turn's `agent://event` stream (below)
@@ -1307,7 +1359,7 @@ type AppCommand = { id: string; args?: object };
 | `handoff_settings` | — | Folder ▸ Handoff Settings…: open the folder's cloud handoff settings. |
 | `workspace_opened` | `{workspace_id: string}` | A folder became (or already was) a workspace through File ▸ Open Folder… (⌘O), a drop on the window, or a drop on the dock icon / "Open With" in Finder. One event per folder; the workspace is already in `workspace_list`, so the UI selects it. |
 | `workspace_open_failed` | `{message: string}` | One of those folders could not be opened (the first failure; a message for a person). |
-| `files_dropped` | `{paths: string[]}` | Files (not folders) were dropped on the window: their **absolute** paths, in drop order. The host does nothing else with them; a path inside a workspace can be made relative against `Workspace.path` (e.g. for `mentions`). |
+| `files_dropped` | `{paths: string[]}` | Files (not folders) were dropped on the window: their **absolute** paths, in drop order. The host does nothing else with them; the UI attaches the images among them to the composer with `attachment_add`, and a path inside a workspace can be made relative against `Workspace.path` (e.g. for `mentions`). |
 | `run_diagnostics` | — | Help ▸ Run Diagnostics…: open the Doctor. Sent live, never queued (the connect screen listens without `app_ready`). |
 | `signed_out` | — | The session ended on this computer outside a sign-out the page asked for (the Doctor moved the stored sign-in aside): drop what the page shows of it (the desktop shell reloads to the connect screen). Sent live, never queued. |
 | `focus_turn` | `{workspace_id: string, turn_id: string}` | A running or waiting turn was chosen in the menu-bar item's menu (see below): show its folder. (A notification click still only activates the app: the notification plugin has no click callback on desktop.) |

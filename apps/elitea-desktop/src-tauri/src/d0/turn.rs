@@ -61,6 +61,7 @@ use super::api::{
     ResolvedVersion, Revalidated,
 };
 use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
+use super::attachments::{Added, Attachment, Attachments, ImagePick};
 use super::cache::{ParticipantKey, TurnCaches, VersionKey};
 use super::catalogue::{self, Catalogue};
 use super::commits::{self, CommitQueues, CommitRetry, lane_key};
@@ -81,7 +82,7 @@ use super::skills::{self, InvokedSkill};
 use super::slash_commands::{self, CommandPick, ExpandedCommand, ListedCommand};
 use super::tools::{AcceptedPlanNote, ObservedToolset, PlanGatedToolset, ToolObserver};
 use crate::history::{
-    HistoryStore, NewTurn, Owner, StoredTurn, ThreadCopy, ThreadCopyTarget, TurnTap,
+    HistoryStore, NewTurn, Owner, StoredImage, StoredTurn, ThreadCopy, ThreadCopyTarget, TurnTap,
 };
 use crate::index::IndexRegistry;
 use crate::rules::{RuleFiles, WorkspaceRuleSink};
@@ -187,6 +188,10 @@ pub struct TurnRequest {
     /// expands it itself, and the expansion is what the model gets; the
     /// prompt becomes the literal `/<name> <arguments>`.
     pub command: Option<CommandPick>,
+    /// Images the person attached (#1229), by the tokens `attachment_add`
+    /// and `attachment_add_bytes` answered; at most five. A model that
+    /// cannot see images refuses the turn (`model_no_vision`).
+    pub images: Vec<ImagePick>,
 }
 
 /// `agent_turn_start`'s answer.
@@ -749,6 +754,8 @@ pub struct AgentHost {
     /// Commits that failed after their retries, by execution id, for
     /// `turn_commit_retry` (kept in memory until the app quits).
     failed_commits: Mutex<HashMap<String, FailedCommit>>,
+    /// The images attached and not yet sent (#1229), in memory.
+    attachments: Attachments,
     /// Extra toolsets every turn offers (tests: tools that record when they
     /// run).
     #[cfg(test)]
@@ -907,9 +914,16 @@ impl AgentHost {
             caches: TurnCaches::default(),
             commits: CommitQueues::default(),
             failed_commits: Mutex::new(HashMap::new()),
+            attachments: Attachments::default(),
             #[cfg(test)]
             test_toolsets: Mutex::new(Vec::new()),
         })
+    }
+
+    /// How many attached images the host holds (tests).
+    #[cfg(test)]
+    pub(super) fn attachments_held(&self) -> usize {
+        self.attachments.len()
     }
 
     /// Offer `toolset` in every later turn, as a local toolset (tests).
@@ -1204,6 +1218,61 @@ impl AgentHost {
         mentions::files(&folder, query, limit)
     }
 
+    /// `attachment_add`: register the image file at `path` (absolute, as the
+    /// window reported a drop, or a picker chose it) for a later turn of
+    /// `workspace_id`. Blocking: call it off the async executor.
+    ///
+    /// # Errors
+    ///
+    /// `local_work_disabled`, `workspace_unknown`, `path_denied`,
+    /// `not_found`, `image_too_large`, `invalid_request`.
+    pub fn attachment_add(&self, workspace_id: &str, path: &str) -> Result<Added, TurnError> {
+        let (root, policy) = self.attachment_workspace(workspace_id)?;
+        self.attachments.add_path(
+            workspace_id,
+            Path::new(&root),
+            &policy.path_deny,
+            self.host_deny(),
+            path,
+        )
+    }
+
+    /// `attachment_add_bytes`: register a pasted image (base64) for a later
+    /// turn of `workspace_id`. Blocking (it decodes the image).
+    ///
+    /// # Errors
+    ///
+    /// `local_work_disabled`, `workspace_unknown`, `image_too_large`,
+    /// `invalid_request`.
+    pub fn attachment_add_bytes(
+        &self,
+        workspace_id: &str,
+        name: Option<&str>,
+        data: &str,
+    ) -> Result<Added, TurnError> {
+        self.attachment_workspace(workspace_id)?;
+        self.attachments.add_bytes(workspace_id, name, data)
+    }
+
+    /// `attachment_remove`: the person took an image off the composer.
+    pub fn attachment_remove(&self, workspace_id: &str, token: &str) {
+        self.attachments.remove(workspace_id, token);
+    }
+
+    fn attachment_workspace(
+        &self,
+        workspace_id: &str,
+    ) -> Result<(String, LocalWorkPolicy), TurnError> {
+        let policy = self.policy()?;
+        let workspace = self
+            .deps
+            .workspaces
+            .get(workspace_id)
+            .map_err(|e| TurnError::new("storage", e.to_string()))?
+            .ok_or_else(|| TurnError::new("workspace_unknown", "That workspace is not open."))?;
+        Ok((workspace.path, policy))
+    }
+
     /// The workspace's folder as a command file is read from: `path_deny`
     /// and the session's deny list both apply.
     fn command_folder(
@@ -1375,6 +1444,9 @@ impl AgentHost {
         events.status(Phase::Resolving, None);
         match self.prepare(&request, &events, tap.clone()).await {
             Ok(prepared) => {
+                // The turn carries the images now; a refused start kept
+                // them, so the person can fix the refusal and send again.
+                self.attachments.consume(&prepared.images);
                 // The history keeps the prompt as typed, its "@" list apart.
                 match self.owner(&prepared.api).await {
                     Ok(owner) => tap.activate(NewTurn {
@@ -1385,6 +1457,7 @@ impl AgentHost {
                         turn_id: turn_id.clone(),
                         prompt: request.prompt.clone(),
                         mentions: request.mentions.clone(),
+                        images: stored_images(&prepared.images),
                         started_at,
                     }),
                     Err(error) => {
@@ -1452,6 +1525,7 @@ impl AgentHost {
             &admitted,
             "admission",
             "admission",
+            false,
         ))
         .map_err(|_| {
             TurnError::new(
@@ -1636,6 +1710,7 @@ impl AgentHost {
             model: None,
             project_skills: Vec::new(),
             command: None,
+            images: Vec::new(),
         };
         let need_version = self.caches.version(&version_key).is_none();
         let need_participant = participant_key
@@ -1716,6 +1791,9 @@ impl AgentHost {
         }
         // Checked first, so a refusal costs no request; again under the claim.
         let bound = self.bound_workspace(request)?;
+        let images = self
+            .attachments
+            .resolve(&request.workspace_id, &request.images)?;
         let policy = self.policy()?;
         // A custom command is read again now (it may have changed since the
         // menu listed it) and expanded here, before any request.
@@ -1818,12 +1896,12 @@ impl AgentHost {
             async { self.owner(&api).await.ok() },
             // A chosen model is checked against the project's chat models
             // (#1228), read beside the rest (kept for a minute).
+            // An image needs the model's row too (`supports_vision`).
             async {
-                match &request.model {
-                    Some(_) => {
-                        catalogue::read(&api, &self.caches.catalogues, request.project_id).await
-                    }
-                    None => None,
+                if request.model.is_some() || !images.is_empty() {
+                    catalogue::read(&api, &self.caches.catalogues, request.project_id).await
+                } else {
+                    None
                 }
             },
         );
@@ -1859,6 +1937,11 @@ impl AgentHost {
         // before anything starts; one it could not answer for is left to the
         // gateway, which governs every request.
         let admitted = self.requested_model(request, admitted, models.as_deref())?;
+        // A chosen model is known now: images are refused before the turn
+        // starts. A kept choice is known only under the session (below).
+        if request.model.is_some() {
+            check_vision(&images, &admitted, models.as_deref())?;
+        }
         if resolved_withheld {
             events.status(Phase::Resolving, Some(CONTEXT_WITHHELD));
         }
@@ -2030,7 +2113,11 @@ impl AgentHost {
         let (admitted, models) = self
             .thread_model(request, &api, events, admitted, &memory, models)
             .await;
+        // The model the turn runs on is final: it sees images or it does
+        // not, and `read_file` follows.
+        check_vision(&images, &admitted, models.as_deref())?;
         Ok(Prepared {
+            images,
             conversation,
             conversation_uuid: answering.conversation_uuid,
             tap,
@@ -2081,6 +2168,7 @@ impl AgentHost {
             folder,
             mentioned,
             models,
+            images,
             ..
         } = prepared;
         let recorder = entry.recorder.clone();
@@ -2125,6 +2213,7 @@ impl AgentHost {
             &turn_context,
             &mentioned,
             models.as_deref(),
+            &images,
         );
         let outcome = tokio::select! {
             result = run => Some(result),
@@ -2226,7 +2315,7 @@ impl AgentHost {
             assistant["error"] = json!(error.message.chars().take(4000).collect::<String>());
         }
         let body = CommitBody {
-            user_message: json!({ "content": request.prompt }),
+            user_message: user_message(&request.prompt, &images),
             assistant_message: assistant,
             tool_calls: recorder.tool_calls(),
             thinking_steps: recorder.thinking_steps(),
@@ -2528,6 +2617,7 @@ impl AgentHost {
         turn_context: &TurnContext,
         mentioned: &[String],
         models: Option<&Catalogue>,
+        images: &[Arc<Attachment>],
     ) -> Result<AgentAnswer, TurnError> {
         let failed = |code: &str, message: &str| TurnError::new(code, message);
         // This turn's framing nonce: the untrusted blocks end only at a
@@ -2579,7 +2669,15 @@ impl AgentHost {
                 models,
             ),
         );
-        let context::ModelFacts { limits, replay } = model_facts;
+        let context::ModelFacts {
+            limits,
+            replay,
+            vision,
+        } = model_facts;
+        // `read_file` returns an image part only to a model that sees images
+        // (attached images passed the same check at the start).
+        let vision = vision || !images.is_empty();
+        workspace.session.set_vision(vision);
         // The runtime's planner, offered to every workspace turn (a coding
         // agent needs its checklist), plan mode included: it changes only
         // the session's plan state (#1225).
@@ -2600,6 +2698,7 @@ impl AgentHost {
             quiet: false,
             recorder: Some(recorder.clone()),
             replay,
+            vision,
         };
         let instruction = system_instruction(
             &admitted.instructions,
@@ -2659,6 +2758,7 @@ impl AgentHost {
             admitted,
             &started.execution_id,
             &started.question_id,
+            vision,
         );
         execution.payload.model_context_limits = Some(limits);
         let plan = InstructionPlan::admit(&execution).map_err(|_| {
@@ -2823,6 +2923,9 @@ impl AgentHost {
             },
         );
         let mut content = Content::new("user").with_text(message);
+        for image in images {
+            content = content.with_inline_data(image.picture.mime, image.picture.bytes.clone());
+        }
         loop {
             match run_once(&runner, &session_id, content, sink, recorder).await? {
                 RunEnd::Answered => {
@@ -2941,6 +3044,8 @@ impl AgentHost {
         }
         *turns = TurnTable::default();
         drop(turns);
+        // Images attached under one session are not sent under the next.
+        self.attachments.clear();
         *self
             .owner
             .lock()
@@ -3667,6 +3772,36 @@ struct Prepared {
     /// The project's chat models, when the turn read them (a chosen or
     /// kept model is checked against them).
     models: Option<Arc<Catalogue>>,
+    /// The images the person attached (#1229); the model sees images.
+    images: Vec<Arc<Attachment>>,
+}
+
+/// Whether the catalogue says the turn's model sees images.
+fn sees_images(admitted: &Admitted, models: Option<&Catalogue>) -> bool {
+    models
+        .and_then(|models| models.find(&admitted.model.model_name))
+        .and_then(|model| model.row.get("supports_vision"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Images go only to a model the catalogue marks as seeing them
+/// (`model_no_vision`): refused, never dropped.
+fn check_vision(
+    images: &[Arc<Attachment>],
+    admitted: &Admitted,
+    models: Option<&Catalogue>,
+) -> Result<(), TurnError> {
+    if images.is_empty() || sees_images(admitted, models) {
+        return Ok(());
+    }
+    Err(TurnError::new(
+        "model_no_vision",
+        format!(
+            "The model {} cannot view images. Choose a model that can, or remove the images.",
+            admitted.model.model_name
+        ),
+    ))
 }
 
 /// The body of `local_turn_commit`, encoded with its `tool_calls` in the
@@ -3821,6 +3956,48 @@ fn model_failure(text: &str) -> TurnError {
         )
 }
 
+/// The commit's `user_message`: the prompt, and what the turn attached as
+/// a note (`images: [{name, mime, bytes}]`; the bytes themselves stay on
+/// this machine, the server ignores a key it does not know).
+fn user_message(prompt: &str, images: &[Arc<Attachment>]) -> Value {
+    let mut message = json!({ "content": prompt });
+    if !images.is_empty() {
+        message["images"] = Value::Array(
+            images
+                .iter()
+                .map(|image| {
+                    json!({
+                        "name": image.name,
+                        "mime": image.picture.mime,
+                        "bytes": image.picture.bytes.len(),
+                    })
+                })
+                .collect(),
+        );
+    }
+    message
+}
+
+/// What the thread history keeps of a turn's images: name, type, size and
+/// the thumbnail (never the image).
+fn stored_images(images: &[Arc<Attachment>]) -> Vec<StoredImage> {
+    images
+        .iter()
+        .map(|image| StoredImage {
+            name: image.name.clone(),
+            mime: image.picture.mime.to_owned(),
+            bytes: image.picture.bytes.len(),
+            thumbnail: image.thumbnail.as_deref().map(|jpeg| {
+                use base64::Engine as _;
+                format!(
+                    "data:image/jpeg;base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(jpeg)
+                )
+            }),
+        })
+        .collect()
+}
+
 fn checkpoint_label(prompt: &str) -> String {
     let line = prompt.lines().next().unwrap_or_default();
     let mut label: String = line.chars().take(60).collect();
@@ -3837,6 +4014,7 @@ fn execution_request(
     admitted: &Admitted,
     execution_id: &str,
     question_id: &str,
+    vision: bool,
 ) -> AgentExecutionRequest {
     let mut application = Map::new();
     application.insert(
@@ -3882,7 +4060,7 @@ fn execution_request(
             conversation_id: None,
             persona: String::new(),
             context_settings: Map::new(),
-            supports_vision: false,
+            supports_vision: vision,
             return_chat_history: false,
             invoked_skills: Vec::new(),
             applied_skills: Vec::new(),

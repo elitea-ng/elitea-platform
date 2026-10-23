@@ -356,7 +356,13 @@ impl Tool for ObservedTool {
         {
             self.plan_accepted(ctx.as_ref(), plan);
         }
-        let (ok, summary, truncated, error) = match &result {
+        // What the summary, the commit's steps and the history see of the
+        // result: an image's bytes go to the model only (`read_file`).
+        let observed = match &result {
+            Ok(value) => Ok(elitea_agent_runtime::image_result::without_image(value)),
+            Err(error) => Err(error),
+        };
+        let (ok, summary, truncated, error) = match &observed {
             Ok(value) => {
                 let failed = value.get("status").and_then(Value::as_str) == Some("error");
                 let message = value
@@ -379,17 +385,17 @@ impl Tool for ObservedTool {
         };
         // run_tests: the command it planned (and ran) is in its answer.
         let planned = (tool == "run_tests" && !self.remote)
-            .then(|| result.as_ref().ok())
+            .then(|| observed.as_ref().ok())
             .flatten()
             .and_then(|value| value.get("command"))
             .and_then(Value::as_str)
             .map(str::to_owned);
-        if let (Some(command), Ok(value)) = (command.as_ref().or(planned.as_ref()), &result) {
+        if let (Some(command), Ok(value)) = (command.as_ref().or(planned.as_ref()), &observed) {
             observer.recorder.command(command, value);
         }
         observer.recorder.tool_finished(
             &call_id,
-            result.as_ref().unwrap_or(&Value::Null),
+            observed.as_ref().map_or(&Value::Null, |value| &**value),
             error.as_deref(),
         );
         observer.events.send(

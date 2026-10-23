@@ -53,7 +53,8 @@
 //!         started_at INTEGER /* Unix ms */, finished_at INTEGER NULL,
 //!         changes TEXT NULL /* JSON FileChange[] */,
 //!         events_bytes INTEGER, events_truncated INTEGER /* 0|1 */,
-//!         turn_origin TEXT /* local | cloud (imported, ADR-0034) */)
+//!         turn_origin TEXT /* local | cloud (imported, ADR-0034) */,
+//!         images TEXT /* JSON StoredImage[] (#1229): name, type, size, thumbnail */)
 //! events (turn_id TEXT REFERENCES turns ON DELETE CASCADE, seq INTEGER,
 //!         kind TEXT, payload TEXT /* JSON */, PRIMARY KEY (turn_id, seq))
 //! ```
@@ -77,7 +78,7 @@ use crate::error::HostError;
 
 pub const FILE_NAME: &str = "threads.sqlite";
 /// `PRAGMA user_version` of the schema this build writes.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 /// A string inside one event's payload is cut to this many bytes.
 pub const MAX_EVENT_STRING: usize = 16 * 1024;
 /// One turn's stored events, in payload bytes.
@@ -119,7 +120,8 @@ CREATE TABLE turns (
     changes TEXT,
     events_bytes INTEGER NOT NULL DEFAULT 0,
     events_truncated INTEGER NOT NULL DEFAULT 0,
-    turn_origin TEXT NOT NULL DEFAULT 'local'
+    turn_origin TEXT NOT NULL DEFAULT 'local',
+    images TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX turns_by_thread
     ON turns (origin, user_id, workspace_id, conversation_id, started_at);
@@ -141,6 +143,17 @@ pub struct Owner {
     pub user_id: i64,
 }
 
+/// An image a turn carried (#1229), as the history keeps it: never the
+/// image, only its name, type, size and a JPEG thumbnail of at most 64 KiB
+/// (`data:image/jpeg;base64,…`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct StoredImage {
+    pub name: String,
+    pub mime: String,
+    pub bytes: usize,
+    pub thumbnail: Option<String>,
+}
+
 /// A turn's row, written once its start succeeded.
 #[derive(Clone, Debug)]
 pub struct NewTurn {
@@ -152,6 +165,8 @@ pub struct NewTurn {
     /// As the person typed it (the "@" list is `mentions`, not inlined).
     pub prompt: String,
     pub mentions: Vec<String>,
+    /// The images the turn carried (#1229).
+    pub images: Vec<StoredImage>,
     pub started_at: i64,
 }
 
@@ -192,6 +207,8 @@ pub struct StoredTurn {
     pub conversation_uuid: Option<String>,
     pub prompt: String,
     pub mentions: Vec<String>,
+    /// The images the turn carried: thumbnails only (#1229).
+    pub images: Vec<StoredImage>,
     pub started_at: i64,
     pub finished_at: Option<i64>,
     pub events: Vec<StoredEvent>,
@@ -327,7 +344,8 @@ pub(crate) fn inspect_private(path: &Path, what: &str) -> Result<(), HostError> 
 }
 /// One write for the history's writer thread.
 enum Op {
-    Begin(NewTurn),
+    /// Boxed: a turn's row is the largest op by far.
+    Begin(Box<NewTurn>),
     Event {
         turn_id: String,
         seq: u64,
@@ -693,7 +711,8 @@ impl HistoryStore {
             let mut turns: Vec<StoredTurn> = {
                 let mut statement = conn.prepare(&format!(
                     "SELECT turn_id, conversation_id, conversation_uuid, prompt, mentions,
-                            started_at, finished_at, changes, events_truncated, turn_origin
+                            started_at, finished_at, changes, events_truncated, turn_origin,
+                            images
                      FROM turns
                      WHERE {THREAD}
                      ORDER BY started_at, rowid"
@@ -710,7 +729,9 @@ impl HistoryStore {
                         |row| {
                             let mentions: String = row.get(4)?;
                             let changes: Option<String> = row.get(7)?;
+                            let images: String = row.get(10)?;
                             Ok(StoredTurn {
+                                images: serde_json::from_str(&images).unwrap_or_default(),
                                 turn_id: row.get(0)?,
                                 conversation_id: row.get(1)?,
                                 conversation_uuid: row.get(2)?,
@@ -1002,10 +1023,10 @@ impl HistoryStore {
                 tx.execute(
                     "INSERT INTO turns (turn_id, origin, user_id, workspace_id, conversation_id,
                          conversation_uuid, prompt, mentions, started_at, finished_at, changes,
-                         events_bytes, events_truncated, turn_origin)
+                         events_bytes, events_truncated, turn_origin, images)
                      SELECT ?1, origin, user_id, workspace_id, ?2, ?3, prompt, mentions,
                             started_at, finished_at, changes, events_bytes, events_truncated,
-                            turn_origin
+                            turn_origin, images
                      FROM turns WHERE turn_id = ?4",
                     params![new, target_id, target_uuid, old],
                 )?;
@@ -1305,10 +1326,11 @@ fn apply(conn: &Connection, op: Op) -> rusqlite::Result<()> {
     match op {
         Op::Begin(turn) => {
             let mentions = serde_json::to_string(&turn.mentions).unwrap_or_else(|_| "[]".into());
+            let images = serde_json::to_string(&turn.images).unwrap_or_else(|_| "[]".into());
             conn.execute(
                 "INSERT INTO turns (turn_id, origin, user_id, workspace_id, conversation_id,
-                     conversation_uuid, prompt, mentions, started_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                     conversation_uuid, prompt, mentions, started_at, images)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     turn.turn_id,
                     turn.owner.origin,
@@ -1319,6 +1341,7 @@ fn apply(conn: &Connection, op: Op) -> rusqlite::Result<()> {
                     turn.prompt,
                     mentions,
                     turn.started_at,
+                    images,
                 ],
             )
             .map(|_| ())
@@ -1490,10 +1513,18 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
                 "BEGIN; {SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not create the thread history", &e)),
-        // 2 (ADR-0034): turns imported from the cloud executor.
+        // 2 (ADR-0034): turns imported from the cloud executor. 3 (#1229):
+        // the images a turn carried.
         1 => conn
             .execute_batch(&format!(
                 "BEGIN; ALTER TABLE turns ADD COLUMN turn_origin TEXT NOT NULL DEFAULT 'local'; \
+                 ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]'; \
+                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+            ))
+            .map_err(|e| storage("could not upgrade the thread history", &e)),
+        2 => conn
+            .execute_batch(&format!(
+                "BEGIN; ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]'; \
                  PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not upgrade the thread history", &e)),
@@ -1568,7 +1599,7 @@ impl TurnTap {
             capped: false,
             backlog: VecDeque::new(),
         });
-        Self::queue(store, &mut recording, Op::Begin(turn));
+        Self::queue(store, &mut recording, Op::Begin(Box::new(turn)));
         for event in &buffered {
             Self::record(store, &mut recording, event);
         }
@@ -1755,6 +1786,7 @@ mod tests {
             turn_id: turn_id.into(),
             prompt: "Fix the build".into(),
             mentions: vec!["src/main.rs".into()],
+            images: Vec::new(),
             started_at: now_ms(),
         }
     }
@@ -1820,6 +1852,35 @@ mod tests {
             json!({"committed": true, "conversation_id": "42", "message_ids": [], "changed_files": 1}),
         ));
         window.all()
+    }
+
+    #[test]
+    fn a_turns_images_are_kept_as_thumbnails_and_an_older_store_upgrades() {
+        let (root, store) = store();
+        let mut turn = new_turn(owner(1), "t1", "42");
+        turn.images = vec![StoredImage {
+            name: "shot.png".into(),
+            mime: "image/png".into(),
+            bytes: 1234,
+            thumbnail: Some("data:image/jpeg;base64,AAAA".into()),
+        }];
+        play(&store, turn.clone());
+        play(&store, new_turn(owner(1), "t2", "42"));
+        let turns = store.thread(&owner(1), "w1", "42").unwrap();
+        assert_eq!(turns[0].images, turn.images);
+        assert!(turns[1].images.is_empty());
+        // A store written before images (schema 2) gains the column.
+        store
+            .with("downgrade", |c| {
+                c.execute_batch("ALTER TABLE turns DROP COLUMN images; PRAGMA user_version = 2;")
+            })
+            .unwrap();
+        drop(store);
+        let reopened =
+            Arc::new(HistoryStore::open(&root.path().join("ai.elitea.desktop")).unwrap());
+        let turns = reopened.thread(&owner(1), "w1", "42").unwrap();
+        assert_eq!(turns.len(), 2);
+        assert!(turns[0].images.is_empty());
     }
 
     #[test]

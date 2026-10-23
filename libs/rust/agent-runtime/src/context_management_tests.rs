@@ -905,3 +905,36 @@ fn pi_numbers_and_small_windows() {
     assert_eq!(pi.trigger_tokens(&small), 6_000);
     assert_eq!(pi.keep_recent_for(&small), 3_000);
 }
+
+#[test]
+fn an_image_costs_what_a_provider_bills_not_its_bytes() {
+    let big = "z".repeat(2_000_000);
+    let tool_image = Content {
+        role: "function".into(),
+        parts: vec![Part::FunctionResponse {
+            function_response: FunctionResponseData::new(
+                "read_file",
+                json!({"kind": "image", "mime": "image/png", "image_base64": big}),
+            ),
+            id: Some("c".into()),
+            annotations: None,
+        }],
+    };
+    let inline = Content::new("user")
+        .with_text("what is this?")
+        .with_inline_data("image/png", vec![7; 1_000_000]);
+    for content in [&tool_image, &inline] {
+        let cost = content_tokens(content);
+        assert!(
+            (crate::image_result::TOKEN_ESTIMATE..crate::image_result::TOKEN_ESTIMATE + 100)
+                .contains(&cost),
+            "{cost}"
+        );
+    }
+    // Text is counted as before.
+    let text = Content::new("user").with_text("hello");
+    assert_eq!(
+        content_tokens(&text),
+        estimate_tokens(serde_json::to_string(&text).unwrap().len())
+    );
+}

@@ -128,7 +128,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
               )}
               <ForkNotices fork={forking} />
               <EarlierTurns history={session.history} shown={session.shown} onFork={forking.onFork} />
-              <Exchanges turn={turn} prompts={session.prompts} onFork={forking.onFork} />
+              <Exchanges turn={turn} prompts={session.prompts} promptImages={session.promptImages} onFork={forking.onFork} />
               <approval.Dialog request={continueRequest} queued={0} onRespond={session.answer} />
               <plan.Card proposal={turn.view.planProposal} onRespond={session.answer} />
               </>

@@ -889,6 +889,16 @@ pub fn bounded(mut event: Event) -> Event {
                 } => {
                     function_response.inline_data.clear();
                     function_response.file_data.clear();
+                    // An image a tool returned (read_file, #1229) is kept
+                    // for the run that read it, not in the store: its
+                    // metadata stays, the bytes do not.
+                    if let std::borrow::Cow::Owned(without) =
+                        elitea_agent_runtime::image_result::without_image(
+                            &function_response.response,
+                        )
+                    {
+                        function_response.response = without;
+                    }
                     let text = function_response.response.to_string();
                     if text.len() > MAX_TOOL_RESPONSE_BYTES {
                         let mut end = MAX_TOOL_RESPONSE_BYTES;

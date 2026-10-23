@@ -2075,6 +2075,7 @@ version = "0.1.0"
 dependencies = [
  "adk-core",
  "async-trait",
+ "base64 0.23.1",
  "elitea-agent-runtime",
  "elitea-content-source",
  "elitea-doc-extract",
@@ -2084,6 +2085,7 @@ dependencies = [
  "grep-regex",
  "grep-searcher",
  "ignore",
+ "image",
  "landlock",
  "nucleo-matcher",
  "quick-xml 0.42.0",

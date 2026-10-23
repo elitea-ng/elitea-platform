@@ -27,8 +27,8 @@ export type ShellAction =
   | { type: 'workspaces_changed'; workspaceId: string }
   /** Something to tell the person (a failed Open Folder…, a drop the shell cannot use). */
   | { type: 'notice'; message: string }
-  /** Files (not a folder) were dropped on the window. */
-  | { type: 'files_dropped' };
+  /** Files (not a folder) were dropped on the window: images join the composer's message, anything else is told. */
+  | { type: 'files_dropped'; paths: string[] };
 
 const PLAIN_COMMANDS = new Set<string>(['new_thread', 'settings', 'command_palette', 'toggle_sidebar', 'toggle_changes', 'back', 'forward', 'send_to_cloud', 'open_in_chat', 'toggle_plan', 'choose_agent', 'index_settings', 'handoff_settings']);
 
@@ -48,8 +48,11 @@ const WITH_ARGS: Partial<Record<AppCommandId, (args: unknown) => ShellAction | u
     const message = (args as { message?: unknown } | undefined)?.message;
     return { type: 'notice', message: typeof message === 'string' ? message : '' };
   },
-  // Files (not folders) dropped on the window: only a folder opens as a workspace.
-  files_dropped: () => ({ type: 'files_dropped' }),
+  // Files (not folders) dropped on the window: the composer on screen takes images; only a folder opens as a workspace.
+  files_dropped: (args) => {
+    const paths = (args as { paths?: unknown } | undefined)?.paths;
+    return { type: 'files_dropped', paths: Array.isArray(paths) ? paths.filter((path): path is string => typeof path === 'string') : [] };
+  },
   // Reserved by the host (not sent yet); harmless to honour.
   focus_turn: (args) => {
     const workspaceId = workspaceIdOf(args);

@@ -105,6 +105,7 @@
   "workspace.composer.projectSkills": "Project skills",
   "workspace.composer.workspaceCommands": "Commands in this workspace",
   "workspace.composer.userCommands": "Your commands",
+  "workspace.composer.removeImage": "Remove {{name}}",
   "workspace.command.sourceWorkspace": "workspace",
   "workspace.command.sourceUser": "yours",
   "workspace.command.ignored": "ignored: {{keys}}",

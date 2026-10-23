@@ -61,6 +61,7 @@ pub mod edit_profile;
 pub mod exact_number;
 pub mod graph;
 pub mod host;
+pub mod image_result;
 pub mod instruction_authority;
 pub mod lazy_tools;
 pub mod planner;

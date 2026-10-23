@@ -896,6 +896,7 @@ async fn a_retried_release_marks_the_session_for_reseeding() {
         model: None,
         project_skills: Vec::new(),
         command: None,
+        images: Vec::new(),
     };
     let emitter = h.emitter.clone();
     let run = |prompt: &'static str| {
@@ -1708,6 +1709,7 @@ async fn a_take_back_makes_the_next_local_turn_see_the_cloud_turns() {
         model: None,
         project_skills: Vec::new(),
         command: None,
+        images: Vec::new(),
     };
     let emitter = h.emitter.clone();
     let run = |prompt: &'static str| {

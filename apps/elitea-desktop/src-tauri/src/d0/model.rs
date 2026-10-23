@@ -29,6 +29,8 @@ use adk_core::{
     UsageMetadata,
 };
 use async_trait::async_trait;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use elitea_agent_runtime::host::{
     BoundModel, HostError, HostErrorCode, ModelRequest, ModelTransport,
 };
@@ -72,6 +74,10 @@ pub struct GatewayTransport {
     pub recorder: Option<Arc<Recorder>>,
     /// Whether reasoning goes back to the provider in history.
     pub replay: ReasoningReplay,
+    /// Whether the model sees images (the catalogue's `supports_vision`):
+    /// a request that carries one to a model that does not is refused,
+    /// never sent without it (#1229).
+    pub vision: bool,
 }
 
 impl ModelTransport for GatewayTransport {
@@ -96,6 +102,7 @@ impl ModelTransport for GatewayTransport {
                     self.recorder.clone()
                 },
                 replay: self.replay,
+                vision: self.vision,
                 request,
                 completed: Mutex::new(None),
             }),
@@ -134,6 +141,7 @@ pub struct GatewayModel {
     quiet: bool,
     recorder: Option<Arc<Recorder>>,
     replay: ReasoningReplay,
+    vision: bool,
     request: ModelRequest,
     /// The last answer that ended the model's turn (no tool calls).
     completed: Mutex<Option<String>>,
@@ -154,7 +162,16 @@ impl Llm for GatewayModel {
         request: LlmRequest,
         _stream: bool,
     ) -> adk_core::Result<LlmResponseStream> {
-        let body = request_body(&self.request, &request, self.replay)?;
+        let body = request_body(
+            &self.request,
+            &request,
+            self.replay,
+            if self.vision {
+                Images::Send
+            } else {
+                Images::Refuse
+            },
+        )?;
         let started = recorder::now();
         let bearer = self
             .credentials
@@ -284,11 +301,48 @@ fn refusal_message(code: &str) -> &'static str {
     }
 }
 
+/// What a request body does with the images in its contents (#1229).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Images {
+    /// Send them as `image_url` data URIs.
+    Send,
+    /// The model cannot see images: a request carrying one is refused
+    /// (`model_gateway.model_no_vision`), never sent without it.
+    Refuse,
+    /// The body is only measured against the context window: each image
+    /// is a placeholder that weighs what a provider bills for one.
+    Measure,
+}
+
+/// Why a message could not be rendered.
+enum Unrenderable {
+    Malformed,
+    NoVision,
+}
+
+/// A data URI standing in for an image whose bytes must not be measured.
+fn measured_placeholder() -> String {
+    let bytes = usize::try_from(elitea_agent_runtime::image_result::TOKEN_ESTIMATE)
+        .unwrap_or_default()
+        .saturating_mul(4);
+    format!("data:image/png;base64,{}", "A".repeat(bytes))
+}
+
+fn image_url_part(mime: &str, base64: &str, images: Images) -> Value {
+    let url = if images == Images::Measure {
+        measured_placeholder()
+    } else {
+        format!("data:{mime};base64,{base64}")
+    };
+    json!({"type": "image_url", "image_url": {"url": url}})
+}
+
 /// The OpenAI-compatible body: the worker facade's shape.
 pub(super) fn request_body(
     model: &ModelRequest,
     request: &LlmRequest,
     replay: ReasoningReplay,
+    images: Images,
 ) -> adk_core::Result<Value> {
     let invalid = || {
         model_error(
@@ -320,9 +374,25 @@ pub(super) fn request_body(
     if !system.is_empty() {
         messages.push(json!({"role": "system", "content": system}));
     }
+    // Chat completions' tool messages are text-only: an image a tool
+    // returned follows the run of tool messages it belongs to, as a user
+    // message the host wrote (`name: tool_image`).
+    let mut tool_images: Vec<Value> = Vec::new();
     for content in request.contents.iter().filter(|c| c.role != "system") {
-        append_message(content, &mut messages, replay).ok_or_else(invalid)?;
+        if !matches!(content.role.as_str(), "function" | "tool") {
+            messages.append(&mut tool_images);
+        }
+        append_message(content, &mut messages, &mut tool_images, replay, images).map_err(
+            |why| match why {
+                Unrenderable::Malformed => invalid(),
+                Unrenderable::NoVision => model_error(
+                    "model_gateway.model_no_vision",
+                    "this model cannot view images; choose a model that can",
+                ),
+            },
+        )?;
     }
+    messages.append(&mut tool_images);
     let mut body = Map::new();
     body.insert("model".into(), json!(model.model_name));
     body.insert("messages".into(), Value::Array(messages));
@@ -350,8 +420,10 @@ pub(super) fn request_body(
 fn append_message(
     content: &Content,
     messages: &mut Vec<Value>,
+    tool_images: &mut Vec<Value>,
     replay: ReasoningReplay,
-) -> Option<()> {
+    images: Images,
+) -> Result<(), Unrenderable> {
     match content.role.as_str() {
         "user" => {
             let text: Vec<&str> = content
@@ -362,7 +434,39 @@ fn append_message(
                     _ => None,
                 })
                 .collect();
-            messages.push(json!({"role": "user", "content": text.join("\n")}));
+            let pictures: Vec<&Part> = content
+                .parts
+                .iter()
+                .filter(
+                    |part| matches!(part, Part::InlineData { mime_type, .. } if mime_type.starts_with("image/")),
+                )
+                .collect();
+            if pictures.is_empty() {
+                messages.push(json!({"role": "user", "content": text.join("\n")}));
+            } else if images == Images::Refuse {
+                return Err(Unrenderable::NoVision);
+            } else {
+                // The worker's shape: the text, then one part per image.
+                let mut parts = Vec::new();
+                let text = text.join("\n");
+                if !text.is_empty() {
+                    parts.push(json!({"type": "text", "text": text}));
+                }
+                for picture in pictures {
+                    if let Part::InlineData {
+                        mime_type, data, ..
+                    } = picture
+                    {
+                        let base64 = if images == Images::Measure {
+                            String::new()
+                        } else {
+                            BASE64.encode(data)
+                        };
+                        parts.push(image_url_part(mime_type, &base64, images));
+                    }
+                }
+                messages.push(json!({"role": "user", "content": parts}));
+            }
         }
         "model" | "assistant" => {
             let mut text = String::new();
@@ -378,7 +482,10 @@ fn append_message(
                     } => calls.push(json!({
                         "id": id,
                         "type": "function",
-                        "function": {"name": name, "arguments": serde_json::to_string(args).ok()?},
+                        "function": {
+                            "name": name,
+                            "arguments": serde_json::to_string(args).map_err(|_| Unrenderable::Malformed)?,
+                        },
                     })),
                     // Reasoning is not part of the chat schema: on this
                     // route it is never sent back (`ReasoningReplay::Never`).
@@ -408,17 +515,39 @@ fn append_message(
                     ..
                 } = part
                 {
+                    let response = &function_response.response;
+                    let body = elitea_agent_runtime::image_result::without_image(response);
                     messages.push(json!({
                         "role": "tool",
                         "tool_call_id": id,
-                        "content": serde_json::to_string(&function_response.response).ok()?,
+                        "content": serde_json::to_string(&*body).map_err(|_| Unrenderable::Malformed)?,
                     }));
+                    if matches!(body, std::borrow::Cow::Owned(_))
+                        && let (Some(mime), Some(base64)) = (
+                            response.get("mime").and_then(Value::as_str),
+                            response
+                                .get(elitea_agent_runtime::image_result::IMAGE_FIELD)
+                                .and_then(Value::as_str),
+                        )
+                    {
+                        if images == Images::Refuse {
+                            return Err(Unrenderable::NoVision);
+                        }
+                        tool_images.push(json!({
+                            "role": "user",
+                            "name": "tool_image",
+                            "content": [
+                                {"type": "text", "text": format!("Image returned by tool call {id}:")},
+                                image_url_part(mime, base64, images),
+                            ],
+                        }));
+                    }
                 }
             }
         }
-        _ => return None,
+        _ => return Err(Unrenderable::Malformed),
     }
-    Some(())
+    Ok(())
 }
 
 fn tools(declarations: &HashMap<String, Value>) -> Option<Value> {
@@ -691,7 +820,13 @@ mod tests {
             "a_tool".into(),
             json!({"name": "a_tool", "parameters": {"type": "object"}}),
         );
-        let body = request_body(&model_request(), &request, ReasoningReplay::Never).unwrap();
+        let body = request_body(
+            &model_request(),
+            &request,
+            ReasoningReplay::Never,
+            Images::Send,
+        )
+        .unwrap();
         assert_eq!(body["messages"][0]["role"], "system");
         assert_eq!(
             body["messages"][0]["content"],
@@ -706,6 +841,158 @@ mod tests {
         assert_eq!(body["stream"], true);
         assert_eq!(body["max_completion_tokens"], 100);
         assert!(body.get("reasoning_effort").is_none());
+    }
+
+    fn image_user() -> LlmRequest {
+        let mut content = Content::new("user").with_text("what is wrong here?");
+        content = content.with_inline_data("image/png", vec![1, 2, 3]);
+        LlmRequest {
+            model: "gpt-x".into(),
+            contents: vec![content],
+            config: None,
+            tools: HashMap::new(),
+            previous_response_id: None,
+        }
+    }
+
+    #[test]
+    fn a_text_only_user_message_stays_a_plain_string() {
+        let request = LlmRequest {
+            model: "gpt-x".into(),
+            contents: vec![Content::new("user").with_text("hi")],
+            config: None,
+            tools: HashMap::new(),
+            previous_response_id: None,
+        };
+        for images in [Images::Send, Images::Refuse, Images::Measure] {
+            let body =
+                request_body(&model_request(), &request, ReasoningReplay::Never, images).unwrap();
+            assert_eq!(
+                body["messages"][1],
+                json!({"role": "user", "content": "hi"}),
+                "{images:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_user_image_becomes_an_image_url_part_after_the_text() {
+        let body = request_body(
+            &model_request(),
+            &image_user(),
+            ReasoningReplay::Never,
+            Images::Send,
+        )
+        .unwrap();
+        assert_eq!(
+            body["messages"][1],
+            json!({"role": "user", "content": [
+                {"type": "text", "text": "what is wrong here?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AQID"}},
+            ]})
+        );
+    }
+
+    #[test]
+    fn a_model_without_vision_is_never_sent_an_image() {
+        let error = request_body(
+            &model_request(),
+            &image_user(),
+            ReasoningReplay::Never,
+            Images::Refuse,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("model_gateway.model_no_vision"));
+    }
+
+    #[test]
+    fn a_measured_image_weighs_what_a_provider_bills() {
+        let body = request_body(
+            &model_request(),
+            &image_user(),
+            ReasoningReplay::Never,
+            Images::Measure,
+        )
+        .unwrap();
+        let url = body["messages"][1]["content"][1]["image_url"]["url"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            elitea_agent_runtime::context_budget::estimate_tokens(url.len()),
+            elitea_agent_runtime::image_result::TOKEN_ESTIMATE + 6
+        );
+    }
+
+    #[test]
+    fn a_tool_image_follows_its_run_of_tool_messages_as_a_host_user_message() {
+        let call = |id: &str| Part::FunctionCall {
+            name: "read_file".into(),
+            args: json!({"path": id}),
+            id: Some(id.into()),
+            thought_signature: None,
+        };
+        let response = |id: &str, body: Value| Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new("read_file", body),
+            id: Some(id.into()),
+            annotations: None,
+        };
+        let request = LlmRequest {
+            model: "gpt-x".into(),
+            contents: vec![
+                Content::new("user").with_text("look"),
+                Content {
+                    role: "model".into(),
+                    parts: vec![call("a"), call("b")],
+                },
+                Content {
+                    role: "function".into(),
+                    parts: vec![response(
+                        "a",
+                        json!({"kind": "image", "mime": "image/png", "bytes": 3, "image_base64": "AQID"}),
+                    )],
+                },
+                Content {
+                    role: "function".into(),
+                    parts: vec![response("b", json!({"content": "text"}))],
+                },
+            ],
+            config: None,
+            tools: HashMap::new(),
+            previous_response_id: None,
+        };
+        let body = request_body(
+            &model_request(),
+            &request,
+            ReasoningReplay::Never,
+            Images::Send,
+        )
+        .unwrap();
+        let roles: Vec<(&str, Option<&str>)> = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| (m["role"].as_str().unwrap(), m["name"].as_str()))
+            .collect();
+        assert_eq!(
+            roles,
+            [
+                ("system", None),
+                ("user", None),
+                ("assistant", None),
+                ("tool", None),
+                ("tool", None),
+                ("user", Some("tool_image")),
+            ]
+        );
+        let tool = body["messages"][3]["content"].as_str().unwrap();
+        assert!(
+            tool.contains("\"kind\":\"image\"") && !tool.contains("AQID"),
+            "{tool}"
+        );
+        assert_eq!(
+            body["messages"][5]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,AQID"
+        );
     }
 
     #[test]
@@ -776,7 +1063,7 @@ mod tests {
             previous_response_id: None,
         };
         for replay in [ReasoningReplay::Never, ReasoningReplay::SignedBlocks] {
-            let body = request_body(&model_request(), &request, replay).unwrap();
+            let body = request_body(&model_request(), &request, replay, Images::Send).unwrap();
             assert_eq!(
                 body["messages"][2],
                 json!({"role": "assistant", "content": "hello"})

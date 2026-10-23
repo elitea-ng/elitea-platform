@@ -16,7 +16,7 @@ import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
-import { composer, describeWorkspaceError, replayView, TurnTranscript, type WorkspaceTurn } from '@/features/workspace';
+import { composer, describeWorkspaceError, ImageStrip, replayView, TurnTranscript, type StripImage, type WorkspaceTurn } from '@/features/workspace';
 import type { CustomCommand, StoredTurn, Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
@@ -123,7 +123,7 @@ function turnForkPoint(turnId: string, done: { messageIds: readonly string[] } |
 const forkAction = (onFork: ((point: ForkPoint) => void) | undefined, point: ForkPoint | null): (() => void) | null | undefined =>
   onFork === undefined ? undefined : point === null ? null : () => onFork(point);
 
-export function YourPrompt({ text, fork }: { text: string; fork?: (() => void) | null | undefined }): React.JSX.Element {
+export function YourPrompt({ text, fork, images }: { text: string; fork?: (() => void) | null | undefined; images?: readonly StripImage[] | undefined }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   return (
     <Box
@@ -138,6 +138,11 @@ export function YourPrompt({ text, fork }: { text: string; fork?: (() => void) |
         background: theme.vars.palette.background.userInputBackground,
       })}
     >
+      {images !== undefined && images.length > 0 && (
+        <Box sx={{ marginBottom: 1 }}>
+          <ImageStrip images={images} />
+        </Box>
+      )}
       <Typography variant="bodyMedium" sx={{ whiteSpace: 'pre-wrap' }}>
         {text}
       </Typography>
@@ -223,7 +228,7 @@ function RecordedTurn({ stored, onFork }: { stored: StoredTurn; onFork: ((point:
   const fork = forkAction(onFork, stored.state === 'running' ? null : turnForkPoint(stored.turn_id, view.done));
   return (
     <Box data-testid="history-turn" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-      <YourPrompt text={stored.prompt} fork={fork} />
+      <YourPrompt text={stored.prompt} fork={fork} images={stored.images} />
       <TurnTranscript view={view} busy={false} onCancel={() => undefined} onTextContextMenu={(text, event) => copyMenu(text, event, fork)} />
       {stored.state === 'interrupted' && view.done === undefined && (
         <Typography variant="bodySmall" sx={quietSx}>
@@ -300,17 +305,20 @@ export function EarlierTurns({
 export function Exchanges({
   turn,
   prompts,
+  promptImages,
   onFork,
 }: {
   turn: WorkspaceTurn;
   prompts: readonly string[];
+  /** The thumbnails of each prompt's images, by the same index. */
+  promptImages: readonly (readonly StripImage[])[];
   /** "Fork from here" on each ended turn; absent = not offered. */
   onFork?: ((point: ForkPoint) => void) | undefined;
 }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   const exchanges = [
-    ...turn.earlier.map((entry, index) => ({ key: entry.turnId, prompt: prompts[index], view: entry.view, live: false })),
-    ...(turn.turnId === null ? [] : [{ key: turn.turnId, prompt: prompts[turn.earlier.length], view: turn.view, live: true }]),
+    ...turn.earlier.map((entry, index) => ({ key: entry.turnId, prompt: prompts[index], images: promptImages[index], view: entry.view, live: false })),
+    ...(turn.turnId === null ? [] : [{ key: turn.turnId, prompt: prompts[turn.earlier.length], images: promptImages[turn.earlier.length], view: turn.view, live: true }]),
   ];
   return (
     <>
@@ -319,7 +327,7 @@ export function Exchanges({
         const fork = forkAction(onFork, exchange.live && turn.busy ? null : turnForkPoint(exchange.key, exchange.view.done));
         return (
         <Box key={exchange.key} sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-          {exchange.prompt !== undefined && <YourPrompt text={exchange.prompt} fork={fork} />}
+          {exchange.prompt !== undefined && <YourPrompt text={exchange.prompt} fork={fork} images={exchange.images} />}
           <TurnTranscript
             view={exchange.view}
             busy={exchange.live && turn.busy}

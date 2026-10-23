@@ -379,6 +379,7 @@ fn request(workspace_id: &str) -> TurnRequest {
         model: None,
         project_skills: Vec::new(),
         command: None,
+        images: Vec::new(),
     }
 }
 
@@ -6957,4 +6958,314 @@ async fn a_model_that_cannot_reason_gets_no_effort_and_keeps_the_temperature() {
     assert_eq!(bodies[1]["reasoning_effort"], "high");
     assert!(bodies[1].get("temperature").is_none());
     assert_eq!(running_models(&h)[0]["chosen"], true);
+}
+
+// ---- Image input (#1229) ----
+
+/// A 1x1 PNG.
+const PIXEL_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+/// The platform with `gpt-test` marked as seeing images (or not), and the
+/// model answering with `script`.
+fn vision_platform(
+    vision: Option<bool>,
+    script: impl Fn(&Value) -> Res + Send + Sync + 'static,
+) -> impl Fn(&Req) -> Res {
+    let inner = platform(agent_details(), &[]);
+    move |req: &Req| {
+        if req.path.starts_with("/api/v2/configurations/models/1?") {
+            let mut row = json!({
+                "name": "gpt-test", "project_id": 1, "section": "llm",
+                "context_window": 200_000, "max_output_tokens": 4096,
+            });
+            if let Some(vision) = vision {
+                row["supports_vision"] = json!(vision);
+            }
+            return Res::json(200, &json!({"total": 1, "items": [row]}));
+        }
+        if req.path == "/llm/v1/chat/completions" {
+            return script(&serde_json::from_str(&req.body).unwrap_or_default());
+        }
+        inner(req)
+    }
+}
+
+fn pasted(h: &Harness) -> super::attachments::ImagePick {
+    let added = h
+        .host
+        .attachment_add_bytes(&h.workspace_id, None, PIXEL_PNG)
+        .unwrap();
+    super::attachments::ImagePick {
+        source: super::attachments::ImageSource::Clipboard,
+        token: added.token,
+    }
+}
+
+#[tokio::test]
+async fn user_image_is_sent_as_image_url_data_uri() {
+    let server = serve(vision_platform(Some(true), |_| say("A single pixel."))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let pick = pasted(&h);
+    let mut asked = request(&h.workspace_id);
+    asked.prompt = "what is wrong in this dialog?".into();
+    asked.images = vec![pick];
+    let started = h.host.start(asked).await.unwrap();
+    until_done_of(&h, &started.turn_id).await;
+
+    let bodies = llm_bodies(&h.server);
+    let user = bodies[0]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "user")
+        .unwrap();
+    let parts = user["content"].as_array().expect("text and image parts");
+    assert_eq!(parts.len(), 2, "{parts:?}");
+    assert_eq!(parts[0]["type"], "text");
+    assert!(
+        parts[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("what is wrong in this dialog?")
+    );
+    assert_eq!(parts[1]["type"], "image_url");
+    assert_eq!(
+        parts[1]["image_url"]["url"],
+        format!("data:image/png;base64,{PIXEL_PNG}")
+    );
+
+    // The commit notes the attachment (name, type, size), never the bytes.
+    let commit = seen(
+        &h.server,
+        &format!("/api/v2/elitea_core/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    );
+    let body: Value = serde_json::from_str(&commit[0].body).unwrap();
+    let note = &body["user_message"]["images"];
+    assert_eq!(note[0]["mime"], "image/png");
+    assert_eq!(note[0]["name"], "pasted-image");
+    assert!(!commit[0].body.contains(PIXEL_PNG));
+
+    // The thread history keeps the thumbnail, not the image.
+    let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+    let stored = &turns[0].images;
+    assert_eq!(stored.len(), 1);
+    assert!(
+        stored[0]
+            .thumbnail
+            .as_deref()
+            .unwrap()
+            .starts_with("data:image/jpeg;base64,")
+    );
+    // The token is used up by the turn that carried it.
+    assert_eq!(h.host.attachments_held(), 0);
+}
+
+#[tokio::test]
+async fn text_only_body_is_unchanged() {
+    let server = serve(vision_platform(Some(true), |_| say("ok"))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    let bodies = llm_bodies(&h.server);
+    let user = bodies[0]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "user")
+        .unwrap();
+    // A plain string, as before images existed: prompt caches key on it.
+    assert_eq!(user["content"], "Write notes and file a bug");
+    assert_eq!(
+        user.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["content", "role"]
+    );
+    let commit = seen(
+        &h.server,
+        &format!("/api/v2/elitea_core/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    );
+    let body: Value = serde_json::from_str(&commit[0].body).unwrap();
+    assert_eq!(
+        body["user_message"],
+        json!({"content": "Write notes and file a bug"})
+    );
+}
+
+#[tokio::test]
+async fn non_vision_model_refuses_images_before_start() {
+    // A model the catalogue marks without vision, or does not describe.
+    for vision in [Some(false), None] {
+        let server = serve(vision_platform(vision, |_| say("ok"))).await;
+        let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+        let started = |h: &Harness| {
+            seen(
+                &h.server,
+                "/api/v2/elitea_core/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555",
+            )
+            .len()
+        };
+        // The person chose the model: known before anything starts.
+        let pick = pasted(&h);
+        let mut asked = request(&h.workspace_id);
+        asked.images = vec![pick];
+        asked.model = Some(crate::d0::definition::ModelChoice::parse("gpt-test", None).unwrap());
+        let error = h.host.start(asked).await.unwrap_err();
+        assert_eq!(error.code, "model_no_vision", "{vision:?}");
+        assert_eq!(started(&h), 0, "no local turn was started");
+        // The image stays attached: the person may switch model and send again.
+        assert_eq!(h.host.attachments_held(), 1);
+        // The agent's own (or the thread's kept) model is known under the
+        // session: refused before the model is asked.
+        let pick = pasted(&h);
+        let mut asked = request(&h.workspace_id);
+        asked.images = vec![pick];
+        let error = h.host.start(asked).await.unwrap_err();
+        assert_eq!(error.code, "model_no_vision", "{vision:?}");
+        assert!(llm_bodies(&h.server).is_empty());
+        assert_eq!(h.host.attachments_held(), 2);
+    }
+}
+
+#[tokio::test]
+async fn an_attachment_belongs_to_one_workspace_and_a_turn_takes_five() {
+    let server = serve(vision_platform(Some(true), |_| say("ok"))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let mut asked = request(&h.workspace_id);
+    asked.images = vec![super::attachments::ImagePick {
+        source: super::attachments::ImageSource::File,
+        token: "no-such-token".into(),
+    }];
+    assert_eq!(
+        h.host.start(asked).await.unwrap_err().code,
+        "attachment_unknown"
+    );
+    let mut asked = request(&h.workspace_id);
+    asked.images = (0..6).map(|_| pasted(&h)).collect();
+    assert_eq!(
+        h.host.start(asked).await.unwrap_err().code,
+        "too_many_images"
+    );
+    // Not an image: refused when attached, not when sent.
+    let error = h
+        .host
+        .attachment_add_bytes(&h.workspace_id, None, "aGVsbG8=")
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_request");
+}
+
+#[tokio::test]
+async fn attachment_add_refuses_denied_paths() {
+    let server = serve(vision_platform(Some(true), |_| say("ok"))).await;
+    let policy = json!({
+        "allowed": true, "shell": true, "max_sandbox_mode": "workspace-write",
+        "path_deny": ["private/**"],
+    });
+    let h = harness(server, Some(policy), UiDecision::AllowOnce).await;
+    let png =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, PIXEL_PNG).unwrap();
+    let write = |path: std::path::PathBuf| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &png).unwrap();
+        path.to_string_lossy().into_owned()
+    };
+    // The app's own data (the harness passes its config dir as a host dir).
+    let app_file = write(h.app.path().join("config").join("secret.png"));
+    let error = h
+        .host
+        .attachment_add(&h.workspace_id, &app_file)
+        .unwrap_err();
+    assert_eq!(error.code, "path_denied", "{error:?}");
+    // Inside the workspace, matching path_deny.
+    let denied = write(h.folder.path().join("private").join("x.png"));
+    assert_eq!(
+        h.host
+            .attachment_add(&h.workspace_id, &denied)
+            .unwrap_err()
+            .code,
+        "path_denied"
+    );
+    // A link is not followed: a link to a denied file does not get it in.
+    let link = h.folder.path().join("innocent.png");
+    std::os::unix::fs::symlink(&app_file, &link).unwrap();
+    assert!(
+        h.host
+            .attachment_add(&h.workspace_id, &link.to_string_lossy())
+            .is_err()
+    );
+    // A relative path is not a drop.
+    assert_eq!(
+        h.host
+            .attachment_add(&h.workspace_id, "x.png")
+            .unwrap_err()
+            .code,
+        "invalid_request"
+    );
+    // A file in the workspace, and one elsewhere, are taken.
+    let inside = write(h.folder.path().join("shots").join("ok.png"));
+    let added = h.host.attachment_add(&h.workspace_id, &inside).unwrap();
+    assert_eq!(
+        (added.name.as_str(), added.mime.as_str()),
+        ("ok.png", "image/png")
+    );
+    let elsewhere = tempfile::tempdir().unwrap();
+    let outside = write(elsewhere.path().join("drop.png"));
+    assert!(h.host.attachment_add(&h.workspace_id, &outside).is_ok());
+    let text = elsewhere.path().join("a.txt");
+    std::fs::write(&text, "not an image").unwrap();
+    assert!(
+        h.host
+            .attachment_add(&h.workspace_id, &text.to_string_lossy())
+            .is_err(),
+        "text is not an image"
+    );
+}
+
+/// The model reads `img.png` with `read_file`, then answers.
+fn reads_the_image(body: &Value) -> Res {
+    let last = body["messages"].as_array().and_then(|m| m.last()).unwrap();
+    if last["role"] == "user" && last["name"] == "tool_image" || last["role"] == "tool" {
+        return say("It is a pixel.");
+    }
+    tool_call("call-img", "read_file", &json!({"path": "img.png"}))
+}
+
+#[tokio::test]
+async fn read_file_returns_the_image_to_a_vision_model_and_a_hint_to_another() {
+    for vision in [true, false] {
+        let server = serve(vision_platform(Some(vision), reads_the_image)).await;
+        let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+        let png =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, PIXEL_PNG).unwrap();
+        std::fs::write(h.folder.path().join("img.png"), png).unwrap();
+        let mut asked = request(&h.workspace_id);
+        asked.prompt = "look at img.png".into();
+        let started = h.host.start(asked).await.unwrap();
+        until_done_of(&h, &started.turn_id).await;
+        let bodies = llm_bodies(&h.server);
+        assert_eq!(bodies.len(), 2, "{vision}");
+        let messages = bodies[1]["messages"].as_array().unwrap();
+        let tool = messages.iter().find(|m| m["role"] == "tool").unwrap();
+        let tool_text = tool["content"].as_str().unwrap();
+        assert!(!tool_text.contains("image_base64"), "{tool_text}");
+        assert!(!tool_text.contains(PIXEL_PNG), "{tool_text}");
+        let image = messages.iter().find(|m| m["name"] == "tool_image");
+        if vision {
+            let image = image.expect("the image follows the tool message");
+            assert_eq!(image["role"], "user");
+            assert_eq!(
+                image["content"][1]["image_url"]["url"],
+                format!("data:image/png;base64,{PIXEL_PNG}")
+            );
+            assert!(tool_text.contains("\"kind\":\"image\""), "{tool_text}");
+        } else {
+            assert!(image.is_none());
+            assert!(tool_text.contains("cannot view images"), "{tool_text}");
+        }
+        // The thread history and the session never keep the bytes.
+        let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+        assert!(
+            !serde_json::to_string(&turns[0].events)
+                .unwrap()
+                .contains(PIXEL_PNG)
+        );
+    }
 }

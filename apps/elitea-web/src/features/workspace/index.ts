@@ -18,6 +18,8 @@ import { ModelChip } from './ui/ModelChip';
 import { PlanCard } from './ui/PlanCard';
 
 export { ChangedFilesCard } from './ui/ChangedFilesCard';
+export { ImageStrip } from './ui/ImageStrip';
+export type { StripImage } from './ui/ImageStrip';
 export { TurnTranscript } from './ui/TurnTranscript';
 export { WorkspaceList } from './ui/WorkspaceList';
 export type { ProjectChoice } from './ui/WorkspaceList';

@@ -22,6 +22,7 @@ use crate::d0::mentions::Located;
 use crate::auth::{AuthService, RefreshResult};
 use crate::d0::api::{ApiError, Bearer, Credentials};
 use crate::d0::approvals::UiDecision;
+use crate::d0::attachments::{Added, ImagePick};
 use crate::d0::definition::ModelChoice;
 use crate::d0::events::{AgentEvent, EVENT_NAME, EventEmitter};
 use crate::d0::recorder::FileChange;
@@ -549,6 +550,7 @@ pub async fn agent_turn_start(
     compact: Option<bool>,
     model: Option<TurnModel>,
     command: Option<CommandPick>,
+    images: Option<Vec<ImagePick>>,
 ) -> Result<TurnStarted, IpcError> {
     // A thread in the cloud runs no local turn (ADR-0034 decision 7; the
     // platform refuses it too).
@@ -582,8 +584,53 @@ pub async fn agent_turn_start(
                 })
                 .transpose()?,
             command,
+            images: images.unwrap_or_default(),
         })
         .await?)
+}
+
+/// Attach the image file at `path` (absolute: a dropped file's path from
+/// `files_dropped`, or a picked one) to the next turn of the workspace
+/// (#1229). The host reads it confined (credentials, the app's data and
+/// `path_deny` are refused with `path_denied`), checks and shrinks it, and
+/// keeps it in memory; the answer's token goes in `agent_turn_start.images`.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn attachment_add(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    path: String,
+) -> Result<Added, IpcError> {
+    let agents = state.agents.clone();
+    tokio::task::spawn_blocking(move || agents.attachment_add(&workspace_id, &path))
+        .await
+        .map_err(|_| IpcError::new("internal", "the image lookup stopped unexpectedly"))?
+        .map_err(IpcError::from)
+}
+
+/// Attach a pasted image (`data`: base64, at most 10 MiB decoded). `mime`
+/// is what the clipboard said; the host goes by the bytes.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn attachment_add_bytes(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    mime: String,
+    data: String,
+    name: Option<String>,
+) -> Result<Added, IpcError> {
+    let _ = mime;
+    let agents = state.agents.clone();
+    tokio::task::spawn_blocking(move || {
+        agents.attachment_add_bytes(&workspace_id, name.as_deref(), &data)
+    })
+    .await
+    .map_err(|_| IpcError::new("internal", "the image lookup stopped unexpectedly"))?
+    .map_err(IpcError::from)
+}
+
+/// Take an attached image off the composer before it is sent.
+#[tauri::command(rename_all = "snake_case")]
+pub fn attachment_remove(state: State<'_, LocalState>, workspace_id: String, token: String) {
+    state.agents.attachment_remove(&workspace_id, &token);
 }
 
 /// Read ahead what a turn to this agent version (and conversation) reads

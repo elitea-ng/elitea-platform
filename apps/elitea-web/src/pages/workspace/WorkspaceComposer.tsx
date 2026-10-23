@@ -18,6 +18,13 @@
  *
  * Both menus are driven from the keyboard without leaving the textarea:
  * ↑/↓ move, Enter or Tab pick, Esc closes until the token changes.
+ *
+ * Images (#1229): a pasted image, or an image file dropped on the window
+ * (the host reports its path; the shell hands it to `attachFiles`), is
+ * registered with the host (`attachBytes` / `attachFile`), which checks and
+ * shrinks it and answers a token and a thumbnail. The thumbnails sit above
+ * the input with a remove button each; Send carries the tokens. The host
+ * enforces the limits (five images, 10 MiB each); this only stops offering.
  */
 import { useMemo, useRef, useState, type ComponentRef, type KeyboardEvent, type ReactNode } from 'react';
 
@@ -29,11 +36,14 @@ import SendIcon from '@mui/icons-material/Send';
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import type { Theme } from '@mui/material/styles';
+import Typography from '@mui/material/Typography';
 
 import { NewChatInput } from '@/features/chat-input';
-import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
+import { composer, ImageStrip, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
 
 import type { ComposerSkill } from './useAgentSkills';
+import { useImageAttachments } from './useImageAttachments';
+import type { SentImages } from './useSendPrompt';
 import type { CustomCommand, TurnCommand, TurnStartRequest, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { Segmented } from '@/widgets/desktop-shell';
@@ -82,7 +92,9 @@ export interface WorkspaceComposerProps {
    * Resolves `true` once the turn started (the input is then cleared). `skills`: the skill names the message invokes;
    * `command`: the custom command it runs, if any (then no skill).
    */
-  onSend: (prompt: string, mentions: string[], skills: TurnStartRequest['skills'], command?: TurnCommand) => Promise<boolean>;
+  onSend: (prompt: string, mentions: string[], skills: TurnStartRequest['skills'], command?: TurnCommand, images?: SentImages) => Promise<boolean>;
+  /** Images can be attached (a local thread; not the cloud copy). Default true. */
+  acceptImages?: boolean;
   onStop: () => void;
   onCommand: (command: WorkspaceCommandId) => void;
   /** `/model <name>` was sent as the whole message: the page sets the model (nothing goes to the agent). */
@@ -151,6 +163,9 @@ function insertedToken(entry: Exclude<SlashEntry, { kind: 'host' }>): string {
   return entry.kind === 'custom' ? composer.customCommandToken(entry.command) : composer.skillToken(entry.skill);
 }
 
+/** Images can be attached to a local thread that is not read only. */
+const takesImages = (accept: boolean | undefined, locked: boolean): boolean => accept !== false && !locked;
+
 const sameToken = (a: Token, b: Token): boolean => a?.kind === b?.kind && a?.start === b?.start && a?.query === b?.query;
 
 interface FooterControlsProps {
@@ -197,6 +212,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   const [activeIndex, setActiveIndex] = useState(0);
   // What was picked with "@", in pick order (a folder keeps its trailing "/").
   const [picked, setPicked] = useState<string[]>([]);
+  const attachments = useImageAttachments(ipc, workspaceId, takesImages(props.acceptImages, locked));
 
   const open = token !== null && !sameToken(token, dismissed) ? token : null;
   const files = useQuery({
@@ -298,14 +314,23 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     const mentions = composer.referencedPaths(question, picked);
     // The longest name the message starts with; a custom command over a skill of its name.
     const { command, skill } = composer.invokedPick(question, customCommands, skills);
-    const sending = command === null ? onSend(question, mentions, skillPicks(skill)) : onSend(question, mentions, [], command);
+    const images = attachments.sent();
+    const sending = command === null ? onSend(question, mentions, skillPicks(skill), undefined, images) : onSend(question, mentions, [], command, images);
     void sending.then((sent) => {
-      if (sent) clearInput();
+      if (!sent) return;
+      clearInput();
+      attachments.clear();
     });
   };
 
   return (
-    <Box data-testid="workspace-composer" onFocus={props.onFocus} sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+    <Box data-testid="workspace-composer" onFocus={props.onFocus} onPasteCapture={attachments.onPaste} sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <ImageStrip images={attachments.images} onRemove={attachments.remove} />
+      {attachments.error !== null && (
+        <Typography variant="bodySmall" role="alert" data-testid="attachment-error" sx={(theme: Theme) => ({ color: theme.vars.palette.error.main })}>
+          {attachments.error}
+        </Typography>
+      )}
       {menuOpen && (
         <SuggestionMenu
           data-testid={open.kind === 'file' ? 'workspace-file-menu' : 'workspace-command-menu'}

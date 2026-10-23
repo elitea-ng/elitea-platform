@@ -103,9 +103,9 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   const local: Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'> = {
     canSend: session.canSend && !handoff.offLaptop,
     busy: turn.busy,
-    onSend: async (prompt, mentions, picked, command) => {
+    onSend: async (prompt, mentions, picked, command, images) => {
       model.dismissNotice();
-      const sent = await session.send(prompt, commands.planMode, mentions, picked, commands.compactNext, model.choice, command);
+      const sent = await session.send(prompt, commands.planMode, mentions, picked, commands.compactNext, model.choice, command, images);
       if (sent && commands.compactNext) commands.compactSent();
       return sent;
     },
@@ -123,6 +123,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         ipc={ipc}
         workspaceId={workspaceId}
         readOnly={handoff.offLaptop && !cloudMode}
+        acceptImages={!cloudMode}
         planMode={commands.planMode}
         agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} disabledHint={agentHint} />}
         {...modelBinding(model, cloudMode, commands.modelRef)}

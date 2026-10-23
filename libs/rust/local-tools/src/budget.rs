@@ -1122,6 +1122,7 @@ mod tests {
             &ReadLedger::new(),
             json!({ "path": "big.txt" }),
             budget,
+            false,
         )
         .expect("read");
         let content = read["content"].as_str().expect("content");
@@ -1140,6 +1141,7 @@ mod tests {
             &ReadLedger::new(),
             json!({ "path": "big.txt", "offset": next }),
             budget,
+            false,
         )
         .expect("page");
         assert_eq!(again["start_line"].as_u64(), Some(next));
@@ -1206,6 +1208,7 @@ mod tests {
                     &ReadLedger::new(),
                     json!({ "path": "one.txt", "offset": offset, "column": column }),
                     budget,
+                    false,
                 )
                 .expect("read")
             },

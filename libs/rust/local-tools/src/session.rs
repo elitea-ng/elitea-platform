@@ -11,6 +11,7 @@
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -100,6 +101,9 @@ pub struct LocalSession {
     turn: Mutex<Turn>,
     /// The edit tools the current model is offered.
     edit_profile: Mutex<EditProfile>,
+    /// Whether the current model can see images: `read_file` returns an
+    /// image to one that can (set per turn from the model catalogue).
+    vision: AtomicBool,
     /// The project profile and the mentioned folders it was detected
     /// with: detected again only when those change or a marker does.
     project: Mutex<Option<(Vec<WsPath>, Arc<ProjectProfile>)>>,
@@ -147,7 +151,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "read_file",
         kind: ToolKind::ReadFile,
-        description: "Read a UTF-8 text file in the workspace, with line numbers. Page long files with offset/limit; a line too long for one page is cut, and next_offset with next_column continue inside it. Reading a file is required before changing it.",
+        description: "Read a UTF-8 text file in the workspace, with line numbers. Page long files with offset/limit; a line too long for one page is cut, and next_offset with next_column continue inside it. Reading a file is required before changing it. Images (PNG, JPEG, WebP, GIF) are returned as images when the model can see them.",
         parameters: || {
             json!({
                 "type": "object",
@@ -702,6 +706,7 @@ impl LocalSession {
             spill,
             turn: Mutex::new(Turn::default()),
             edit_profile: Mutex::new(EditProfile::default()),
+            vision: AtomicBool::new(false),
             project: Mutex::new(None),
         }))
     }
@@ -891,6 +896,18 @@ impl LocalSession {
         if let Ok(mut current) = self.edit_profile.lock() {
             *current = profile;
         }
+    }
+
+    /// Say whether the turn's model can see images; `false` until set.
+    /// `read_file` on an image returns it only when it can
+    /// (see the `read_file` description).
+    pub fn set_vision(&self, vision: bool) {
+        self.vision.store(vision, Ordering::Relaxed);
+    }
+
+    #[must_use]
+    pub fn vision(&self) -> bool {
+        self.vision.load(Ordering::Relaxed)
     }
 
     #[must_use]
@@ -1212,6 +1229,7 @@ impl LocalSession {
                     &this.ledger,
                     args,
                     budget::bytes(budgets.read_file),
+                    this.vision(),
                 ),
                 ToolKind::ListTree => files::tree(&this.workspace, args),
                 ToolKind::SearchFiles => {
