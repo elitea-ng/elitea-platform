@@ -50,6 +50,13 @@ because each was a real bug found across 3 review rounds.
   readiness. So a boot during a NATS outage must not serve unmetered. Do not
   revert this to serving without a human. Do NOT let a probe that FAILED to
   read the budget tables be read as "no budgets".
+- **The NATS-down degraded cap is a FLEET bound** (human decision, the owner
+  approved it on 2026-10-22, DECISIONS.md). Each replica admits
+  `failmode.PerReplicaShare(cap, ExpectedReplicas)` = `floor(cap / N)`, minimum
+  0, in FRESH_SAFE and FRESH_NEAR alike. Do NOT round up and do NOT add a
+  positive minimum: either lets N replicas spend more than the cap. A set
+  `LLM_BUDGET_EXPECTED_REPLICAS` below 1 or not an integer refuses to start
+  (`expectedReplicas`); do not let it fall back to 1.
 - Budget gate runs **before** the provider on EVERY /llm endpoint (chat,
   responses, text, embeddings, images, messages). Adding a new endpoint? It MUST
   call checkBudget before dispatch and updateUsage after.

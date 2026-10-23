@@ -4,6 +4,39 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## LLM gateway: the degraded-mode budget cap is divided by the replica count
+
+**Affects:** every install that runs more than one LLM gateway replica, and
+every install that sets `LLM_BUDGET_EXPECTED_REPLICAS` or
+`LLM_BUDGET_NATS_DEGRADED_CAP_USD`.
+
+**What changed.**
+
+* While NATS is down, each gateway replica now admits only its share of the
+  degraded-mode budget cap: `floor(cap / LLM_BUDGET_EXPECTED_REPLICAS)`. The
+  cap is `LLM_BUDGET_NATS_DEGRADED_CAP_USD`, else 10% of the hard limit.
+  Before, each replica admitted the whole cap, so N replicas could spend
+  N × cap. The fleet total is now at most the cap, plus the one request
+  each replica admits last (its cost is known only after it runs).
+* **The per-replica cap shrinks as the replica count grows.** The chart sets
+  `LLM_BUDGET_EXPECTED_REPLICAS` to the replica ceiling
+  (`llmGateway.autoscaling.maxReplicas`, 4 by default, else `replicaCount`).
+  With the defaults each replica gets a quarter of the cap. A cap smaller
+  than the replica count, in nano-USD, gives a share of 0: that replica
+  refuses every request for the budget until NATS returns.
+* The gateway refuses to start when `LLM_BUDGET_EXPECTED_REPLICAS` is set to
+  0, a negative number or text. Before, such a value was read as 1.
+
+**What to do.**
+
+1. Leave `llmGateway.env.LLM_BUDGET_EXPECTED_REPLICAS` empty. The chart
+   derives it. Outside the chart, set it to the most gateway replicas that
+   can run.
+2. To keep the degraded-mode allowance each replica had before, multiply
+   `llmGateway.env.LLM_BUDGET_NATS_DEGRADED_CAP_USD` by the replica ceiling.
+   This also raises the fleet total. A value of `0` (10% of the hard limit)
+   is now the fleet total, not the total per replica.
+
 ## Scaling for every component: Inventory on N replicas, fleet-wide DeepWiki slots, autoscalers on by default
 
 **Affects:** every Kubernetes install of the `elitea` chart, and especially

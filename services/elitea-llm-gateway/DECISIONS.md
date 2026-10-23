@@ -25,6 +25,31 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   unbounded. We accept returning 503 during a DB blip over granting free spend.
   Reconsider only if availability SLOs make brief 503s unacceptable AND a safer
   bound exists.
+- **[human decision] 2026-10-22 — the NATS-down degraded cap is a FLEET bound,
+  divided by the expected replica count.** The owner approved this on
+  2026-10-22. *Finding:* in `NATS_DOWN_PG_FRESH_SAFE` each replica admitted
+  degraded spend up to the WHOLE cap (`LLM_BUDGET_NATS_DEGRADED_CAP_USD`, else
+  10% of the hard limit). Each replica counts its degraded spend in process and
+  cannot see the others. So N replicas could overspend by N × cap.
+  *Decision:* each replica admits `floor(cap / LLM_BUDGET_EXPECTED_REPLICAS)`
+  (`failmode.PerReplicaShare`). FRESH_NEAR already divided the remaining budget
+  the same way; both states now use the one function. *Rounding:* FLOOR, so
+  `N × share ≤ cap` for every input. Ceiling would let the fleet exceed the cap
+  by up to N−1 nano-USD. *Minimum:* 0. A cap below N nano-USD gives a share of
+  0, and that replica refuses every degraded request for the scope (402,
+  `overShare`). The share-0 test is explicit because admission passes
+  `reqCostNano=0`: without it, a share of 0 admits the first request. Any
+  positive minimum would let the fleet exceed the cap. *Residual:* a replica
+  with a positive share can pass it by the one request it admits at the
+  crossing (the 2026-08-09 async-billing overshoot), so the fleet bound is
+  cap + one request per replica. *Boot check:* a set
+  `LLM_BUDGET_EXPECTED_REPLICAS` that is not an integer ≥ 1 stops the process
+  (`expectedReplicas`, cmd/elitea-llm-gateway). `config.FromEnv` alone reads
+  such a value as 1, and 1 gives each replica the whole cap. The chart derives
+  the value from the replica ceiling and refuses an override below it.
+  *Accepted cost:* while fewer replicas run than the expected count, the fleet
+  spends less than the cap in degraded mode. To keep the per-replica share,
+  raise `LLM_BUDGET_NATS_DEGRADED_CAP_USD` with the replica count.
 - **[human decision] 2026-08-09 (supersedes the entry below) — the
   concurrent-admission overshoot is UNBOUNDED and accepted; the in-flight
   reservation is deleted.** *Finding (issue #10):* the reservation that the

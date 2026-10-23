@@ -12,7 +12,7 @@ Every Elitea workload either has an autoscaler or is a singleton for a stated re
 | elitea-main | HPA | CPU (70 %) and memory (80 %) | metrics-server | 2 to 8 |
 | elitea-web | HPA | CPU (70 %) | metrics-server | 2 to 6 |
 | elitea-vector | HPA | CPU (70 %) | metrics-server | 2 to 6 |
-| LLM gateway | KEDA `prometheus` + CPU | `sum(gateway_llm_sse_active_connections)` in the namespace, 40 streams per replica | KEDA, Prometheus scraping `:8083/metrics` | 2 to 4 |
+| LLM gateway | KEDA `prometheus` + CPU | `sum(gateway_llm_sse_active_connections)` in the namespace, 40 streams per replica | KEDA, Prometheus scraping `:8083/metrics` | 2 to 4; the ceiling divides the degraded-mode budget cap (see [The gateway's expected replicas](#the-gateways-expected-replicas)) |
 | | HPA, Pods metric | `gateway_llm_sse_active_connections` per pod, through `custom.metrics.k8s.io` | a custom metrics adapter | |
 | | HPA | CPU (70 %) | metrics-server | |
 | Agent worker | KEDA `nats-jetstream` + CPU | consumer lag on the agent command stream; one replica per `delivery_max_concurrency` (32) commands | KEDA | 1 to 10 |
@@ -225,4 +225,14 @@ The Kubernetes Cluster Autoscaler gives an evicted pod at most `--max-graceful-t
 
 ## The gateway's expected replicas
 
-The gateway divides its degraded-mode budget cap by `LLM_BUDGET_EXPECTED_REPLICAS`. If that number is below the real fleet, every replica spends a share meant for fewer, and the fleet overspends while it is degraded. The chart **derives** it from the gateway's replica ceiling: `autoscaling.maxReplicas` while autoscaling (4 by default), else `replicaCount`. Leave it unset. An explicit value below the ceiling is refused, and one above it is accepted. While fewer replicas run than the ceiling, the fleet spends less than the cap in degraded mode, never more.
+While NATS is down, the gateway counts spend in each replica and cannot see the other replicas. The degraded-mode budget cap is the bound for the whole fleet, so each replica gets one share of it:
+
+```
+per-replica share = floor(cap / LLM_BUDGET_EXPECTED_REPLICAS)
+cap               = LLM_BUDGET_NATS_DEGRADED_CAP_USD, or 10% of the budget's hard limit when that is 0
+fleet total       ≤ replicas × share + one request per replica ≤ cap + one request per replica
+```
+
+The share rounds down to the nano-USD, so the shares together never go above the cap. A request's cost is known only after it runs, so each replica can pass its share by the one request it admits last. A cap smaller than the replica count, in nano-USD, gives a share of 0: that replica then refuses every request for the budget until NATS returns. Below the soft-alert threshold this cap applies; above it, each replica gets the same share of the budget that remains. More replicas give a smaller share each. To keep a per-replica share as you add replicas, raise `llmGateway.env.LLM_BUDGET_NATS_DEGRADED_CAP_USD` with the replica count.
+
+The gateway refuses to start when `LLM_BUDGET_EXPECTED_REPLICAS` is set to 0, a negative number or text. If that number is below the real fleet, every replica spends a share meant for fewer, and the fleet overspends while it is degraded. The chart **derives** it from the gateway's replica ceiling: `autoscaling.maxReplicas` while autoscaling (4 by default), else `replicaCount`. Leave it unset. An explicit value below the ceiling is refused, and one above it is accepted. While fewer replicas run than the ceiling, the fleet spends less than the cap in degraded mode, never more.

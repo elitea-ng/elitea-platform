@@ -63,6 +63,17 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
 
+	// The degraded-mode budget allowance is divided by this replica count
+	// (human decision, DECISIONS.md 2026-10-22). A set value that is not a
+	// positive integer stops the process: config.FromEnv would read it as 1,
+	// and every replica would then spend the whole fleet's allowance.
+	replicas, err := expectedReplicas(os.LookupEnv)
+	if err != nil {
+		slog.Error("FATAL: refusing to start", "err", err)
+		os.Exit(1)
+	}
+	cfg.ExpectedReplicas = replicas
+
 	// The vault master key gate, before anything opens the database: the same
 	// rule elitea-main enforces (master_key_gate.go). A malformed key always
 	// stops the process; an ABSENT key stops it too, unless the development
@@ -820,8 +831,9 @@ func logLoopBreakerMode(logger *slog.Logger, p llmproxy.LoopBreakerParams) {
 // GovernanceStore + cost.Calculator) and calls Start before returning.
 //
 // FIX #7: cfg.NATSDegradedCapUSD (float64 USD) is converted to int64 nano-USD
-// and set on failmode.Params.DegradedCapNano so the per-replica degraded cap is
-// enforced by the FSM (previously it was silently 0 — never set).
+// and set on failmode.Params.DegradedCapNano so the fleet-wide degraded cap is
+// enforced by the FSM (previously it was silently 0 — never set). Each replica
+// admits failmode.PerReplicaShare(cap, ExpectedReplicas) of it.
 func buildGovernance(
 	ctx context.Context,
 	cfg config.Config,
@@ -859,6 +871,8 @@ func buildGovernance(
 		params.Mode = failmode.ModeTieredHybrid
 	}
 	if params.ExpectedReplicas < 1 {
+		// main refuses such a value at boot (expectedReplicas). This floor is a
+		// second guard for a caller that builds a Config by hand.
 		params.ExpectedReplicas = 1
 	}
 

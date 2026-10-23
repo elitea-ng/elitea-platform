@@ -4536,8 +4536,10 @@ llmGateway:
     # How old (integer minutes) the Postgres snapshot may be before the tiered-hybrid
     # fallback degrades to 503 (NATS_DOWN_PG_STALE). Default: 5.
     LLM_BUDGET_PG_FRESHNESS_MIN: "5"
-    # Absolute per-replica degraded-window overspend cap in USD (§8.5).
+    # Absolute FLEET-wide degraded-window overspend cap in USD (§8.5).
     # 0 = use 10 % of the project hard_limit_usd instead of a fixed cap.
+    # Each replica admits floor(cap / LLM_BUDGET_EXPECTED_REPLICAS) of it, so
+    # the share per replica shrinks as the replica ceiling grows.
     LLM_BUDGET_NATS_DEGRADED_CAP_USD: "0"
     # Continuous NATS outage ceiling (integer minutes). Once NATS has been down longer
     # than this the FSM forces closed (503) regardless of snapshot freshness. Default: 10.

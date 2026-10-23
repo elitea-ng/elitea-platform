@@ -53,6 +53,7 @@ func TestMainWiring(t *testing.T) {
 		{"llmproxy.WithAlertEventPublisher(", "budget.soft_alert is never published to gateway.events.* — the 80% alert would be invisible to subscribers (spec §8.3)"},
 		{"llmproxy.WithStreamGrace(", "the stream-disconnect grace period is never configured — a client that disconnects mid-stream is billed nothing and the hard budget is bypassable (issue #9)"},
 		{"llmproxy.WithStreamDrainLimit(", "abandoned-stream drains are unbounded — a disconnect storm holds unbounded goroutines and provider sockets (issue #9)"},
+		{"expectedReplicas(", "the LLM_BUDGET_EXPECTED_REPLICAS boot check is never invoked — a 0, negative or non-numeric value falls back to 1, and every replica then spends the whole fleet's degraded-mode allowance (human decision, DECISIONS.md 2026-10-22)"},
 		{"requireVaultMasterKey(", "the vault master key gate is never invoked — the gateway would start with no SECRETS_MASTER_KEY and read every project vault key in the clear, the posture elitea-main already refuses"},
 		{"startupIdentityCheck(", "the identity-secret startup guard is never invoked — the gateway would boot with identity verification disabled while the vault-backed Account resolves per-project credentials from an unauthenticated X-Elitea-Project-Id (issue #11)"},
 		{"shutdownSequence(", "the shutdown sequence is never invoked — stream grace, HTTP drain, billing drain and NATS close would not run in the one order that loses no spend (issue #9)"},

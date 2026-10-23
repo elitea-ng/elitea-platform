@@ -38,7 +38,7 @@ const (
 	DefaultProviderConcurrency = 50
 
 	// DefaultNATSReplicas is the default gateway replica count
-	// (LLM_BUDGET_EXPECTED_REPLICAS) the degraded per-replica cap divides by.
+	// (LLM_BUDGET_EXPECTED_REPLICAS) the fleet-wide degraded allowance divides by.
 	// It no longer sizes any NATS asset: the gateway binds to streams the
 	// nats-bootstrap Job creates, at the replica count that Job is given
 	// (#1076). HA operators MUST set the real gateway replica count.
@@ -255,12 +255,16 @@ type Config struct {
 	// NATSDegradedMaxDuration is the continuous-outage ceiling before the FSM
 	// forces closed (503) regardless of snapshot freshness (§8.5).
 	NATSDegradedMaxDuration time.Duration
-	// NATSDegradedCapUSD is an absolute per-replica degraded-window overspend cap
-	// in USD (§8.5). 0 means "use DefaultNATSDegradedCapPct % of hard_limit_usd".
+	// NATSDegradedCapUSD is an absolute FLEET-wide degraded-window overspend cap
+	// in USD (§8.5). 0 means "use 10% of hard_limit_usd". Each replica admits
+	// floor(cap / ExpectedReplicas) of it (failmode.PerReplicaShare).
 	NATSDegradedCapUSD float64
-	// ExpectedReplicas is the operator-configured replica count used for the
-	// NATS_DOWN_PG_FRESH_NEAR per-replica cap (§8.5, LLM_BUDGET_EXPECTED_REPLICAS,
-	// default 1).
+	// ExpectedReplicas is the operator-configured replica count that the
+	// NATS-down degraded allowance is divided by: the FRESH_NEAR remaining
+	// budget and the FRESH_SAFE degraded cap (§8.5, LLM_BUDGET_EXPECTED_REPLICAS,
+	// default 1). FromEnv reads a non-positive value as the default; main
+	// refuses to start on such a value first (expectedReplicas in
+	// cmd/elitea-llm-gateway).
 	ExpectedReplicas int
 
 	// The mTLS material of the GatewayService gRPC listener (#1359): the
