@@ -43,6 +43,11 @@ func TestBoundsMatchTheSharedContract(t *testing.T) {
 		contract.RuntimeMessage != applicationcomposition.RuntimeMessage {
 		t.Fatalf("contract %+v drifted from the save check", contract)
 	}
+	// The output plane refuses a runtime failure whose safe message exceeds
+	// 256 bytes (application/output RuntimeFailureFrame.Validate).
+	if len(contract.RuntimeMessage) > 256 {
+		t.Fatalf("the registered message is %d bytes; the output plane admits 256", len(contract.RuntimeMessage))
+	}
 }
 
 // A refused start is the typed composition refusal: 422, the public code and

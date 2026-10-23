@@ -6,5 +6,5 @@
   "max_ordinary_graph_scopes": 2,
   "max_application_hops": 25,
   "public_code": "APPLICATION_COMPOSITION_INVALID",
-  "runtime_message": "This agent or pipeline cannot run: its attached agents and pipelines form a circular reference, are nested deeper than allowed, or include a pipeline that pauses for review where the pause cannot be continued. Review its attachments, then remove or change the one that breaks the rule."
+  "runtime_message": "This agent or pipeline cannot run: its attachments form a circular reference, nest deeper than allowed, or include a pipeline that pauses where the pause cannot be continued. Review its attachments and change the one that breaks the rule."
 }

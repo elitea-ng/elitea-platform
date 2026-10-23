@@ -803,7 +803,7 @@ impl RuntimeFailureKind {
 /// registers this exact text.
 /// Registered text of [`RuntimeFailureKind::ApplicationCompositionInvalid`]. Data-free: Main's
 /// attach and pipeline save checks name the attachment; Main registers this exact text.
-pub(crate) const APPLICATION_COMPOSITION_INVALID_MESSAGE: &str = "This agent or pipeline cannot run: its attached agents and pipelines form a circular reference, are nested deeper than allowed, or include a pipeline that pauses for review where the pause cannot be continued. Review its attachments, then remove or change the one that breaks the rule.";
+pub(crate) const APPLICATION_COMPOSITION_INVALID_MESSAGE: &str = "This agent or pipeline cannot run: its attachments form a circular reference, nest deeper than allowed, or include a pipeline that pauses where the pause cannot be continued. Review its attachments and change the one that breaks the rule.";
 
 pub(crate) const PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE: &str = "This pipeline uses a node type that is not available on this deployment. Open the pipeline to see which node, then remove or replace it.";
 

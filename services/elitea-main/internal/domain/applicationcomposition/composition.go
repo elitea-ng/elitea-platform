@@ -51,7 +51,7 @@ const Code = "APPLICATION_COMPOSITION_INVALID"
 // RuntimeMessage is the registered, data-free text of a run refused for its
 // stored composition (application-composition-limits-v1.json runtime_message):
 // the Worker sends it, and Main's start refusal (ErrAtStart) answers it.
-const RuntimeMessage = "This agent or pipeline cannot run: its attached agents and pipelines form a circular reference, are nested deeper than allowed, or include a pipeline that pauses for review where the pause cannot be continued. Review its attachments, then remove or change the one that breaks the rule."
+const RuntimeMessage = "This agent or pipeline cannot run: its attachments form a circular reference, nest deeper than allowed, or include a pipeline that pauses where the pause cannot be continued. Review its attachments and change the one that breaks the rule."
 
 // ErrAtStart refuses a run whose stored composition Main's start validation
 // rejects for a bound (a circular reference, the hop or tier bound): a

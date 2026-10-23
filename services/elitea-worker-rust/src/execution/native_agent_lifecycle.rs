@@ -1836,6 +1836,8 @@ mod taxonomy_tests {
                 crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::UnsupportedCapability
             );
             assert_eq!(message, APPLICATION_COMPOSITION_INVALID_MESSAGE);
+            // Main refuses a terminal whose safe message exceeds 256 bytes.
+            assert!(message.len() <= 256);
             assert!(!retryable);
         }
         let unavailable = NativeAgentAssemblyError::new(
