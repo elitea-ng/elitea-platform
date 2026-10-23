@@ -168,7 +168,7 @@ describe('transformParticipant version resolution', () => {
 
 // EliteaUI participants.helpers.test.js (#5778), on Main's participant meta (FU-244, PLAN §8.8).
 describe('isSkippedContainerParticipant', () => {
-  const agent = (meta: Record<string, unknown>, entityName = ChatParticipantType.Applications) => ({
+  const agent = (meta: Record<string, unknown>, entityName: string = ChatParticipantType.Applications) => ({
     entity_name: entityName,
     entity_meta: { id: 7 },
     meta: { is_container: true, ...meta },
