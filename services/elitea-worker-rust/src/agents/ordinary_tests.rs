@@ -3961,6 +3961,9 @@ async fn nested_agent_cycle_fails_after_one_exact_resolution_and_before_model_di
         error.code(),
         NativeAgentAssemblyErrorCode::InvalidConfiguration
     );
+    assert!(crate::agents::application_tools::is_composition_bound(
+        &error
+    ));
     assert_eq!(calls.load(Ordering::Acquire), 2);
     assert_eq!(paths.lock().expect("runtime-context paths").len(), 2);
     assert!(captured.lock().expect("captured model requests").is_empty());
@@ -4014,6 +4017,10 @@ async fn nested_agent_tier_limit_fails_before_fetching_the_fourth_tier() {
         error.code(),
         NativeAgentAssemblyErrorCode::ResourceExhausted
     );
+    // FU-244: a tier past the bound is the typed composition refusal, never a skipped edge.
+    assert!(crate::agents::application_tools::is_composition_bound(
+        &error
+    ));
     assert_eq!(calls.load(Ordering::Acquire), 3);
     let paths = paths.lock().expect("runtime-context paths");
     assert!(

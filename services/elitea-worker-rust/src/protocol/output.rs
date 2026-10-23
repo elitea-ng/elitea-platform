@@ -93,6 +93,9 @@ pub enum RuntimeFailureKind {
     PipelineInputInvalid,
     PipelineChildInputTypeInvalid,
     PipelineNodeTypeNotAvailable,
+    /// FU-244: the saved composition breaks a bound (cycle, nesting, scopes, budgets, a pause
+    /// a pipeline root cannot continue). Authoring error, refused before any model call.
+    ApplicationCompositionInvalid,
     PipelineInputLimit,
     PipelineToolUnavailable,
     PipelineToolFailed,
@@ -798,6 +801,10 @@ impl RuntimeFailureKind {
 /// A stored pipeline holds a direct node on a toolkit its position cannot serve.
 /// Data-free: the node is named by Main's start check and by the editor; Main
 /// registers this exact text.
+/// Registered text of [`RuntimeFailureKind::ApplicationCompositionInvalid`]. Data-free: Main's
+/// attach and pipeline save checks name the attachment; Main registers this exact text.
+pub(crate) const APPLICATION_COMPOSITION_INVALID_MESSAGE: &str = "This agent or pipeline cannot run: its attached agents and pipelines form a circular reference, are nested deeper than allowed, or include a pipeline that pauses for review where the pause cannot be continued. Review its attachments, then remove or change the one that breaks the rule.";
+
 pub(crate) const PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE: &str = "This pipeline uses a node type that is not available on this deployment. Open the pipeline to see which node, then remove or replace it.";
 
 /// The upstream code a typed "may have started" refusal carries through the
@@ -851,6 +858,11 @@ pub(crate) fn runtime_error_policy(
         RuntimeFailureKind::PipelineNodeTypeNotAvailable => (
             RuntimeErrorCodeV1::UnsupportedCapability,
             PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE,
+            false,
+        ),
+        RuntimeFailureKind::ApplicationCompositionInvalid => (
+            RuntimeErrorCodeV1::UnsupportedCapability,
+            APPLICATION_COMPOSITION_INVALID_MESSAGE,
             false,
         ),
         RuntimeFailureKind::PipelineChildInputTypeInvalid => (
@@ -1047,6 +1059,7 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::PipelineInputInvalid,
         RuntimeFailureKind::PipelineChildInputTypeInvalid,
         RuntimeFailureKind::PipelineNodeTypeNotAvailable,
+        RuntimeFailureKind::ApplicationCompositionInvalid,
         RuntimeFailureKind::PipelineInputLimit,
         RuntimeFailureKind::PipelineToolUnavailable,
         RuntimeFailureKind::PipelineToolFailed,

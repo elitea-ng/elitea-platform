@@ -14,6 +14,7 @@ use super::{
     PipelineDefinition, PipelineExecutionProfile, PlatformClient, ToolAdmissionPolicy,
     invalid_pipeline_tool_scope,
 };
+use crate::agents::application_tools::{bound, composition_bound};
 
 // Match the existing nested interrupt parser. Do not admit deeper pauses.
 pub(crate) const MAX_PIPELINE_COMPOSITION_DEPTH: usize = 3;
@@ -84,15 +85,20 @@ impl CompositionAdmission<'_> {
             {
                 return Err(invalid_pipeline_tool_scope());
             }
-            if depth > MAX_PIPELINE_COMPOSITION_DEPTH || self.hops == MAX_PIPELINE_COMPOSITION_HOPS
-            {
-                return Err(composition_exhausted());
+            if depth > MAX_PIPELINE_COMPOSITION_DEPTH {
+                return Err(composition_exhausted(bound::PIPELINE_DEPTH));
+            }
+            if self.hops == MAX_PIPELINE_COMPOSITION_HOPS {
+                return Err(composition_exhausted(bound::APPLICATION_HOPS));
             }
             self.hops += 1;
             if !self.resolving.insert(identity) {
-                return Err(NativeAgentAssemblyError::new(
-                    NativeAgentAssemblyErrorCode::InvalidConfiguration,
-                    "the saved pipeline composition contains a cycle",
+                return Err(composition_bound(
+                    NativeAgentAssemblyError::new(
+                        NativeAgentAssemblyErrorCode::InvalidConfiguration,
+                        "the saved pipeline composition contains a cycle",
+                    ),
+                    bound::CYCLE,
                 ));
             }
             let result = async {
@@ -112,9 +118,9 @@ impl CompositionAdmission<'_> {
                                 .map_err(|_| invalid_pipeline_tool_scope())?
                                 .len(),
                         )
-                        .ok_or_else(composition_exhausted)?;
+                        .ok_or_else(|| composition_exhausted(bound::VERSION_BYTES))?;
                     if self.version_bytes > MAX_COMPOSITION_VERSION_BYTES {
-                        return Err(composition_exhausted());
+                        return Err(composition_exhausted(bound::VERSION_BYTES));
                     }
                     self.versions.insert(identity, version.clone());
                     version
@@ -284,8 +290,11 @@ fn collect_paths(
         } else {
             format!("{prefix}/{node_id}")
         };
-        if depth == MAX_PIPELINE_COMPOSITION_DEPTH || paths.len() == MAX_PIPELINE_CHECKPOINT_PATHS {
-            return Err(composition_exhausted());
+        if depth == MAX_PIPELINE_COMPOSITION_DEPTH {
+            return Err(composition_exhausted(bound::PIPELINE_DEPTH));
+        }
+        if paths.len() == MAX_PIPELINE_CHECKPOINT_PATHS {
+            return Err(composition_exhausted(bound::CHECKPOINT_PATHS));
         }
         let child = children.get(selection.alias());
         if paths
@@ -307,10 +316,13 @@ fn collect_paths(
     Ok(())
 }
 
-const fn composition_exhausted() -> NativeAgentAssemblyError {
-    NativeAgentAssemblyError::new(
-        NativeAgentAssemblyErrorCode::ResourceExhausted,
-        "the saved pipeline composition exceeds its resource bound",
+const fn composition_exhausted(detail: &'static str) -> NativeAgentAssemblyError {
+    composition_bound(
+        NativeAgentAssemblyError::new(
+            NativeAgentAssemblyErrorCode::ResourceExhausted,
+            "the saved pipeline composition exceeds its resource bound",
+        ),
+        detail,
     )
 }
 
@@ -595,6 +607,9 @@ mod tests {
             NativeAgentAssemblyErrorCode::InvalidConfiguration
         );
         assert_eq!(reads.load(Ordering::SeqCst), 1);
+        assert!(crate::agents::application_tools::is_composition_bound(
+            &error
+        ));
         let (platform, reads) = client(BTreeMap::new());
         assert!(
             admit_tool_composition(
@@ -649,5 +664,8 @@ mod tests {
             NativeAgentAssemblyErrorCode::ResourceExhausted
         );
         assert_eq!(reads.load(Ordering::SeqCst), 4);
+        assert!(crate::agents::application_tools::is_composition_bound(
+            &error
+        ));
     }
 }

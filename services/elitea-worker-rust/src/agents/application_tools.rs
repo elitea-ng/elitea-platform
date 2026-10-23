@@ -81,6 +81,7 @@ use crate::transport::runtime_context::SavedAgentFingerprint;
 #[cfg(test)]
 pub(in crate::agents) use materialization::MAX_MATERIALIZATION_VERSION_BYTES;
 pub(super) use materialization::{ApplicationContinuation, ApplicationMaterializationPath};
+pub(crate) use materialization::{bound, composition_bound, is_composition_bound};
 pub(crate) use static_resume::{
     install_static_application_resume, prepare_static_application_resume,
 };
@@ -2923,6 +2924,7 @@ pub(crate) async fn materialize_application_runtime(
 > {
     let (event_sender, event_receiver) = mpsc::channel(APPLICATION_EVENT_CHANNEL_CAPACITY);
     let resume = ApplicationResumeCoordinator::default();
+    let materialization = dependencies.materialization.clone();
     dependencies.event_sender = Some(event_sender);
     dependencies.resume = Some(resume.clone());
     // #973: read before the dependencies are consumed below. A caller that
@@ -2955,7 +2957,9 @@ pub(crate) async fn materialize_application_runtime(
     // root one does (#990): skipped and named on the root's notice, never a
     // failed turn for the Agents that do not call it.
     let mut skipped_pipeline_children = skipped_pipeline_children;
-    for child in skipped_nested {
+    // FU-243: plus what a pipeline `agent` node's Agent left out below (recorded on the shared
+    // assembly path by `pipeline::bind_scoped_agent`), so this root names it too.
+    for child in skipped_nested.into_iter().chain(materialization.skipped()) {
         if skipped_pipeline_children.len() >= MAX_SKIPPED_APPLICATION_CHILDREN {
             break;
         }
@@ -3055,6 +3059,10 @@ async fn materialize_pipeline_children(
         .await;
         let (definition, runtimes, child_tools) = match built {
             Ok(built) => built,
+            // FU-244: a bound violation (cycle, depth, tiers, scopes, budgets, a pause the
+            // root cannot continue) is an authoring error of the saved composition. It is
+            // refused with its typed readable terminal, never dropped as an edge.
+            Err(error) if is_composition_bound(&error) => return Err(error),
             Err(error) => {
                 tracing::warn!(
                     application_id = reference.identity.0,
@@ -3214,8 +3222,14 @@ impl ApplicationAssemblyState<'_> {
             );
             let result = async {
                 self.hops = self.hops.saturating_add(1);
-                if self.hops > MAX_APPLICATION_HOPS || tier > MAX_AGENT_TIERS {
-                    return Err(resource_exhausted());
+                if self.hops > MAX_APPLICATION_HOPS {
+                    return Err(composition_bound(
+                        resource_exhausted(),
+                        bound::APPLICATION_HOPS,
+                    ));
+                }
+                if tier > MAX_AGENT_TIERS {
+                    return Err(composition_bound(resource_exhausted(), bound::AGENT_TIERS));
                 }
                 // Unreachable from `application_references`, which filters
                 // these out and reports them as skipped (#973). Kept as the
@@ -3237,7 +3251,7 @@ impl ApplicationAssemblyState<'_> {
                 }
                 tracing::Span::current().record("cache_hit", false);
                 if !self.resolving.insert(identity) {
-                    return Err(invalid_configuration());
+                    return Err(composition_bound(invalid_configuration(), bound::CYCLE));
                 }
                 tracing::Span::current().record("stage", "resolve_version");
                 let parent_path = std::mem::replace(&mut self.materialization, next_path);

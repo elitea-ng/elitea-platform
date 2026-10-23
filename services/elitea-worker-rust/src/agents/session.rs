@@ -446,6 +446,8 @@ pub(crate) struct PipelineRuntimeBindings {
     pub(crate) nodes: super::graph::compiler::PipelineNodeRuntimes,
     pub(crate) applications: ApplicationRuntimeProjection,
     pub(crate) node_events: Option<PipelineNodeEventReceiver>,
+    /// Attachments a pipeline `agent` node's Agent left out (FU-243), named on the notice.
+    pub(crate) skipped_application_children: Vec<SkippedApplicationChild>,
 }
 
 fn application_event_agent(
@@ -1845,6 +1847,7 @@ pub(super) async fn assemble_pipeline_native(
         nodes: node_runtimes,
         applications: application_runtime,
         node_events,
+        skipped_application_children,
     } = runtime;
     let ApplicationRuntimeProjection {
         presentations: application_tools,
@@ -1944,6 +1947,13 @@ pub(super) async fn assemble_pipeline_native(
         ))
         .build()
         .map_err(|_| invalid_configuration())?;
+    // FU-243: a pipeline root names what its Agent nodes left out, like an ordinary root.
+    let projection =
+        projection.with_skipped_capabilities(super::skipped_capabilities::skipped_capabilities(
+            &[],
+            InternalToolCatalog::empty(),
+            &skipped_application_children,
+        ));
     let projector = AgentEventProjector::with_tool_catalogs(
         projection,
         SensitiveToolCatalog::default(),

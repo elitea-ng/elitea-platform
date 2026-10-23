@@ -1,15 +1,51 @@
 //! One bounded assembly path across saved graphs and ordinary Agents.
 
-use std::sync::Arc;
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use super::{
-    MAX_AGENT_TIERS, MAX_APPLICATION_HOPS, NativeAgentAssemblyError, NativeAgentAssemblyErrorCode,
+    MAX_AGENT_TIERS, MAX_APPLICATION_HOPS, MAX_SKIPPED_APPLICATION_CHILDREN,
+    NativeAgentAssemblyError, NativeAgentAssemblyErrorCode, SkippedApplicationChild,
     invalid_configuration, resource_exhausted,
 };
 use crate::agents::pipeline::composition::MAX_PIPELINE_COMPOSITION_DEPTH;
 
 pub(in crate::agents) const MAX_MATERIALIZATION_VERSION_BYTES: usize = 4 * 1024 * 1024;
+
+/// The typed cause every composition bound violation carries: a cycle, nesting past a tier,
+/// depth or scope bound, the hop or version-byte budget, or a pausing pipeline tool a graph
+/// root cannot continue. These are authoring errors of the saved composition, not runtime
+/// unavailability, so they are refused (`native_agent_lifecycle::assembly_failure` turns the
+/// cause into its registered readable terminal) and never degrade into a skipped attachment.
+pub(crate) const COMPOSITION_BOUND_CODE: &str = "application.composition_bound";
+
+/// Which bound a composition violated; data-free, logged with the cause.
+pub(crate) mod bound {
+    pub(crate) const CYCLE: &str = "cycle";
+    pub(crate) const AGENT_TIERS: &str = "agent_tiers";
+    pub(crate) const PIPELINE_DEPTH: &str = "pipeline_depth";
+    pub(crate) const ORDINARY_GRAPH_SCOPES: &str = "ordinary_graph_scopes";
+    pub(crate) const APPLICATION_HOPS: &str = "application_hops";
+    pub(crate) const VERSION_BYTES: &str = "version_bytes";
+    pub(crate) const CHECKPOINT_PATHS: &str = "checkpoint_paths";
+    pub(crate) const STATIC_PAUSE_UNDER_GRAPH_ROOT: &str = "static_pause_under_graph_root";
+}
+
+/// Mark `error` as a composition bound violation (see [`COMPOSITION_BOUND_CODE`]).
+pub(crate) const fn composition_bound(
+    error: NativeAgentAssemblyError,
+    detail: &'static str,
+) -> NativeAgentAssemblyError {
+    error.with_cause(COMPOSITION_BOUND_CODE, Some(detail))
+}
+
+/// Whether `error` is a composition bound violation, which is refused, never skipped.
+pub(crate) fn is_composition_bound(error: &NativeAgentAssemblyError) -> bool {
+    error
+        .cause()
+        .is_some_and(|cause| cause.code() == COMPOSITION_BOUND_CODE)
+}
 
 /// How the saved applications of one graph conversation continue.
 ///
@@ -34,6 +70,10 @@ pub(in crate::agents) struct ApplicationMaterializationPath {
     pipeline_depth: usize,
     hops: Arc<AtomicUsize>,
     version_bytes: Arc<AtomicUsize>,
+    /// Every unbuildable attachment skipped anywhere below the root (FU-243). Shared like the
+    /// hop counter, so the root names an attachment a pipeline `agent` node's Agent left out
+    /// however deep it sits. Bounded by `MAX_SKIPPED_APPLICATION_CHILDREN`.
+    skipped: Arc<Mutex<BTreeSet<SkippedApplicationChild>>>,
     continuation: ApplicationContinuation,
     graph_agent_scopes: usize,
     native_graph_root: bool,
@@ -53,6 +93,7 @@ impl ApplicationMaterializationPath {
             pipeline_depth: 0,
             hops: Arc::default(),
             version_bytes: Arc::default(),
+            skipped: Arc::default(),
             continuation,
             graph_agent_scopes: 0,
             native_graph_root: false,
@@ -81,7 +122,10 @@ impl ApplicationMaterializationPath {
         if self.graph_agent_scopes
             >= crate::agents::pipeline::scoped_applications::MAX_ORDINARY_GRAPH_SCOPES
         {
-            return Err(super::unsupported_capability());
+            return Err(composition_bound(
+                super::unsupported_capability(),
+                bound::ORDINARY_GRAPH_SCOPES,
+            ));
         }
         let mut path = self.clone();
         path.graph_agent_scopes += 1;
@@ -93,7 +137,7 @@ impl ApplicationMaterializationPath {
         identity: (u64, u64),
     ) -> Result<Self, NativeAgentAssemblyError> {
         if self.agent_tier >= MAX_AGENT_TIERS {
-            return Err(resource_exhausted());
+            return Err(composition_bound(resource_exhausted(), bound::AGENT_TIERS));
         }
         let mut next = self.enter(identity)?;
         next.agent_tier += 1;
@@ -106,7 +150,10 @@ impl ApplicationMaterializationPath {
     ) -> Result<Self, NativeAgentAssemblyError> {
         // Tool-root depth is zero in the existing saved composition contract.
         if self.pipeline_depth > MAX_PIPELINE_COMPOSITION_DEPTH {
-            return Err(resource_exhausted());
+            return Err(composition_bound(
+                resource_exhausted(),
+                bound::PIPELINE_DEPTH,
+            ));
         }
         let mut next = self.enter(identity)?;
         next.pipeline_depth += 1;
@@ -118,19 +165,47 @@ impl ApplicationMaterializationPath {
             return Err(invalid_configuration());
         }
         if self.ancestors.contains(&identity) {
-            return Err(NativeAgentAssemblyError::new(
-                NativeAgentAssemblyErrorCode::InvalidConfiguration,
-                "the saved application composition contains a cycle",
+            return Err(composition_bound(
+                NativeAgentAssemblyError::new(
+                    NativeAgentAssemblyErrorCode::InvalidConfiguration,
+                    "the saved application composition contains a cycle",
+                ),
+                bound::CYCLE,
             ));
         }
         self.hops
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 (value < MAX_APPLICATION_HOPS).then_some(value + 1)
             })
-            .map_err(|_| resource_exhausted())?;
+            .map_err(|_| composition_bound(resource_exhausted(), bound::APPLICATION_HOPS))?;
         let mut next = self.clone();
         next.ancestors.push(identity);
         Ok(next)
+    }
+
+    /// Remember attachments this assembly left out, for the root's skipped notice.
+    pub(in crate::agents) fn record_skipped(&self, children: &[SkippedApplicationChild]) {
+        if children.is_empty() {
+            return;
+        }
+        // A poisoned set only loses notice entries, never assembly correctness.
+        let Ok(mut skipped) = self.skipped.lock() else {
+            return;
+        };
+        for child in children {
+            if skipped.len() >= MAX_SKIPPED_APPLICATION_CHILDREN {
+                break;
+            }
+            skipped.insert(child.clone());
+        }
+    }
+
+    /// Every attachment left out anywhere in this assembly, in a stable order.
+    pub(in crate::agents) fn skipped(&self) -> Vec<SkippedApplicationChild> {
+        self.skipped
+            .lock()
+            .map(|skipped| skipped.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     pub(in crate::agents) fn admit_version(
@@ -146,7 +221,7 @@ impl ApplicationMaterializationPath {
                     .checked_add(bytes)
                     .filter(|total| *total <= MAX_MATERIALIZATION_VERSION_BYTES)
             })
-            .map_err(|_| resource_exhausted())?;
+            .map_err(|_| composition_bound(resource_exhausted(), bound::VERSION_BYTES))?;
         Ok(())
     }
 }

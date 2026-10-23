@@ -8,7 +8,9 @@
 
 use super::*;
 use crate::agents::application_tools::ApplicationContinuation;
-use crate::agents::application_tools::{MAX_APPLICATION_HOPS, MAX_MATERIALIZATION_VERSION_BYTES};
+use crate::agents::application_tools::{
+    MAX_APPLICATION_HOPS, MAX_MATERIALIZATION_VERSION_BYTES, bound, is_composition_bound,
+};
 use crate::agents::ordinary::OrdinaryNativeAgentAssembler;
 use crate::agents::pipeline::scope_receipts::has_graph_call_receipts;
 use crate::agents::pipeline::scoped_applications::MAX_ORDINARY_GRAPH_SCOPES;
@@ -690,14 +692,20 @@ async fn an_unbuildable_attachment_of_a_pipeline_agent_node_is_skipped_and_the_n
         "the unbuildable attachment is not offered: {:?}",
         offered_tools(&captured, 0)
     );
+    // FU-243: a pipeline root names the skipped attachment like an ordinary root does.
+    let rendered = serde_json::to_string(&browser).expect("browser events");
+    assert!(
+        rendered.contains("skipped_capabilities") && rendered.contains("broken-flow"),
+        "the skipped attachment is named on the pipeline root: {rendered}"
+    );
 }
 
-/// A static-pausing saved pipeline attached to a graph `agent` node's Agent
-/// cannot be projected beneath a graph root (one checkpoint owner): it is not
-/// offered, and the node still answers, as every other unbuildable attachment
-/// degrades (#990); the run never fails for a tool the Agent may not call.
+/// FU-244: a static-pausing saved pipeline attached to a graph `agent` node's Agent cannot be
+/// continued beneath a graph root (one checkpoint owner). That is an authoring error of the
+/// composition, so the run is refused with the typed composition cause before any model call;
+/// it is never silently dropped.
 #[tokio::test(flavor = "current_thread")]
-async fn a_graph_root_does_not_offer_a_static_saved_pipeline_tool_and_the_node_answers() {
+async fn a_static_saved_pipeline_tool_under_a_graph_root_is_refused_before_any_model_call() {
     let (sessions, checkpointer) = state();
     let versions = BTreeMap::from([
         (
@@ -709,32 +717,26 @@ async fn a_graph_root_does_not_offer_a_static_saved_pipeline_tool_and_the_node_a
             saved_version("pipeline", STATIC_GRAPH, &json!({}), Vec::new()),
         ),
     ]);
-    let (assembler, captured, _) = process(
-        &sessions,
-        &checkpointer,
-        &versions,
-        vec![text("node answer")],
-    );
+    let (assembler, captured, _) = process(&sessions, &checkpointer, &versions, Vec::new());
     let request = root_request(
         &root_yaml("worker"),
         vec![reference((5, 6), "agent", "worker")],
     );
-    let invocation = assembler
-        .assemble(authorized(&request))
-        .await
-        .expect("the static attachment degrades instead of failing the run");
-    let browser = collect_pipeline_completion(invocation).await;
-    assert!(
-        browser
-            .iter()
-            .any(|event| event["content"] == "node answer"),
-        "{browser:?}"
-    );
-    assert_eq!(model_calls(&captured), 1);
-    assert!(
-        !offered_tools(&captured, 0).contains(&"elitea_agent_7_v_8".to_owned()),
-        "{:?}",
-        offered_tools(&captured, 0)
+    let Err(error) = assembler.assemble(authorized(&request)).await else {
+        panic!("a static pause beneath a graph root must be refused");
+    };
+    assert_composition_bound(&error, bound::STATIC_PAUSE_UNDER_GRAPH_ROOT);
+    assert_eq!(model_calls(&captured), 0);
+}
+
+fn assert_composition_bound(error: &super::super::runtime::NativeAgentAssemblyError, detail: &str) {
+    assert!(is_composition_bound(error), "{error:?}");
+    assert_eq!(
+        error
+            .cause()
+            .and_then(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::detail),
+        Some(detail),
+        "{error:?}"
     );
 }
 
@@ -795,6 +797,7 @@ async fn the_application_hop_budget_admits_the_limit_and_refuses_one_more() {
         error.code(),
         NativeAgentAssemblyErrorCode::ResourceExhausted
     );
+    assert_composition_bound(&error, bound::APPLICATION_HOPS);
 }
 
 /// A saved Agent whose serialized version is exactly `bytes` long.
@@ -846,6 +849,7 @@ async fn the_version_byte_budget_admits_four_mib_and_refuses_one_more_byte() {
         error.code(),
         NativeAgentAssemblyErrorCode::ResourceExhausted
     );
+    assert_composition_bound(&error, bound::VERSION_BYTES);
 }
 
 /// A root whose chain reaches `scopes` ordinary graph scopes: each scope is a saved pipeline whose
@@ -891,12 +895,10 @@ async fn assemble_scopes(
     (result, reads)
 }
 
-/// One scope past the budget is never built: the Agent that would open it runs
-/// without that attachment (a pipeline `agent` node degrades its Agent's
-/// unbuildable attachments, #990), so the run assembles and the scope past the
-/// budget is never read.
+/// FU-244: one ordinary graph scope past the budget is refused with the typed composition
+/// cause at assembly; the Agent past the budget is never read.
 #[tokio::test(flavor = "current_thread")]
-async fn the_ordinary_graph_scope_budget_admits_the_limit_and_never_builds_one_more() {
+async fn the_ordinary_graph_scope_budget_admits_the_limit_and_refuses_one_more() {
     let (result, reads) = assemble_scopes(MAX_ORDINARY_GRAPH_SCOPES).await;
     result.expect("exactly the scope budget assembles");
     let last = MAX_ORDINARY_GRAPH_SCOPES as u64 - 1;
@@ -905,7 +907,10 @@ async fn the_ordinary_graph_scope_budget_admits_the_limit_and_never_builds_one_m
         "the last Agent within the budget is read: {reads:?}"
     );
     let (result, reads) = assemble_scopes(MAX_ORDINARY_GRAPH_SCOPES + 1).await;
-    result.expect("the scope past the budget is dropped, not a failed run");
+    let Err(error) = result else {
+        panic!("one scope past the budget must be refused");
+    };
+    assert_composition_bound(&error, bound::ORDINARY_GRAPH_SCOPES);
     let past = MAX_ORDINARY_GRAPH_SCOPES as u64;
     let beyond_agent = (11 + past * 2, 12 + past * 2);
     assert!(
