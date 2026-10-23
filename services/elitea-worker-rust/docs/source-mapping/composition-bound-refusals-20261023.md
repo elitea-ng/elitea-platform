@@ -13,6 +13,10 @@ Branch `fix/fu244-typed-bound-refusals`, from `main` `6b0cea32c` (#1407). Step 0
   pipelines, 2 levels of pipeline Agent nodes, 25 attachments per run).
 - **Refused at authoring time**, typed and readable, wherever a stack is composed, and again at assembly as defence in
   depth. Never dropped silently.
+- **Ad-hoc chat (user decision, PLAN §8.8).** A conversation runs a participant as a root, so a 3-level agent can still
+  be added and runs fully when selected. On an ad-hoc turn (no agent selected) it would sit one level deeper, below the
+  chat model; there it is not offered to the chat model, and the participant list says so with EliteaUI's warning and
+  wording. No per-turn notice (EliteaUI has none) and no per-turn refusal.
 
 | Where a stack is composed | Main enforcement | Proof |
 |---|---|---|
@@ -22,6 +26,7 @@ Branch `fix/fu244-typed-bound-refusals`, from `main` `6b0cea32c` (#1407). Step 0
 | Switch a participant's version | `repos/conversations.go:1316` | `TestSwitchingAParticipantToAVersionThatClosesACycleIsRefused` |
 | Switch references by deleting a version with a replacement | `applications/handler.go:1763,1782` | `TestHandlerPostgres_DeleteVersionRefusesAReplacementThatClosesACycle` |
 | Publish | `eliteacore/handler.go:2008` (replaces the old walk, which counted pipeline hops as levels and never looked into pipelines) | `TestPublishValidationRefusesACycleThroughAPipelineAndAFourthLevel` |
+| Ad-hoc turn (chat model) | `repos/agent_start.go:796` → `agent_nesting.go:388` → `applicationcomposition.ChatToolFit` (`composition.go:163`): not offered; the participant read sends the same answer (`repos/conversations.go:314`) and the Web shows EliteaUI's warning (`chat-participants/lib/helpers.ts:126`) | `TestChatToolFitOffersOnlyWhatFitsBelowTheChatModel`, `TestFilterCurrentAdhocApplicationNestingOffersOnlyWhatFitsBelowTheChatModel`, `TestTheParticipantReadFlagsAnAgentThatRunsOnlyWhenSelected`; browser G |
 | Run start (selected agent) | `repos/agent_start.go:438` → `application_composition.go:271` (422 typed); the old start walk keeps its row checks only | route test; browser C |
 | Assembly (Worker) | `application.composition_bound` (below) | Worker tests; browser C2 |
 
@@ -29,7 +34,9 @@ Current-app gaps not ported (#5680/#5778): unbounded nesting (bounded here); pip
 tree walk (the cycle search follows every attachment, `composition.go:219`); version-switch bypass (participant switch
 and re-pointing are checked); name-only pipeline nodes (an Agent node's alias resolves to exactly one attachment by its
 stored name, Worker and Main alike); depth-blind container checks (levels are counted, not "has children"); the Web's
-depth-1 "container" guard is removed (`useAgentPipelineAssociation.tsx`), Main is authoritative.
+depth-1 "container" guard is removed (`useAgentPipelineAssociation.tsx`), Main is authoritative; the current app's
+participant warning was ported in its pre-#5778 form (every agent that uses other agents, never a pipeline) and is now
+EliteaUI's depth-aware gate fed by Main.
 
 ## Business behaviour
 
@@ -137,11 +144,16 @@ Counts from this branch head, against a disposable `postgres:18` with the CI env
 `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`, `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`):
 
 - **Worker** `cargo test --offline --locked --no-fail-fast --all-targets --all-features -- --test-threads=4`:
-  WORKER_COUNTS. The ignored tests are the supervisor/preparation/hydration `#[ignore]` suites CI runs separately.
+  **2612 passed, 0 failed, 103 ignored** (no Worker change after this run). The ignored tests are the supervisor/preparation/hydration `#[ignore]` suites CI runs separately.
   `cargo fmt --check` and `cargo clippy --locked --all-targets --all-features -D warnings` clean. No `libs/rust` change.
-- **Main** `go test -race -count=1 ./...`: MAIN_COUNTS; `go vet ./...` clean.
-- **Web**: WEB_COUNTS; `tsc --noEmit` and `oxlint` clean. No new `t()` key (the message comes from the server or
-  `mapAssociationError`).
+- **Main** `go test -race -count=1 ./...`: 221 packages ok, 33 without tests, 1 package failed on one pre-existing
+  flake: `TestForkFromAMessageCopiesTheHistoryUpToAndIncludingIt` refuses the text "999" anywhere in the fork's meta, and
+  that run's random conversation UUID contained it (`…4c1999c998c6`); it passes on rerun (`-count=3`) and is not touched
+  here. `go vet ./...` clean.
+- **Web** `vitest run`: 1885 files / 18837 tests passed, 6 expected fail, 1 skipped; 1 failed:
+  `themePreference.test.ts` "keeps the mark in memory when storage refuses the write", which this branch does not touch
+  (pre-existing, storage behaviour under node). `tsc --noEmit` and `oxlint` clean. No new `t()` key: refusals come from the server or
+  `mapAssociationError`; the two skipped-container keys carry EliteaUI's current text.
 
 New or changed tests (red before the change where marked):
 
@@ -159,6 +171,10 @@ New or changed tests (red before the change where marked):
 | Read budget: each version read once per walk; a refused walk reads ≤ 27 versions | `TestEachVersionIsReadAtMostOnceWithinTheHopBudget` | new |
 | Real PG: a cycle-closing attach is refused, named, nothing written; tiers refused only past the limit; a pausing pipeline under a pipeline Agent node refused at attach and at save (row read back); 25 attachments walk in a measured time, the 26th refused | `TestAnAttachThatClosesACycleIsRefusedAndWritesNothing`, `TestAgentTiersAreRefusedOnlyPastTheLimit`, `TestAPausingPipelineUnderAPipelineAgentNodeIsRefusedAtAttachAndAtSave`, `TestTheCompositionCheckAtItsHopBudgetIsFast` | new |
 | Start: a stored bound violation answers 422 `APPLICATION_COMPOSITION_INVALID` | `route_test` `TestCurrentApplicationStartRouteNamesThePipelineLimitItRefused/composition`, `TestARefusedStartIsTheTypedCompositionRefusal`, `agent_nesting_test` (bound marker on every refusal case) | red: generic |
+| Ad-hoc: a participant fits below the chat model only with room for one more level (leaf 1, orchestrator 2, 3 levels → not offered, pipelines consume no tier, the chat model's hop counts, an unreadable version is left to the turn) | `TestChatToolFitOffersOnlyWhatFitsBelowTheChatModel`, `TestChatToolFitCountsTheChatModelsHop`, `TestChatToolFitLeavesAnUnreadableVersionToTheTurn` | new |
+| Ad-hoc start offers only what fits (the nesting resolution alone would offer both) | `TestFilterCurrentAdhocApplicationNestingOffersOnlyWhatFitsBelowTheChatModel`; PG `TestPostgresCurrentNestedApplicationTurnPreservesThreeTierContract` (real source) | red: offered |
+| Real PG: a 3-level agent is addable; the participant read sends `agent_subtree_tiers` 3/2/1, `is_container`, `max_agent_nesting_tiers` 3 | `TestTheParticipantReadFlagsAnAgentThatRunsOnlyWhenSelected` | new (Main sent none) |
+| Web: EliteaUI's gate (`1 + tiers > max`, blunt fallback without the tier fields) | `helpers.test.ts` `isSkippedContainerParticipant` (4) | new |
 | Web: a refused attach is shown, the menu closes, the write is sent once | `ToolMenu.test.tsx` "shows a server refusal of the attach …" | red: no alert, 4 requests |
 
 ## Performance
@@ -176,6 +192,11 @@ New or changed tests (red before the change where marked):
   (`CASE … octet_length … <= $3` in the version query).
 - **Worker.** No new work on the run path: the cause is a field on the existing error; the skipped set is a bounded
   `BTreeSet` (≤ 8 entries) behind an uncontended mutex touched only when something was skipped.
+- **Participant read.** Each agent or pipeline participant with a version adds one `ChatToolFit` walk to the
+  conversation read (same budget: ≤ 129 versions, ≤ 25 attachments; typically the participant and its few
+  attachments). Measured on the stack, conversation 898 (two agent participants, six versions walked), 20 reads from
+  the browser: p50 **8.3 ms**, p95 10.2 ms, max 11.5 ms end to end. A failed walk leaves the participant as read.
+  The ad-hoc start runs the same walk per offered participant, in its read-only project transaction.
 - **Measured** (real PostgreSQL 18, `TestTheCompositionCheckAtItsHopBudgetIsFast`): the worst admitted walk, 25
   attachments under one root, slowest of 20 checks = **54.7 ms** (bound asserted at 2 s; the shape under test is the
   bound, not the machine). Typical attaches walk a handful of versions.
@@ -212,11 +233,21 @@ Checked against `rules/security.md`:
 - **Input / amplification.** Stored YAML is parsed only after `pipelinelimits.Check` (size + alias-expansion budget);
   the walk is bounded by the hop budget and cache; cycles terminate (ancestor check).
 - **Injection.** Parameterized SQL only; the schema identifier is the pre-quoted tenant schema.
+- **Ad-hoc delta (participant read, ad-hoc start).** Read-only, inside the already-authorized conversation read and
+  start; versions are read by the ids the participant row stores, in the conversation's own tenant schema, so another
+  project's version is not found and not followed. The read adds only numbers and booleans to `meta`, never names.
+  A client cannot plant the fields: the add stores only a server-built display name (`participantDisplayMeta`), and
+  the start's decision never reads `meta`. A failed walk degrades the participant, never the conversation.
 - **Data in messages.** A save refusal echoes the author's own application names and node ids (bounded, printable)
   back to the author of the same project, as the existing node-type refusal does; the run-time message is data-free
   (registered text only); nothing is logged except the existing data-free error lines.
 - **Secrets / egress / supply chain.** Not applicable: no secret handled, no outbound call, no new dependency.
 - Not applicable to this change: egress, delegated credentials, sandbox, CSP.
+- **Audits (dependency scanners; no dependency or toolchain change in this PR).** `govulncheck ./...` (Main): one
+  standard-library finding, GO-2026-6809 (`crypto/x509`, fixed in go1.26.10; the toolchain pin, pre-existing), no
+  module finding reachable. `cargo deny --all-features check advisories` (Worker): 16 advisories, all pre-existing in
+  the locked tree (RUSTSEC-2023-0071, 2024-0449, 2026-0192, -0206, -0346, -0347, -0348, -0349, -0367, -0368, -0369,
+  -0381, -0382, -0383, -0385, -0386); none added.
 
 ## Recovery rows (replatform-delivery-gate §2)
 
@@ -228,6 +259,7 @@ No new durable state, no new effect. The rows this change touches:
 | Main × admission (run start) of a stored cycle, hop or over-tier container | F (`APPLICATION_COMPOSITION_INVALID`, 422): the run never starts, no execution row | `repos/agent_start.go:445`, `route.go:601` | route test; browser C |
 | Worker × assembly of a stored bound violation Main's start does not see (static pause under a pipeline root, pipeline depth, scopes, version bytes) | F, settled and acked before any model call, persisted on the message | `native_agent_lifecycle.rs:1558`, `protocol/output.rs:806,863` | scoped/materialization tests; browser C2 (`executed_settled_acked`) |
 | Worker × assembly of an unbuildable attachment (deleted version, unresumable pause kind) | R for every run: degraded and **named** on every root, pipeline roots included | `materialization.rs:187-205`, `pipeline.rs:753,815,2137`, `session.rs:1952` | `an_unbuildable_attachment_of_a_pipeline_agent_node_…`; browser D (reload) |
+| Main × admission of an ad-hoc turn with a participant that does not fit below the chat model | R: the turn runs; the participant is not offered (stated on the participant list, not dropped silently) | `agent_nesting.go:388`, `conversations.go:314` | filter unit + PG tests; browser G (Worker `tool_reference_count=1`) |
 | Main × output delivery of the composition terminal | I: the registered text fits the 256-byte bound, so the frame is admitted and settled once | `runtime_failure.go` bound; contract | lifecycle + contract tests; browser C2 |
 
 Gap kept (not this change): Main's start validation refuses a **deleted** attachment version generically
@@ -238,8 +270,10 @@ Gap kept (not this change): Main's start validation refuses a **deleted** attach
 Stack `fu244` (own; `production-profile.pre-defaults-20261019/stack.sh`, Traefik-less current-main tooling), front door
 `http://fu244.localhost:19080`, dump `product-real-models-main-d5e966074.dump`, `verify-profile: 50 passed, 0 failed`
 (after every redeploy). Final images (binary-checked, §3b: the registered message is present in both binaries):
-Main `elitea-main:fu244-81a222eea`, Worker `elitea-worker-rust:fu244-81a222eea`, Web `elitea-web:fu244-a9ff0c48b`
-(the last Web change), supervisor `2a1-1f617cfdb`, the rest `main-d5e966074-verify`. User's Chrome (Claude in Chrome),
+Main `elitea-main:fu244-81a222eea` (cases A–D), `fu244-c3b44de34` (cases E, F: the §8.8 sites) and `fu244-83d394c2a`
+(case G; binary contains `applicationcomposition.ChatToolFit` and `enrichParticipantNesting`), Worker
+`elitea-worker-rust:fu244-81a222eea`, Web `elitea-web:fu244-a9ff0c48b` (A–D), `fu244-300b28c0c` (E, F) and
+`fu244-83d394c2a` (G; bundle contains the EliteaUI wording), supervisor `2a1-1f617cfdb`, the rest `main-d5e966074-verify`. User's Chrome (Claude in Chrome),
 own tab, mock OIDC `admin@centry.user`, project 2.
 
 **Fixtures (honest).** Project 2 is legacy-created, so attaching through Main's route 500s there on a *valid* attach
@@ -256,11 +290,30 @@ SQL on purpose, as a composition saved before the check would hold them (`fixtur
 | B. Attach refused | Agent 157, Tools → Pipeline → "FU244 cycle flow" | Exactly one `PATCH …/application_relation/prompt_lib/2/172/197` → 400 `APPLICATION_COMPOSITION_INVALID`; menu closes; inline: `Cannot add "FU244 cycle flow": this would create a circular agent reference. Remove the circular dependency first.` (Main's raw text names `"C1 sensitive record agent 20261008" → "FU244 cycle flow" → "C1 sensitive record agent 20261008"`) | Agent 157 has 0 application attachments |
 | C. Stored cycle at run start | Chat with pipeline 172 (stored edge 157 → 172) | The registered message, 422 from Main's start (chat 894) | The chat is empty: a refused start creates no message group (as for every existing start refusal) |
 | C2. Stored static pause at the Worker | Chat with pipeline 171 (stored Agent node → 169 → 168) | The registered message; Worker log `agent_native_assembly_failed … cause_code="application.composition_bound" cause_detail="static_pause_under_graph_root"`, outcome `executed_settled_acked`, execution `d689090294820c32fe422e9e26db0cc6` (chat 893) | Persisted, same message |
+| E. A fourth agent level refused at attach (§8.8) | Agent 179 "FU244 Host", Tools → Agent → "FU244 Orchestrator" (176 → 177 → 178, a 3-level chain created by `fixtures-88.sql`) | One PATCH → 400; inline: `Agents are nested more than 3 levels deep: "FU244 Host" → "FU244 Orchestrator" → "FU244 Sub-orchestrator" → "FU244 Leaf". Attach fewer levels of agents before saving.` The removed Web guard would have refused locally with the depth-1 "uses other agents" text | Host has 0 attachments. (An earlier accidental type-ahead pick of a valid agent showed "relation write failed": FU-242's legacy-schema insert, now visible instead of silent) |
+| F. Add to a conversation refused (§8.8) | Agent 157 (stored cycle 157 → 172 → 157), header "Chat" | `POST …/participants/prompt_lib/2/<conversation>` → 400; header alert shows the named cycle `"C1 sensitive record agent 20261008" → "FU244 cycle flow" → "C1 sensitive record agent 20261008"` (before: the generic "Failed to open a chat with this agent.") | The conversation created first is left with only the user (the button creates, then adds — follow-up) |
+| G. Ad-hoc (§8.8) | New chat (898), chat model Claude Haiku; add "FU244 Top" (182 v207 → Middle 181 v206 → Leaf 180 v205, `fixture-g-adhoc.sql`) and "FU244 Middle" by `#` mention; (1) Top selected, send; (2) select nothing, send | Add accepted. (1) Top runs as the root and calls Middle, which has Leaf bound. Participant row under Top (not active): "Its sub-agent chain is at the nesting limit (3 tiers), so it runs only as the active agent here — select it to run."; nothing under Middle. (2) The turn completes; the chat model answers that it can call only "FU244 Middle"; Worker `execution_kind=Adhoc … tool_reference_count=1 nested_application_count=1`, no refusal. Read: Top `agent_subtree_tiers` 3, Middle 2, `max_agent_nesting_tiers` 3 | Collapsed rail: info dot, tooltip "Its sub-agent chain is at the nesting limit (3 tiers) — select it to run."; expanded: the same row warning |
 | D. Named degrade on a pipeline root (FU-243) | Chat with pipeline 175 | The node answers ("Hello! 👋"); notice "Some tools were not available in this reply — Attached agent FU244 ask flow: this attached agent type is not available as a tool on this worker yet, so it was left out." (chat 892; message group 7518 meta carries `skipped_capabilities`) | Persisted, same notice |
 
-Screenshots: `handoffs/point5-wave1-20261008/fu244/evidence/` (local).
+Screenshots: `handoffs/point5-wave1-20261008/fu244/evidence/` (local; G1–G4 for case G).
+
+**Current app (EliteaUI).** Placement and wording were taken from EliteaUI's `ParticipantWarning.jsx:44-45`
+(participant row, neutral info) and `CollapsedPerticapantsList.jsx:206-216` (rail dot, tooltip), gate
+`participants.helpers.js` `isSkippedContainerParticipant`. In the running current app (http://localhost, Chrome) the
+conversation read returns the same fields (`is_container`, `agent_subtree_tiers`, `max_agent_nesting_tiers: 3`), e.g. a
+2-tier agent `true, 2, 3`; no participant there sits at the limit, so the warning itself was not rendered there.
 
 ## Follow-ups
+
+- The new Web composer's "Switch to model" control did not switch to the chat model on the stack (clicked and
+  scripted); clicking the active participant in the list does. Pre-existing, unrelated to this change.
+- `entities/participant` still exports a camelCase `isSkippedContainerParticipant` that no UI uses (the pre-#5778 rule);
+  remove it or align it with the feature helper.
+- A run retained by the earlier > 256-byte terminal (fixed here) keeps retrying on the stack
+  (`agent_output.invalid_durable_state`, execution `e6f9d6e48bc7664ae560f90f342394db`); it is stack residue from before
+  the fix, not produced by the final images.
+- The agent/pipeline "Chat" button creates the conversation first and adds the participant second, so a refused add
+  leaves an empty conversation; creating with the participant in one call (the create path checks it too) avoids it.
 
 - **Start-time named check for upward violations.** The save check walks the saved version as a root, so a violation
   that appears only from an ancestor (a descendant edited after its parents were saved, e.g. a pause added to a pipeline
