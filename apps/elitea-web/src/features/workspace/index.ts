@@ -12,8 +12,10 @@ import { matchingSkills, skillToken } from './model/composerSkills';
 import { activeToken, mentionText, referencedPaths } from './model/composerTokens';
 import { readLastLocation, writeLastLocation } from './model/threads';
 import { latestPlan } from './model/turnReducer';
+import { sumUsage } from './model/turnUsage';
 import { ApprovalCard } from './ui/ApprovalCard';
 import { ApprovalDialog } from './ui/ApprovalDialog';
+import { ImageStrip } from './ui/ImageStrip';
 import { ModelChip } from './ui/ModelChip';
 import { PlanCard } from './ui/PlanCard';
 
@@ -31,7 +33,7 @@ export { SuggestionMenu } from './ui/SuggestionMenu';
 export type { SuggestionItem } from './ui/SuggestionMenu';
 export type { WorkspaceCommandId } from './model/composerCommands';
 
-/** The composer's text rules ("@"/"/" tokens, referenced paths), its "/" menu (local commands, the custom commands, the agent's skills) and its model chip, as one bundle. */
+/** The composer's text rules ("@"/"/" tokens, referenced paths), its "/" menu (local commands, the custom commands, the agent's skills), its model chip, its image strip (also under a sent prompt) and its usage sum (a thread's tokens), as one bundle. */
 export const composer = {
   activeToken,
   mentionText,
@@ -45,6 +47,8 @@ export const composer = {
   matchingSkills,
   skillToken,
   ModelChip,
+  ImageStrip,
+  sumUsage,
 };
 
 /** The folder and thread the person was last in (desktop home), read and written as one pair. */
@@ -55,10 +59,12 @@ export const approval = { Dialog: ApprovalDialog, Card: ApprovalCard };
 
 /**
  * Plan mode and the agent's checklist (#1225): the proposed plan's card, the todo pane (the session's Plan tab,
- * loaded only when the tab is shown) and the latest plan of a thread's turns.
+ * loaded only when the tab is shown) and the latest plan of a thread's turns; and the session's background
+ * processes (#1223): the terminal pane (the Processes tab, loaded only once the folder has a process).
  */
 export const plan = {
   Card: PlanCard,
   TodoPane: lazy(() => import('./ui/TodoPane').then((module) => ({ default: module.TodoPane }))),
   latest: latestPlan,
+  TerminalPane: lazy(() => import('./ui/TerminalPane').then((module) => ({ default: module.TerminalPane }))),
 };

@@ -103,6 +103,30 @@ export const ConfigurationModelItem = zod
     low_tier: zod.boolean().nullish().describe("`reviewed` only."),
     high_tier: zod.boolean().nullish().describe("`reviewed` only."),
     openai_compatible: zod.boolean().nullish().describe("`reviewed` only."),
+    input_cost_per_1m_tokens: zod
+      .number()
+      .nullish()
+      .describe(
+        "`reviewed` only, and section=llm only. USD per 1M input tokens from the gateway's price catalogue (gateway.gateway_models, the table the budget gate prices with). Absent or null when the price is unknown or when the caller may not see amounts (the budget routes' can_see_amounts rule: the caller's personal project, or the project admin role).\n",
+      ),
+    output_cost_per_1m_tokens: zod
+      .number()
+      .nullish()
+      .describe(
+        "`reviewed` only, and section=llm only. USD per 1M output tokens from the gateway's price catalogue. Absent or null when unknown or when the caller may not see amounts (the budget routes' can_see_amounts rule).\n",
+      ),
+    cached_input_cost_per_1m_tokens: zod
+      .number()
+      .nullish()
+      .describe(
+        "`reviewed` only, and section=llm only. What the gateway charges per 1M cached input tokens, in USD; it applies no cache discount today, so it equals the input price. Absent or null when unknown or when the caller may not see amounts (the budget routes' can_see_amounts rule).\n",
+      ),
+    currency: zod
+      .string()
+      .nullish()
+      .describe(
+        '`reviewed` only. The currency of the three cost fields, always "USD". Present exactly when they are.\n',
+      ),
     data: zod.record(zod.string(), zod.unknown()).optional(),
   })
   .describe(

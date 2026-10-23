@@ -7,8 +7,8 @@
  * sent, never its content (IPC.md "Context window"). Loaded lazily by
  * `ThreadComposer`.
  *
- * The activity island keeps its own token counts per turn; one context
- * display, here, is the meter (#1227 folds the island's into it).
+ * The turn's and the thread's tokens and cost are the usage chip's
+ * (`UsageChip`, beside it).
  */
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';

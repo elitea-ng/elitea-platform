@@ -1010,6 +1010,9 @@ impl HandoffHost {
             workspace_id,
             "Wait for the running turn to end before sending this thread.",
         )?;
+        // The thread leaves this device: nothing the agent started here
+        // keeps running (or writing) while the snapshot is taken (#1223).
+        self.deps.agents.kill_processes(workspace_id).await;
         self.emit(uuid, "snapshot", 0, 1, None);
         let config = self.send_config(&root, uuid, &device, &effective, &folder, leave);
         let source = self.open(&config)?;
@@ -1097,7 +1100,10 @@ impl HandoffHost {
                 "scan_findings": snap.include_findings.len(),
             },
             "has_upstream": snap.upstream.is_some(),
-            "note": handoff_note(&snap),
+            "note": handoff_note(
+                &snap,
+                !self.deps.agents.mcp_files().merged(workspace_id).0.is_empty()
+            ),
         });
         if !snap.included.is_empty() {
             body["included_excluded"] = json!(
@@ -2021,8 +2027,9 @@ fn refuse_blocked(snap: &Snapshot) -> Result<(), HandoffError> {
 }
 
 /// The handoff note: what is sent and left behind (the server adds it to
-/// the event message; it carries no file contents).
-fn handoff_note(snap: &Snapshot) -> String {
+/// the event message; it carries no file contents). The person's local MCP
+/// servers (#1230) are among what stays: the cloud runs none of them.
+fn handoff_note(snap: &Snapshot, mcp_servers: bool) -> String {
     let mut note = format!(
         "{} files sent, {} left on the laptop.",
         snap.files,
@@ -2034,6 +2041,11 @@ fn handoff_note(snap: &Snapshot) -> String {
             upstream.branch,
             &upstream.sha[..12.min(upstream.sha.len())]
         ));
+    }
+    if mcp_servers {
+        note.push_str(
+            " Local MCP servers stay on the laptop: their tools are not available in the cloud.",
+        );
     }
     snapshot::clean_note(&note)
 }

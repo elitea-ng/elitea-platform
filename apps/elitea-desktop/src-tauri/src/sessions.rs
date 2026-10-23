@@ -204,6 +204,42 @@ pub struct NewEvent {
     pub event: Event,
 }
 
+/// A thread's framing nonce (#1227): 128 random bits drawn when the session
+/// is created and again whenever it is re-seeded from the server, kept only
+/// in this store. Every turn of the thread frames its untrusted blocks under
+/// it (`d0/framing.rs`), so the system prompt stays byte-identical from turn
+/// to turn and the provider's prompt cache keeps it. Never logged: `Debug`
+/// does not print it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ThreadNonce([u8; 16]);
+
+impl ThreadNonce {
+    /// A fresh one.
+    #[must_use]
+    pub fn fresh() -> Self {
+        Self(rand::random())
+    }
+
+    /// The stored bytes, when they are a usable nonce (16 bytes, not all
+    /// zero: a row the adk `create` path made holds a zero placeholder).
+    fn from_stored(bytes: &[u8]) -> Option<Self> {
+        let bytes: [u8; 16] = bytes.try_into().ok()?;
+        (bytes != [0; 16]).then_some(Self(bytes))
+    }
+
+    /// As the framing writes it: 32 lowercase hex digits.
+    #[must_use]
+    pub fn hex(&self) -> String {
+        self.0.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+}
+
+impl std::fmt::Debug for ThreadNonce {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ThreadNonce(..)")
+    }
+}
+
 /// What opening a session found.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionState {
@@ -214,6 +250,8 @@ pub struct SessionState {
     /// The `path_deny` fingerprint differed: the tool-response bodies were
     /// dropped and the re-seed must not bring them back.
     pub bodies_dropped: bool,
+    /// The thread's framing nonce (a re-seed draws another: [`SessionStore::seed`]).
+    pub nonce: ThreadNonce,
 }
 
 /// `session_info`'s answer.
@@ -515,15 +553,15 @@ impl SessionStore {
         let busy = self.active.lock().contains_key(&key);
         self.call("could not open the session", move |conn| {
             let tx = conn.transaction()?;
-            let row: Option<(i64, Option<String>, String)> = tx
+            let row: Option<(i64, Option<String>, String, Vec<u8>)> = tx
                 .query_row(
-                    "SELECT seeded_from_server, server_cursor, policy_fp
+                    "SELECT seeded_from_server, server_cursor, policy_fp, thread_nonce
                      FROM sessions WHERE session_key = ?1",
                     params![key],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )
                 .optional()?;
-            let state = if let Some((seeded, cursor, stored_fp)) = row {
+            let state = if let Some((seeded, cursor, stored_fp, stored_nonce)) = row {
                 if !busy {
                     // An earlier turn that never ended (no answer id).
                     tx.execute(
@@ -547,14 +585,26 @@ impl SessionStore {
                     params![key],
                     |row| row.get(0),
                 )?;
+                let nonce = match ThreadNonce::from_stored(&stored_nonce) {
+                    Some(nonce) => nonce,
+                    None => {
+                        let nonce = ThreadNonce::fresh();
+                        tx.execute(
+                            "UPDATE sessions SET thread_nonce = ?2 WHERE session_key = ?1",
+                            params![key, nonce.0.to_vec()],
+                        )?;
+                        nonce
+                    }
+                };
                 SessionState {
                     seeded_from_server: seeded != 0 && !changed,
                     server_cursor: if changed { None } else { cursor },
                     events: usize::try_from(events).unwrap_or_default(),
                     bodies_dropped: changed,
+                    nonce,
                 }
             } else {
-                let nonce: [u8; 16] = rand::random();
+                let nonce = ThreadNonce::fresh();
                 tx.execute(
                     "INSERT INTO sessions (session_key, deployment, user_id, project_id,
                          conversation_uuid, thread_nonce, seeded_from_server, created_at,
@@ -566,7 +616,7 @@ impl SessionStore {
                         identity.user_id,
                         identity.project_id,
                         identity.conversation_uuid,
-                        nonce.to_vec(),
+                        nonce.0.to_vec(),
                         now_ms(),
                         fp
                     ],
@@ -576,6 +626,7 @@ impl SessionStore {
                     server_cursor: None,
                     events: 0,
                     bodies_dropped: false,
+                    nonce,
                 }
             };
             tx.commit()?;
@@ -588,6 +639,8 @@ impl SessionStore {
     /// folded) and mark it seeded as of `cursor`. The session state under
     /// the keys in `carry` (the thread's own settings, which the server's
     /// transcript does not hold) stays as the replaced events left it.
+    /// A re-seed draws the thread a new framing nonce, which it returns: the
+    /// rebuilt history starts a new prompt prefix anyway.
     ///
     /// # Errors
     ///
@@ -598,8 +651,10 @@ impl SessionStore {
         events: Vec<NewEvent>,
         cursor: Option<String>,
         carry: &'static [&'static str],
-    ) -> Result<(), HostError> {
+    ) -> Result<ThreadNonce, HostError> {
         let key = key.to_owned();
+        let nonce = ThreadNonce::fresh();
+        let stored = nonce.0.to_vec();
         self.call("could not seed the session", move |conn| {
             let tx = conn.transaction()?;
             let mut carried = Carried::default();
@@ -620,14 +675,16 @@ impl SessionStore {
             }
             trim(&tx, &key)?;
             tx.execute(
-                "UPDATE sessions SET seeded_from_server = 1, server_cursor = ?2, updated_at = ?3
+                "UPDATE sessions SET seeded_from_server = 1, server_cursor = ?2, updated_at = ?3,
+                     thread_nonce = ?4
                  WHERE session_key = ?1",
-                params![key, cursor, now_ms()],
+                params![key, cursor, now_ms(), stored],
             )?;
             refresh_bytes(&tx, &key)?;
             tx.commit()
         })
-        .await
+        .await?;
+        Ok(nonce)
     }
 
     /// Mark the session of this conversation for re-seeding (a take-back
@@ -889,6 +946,16 @@ pub fn bounded(mut event: Event) -> Event {
                 } => {
                     function_response.inline_data.clear();
                     function_response.file_data.clear();
+                    // An image a tool returned (read_file, #1229) is kept
+                    // for the run that read it, not in the store: its
+                    // metadata stays, the bytes do not.
+                    if let std::borrow::Cow::Owned(without) =
+                        elitea_agent_runtime::image_result::without_image(
+                            &function_response.response,
+                        )
+                    {
+                        function_response.response = without;
+                    }
                     let text = function_response.response.to_string();
                     if text.len() > MAX_TOOL_RESPONSE_BYTES {
                         let mut end = MAX_TOOL_RESPONSE_BYTES;

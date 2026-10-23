@@ -276,8 +276,8 @@ func TestCurrentRuntimeInternalToolsForwardsThePlatformCatalogue(t *testing.T) {
 	}{
 		{
 			name: "the whole authorable catalogue",
-			raw:  `["ask_user","attachments","data_analysis","image_generation","internal_mcp","lazy_tools_mode","planner","pyodide","swarm"]`,
-			want: `["ask_user","attachments","data_analysis","image_generation","lazy_tools_mode","planner","pyodide","swarm"]`,
+			raw:  `["ask_user","attachments","data_analysis","image_generation","internal_mcp","lazy_tools_mode","planner","pyodide","subagents","swarm"]`,
+			want: `["ask_user","attachments","data_analysis","image_generation","lazy_tools_mode","planner","pyodide","subagents","swarm"]`,
 		},
 		{name: "internal_mcp flag is consumed after tool projection", raw: `["internal_mcp"]`, want: `[]`},
 		{name: "duplicates collapse", raw: `["pyodide","pyodide","ask_user"]`, want: `["pyodide","ask_user"]`},

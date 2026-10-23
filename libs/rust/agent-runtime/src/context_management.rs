@@ -1490,8 +1490,47 @@ fn text_of(content: &Content) -> String {
 }
 
 /// Estimated tokens of one content as a request carries it.
+///
+/// An image costs what the provider bills for one
+/// ([`crate::image_result::TOKEN_ESTIMATE`]), not its bytes: serialised, an
+/// inline image is a number per byte and a tool's is a base64 string.
 fn content_tokens(content: &Content) -> u64 {
-    estimate_tokens(serde_json::to_string(content).map_or(0, |text| text.len()))
+    let is_image = |part: &Part| match part {
+        Part::InlineData { .. } => true,
+        Part::FunctionResponse {
+            function_response, ..
+        } => function_response
+            .response
+            .get(crate::image_result::IMAGE_FIELD)
+            .is_some(),
+        _ => false,
+    };
+    if !content.parts.iter().any(is_image) {
+        return estimate_tokens(serde_json::to_string(content).map_or(0, |text| text.len()));
+    }
+    let mut images = 0_u64;
+    let mut rest = Vec::with_capacity(content.parts.len());
+    for part in &content.parts {
+        if !is_image(part) {
+            rest.push(part.clone());
+            continue;
+        }
+        images += crate::image_result::TOKEN_ESTIMATE;
+        let mut part = part.clone();
+        if let Part::FunctionResponse {
+            function_response, ..
+        } = &mut part
+        {
+            function_response.response =
+                crate::image_result::without_image(&function_response.response).into_owned();
+            rest.push(part);
+        }
+    }
+    let trimmed = Content {
+        role: content.role.clone(),
+        parts: rest,
+    };
+    images + estimate_tokens(serde_json::to_string(&trimmed).map_or(0, |text| text.len()))
 }
 
 /// Where to cut `working` (contents from `base` on may be folded): the

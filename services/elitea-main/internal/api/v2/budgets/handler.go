@@ -67,6 +67,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -236,50 +237,20 @@ func callerID(r *http.Request) (int64, bool) {
 }
 
 // isProjectAdmin reports whether the user holds the project's `admin` role —
-// the check `admin_check_user_is_admin` performs in the reference, asked
-// directly of the tables legacyrbac.PostgresResolver reads.
+// the check `admin_check_user_is_admin` performs in the reference. The query
+// lives in repos.AmountVisibility, the one rule the model catalogue's prices
+// share with these routes.
 //
 // A failure to ASK is not an answer: the reference swallowed the RPC exception
 // and treated it as "not an admin", which turns a database blip into a 403 on a
 // page the caller is entitled to. Here the error propagates and the caller
 // answers 500.
 func (h *Handler) isProjectAdmin(ctx context.Context, projectID, userID int64) (bool, error) {
-	var isAdmin bool
-	err := h.pool.QueryRow(ctx, `
-SELECT EXISTS (
-    SELECT 1
-    FROM public.auth_core__project_user_role AS assignment
-    JOIN public.auth_core__project_role AS project_role
-      ON project_role.id = assignment.role_id
-     AND project_role.project_id = assignment.project_id
-    WHERE assignment.project_id = $1
-      AND assignment.user_id = $2
-      AND project_role.name = 'admin'
-)`, projectID, userID).Scan(&isAdmin)
+	isAdmin, err := repos.NewAmountVisibility(h.pool).IsProjectAdmin(ctx, projectID, userID)
 	if err != nil {
-		return false, fmt.Errorf("budgets: resolve project admin: %w", err)
+		return false, fmt.Errorf("budgets: %w", err)
 	}
 	return isAdmin, nil
-}
-
-// isPersonalProject reports whether the project is this user's own personal
-// project. The predicate is the one the admin project listing already uses
-// (internal/api/v2/admin/projects.go personalProjectPredicate) resolved to the
-// specific owner, rather than the hardcoded personal_project_id "1" that #161
-// found in the social author path.
-func (h *Handler) isPersonalProject(ctx context.Context, projectID, userID int64) (bool, error) {
-	// The name is composed here rather than in SQL: `'project_user_' || $2` puts
-	// the parameter in a text context, and pgx then refuses to encode an int64
-	// as text at all ("cannot find encode plan"), so the query fails outright
-	// rather than returning a wrong answer.
-	var personal bool
-	err := h.pool.QueryRow(ctx, `
-SELECT EXISTS (SELECT 1 FROM centry.project WHERE id = $1 AND name = $2)`,
-		projectID, "project_user_"+strconv.FormatInt(userID, 10)).Scan(&personal)
-	if err != nil {
-		return false, fmt.Errorf("budgets: resolve personal project: %w", err)
-	}
-	return personal, nil
 }
 
 /* ── responses ─────────────────────────────────────────────────────────── */

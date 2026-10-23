@@ -21,6 +21,7 @@ const WorkspacesPage = /* @__PURE__ */ lazy(() => import('./WorkspacesPage'));
 const WorkspaceSessionPage = /* @__PURE__ */ lazy(() => import('./WorkspaceSessionPage'));
 const TroubleshootPage = /* @__PURE__ */ lazy(() => import('./TroubleshootPage'));
 const RulesPage = /* @__PURE__ */ lazy(() => import('./RulesPage'));
+const McpPage = /* @__PURE__ */ lazy(() => import('./McpPage'));
 
 function NotAvailable(): React.JSX.Element {
   return <Navigate to="/chat" replace />;
@@ -60,6 +61,16 @@ export function RulesEntry(): React.JSX.Element | null {
   return (
     <Suspense fallback={null}>
       <RulesPage />
+    </Suspense>
+  );
+}
+
+/** Settings › MCP servers (#1230); nothing outside `desktop`. */
+export function McpEntry(): React.JSX.Element | null {
+  if (import.meta.env.MODE !== 'desktop') return null;
+  return (
+    <Suspense fallback={null}>
+      <McpPage />
     </Suspense>
   );
 }

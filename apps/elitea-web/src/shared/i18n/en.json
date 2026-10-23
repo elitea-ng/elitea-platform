@@ -4939,5 +4939,13 @@
   "conversationActivity.needsYou": "Needs your input",
   "conversationActivity.unread": "Finished, unread",
   "conversationActivity.done": "Finished",
-  "conversationActivity.needsYouCount": "{{count}} needs you"
+  "conversationActivity.needsYouCount": "{{count}} needs you",
+  "artifacts.preview.noPdf": "No PDF to display.",
+  "artifacts.preview.pdfFailed": "This PDF cannot be shown. It may be encrypted or damaged. Download it to open it.",
+  "artifacts.preview.pdfLoadingAria": "Loading PDF",
+  "artifacts.preview.pdfNextPage": "Next page",
+  "artifacts.preview.pdfPageAria": "Page {{page}} of {{name}}",
+  "artifacts.preview.pdfPageFailed": "Page {{page}} cannot be shown. The other pages may still open, or download the file to view it.",
+  "artifacts.preview.pdfPageIndicator": "Page {{page}} of {{total}}",
+  "artifacts.preview.pdfPreviousPage": "Previous page"
 }

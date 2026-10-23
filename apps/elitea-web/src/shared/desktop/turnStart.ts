@@ -27,6 +27,38 @@ export interface TurnStartRequest {
   model?: TurnModelChoice | undefined;
   /** A custom command the person picked with "/": the host reads and expands its file itself, and records the prompt as `/<name> <arguments>`. */
   command?: TurnCommand | undefined;
+  /** Images attached to the message (IPC.md "Image input"), by the tokens `attachment_add` / `attachment_add_bytes` answered; at most five. */
+  images?: TurnImagePick[] | undefined;
+}
+
+/** `agent_turn_start.images[]`: where the image came from, and its token. */
+export interface TurnImagePick {
+  source: 'clipboard' | 'file';
+  token: string;
+}
+
+/** The most images one message carries (the host enforces it too). */
+export const MAX_TURN_IMAGES = 5;
+
+/** `attachment_add` / `attachment_add_bytes`' answer: an image the host holds for the next turn of the workspace. */
+export interface AttachedImage {
+  token: string;
+  name: string;
+  mime: string;
+  /** Size after the host's shrinking. */
+  bytes: number;
+  width: number;
+  height: number;
+  /** `data:image/jpeg;base64,…`, a small preview (absent when it could not be made). */
+  thumbnail: string | null;
+}
+
+/** What a recorded turn keeps of an attached image (`thread_history`): never the image, a thumbnail. */
+export interface StoredImage {
+  name: string;
+  mime: string;
+  bytes: number;
+  thumbnail: string | null;
 }
 
 /** A project skill picked in the "/" menu, by its id only. */

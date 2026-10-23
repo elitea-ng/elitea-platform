@@ -15,7 +15,7 @@
 //!   compaction wraps the model, so it measures the request the elision
 //!   left and compacts only when that is still past its trigger.
 //! * **Budget.** [`ProviderBudget`] measures the body the gateway transport
-//!   sends ([`super::model::request_body`]), not an estimate of the adk
+//!   sends ([`super::model::request_body_in`]), not an estimate of the adk
 //!   contents.
 //! * **Summary model.** The agent's own model, through the same `/llm`
 //!   transport and execution id (spend is the turn's), bound quiet: the
@@ -73,12 +73,14 @@ pub const MAX_MODEL_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 /// author; this one names who wrote it).
 pub const MARKER_AUTHOR: &str = "elitea_context_compaction";
 
-/// What a turn knows of its model from the catalogue: its context limits
-/// and whether its reasoning goes back to the provider (#1228).
+/// What a turn knows of its model from the catalogue: its context limits,
+/// whether its reasoning goes back to the provider (#1228) and whether it
+/// sees images (#1229; `false` when the catalogue was not read for it).
 #[derive(Clone, Copy, Debug)]
 pub struct ModelFacts {
     pub limits: ModelContextLimits,
     pub replay: ReasoningReplay,
+    pub vision: bool,
 }
 
 /// The facts of the turn's model (module docs), with at most one catalogue
@@ -107,10 +109,11 @@ pub async fn model_facts(
         .and_then(|value| serde_json::from_value::<ModelContextLimits>(value.clone()).ok())
         .filter(valid)
     {
-        let replay = from_hand.or(kept).map(|facts| facts.replay);
+        let known = from_hand.or(kept);
         return ModelFacts {
             limits: frozen,
-            replay: replay.unwrap_or_default(),
+            replay: known.map(|facts| facts.replay).unwrap_or_default(),
+            vision: known.is_some_and(|facts| facts.vision),
         };
     }
     if let Some(facts) = from_hand.or(kept) {
@@ -126,6 +129,7 @@ pub async fn model_facts(
         return ModelFacts {
             limits: FALLBACK_LIMITS,
             replay: ReasoningReplay::Never,
+            vision: false,
         };
     };
     let facts = facts_of(&catalogue, model_name);
@@ -144,6 +148,10 @@ fn facts_of(catalogue: &Catalogue, model_name: &str) -> ModelFacts {
             .and_then(|model| limits_of(&model.row))
             .unwrap_or(FALLBACK_LIMITS),
         replay: ReasoningReplay::of(model),
+        vision: model
+            .and_then(|model| model.row.get("supports_vision"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     }
 }
 
@@ -218,11 +226,24 @@ pub struct ProviderBudget {
     pub budget: RequestContextBudget,
     /// As the transport sends history (#1228).
     pub replay: ReasoningReplay,
+    /// The turn's context message and cache breakpoints, as the transport
+    /// lays them out (#1227): the tail weighs what it sends.
+    pub tail: Option<Arc<super::model::TurnTail>>,
+    pub cache_hints: bool,
 }
 
 impl ModelRequestBudget for ProviderBudget {
     fn measure(&self, request: &LlmRequest) -> adk_core::Result<RequestContextUsage> {
-        let body = super::model::request_body(&self.model, request, self.replay)?;
+        let body = super::model::request_body_in(
+            &self.model,
+            request,
+            super::model::Layout {
+                replay: self.replay,
+                images: super::model::Images::Measure,
+                tail: self.tail.as_deref(),
+                cache_hints: self.cache_hints,
+            },
+        )?;
         let encoded = serde_json::to_vec(&body)
             .map_err(|_| adk_core::AdkError::model("the model request could not be encoded"))?;
         self.budget

@@ -15,6 +15,7 @@ mod credentials_file;
 mod d0;
 mod discovery;
 mod doctor;
+mod documents;
 mod embeddings;
 mod error;
 mod handoff;
@@ -24,11 +25,14 @@ mod index;
 mod local_commands;
 mod logging;
 mod loopback;
+mod mcp;
+mod mcp_commands;
 mod menu;
 mod models;
 mod net;
 mod pkce;
 mod platform;
+mod process_commands;
 mod rules;
 mod seed;
 mod sessions;
@@ -424,6 +428,9 @@ pub fn run() {
             local_commands::rules_explain,
             local_commands::rules_import_proposed,
             local_commands::agent_turn_start,
+            local_commands::attachment_add,
+            local_commands::attachment_add_bytes,
+            local_commands::attachment_remove,
             local_commands::agent_prewarm,
             local_commands::turn_commit_retry,
             local_commands::agent_turn_cancel,
@@ -438,6 +445,18 @@ pub fn run() {
             local_commands::checkpoint_preview,
             local_commands::reveal_path,
             local_commands::open_path,
+            process_commands::process_list,
+            process_commands::process_read,
+            process_commands::process_write,
+            process_commands::process_resize,
+            process_commands::process_kill,
+            process_commands::process_pin,
+            mcp_commands::mcp_list,
+            mcp_commands::mcp_save,
+            mcp_commands::mcp_remove,
+            mcp_commands::mcp_restart,
+            mcp_commands::mcp_status,
+            mcp_commands::mcp_proposal_answer,
             index::index_status,
             index::index_open,
             index::index_enable,
@@ -502,6 +521,11 @@ fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
         if let Some(history) = &local.history {
             history.flush();
         }
+        // Background processes the agent started end with the app (#1223):
+        // `SIGTERM`, then `SIGKILL` to what still runs 2 s later.
+        local
+            .agents
+            .stop_all_processes_blocking(elitea_local_tools::process::TERM_GRACE);
         // A turn's commit runs after its `done`: the exit waits (bounded)
         // for those queued or running; one still pending after that, or kept
         // after it failed, is not saved; its execution expires on the server.

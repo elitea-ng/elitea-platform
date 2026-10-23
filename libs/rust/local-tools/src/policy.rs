@@ -3,7 +3,7 @@
 //!
 //! The desktop receives the policy with every token response and enforces
 //! it here; the server cannot verify what a client did. Fields this crate
-//! does not use (`local_mcp`, `memory_write`, `cloud_sync`) are ignored when
+//! does not use (`memory_write`, `cloud_sync`) are ignored when
 //! deserialising. Every default fails closed (`local_index` too: the server
 //! sends `true` by default, a policy without the field turns it off).
 
@@ -83,6 +83,10 @@ pub struct LocalWorkPolicy {
     /// on-device embedding models are downloaded from instead of Hugging
     /// Face (an https base laid out as its CDN). Empty: Hugging Face.
     pub index_model_mirror_url: String,
+    /// `local_work_local_mcp` (ADR-0029 decision 4, #1230): the person's
+    /// own stdio MCP servers may run on this device ([`crate::mcp`]). Only
+    /// with `allowed`; off when absent, and turning it off stops them.
+    pub local_mcp: bool,
 }
 
 impl Default for LocalWorkPolicy {
@@ -100,6 +104,7 @@ impl Default for LocalWorkPolicy {
             index_local_embeddings: false,
             index_remote_embeddings: false,
             index_model_mirror_url: String::new(),
+            local_mcp: false,
         }
     }
 }
@@ -151,6 +156,11 @@ mod tests {
             mirror.index_model_mirror_url,
             "https://mirror.example.com/hf"
         );
+        assert!(!policy.local_mcp, "absent is off");
+        let mcp: LocalWorkPolicy =
+            serde_json::from_value(serde_json::json!({"allowed": true, "local_mcp": true}))
+                .expect("parse");
+        assert!(mcp.local_mcp);
         assert!(SandboxMode::ReadOnly < SandboxMode::WorkspaceWrite);
         assert!(SandboxMode::WorkspaceWrite < SandboxMode::FullAccess);
     }

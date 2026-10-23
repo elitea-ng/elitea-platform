@@ -554,15 +554,21 @@ fn sanitize(value: &str) -> String {
 }
 
 /// `<toolkit>_<tool>` (or `<toolkit>_call` for `all_tools`), sanitised,
-/// unique, and never one of the `reserved` local tool names.
+/// unique, never one of the `reserved` local tool names and never in the
+/// local MCP tools' `mcp__` namespace.
 fn name_tools(specs: &mut [RemoteToolSpec], reserved: &[&str]) {
     let mut taken: Vec<String> = reserved.iter().map(|name| (*name).to_owned()).collect();
     for spec in specs {
-        let base = sanitize(&format!(
+        let mut base = sanitize(&format!(
             "{}_{}",
             spec.toolkit_name,
             spec.tool_name.as_deref().unwrap_or("call")
         ));
+        // `mcp__…` names the person's local MCP tools (#1230): a remote
+        // toolkit never takes one, whatever servers run.
+        if base.starts_with(elitea_local_tools::mcp::naming::PREFIX) {
+            base = sanitize(&format!("remote_{base}"));
+        }
         let mut name = base.clone();
         let mut n = 2;
         while taken.contains(&name) {
@@ -849,5 +855,10 @@ mod tests {
         assert_eq!(specs[0].exposed_name, "read_file_2");
         assert_eq!(specs[1].exposed_name, "read_file_3");
         assert_eq!(sanitize(&"x".repeat(80)).len(), 64);
+        // The local MCP namespace stays the person's servers' (#1230).
+        specs[0].toolkit_name = "mcp_".into();
+        specs[0].tool_name = Some("_x".into());
+        name_tools(&mut specs[..1], &[]);
+        assert_eq!(specs[0].exposed_name, "remote_mcp___x");
     }
 }

@@ -242,6 +242,7 @@ const DESKTOP_ONLY_PREFIXES = [
   'src/features/workspace/',
   'src/features/workspace-handoff/',
   'src/features/workspace-index/',
+  'src/features/workspace-mcp/',
   'src/features/workspace-rules/',
   'src/pages/workspace/',
   'src/shared/desktop/',

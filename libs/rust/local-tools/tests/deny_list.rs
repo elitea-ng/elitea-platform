@@ -64,6 +64,7 @@ fn fixture() -> (Fixture, PathBuf) {
         deny_read: vec![home.join("xdg-config/elitea")],
         app_id: Some(APP_ID.to_owned()),
         budgets: elitea_local_tools::budget::Budgets::default(),
+        documents: elitea_local_tools::document::Documents::default(),
     })
     .expect("session");
     (Fixture { _dir: dir, session }, home)
@@ -196,6 +197,7 @@ async fn a_home_workspace_spills_and_the_spill_dir_stays_hidden() {
         deny_read: Vec::new(),
         app_id: Some(APP_ID.to_owned()),
         budgets: elitea_local_tools::budget::Budgets::default(),
+        documents: elitea_local_tools::document::Documents::default(),
     })
     .expect("session");
     session.set_conversation(Some("42"));

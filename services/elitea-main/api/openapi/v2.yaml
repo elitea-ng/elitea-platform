@@ -9002,6 +9002,39 @@ components:
           type: boolean
           nullable: true
           description: '`reviewed` only.'
+        input_cost_per_1m_tokens:
+          type: number
+          nullable: true
+          description: >
+            `reviewed` only, and section=llm only. USD per 1M input tokens from
+            the gateway's price catalogue (gateway.gateway_models, the table the
+            budget gate prices with). Absent or null when the price is unknown
+            or when the caller may not see amounts (the budget routes'
+            can_see_amounts rule: the caller's personal project, or the project
+            admin role).
+        output_cost_per_1m_tokens:
+          type: number
+          nullable: true
+          description: >
+            `reviewed` only, and section=llm only. USD per 1M output tokens from
+            the gateway's price catalogue. Absent or null when unknown or when
+            the caller may not see amounts (the budget routes' can_see_amounts
+            rule).
+        cached_input_cost_per_1m_tokens:
+          type: number
+          nullable: true
+          description: >
+            `reviewed` only, and section=llm only. What the gateway charges per
+            1M cached input tokens, in USD; it applies no cache discount today,
+            so it equals the input price. Absent or null when unknown or when
+            the caller may not see amounts (the budget routes' can_see_amounts
+            rule).
+        currency:
+          type: string
+          nullable: true
+          description: >
+            `reviewed` only. The currency of the three cost fields, always
+            "USD". Present exactly when they are.
         data:
           type: object
           additionalProperties: true
@@ -17411,8 +17444,8 @@ paths:
         must be in the internal-tools catalogue the agent turn admits:
         `ask_user`, `attachments`, `data_analysis`, `image_generation`,
         `internal_mcp`, `lazy_tools_mode`, `planner`,
-        `project_context_builder`, `pyodide`, `skills_builder`, `swarm`. A
-        name outside it, a missing or non-array `internal_tools`, or any
+        `project_context_builder`, `pyodide`, `skills_builder`, `subagents`,
+        `swarm`. A name outside it, a missing or non-array `internal_tools`, or any
         other key answers 400 and writes nothing. Whether the configured
         worker runs a tool is a separate question (runtime capabilities).
 

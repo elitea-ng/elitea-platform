@@ -1154,6 +1154,19 @@ jobs:
           save-if: false
           workspaces: apps/elitea-desktop/src-tauri
 
+      # The document extractor (ADR-0029 decision 4) is a binary of its own,
+      # bundled as the app's externalBin so it is signed and notarised with
+      # it. Tauri wants it named for the target triple.
+      - name: Build the document sidecar
+        run: |
+          set -euo pipefail
+          cd apps/elitea-desktop/doc-extract-sidecar
+          bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+          cargo build --release --locked --target aarch64-apple-darwin
+          mkdir -p ../src-tauri/binaries
+          cp target/aarch64-apple-darwin/release/elitea-doc-extract-sidecar \
+            ../src-tauri/binaries/elitea-doc-extract-sidecar-aarch64-apple-darwin
+
       - name: Prepare the notarisation key
         env:
           APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
@@ -1174,7 +1187,9 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg
+        run: >
+          npx tauri build --target aarch64-apple-darwin --bundles app,dmg
+          --config src-tauri/tauri.sidecar.conf.json
 
       # Proven, not assumed: Gatekeeper accepts the app and the ticket is stapled.
       - name: The app is signed, notarised and stapled

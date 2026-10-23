@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
 
+import { PROCESS_LINES } from './processEvents';
 import { activeView, earlierViews, initialTurnsState, latestPlan, MAX_UNCLAIMED_TURNS, replayView, turnReducer, type TurnAction, type TurnsState } from './turnReducer';
 
 const T = 'turn-1';
@@ -294,5 +295,144 @@ describe('turnReducer', () => {
     }
     expect(activeView(run([status(1, 'done'), proposal(2, 'late')])).planProposal).toBeUndefined();
     expect(replayView([proposal(1, 'r1')]).planProposal).toBeUndefined();
+  });
+});
+
+describe('sub-agents (#1226)', () => {
+  const spawn = (seq: number, id: string): AgentEvent => ({
+    turn_id: T,
+    seq,
+    kind: 'tool_call',
+    payload: { call_id: id, tool: 'spawn_agent', args_summary: 'Find the callers', remote: false },
+  });
+  const started = (seq: number, agentId: string, parent: string, ordinal: number): AgentEvent => ({
+    turn_id: T,
+    seq,
+    kind: 'subagent_started',
+    payload: { agent_id: agentId, parent_call_id: parent, ordinal, label: `child ${ordinal}` },
+  });
+  const inner = (seq: number, agentId: string, event: Extract<AgentEvent, { kind: 'subagent_event' }>['payload']['inner']): AgentEvent => ({
+    turn_id: T,
+    seq,
+    kind: 'subagent_event',
+    payload: { agent_id: agentId, inner: event },
+  });
+  const finished = (seq: number, agentId: string, status: 'completed' | 'cancelled', result?: string): AgentEvent => ({
+    turn_id: T,
+    seq,
+    kind: 'subagent_finished',
+    payload: { agent_id: agentId, status, steps: 2, input_tokens: 100, output_tokens: 20, ...(result === undefined ? {} : { result }) },
+  });
+
+  it('opens a lane per child under its spawn call, with its own rows, and settles it', () => {
+    const view = activeView(
+      run([
+        spawn(1, 'c1'),
+        started(2, 'a_1', 'c1', 1),
+        spawn(3, 'c2'),
+        started(4, 'a_2', 'c2', 2),
+        inner(5, 'a_1', { kind: 'tool_call', call_id: 'k1', tool: 'read_file', args_summary: 'a.rs', remote: false }),
+        inner(6, 'a_1', { kind: 'tool_result', call_id: 'k1', ok: true, summary: 'fn main', truncated: false }),
+        inner(7, 'a_1', { kind: 'text_delta', text: 'Found it.' }),
+        finished(8, 'a_1', 'completed', 'main is in a.rs'),
+      ]),
+    );
+    // The children's calls are not the turn's own rows.
+    expect(view.items.map((item) => (item.type === 'tool' ? item.tool : item.type))).toEqual(['spawn_agent', 'spawn_agent']);
+    const [first, second] = view.subAgents ?? [];
+    expect(first).toMatchObject({ agentId: 'a_1', parentCallId: 'c1', status: 'completed', steps: 2, inputTokens: 100, result: 'main is in a.rs' });
+    expect(first?.items).toEqual([
+      { type: 'tool', key: 'ck1', callId: 'k1', tool: 'read_file', argsSummary: 'a.rs', remote: false, result: { ok: true, summary: 'fn main', truncated: false } },
+      { type: 'text', key: 't7', text: 'Found it.' },
+    ]);
+    expect(second).toMatchObject({ agentId: 'a_2', parentCallId: 'c2', status: 'running', label: 'child 2' });
+  });
+
+  it('runs again when a continued child sends events, and replays from the history as it ran', () => {
+    const events = [spawn(1, 'c1'), started(2, 'a_1', 'c1', 1), finished(3, 'a_1', 'completed', 'one'), inner(4, 'a_1', { kind: 'text_delta', text: 'more' })];
+    expect(activeView(run(events)).subAgents?.[0]?.status).toBe('running');
+    expect(replayView([...events, finished(5, 'a_1', 'cancelled')]).subAgents?.[0]).toMatchObject({ status: 'cancelled', steps: 2 });
+    expect(replayView([...events, finished(5, 'a_1', 'cancelled')]).subAgents?.[0]?.result).toBeUndefined();
+  });
+
+  it('ignores an event for a child whose start it never heard, and a repeated start', () => {
+    const view = activeView(run([inner(1, 'a_9', { kind: 'text_delta', text: 'x' }), finished(2, 'a_9', 'completed'), spawn(3, 'c1'), started(4, 'a_1', 'c1', 1), started(5, 'a_1', 'c1', 1)]));
+    expect(view.subAgents?.map((lane) => lane.agentId)).toEqual(['a_1']);
+  });
+});
+
+describe('usage, usage_total and context (#1227)', () => {
+  const meter = { used_tokens: 1_200, window_tokens: 10_000, percent: 12, phase: 'measured' as const, compacted: false, window_fallback: false };
+  const usage = (seq: number, prompt: number, cached?: number): AgentEvent => ({
+    turn_id: T,
+    seq,
+    kind: 'usage',
+    payload: { model: 'gpt-x', step: seq, prompt_tokens: prompt, completion_tokens: 10, total_tokens: prompt + 10, reasoning_tokens: 2, ...(cached === undefined ? {} : { cached_tokens: cached }), context: meter },
+  });
+  const total = (seq: number): AgentEvent => ({
+    turn_id: T,
+    seq,
+    kind: 'usage_total',
+    payload: { prompt: 3_500, completion: 30, cached: 900, cache_write: 0, reasoning: 4, calls: 3, subagents: { prompt: 300, completion: 10, cached: 0, cache_write: 0, reasoning: 0, calls: 1 } },
+  });
+
+  it('sums the turn’s calls while it runs, with the model and the meter', () => {
+    const view = activeView(run([status(0, 'running'), usage(1, 1_000), usage(2, 2_200, 900)]));
+    expect(view.usage).toEqual({ prompt: 3_200, completion: 20, cached: 900, cache_write: 0, reasoning: 4, calls: 2, final: false, model: 'gpt-x' });
+    expect(view.context?.percent).toBe(12);
+  });
+
+  it('takes the host’s total once the run ended, sub-agents included, and keeps it', () => {
+    const view = replayView([status(0, 'running'), usage(1, 1_000), usage(2, 2_200, 900), total(3), usage(4, 50)]);
+    expect(view.usage).toMatchObject({ prompt: 3_500, cached: 900, calls: 3, final: true, model: 'gpt-x' });
+    expect(view.usage?.subagents?.prompt).toBe(300);
+  });
+
+  it('follows the context event between usage events', () => {
+    const view = activeView(run([usage(1, 1_000), { turn_id: T, seq: 2, kind: 'context', payload: { ...meter, phase: 'compacting' } }]));
+    expect(view.context?.phase).toBe('compacting');
+    expect(view.usage?.calls).toBe(1);
+  });
+});
+
+describe('background processes (#1223)', () => {
+  const delta = (seq: number, data: string, offset: number, callId = 'c1'): AgentEvent => ({
+    turn_id: T,
+    seq,
+    kind: 'tool_output_delta',
+    payload: { call_id: callId, process_id: 'p_0000abcd', stream: 'pty', data, offset },
+  });
+  const started: AgentEvent = {
+    turn_id: T,
+    seq: 1,
+    kind: 'process_started',
+    payload: { process_id: 'p_0000abcd', call_id: 'c1', command: 'npm run dev', tty: true, sandbox: 'workspace-write', loopback: true },
+  };
+  const toolOf = (state: TurnsState) => activeView(state).items.find((item) => item.type === 'tool');
+
+  it('folds tool_output_delta into its run_command row, escape codes dropped, then settles it', () => {
+    const state = run([
+      call(0, 'c1'),
+      started,
+      delta(2, '\u001b[32mready\u001b[0m on :5173\r\n', 0),
+      delta(3, 'GET /\r\n', 25),
+      { turn_id: T, seq: 4, kind: 'process_exited', payload: { process_id: 'p_0000abcd', call_id: 'c1', status: 'exited', exit_code: 0 } },
+    ]);
+    const tool = toolOf(state);
+    expect(tool?.type === 'tool' && tool.process).toEqual({ processId: 'p_0000abcd', status: 'exited', exitCode: 0, output: 'ready on :5173\nGET /\n', end: 32 });
+    // Nothing for a call the turn never showed.
+    expect(activeView(run([delta(0, 'x', 0, 'nope')])).items).toEqual([]);
+  });
+
+  it('keeps the last 200 lines, in offset order when deltas arrive out of order', () => {
+    const lines = Array.from({ length: 250 }, (_, i) => `line ${i}`).join('\n');
+    const state = run([call(0, 'c1'), delta(3, `${lines}\n`, 6), delta(2, 'first\n', 0)]);
+    const tool = toolOf(state);
+    const output = tool?.type === 'tool' ? (tool.process?.output ?? '') : '';
+    expect(output.split('\n')).toHaveLength(PROCESS_LINES);
+    expect(output.endsWith('line 249\n')).toBe(true);
+    // Folded again in seq order: "first" came before the 250 lines, so it is past the kept 200.
+    expect(output).not.toContain('first');
+    expect(activeView(run([call(0, 'c1'), delta(2, 'b\n', 2), delta(1, 'a\n', 0)])).items[0]).toMatchObject({ process: { output: 'a\nb\n' } });
   });
 });

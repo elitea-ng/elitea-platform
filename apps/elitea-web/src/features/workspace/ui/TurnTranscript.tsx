@@ -1,7 +1,8 @@
 /**
  * The live transcript of one turn: streamed text (Markdown, as in chat), each step's reasoning as a
  * folded "Thinking" block (`ThinkingBlock`), tool rows (local or remote, with a collapsible result),
- * the status line and the cancel button.
+ * each `spawn_agent` call's sub-agents under its row (`SubAgentLanes`), a background process's output under its
+ * `run_command` row (`ToolProcessOutput`), the status line and the cancel button.
  */
 import { useState, type MouseEvent } from 'react';
 
@@ -23,8 +24,11 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
 
+import { lanesOf } from '../model/subAgentEvents';
 import { isTerminalPhase, type TranscriptItem, type TurnView } from '../model/turnReducer';
+import { SubAgentLanes } from './SubAgentLanes';
 import { ThinkingBlock } from './ThinkingBlock';
+import { ToolProcessOutput } from './ToolProcessOutput';
 
 type ToolItem = Extract<TranscriptItem, { type: 'tool' }>;
 
@@ -156,6 +160,7 @@ function ToolRow({ item }: { item: ToolItem }): React.JSX.Element {
           </Typography>
         </Collapse>
       )}
+      {item.process !== undefined && <ToolProcessOutput process={item.process} />}
     </Box>
   );
 }
@@ -209,7 +214,10 @@ export function TurnTranscript({ view, busy, onCancel, onRetryCommit, onTextCont
         ) : item.type === 'thinking' ? (
           <ThinkingBlock key={item.key} item={item} />
         ) : (
-          <ToolRow key={item.key} item={item} />
+          <Box key={item.key}>
+            <ToolRow item={item} />
+            <SubAgentLanes lanes={lanesOf(view.subAgents, item.callId)} ToolRow={ToolRow} />
+          </Box>
         ),
       )}
       {view.error !== undefined && (

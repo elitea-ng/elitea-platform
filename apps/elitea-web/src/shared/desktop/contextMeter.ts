@@ -7,6 +7,8 @@ export interface ContextMeter {
   used_tokens: number;
   /** The window the budget uses: the model's, at most 272k. */
   window_tokens: number;
+  /** Used of the window, 0 to 100 (absent from hosts before #1227). */
+  percent?: number;
   phase: 'measured' | 'compacting' | 'compacted';
   /** The turn compacted the context. */
   compacted: boolean;

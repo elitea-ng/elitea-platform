@@ -1,0 +1,409 @@
+//! The four sub-agent tools. Every refusal is a result the model reads
+//! (`{"status": "error", "code", "message"}`), never a run failure.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use adk_core::{Tool, ToolContext};
+use async_trait::async_trait;
+use ring::rand::{SecureRandom as _, SystemRandom};
+use serde_json::{Value, json};
+
+use super::child::{self, Child, InputRefused};
+use super::{
+    CHILD_AGENT_PREFIX, CLOSE_AGENT, ChildIdentity, DEFAULT_WAIT_SECONDS, DEPTH_EXCEEDED,
+    MAX_CHILD_STEPS, MAX_LABEL_CHARS, MAX_TASK_CHARS, MAX_WAIT_IDS, MAX_WAIT_SECONDS, Registry,
+    SEND_INPUT, SPAWN_AGENT, WAIT_AGENT,
+};
+
+#[derive(Clone, Copy)]
+pub(super) enum Action {
+    Spawn,
+    Send,
+    Wait,
+    Close,
+}
+
+impl Action {
+    pub(super) const ALL: [Self; 4] = [Self::Spawn, Self::Send, Self::Wait, Self::Close];
+}
+
+pub(super) fn tool(action: Action, registry: Arc<Registry>) -> Arc<dyn Tool> {
+    Arc::new(SubAgentTool { action, registry })
+}
+
+struct SubAgentTool {
+    action: Action,
+    registry: Arc<Registry>,
+}
+
+fn refused(code: &str, message: impl Into<String>) -> Value {
+    json!({"status": "error", "code": code, "message": message.into()})
+}
+
+/// `a_` and 8 hex digits.
+fn new_agent_id() -> Option<String> {
+    let mut bytes = [0_u8; 4];
+    SystemRandom::new().fill(&mut bytes).ok()?;
+    Some(format!("a_{:08x}", u32::from_be_bytes(bytes)))
+}
+
+fn bounded_text(args: &Value, key: &str) -> Result<String, Value> {
+    let text = args
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| {
+            refused(
+                "invalid_arguments",
+                format!("`{key}` must be a non-empty string."),
+            )
+        })?;
+    if text.chars().count() > MAX_TASK_CHARS {
+        return Err(refused(
+            "invalid_arguments",
+            format!("`{key}` is longer than {MAX_TASK_CHARS} characters; shorten it."),
+        ));
+    }
+    Ok(text.to_owned())
+}
+
+impl SubAgentTool {
+    fn children(&self) -> Vec<Child> {
+        self.registry
+            .children
+            .lock()
+            .map(|children| children.clone())
+            .unwrap_or_default()
+    }
+
+    fn running(&self) -> usize {
+        self.children()
+            .iter()
+            .filter(|child| !child.status().is_settled())
+            .count()
+    }
+
+    fn find(&self, agent_id: &str) -> Option<Child> {
+        self.children()
+            .into_iter()
+            .find(|child| child.identity().agent_id == agent_id)
+    }
+
+    fn unknown(agent_id: &str) -> Value {
+        refused(
+            "subagent_unknown",
+            format!("No sub-agent {agent_id} was started in this turn."),
+        )
+    }
+
+    async fn spawn(&self, ctx: &dyn ToolContext, args: &Value) -> Value {
+        let task = match bounded_text(args, "task") {
+            Ok(task) => task,
+            Err(refusal) => return refusal,
+        };
+        let label = args
+            .get("label")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .map(|label| label.chars().take(MAX_LABEL_CHARS).collect::<String>());
+        let limits = self.registry.limits;
+        let steps = match args.get("max_steps") {
+            None | Some(Value::Null) => limits.default_steps,
+            Some(value) => match value
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .filter(|n| (1..=MAX_CHILD_STEPS).contains(n))
+            {
+                Some(steps) => steps,
+                None => {
+                    return refused(
+                        "invalid_arguments",
+                        format!("`max_steps` must be an integer from 1 to {MAX_CHILD_STEPS}."),
+                    );
+                }
+            },
+        };
+        let children = self.children();
+        if children.len() >= limits.max_per_turn {
+            return refused(
+                "subagent_limit",
+                format!(
+                    "This turn already started {} sub-agents, the most it may; use their results.",
+                    limits.max_per_turn
+                ),
+            );
+        }
+        let running = children
+            .iter()
+            .filter(|child| !child.status().is_settled())
+            .count();
+        if running >= limits.max_concurrent {
+            return refused(
+                "subagent_busy",
+                format!(
+                    "{running} sub-agents are already running, the most at once; wait for one (`{WAIT_AGENT}`) or close one (`{CLOSE_AGENT}`) first."
+                ),
+            );
+        }
+        let Some(agent_id) = (0..4).find_map(|_| {
+            new_agent_id().filter(|id| {
+                children
+                    .iter()
+                    .all(|child| &child.identity().agent_id != id)
+            })
+        }) else {
+            return refused("subagent_unavailable", "No sub-agent id could be made.");
+        };
+        let identity = ChildIdentity {
+            agent_id: agent_id.clone(),
+            parent_call_id: ctx.function_call_id().to_owned(),
+            label,
+            ordinal: children.len() + 1,
+        };
+        let started = child::start(child::Start {
+            identity,
+            task,
+            steps,
+            budget: limits.input_token_budget,
+            instruction: self.registry.instruction.clone(),
+            excluded: Arc::new(self.registry.excluded.clone()),
+            host: Arc::clone(&self.registry.host),
+        })
+        .await;
+        match started {
+            Ok(child) => {
+                if let Ok(mut children) = self.registry.children.lock() {
+                    children.push(child);
+                } else {
+                    child.close();
+                    return refused(
+                        "subagent_unavailable",
+                        "The sub-agent could not be started.",
+                    );
+                }
+                json!({"agent_id": agent_id, "status": "running"})
+            }
+            Err(code) => refused(code, "The sub-agent could not be started."),
+        }
+    }
+
+    fn send(&self, args: &Value) -> Value {
+        let Some(agent_id) = args.get("agent_id").and_then(Value::as_str) else {
+            return refused("invalid_arguments", "`agent_id` must be a string.");
+        };
+        let message = match bounded_text(args, "message") {
+            Ok(message) => message,
+            Err(refusal) => return refusal,
+        };
+        let Some(child) = self.find(agent_id) else {
+            return Self::unknown(agent_id);
+        };
+        match child.send(message, self.running(), self.registry.limits.max_concurrent) {
+            Ok(()) => json!({"agent_id": agent_id, "status": "running"}),
+            Err(InputRefused::Busy) => refused(
+                "subagent_busy",
+                format!(
+                    "The most sub-agents are already running; wait for one (`{WAIT_AGENT}`) first."
+                ),
+            ),
+            Err(InputRefused::Ended(status)) => refused(
+                "subagent_ended",
+                format!(
+                    "Sub-agent {agent_id} has ended ({}); start a new one for more work.",
+                    status.as_str()
+                ),
+            ),
+        }
+    }
+
+    async fn wait(&self, args: &Value) -> Value {
+        let ids = match args.get("agent_ids") {
+            // None named: every sub-agent still running, or (none running)
+            // every one this turn started, so a spawn and a wait can share
+            // one round of calls.
+            None | Some(Value::Null) => {
+                let all = self.children();
+                let running: Vec<Value> = all
+                    .iter()
+                    .filter(|child| !child.status().is_settled())
+                    .map(|child| json!(child.identity().agent_id))
+                    .collect();
+                if running.is_empty() {
+                    all.iter()
+                        .map(|child| json!(child.identity().agent_id))
+                        .collect()
+                } else {
+                    running
+                }
+            }
+            Some(Value::Array(ids)) if !ids.is_empty() && ids.len() <= MAX_WAIT_IDS => ids.clone(),
+            Some(_) => {
+                return refused(
+                    "invalid_arguments",
+                    format!("`agent_ids` names 1 to {MAX_WAIT_IDS} sub-agents."),
+                );
+            }
+        };
+        if ids.is_empty() {
+            return refused("subagent_unknown", "No sub-agent was started in this turn.");
+        }
+        let timeout = match args.get("timeout_seconds") {
+            None | Some(Value::Null) => DEFAULT_WAIT_SECONDS,
+            Some(value) => match value
+                .as_u64()
+                .filter(|n| (1..=MAX_WAIT_SECONDS).contains(n))
+            {
+                Some(seconds) => seconds,
+                None => {
+                    return refused(
+                        "invalid_arguments",
+                        format!(
+                            "`timeout_seconds` must be an integer from 1 to {MAX_WAIT_SECONDS}."
+                        ),
+                    );
+                }
+            },
+        };
+        let mut children = Vec::new();
+        for id in &ids {
+            let Some(id) = id.as_str() else {
+                return refused("invalid_arguments", "`agent_ids` must be strings.");
+            };
+            let Some(child) = self.find(id) else {
+                return Self::unknown(id);
+            };
+            if !children
+                .iter()
+                .any(|known: &Child| known.identity().agent_id == id)
+            {
+                children.push(child);
+            }
+        }
+        // Every one settled, or the timeout: those still running say so.
+        let all = futures::future::join_all(children.iter().map(Child::settled));
+        let _ = tokio::time::timeout(Duration::from_secs(timeout), all).await;
+        json!({"results": children.iter().map(|child| child.report().to_value()).collect::<Vec<_>>()})
+    }
+
+    fn close(&self, args: &Value) -> Value {
+        let Some(agent_id) = args.get("agent_id").and_then(Value::as_str) else {
+            return refused("invalid_arguments", "`agent_id` must be a string.");
+        };
+        let Some(child) = self.find(agent_id) else {
+            return Self::unknown(agent_id);
+        };
+        if let Some(report) = child.close() {
+            self.registry.host.finished(child.identity(), &report);
+        }
+        child.report().to_value()
+    }
+}
+
+#[async_trait]
+impl Tool for SubAgentTool {
+    fn name(&self) -> &str {
+        match self.action {
+            Action::Spawn => SPAWN_AGENT,
+            Action::Send => SEND_INPUT,
+            Action::Wait => WAIT_AGENT,
+            Action::Close => CLOSE_AGENT,
+        }
+    }
+
+    fn description(&self) -> &str {
+        match self.action {
+            Action::Spawn => {
+                "Start a read-only sub-agent on a self-contained task and return at once with its agent_id. It has its own fresh context (it sees nothing of this conversation but the task), can read and search but never change anything, and runs alongside other sub-agents. Use it for independent investigations that would fill your context; then wait_agent for the results."
+            }
+            Action::Send => {
+                "Send another message to a sub-agent: it continues on its own context (queued if it is still running)."
+            }
+            Action::Wait => {
+                "Wait for sub-agents to finish and return their results (status, final report, steps and tokens): the ones named, or every one still running when none is named. Those still running at the timeout are reported as running."
+            }
+            Action::Close => "Stop a sub-agent and free its slot; returns what it had.",
+        }
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(match self.action {
+            Action::Spawn => json!({
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "maxLength": MAX_TASK_CHARS,
+                        "description": "Self-contained instructions; the child sees nothing else from this conversation."
+                    },
+                    "label": {
+                        "type": "string",
+                        "maxLength": MAX_LABEL_CHARS,
+                        "description": "A short name shown for the sub-agent"
+                    },
+                    "max_steps": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_CHILD_STEPS,
+                        "description": "The most model steps it may take"
+                    }
+                },
+                "required": ["task"]
+            }),
+            Action::Send => json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": {"type": "string"},
+                    "message": {"type": "string", "maxLength": MAX_TASK_CHARS}
+                },
+                "required": ["agent_id", "message"]
+            }),
+            Action::Wait => json!({
+                "type": "object",
+                "properties": {
+                    "agent_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": MAX_WAIT_IDS
+                    },
+                    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": MAX_WAIT_SECONDS}
+                }
+            }),
+            Action::Close => json!({
+                "type": "object",
+                "properties": {"agent_id": {"type": "string"}},
+                "required": ["agent_id"]
+            }),
+        })
+    }
+
+    // Only waiting changes nothing: several waits may run together with
+    // the parent's reads. Spawning, sending and closing run in call order.
+    fn is_read_only(&self) -> bool {
+        matches!(self.action, Action::Wait)
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        matches!(self.action, Action::Wait)
+    }
+
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
+        // One level deep: a child is never given these tools, and a call
+        // from a child's context is refused all the same.
+        if ctx.agent_name().starts_with(CHILD_AGENT_PREFIX) {
+            return Ok(refused(
+                DEPTH_EXCEEDED,
+                "A sub-agent cannot start or manage other sub-agents.",
+            ));
+        }
+        Ok(match self.action {
+            Action::Spawn => self.spawn(ctx.as_ref(), &args).await,
+            Action::Send => self.send(&args),
+            Action::Wait => self.wait(&args).await,
+            Action::Close => self.close(&args),
+        })
+    }
+}

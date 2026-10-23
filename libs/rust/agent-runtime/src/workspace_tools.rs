@@ -54,7 +54,7 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
     WorkspaceToolSpec {
         name: "read_file",
         read_only: true,
-        description: "Read a UTF-8 text file in the workspace, with line numbers. Page long files with offset/limit; a line too long for one page is cut, and next_offset with next_column continue inside it. Reading a file is required before changing it.",
+        description: "Read a UTF-8 text file in the workspace, with line numbers. Page long files with offset/limit; a line too long for one page is cut, and next_offset with next_column continue inside it. Reading a file is required before changing it. Images (PNG, JPEG, WebP, GIF) are returned as images when the model can see them.",
         parameters: || {
             json!({
                 "type": "object",
@@ -128,11 +128,15 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
     WorkspaceToolSpec {
         name: "read_document",
         read_only: true,
-        description: "Extract the text of a document in the workspace (PDF, Word, Excel, PowerPoint, e-mail, HTML, or plain text).",
+        description: "Extract the text of a document in the workspace (PDF, Word, Excel, PowerPoint, OpenDocument, RTF, EPUB, e-mail, HTML, or plain text), page by page: a PDF page, a slide or a sheet is one page, marked [page N]. The result says page_count and which pages it shows; pass pages (\"1-20\", \"5\", \"30-\") to read a range of a long document, and when the text is cut, next_offset (with the same pages) continues it and next_pages names the pages after it.",
         parameters: || {
             json!({
                 "type": "object",
-                "properties": { "path": path_param("Path relative to the workspace root.") },
+                "properties": {
+                    "path": path_param("Path relative to the workspace root."),
+                    "pages": { "type": "string", "description": "Page range, e.g. \"1-20\" or \"5\". Default: from the first page until the output budget is reached." },
+                    "offset": { "type": "integer", "minimum": 0, "description": "Character offset into the selected text, for continuing a cut result." }
+                },
                 "required": ["path"]
             })
         },

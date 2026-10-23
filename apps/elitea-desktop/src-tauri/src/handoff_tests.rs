@@ -896,6 +896,7 @@ async fn a_retried_release_marks_the_session_for_reseeding() {
         model: None,
         project_skills: Vec::new(),
         command: None,
+        images: Vec::new(),
     };
     let emitter = h.emitter.clone();
     let run = |prompt: &'static str| {
@@ -1708,6 +1709,7 @@ async fn a_take_back_makes_the_next_local_turn_see_the_cloud_turns() {
         model: None,
         project_skills: Vec::new(),
         command: None,
+        images: Vec::new(),
     };
     let emitter = h.emitter.clone();
     let run = |prompt: &'static str| {
@@ -1855,4 +1857,40 @@ async fn a_take_back_makes_the_next_local_turn_see_the_cloud_turns() {
     // And the next turn needs no seed.
     run("thanks").await;
     assert_eq!(seeds(&h), 1);
+}
+
+/// #1223: a send stops the workspace's background processes before the
+/// snapshot: nothing the agent started keeps running, or writing, while
+/// the thread leaves the device.
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_start_kills_background_processes() {
+    let h = harness().await;
+    *h.policy.0.lock().unwrap() = json!({"allowed": true, "cloud_handoff": true, "shell": true});
+    let session = h
+        .agents
+        .local_session(&h.workspace_id, h.folder.clone())
+        .unwrap();
+    // `cat` reads its stdin until it closes: it runs until stopped.
+    let started = session
+        .call(
+            "run_command",
+            "c1",
+            json!({ "command": "cat", "background": true }),
+        )
+        .await;
+    assert_eq!(started["status"], "running", "{started}");
+    let id = started["process_id"].as_str().unwrap().to_owned();
+
+    let sent = h
+        .host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    assert_eq!(sent.state, "CLOUD_IDLE");
+    let process = session.process(&id).unwrap();
+    assert!(!process.is_running());
+    assert_eq!(
+        process.info().status,
+        elitea_local_tools::process::ProcessState::Killed
+    );
 }

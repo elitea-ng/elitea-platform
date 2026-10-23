@@ -148,6 +148,7 @@ fn fixture_with(
         deny_read: Vec::new(),
         app_id: None,
         budgets: elitea_local_tools::budget::Budgets::default(),
+        documents: elitea_local_tools::document::Documents::default(),
     })
     .expect("session");
     Fixture {
@@ -258,6 +259,7 @@ async fn remembered_shell_choices_and_approve_always_never_allow_a_commit() {
                 sandbox: Some(SandboxMode::FullAccess),
                 network: true,
                 runner: None,
+                loopback: false,
             })
             .expect("remember");
     }

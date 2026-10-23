@@ -11,6 +11,7 @@
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -30,16 +31,23 @@ use crate::approvals::{
 use crate::budget::{self, Budgets, SpillStore};
 use crate::checkpoint::{CheckpointInfo, Checkpoints, RestoreReport};
 use crate::deny::DenyList;
+use crate::document::{self, Documents, InProcessExtractor, SidecarExtractor};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::files;
 use crate::git::{Repo, StatusSummary, capped, check_revision, parse_status_summary};
 use crate::ledger::ReadLedger;
+use crate::mcp::{McpServers, ServerStatus};
 use crate::policy::{LocalWorkPolicy, SandboxMode};
+use crate::process::{KeepAlive, ProcessRegistry};
 use crate::project::{self, ProjectProfile};
 use crate::run_tests;
 use crate::sandbox::{self, Enforcement, SandboxRequest};
 use crate::shell::{self, CommandSpec, ShellConfig};
 use crate::workspace::{Intent, Workspace, WsPath};
+
+mod processes;
+
+pub use processes::{PROCESS_TOOLS, RUN_COMMAND_PROCESSES};
 
 /// Everything a host decides when it opens a workspace.
 pub struct SessionConfig {
@@ -75,6 +83,10 @@ pub struct SessionConfig {
     /// searches and git). Output over a budget is cut; a command's, git's
     /// and a document's whole output is spilled for `read_output`.
     pub budgets: Budgets,
+    /// Where `read_document` gets PDF and Office text
+    /// ([`Documents::default`]: this process, which has no extractor on the
+    /// desktop; the host passes the bundled sidecar).
+    pub documents: Documents,
 }
 
 #[derive(Debug, Default)]
@@ -94,15 +106,25 @@ pub struct LocalSession {
     checkpoints: Checkpoints,
     shell: ShellConfig,
     budgets: Budgets,
+    documents: Documents,
     /// The session's spilled outputs, per conversation (under the data
     /// directory; kept across a reopen for [`budget::SPILL_RETENTION`]).
     spill: SpillStore,
     turn: Mutex<Turn>,
     /// The edit tools the current model is offered.
     edit_profile: Mutex<EditProfile>,
+    /// Whether the current model can see images: `read_file` returns an
+    /// image to one that can (set per turn from the model catalogue).
+    vision: AtomicBool,
     /// The project profile and the mentioned folders it was detected
     /// with: detected again only when those change or a marker does.
     project: Mutex<Option<(Vec<WsPath>, Arc<ProjectProfile>)>>,
+    /// The background processes (#1223); dropped with the session, which
+    /// stops them.
+    processes: ProcessRegistry,
+    /// The person's local MCP servers (#1230); dropped with the session,
+    /// which stops them.
+    mcp: McpServers,
 }
 
 /// How a command would be confined (see [`LocalSession::command_confinement`]).
@@ -147,7 +169,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "read_file",
         kind: ToolKind::ReadFile,
-        description: "Read a UTF-8 text file in the workspace, with line numbers. Page long files with offset/limit; a line too long for one page is cut, and next_offset with next_column continue inside it. Reading a file is required before changing it.",
+        description: "Read a UTF-8 text file in the workspace, with line numbers. Page long files with offset/limit; a line too long for one page is cut, and next_offset with next_column continue inside it. Reading a file is required before changing it. Images (PNG, JPEG, WebP, GIF) are returned as images when the model can see them.",
         parameters: || {
             json!({
                 "type": "object",
@@ -221,11 +243,15 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "read_document",
         kind: ToolKind::ReadDocument,
-        description: "Extract the text of a document in the workspace (PDF, Word, Excel, PowerPoint, e-mail, HTML, or plain text).",
+        description: "Extract the text of a document in the workspace (PDF, Word, Excel, PowerPoint, OpenDocument, RTF, EPUB, e-mail, HTML, or plain text), page by page: a PDF page, a slide or a sheet is one page, marked [page N]. The result says page_count and which pages it shows; pass pages (\"1-20\", \"5\", \"30-\") to read a range of a long document, and when the text is cut, next_offset (with the same pages) continues it and next_pages names the pages after it.",
         parameters: || {
             json!({
                 "type": "object",
-                "properties": { "path": path_param("Path relative to the workspace root.") },
+                "properties": {
+                    "path": path_param("Path relative to the workspace root."),
+                    "pages": { "type": "string", "description": "Page range, e.g. \"1-20\" or \"5\". Default: from the first page until the output budget is reached." },
+                    "offset": { "type": "integer", "minimum": 0, "description": "Character offset into the selected text, for continuing a cut result." }
+                },
                 "required": ["path"]
             })
         },
@@ -423,6 +449,7 @@ pub fn tools_for(profile: EditProfile) -> Vec<&'static ToolSpec> {
 }
 
 #[derive(Deserialize)]
+#[allow(clippy::struct_excessive_bools)] // the tool's independent switches
 struct CommandArgs {
     command: String,
     #[serde(default)]
@@ -433,6 +460,31 @@ struct CommandArgs {
     sandbox: Option<SandboxMode>,
     #[serde(default)]
     network: bool,
+    /// The rest are [`RUN_COMMAND_PROCESSES`]' (#1223).
+    #[serde(default)]
+    background: bool,
+    #[serde(default)]
+    tty: bool,
+    #[serde(default)]
+    loopback: bool,
+    #[serde(default)]
+    yield_ms: Option<u64>,
+    #[serde(default)]
+    keep_alive: Option<KeepAlive>,
+}
+
+impl CommandArgs {
+    /// Whether it starts a background process: asked for, or implied (a
+    /// terminal program is written to later; keeping a process alive needs
+    /// one).
+    fn background(&self) -> bool {
+        self.background || self.tty || self.keep_alive == Some(KeepAlive::Session)
+    }
+
+    /// Whether it uses any of the background-process switches.
+    fn uses_processes(&self) -> bool {
+        self.background() || self.loopback || self.yield_ms.is_some() || self.keep_alive.is_some()
+    }
 }
 
 /// An `edit_file` or a `multi_edit` call.
@@ -699,10 +751,14 @@ impl LocalSession {
             checkpoints,
             shell,
             budgets: config.budgets,
+            documents: config.documents,
             spill,
             turn: Mutex::new(Turn::default()),
             edit_profile: Mutex::new(EditProfile::default()),
+            vision: AtomicBool::new(false),
             project: Mutex::new(None),
+            processes: ProcessRegistry::new(),
+            mcp: McpServers::new(),
         }))
     }
 
@@ -764,6 +820,34 @@ impl LocalSession {
         let profile = Arc::new(project::detect(&self.workspace, &mentioned));
         *cached = Some((mentioned, Arc::clone(&profile)));
         profile
+    }
+
+    /// The session's local MCP servers (#1230): the host configures them
+    /// ([`McpServers::configure`]) and reads their status.
+    #[must_use]
+    pub fn mcp(&self) -> &McpServers {
+        &self.mcp
+    }
+
+    /// Start the configured MCP servers that have not started yet (the
+    /// questions asked are named after `subject`, the turn); their
+    /// statuses. Nothing starts when the policy's `local_mcp` is off.
+    pub async fn start_mcp_servers(self: &Arc<Self>, subject: &str) -> Vec<ServerStatus> {
+        let policy = self.engine.policy();
+        if !(policy.allowed && policy.local_mcp) {
+            return self.mcp.status();
+        }
+        self.mcp.start_all(self, subject).await
+    }
+
+    /// The command settings (the MCP servers start from them).
+    pub(crate) fn shell_config(&self) -> &ShellConfig {
+        &self.shell
+    }
+
+    /// The tools' output budgets.
+    pub(crate) fn budgets(&self) -> Budgets {
+        self.budgets
     }
 
     /// The session's deny list (built once at open).
@@ -893,6 +977,18 @@ impl LocalSession {
         }
     }
 
+    /// Say whether the turn's model can see images; `false` until set.
+    /// `read_file` on an image returns it only when it can
+    /// (see the `read_file` description).
+    pub fn set_vision(&self, vision: bool) {
+        self.vision.store(vision, Ordering::Relaxed);
+    }
+
+    #[must_use]
+    pub fn vision(&self) -> bool {
+        self.vision.load(Ordering::Relaxed)
+    }
+
     #[must_use]
     pub fn edit_profile(&self) -> EditProfile {
         self.edit_profile
@@ -902,9 +998,12 @@ impl LocalSession {
     }
 
     /// The tools the model is offered now: none when local work is off, no
-    /// shell when the policy says so, no git tools outside git, only
-    /// read-only tools and `exit_plan_mode` in plan mode, and the edit tools
-    /// of the session's [`EditProfile`].
+    /// shell (nor background processes) when the policy says so, no git
+    /// tools outside git, only read-only tools and `exit_plan_mode` in plan
+    /// mode, and the edit tools of the session's [`EditProfile`]. With
+    /// [`ShellConfig::background_processes`], `run_command` is
+    /// [`RUN_COMMAND_PROCESSES`] and the [`PROCESS_TOOLS`] follow
+    /// [`TOOLS`].
     #[must_use]
     pub fn available_tools(&self) -> Vec<&'static ToolSpec> {
         let policy = self.engine.policy();
@@ -915,9 +1014,20 @@ impl LocalSession {
         // refusal, so the agent and the person see why.
         let git = self.checkpoints.kind() == "git" || self.checkpoints.git_refusal().is_some();
         let plan = self.engine.plan_mode();
+        let processes = self.shell.background_processes;
         let mut tools: Vec<&'static ToolSpec> = tools_for(self.edit_profile())
             .into_iter()
-            .filter(|tool| !tool.kind.runs_commands() || policy.shell)
+            // With background processes, `run_command` takes their switches
+            // (a local-only schema: the cloud executor keeps the plain one).
+            .map(|tool| {
+                if processes && tool.name == RUN_COMMAND_PROCESSES.name {
+                    &RUN_COMMAND_PROCESSES
+                } else {
+                    tool
+                }
+            })
+            .chain(PROCESS_TOOLS.iter().filter(|_| processes))
+            .filter(|tool| !(tool.kind.runs_commands() || tool.kind.is_process()) || policy.shell)
             .filter(|tool| !matches!(tool.kind, ToolKind::GitRead | ToolKind::GitCommit) || git)
             .filter(|tool| !plan || tool.kind.plan_allows())
             .collect();
@@ -972,6 +1082,7 @@ impl LocalSession {
         let result = self.dispatch(tool, call_id, args).await;
         if !TOOLS
             .iter()
+            .chain(PROCESS_TOOLS)
             .any(|spec| spec.name == tool && spec.kind.is_read_only())
         {
             // A change: what the sandbox masks may differ now.
@@ -979,8 +1090,11 @@ impl LocalSession {
         }
         match result {
             Ok(mut value) => {
+                // A process tool's `status` is the process's (`running`,
+                // `exited`, …); every other success is `ok`.
                 if let Value::Object(map) = &mut value {
-                    map.insert("status".to_owned(), Value::String("ok".to_owned()));
+                    map.entry("status")
+                        .or_insert_with(|| Value::String("ok".to_owned()));
                 }
                 value
             }
@@ -1079,6 +1193,14 @@ impl LocalSession {
             ToolKind::RunCommand => self.run_command(call_id, args).await,
             ToolKind::RunTests => self.run_tests(call_id, args).await,
             ToolKind::ExitPlanMode => self.exit_plan_mode(call_id, &args).await,
+            ToolKind::ProcessRead | ToolKind::ProcessWrite | ToolKind::ProcessKill => {
+                self.process_tool(spec.name, call_id, args).await
+            }
+            // MCP tools are no `ToolSpec`: their own toolset calls them.
+            ToolKind::McpStart | ToolKind::McpCall => Err(ToolError::new(
+                ErrorCode::Denied,
+                format!("`{tool}` is not available"),
+            )),
         }
     }
 
@@ -1212,6 +1334,7 @@ impl LocalSession {
                     &this.ledger,
                     args,
                     budget::bytes(budgets.read_file),
+                    this.vision(),
                 ),
                 ToolKind::ListTree => files::tree(&this.workspace, args),
                 ToolKind::SearchFiles => {
@@ -1220,19 +1343,42 @@ impl LocalSession {
                 ToolKind::FindFiles => {
                     files::find_files(&this.workspace, args, budget::bytes(budgets.search))
                 }
-                _ => files::document(
-                    &this.workspace,
-                    args,
-                    &this.spill,
-                    budget::bytes(budgets.document),
-                ),
+                _ => this.read_document(args, budget::bytes(budgets.document)),
             }
         })
         .await
     }
 
+    /// `read_document`, with the extractor the host chose.
+    fn read_document(&self, args: Value, max_bytes: usize) -> ToolResult<Value> {
+        match &self.documents {
+            Documents::InProcess => document::read(
+                &self.workspace,
+                args,
+                &self.spill,
+                max_bytes,
+                &InProcessExtractor,
+            ),
+            Documents::Custom(extractor) => {
+                document::read(&self.workspace, args, &self.spill, max_bytes, &**extractor)
+            }
+            Documents::Sidecar(program) => {
+                // Read-only, no network: the parser gets bytes on stdin and
+                // has nowhere to send anything.
+                let request = self.sandbox_request(SandboxMode::ReadOnly, false)?;
+                let sidecar = SidecarExtractor::new(program, &request, &self.shell.sandbox);
+                document::read(&self.workspace, args, &self.spill, max_bytes, &sidecar)
+            }
+        }
+    }
+
     /// Ask the approval channel about `call`.
-    async fn authorize(&self, call_id: &str, call: ToolCall, message: &str) -> ToolResult<()> {
+    pub(crate) async fn authorize(
+        &self,
+        call_id: &str,
+        call: ToolCall,
+        message: &str,
+    ) -> ToolResult<()> {
         let request = ApprovalRequest {
             subject: call_id.to_owned(),
             message: message.to_owned(),
@@ -1378,6 +1524,16 @@ impl LocalSession {
 
     async fn run_command(self: &Arc<Self>, call_id: &str, args: Value) -> ToolResult<Value> {
         let args: CommandArgs = parse(args)?;
+        if args.uses_processes() && !self.shell.background_processes {
+            return Err(ToolError::new(
+                ErrorCode::Unsupported,
+                "background processes and loopback are not available here",
+            ));
+        }
+        if args.yield_ms.is_some_and(|ms| ms > processes::MAX_YIELD_MS) {
+            return Err(ToolError::invalid("`yield_ms` is 0 to 30000"));
+        }
+        let background = args.background();
         let cwd = match &args.cwd {
             Some(cwd) => self.workspace.resolve(cwd, Intent::Read)?,
             None => WsPath::root(),
@@ -1390,14 +1546,21 @@ impl LocalSession {
             timeout: args.timeout_seconds.map(Duration::from_secs),
             mode,
             network: args.network,
+            loopback: args.loopback,
         };
+        if background {
+            // Refused before the person is asked about a process that
+            // could not start.
+            self.processes.check_room()?;
+        }
         // The sandbox this command gets now decides whether it is
         // confined: one that cannot hide what it denies (no sandbox,
-        // Landlock alone, a bubblewrap walk cut short) makes it the
-        // person's call, every time. A sandbox that cannot run at all is
-        // refused after the rules, as before.
-        let unconfined = shell::plan(&self.workspace, &self.shell, &spec)
-            .is_ok_and(|prepared| !prepared.hides_denied);
+        // Landlock alone, a bubblewrap walk cut short), or that cannot keep
+        // a loopback command to the loopback, makes it the person's call,
+        // every time. A sandbox that cannot run at all is refused after the
+        // rules, as before.
+        let unconfined = shell::runs_unconfined(&self.workspace, &self.shell, &spec);
+        let keep_alive = args.keep_alive.unwrap_or_default();
         let call = ToolCall {
             tool: ToolKind::RunCommand,
             paths: vec![spec.cwd.display_string()],
@@ -1406,10 +1569,34 @@ impl LocalSession {
             network: args.network,
             unconfined,
             runner: None,
+            loopback: args.loopback,
+            keep_alive: keep_alive == KeepAlive::Session,
+            mcp: None,
         };
-        self.authorize(call_id, call, "run a command").await?;
+        let message = match (background, args.tty) {
+            (_, true) => "run a command on a terminal",
+            (true, false) => "run a command in the background",
+            (false, false) => "run a command",
+        };
+        self.authorize(call_id, call, message).await?;
         if mode != SandboxMode::ReadOnly {
             self.blocking(Self::ensure_checkpoint).await?;
+        }
+        if background {
+            return self
+                .start_process(
+                    call_id,
+                    &spec,
+                    processes::Start {
+                        tty: args.tty,
+                        keep_alive,
+                        unconfined,
+                        yield_for: Duration::from_millis(
+                            args.yield_ms.unwrap_or(processes::DEFAULT_YIELD_MS),
+                        ),
+                    },
+                )
+                .await;
         }
         // Approved as confined and the sandbox changed since: refused.
         let mut output =
@@ -1465,17 +1652,17 @@ impl LocalSession {
             timeout: Some(timeout),
             mode,
             network,
+            loopback: false,
         };
-        let unconfined = shell::plan(&self.workspace, &self.shell, &spec)
-            .is_ok_and(|prepared| !prepared.hides_denied);
+        let unconfined = shell::runs_unconfined(&self.workspace, &self.shell, &spec);
         let call = ToolCall {
-            tool: ToolKind::RunTests,
-            paths: vec![spec.cwd.display_string()],
             command: Some(spec.command.clone()),
             sandbox: Some(mode),
             network,
             unconfined,
             runner: Some(planned.kind.as_str().to_owned()),
+            paths: vec![spec.cwd.display_string()],
+            ..ToolCall::new(ToolKind::RunTests)
         };
         self.authorize(call_id, call, "run the tests").await?;
         if mode != SandboxMode::ReadOnly {

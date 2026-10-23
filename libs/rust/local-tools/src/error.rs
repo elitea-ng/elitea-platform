@@ -44,6 +44,9 @@ pub enum ErrorCode {
     /// (past its retention, dropped by the cap, or another
     /// conversation's): re-run the tool that produced it.
     OutputExpired,
+    /// A session already runs as many background processes as it may
+    /// ([`crate::process::MAX_LIVE`]).
+    TooManyProcesses,
     Io,
 }
 
@@ -67,6 +70,7 @@ impl ErrorCode {
             Self::Git => "local_tools.git",
             Self::UnsafeRepository => "local_tools.unsafe_repository",
             Self::OutputExpired => "local_tools.output_expired",
+            Self::TooManyProcesses => "local_tools.too_many_processes",
             Self::Io => "local_tools.io",
         }
     }

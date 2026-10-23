@@ -8,13 +8,18 @@
  * place for the two halves to drift apart.
  */
 import type { ContextMeter } from './contextMeter';
-import type { CustomCommand, TurnStartRequest } from './turnStart';
+import type { AttachedImage, CustomCommand, StoredImage, TurnStartRequest } from './turnStart';
 import type { HostInvoke } from './hostBridge';
 import type { PlanProposalPayload, PlanView } from './planIpc';
+import type { ProcessTurnEvent } from './processTypes';
+import type { SubAgentFinishedPayload, SubAgentInnerEvent, SubAgentStartedPayload } from './subAgentIpc';
 import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel } from './turnModel';
+import type { ThreadForkRequest } from './threadForkIpc';
+import type { UsagePayload, UsageTotalPayload } from './turnUsage';
 
 export type { ContextMeter } from './contextMeter';
-export type { CustomCommand, TurnCommand, TurnStartRequest } from './turnStart';
+export type { AttachedImage, CustomCommand, TurnCommand, TurnImagePick, TurnStartRequest } from './turnStart';
+export type { ThreadForkRequest } from './threadForkIpc';
 
 export interface Workspace {
   id: string;
@@ -123,6 +128,8 @@ export interface ApprovalRequestPayload {
   can_remember: boolean;
 }
 
+export type { SubAgentStatus } from './subAgentIpc';
+
 interface EventBase {
   turn_id: string;
   seq: number;
@@ -169,8 +176,9 @@ export type AgentEvent =
   | (EventBase & { kind: 'thinking_end'; payload: ThinkingEndPayload })
   | (EventBase & { kind: 'tool_call'; payload: { call_id: string; tool: string; args_summary: string; remote: boolean } })
   | (EventBase & { kind: 'tool_result'; payload: { call_id: string; ok: boolean; summary: string; truncated: boolean } })
-  /** One model call's usage: `prompt_tokens` is what it sent (the context in use), `completion_tokens` what it produced; `context` the call's request occupancy (the composer's meter). Absent when the gateway reports no usage. */
-  | (EventBase & { kind: 'usage'; payload: { prompt_tokens: number; completion_tokens: number; total_tokens: number; reasoning_tokens?: number; context?: ContextMeter } })
+  /** One of the turn's model calls (`turnUsage.ts`): `prompt_tokens` is what it sent (the context in use); `context` its request occupancy (the composer's meter). Absent when the gateway reports no usage. */
+  | (EventBase & { kind: 'usage'; payload: UsagePayload })
+  | (EventBase & { kind: 'usage_total'; payload: UsageTotalPayload })
   /** The request occupancy when its phase changes (`compacting` while a summary call runs, then `compacted`, then `measured`): the composer's meter between `usage` events. */
   | (EventBase & { kind: 'context'; payload: ContextMeter })
   | (EventBase & { kind: 'approval_request'; payload: ApprovalRequestPayload })
@@ -181,6 +189,14 @@ export type AgentEvent =
   | (EventBase & { kind: 'plan_proposed'; payload: PlanProposalPayload })
   /** The person accepted the plan: the session left plan mode and the turn goes on with every tool. */
   | (EventBase & { kind: 'plan_accepted'; payload: { call_id: string } })
+  /** A read-only sub-agent started under the turn's `spawn_agent` call `parent_call_id` (#1226; IPC.md "Sub-agents"). */
+  | (EventBase & { kind: 'subagent_started'; payload: SubAgentStartedPayload })
+  /** One of a sub-agent's own events: its `tool_call`, `tool_result` or `text_delta`, as `inner`. */
+  | (EventBase & { kind: 'subagent_event'; payload: { agent_id: string; inner: SubAgentInnerEvent } })
+  /** A sub-agent settled: once per run of it (a `send_input` that continues it settles again). */
+  | (EventBase & { kind: 'subagent_finished'; payload: SubAgentFinishedPayload })
+  /** A background process its `run_command` call started, its output and its end, while this turn runs (#1223). */
+  | (EventBase & ProcessTurnEvent)
   | (EventBase & { kind: 'error'; payload: { code: string; message: string } })
   | (EventBase & { kind: 'done'; payload: TurnDonePayload })
   /** After `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again. */
@@ -204,25 +220,12 @@ export interface StoredTurn {
   /** What the turn changed, as it ended (`null` before it ended). */
   changes: ChangedFile[] | null;
   events_truncated: boolean;
+  /** The images the turn carried: thumbnails only. Absent for a turn recorded before images. */
+  images?: StoredImage[];
   /** `interrupted`: it never ended (the app quit while it ran). */
   state: 'done' | 'running' | 'interrupted';
   /** The host still keeps it: `turn_changes` / `checkpoint_restore` answer for it. */
   live: boolean;
-}
-
-/** What `thread_history_fork` copies (IPC.md "Thread history"). */
-export interface ThreadForkRequest {
-  workspaceId: string;
-  sourceConversationId: string;
-  targetConversationId: string;
-  targetConversationUuid: string;
-  /** The fork point's turn: the turns up to and including it are copied. Absent: every turn. */
-  upToTurnId?: string;
-  /**
-   * The fork answer's `forked_messages` (source message UUID → the copy's): the copied turns' `done`
-   * events name the new conversation's messages, so they can be fork points in turn.
-   */
-  messageIds?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -261,6 +264,12 @@ export interface WorkspaceIpc {
   /** The "/" menu's custom commands of the workspace and of the person's own folder, by name. */
   commands(workspaceId: string): Promise<CustomCommand[]>;
   startTurn(request: TurnStartRequest): Promise<TurnStarted>;
+  /** Attach the image file at `path` (absolute: a drop's, as `files_dropped` reports it) to the workspace's next turn; the host reads it confined and shrinks it. */
+  attachFile(workspaceId: string, path: string): Promise<AttachedImage>;
+  /** Attach a pasted image (`data`: base64, at most 10 MiB decoded). */
+  attachBytes(workspaceId: string, mime: string, data: string, name?: string): Promise<AttachedImage>;
+  /** Take an attached image off before it is sent. */
+  removeAttachment(workspaceId: string, token: string): Promise<void>;
   /** Send a turn's failed commit again (after `commit_failed`); resolves once it is saved. */
   retryCommit(executionId: string): Promise<void>;
   /** Have the host read ahead what a turn to this agent reads first (the composer got focus); starts nothing. */
@@ -315,6 +324,10 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
       invoke<WorkspaceFile[]>('workspace_files', limit === undefined ? { workspace_id: workspaceId, query } : { workspace_id: workspaceId, query, limit }),
     commands: (workspaceId) => invoke<CustomCommand[]>('commands_list', { workspace_id: workspaceId }),
     startTurn: (request) => invoke<TurnStarted>('agent_turn_start', { ...request }),
+    attachFile: (workspaceId, path) => invoke<AttachedImage>('attachment_add', { workspace_id: workspaceId, path }),
+    attachBytes: (workspaceId, mime, data, name) =>
+      invoke<AttachedImage>('attachment_add_bytes', { workspace_id: workspaceId, mime, data, ...(name === undefined ? {} : { name }) }),
+    removeAttachment: (workspaceId, token) => invoke<void>('attachment_remove', { workspace_id: workspaceId, token }),
     prewarm: (request) => invoke<TurnPrewarmed>('agent_prewarm', { ...request }),
     retryCommit: (executionId) => invoke<void>('turn_commit_retry', { execution_id: executionId }),
     cancelTurn: (turnId) => invoke<void>('agent_turn_cancel', { turn_id: turnId }),

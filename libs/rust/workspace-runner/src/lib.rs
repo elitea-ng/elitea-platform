@@ -172,6 +172,10 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
     let prompt = Arc::new(CloudPrompt::default());
     let mut shell = ShellConfig::new(config.data_dir.join("tmp"));
     shell.sandbox.container = true;
+    // A cloud turn's tool calls end with the turn and nobody watches a
+    // terminal there: `run_command` stays foreground-only, and the
+    // `process_*` tools are not offered (#1223).
+    shell.background_processes = false;
     shell.sandbox.container_env =
         elitea_local_tools::sandbox::ContainerEnv::new(config.env.clone());
     // The workspace volume's top directory is not owned by the runner's uid
@@ -199,6 +203,9 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
             index_local_embeddings: false,
             index_remote_embeddings: false,
             index_model_mirror_url: String::new(),
+            // Stdio MCP servers are the person's, on their device: never in
+            // the cloud executor (#1230).
+            local_mcp: false,
         },
         settings: WorkspaceSettings::default(),
         choices: Arc::new(MemoryChoices::default()),
@@ -208,6 +215,7 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
         deny_read: Vec::new(),
         app_id: None,
         budgets: elitea_local_tools::budget::Budgets::default(),
+        documents: elitea_local_tools::document::Documents::default(),
     })
     .map_err(|_| WORKSPACE_UNAVAILABLE.to_owned())?;
     prompt.bind(Arc::clone(session.rules()));

@@ -46,13 +46,15 @@ use elitea_agent_runtime::request::{
     NextInputSuggestionPolicy, ProjectContextSnapshot, UserInput,
 };
 use elitea_agent_runtime::step_limit::{self, StepBudget};
+use elitea_agent_runtime::subagents::{self, SubAgentConfig, SubAgents};
 use elitea_local_index::tools::{IndexToolProvider, NAMES as INDEX_TOOLS};
 use elitea_local_tools::approvals::{JsonFileChoices, PermissionProfile, WorkspaceSettings};
 use elitea_local_tools::find::FoundPath;
+use elitea_local_tools::mcp::{Framed, McpFramer, McpToolProvider, TOOLSET_NAME as MCP_TOOLSET};
 use elitea_local_tools::policy::{LocalWorkPolicy, SandboxMode};
 use elitea_local_tools::project_instructions::{self, ProjectInstructions, TRUNCATED_NOTE};
 use elitea_local_tools::provider::LocalToolProvider;
-use elitea_local_tools::session::{LocalSession, SessionConfig, TOOLS};
+use elitea_local_tools::session::{LocalSession, PROCESS_TOOLS, SessionConfig, TOOLS};
 use futures::{FutureExt as _, StreamExt as _};
 use serde_json::{Map, Value, json};
 
@@ -61,16 +63,17 @@ use super::api::{
     ResolvedVersion, Revalidated,
 };
 use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
+use super::attachments::{Added, Attachment, Attachments, ImagePick};
 use super::cache::{ParticipantKey, TurnCaches, VersionKey};
 use super::catalogue::{self, Catalogue};
 use super::commits::{self, CommitQueues, CommitRetry, lane_key};
 use super::context::{self, ContextHost, TurnContext};
 use super::definition::{self, Admitted, ModelChoice};
 use super::environment;
-use super::events::{EventEmitter, Phase, Timed, TurnEvents};
+use super::events::{EventEmitter, Phase, Timed, TurnEvents, UsageLane};
 use super::framing;
 use super::mentions;
-use super::model::GatewayTransport;
+use super::model::{GatewayTransport, TurnTail};
 use super::recorder::{self, FileChange, Recorder, ToolCalls};
 use super::remote_tools::{
     MCP_AUTHORIZATION_WAIT, RemoteContext, RemoteToolProvider, RetryPolicy,
@@ -79,9 +82,10 @@ use super::remote_tools::{
 use super::session::{AGENT_AUTHOR, Refusal, SessionError, SessionPlan};
 use super::skills::{self, InvokedSkill};
 use super::slash_commands::{self, CommandPick, ExpandedCommand, ListedCommand};
+use super::subagents::DesktopSubAgents;
 use super::tools::{AcceptedPlanNote, ObservedToolset, PlanGatedToolset, ToolObserver};
 use crate::history::{
-    HistoryStore, NewTurn, Owner, StoredTurn, ThreadCopy, ThreadCopyTarget, TurnTap,
+    HistoryStore, NewTurn, Owner, StoredImage, StoredTurn, ThreadCopy, ThreadCopyTarget, TurnTap,
 };
 use crate::index::IndexRegistry;
 use crate::rules::{RuleFiles, WorkspaceRuleSink};
@@ -187,6 +191,10 @@ pub struct TurnRequest {
     /// expands it itself, and the expansion is what the model gets; the
     /// prompt becomes the literal `/<name> <arguments>`.
     pub command: Option<CommandPick>,
+    /// Images the person attached (#1229), by the tokens `attachment_add`
+    /// and `attachment_add_bytes` answered; at most five. A model that
+    /// cannot see images refuses the turn (`model_no_vision`).
+    pub images: Vec<ImagePick>,
 }
 
 /// `agent_turn_start`'s answer.
@@ -278,6 +286,8 @@ pub fn app_dirs_for_sandbox(dirs: impl IntoIterator<Item = Option<PathBuf>>) -> 
 struct WorkspaceSession {
     session: Arc<LocalSession>,
     prompt: Arc<UiPrompt>,
+    /// Where the session's background processes report (#1223).
+    processes: Arc<super::processes::ProcessSink>,
     policy: LocalWorkPolicy,
     /// When the approval rule files it loaded last changed.
     rules_stamp: Mutex<crate::rules::Stamp>,
@@ -399,15 +409,63 @@ const TURN_RUNNING: &str = "A turn is already running in this workspace.";
 const CONTEXT_WITHHELD: &str =
     "You cannot view this project's context, so this turn runs without it.";
 
-/// The names a remote tool may not take: every local tool's and every index
+/// The names a remote tool may not take: every local tool's, every index
 /// tool's (whether or not this workspace has an index: names stay stable as
-/// the index comes and goes).
+/// the index comes and goes) and the runtime's sub-agent tools (the
+/// `elitea_subagents` toolset every workspace turn is offered, #1226).
 fn local_tool_names() -> Vec<&'static str> {
     TOOLS
         .iter()
+        .chain(PROCESS_TOOLS)
         .map(|tool| tool.name)
         .chain(INDEX_TOOLS)
+        .chain(subagents::TOOL_NAMES)
         .collect()
+}
+
+/// The tags a local MCP server's text is framed in (#1230).
+const MCP_DESCRIPTION_TAG: &str = "mcp_tool_description";
+const MCP_RESULT_TAG: &str = "mcp_result";
+
+/// A local MCP server's descriptions and results under the thread's nonce:
+/// what a server says is data, and its text cannot end the block.
+struct McpFrame {
+    nonce: String,
+}
+
+impl McpFramer for McpFrame {
+    fn frame(&self, kind: Framed, server: &str, text: &str) -> String {
+        let tag = match kind {
+            Framed::Description => MCP_DESCRIPTION_TAG,
+            Framed::Result => MCP_RESULT_TAG,
+        };
+        format!(
+            "{}\n{}",
+            super::framing::ends_only_at(tag, &self.nonce),
+            super::framing::block(tag, &self.nonce, "server", server, text)
+        )
+    }
+}
+
+/// Stop a session's background processes without waiting for them: from
+/// a lock or a synchronous caller (the session is being replaced).
+fn stop_processes_soon(session: &Arc<LocalSession>) {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        let session = session.clone();
+        handle.spawn(async move { session.stop_processes().await });
+    } else {
+        session.stop_processes_blocking(elitea_local_tools::process::TERM_GRACE);
+    }
+}
+
+/// Closes a turn's sub-agents when its run ends, however it ends (an answer,
+/// an error, or a cancel that drops the run): none outlives the turn.
+struct CloseSubAgents(SubAgents);
+
+impl Drop for CloseSubAgents {
+    fn drop(&mut self) {
+        self.0.close_all();
+    }
 }
 
 /// The conversation's participant that answers with the request's agent
@@ -742,6 +800,8 @@ pub struct AgentHost {
     owner: Mutex<Option<(String, Owner)>>,
     /// The approval rule files (user and per workspace).
     rules: Arc<RuleFiles>,
+    /// The person's local MCP servers' settings (`src/mcp.rs`, #1230).
+    mcp: Arc<crate::mcp::McpFiles>,
     /// The agent versions and answering participants read this session.
     caches: TurnCaches,
     /// The commits after `done`, one lane per conversation.
@@ -749,6 +809,8 @@ pub struct AgentHost {
     /// Commits that failed after their retries, by execution id, for
     /// `turn_commit_retry` (kept in memory until the app quits).
     failed_commits: Mutex<HashMap<String, FailedCommit>>,
+    /// The images attached and not yet sent (#1229), in memory.
+    attachments: Attachments,
     /// Extra toolsets every turn offers (tests: tools that record when they
     /// run).
     #[cfg(test)]
@@ -762,8 +824,9 @@ pub(super) const END_OF_PROJECT_INSTRUCTIONS: &str = "## End of project instruct
 /// The precedence line of the AGENTS.md section: it ranks last (see
 /// `skills::SKILLS_PRECEDENCE` for the same order from above).
 pub(super) const PROJECT_PRECEDENCE: &str = "Precedence: these files rank last. The \
-     agent's own instructions, the environment section and any skill picked for \
-     this turn, all above, outrank them where they disagree.";
+     agent's own instructions and the environment section, above, and any skill \
+     picked for this turn (given with the person's message), outrank them where \
+     they disagree.";
 
 /// The agent's instructions (with any skill picked for this turn already
 /// after them), then the workspace's AGENTS.md files as one delimited
@@ -812,29 +875,41 @@ pub fn with_project_instructions(
     }
 }
 
-/// A turn's system prompt, in the order of authority: the agent's
-/// instructions, the stable part of the host's environment section
-/// (trusted: not framed), the skills picked for the turn and the
-/// workspace's AGENTS.md (both untrusted, framed under `nonce`), then the
-/// environment's volatile part (`current`: the date and the git line, last
-/// so a prompt cache keeps everything before it) and the memory recall.
+/// A thread's system prompt (#1227), in the order of authority: the
+/// agent's instructions, the stable part of the host's environment section
+/// (trusted: not framed), then the workspace's AGENTS.md (untrusted, framed
+/// under the thread's `nonce`). Nothing in it changes from one turn of a
+/// thread to the next unless the agent's version, the mode, the tools
+/// offered or the AGENTS.md files do, so a provider's prompt cache keeps
+/// it; what changes every turn is [`volatile_context`].
 #[must_use]
 pub fn system_instruction(
     agent: &str,
     environment: &str,
-    invoked: &[InvokedSkill],
     project: &ProjectInstructions,
+    nonce: &str,
+) -> String {
+    with_project_instructions(&splice_memory(agent, environment), project, nonce)
+}
+
+/// A turn's volatile context (#1227), sent as one host message right
+/// before the person's message (`model::TurnTail`), never stored in the
+/// session: the environment's volatile part (`current`: the date and the
+/// git line), the skills picked for the turn (untrusted, framed under the
+/// thread's `nonce`), then the memory recall, last, by the cloud's splice:
+/// its text and count are what a web turn receives; only where it sits
+/// moved (the cloud worker keeps it in its instructions today).
+#[must_use]
+pub fn volatile_context(
     current: &str,
+    invoked: &[InvokedSkill],
     recall: &str,
     nonce: &str,
 ) -> String {
-    let authored = splice_memory(agent, environment);
-    let stable = with_project_instructions(
-        &skills::with_invoked_skills(&authored, invoked, nonce),
-        project,
-        nonce,
-    );
-    splice_memory(&splice_memory(&stable, current), recall)
+    splice_memory(
+        &skills::with_invoked_skills(current, invoked, nonce),
+        recall,
+    )
 }
 
 /// The cloud's memory splice (`appendCurrentInstructionsMemories`,
@@ -895,10 +970,15 @@ impl AgentHost {
             deps.user_rules_dir.clone(),
             deps.workspaces.clone(),
         ));
+        let mcp = Arc::new(crate::mcp::McpFiles::new(
+            deps.user_rules_dir.clone(),
+            deps.workspaces.clone(),
+        ));
         Ok(Self {
             deps,
             api,
             rules,
+            mcp,
             broker: Arc::new(ApprovalBroker::default()),
             sessions: Mutex::new(HashMap::new()),
             busy: BusySet::default(),
@@ -907,9 +987,16 @@ impl AgentHost {
             caches: TurnCaches::default(),
             commits: CommitQueues::default(),
             failed_commits: Mutex::new(HashMap::new()),
+            attachments: Attachments::default(),
             #[cfg(test)]
             test_toolsets: Mutex::new(Vec::new()),
         })
+    }
+
+    /// How many attached images the host holds (tests).
+    #[cfg(test)]
+    pub(super) fn attachments_held(&self) -> usize {
+        self.attachments.len()
     }
 
     /// Offer `toolset` in every later turn, as a local toolset (tests).
@@ -959,6 +1046,11 @@ impl AgentHost {
             existing.refresh_rules(&self.rules, workspace_id);
             return Ok(existing.clone());
         }
+        // The policy changed: the session it replaces ends, and its
+        // background processes with it (#1223).
+        if let Some(replaced) = sessions.remove(workspace_id) {
+            stop_processes_soon(&replaced.session);
+        }
         let data_dir = self.deps.workspaces.data_dir(workspace_id);
         // Owner-only (0700), the workspaces folder above it too: remembered
         // approvals, copy checkpoints and the index are the folder's data.
@@ -988,6 +1080,7 @@ impl AgentHost {
             deny_read: self.deps.sandbox_deny.clone(),
             app_id: self.deps.app_id.clone(),
             budgets: elitea_local_tools::budget::Budgets::default(),
+            documents: crate::documents::bundled(),
         })
         .map_err(|e| TurnError::new("workspace_unavailable", e.message().to_owned()))?;
         // Layer 3: the workspace's rules, then the person's (a broken file
@@ -1003,9 +1096,15 @@ impl AgentHost {
                 self.rules.clone(),
                 workspace_id,
             ))));
+        let processes = Arc::new(super::processes::ProcessSink::new(
+            workspace_id,
+            self.deps.emitter.clone(),
+        ));
+        session.set_process_events(Some(processes.clone()));
         let entry = Arc::new(WorkspaceSession {
             session,
             prompt,
+            processes,
             policy: policy.clone(),
             rules_stamp: Mutex::new(loaded.stamp),
         });
@@ -1204,6 +1303,61 @@ impl AgentHost {
         mentions::files(&folder, query, limit)
     }
 
+    /// `attachment_add`: register the image file at `path` (absolute, as the
+    /// window reported a drop, or a picker chose it) for a later turn of
+    /// `workspace_id`. Blocking: call it off the async executor.
+    ///
+    /// # Errors
+    ///
+    /// `local_work_disabled`, `workspace_unknown`, `path_denied`,
+    /// `not_found`, `image_too_large`, `invalid_request`.
+    pub fn attachment_add(&self, workspace_id: &str, path: &str) -> Result<Added, TurnError> {
+        let (root, policy) = self.attachment_workspace(workspace_id)?;
+        self.attachments.add_path(
+            workspace_id,
+            Path::new(&root),
+            &policy.path_deny,
+            self.host_deny(),
+            path,
+        )
+    }
+
+    /// `attachment_add_bytes`: register a pasted image (base64) for a later
+    /// turn of `workspace_id`. Blocking (it decodes the image).
+    ///
+    /// # Errors
+    ///
+    /// `local_work_disabled`, `workspace_unknown`, `image_too_large`,
+    /// `invalid_request`.
+    pub fn attachment_add_bytes(
+        &self,
+        workspace_id: &str,
+        name: Option<&str>,
+        data: &str,
+    ) -> Result<Added, TurnError> {
+        self.attachment_workspace(workspace_id)?;
+        self.attachments.add_bytes(workspace_id, name, data)
+    }
+
+    /// `attachment_remove`: the person took an image off the composer.
+    pub fn attachment_remove(&self, workspace_id: &str, token: &str) {
+        self.attachments.remove(workspace_id, token);
+    }
+
+    fn attachment_workspace(
+        &self,
+        workspace_id: &str,
+    ) -> Result<(String, LocalWorkPolicy), TurnError> {
+        let policy = self.policy()?;
+        let workspace = self
+            .deps
+            .workspaces
+            .get(workspace_id)
+            .map_err(|e| TurnError::new("storage", e.to_string()))?
+            .ok_or_else(|| TurnError::new("workspace_unknown", "That workspace is not open."))?;
+        Ok((workspace.path, policy))
+    }
+
     /// The workspace's folder as a command file is read from: `path_deny`
     /// and the session's deny list both apply.
     fn command_folder(
@@ -1375,6 +1529,9 @@ impl AgentHost {
         events.status(Phase::Resolving, None);
         match self.prepare(&request, &events, tap.clone()).await {
             Ok(prepared) => {
+                // The turn carries the images now; a refused start kept
+                // them, so the person can fix the refusal and send again.
+                self.attachments.consume(&prepared.images);
                 // The history keeps the prompt as typed, its "@" list apart.
                 match self.owner(&prepared.api).await {
                     Ok(owner) => tap.activate(NewTurn {
@@ -1385,6 +1542,7 @@ impl AgentHost {
                         turn_id: turn_id.clone(),
                         prompt: request.prompt.clone(),
                         mentions: request.mentions.clone(),
+                        images: stored_images(&prepared.images),
                         started_at,
                     }),
                     Err(error) => {
@@ -1452,6 +1610,7 @@ impl AgentHost {
             &admitted,
             "admission",
             "admission",
+            false,
         ))
         .map_err(|_| {
             TurnError::new(
@@ -1636,6 +1795,7 @@ impl AgentHost {
             model: None,
             project_skills: Vec::new(),
             command: None,
+            images: Vec::new(),
         };
         let need_version = self.caches.version(&version_key).is_none();
         let need_participant = participant_key
@@ -1716,6 +1876,9 @@ impl AgentHost {
         }
         // Checked first, so a refusal costs no request; again under the claim.
         let bound = self.bound_workspace(request)?;
+        let images = self
+            .attachments
+            .resolve(&request.workspace_id, &request.images)?;
         let policy = self.policy()?;
         // A custom command is read again now (it may have changed since the
         // menu listed it) and expanded here, before any request.
@@ -1818,12 +1981,12 @@ impl AgentHost {
             async { self.owner(&api).await.ok() },
             // A chosen model is checked against the project's chat models
             // (#1228), read beside the rest (kept for a minute).
+            // An image needs the model's row too (`supports_vision`).
             async {
-                match &request.model {
-                    Some(_) => {
-                        catalogue::read(&api, &self.caches.catalogues, request.project_id).await
-                    }
-                    None => None,
+                if request.model.is_some() || !images.is_empty() {
+                    catalogue::read(&api, &self.caches.catalogues, request.project_id).await
+                } else {
+                    None
                 }
             },
         );
@@ -1859,6 +2022,11 @@ impl AgentHost {
         // before anything starts; one it could not answer for is left to the
         // gateway, which governs every request.
         let admitted = self.requested_model(request, admitted, models.as_deref())?;
+        // A chosen model is known now: images are refused before the turn
+        // starts. A kept choice is known only under the session (below).
+        if request.model.is_some() {
+            check_vision(&images, &admitted, models.as_deref())?;
+        }
         if resolved_withheld {
             events.status(Phase::Resolving, Some(CONTEXT_WITHHELD));
         }
@@ -2030,7 +2198,11 @@ impl AgentHost {
         let (admitted, models) = self
             .thread_model(request, &api, events, admitted, &memory, models)
             .await;
+        // The model the turn runs on is final: it sees images or it does
+        // not, and `read_file` follows.
+        check_vision(&images, &admitted, models.as_deref())?;
         Ok(Prepared {
+            images,
             conversation,
             conversation_uuid: answering.conversation_uuid,
             tap,
@@ -2081,6 +2253,7 @@ impl AgentHost {
             folder,
             mentioned,
             models,
+            images,
             ..
         } = prepared;
         let recorder = entry.recorder.clone();
@@ -2104,6 +2277,8 @@ impl AgentHost {
         // the thread unless its model or meta.edit_format changes.
         session.set_edit_profile(admitted.edit_profile);
         session.begin_turn(&checkpoint_label(&request.prompt));
+        // The processes this turn starts show on its tool cards until it ends.
+        workspace.processes.bind_turn(Some(events.clone()));
         events.running(&project.paths(), &turn_model(&admitted));
 
         let sink = Arc::new(TurnSink::with_events(events.clone()));
@@ -2125,6 +2300,7 @@ impl AgentHost {
             &turn_context,
             &mentioned,
             models.as_deref(),
+            &images,
         );
         let outcome = tokio::select! {
             result = run => Some(result),
@@ -2149,9 +2325,19 @@ impl AgentHost {
         // What the turn left in each file it changed: the per-file revert
         // of this turn, once it is not the newest, checks against it.
         recorder.seal(session.workspace());
+        // The turn's background processes end with it, unless pinned or
+        // kept for the session; their exits reach the tool cards first.
+        session.end_turn_processes().await;
+        workspace.processes.bind_turn(None);
+        for info in session.processes() {
+            recorder.process_ended(&info);
+        }
         workspace.prompt.bind(None);
         self.broker.forget_turn(events.turn_id());
         let conversation_id = request.conversation_id.clone();
+        // What every model call of the run used (before `done`, which the
+        // thread history keeps with it).
+        events.usage_total();
         let Some(result) = outcome else {
             let _ = sink.finish(RunOutcome::Stopped).await;
             // Nothing of a cancelled turn is saved: nothing of it stays.
@@ -2226,7 +2412,7 @@ impl AgentHost {
             assistant["error"] = json!(error.message.chars().take(4000).collect::<String>());
         }
         let body = CommitBody {
-            user_message: json!({ "content": request.prompt }),
+            user_message: user_message(&request.prompt, &images),
             assistant_message: assistant,
             tool_calls: recorder.tool_calls(),
             thinking_steps: recorder.thinking_steps(),
@@ -2480,6 +2666,9 @@ impl AgentHost {
         // (its execution id: the spend is the turn's).
         let summarizer = GatewayTransport {
             quiet: true,
+            lane: UsageLane::Summary,
+            tail: None,
+            cache_hints: false,
             ..transport.clone()
         }
         .bind(ModelRequest {
@@ -2498,6 +2687,8 @@ impl AgentHost {
                 model: model_request,
                 budget,
                 replay: transport.replay,
+                tail: transport.tail.clone(),
+                cache_hints: transport.cache_hints,
             }),
             summarizer,
             Arc::new(host),
@@ -2528,11 +2719,13 @@ impl AgentHost {
         turn_context: &TurnContext,
         mentioned: &[String],
         models: Option<&Catalogue>,
+        images: &[Arc<Attachment>],
     ) -> Result<AgentAnswer, TurnError> {
         let failed = |code: &str, message: &str| TurnError::new(code, message);
-        // This turn's framing nonce: the untrusted blocks end only at a
-        // closing tag carrying it (d0/framing.rs).
-        let nonce = framing::nonce();
+        // The thread's framing nonce: the untrusted blocks end only at a
+        // closing tag carrying it (d0/framing.rs), the same every turn of the
+        // thread, so the system prompt stays cached (#1227).
+        let nonce = memory.nonce.clone();
         // The host's environment section names the tools offered now: the
         // session's, then the index tools when the workspace's index is on
         // and built (they only read, so plan mode keeps them). The index is
@@ -2579,7 +2772,15 @@ impl AgentHost {
                 models,
             ),
         );
-        let context::ModelFacts { limits, replay } = model_facts;
+        let context::ModelFacts {
+            limits,
+            replay,
+            vision,
+        } = model_facts;
+        // `read_file` returns an image part only to a model that sees images
+        // (attached images passed the same check at the start).
+        let vision = vision || !images.is_empty();
+        workspace.session.set_vision(vision);
         // The runtime's planner, offered to every workspace turn (a coding
         // agent needs its checklist), plan mode included: it changes only
         // the session's plan state (#1225).
@@ -2588,8 +2789,47 @@ impl AgentHost {
         if index.is_some() {
             extra_tools.extend(INDEX_TOOLS.iter().map(|name| (*name).to_owned()));
         }
+        // A sub-agent's environment names what it is offered: the read-only
+        // local tools and the index tools (#1226).
+        let child_facts = environment::Facts {
+            plan_mode: false,
+            tools: workspace
+                .session
+                .available_tools()
+                .iter()
+                .filter(|tool| tool.kind.is_read_only() && !tool.kind.is_process())
+                .map(|tool| tool.name.to_owned())
+                .chain(extra_tools.iter().cloned())
+                .collect(),
+            ..facts.clone()
+        };
         extra_tools.extend(PLANNER_TOOLS.iter().map(|name| (*name).to_owned()));
+        // The runtime's sub-agents, offered to every workspace turn, plan
+        // mode included (a child only reads).
+        extra_tools.extend(subagents::TOOL_NAMES.iter().map(|name| (*name).to_owned()));
         facts.tools.extend(extra_tools.iter().cloned());
+        // A command's expansion, framed under the thread's nonce, is the
+        // person's message to the model; anything else goes as typed.
+        let message = command.map_or_else(
+            || request.prompt.clone(),
+            |turn| {
+                mentions::with_mentions(
+                    &slash_commands::model_prompt(&turn.command, &nonce),
+                    &turn.mentions,
+                )
+            },
+        );
+        // What changes every turn goes in a host message before the
+        // person's (`TurnTail`): the system prompt stays the thread's.
+        let tail = Arc::new(TurnTail {
+            text: volatile_context(
+                &environment::current(&facts),
+                invoked,
+                &started.memory_recall.text,
+                &nonce,
+            ),
+            anchor: message.clone(),
+        });
         // ModelTransport: /llm with the native token and the execution id.
         let transport = GatewayTransport {
             http: api.http().await.clone(),
@@ -2600,20 +2840,24 @@ impl AgentHost {
             quiet: false,
             recorder: Some(recorder.clone()),
             replay,
+            vision,
+            lane: UsageLane::Turn,
+            tail: Some(tail.clone()),
+            // A native Anthropic model: the body carries its cache
+            // breakpoints (`model::Layout`).
+            cache_hints: catalogue::takes_cache_hints(replay, &admitted.model.model_name),
         };
         let instruction = system_instruction(
             &admitted.instructions,
             &environment::preamble(&facts),
-            invoked,
             project,
-            &environment::current(&facts),
-            &started.memory_recall.text,
             &nonce,
         );
-        // The transport sends the instruction outside adk's contents: the
-        // elision below counts it as the provider request carries it.
-        let instruction_tokens =
-            elitea_agent_runtime::context_budget::estimate_tokens(instruction.len());
+        // The transport sends the instruction and the tail outside adk's
+        // contents: the elision below counts them as the request carries them.
+        let instruction_tokens = elitea_agent_runtime::context_budget::estimate_tokens(
+            instruction.len() + tail.text.len(),
+        );
         // The agent's `max_tokens`, at most what a chosen model can answer.
         let max_tokens = admitted.model.max_tokens.map(|tokens| {
             if admitted.model_chosen && !limits.max_output_fallback {
@@ -2636,6 +2880,7 @@ impl AgentHost {
         let bound = transport
             .bind(model_request.clone())
             .map_err(|e| failed("model_unavailable", &e.to_string()))?;
+        let child_model = model_request.clone();
         let model = self.compacting_model(
             &transport,
             model_request,
@@ -2659,6 +2904,7 @@ impl AgentHost {
             admitted,
             &started.execution_id,
             &started.question_id,
+            vision,
         );
         execution.payload.model_context_limits = Some(limits);
         let plan = InstructionPlan::admit(&execution).map_err(|_| {
@@ -2689,6 +2935,19 @@ impl AgentHost {
                 IndexToolProvider::new(index).with_execution_id(started.execution_id.clone()),
             ));
         }
+        // The person's local MCP servers (#1230), after the index: started
+        // (lazily, under the sandbox) by the first turn that may offer them,
+        // their tools in a stable order behind the local and index ones.
+        if workspace.policy.local_mcp {
+            self.start_mcp_servers(request, workspace, events, &started.execution_id)
+                .await;
+            provider = provider.with(Arc::new(McpToolProvider::new(
+                workspace.session.clone(),
+                Arc::new(McpFrame {
+                    nonce: nonce.clone(),
+                }),
+            )));
+        }
         let provider = provider.with(Arc::new(RemoteToolProvider::new(&remote_specs, &remote)));
         let toolsets = provider
             .toolsets(&ToolsetRequest {
@@ -2702,7 +2961,44 @@ impl AgentHost {
             recorder: recorder.clone(),
             session: Some(workspace.session.clone()),
             planner: Some(planner.clone()),
+            child: None,
         };
+        // Sub-agents: the turn's model, quiet, and its local and index tools
+        // (never the remote toolkits, nor the person's MCP servers: a child
+        // is not asked about, and its tools are only the read-only built-in
+        // ones); the AGENTS.md sections under the
+        // thread's nonce, never the agent's instructions, the history or the
+        // turn's tail. A child's prompt is its own: its volatile part stays
+        // in it. Its usage counts toward the turn's (`UsageLane::SubAgent`).
+        let child_instruction = splice_memory(
+            &system_instruction("", &environment::preamble(&child_facts), project, &nonce),
+            &environment::current(&child_facts),
+        );
+        let children = SubAgents::new(
+            Arc::new(DesktopSubAgents::new(
+                GatewayTransport {
+                    lane: UsageLane::SubAgent,
+                    tail: None,
+                    ..transport.clone()
+                },
+                child_model,
+                toolsets
+                    .iter()
+                    .filter(|toolset| {
+                        toolset.name() != REMOTE_TOOLSET && toolset.name() != MCP_TOOLSET
+                    })
+                    .cloned()
+                    .collect(),
+                events.clone(),
+                recorder.clone(),
+            )),
+            // A child only reads, and never gets near the parent's processes
+            // (`process_output`, `process_list` and `process_wait` read, but
+            // what they read is the parent's terminal, #1223).
+            SubAgentConfig::new(child_instruction)
+                .with_excluded_tools(PROCESS_TOOLS.iter().map(|tool| tool.name.to_owned())),
+        );
+        let children = CloseSubAgents(children);
 
         let mut builder = LlmAgentBuilder::new(AGENT_NAME)
             .model(model)
@@ -2761,6 +3057,15 @@ impl AgentHost {
             },
             false,
         )) as Arc<dyn Toolset>);
+        builder = builder.toolset(Arc::new(ObservedToolset::new(
+            children.0.toolset(),
+            ToolObserver {
+                session: None,
+                planner: None,
+                ..observer.clone()
+            },
+            false,
+        )) as Arc<dyn Toolset>);
         #[cfg(test)]
         for toolset in self.test_toolsets.lock().expect("lock").iter() {
             builder = builder.toolset(Arc::new(ObservedToolset::new(
@@ -2811,18 +3116,10 @@ impl AgentHost {
         // approvals); on "continue" the same runner runs again on the same
         // session, within this execution, from the host's own prompt.
         let mut budget = StepBudget::new(admitted.step_limit);
-        // A command's expansion, framed under this turn's nonce, is the
-        // person's message to the model; anything else goes as typed.
-        let message = command.map_or_else(
-            || request.prompt.clone(),
-            |turn| {
-                mentions::with_mentions(
-                    &slash_commands::model_prompt(&turn.command, &nonce),
-                    &turn.mentions,
-                )
-            },
-        );
         let mut content = Content::new("user").with_text(message);
+        for image in images {
+            content = content.with_inline_data(image.picture.mime, image.picture.bytes.clone());
+        }
         loop {
             match run_once(&runner, &session_id, content, sink, recorder).await? {
                 RunEnd::Answered => {
@@ -2941,19 +3238,129 @@ impl AgentHost {
         }
         *turns = TurnTable::default();
         drop(turns);
+        // Images attached under one session are not sent under the next.
+        self.attachments.clear();
         *self
             .owner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        self.sessions
+        // Signing out ends every session, and its background processes.
+        for (_, entry) in self
+            .sessions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
+            .drain()
+        {
+            stop_processes_soon(&entry.session);
+        }
         self.caches.clear();
         self.failed_commits
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+    }
+
+    /// Start the workspace's local MCP servers that have not started, from
+    /// both settings files as they are now; a server that does not start
+    /// (or a file that is refused) is said in a `status` event, and the turn
+    /// runs without its tools (#1230).
+    async fn start_mcp_servers(
+        &self,
+        request: &TurnRequest,
+        workspace: &Arc<WorkspaceSession>,
+        events: &Arc<TurnEvents>,
+        subject: &str,
+    ) {
+        let (servers, mut problems) = self.mcp.merged(&request.workspace_id);
+        workspace.session.mcp().configure(servers);
+        for status in workspace.session.start_mcp_servers(subject).await {
+            if status.state == elitea_local_tools::mcp::ServerState::Failed {
+                problems.push(format!(
+                    "The local MCP server `{}` did not start: {}.",
+                    status.name,
+                    status.error.as_deref().unwrap_or("it failed")
+                ));
+            }
+        }
+        if !problems.is_empty() {
+            let message = problems.join(" ");
+            log::warn!("{message}");
+            events.status(Phase::Running, Some(&message));
+        }
+    }
+
+    /// The local MCP servers' settings files (IPC `mcp_*`).
+    #[must_use]
+    pub fn mcp_files(&self) -> &Arc<crate::mcp::McpFiles> {
+        &self.mcp
+    }
+
+    /// The settings changed: every open session (or `workspace_id`'s only)
+    /// takes them now, stopping a server whose entry changed or went; a new
+    /// or changed one starts with the next turn.
+    pub fn mcp_reconfigure(&self, workspace_id: Option<&str>) {
+        let sessions: Vec<(String, Arc<LocalSession>)> = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|(id, _)| workspace_id.is_none_or(|only| only == id.as_str()))
+            .map(|(id, entry)| (id.clone(), entry.session.clone()))
+            .collect();
+        for (id, session) in sessions {
+            session.mcp().configure(self.mcp.merged(&id).0);
+        }
+    }
+
+    /// Whether the policy lets local MCP servers run now.
+    #[must_use]
+    pub fn local_mcp_allowed(&self) -> bool {
+        self.policy().is_ok_and(|policy| policy.local_mcp)
+    }
+
+    /// The workspace's open session, if a turn opened one (the Processes
+    /// pane's commands, #1223), and whether a turn runs in it now.
+    pub fn process_session(&self, workspace_id: &str) -> Option<(Arc<LocalSession>, bool)> {
+        let sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = sessions.get(workspace_id)?;
+        Some((entry.session.clone(), entry.processes.turn_running()))
+    }
+
+    /// Stop the workspace's background processes and wait for them (the
+    /// workspace is removed, a handoff starts, #1223).
+    pub async fn kill_processes(&self, workspace_id: &str) {
+        let session = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(workspace_id)
+            .map(|entry| entry.session.clone());
+        if let Some(session) = session {
+            session.stop_processes().await;
+        }
+    }
+
+    /// The app quits: `SIGTERM` to every workspace's background processes,
+    /// `SIGKILL` to what still runs after `grace` (#1223).
+    pub fn stop_all_processes_blocking(&self, grace: std::time::Duration) {
+        let sessions: Vec<Arc<LocalSession>> = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .map(|entry| entry.session.clone())
+            .collect();
+        // One grace for all of them: the quit waits at most `grace` in all
+        // (a later session's processes then go straight to `SIGKILL`).
+        let deadline = std::time::Instant::now() + grace;
+        for session in &sessions {
+            session.stop_processes_blocking(
+                deadline.saturating_duration_since(std::time::Instant::now()),
+            );
+        }
     }
 
     /// A turn changed `changes` in the workspace: its index (if open)
@@ -2985,6 +3392,8 @@ impl AgentHost {
             workspace_id,
             "Wait for the running turn to end, or stop it, before removing this workspace.",
         )?;
+        // Nothing the agent started outlives the workspace (#1223).
+        self.kill_processes(workspace_id).await;
         // The index's refresh stopped and its database closed, and held so
         // until the directory holding it is deleted: nothing reopens it.
         let workspaces = self.deps.workspaces.clone();
@@ -3667,6 +4076,38 @@ struct Prepared {
     /// The project's chat models, when the turn read them (a chosen or
     /// kept model is checked against them).
     models: Option<Arc<Catalogue>>,
+    /// The images the person attached (#1229); the model sees images.
+    images: Vec<Arc<Attachment>>,
+}
+
+/// Whether the catalogue says the turn's model sees images.
+fn sees_images(admitted: &Admitted, models: Option<&Catalogue>) -> bool {
+    models
+        .and_then(|models| models.find(&admitted.model.model_name))
+        .and_then(|model| model.row.get("supports_vision"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Images go only to a model the catalogue marks as seeing them
+/// (`model_no_vision`): refused, never dropped. A catalogue the turn could
+/// not read says nothing about the model: the images go, and the gateway
+/// decides, as it does for a chosen model the catalogue could not check.
+fn check_vision(
+    images: &[Arc<Attachment>],
+    admitted: &Admitted,
+    models: Option<&Catalogue>,
+) -> Result<(), TurnError> {
+    if images.is_empty() || models.is_none() || sees_images(admitted, models) {
+        return Ok(());
+    }
+    Err(TurnError::new(
+        "model_no_vision",
+        format!(
+            "The model {} cannot view images. Choose a model that can, or remove the images.",
+            admitted.model.model_name
+        ),
+    ))
 }
 
 /// The body of `local_turn_commit`, encoded with its `tool_calls` in the
@@ -3821,6 +4262,48 @@ fn model_failure(text: &str) -> TurnError {
         )
 }
 
+/// The commit's `user_message`: the prompt, and what the turn attached as
+/// a note (`images: [{name, mime, bytes}]`; the bytes themselves stay on
+/// this machine, the server ignores a key it does not know).
+fn user_message(prompt: &str, images: &[Arc<Attachment>]) -> Value {
+    let mut message = json!({ "content": prompt });
+    if !images.is_empty() {
+        message["images"] = Value::Array(
+            images
+                .iter()
+                .map(|image| {
+                    json!({
+                        "name": image.name,
+                        "mime": image.picture.mime,
+                        "bytes": image.picture.bytes.len(),
+                    })
+                })
+                .collect(),
+        );
+    }
+    message
+}
+
+/// What the thread history keeps of a turn's images: name, type, size and
+/// the thumbnail (never the image).
+fn stored_images(images: &[Arc<Attachment>]) -> Vec<StoredImage> {
+    images
+        .iter()
+        .map(|image| StoredImage {
+            name: image.name.clone(),
+            mime: image.picture.mime.to_owned(),
+            bytes: image.picture.bytes.len(),
+            thumbnail: image.thumbnail.as_deref().map(|jpeg| {
+                use base64::Engine as _;
+                format!(
+                    "data:image/jpeg;base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(jpeg)
+                )
+            }),
+        })
+        .collect()
+}
+
 fn checkpoint_label(prompt: &str) -> String {
     let line = prompt.lines().next().unwrap_or_default();
     let mut label: String = line.chars().take(60).collect();
@@ -3837,6 +4320,7 @@ fn execution_request(
     admitted: &Admitted,
     execution_id: &str,
     question_id: &str,
+    vision: bool,
 ) -> AgentExecutionRequest {
     let mut application = Map::new();
     application.insert(
@@ -3882,7 +4366,7 @@ fn execution_request(
             conversation_id: None,
             persona: String::new(),
             context_settings: Map::new(),
-            supports_vision: false,
+            supports_vision: vision,
             return_chat_history: false,
             invoked_skills: Vec::new(),
             applied_skills: Vec::new(),
@@ -4090,7 +4574,7 @@ mod tests {
     }
 
     #[test]
-    fn the_agent_then_the_environment_then_the_skill_then_agents_md_each_saying_its_rank() {
+    fn the_agent_then_the_environment_then_agents_md_then_the_tail_each_saying_its_rank() {
         use elitea_local_tools::project_instructions::InstructionFile;
         let project = ProjectInstructions {
             files: vec![InstructionFile {
@@ -4104,37 +4588,40 @@ mod tests {
             name: "Style".into(),
             instructions: "Write tersely.".into(),
         }];
-        let assembled = system_instruction(
-            "Be brief.",
-            "## Environment\n- OS: macOS",
-            &skill,
-            &project,
+        let system =
+            system_instruction("Be brief.", "## Environment\n- OS: macOS", &project, NONCE);
+        let tail = volatile_context(
             "## Environment (this turn)\n- Today: 2026-10-10",
+            &skill,
             "Memory: tea.",
             NONCE,
         );
-        let at = |needle: &str| {
-            assembled
-                .find(needle)
-                .unwrap_or_else(|| panic!("{needle}: {assembled}"))
+        let at = |text: &str, needle: &str| {
+            text.find(needle)
+                .unwrap_or_else(|| panic!("{needle}: {text}"))
         };
         let order = [
-            at("Be brief."),
-            at("## Environment\n"),
-            at(skills::SKILLS_HEADING),
-            at(skills::SKILLS_PRECEDENCE),
-            at("Write tersely."),
-            at(skills::END_OF_SKILLS),
-            at("## Project instructions (AGENTS.md)"),
-            at(PROJECT_PRECEDENCE),
-            at("Run task test."),
-            at(END_OF_PROJECT_INSTRUCTIONS),
-            at("## Environment (this turn)\n- Today: 2026-10-10"),
-            at("Memory: tea."),
+            at(&system, "Be brief."),
+            at(&system, "## Environment\n"),
+            at(&system, "## Project instructions (AGENTS.md)"),
+            at(&system, PROJECT_PRECEDENCE),
+            at(&system, "Run task test."),
         ];
-        assert!(order.windows(2).all(|w| w[0] < w[1]), "{assembled}");
-        // The host's section is trusted: it is not framed under the nonce.
-        assert!(!assembled[..at(skills::SKILLS_HEADING)].contains(NONCE));
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "{system}");
+        assert!(system.ends_with(END_OF_PROJECT_INSTRUCTIONS), "{system}");
+        let order = [
+            at(&tail, "## Environment (this turn)\n- Today: 2026-10-10"),
+            at(&tail, skills::SKILLS_HEADING),
+            at(&tail, skills::SKILLS_PRECEDENCE),
+            at(&tail, "Write tersely."),
+            at(&tail, skills::END_OF_SKILLS),
+        ];
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "{tail}");
+        // The recall is last, by the cloud's splice.
+        assert!(tail.ends_with("\n\nMemory: tea."), "{tail}");
+        // The host's sections are trusted: they are not framed.
+        assert!(!system[..at(&system, "## Project instructions")].contains(NONCE));
+        assert!(!tail[..at(&tail, skills::SKILLS_HEADING)].contains(NONCE));
         // Each preamble names what outranks it and what it outranks.
         assert!(skills::SKILLS_PRECEDENCE.contains(
             "agent's own instructions and the environment section above outrank this skill"
@@ -4145,15 +4632,17 @@ mod tests {
         );
         assert!(PROJECT_PRECEDENCE.contains("rank last"));
         assert!(PROJECT_PRECEDENCE.contains(
-            "the environment section and any skill picked for this turn, all above, outrank them"
+            "any skill picked for this turn (given with the person's message), outrank them"
         ));
+        // Without skills or recall the tail is the environment's part alone.
+        assert_eq!(volatile_context("## Now", &[], "", NONCE), "## Now");
     }
 
-    /// #1314: two turns whose facts differ only in the date and the git line
-    /// assemble byte-identical prompts up to the environment's volatile part,
-    /// so a provider prompt cache keeps the skills and AGENTS.md text.
+    /// #1314 / #1227: two turns whose facts differ only in the date and the
+    /// git line, and whose skills and recall differ, assemble byte-identical
+    /// system prompts: all of that is in the turn's tail.
     #[test]
-    fn the_date_and_git_line_leave_the_cached_prefix_unchanged() {
+    fn the_date_git_line_skills_and_recall_leave_the_system_prompt_unchanged() {
         use elitea_local_tools::project_instructions::InstructionFile;
         let project = ProjectInstructions {
             files: vec![InstructionFile {
@@ -4187,38 +4676,21 @@ mod tests {
             branch: Some("main".into()),
             changed: 4,
         };
-        let assemble = |facts: &environment::Facts| {
-            system_instruction(
-                "Be brief.",
-                &environment::preamble(facts),
-                &skill,
-                &project,
-                &environment::current(facts),
-                "Memory: tea.",
-                NONCE,
-            )
+        let system = |facts: &environment::Facts| {
+            system_instruction("Be brief.", &environment::preamble(facts), &project, NONCE)
         };
-        let (one, two) = (assemble(&monday), assemble(&tuesday));
-        assert_ne!(one, two);
-        let split = |text: &str| -> usize {
-            text.find(environment::CURRENT_HEADING)
-                .unwrap_or_else(|| panic!("{text}"))
-        };
-        assert_eq!(split(&one), split(&two));
-        let prefix = &one[..split(&one)];
-        assert_eq!(prefix, &two[..split(&two)]);
-        // The prefix carries the stable environment, the skill and AGENTS.md.
-        for needle in [
-            "## Environment\n",
-            "Write tersely.",
-            END_OF_PROJECT_INSTRUCTIONS,
-        ] {
-            assert!(prefix.contains(needle), "{needle}: {prefix}");
-        }
-        assert!(!prefix.contains("2026-10-1"), "{prefix}");
-        assert!(
-            two.ends_with("- Workspace: repo (git: branch main, 4 changed files)\n\nMemory: tea.")
+        assert_eq!(system(&monday), system(&tuesday));
+        let one = volatile_context(&environment::current(&monday), &[], "Memory: tea.", NONCE);
+        let two = volatile_context(
+            &environment::current(&tuesday),
+            &skill,
+            "Memory: cake.",
+            NONCE,
         );
+        assert_ne!(one, two);
+        assert!(!system(&monday).contains("2026-10-1"));
+        assert!(two.starts_with(environment::CURRENT_HEADING), "{two}");
+        assert!(two.ends_with("\n\nMemory: cake."), "{two}");
     }
 
     #[test]

@@ -2191,12 +2191,16 @@ export interface components {
         };
         /** @description NOTE(W2): the union of internal/api/v2/configurations/handler.go's Model (compat) and internal/application/configurations/models.go's CurrentModelCatalogItem (reviewed). */
         ConfigurationModelItem: {
+            /** @description `reviewed` only, and section=llm only. What the gateway charges per 1M cached input tokens, in USD; it applies no cache discount today, so it equals the input price. Absent or null when unknown or when the caller may not see amounts (the budget routes' can_see_amounts rule). */
+            cached_input_cost_per_1m_tokens?: number | null;
             /** @description `compat` only. A copy of `id`. */
             config_id?: number;
             /** @description `compat` only. A copy of `name`. */
             config_name?: string;
             /** @description `reviewed` only. */
             context_window?: number | null;
+            /** @description `reviewed` only. The currency of the three cost fields, always "USD". Present exactly when they are. */
+            currency?: string | null;
             data?: {
                 [key: string]: unknown;
             };
@@ -2210,6 +2214,8 @@ export interface components {
             high_tier?: boolean | null;
             /** @description `compat` only, and it is the CONFIGURATION row id, not a model id. `reviewed` emits no id at all, and the shipped client synthesises one from `project_id` and `name`. */
             id?: number;
+            /** @description `reviewed` only, and section=llm only. USD per 1M input tokens from the gateway's price catalogue (gateway.gateway_models, the table the budget gate prices with). Absent or null when the price is unknown or when the caller may not see amounts (the budget routes' can_see_amounts rule: the caller's personal project, or the project admin role). */
+            input_cost_per_1m_tokens?: number | null;
             /** @description `compat` only, and it is ALWAYS false: that handler does not read the project default. Read `default_model_name` on the envelope instead. */
             is_default?: boolean;
             /** @description `reviewed` only. */
@@ -2222,6 +2228,8 @@ export interface components {
             name: string;
             /** @description `reviewed` only. */
             openai_compatible?: boolean | null;
+            /** @description `reviewed` only, and section=llm only. USD per 1M output tokens from the gateway's price catalogue. Absent or null when unknown or when the caller may not see amounts (the budget routes' can_see_amounts rule). */
+            output_cost_per_1m_tokens?: number | null;
             /** @description BOTH, and a NUMBER on both, for the reason ConfigurationRow gives. */
             project_id: number;
             /** @description `compat` only. */

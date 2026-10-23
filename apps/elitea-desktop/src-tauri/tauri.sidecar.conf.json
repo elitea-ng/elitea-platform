@@ -1,0 +1,5 @@
+{
+  "bundle": {
+    "externalBin": ["binaries/elitea-doc-extract-sidecar"]
+  }
+}

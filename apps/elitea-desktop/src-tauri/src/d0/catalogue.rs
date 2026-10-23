@@ -108,6 +108,18 @@ impl ReasoningReplay {
     }
 }
 
+/// Whether the turn's model takes Anthropic `cache_control` breakpoints: a
+/// provider of its own ([`ReasoningReplay::SignedBlocks`]) whose name is
+/// Anthropic's. `openai_compatible: false` alone is not enough: it is the
+/// flag's default, so any row that never set it carries it. The rule is
+/// the server's own (`nativeAnthropic` in elitea-main's agent execution).
+#[must_use]
+pub fn takes_cache_hints(replay: ReasoningReplay, model_name: &str) -> bool {
+    let name = model_name.to_ascii_lowercase();
+    replay == ReasoningReplay::SignedBlocks
+        && (name.contains("claude") || name.contains("anthropic"))
+}
+
 /// A catalogue status the session can keep: a 2xx, or a 404 (no catalogue
 /// for the project: it describes no model). Any other (401, 403, 408, 429,
 /// a 5xx) may answer differently on the next turn.
@@ -230,6 +242,22 @@ mod tests {
         );
         assert_eq!(ReasoningReplay::of(None), ReasoningReplay::Never);
         assert!(catalogue.find("embed").is_none());
+    }
+
+    #[test]
+    fn cache_hints_go_only_to_a_native_anthropic_model() {
+        let native = ReasoningReplay::SignedBlocks;
+        assert!(takes_cache_hints(native, "claude-sonnet-4-5"));
+        assert!(takes_cache_hints(native, "us.anthropic.claude-haiku-4-5"));
+        assert!(takes_cache_hints(native, "Claude-Opus"));
+        // A provider of its own that is not Anthropic's (the flag's default).
+        assert!(!takes_cache_hints(native, "gemini-2.5-pro"));
+        assert!(!takes_cache_hints(native, "gpt-5"));
+        // Claude behind the OpenAI-compatible route takes no breakpoints.
+        assert!(!takes_cache_hints(
+            ReasoningReplay::Never,
+            "claude-sonnet-4-5"
+        ));
     }
 
     #[test]

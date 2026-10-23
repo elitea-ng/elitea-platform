@@ -1,3 +1,6 @@
 node_modules/
 src-tauri/target/
 src-tauri/gen/
+# The document sidecar the release job copies in (tauri.sidecar.conf.json).
+src-tauri/binaries/
+doc-extract-sidecar/target/

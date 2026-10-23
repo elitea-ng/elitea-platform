@@ -45,12 +45,18 @@ const WRITE_PROJECT_CONTEXT_TOOL_NAME: &str = "write_project_context";
 pub(crate) const PLANNER_TOOL_NAME: &str = "planner";
 pub(crate) const LAZY_TOOLS_TOOL_NAME: &str = "lazy_tools_mode";
 pub(crate) const ATTACHMENTS_TOOL_NAME: &str = "attachments";
+/// The runtime's read-only sub-agents (#1226), bound by the ordinary agent
+/// assembly: on the toggle, and on every cloud-executor workspace turn.
+/// A literal, like the names above, for Main's catalogue drift test to read;
+/// it is the runtime's own name (asserted below).
+pub(crate) const SUBAGENTS_TOOL_NAME: &str = "subagents";
 
 /// The platform's authorable internal-tool names this runtime does NOT
 /// implement yet — the create-agent form's own catalogue
 /// (`apps/elitea-web/src/features/agents/lib/internalTools.ts`), less what it
 /// serves: `ask_user`, the two builders, and (since the planner / attachments /
-/// Smart Tools Selection port) `planner`, `attachments` and `lazy_tools_mode`.
+/// Smart Tools Selection port) `planner`, `attachments` and `lazy_tools_mode`,
+/// and `subagents`.
 ///
 /// The Python worker is NOT the runtime that serves all of these, whatever
 /// this comment used to claim. It skips `pyodide` for the same reason and with
@@ -132,6 +138,8 @@ pub(crate) struct InternalToolCatalog {
     planner: bool,
     lazy_tools: bool,
     attachments: bool,
+    /// The sub-agents toggle (#1226), served like the three above.
+    subagents: bool,
     skipped: u8,
 }
 
@@ -146,6 +154,7 @@ impl InternalToolCatalog {
             planner: false,
             lazy_tools: false,
             attachments: false,
+            subagents: false,
             skipped: 0,
         }
     }
@@ -164,6 +173,7 @@ impl InternalToolCatalog {
                 Some(PLANNER_TOOL_NAME) => catalog.planner = true,
                 Some(LAZY_TOOLS_TOOL_NAME) => catalog.lazy_tools = true,
                 Some(ATTACHMENTS_TOOL_NAME) => catalog.attachments = true,
+                Some(SUBAGENTS_TOOL_NAME) => catalog.subagents = true,
                 Some(name) if PLATFORM_INTERNAL_TOOLS.contains(&name) => {
                     if name == DATA_ANALYSIS_TOOL_NAME {
                         catalog.data_analysis = true;
@@ -214,6 +224,7 @@ impl InternalToolCatalog {
             planner: self.planner || other.planner,
             lazy_tools: self.lazy_tools || other.lazy_tools,
             attachments: self.attachments || other.attachments,
+            subagents: self.subagents || other.subagents,
             skipped: self.skipped | other.skipped,
         }
     }
@@ -299,6 +310,11 @@ impl InternalToolCatalog {
     }
 
     #[must_use]
+    pub(crate) const fn subagents_enabled(self) -> bool {
+        self.subagents
+    }
+
+    #[must_use]
     pub(crate) const fn is_empty(self) -> bool {
         !self.ask_user
             && !self.skills_builder
@@ -307,6 +323,7 @@ impl InternalToolCatalog {
             && !self.planner
             && !self.lazy_tools
             && !self.attachments
+            && !self.subagents
             && self.skipped == 0
     }
 
@@ -1098,6 +1115,7 @@ mod tests {
             "lazy_tools_mode",
             "planner",
             "pyodide",
+            "subagents",
             "swarm",
         ]
         .map(ToOwned::to_owned);
@@ -1118,6 +1136,7 @@ mod tests {
         assert!(catalog.lazy_tools_enabled());
         assert!(catalog.attachments_enabled());
         assert!(catalog.data_analysis_enabled());
+        assert!(catalog.subagents_enabled());
 
         // Outside the platform catalogue is still a refusal: it names nothing
         // the product can do, so skipping it would hide malformed config.
@@ -1131,14 +1150,23 @@ mod tests {
         );
     }
 
-    /// The planner, Smart Tools Selection and Attachments toggles are served:
+    #[test]
+    fn the_subagents_toggle_is_the_runtimes_name() {
+        assert_eq!(
+            SUBAGENTS_TOOL_NAME,
+            elitea_agent_runtime::subagents::INTERNAL_TOOL_NAME
+        );
+    }
+
+    /// The planner, Smart Tools Selection, Attachments and Sub-agents toggles are served:
     /// no skip warning, no notice line, and each is its own independent flag.
     #[test]
     fn planner_lazy_tools_and_attachments_are_served_not_skipped() {
-        for (name, planner, lazy, attachments) in [
-            ("planner", true, false, false),
-            ("lazy_tools_mode", false, true, false),
-            ("attachments", false, false, true),
+        for (name, planner, lazy, attachments, subagents) in [
+            ("planner", true, false, false, false),
+            ("lazy_tools_mode", false, true, false, false),
+            ("attachments", false, false, true, false),
+            ("subagents", false, false, false, true),
         ] {
             let catalog = InternalToolCatalog::from_names(&[name.to_owned()]).expect("catalog");
             assert_eq!(catalog.skipped_platform_tools().count(), 0, "{name}");
@@ -1146,6 +1174,7 @@ mod tests {
             assert_eq!(catalog.instruction_addendum().is_some(), planner, "{name}");
             assert_eq!(catalog.lazy_tools_enabled(), lazy, "{name}");
             assert_eq!(catalog.attachments_enabled(), attachments, "{name}");
+            assert_eq!(catalog.subagents_enabled(), subagents, "{name}");
             assert!(!catalog.is_empty(), "{name} is not an empty catalog");
             // A merge keeps the flag from either side.
             assert_eq!(

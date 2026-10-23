@@ -768,6 +768,42 @@ async fn a_tool_response_is_cut_and_binary_content_is_not_kept() {
 }
 
 #[tokio::test]
+async fn a_tool_image_is_not_kept_but_its_metadata_is() {
+    let (_dir, state) = open();
+    let sessions = state.store();
+    let me = identity(1, "https://a.example");
+    let key = me.key();
+    sessions.open_session(&me, "fp").await.unwrap();
+    let image = json!({
+        "kind": "image", "path": "a.png", "mime": "image/png", "bytes": 3,
+        "image_base64": "z".repeat(MAX_TOOL_RESPONSE_BYTES * 2),
+    });
+    sessions
+        .seed(
+            &key,
+            vec![
+                new("t", call_event("i", "c")),
+                new("t", response_event("i", "c", image)),
+            ],
+            None,
+            &[],
+        )
+        .await
+        .unwrap();
+    let rows = sessions.rows(&key).await.unwrap();
+    let Part::FunctionResponse {
+        function_response, ..
+    } = &rows[1].event.llm_response.content.as_ref().unwrap().parts[0]
+    else {
+        panic!("a response")
+    };
+    assert_eq!(
+        function_response.response,
+        json!({"kind": "image", "path": "a.png", "mime": "image/png", "bytes": 3})
+    );
+}
+
+#[tokio::test]
 async fn a_path_deny_change_drops_the_tool_response_bodies_and_asks_for_a_seed() {
     let (_dir, state) = open();
     let sessions = state.store();
@@ -980,4 +1016,38 @@ fn an_adk_event_round_trips_through_plain_serde_json() {
         serde_json::to_value(&back.llm_response.content).unwrap(),
         serde_json::to_value(&response.llm_response.content).unwrap()
     );
+}
+
+#[tokio::test]
+async fn a_thread_keeps_its_nonce_until_a_reseed_and_threads_do_not_share_one() {
+    let (_dir, store) = open();
+    let sessions = store.store();
+    let me = identity(1, "https://a.example");
+    let first = sessions.open_session(&me, "fp").await.unwrap().nonce;
+    assert_eq!(first.hex().len(), 32);
+    assert_eq!(sessions.open_session(&me, "fp").await.unwrap().nonce, first);
+    // A changed path policy re-keys the session but is not a re-seed.
+    assert_eq!(
+        sessions.open_session(&me, "fp2").await.unwrap().nonce,
+        first
+    );
+    let reseeded = sessions
+        .seed(&me.key(), Vec::new(), Some("0".into()), &[])
+        .await
+        .unwrap();
+    assert_ne!(reseeded, first);
+    assert_eq!(
+        sessions.open_session(&me, "fp2").await.unwrap().nonce,
+        reseeded
+    );
+    let other = SessionIdentity {
+        conversation_uuid: "aaaaaaaa-2222-4333-8444-555555555555".into(),
+        ..me.clone()
+    };
+    assert_ne!(
+        sessions.open_session(&other, "fp").await.unwrap().nonce,
+        reseeded
+    );
+    // Never printed.
+    assert!(!format!("{reseeded:?}").contains(&reseeded.hex()));
 }

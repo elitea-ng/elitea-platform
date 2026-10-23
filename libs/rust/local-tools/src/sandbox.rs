@@ -26,7 +26,19 @@
 //!   Where the sandbox chosen for a command cannot hide them
 //!   ([`Prepared::hides_denied`]), the session asks for that command.
 //! * **No listening sockets** when the network is allowed, unless the host
-//!   allows it.
+//!   allows it, or the command asked for [`SandboxRequest::loopback`]
+//!   (listening on `127.0.0.1` / `::1` only).
+//!
+//! **Loopback** ([`SandboxRequest::loopback`], #1223: a dev server and the
+//! `curl` that checks it). With the network off, a loopback command may
+//! listen on and connect to the loopback addresses and nothing else:
+//!
+//! | Sandbox | What `loopback` allows |
+//! |---|---|
+//! | Seatbelt | `network-bind` / `network-inbound` on a local `localhost` address and `network-outbound` to a remote `localhost` one: the host's own loopback, so a server one command started is reachable from another loopback command; every other address stays denied |
+//! | bubblewrap | nothing more: the command keeps its private network namespace, whose own `lo` is up, so its processes reach each other over loopback but neither the host's loopback nor another command's ([`loopback_scoped`] is true) |
+//! | Landlock alone | Landlock's TCP rules are by port, not address: a loopback command gets TCP unrestricted. [`loopback_scoped`] is false, so the session asks for every such command |
+//! | Container | the container's own network: nothing changes |
 //!
 //! [`SandboxMode::FullAccess`] with the network on is no sandbox at all and
 //! reports [`Enforcement::None`].
@@ -82,6 +94,7 @@ pub const BWRAP_TRUNCATED_GAPS: &str = "the workspace has more directories than 
 
 /// What one command may do.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // independent switches
 pub struct SandboxRequest {
     pub mode: SandboxMode,
     pub network: bool,
@@ -105,6 +118,10 @@ pub struct SandboxRequest {
     pub deny_root: Option<PathBuf>,
     /// With the network on: may the command listen for connections.
     pub allow_listen: bool,
+    /// May the command listen on and connect to the loopback addresses
+    /// (with the network off: those only; with it on: listening on them
+    /// too). See the module's loopback table.
+    pub loopback: bool,
     /// May the command reach the keychain's services.
     pub allow_keychain: bool,
 }
@@ -338,6 +355,19 @@ pub struct Prepared {
     /// cap), the command is not fully confined: the session asks for it
     /// every time.
     pub hides_denied: bool,
+}
+
+/// Whether `prepared` keeps a [`SandboxRequest::loopback`] command to the
+/// loopback addresses: Seatbelt, bubblewrap and a container do; Landlock
+/// alone and no sandbox do not (the session then asks for every such
+/// command).
+#[must_use]
+pub fn loopback_scoped(prepared: &Prepared) -> bool {
+    match prepared.enforcement {
+        Enforcement::Full | Enforcement::Container => true,
+        Enforcement::Partial => prepared.note != Some(LANDLOCK_GAPS),
+        Enforcement::None => false,
+    }
 }
 
 fn unwrapped(argv: &[String], enforcement: Enforcement) -> ToolResult<Prepared> {
@@ -904,7 +934,21 @@ pub mod seatbelt {
             text.push_str(&mach_lookup(DNS_SERVICES));
             if !request.allow_listen {
                 text.push_str("; no listening sockets\n(deny network-bind)\n");
+                if request.loopback {
+                    text.push_str(concat!(
+                        "; but on the loopback addresses (asked for)\n",
+                        "(allow network-bind (local ip \"localhost:*\"))\n",
+                    ));
+                }
             }
+        } else if request.loopback {
+            text.push_str(concat!(
+                "\n; no network but loopback (asked for): listen on and connect to\n",
+                "; 127.0.0.1 and ::1, nothing else\n",
+                "(allow network-bind (local ip \"localhost:*\"))\n",
+                "(allow network-inbound (local ip \"localhost:*\"))\n",
+                "(allow network-outbound (remote ip \"localhost:*\"))\n",
+            ));
         } else {
             text.push_str(
                 "\n; no network: every socket, loopback included, is denied by default\n",
@@ -1383,7 +1427,14 @@ pub mod landlock {
         let mut helper = vec![
             HELPER_FLAG.to_owned(),
             request.mode.as_str().to_owned(),
-            if request.network { "net" } else { "no-net" }.to_owned(),
+            // Landlock's TCP rules cannot name an address: loopback is TCP
+            // unrestricted (the session asks for every such command).
+            if request.network || request.loopback {
+                "net"
+            } else {
+                "no-net"
+            }
+            .to_owned(),
         ];
         for root in &request.writable_roots {
             helper.push(
@@ -1490,7 +1541,10 @@ pub mod landlock {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Enforcement, SandboxConfig, SandboxRequest, credential_paths, prepare, seatbelt};
+    use super::{
+        BWRAP_TRUNCATED_GAPS, Enforcement, LANDLOCK_GAPS, Prepared, SandboxConfig, SandboxRequest,
+        bubblewrap, credential_paths, loopback_scoped, prepare, seatbelt,
+    };
     use crate::error::ErrorCode;
     use crate::policy::SandboxMode;
 
@@ -1612,6 +1666,54 @@ mod tests {
             Some(PathBuf::from("/usr/bin/true")),
             "a stand-in that succeeds passes the probe"
         );
+    }
+
+    /// #1223: loopback opens the loopback addresses only, never another
+    /// address; off, the profile has no network rule at all.
+    #[test]
+    fn loopback_allows_localhost_only_and_is_off_by_default() {
+        let (closed, _) = seatbelt::profile(&request(SandboxMode::WorkspaceWrite, false));
+        assert!(!closed.contains("(allow network"), "{closed}");
+        let mut req = request(SandboxMode::WorkspaceWrite, false);
+        req.loopback = true;
+        let (text, _) = seatbelt::profile(&req);
+        let rules: Vec<&str> = text
+            .lines()
+            .filter(|line| line.starts_with("(allow network"))
+            .collect();
+        assert_eq!(
+            rules,
+            [
+                "(allow network-bind (local ip \"localhost:*\"))",
+                "(allow network-inbound (local ip \"localhost:*\"))",
+                "(allow network-outbound (remote ip \"localhost:*\"))",
+            ]
+        );
+        // With the network on, listening stays denied but on loopback.
+        let mut open = request(SandboxMode::WorkspaceWrite, true);
+        open.loopback = true;
+        let (text, _) = seatbelt::profile(&open);
+        let bind = text.find("(deny network-bind)").expect("deny");
+        let local = text
+            .find("(allow network-bind (local ip \"localhost:*\"))")
+            .expect("allow");
+        assert!(local > bind, "the later rule wins");
+        // bubblewrap keeps its own namespace either way.
+        let masks = bubblewrap::Masks::default();
+        assert!(bubblewrap::args(&req, &masks, &[]).contains(&"--unshare-net".to_owned()));
+        let scoped = |enforcement, note| {
+            loopback_scoped(&Prepared {
+                program: PathBuf::from("/x"),
+                args: Vec::new(),
+                enforcement,
+                note,
+                hides_denied: false,
+            })
+        };
+        assert!(scoped(Enforcement::Full, None));
+        assert!(scoped(Enforcement::Partial, Some(BWRAP_TRUNCATED_GAPS)));
+        assert!(!scoped(Enforcement::Partial, Some(LANDLOCK_GAPS)));
+        assert!(!scoped(Enforcement::None, None));
     }
 
     #[test]

@@ -141,8 +141,18 @@ function withApproval(turn: TrackedTurn, payload: ApprovalRequestPayload): Track
 }
 
 /** Each model call re-sends the conversation: the turn's input is the sum, the context in use the latest call's. */
-function withUsage(turn: TrackedTurn, usage: { prompt_tokens: number; completion_tokens: number }): TrackedTurn {
+type UsageEvent = Extract<AgentEvent, { kind: 'usage' | 'usage_total' }>;
+const USAGE_KINDS: ReadonlySet<AgentEvent['kind']> = new Set(['usage', 'usage_total']);
+
+function isUsageEvent(event: AgentEvent): event is UsageEvent {
+  return USAGE_KINDS.has(event.kind);
+}
+
+/** A call's usage adds to the turn's; `usage_total` (the run ended, #1227) is the turn's, sub-agents and summaries included. */
+function withUsage(turn: TrackedTurn, event: UsageEvent): TrackedTurn {
   const before = turn.usage ?? { inputTokens: 0, outputTokens: 0, contextTokens: 0 };
+  if (event.kind === 'usage_total') return { ...turn, usage: { ...before, inputTokens: event.payload.prompt, outputTokens: event.payload.completion } };
+  const usage = event.payload;
   return {
     ...turn,
     usage: {
@@ -171,10 +181,38 @@ function ended(turn: TrackedTurn, phase: TurnPhase): TrackedTurn {
   return { ...turn, phase, tool: null, approvals: [], finished: turn.commit === 'none' };
 }
 
-const QUIET_KINDS: ReadonlySet<AgentEvent['kind']> = new Set<AgentEvent['kind']>(['text_delta', 'thinking_delta', 'thinking_end', 'context']);
+type QuietKind =
+  | 'text_delta'
+  | 'thinking_delta'
+  | 'thinking_end'
+  | 'context'
+  | 'subagent_started'
+  | 'subagent_event'
+  | 'subagent_finished'
+  | 'process_started'
+  | 'tool_output_delta'
+  | 'process_exited';
 
-/** Streamed text and reasoning, and the composer's meter (`context`): nothing the feed shows. */
-function changesNothing(event: AgentEvent): event is Extract<AgentEvent, { kind: 'text_delta' | 'thinking_delta' | 'thinking_end' | 'context' }> {
+const QUIET_KINDS: ReadonlySet<AgentEvent['kind']> = new Set<QuietKind>([
+  'text_delta',
+  'thinking_delta',
+  'thinking_end',
+  'context',
+  'subagent_started',
+  'subagent_event',
+  'subagent_finished',
+  'process_started',
+  'tool_output_delta',
+  'process_exited',
+]);
+
+/**
+ * Streamed text and reasoning, the composer's meter (`context`) and the
+ * sub-agents' own events (the turn's `spawn_agent` / `wait_agent` calls are
+ * its steps), and a background process's start, output and exit (its
+ * `run_command` call is the step): nothing the feed shows.
+ */
+function changesNothing(event: AgentEvent): event is Extract<AgentEvent, { kind: QuietKind }> {
   return QUIET_KINDS.has(event.kind);
 }
 
@@ -199,6 +237,7 @@ function foldPlan(turn: TrackedTurn, event: PlanEvent): TrackedTurn {
 export function foldTurn(turn: TrackedTurn, event: AgentEvent): TrackedTurn {
   if (changesNothing(event)) return turn;
   if (isPlanEvent(event)) return foldPlan(turn, event);
+  if (isUsageEvent(event)) return withUsage(turn, event);
   switch (event.kind) {
     case 'status':
       return withPhase(turn, event.payload.phase);
@@ -214,8 +253,6 @@ export function foldTurn(turn: TrackedTurn, event: AgentEvent): TrackedTurn {
       return ended(turn, 'error');
     case 'done':
       return settled(turn, event.payload);
-    case 'usage':
-      return withUsage(turn, event.payload);
     case 'commit_failed':
       return { ...turn, commit: 'failed', finished: false };
   }

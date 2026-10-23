@@ -10,6 +10,13 @@
 //! message that merges every `system` content, tool declarations sorted by
 //! name, `stream: true` with usage) and reads the stream leniently.
 //!
+//! Prompt cache (#1227): the system message is the thread's stable prefix;
+//! the turn's volatile context goes in a host message before the person's
+//! ([`TurnTail`]); on a model the catalogue marks as a provider of its own
+//! the body carries Anthropic `cache_control` breakpoints ([`Layout`]).
+//! Each call's usage (cached reads and writes, reasoning) goes to the
+//! turn's ledger ([`TurnEvents::model_usage`]).
+//!
 //! Text deltas go to the webview as they arrive; the adk agent receives the
 //! model's response once the stream ended (it runs in
 //! `StreamingMode::None`, so session history holds whole responses).
@@ -29,11 +36,13 @@ use adk_core::{
     UsageMetadata,
 };
 use async_trait::async_trait;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use elitea_agent_runtime::host::{
     BoundModel, HostError, HostErrorCode, ModelRequest, ModelTransport,
 };
 use elitea_llm_wire::headers::{EXECUTION_HEADER, PROJECT_HEADER, valid_execution_id};
-use elitea_llm_wire::openai::{self, DoneMatch, TypeCheck};
+use elitea_llm_wire::openai::{self, DoneMatch, TypeCheck, UsageProfile};
 use elitea_llm_wire::refusal::refusal_code;
 use elitea_llm_wire::route::CHAT_COMPLETIONS_ROUTE;
 use elitea_llm_wire::sse::{SseOptions, SseSplitter};
@@ -45,7 +54,7 @@ use serde_json::{Map, Value, json};
 
 use super::api::Credentials;
 use super::catalogue::ReasoningReplay;
-use super::events::TurnEvents;
+use super::events::{CallUsage, TurnEvents, UsageLane};
 use super::recorder::{self, Recorder};
 
 const TOOL_CALL_LIMITS: ToolCallLimits = ToolCallLimits {
@@ -72,7 +81,40 @@ pub struct GatewayTransport {
     pub recorder: Option<Arc<Recorder>>,
     /// Whether reasoning goes back to the provider in history.
     pub replay: ReasoningReplay,
+    /// Whether the model sees images (the catalogue's `supports_vision`):
+    /// a request that carries one to a model that does not is refused,
+    /// never sent without it (#1229).
+    pub vision: bool,
+    /// Whose calls these are, for the turn's usage ([`UsageLane`]).
+    pub lane: UsageLane,
+    /// The turn's host-authored context message ([`TurnTail`]): the agent's
+    /// own model only, never a summary or a sub-agent.
+    pub tail: Option<Arc<TurnTail>>,
+    /// Send Anthropic `cache_control` breakpoints ([`Layout::cache_hints`]):
+    /// a native Anthropic model ([`super::catalogue::takes_cache_hints`]),
+    /// and never on a summary call.
+    pub cache_hints: bool,
 }
+
+/// The turn's volatile context (#1227: the environment's date and git
+/// line, the skills picked for the turn, the memory recall), sent as one
+/// host-authored user message (`name: host_context`) right before the
+/// person's message of this turn, so the system message and the history
+/// before it stay byte-identical from turn to turn and the provider's
+/// prompt cache keeps them. It is outside adk's contents, like the system
+/// instruction: never stored in the session, so a later turn never carries
+/// this turn's recall.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TurnTail {
+    pub text: String,
+    /// The text of the person's message it precedes (the newest user
+    /// message carrying it is the turn's own; when compaction took that one
+    /// away, the tail goes before the newest user message).
+    pub anchor: String,
+}
+
+/// The `name` of the tail's message.
+pub const HOST_CONTEXT_NAME: &str = "host_context";
 
 impl ModelTransport for GatewayTransport {
     fn bind(&self, request: ModelRequest) -> Result<Box<dyn BoundModel>, HostError> {
@@ -96,6 +138,10 @@ impl ModelTransport for GatewayTransport {
                     self.recorder.clone()
                 },
                 replay: self.replay,
+                vision: self.vision,
+                lane: self.lane,
+                tail: self.tail.clone(),
+                cache_hints: self.cache_hints,
                 request,
                 completed: Mutex::new(None),
             }),
@@ -134,6 +180,10 @@ pub struct GatewayModel {
     quiet: bool,
     recorder: Option<Arc<Recorder>>,
     replay: ReasoningReplay,
+    vision: bool,
+    lane: UsageLane,
+    tail: Option<Arc<TurnTail>>,
+    cache_hints: bool,
     request: ModelRequest,
     /// The last answer that ended the model's turn (no tool calls).
     completed: Mutex<Option<String>>,
@@ -154,7 +204,20 @@ impl Llm for GatewayModel {
         request: LlmRequest,
         _stream: bool,
     ) -> adk_core::Result<LlmResponseStream> {
-        let body = request_body(&self.request, &request, self.replay)?;
+        let body = request_body_in(
+            &self.request,
+            &request,
+            Layout {
+                replay: self.replay,
+                images: if self.vision {
+                    Images::Send
+                } else {
+                    Images::Refuse
+                },
+                tail: self.tail.as_deref(),
+                cache_hints: self.cache_hints,
+            },
+        )?;
         let started = recorder::now();
         let bearer = self
             .credentials
@@ -205,7 +268,13 @@ impl Llm for GatewayModel {
                 break;
             }
         }
-        let (responses, completed) = reader.finish()?;
+        let (responses, completed, usage) = reader.finish()?;
+        // Counted whoever called (a summary, a sub-agent): the turn's total
+        // is what the gateway logged for its execution id.
+        if let Some(usage) = usage {
+            self.events
+                .model_usage(self.lane, &self.request.model_name, usage);
+        }
         if let Some(recorder) = &self.recorder {
             let thinking: String = responses
                 .iter()
@@ -284,12 +353,129 @@ fn refusal_message(code: &str) -> &'static str {
     }
 }
 
-/// The OpenAI-compatible body: the worker facade's shape.
+/// What a request body does with the images in its contents (#1229).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Images {
+    /// Send them as `image_url` data URIs.
+    Send,
+    /// The model cannot see images: a request carrying one is refused
+    /// (`model_gateway.model_no_vision`), never sent without it.
+    Refuse,
+    /// The body is only measured against the context window: each image
+    /// is a placeholder that weighs what a provider bills for one.
+    Measure,
+}
+
+/// Why a message could not be rendered.
+enum Unrenderable {
+    Malformed,
+    NoVision,
+}
+
+/// A data URI standing in for an image whose bytes must not be measured.
+fn measured_placeholder() -> String {
+    let bytes = usize::try_from(elitea_agent_runtime::image_result::TOKEN_ESTIMATE)
+        .unwrap_or_default()
+        .saturating_mul(4);
+    format!("data:image/png;base64,{}", "A".repeat(bytes))
+}
+
+fn image_url_part(mime: &str, base64: &str, images: Images) -> Value {
+    let url = if images == Images::Measure {
+        measured_placeholder()
+    } else {
+        format!("data:{mime};base64,{base64}")
+    };
+    json!({"type": "image_url", "image_url": {"url": url}})
+}
+
+/// How a request body is laid out beyond its contents.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Layout<'a> {
+    pub replay: ReasoningReplay,
+    pub images: Images,
+    /// The turn's context message, placed before the person's message.
+    pub tail: Option<&'a TurnTail>,
+    /// Anthropic prompt-cache breakpoints (#1227 stage 2): the gateway's
+    /// Bifrost core (v1.7.15) carries `cache_control` on a content part
+    /// (the system message's included, hoisted into Anthropic's `system`)
+    /// and on a tool to the Anthropic API, and reports the cache writes
+    /// back as `prompt_tokens_details.cache_write_tokens`. Three of
+    /// Anthropic's four: the stable system message, the last tool, and the
+    /// request's last message (so the next step reads the whole prefix).
+    pub cache_hints: bool,
+}
+
+/// The `cache_control` of a breakpoint.
+fn ephemeral() -> Value {
+    json!({"type": "ephemeral"})
+}
+
+/// `message` with a breakpoint on its last content part (a text content
+/// becomes one text part); a message without content is left as it is.
+fn mark_last_part(message: &mut Value) {
+    match message.get_mut("content") {
+        Some(Value::String(text)) if !text.is_empty() => {
+            let text = std::mem::take(text);
+            message["content"] =
+                json!([{"type": "text", "text": text, "cache_control": ephemeral()}]);
+        }
+        Some(Value::Array(parts)) => {
+            if let Some(part) = parts.last_mut().and_then(Value::as_object_mut) {
+                part.insert("cache_control".into(), ephemeral());
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The OpenAI-compatible body, without a tail or cache breakpoints (the
+/// tests' shape).
+#[cfg(test)]
 pub(super) fn request_body(
     model: &ModelRequest,
     request: &LlmRequest,
     replay: ReasoningReplay,
+    images: Images,
 ) -> adk_core::Result<Value> {
+    request_body_in(
+        model,
+        request,
+        Layout {
+            replay,
+            images,
+            tail: None,
+            cache_hints: false,
+        },
+    )
+}
+
+/// The text of a user content, as [`TurnTail::anchor`] names it.
+fn user_text(content: &Content) -> String {
+    content
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            Part::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The OpenAI-compatible body (the worker facade's shape), laid out by
+/// `layout`.
+pub(super) fn request_body_in(
+    model: &ModelRequest,
+    request: &LlmRequest,
+    layout: Layout<'_>,
+) -> adk_core::Result<Value> {
+    let Layout {
+        replay,
+        images,
+        tail,
+        cache_hints,
+    } = layout;
     let invalid = || {
         model_error(
             "model_gateway.invalid_request",
@@ -318,16 +504,69 @@ pub(super) fn request_body(
     let mut messages = Vec::new();
     let system = sections.join("\n\n");
     if !system.is_empty() {
-        messages.push(json!({"role": "system", "content": system}));
+        let mut message = json!({"role": "system", "content": system});
+        if cache_hints {
+            mark_last_part(&mut message);
+        }
+        messages.push(message);
     }
+    let first_turn_message = messages.len();
+    // Where the tail goes: before the newest user message that is the
+    // turn's own, else before the newest user message.
+    let mut anchored: Option<usize> = None;
+    let mut newest_user: Option<usize> = None;
+    // Chat completions' tool messages are text-only: an image a tool
+    // returned follows the run of tool messages it belongs to, as a user
+    // message the host wrote (`name: tool_image`).
+    let mut tool_images: Vec<Value> = Vec::new();
     for content in request.contents.iter().filter(|c| c.role != "system") {
-        append_message(content, &mut messages, replay).ok_or_else(invalid)?;
+        if !matches!(content.role.as_str(), "function" | "tool") {
+            messages.append(&mut tool_images);
+        }
+        if content.role == "user" {
+            newest_user = Some(messages.len());
+            if tail.is_some_and(|tail| user_text(content) == tail.anchor) {
+                anchored = Some(messages.len());
+            }
+        }
+        append_message(content, &mut messages, &mut tool_images, replay, images).map_err(
+            |why| match why {
+                Unrenderable::Malformed => invalid(),
+                Unrenderable::NoVision => model_error(
+                    "model_gateway.model_no_vision",
+                    "this model cannot view images; choose a model that can",
+                ),
+            },
+        )?;
+    }
+    messages.append(&mut tool_images);
+    if let Some(tail) = tail.filter(|tail| !tail.text.is_empty()) {
+        let at = anchored.or(newest_user).unwrap_or(first_turn_message);
+        messages.insert(
+            at,
+            json!({"role": "user", "name": HOST_CONTEXT_NAME, "content": tail.text}),
+        );
+    }
+    if cache_hints
+        && messages.len() > first_turn_message
+        && let Some(last) = messages.last_mut()
+    {
+        mark_last_part(last);
     }
     let mut body = Map::new();
     body.insert("model".into(), json!(model.model_name));
     body.insert("messages".into(), Value::Array(messages));
     if !request.tools.is_empty() {
-        body.insert("tools".into(), tools(&request.tools).ok_or_else(invalid)?);
+        let mut declared = tools(&request.tools).ok_or_else(invalid)?;
+        if cache_hints
+            && let Some(last) = declared
+                .as_array_mut()
+                .and_then(|tools| tools.last_mut())
+                .and_then(Value::as_object_mut)
+        {
+            last.insert("cache_control".into(), ephemeral());
+        }
+        body.insert("tools".into(), declared);
         body.insert("tool_choice".into(), json!("auto"));
     }
     body.insert("stream".into(), json!(true));
@@ -350,8 +589,10 @@ pub(super) fn request_body(
 fn append_message(
     content: &Content,
     messages: &mut Vec<Value>,
+    tool_images: &mut Vec<Value>,
     replay: ReasoningReplay,
-) -> Option<()> {
+    images: Images,
+) -> Result<(), Unrenderable> {
     match content.role.as_str() {
         "user" => {
             let text: Vec<&str> = content
@@ -362,7 +603,39 @@ fn append_message(
                     _ => None,
                 })
                 .collect();
-            messages.push(json!({"role": "user", "content": text.join("\n")}));
+            let pictures: Vec<&Part> = content
+                .parts
+                .iter()
+                .filter(
+                    |part| matches!(part, Part::InlineData { mime_type, .. } if mime_type.starts_with("image/")),
+                )
+                .collect();
+            if pictures.is_empty() {
+                messages.push(json!({"role": "user", "content": text.join("\n")}));
+            } else if images == Images::Refuse {
+                return Err(Unrenderable::NoVision);
+            } else {
+                // The worker's shape: the text, then one part per image.
+                let mut parts = Vec::new();
+                let text = text.join("\n");
+                if !text.is_empty() {
+                    parts.push(json!({"type": "text", "text": text}));
+                }
+                for picture in pictures {
+                    if let Part::InlineData {
+                        mime_type, data, ..
+                    } = picture
+                    {
+                        let base64 = if images == Images::Measure {
+                            String::new()
+                        } else {
+                            BASE64.encode(data)
+                        };
+                        parts.push(image_url_part(mime_type, &base64, images));
+                    }
+                }
+                messages.push(json!({"role": "user", "content": parts}));
+            }
         }
         "model" | "assistant" => {
             let mut text = String::new();
@@ -378,13 +651,16 @@ fn append_message(
                     } => calls.push(json!({
                         "id": id,
                         "type": "function",
-                        "function": {"name": name, "arguments": serde_json::to_string(args).ok()?},
+                        "function": {
+                            "name": name,
+                            "arguments": serde_json::to_string(args).map_err(|_| Unrenderable::Malformed)?,
+                        },
                     })),
                     // Reasoning is not part of the chat schema: on this
                     // route it is never sent back (`ReasoningReplay::Never`).
-                    // TODO(#1227 stage 2): the Anthropic route sends a signed
-                    // thinking block back as the provider requires; until it
-                    // exists there is nowhere to put it.
+                    // Nor a signed thinking block: the desktop speaks to
+                    // every model, Anthropic's too (with cache breakpoints,
+                    // #1227), through this route, which has no place for it.
                     Part::Thinking {
                         signature: Some(_), ..
                     } if replay == ReasoningReplay::SignedBlocks => {}
@@ -408,17 +684,39 @@ fn append_message(
                     ..
                 } = part
                 {
+                    let response = &function_response.response;
+                    let body = elitea_agent_runtime::image_result::without_image(response);
                     messages.push(json!({
                         "role": "tool",
                         "tool_call_id": id,
-                        "content": serde_json::to_string(&function_response.response).ok()?,
+                        "content": serde_json::to_string(&*body).map_err(|_| Unrenderable::Malformed)?,
                     }));
+                    if matches!(body, std::borrow::Cow::Owned(_))
+                        && let (Some(mime), Some(base64)) = (
+                            response.get("mime").and_then(Value::as_str),
+                            response
+                                .get(elitea_agent_runtime::image_result::IMAGE_FIELD)
+                                .and_then(Value::as_str),
+                        )
+                    {
+                        if images == Images::Refuse {
+                            return Err(Unrenderable::NoVision);
+                        }
+                        tool_images.push(json!({
+                            "role": "user",
+                            "name": "tool_image",
+                            "content": [
+                                {"type": "text", "text": format!("Image returned by tool call {id}:")},
+                                image_url_part(mime, base64, images),
+                            ],
+                        }));
+                    }
                 }
             }
         }
-        _ => return None,
+        _ => return Err(Unrenderable::Malformed),
     }
-    Some(())
+    Ok(())
 }
 
 fn tools(declarations: &HashMap<String, Value>) -> Option<Value> {
@@ -446,6 +744,21 @@ fn tools(declarations: &HashMap<String, Value>) -> Option<Value> {
         .map(Value::Array)
 }
 
+/// adk's usage record of a call: the cached reads and writes and the
+/// reasoning as adk-core names them.
+fn usage_metadata(usage: &CallUsage) -> UsageMetadata {
+    let count = |n: u64| i32::try_from(n).unwrap_or(i32::MAX);
+    UsageMetadata {
+        prompt_token_count: count(usage.prompt),
+        candidates_token_count: count(usage.completion),
+        total_token_count: count(usage.total),
+        cache_read_input_token_count: usage.cached.map(count),
+        cache_creation_input_token_count: usage.cache_write.map(count),
+        thinking_token_count: usage.reasoning.map(count),
+        ..UsageMetadata::default()
+    }
+}
+
 /// Reads one streamed completion.
 struct StreamReader<'a> {
     /// `None` for a quiet model.
@@ -457,7 +770,7 @@ struct StreamReader<'a> {
     thinking: Option<usize>,
     calls: ToolCallAssembler,
     finish: Option<openai::FinishReason>,
-    usage: Option<UsageMetadata>,
+    usage: Option<CallUsage>,
     done: bool,
 }
 
@@ -501,25 +814,24 @@ impl<'a> StreamReader<'a> {
             return Ok(());
         }
         let chunk: Value = serde_json::from_slice(data).map_err(|_| Self::malformed())?;
-        if let Some(usage) = chunk.get("usage").filter(|u| u.is_object()) {
-            let count = |key: &str| {
-                usage
-                    .get(key)
-                    .and_then(Value::as_i64)
-                    .and_then(|v| i32::try_from(v).ok())
-                    .unwrap_or_default()
-            };
-            let reasoning = usage
-                .get("completion_tokens_details")
-                .and_then(|details| details.get("reasoning_tokens"))
-                .and_then(Value::as_i64)
-                .and_then(|v| i32::try_from(v).ok());
-            self.usage = Some(UsageMetadata {
-                prompt_token_count: count("prompt_tokens"),
-                candidates_token_count: count("completion_tokens"),
-                total_token_count: count("total_tokens"),
-                thinking_token_count: reasoning,
-                ..UsageMetadata::default()
+        if let Ok(Some(usage)) = openai::parse_usage(chunk.get("usage"), UsageProfile::Lenient) {
+            // The gateway names a cache write `cache_write_tokens` (Bifrost's
+            // OpenAI-SDK spelling) and also `cached_write_tokens`.
+            let cache_write = chunk["usage"]
+                .get("prompt_tokens_details")
+                .and_then(|details| {
+                    details
+                        .get("cache_write_tokens")
+                        .or_else(|| details.get("cached_write_tokens"))
+                })
+                .and_then(Value::as_u64);
+            self.usage = Some(CallUsage {
+                prompt: usage.prompt_tokens,
+                completion: usage.completion_tokens,
+                total: usage.total_tokens,
+                cached: usage.cached_tokens,
+                cache_write,
+                reasoning: usage.reasoning_tokens,
             });
         }
         let Some(choice) = chunk
@@ -575,8 +887,10 @@ impl<'a> StreamReader<'a> {
         }
     }
 
-    /// The adk responses and, for an answer without tool calls, its text.
-    fn finish(mut self) -> adk_core::Result<(Vec<LlmResponse>, Option<String>)> {
+    /// The adk responses, for an answer without tool calls its text, and
+    /// the call's usage when the gateway reported it.
+    #[allow(clippy::type_complexity)]
+    fn finish(mut self) -> adk_core::Result<(Vec<LlmResponse>, Option<String>, Option<CallUsage>)> {
         let mut tail = Vec::new();
         self.splitter
             .finish_into(&mut tail)
@@ -627,28 +941,19 @@ impl<'a> StreamReader<'a> {
             openai::FinishReason::Other => FinishReason::Other,
             _ => FinishReason::Stop,
         };
-        if let (Some(usage), Some(events)) = (&self.usage, self.events) {
-            let count = |n: i32| u32::try_from(n).unwrap_or_default();
-            events.usage(
-                count(usage.prompt_token_count),
-                count(usage.candidates_token_count),
-                count(usage.total_token_count),
-                usage.thinking_token_count.map(count).filter(|n| *n > 0),
-            );
-        }
         let completed = (!has_calls).then(|| self.text.clone());
         let response = LlmResponse {
             content: (!parts.is_empty()).then(|| Content {
                 role: "model".to_owned(),
                 parts,
             }),
-            usage_metadata: self.usage,
+            usage_metadata: self.usage.map(|usage| usage_metadata(&usage)),
             finish_reason: Some(finish_reason),
             partial: false,
             turn_complete: !has_calls,
             ..LlmResponse::default()
         };
-        Ok((vec![response], completed))
+        Ok((vec![response], completed, self.usage))
     }
 }
 
@@ -691,7 +996,13 @@ mod tests {
             "a_tool".into(),
             json!({"name": "a_tool", "parameters": {"type": "object"}}),
         );
-        let body = request_body(&model_request(), &request, ReasoningReplay::Never).unwrap();
+        let body = request_body(
+            &model_request(),
+            &request,
+            ReasoningReplay::Never,
+            Images::Send,
+        )
+        .unwrap();
         assert_eq!(body["messages"][0]["role"], "system");
         assert_eq!(
             body["messages"][0]["content"],
@@ -708,6 +1019,158 @@ mod tests {
         assert!(body.get("reasoning_effort").is_none());
     }
 
+    fn image_user() -> LlmRequest {
+        let mut content = Content::new("user").with_text("what is wrong here?");
+        content = content.with_inline_data("image/png", vec![1, 2, 3]);
+        LlmRequest {
+            model: "gpt-x".into(),
+            contents: vec![content],
+            config: None,
+            tools: HashMap::new(),
+            previous_response_id: None,
+        }
+    }
+
+    #[test]
+    fn a_text_only_user_message_stays_a_plain_string() {
+        let request = LlmRequest {
+            model: "gpt-x".into(),
+            contents: vec![Content::new("user").with_text("hi")],
+            config: None,
+            tools: HashMap::new(),
+            previous_response_id: None,
+        };
+        for images in [Images::Send, Images::Refuse, Images::Measure] {
+            let body =
+                request_body(&model_request(), &request, ReasoningReplay::Never, images).unwrap();
+            assert_eq!(
+                body["messages"][1],
+                json!({"role": "user", "content": "hi"}),
+                "{images:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_user_image_becomes_an_image_url_part_after_the_text() {
+        let body = request_body(
+            &model_request(),
+            &image_user(),
+            ReasoningReplay::Never,
+            Images::Send,
+        )
+        .unwrap();
+        assert_eq!(
+            body["messages"][1],
+            json!({"role": "user", "content": [
+                {"type": "text", "text": "what is wrong here?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AQID"}},
+            ]})
+        );
+    }
+
+    #[test]
+    fn a_model_without_vision_is_never_sent_an_image() {
+        let error = request_body(
+            &model_request(),
+            &image_user(),
+            ReasoningReplay::Never,
+            Images::Refuse,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("model_gateway.model_no_vision"));
+    }
+
+    #[test]
+    fn a_measured_image_weighs_what_a_provider_bills() {
+        let body = request_body(
+            &model_request(),
+            &image_user(),
+            ReasoningReplay::Never,
+            Images::Measure,
+        )
+        .unwrap();
+        let url = body["messages"][1]["content"][1]["image_url"]["url"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            elitea_agent_runtime::context_budget::estimate_tokens(url.len()),
+            elitea_agent_runtime::image_result::TOKEN_ESTIMATE + 6
+        );
+    }
+
+    #[test]
+    fn a_tool_image_follows_its_run_of_tool_messages_as_a_host_user_message() {
+        let call = |id: &str| Part::FunctionCall {
+            name: "read_file".into(),
+            args: json!({"path": id}),
+            id: Some(id.into()),
+            thought_signature: None,
+        };
+        let response = |id: &str, body: Value| Part::FunctionResponse {
+            function_response: adk_core::FunctionResponseData::new("read_file", body),
+            id: Some(id.into()),
+            annotations: None,
+        };
+        let request = LlmRequest {
+            model: "gpt-x".into(),
+            contents: vec![
+                Content::new("user").with_text("look"),
+                Content {
+                    role: "model".into(),
+                    parts: vec![call("a"), call("b")],
+                },
+                Content {
+                    role: "function".into(),
+                    parts: vec![response(
+                        "a",
+                        json!({"kind": "image", "mime": "image/png", "bytes": 3, "image_base64": "AQID"}),
+                    )],
+                },
+                Content {
+                    role: "function".into(),
+                    parts: vec![response("b", json!({"content": "text"}))],
+                },
+            ],
+            config: None,
+            tools: HashMap::new(),
+            previous_response_id: None,
+        };
+        let body = request_body(
+            &model_request(),
+            &request,
+            ReasoningReplay::Never,
+            Images::Send,
+        )
+        .unwrap();
+        let roles: Vec<(&str, Option<&str>)> = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| (m["role"].as_str().unwrap(), m["name"].as_str()))
+            .collect();
+        assert_eq!(
+            roles,
+            [
+                ("system", None),
+                ("user", None),
+                ("assistant", None),
+                ("tool", None),
+                ("tool", None),
+                ("user", Some("tool_image")),
+            ]
+        );
+        let tool = body["messages"][3]["content"].as_str().unwrap();
+        assert!(
+            tool.contains("\"kind\":\"image\"") && !tool.contains("AQID"),
+            "{tool}"
+        );
+        assert_eq!(
+            body["messages"][5]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,AQID"
+        );
+    }
+
     #[test]
     fn a_stream_of_text_and_a_tool_call_reads_into_one_response() {
         let emitter = Arc::new(VecEmitter::default());
@@ -722,7 +1185,7 @@ mod tests {
             "data: [DONE]\n\n",
         );
         assert!(reader.push(stream.as_bytes()).unwrap());
-        let (responses, completed) = reader.finish().unwrap();
+        let (responses, completed, usage) = reader.finish().unwrap();
         assert_eq!(completed, None);
         let response = &responses[0];
         assert!(!response.turn_complete);
@@ -743,13 +1206,153 @@ mod tests {
             .map(|e| e.payload["text"].as_str().unwrap().to_owned())
             .collect();
         assert_eq!(deltas, ["Let me ", "look."]);
-        // The call's usage goes to the UI too: what it sent (the context in use) and what it produced.
-        let usage: Vec<_> = all.iter().filter(|e| e.kind == "usage").collect();
-        assert_eq!(usage.len(), 1);
+        // The call's usage is handed back (the model counts it, `model_usage`).
         assert_eq!(
-            usage[0].payload,
-            json!({"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7})
+            usage,
+            Some(CallUsage {
+                prompt: 3,
+                completion: 4,
+                total: 7,
+                ..CallUsage::default()
+            })
         );
+    }
+
+    #[test]
+    fn cached_cache_write_and_reasoning_tokens_are_read_and_kept_in_adk_usage() {
+        let mut reader = StreamReader::new(None);
+        let stream = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":2000,\"completion_tokens\":50,\"total_tokens\":2050,",
+            "\"prompt_tokens_details\":{\"cached_tokens\":1536,\"cache_write_tokens\":300},",
+            "\"completion_tokens_details\":{\"reasoning_tokens\":20}}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        assert!(reader.push(stream.as_bytes()).unwrap());
+        let (responses, _, usage) = reader.finish().unwrap();
+        let usage = usage.unwrap();
+        assert_eq!(usage.cached, Some(1536));
+        assert_eq!(usage.cache_write, Some(300));
+        assert_eq!(usage.reasoning, Some(20));
+        let adk = responses[0].usage_metadata.as_ref().unwrap();
+        assert_eq!(adk.cache_read_input_token_count, Some(1536));
+        assert_eq!(adk.cache_creation_input_token_count, Some(300));
+        assert_eq!(adk.thinking_token_count, Some(20));
+    }
+
+    fn layout<'a>(tail: Option<&'a TurnTail>, cache_hints: bool) -> Layout<'a> {
+        Layout {
+            replay: ReasoningReplay::Never,
+            images: Images::Send,
+            tail,
+            cache_hints,
+        }
+    }
+
+    fn thread_request() -> LlmRequest {
+        LlmRequest {
+            model: "gpt-x".into(),
+            contents: vec![
+                Content::new("user").with_text("earlier question"),
+                Content {
+                    role: "model".into(),
+                    parts: vec![Part::Text {
+                        text: "earlier answer".into(),
+                    }],
+                },
+                Content::new("user").with_text("fix the test"),
+                Content {
+                    role: "model".into(),
+                    parts: vec![Part::FunctionCall {
+                        name: "read_file".into(),
+                        args: json!({"path": "a"}),
+                        id: Some("c1".into()),
+                        thought_signature: None,
+                    }],
+                },
+                Content {
+                    role: "function".into(),
+                    parts: vec![Part::FunctionResponse {
+                        function_response: adk_core::FunctionResponseData::new(
+                            "read_file",
+                            json!({"content": "x"}),
+                        ),
+                        id: Some("c1".into()),
+                        annotations: None,
+                    }],
+                },
+            ],
+            config: None,
+            tools: HashMap::new(),
+            previous_response_id: None,
+        }
+    }
+
+    #[test]
+    fn the_tail_goes_right_before_the_turns_own_message_at_every_step() {
+        let tail = TurnTail {
+            text: "## Environment (this turn)\n- Today: 2026-10-23\n\nMemory: tea.".into(),
+            anchor: "fix the test".into(),
+        };
+        let body = request_body_in(
+            &model_request(),
+            &thread_request(),
+            layout(Some(&tail), false),
+        )
+        .unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["content"], "Be brief.\n\nMemory: likes tea");
+        assert_eq!(messages[3]["content"], json!(tail.text));
+        assert_eq!(messages[3]["role"], "user");
+        assert_eq!(messages[3]["name"], HOST_CONTEXT_NAME);
+        assert_eq!(messages[4]["content"], "fix the test");
+        assert_eq!(messages.len(), 7);
+        // The turn's message compacted away: before the newest user message.
+        let mut request = thread_request();
+        request.contents.remove(2);
+        let body = request_body_in(&model_request(), &request, layout(Some(&tail), false)).unwrap();
+        assert_eq!(body["messages"][1]["name"], HOST_CONTEXT_NAME);
+        // Without a tail the body is the plain one.
+        assert_eq!(
+            request_body_in(&model_request(), &thread_request(), layout(None, false)).unwrap(),
+            request_body(
+                &model_request(),
+                &thread_request(),
+                ReasoningReplay::Never,
+                Images::Send
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn cache_hints_mark_the_system_message_the_last_tool_and_the_last_message() {
+        let mut request = thread_request();
+        request
+            .tools
+            .insert("b_tool".into(), json!({"name": "b_tool"}));
+        request
+            .tools
+            .insert("a_tool".into(), json!({"name": "a_tool"}));
+        let body = request_body_in(&model_request(), &request, layout(None, true)).unwrap();
+        let ephemeral = json!({"type": "ephemeral"});
+        assert_eq!(
+            body["messages"][0]["content"],
+            json!([{"type": "text", "text": "Be brief.\n\nMemory: likes tea", "cache_control": ephemeral}])
+        );
+        let last = body["messages"].as_array().unwrap().last().unwrap();
+        assert_eq!(last["role"], "tool");
+        assert_eq!(last["content"][0]["cache_control"], ephemeral);
+        assert_eq!(body["tools"][1]["function"]["name"], "b_tool");
+        assert_eq!(body["tools"][1]["cache_control"], ephemeral);
+        assert!(body["tools"][0].get("cache_control").is_none());
+        // The other messages are as without hints.
+        let plain = request_body_in(&model_request(), &request, layout(None, false)).unwrap();
+        assert_eq!(
+            body["messages"].as_array().unwrap()[1..4],
+            plain["messages"].as_array().unwrap()[1..4]
+        );
+        assert!(!plain.to_string().contains("cache_control"));
     }
 
     #[test]
@@ -776,7 +1379,7 @@ mod tests {
             previous_response_id: None,
         };
         for replay in [ReasoningReplay::Never, ReasoningReplay::SignedBlocks] {
-            let body = request_body(&model_request(), &request, replay).unwrap();
+            let body = request_body(&model_request(), &request, replay, Images::Send).unwrap();
             assert_eq!(
                 body["messages"][2],
                 json!({"role": "assistant", "content": "hello"})

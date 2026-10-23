@@ -226,7 +226,10 @@ names instead of retrying. A rule imported from a repository leaves the
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "none" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}}` | `{turn_id, execution_id}` |
+| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "none" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}, images?: {source: "clipboard" \| "file", token: string}[]}` | `{turn_id, execution_id}` |
+| `attachment_add` | `{workspace_id, path}` | `{token, name, mime, bytes, width, height, thumbnail}` — attaches the image file at the **absolute** `path` (a `files_dropped` path, or a picked file) to the workspace's next turn ("Image input", below). Blocking work runs off the async workers. Rejects `path_denied`, `not_found`, `image_too_large`, `invalid_request` (not PNG/JPEG/WebP/GIF, a relative path, a link, not a regular file), `workspace_unknown`, `local_work_disabled`, `not_signed_in`. |
+| `attachment_add_bytes` | `{workspace_id, mime, data, name?}` | The same answer for a pasted image: `data` is base64, at most 10 MiB decoded; `mime` is what the clipboard said and is ignored (the type is sniffed from the bytes); `name` defaults to `pasted-image`. Rejects `image_too_large`, `invalid_request`, `workspace_unknown`, `local_work_disabled`. |
+| `attachment_remove` | `{workspace_id, token}` | `null`. Forgets an image the person took off the composer (an unknown token is not an error). |
 | `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
@@ -273,8 +276,57 @@ Refusal codes (the rejection's `code` and the `error` event's): `local_work_disa
 `model_override_disabled`, `agent_not_in_conversation`, `agent_version_mismatch`,
 `workspace_unknown`, `workspace_unbound` (no project bound yet),
 `workspace_project_mismatch`, `workspace_busy`, `skill_unknown`,
-`skill_invalid`, `skill_too_large`, `command_unknown`, `invalid_request`, `not_signed_in`, and the platform's own codes (`local_turn_conflict`,
+`skill_invalid`, `skill_too_large`, `command_unknown`, `model_no_vision`,
+`attachment_unknown`, `too_many_images`, `invalid_request`, `not_signed_in`, and the platform's own codes (`local_turn_conflict`,
 `not_found`, …).
+
+**Image input** (#1229). A message can carry up to five images; they go to
+the model with the prompt as `image_url` data URIs (`{"type":"image_url",
+"image_url":{"url":"data:<mime>;base64,…"}}` after the text part, the cloud
+worker's shape). The webview never sends a file's bytes over IPC: a dropped
+or picked file is registered by its path (`attachment_add`), a pasted image
+once (`attachment_add_bytes`); the host answers a `token`, which
+`agent_turn_start.images` names. The host checks, bounds and **holds the image
+in memory** (at most 32 images and 64 MiB; the oldest go first; dropped on
+sign-out; a token names one workspace and is used up by the turn that
+starts with it, a refused start keeps it):
+
+* **Types and limits**, enforced here and not only in the UI: PNG, JPEG,
+  WebP and GIF, sniffed from the bytes (never the extension); a source over
+  10 MiB is refused (`image_too_large`); an image over 2048 px on its longest
+  side or 3.75 MB (what encodes to 5 MB of base64, under the providers' 5 MiB
+  image limit) is shrunk (JPEG stays JPEG, any other becomes PNG, a GIF keeps
+  its first frame; a PNG that stays over 3.75 MB is sent as JPEG on white; one
+  no quality brings under the limit is refused `image_too_large`); more than
+  five in a turn is `too_many_images`; an unknown, sent or other-workspace
+  token is `attachment_unknown`.
+* **Confined reads.** A path is read through a workspace rooted at its
+  parent folder (at the workspace itself when it is inside it, so `path_deny`
+  applies) with the session deny list: credentials and the app's own data are
+  refused `path_denied` wherever they are. The file is opened `O_NOFOLLOW`
+  and must be a regular file.
+* **Vision gate.** Images go only to a model the catalogue marks
+  `supports_vision: true` (`ConfigurationModelItem`; one the catalogue does not
+  describe does not count): the turn is refused `model_no_vision`, never
+  sent without them, and the images stay attached so the person can choose
+  another model (`model`) and send again. A model the person chose is checked
+  before the local turn starts; the agent's own (or the thread's kept) model
+  is known under the session, so its refusal comes after the start (the
+  execution expires, no model request is made).
+* **History and commit.** The commit's `user_message` gains `images:
+  [{name, mime, bytes}]` (a server that does not know it ignores it); the
+  bytes are not uploaded. `thread_history` turns carry `images: [{name, mime,
+  bytes, thumbnail}]`, a JPEG thumbnail of at most 64 KiB as a data URI
+  (`threads.sqlite`, schema 3). The session store keeps no image: a later
+  turn (and a "Continue?" after the step limit) sees a note for it.
+* **`read_file` on an image.** `read_file` on a PNG, JPEG, WebP or GIF
+  returns `{kind: "image", path, mime, bytes, width, height}` and the image
+  itself to a model that sees images (same bounds), and the same metadata
+  with a `hint` ("this model cannot view images") to one that does not. Any
+  other binary file answers `{kind: "binary", path, bytes, hint}`. Because
+  chat completions' tool messages are text-only, the model request carries
+  the image in a following user message named `tool_image`. The cloud
+  executor's `read_file` must return the same result (the handoff contract).
 
 A turn is held to the session it started under (the connected origin and
 the sign-in; a token refresh keeps it): once the person signs out, signs
@@ -315,6 +367,35 @@ stays in plan mode and the tool answers `{accepted: false, feedback?,
 message}`; the model revises the plan. The turn's `hitl_exchanges` record
 it as `kind: "plan_approval"`, `decision: "accept" | "decline"`, `value`
 the feedback. The next turn starts in the profile its own `plan_mode` says.
+
+**Sub-agents** (#1226). Every workspace turn, plan mode included, is
+offered the runtime's sub-agent tools (`elitea-agent-runtime`
+`subagents`, the `elitea_subagents` toolset; a remote tool may not take
+their names): `spawn_agent {task, label?, max_steps?}` starts a read-only
+child and returns `{agent_id, status: "running"}` at once, `send_input
+{agent_id, message}` continues one, `wait_agent {agent_ids?, timeout_seconds?}`
+returns `{results: [{agent_id, status, result?, steps, input_tokens,
+output_tokens, error?}]}` once all settled or at the timeout (default 300 s,
+at most 900; no `agent_ids`: every child still running, else every one the
+turn started, so a spawn and a wait can share one round of calls), and `close_agent {agent_id}` stops one. A child has a fresh
+context (the task only, under the environment section and the workspace's
+AGENTS.md, never the agent's instructions or the conversation), the
+read-only local tools and the index tools (no writes, commands, remote
+toolkits, `exit_plan_mode` or sub-agent tools), at most 30 model steps
+unless the task asks for up to 60, and 60k cumulative input tokens: past
+either it stops with `budget_exhausted` and what it had. At most 4 run at
+once and 12 start in one turn; a refusal is a tool result the model reads.
+A child calls `/llm` with the turn's execution id (the turn's spend, under
+the gateway's budget), quiet: its text reaches the UI as `subagent_event`s,
+not as the turn's `text_delta`. Its tool calls are in the commit's
+`tool_calls`, after the `spawn_agent` call, each carrying
+`parent_agent_call_id` (the `spawn_agent` call id), `parent_agent_name`
+(the label, else the agent id), `parent_agent_path`
+(`[{name, call_id, sibling_ordinal}]`) and `sibling_ordinal`, the shape the
+cloud writes for a nested agent's calls; they count toward the 512-call
+cap. An approval a child's read needs (a workspace rule that asks) is the
+turn's own prompt. The turn's end, its cancel and a cloud handoff stop
+every child (`subagent_finished` `cancelled`); none outlives the turn.
 
 **Decline with feedback** (#1225). A call the person denies (a local tool's
 approval or a remote toolkit's confirmation) answers the model with a typed
@@ -476,8 +557,9 @@ instructions, no two skills under one name, the catalogue's bounds; then
 fails the start with `skill_invalid`, naming the skill. All of these after
 the definition is read and before the turn is started on the platform
 (the runtime loads every attached skill, so such a turn could not run).
-The picked skills are appended to the agent's instructions, before the
-AGENTS.md section, as one `## Skill for this turn` section with one
+The picked skills go in the turn's host context message (**Prompt
+layout**, below), after the environment's volatile part and before the
+memory recall, as one `## Skill for this turn` section with one
 `<invoked_skill nonce="…" name="…">` block per skill, ending with
 `## End of skill instructions`; the name is escaped as an attribute value
 and the text is framed as AGENTS.md text is (below). Every attached skill
@@ -565,24 +647,49 @@ mention, the `AGENTS.md` of every folder between it and the root, nearest
 first, deduplicated. Reads go through the confined workspace: a symlinked
 file or folder is not read and a `path_deny` match is refused. All files
 together are capped at 32 KiB; a cut file ends with a truncation note and
-files past the cap are skipped. They are appended to the agent's system
-instructions, after the agent's own instructions and any picked skill
-(which outrank it, as the section's preamble says) and before the memory
-splice, as one `## Project instructions (AGENTS.md)` section with one
+files past the cap are skipped. They end the system instructions, after
+the agent's own instructions and the environment section (which outrank
+them, as does any picked skill, as the section's preamble says), as one
+`## Project instructions (AGENTS.md)` section with one
 `<agents_md nonce="…" path="…">` block per file. The path is escaped as an
 attribute value (`&`, `"`, `<`, `>` and control characters as entities).
 Edits apply from the next turn.
 
 **Nonce framing** (AGENTS.md and skills alike, `src/d0/framing.rs`). Every
-turn draws a fresh random 128-bit nonce `N` (32 hex digits). A block opens
+thread has a random 128-bit nonce `N` (32 hex digits), drawn when its
+session is created in `sessions.sqlite` and again whenever the session is
+re-seeded from the server (a fork is a new conversation, so a new session);
+a turn without the store draws a fresh one. It is kept only in host data,
+never logged, never written into the workspace and sent nowhere but inside
+the prompt to `/llm`; one nonce per thread keeps the system prompt
+byte-identical across turns (#1227). A block opens
 with `<tag nonce="N" …>` and ends only at `</tag nonce="N">`; each section's
 preamble says so, and that everything before that closing tag — including
 text that looks like a closing tag, a heading or the end of the section —
 is the block's content. The text is left byte for byte as written
 (Markdown headings, `Vec<u8>`, `#include`, shell comments and tags of its
 own included), except for the one sequence that could end the block: the
-exact closing tag with this turn's nonce (ASCII case ignored), which the
+exact closing tag with this thread's nonce (ASCII case ignored), which the
 text cannot know in advance; should it occur, its `</` becomes `<\/`.
+
+**Prompt layout** (#1227, `src/d0/turn.rs`, `src/d0/model.rs`). The system
+message is the thread's stable prefix: the agent's instructions, the
+stable part of the environment section (OS, sandbox, network, mode, tools),
+then the AGENTS.md section, plus what the runtime adds (the skill
+catalogue). Tools are sorted by name. Everything that changes every turn
+goes in one host-authored message (`{"role": "user", "name":
+"host_context"}`) placed right before the person's message of the turn, at
+every step of it: `## Environment (this turn)` (the date and the git line),
+the picked skills, then the memory recall, last, by the cloud's splice (its
+text and count are what a web turn receives; only its place moved). The
+message is not stored in the session: the next turn has its own, and no
+recall is reused. Sub-agents keep their own one-shot prompt. On a model the
+catalogue marks `openai_compatible: false` (Anthropic) the body carries
+`cache_control: {type: "ephemeral"}` on the system message (as one text
+part), on the last tool and on the request's last message; the gateway's
+Bifrost core forwards them to Anthropic and reports cache writes as
+`prompt_tokens_details.cache_write_tokens`. A compaction summary call sends
+none.
 
 ```ts
 type FileChange = {
@@ -638,6 +745,211 @@ The host keeps the last 20 turns of each workspace for `turn_changes`,
 `checkpoint_preview` and `checkpoint_restore`; an older turn rejects with `turn_expired`, an id it
 never ran with `turn_unknown`.
 
+## Background processes (`src/d0/processes.rs`, `libs/rust/local-tools/src/process.rs`, #1223)
+
+The agent can start a command in the background (`run_command` with
+`background: true`, or `tty: true` for an interactive program on a
+pseudo-terminal), read its output later (`process_output`, from a byte
+offset; `screen: true` gives a terminal process's rendered screen), type
+into it (`process_write`), wait for it (`process_wait`), stop it
+(`process_kill`) and list them (`process_list`). These tools and the
+extended `run_command` schema are **local-only**: the cloud executor has no
+persistent processes, so its tool list keeps the plain `run_command`.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `process_list` | `{workspace_id}` | `ProcessInfo[]` — the workspace session's processes, running and ended (an ended one stays listed until the session ends), oldest first; `[]` when the workspace has no session yet |
+| `process_read` | `{workspace_id, process_id, since?: number}` | `{data: string, offset: number, next_offset: number, dropped_bytes: number, screen?: string}` — the output from byte `since`, or without it the latest 256 KiB the buffer holds (a pane opened late catches up with it), at most 256 KiB; `offset` is the byte offset of `data`'s first byte (offsets count the process's raw bytes; `data` is that text cut at a whole character, any invalid UTF-8 replaced). `dropped_bytes` is what the buffer no longer holds between `since` and `data`; `screen` (terminal processes) is the rendered screen, rows joined by `\n`. Rejects `process_unknown`, `workspace_unknown` |
+| `process_write` | `{workspace_id, process_id, data: string}` | `null` — the person's keystrokes into the pane (a terminal process's input, or a piped process's stdin), at most 64 KiB, sent as typed (never classified: the person typed it). The write runs off the main thread and waits at most 5 s for the process to take it. Rejects `process_unknown`, `process_ended`, `process_not_reading` (it did not take the input in time, or an earlier write is still pending), `invalid_request` |
+| `process_resize` | `{workspace_id, process_id, rows: number, cols: number}` | `null` — a terminal process's size (1 to 1000 each; it starts at 40 × 120); a piped process ignores it. Rejects `process_unknown`, `invalid_request` |
+| `process_kill` | `{workspace_id, process_id}` | `null` — stops the process's whole process group (`SIGTERM`, then `SIGKILL` after 2 s); an ended one is not an error. Rejects `process_unknown` |
+| `process_pin` | `{workspace_id, process_id, pinned: boolean}` | `null` — a pinned process outlives the end of its turn (until the session ends, below); unpinning one whose turn has ended and that the agent did not keep stops it. Rejects `process_unknown` |
+
+```ts
+type ProcessInfo = {
+  process_id: string;          // "p_" + 8 hex digits
+  call_id: string;             // the run_command call that started it
+  command: string;
+  cwd: string;                 // workspace-relative ("." for the root)
+  tty: boolean;                // on a pseudo-terminal
+  sandbox: "read-only" | "workspace-write" | "full-access";
+  network: boolean;
+  loopback: boolean;
+  keep_alive: "turn" | "session"; // "session": the person approved keeping it past its turn
+  pinned: boolean;
+  status: "running" | "exited" | "killed" | "timed_out";
+  exit_code?: number;          // exited
+  signal?: string;             // killed: "SIGTERM", "SIGKILL", …
+  started_at: number;          // Unix milliseconds
+  ended_at?: number;
+  bytes: number;               // output so far: the next byte's offset
+};
+```
+
+**Lifecycle.** At most 8 live processes per workspace session (a ninth
+`run_command` is refused with `local_tools.too_many_processes`); each runs
+at most 4 hours (then `timed_out`). Every process is stopped (its process
+group: `SIGTERM`, then `SIGKILL` after 2 s) when the turn that started it
+ends, unless it is pinned or the agent asked to keep it
+(`keep_alive: "session"`, approved by the person once per process); every
+one, pinned and kept ones included, when the session ends: the workspace is
+removed, its policy changes (the session is reopened), the person signs out
+or connects elsewhere, a thread of the workspace is handed off to the cloud
+(before the send starts), and when the app quits (the quit waits at most
+2 s for them).
+
+**Output.** A piped process's stdout and stderr share one pipe, as a
+terminal shows them (`stream: "stdout"`); a terminal process's output is
+the terminal's (`stream: "pty"`, escape codes included; the model reads the
+rendered screen or the stream without them). Each process keeps 1 MiB: the
+first 64 KiB and the latest bytes after it, with offsets that only grow; a
+read from an offset the buffer dropped reports `dropped_bytes`. The buffer
+lives in memory only (never uploaded except as the bounded tool results in
+the commit) and goes with the session.
+
+**Sandbox.** Every process starts through the same sandbox as
+`run_command` (the session's deny list, the scrubbed environment;
+`TERM=xterm-256color` instead of `dumb` for a terminal process) in its own
+process group, and keeps the sandbox it started with: a later approval
+never widens a running process, and a process started `read-only` stays
+read-only whatever is typed into it. What the model types
+(`process_write`) is classified like a command line, line by line: a
+destructive line is asked. `loopback: true` (with the network off) lets a
+command listen on and connect to `127.0.0.1` / `::1` only: Seatbelt allows
+exactly those addresses; bubblewrap keeps its private network namespace,
+whose own loopback reaches only the processes of that one command (a server
+and a client must run in the same command there); Landlock alone cannot
+scope addresses, so a loopback command there gets TCP and is asked every
+time. A loopback call is asked; "always allow" remembers it for that
+program and argv prefix in this workspace only.
+
+Events go on `process://event` (`{workspace_id, seq, kind, payload}`,
+`seq` per workspace from 0):
+
+| `kind` | `payload` |
+| --- | --- |
+| `process_started` | `ProcessInfo` |
+| `process_output` | `{process_id, stream: "stdout" \| "pty", data: string, offset: number}` — at most 20 per second per process, at most 16 KiB of output each; `offset` is the byte offset of `data`'s first byte. A process writing faster than that skips ahead: the next `offset` is past the end of the previous `data` (`process_read` fills the gap) |
+| `process_updated` | `ProcessInfo` — pinned or unpinned |
+| `process_exited` | `ProcessInfo` — ended (`status` final), after its last `process_output` |
+
+While the turn that started a process runs, its turn's `agent://event`
+stream also carries `process_started` `{process_id, call_id, command, tty,
+sandbox, loopback}`, `tool_output_delta` `{call_id, process_id, stream,
+data, offset}` (the same throttle) and `process_exited` `{process_id,
+call_id, status, exit_code?}`, for the `run_command` card.
+
+## Local MCP servers (`src/mcp.rs`, `src/mcp_commands.rs`, `libs/rust/local-tools/src/mcp/`, #1230)
+
+The person's own stdio MCP servers on this device (ADR-0029 decision 4), for
+local turns only: gated by the policy's `local_work_local_mcp` (with
+`allowed`; absent means off). Off, no server starts, no MCP tool is offered
+and every MCP call is denied; turning it off reopens the session, which stops
+the running servers. These tools are **local-only**: the cloud executor never
+runs a stdio server (its contract test `local_mcp_tools_are_local_only`
+names the exclusion), and sub-agents are never offered them.
+
+**Settings.** Two files in host data, never in the workspace folder:
+`<app config dir>/mcp.json` (every workspace) and
+`<app data>/workspaces/<id>/mcp.json` (one workspace; a server of the same
+name replaces the user one there). Each is a `0600` file in a `0700` folder,
+read without following a symlink, and refused (no server runs from it, the
+turn says so in a `status` message) when another user owns it, others can
+read it or it does not validate. The Doctor's `mcp.config` check covers the
+user file (`mcp.tighten`, `mcp.move_aside`).
+
+```ts
+type McpFile = {
+  version: 1;
+  servers: Record<string, ServerConfig>; // name: [A-Za-z0-9_-]{1,32}, at most 32
+  answered_proposals?: string[];         // workspace file: the proposals answered (file SHA-256s)
+};
+type ServerConfig = {                    // unknown keys are refused
+  command: string;               // absolute path to an executable regular file outside the workspace
+  args?: string[];               // at most 64, each at most 4 KiB
+  env?: Record<string, string>;  // keys ^[A-Z_][A-Z0-9_]*$, at most 64, values at most 4 KiB
+  cwd?: "workspace" | "none";    // the workspace root (default), or a private temporary folder
+  network?: boolean;             // default false; capped by the policy's network
+  enabled?: boolean;             // default true
+  allowed_tools?: string[] | null; // null: every tool the server lists
+  read_only_tools?: string[];    // the person marks them read-only
+  trust_read_only_hints?: boolean; // also trust the server's readOnlyHint
+  source?: string;               // "user", or "proposal:<sha256>" for an accepted proposal
+};
+type ServerStatus = {
+  name: string;
+  scope: "user" | "workspace";
+  state: "idle" | "starting" | "ready" | "failed" | "stopped";
+  tools: string[];               // the server's own tool names, when ready
+  error?: string;
+  stderr_tail: string;           // the last 8 KiB of a 64 KiB stderr ring (never logged or uploaded)
+  enforcement?: "full" | "partial" | "none" | "container";
+  network: boolean;
+  sandbox?: "read-only" | "workspace-write" | "full-access";
+};
+type ProposedServer = {
+  name: string;
+  command: string;               // as the file writes it
+  args: string[];
+  env_keys: string[];
+  env_preview: Record<string, string>; // each value masked: two characters and its length
+  problem?: string;              // why it cannot be accepted as written
+};
+type Proposal = { file: string; file_sha256: string; servers: ProposedServer[] };
+```
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `mcp_list` | `{workspace_id?}` | `{allowed: boolean, user?: {path, servers, error?}, workspace?: {path, servers, error?}, status: ServerStatus[], proposals: Proposal[]}` — both files (`error`: why one is not used), the workspace session's servers (`[]` before its first turn) and the folder's unanswered proposals (only while `allowed`). Rejects `workspace_unknown` |
+| `mcp_save` | `{scope: "user" \| "workspace", name, server: ServerConfig, workspace_id?}` | `null` — adds or replaces `name` (`source` becomes `"user"`); open sessions take it now (a changed server stops; it starts again with the next turn). `scope: "workspace"` needs `workspace_id`. Rejects `invalid_request`, `mcp_settings_refused`, `workspace_unknown` |
+| `mcp_remove` | `{scope, name, workspace_id?}` | `boolean` — whether it was there; a running server of that name stops. Rejects as `mcp_save` |
+| `mcp_restart` | `{workspace_id, name}` | `ServerStatus` — stops the server in the workspace's session and starts it again through the turn's path (sandbox, approval rules; a start that would ask is refused outside a turn, nobody is there to answer the card). Rejects `mcp_not_started` (the session has not run a turn), `mcp_server_unknown`, `local_mcp_disabled` |
+| `mcp_status` | `{workspace_id?}` | `(ServerStatus & {workspace_id})[]` — that workspace's session's servers, or every open session's |
+| `mcp_proposal_answer` | `{workspace_id, file_sha256, accept: string[]}` | `{accepted: string[]}` — copies the named servers (none: declined) of the proposal whose file hashes to `file_sha256` into the workspace's file, with `source: "proposal:<sha256>"`, the command found on the app's `PATH` when the file names a bare program, the network off; the proposal is not shown again. Nothing starts until the next turn. Rejects `conflict` (the file changed since it was shown), `invalid_request` (a server that cannot be accepted, or whose name the workspace already has), `local_mcp_disabled` |
+
+**Proposals.** When a workspace is opened (`workspace_open`), the host reads
+`.mcp.json`, `.cursor/mcp.json` and `.vscode/mcp.json` through the
+workspace's confined reads (no symlink followed, `path_deny` honoured) and,
+while the policy allows local MCP servers, sends each file it has not seen
+answered on `mcp://event` as `{kind: "mcp_proposal", workspace_id, file,
+file_sha256, servers: ProposedServer[]}`; `mcp_list` returns the same
+proposals at any time. Only stdio servers are proposed (`url` and other
+`type`s are left out); a relative command is never accepted. A later
+change to the file is a new proposal; it never updates an accepted entry.
+
+**In a turn.** The first turn that may offer MCP tools starts every
+enabled server that has not started, one after the other (each at most
+10 s for `initialize` and `tools/list`). A start goes through the same
+sandbox as `run_command` (the session's deny list; `read-only` when every
+tool is marked read-only, else `workspace-write` capped by the policy), in
+its own process group, with only the scrubbed passthrough environment
+(`PATH`, `HOME`, `LANG`, …, `TMPDIR` its own private folder) plus the
+`env` its entry names, never the app's own. A start is an approval
+(`tool: "mcp_start"`): allowed when confined without the network; asked
+when it gets the network (once per workspace session for the same settings) or
+the machine cannot confine it (asked every time); an approval rule on its
+command line decides first. A server that fails is said in the turn's
+`status` message (`phase: "running"`) and its tools are left out; the
+turn goes on. Servers keep running for the app session and stop (their
+process group: `SIGTERM`, then `SIGKILL`) when their entry changes or goes,
+when the session ends (the workspace is removed, its policy changes,
+sign-out, a handoff) and when the app quits.
+
+Their tools are named `mcp__<server>__<tool>` (sanitised to
+`[A-Za-z0-9_-]`, at most 64; a collision gets `_2`, …; a remote toolkit's
+tool never takes an `mcp__` name), sorted by server and tool so the tool
+list stays the same across a thread's turns. A tool's description and
+every result's text reach the model framed under the thread's nonce
+(`<mcp_tool_description …>`, `<mcp_result …>`), descriptions cut at 2 KiB
+and results at the command output budget. A call is an approval
+(`tool: "mcp_call"`): a tool marked read-only runs without asking (and in
+plan mode, where the others are not offered); any other is asked on first
+use, and "always allow" remembers that server's tool in this workspace.
+The `approval_request` card carries `mcp: {server, tool?, read_only}`
+(and, for a start, `network` and `unconfined`). The commit's `local_work`
+report lists each call among its `commands` as `mcp <server> <tool>` with
+`mcp: {server, tool, read_only}`, never its arguments.
+
 ## Thread history (`src/history.rs`)
 
 | Command | Arguments | Result |
@@ -660,6 +972,7 @@ type StoredTurn = {
   conversation_uuid: string | null;
   prompt: string;                   // as typed; the "@" list is `mentions`
   mentions: string[];
+  images: { name: string; mime: string; bytes: number; thumbnail: string | null }[]; // attached images: thumbnails only
   started_at: number;               // Unix ms
   finished_at: number | null;       // when `done` was recorded
   events: AgentEvent[];             // the turn's `agent://event` stream (below)
@@ -1307,7 +1620,7 @@ type AppCommand = { id: string; args?: object };
 | `handoff_settings` | — | Folder ▸ Handoff Settings…: open the folder's cloud handoff settings. |
 | `workspace_opened` | `{workspace_id: string}` | A folder became (or already was) a workspace through File ▸ Open Folder… (⌘O), a drop on the window, or a drop on the dock icon / "Open With" in Finder. One event per folder; the workspace is already in `workspace_list`, so the UI selects it. |
 | `workspace_open_failed` | `{message: string}` | One of those folders could not be opened (the first failure; a message for a person). |
-| `files_dropped` | `{paths: string[]}` | Files (not folders) were dropped on the window: their **absolute** paths, in drop order. The host does nothing else with them; a path inside a workspace can be made relative against `Workspace.path` (e.g. for `mentions`). |
+| `files_dropped` | `{paths: string[]}` | Files (not folders) were dropped on the window: their **absolute** paths, in drop order. The host does nothing else with them; the UI attaches the images among them to the composer with `attachment_add`, and a path inside a workspace can be made relative against `Workspace.path` (e.g. for `mentions`). |
 | `run_diagnostics` | — | Help ▸ Run Diagnostics…: open the Doctor. Sent live, never queued (the connect screen listens without `app_ready`). |
 | `signed_out` | — | The session ended on this computer outside a sign-out the page asked for (the Doctor moved the stored sign-in aside): drop what the page shows of it (the desktop shell reloads to the connect screen). Sent live, never queued. |
 | `focus_turn` | `{workspace_id: string, turn_id: string}` | A running or waiting turn was chosen in the menu-bar item's menu (see below): show its folder. (A notification click still only activates the app: the notification plugin has no click callback on desktop.) |
@@ -1373,9 +1686,11 @@ for them.
 
 ## Events
 
-Five event names, all emitted to the `main` window only: `app://command`
+Seven event names, all emitted to the `main` window only: `app://command`
 (above), `app://context-menu` (`{request_id, id}`, the outcome of `context_menu_show`),
-`agent://event`, `index://event` and `handoff://event` (Cloud handoff, above). The webview may listen
+`agent://event`, `index://event`, `handoff://event` (Cloud handoff, above),
+`process://event` (Background processes, above) and `mcp://event` (Local MCP
+servers, above). The webview may listen
 (`core:event:allow-listen` / `allow-unlisten`), never emit.
 
 `index://event`:
@@ -1413,21 +1728,28 @@ order. Kinds and payloads:
 | `thinking_end` | `{chars: number}` — a reasoning block closed (the model moved on to its answer or its tool calls, or its stream ended); `chars` is its length |
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
-| `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number, reasoning_tokens?: number, context?: ContextMeter}` — `reasoning_tokens` (of `completion_tokens`) when the gateway names them (`completion_tokens_details.reasoning_tokens`); one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent; sum the calls for a turn's total (a step retried after a context overflow, below, sends the dropped call's usage too: both calls were billed). `context` (below) is that call's request occupancy as the host measured it before sending: the composer's context meter. |
+| `usage` | `{model: string, step: number, prompt_tokens: number, completion_tokens: number, total_tokens: number, cached_tokens?: number, cache_write_tokens?: number, reasoning_tokens?: number, context?: ContextMeter}` — one of the turn's own model calls as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage); `step` counts the turn's calls from 1. `prompt_tokens` is what that call sent, its cached reads (`prompt_tokens_details.cached_tokens`) and cache writes (`…cache_write_tokens`, Anthropic) included; `reasoning_tokens` are part of `completion_tokens` (`completion_tokens_details.reasoning_tokens`); each optional count only when non-zero. A step retried after a context overflow (below) sends the dropped call's usage too: both calls were billed. `context` (below) is that call's request occupancy as the host measured it before sending: the composer's context meter. A summary call's and a sub-agent's calls send none; they count in `usage_total` |
+| `usage_total` | `{prompt: number, completion: number, cached: number, cache_write: number, reasoning: number, calls: number, subagents?: {same fields}}` — once the run ended, before `status` `done`/`error`/`cancelled`: every model call made on the turn's execution id (the agent's steps, compaction summaries and sub-agents together: what the gateway's request log holds for it); `subagents` is the sub-agents' share, when any ran. The thread history keeps it past its event cap; a thread's total is the sum of its turns' |
 | `context` | `ContextMeter` (below) — the request occupancy when its `phase` changes: `compacting` as a summary call starts (the meter says "Summarizing…" while it runs), `compacted` once the step's request is the compacted one, `measured` again at the next call (or when a summary failed and the request went out uncompacted). A turn starts `measured`; calls that stay `measured` send none, their occupancy rides on `usage` |
-| `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
+| `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, loopback?: true, keep_alive?: true, can_remember: boolean}` — `loopback` and `keep_alive` mark a background command that may serve on localhost or that lives until the session ends (**Background processes**); `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
 | `plan_updated` | `{plan: {title, explanation?, status: "in_progress" \| "completed", steps: [{n, step, status: "pending" \| "in_progress" \| "completed" \| "cancelled"}]} \| null}` — the agent's checklist changed (the runtime planner's `update_plan`, `start_step`, `complete_step`, `delete_plan`, or the host copying an accepted plan in): the whole plan, `null` once deleted. The latest one is the plan; the thread history stores it like every event, so the todo pane replays after a restart. The plan itself lives in the session (`elitea.plan.v1:` state), so the next turn's planner reads it back |
 | `plan_proposed` | `{request_id, call_id, plan}` — the agent's `exit_plan_mode`: the plan (Markdown, model-written) as a card with Accept / Decline; answered with `approval_respond` `accept` or `decline` (+ `feedback`). See **Plan mode** |
 | `plan_accepted` | `{call_id}` — the person accepted the plan: the session left plan mode and the same turn goes on with every tool; the composer's plan switch turns off |
+| `subagent_started` | `{agent_id, parent_call_id, ordinal: number, label?}` — the agent's `spawn_agent` call `parent_call_id` started a read-only sub-agent (**Sub-agents**, below); `ordinal` is its place among the turn's sub-agents, from 1 |
+| `subagent_event` | `{agent_id, inner}` — what the sub-agent did: `inner` is `{kind: "tool_call", call_id, tool, args_summary, remote}`, `{kind: "tool_result", call_id, ok, summary, truncated}` (its own tool calls, never the turn's `tool_call`s) or `{kind: "text_delta", text}` (one model answer's text, at most 2 KiB); at most 200 per sub-agent |
+| `subagent_finished` | `{agent_id, status: "completed" \| "failed" \| "budget_exhausted" \| "cancelled", steps, input_tokens, output_tokens, result?, error?}` — the sub-agent settled: its report (`result` at most 8 KiB), once per run (a `send_input` that continues it starts another); `cancelled` when it was closed or the turn ended or was cancelled before it answered |
+| `process_started` | `{process_id, call_id, command, tty: boolean, sandbox, loopback: boolean}` — a `run_command` call started a background process (**Background processes**) |
+| `tool_output_delta` | `{call_id, process_id, stream: "stdout" \| "pty", data, offset: number}` — its output while this turn runs: at most 20 per second per process, at most 16 KiB each, `offset` the byte offset of `data` in the process's output |
+| `process_exited` | `{process_id, call_id, status: "exited" \| "killed" \| "timed_out", exit_code?}` — it ended while this turn runs (the turn's end stops the ones it does not keep) |
 | `approval_closed` | `{request_id, reason: "timeout"}` — the host closed an open `approval_request` nobody answered within its wait (today: an MCP sign-in, 10 minutes); the card goes, the turn's `hitl_exchanges` record it with `decision: "timeout"`, and an `approval_respond` for it answers `approval_closed` |
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
-`running` → (`thinking_delta`, `thinking_end`, `text_delta`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`)* →
-`status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
-ends `status` `cancelled` → `done` with `commit: "none"`; nothing is
+`running` → (`thinking_delta`, `thinking_end`, `text_delta`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`, `subagent_started`, `subagent_event`, `subagent_finished`, `process_started`, `tool_output_delta`, `process_exited`)* →
+`usage_total` → `status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
+ends `usage_total` → `status` `cancelled` → `done` with `commit: "none"`; nothing is
 committed and its execution expires on the server. A run that fails after
 the start is still committed, as a failed answer (`is_error`), and its
 `error` event comes before `status` `error`. `done` ends the turn for the
@@ -1476,6 +1798,30 @@ thread's own outputs). Outputs are per conversation (at most 64 MiB each,
 and an app restart for 24 hours, and go with `thread_history_delete`; a
 gone id answers `local_tools.output_expired` (the model re-runs the tool).
 A `tool_result`'s `summary` is unchanged.
+**Documents** (`read_document`, #1220). PDF, Word, Excel, PowerPoint,
+OpenDocument, RTF, EPUB and e-mail files are read as text, page by page (a
+PDF page, a slide or a sheet is one page, marked `[page N]` in the text; a
+format with no pages is page 1). Arguments: `path`, `pages` (`"5"`, `"1-20"`,
+`"30-"`; default all) and `offset` (a character offset into the selected
+text). The result carries `page_count`, `pages` (the range the text shows),
+`text`, `truncated`, `extractor`, and, when something is left,
+`next_offset` (continue inside the selection with the same `pages`) and
+`next_pages` (the pages the selection did not reach: the extractor's answer
+is capped, and so is the selection at 512 KiB). The host does not link the
+extractor (xberg turns on `serde_json/preserve_order`); the release bundle
+carries it as a second binary beside the executable,
+`elitea-doc-extract-sidecar` (`apps/elitea-desktop/doc-extract-sidecar`,
+its own lockfile). Per document the host sends the bytes on stdin (a
+16-byte header, the media type, the file; no path) to one process run under
+the session's sandbox (read-only, no network, the session's deny list, an
+empty environment, 130 s wall clock then the process group is killed) and
+reads at most 8 MiB of JSON back. A crash, a timeout or an unreadable file
+is the tool's error (`local_tools.io`, `local_tools.timeout`,
+`local_tools.binary`); the host keeps running. Without the sidecar (a
+`cargo run` build) only text files are read and a PDF answers
+`local_tools.unsupported`; where the sandbox cannot hide the denied
+credentials, documents are not extracted
+(`local_tools.sandbox_unavailable`). No command or event is added.
 Inside a long turn, once a model request (its messages, the system
 instruction and the tool declarations) passes 60% of the model's window,
 the tool results older than the newest 6 are sent to the model as short
@@ -1539,6 +1885,7 @@ that does not know the field ignores it). An agent version whose
 type ContextMeter = {
   used_tokens: number;      // the request's estimated input tokens
   window_tokens: number;    // the window the budget uses (the model's, at most 272k)
+  percent: number;          // used of window, 0-100 (the meter's figure; it warns at 80)
   phase: "measured" | "compacting" | "compacted";
   compacted: boolean;       // this turn compacted
   compacted_at?: string;    // when it last did (RFC 3339, UTC)

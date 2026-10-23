@@ -30,7 +30,8 @@ use crate::sqlite_store::{DocumentStat, Staged, Stats};
 use elitea_content_source::{
     Acl, ContentSource, Document, DocumentRef, SourceError, content_version, mime_of,
 };
-use elitea_inventory_core::ingest::files::Selection;
+use elitea_doc_extract::{DocumentExtractor, PageRange};
+use elitea_inventory_core::ingest::files::{Selection, Skipped};
 use elitea_local_tools::files::{MAX_FILE_BYTES, relative, walker};
 use elitea_local_tools::workspace::{Workspace, WsPath};
 use serde_json::Map;
@@ -42,6 +43,16 @@ use std::sync::{Arc, Mutex, PoisonError};
 /// The name every citation of a local index carries (`source_toolkit`),
 /// and its one source's status key.
 pub const SOURCE_NAME: &str = "workspace";
+
+/// The extractor a source reads PDF and Office files with.
+#[derive(Clone)]
+struct Documents(Arc<dyn DocumentExtractor>);
+
+impl std::fmt::Debug for Documents {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Documents")
+    }
+}
 
 /// The files of one workspace.
 #[derive(Debug)]
@@ -55,6 +66,9 @@ pub struct LocalFolderSource {
     /// The text of every file fetched, when chunking is on: `(version,
     /// text)` by key, cut into chunks by [`Self::take_staged`].
     staged: Option<Mutex<HashMap<String, (String, String)>>>,
+    /// Reads PDF, Office and e-mail files as text (the desktop's sandboxed
+    /// sidecar). Without one those files are left out, as they always were.
+    documents: Option<Documents>,
 }
 
 /// The version a listing gives a file it did not read: its size and mtime,
@@ -87,7 +101,19 @@ impl LocalFolderSource {
             hashed: AtomicUsize::new(0),
             reads: AtomicUsize::new(0),
             staged: None,
+            documents: None,
         }
+    }
+
+    /// Read PDF, Office, e-mail and e-book files as text through
+    /// `extractor` (the same one `read_document` uses, with the same limits):
+    /// they are listed, and fetched as `text/plain` holding the pages in
+    /// order. A file the extractor cannot read fails its own fetch and no
+    /// other. Not chunked by [`Self::chunking`]: that stays for text and code.
+    #[must_use]
+    pub fn with_documents(mut self, extractor: Arc<dyn DocumentExtractor>) -> Self {
+        self.documents = Some(Documents(extractor));
+        self
     }
 
     /// Cut every file it fetches into search chunks, from the very bytes
@@ -183,9 +209,37 @@ impl LocalFolderSource {
     }
 
     fn admitted(&self, key: &str, mime: &str) -> bool {
-        self.selection
-            .as_ref()
-            .is_none_or(|selection| selection.admit_document(key, mime).is_ok())
+        self.selection.as_ref().is_none_or(|selection| {
+            selection.admit_document(key, mime).is_ok()
+                // A format the loader never listed is admitted when the
+                // source has an extractor for it, unless a list excludes it.
+                || (self.documents.is_some()
+                    && elitea_doc_extract::is_document_type(mime)
+                    && matches!(selection.admit(key), Err(Skipped::UnsupportedExtension)))
+        })
+    }
+
+    /// The text of a document file, when this source reads it with an
+    /// extractor: its pages in order.
+    fn document_text(&self, mime: &str, bytes: &[u8]) -> Option<Result<String, SourceError>> {
+        let documents = self.documents.as_ref()?;
+        if !elitea_doc_extract::is_document_type(mime) {
+            return None;
+        }
+        Some(
+            documents
+                .0
+                .extract(mime, bytes.to_vec(), &PageRange::ALL)
+                .map(|paged| {
+                    paged
+                        .pages
+                        .iter()
+                        .map(|page| page.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n\n")
+                })
+                .map_err(|failure| unavailable(failure.to_string())),
+        )
     }
 
     /// The listing, synchronously (it walks the disk; it reads no file).
@@ -275,17 +329,25 @@ impl LocalFolderSource {
                 .unwrap_or_else(PoisonError::into_inner)
                 .insert(key.to_owned(), (version.clone(), text));
         }
+        let mut mime = mime_of(key).to_owned();
+        let mut bytes = read.bytes;
+        if let Some(text) = self.document_text(&mime, &bytes) {
+            // The version stays the file's own hash; what ingestion parses
+            // is its text.
+            bytes = text?.into_bytes();
+            "text/plain".clone_into(&mut mime);
+        }
         Ok(Document {
             reference: DocumentRef {
                 key: key.to_owned(),
                 version,
-                mime: mime_of(key).to_owned(),
+                mime,
                 size: read.stamp.len,
                 acl: Acl::Project,
             },
             title: path.file_name().unwrap_or(key).to_owned(),
             uri: None,
-            bytes: read.bytes,
+            bytes,
             metadata: Map::new(),
         })
     }

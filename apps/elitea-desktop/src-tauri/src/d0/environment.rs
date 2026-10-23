@@ -18,8 +18,9 @@
 //! keys on the prefix: [`preamble`] (OS, sandbox, network, mode, tools) is
 //! stable within a thread and follows the agent's instructions, while
 //! [`current`] (the date and the workspace's git line, which change daily
-//! and on most turns) is spliced after the skills and AGENTS.md, just
-//! before the memory recall, so the text before it stays cached.
+//! and on most turns) opens the turn's host message before the person's
+//! message (`turn::volatile_context`, #1227), with the skills picked for the
+//! turn and the memory recall, so the system prompt stays cached.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -279,6 +280,13 @@ fn tool_guidance(tools: &[String]) -> Vec<String> {
         clauses.push(
             "for multi-step work keep a checklist with update_plan (one step in_progress at a \
              time) and mark steps done with complete_step"
+                .to_owned(),
+        );
+    }
+    if has("spawn_agent") {
+        clauses.push(
+            "hand independent investigations that would fill your context to read-only \
+             sub-agents (spawn_agent, several at once; collect their reports with wait_agent)"
                 .to_owned(),
         );
     }

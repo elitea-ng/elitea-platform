@@ -640,6 +640,9 @@ impl Extractor {
                 .images
                 .as_ref()
                 .map(|asked| self.image_caps.apply(asked).limits()),
+            // The service answers one whole text; the per-page split is the
+            // desktop sidecar's (#1220).
+            pages: false,
         };
         let ledger = OverrunLedger::new(Arc::clone(&self.overruns));
         let thread_ledger = Arc::clone(&ledger);

@@ -12,6 +12,8 @@
 //!   start/commit, remote toolkit call) over HTTPS with the native token;
 //! * [`cache`] — the session's in-memory caches of the agent versions and
 //!   the conversations' answering participants (a warm turn's one round trip);
+//! * [`attachments`] — the images attached to a turn (#1229): checked,
+//!   bounded and held in memory;
 //! * [`catalogue`] — the project's chat models a turn's chosen model is
 //!   checked against, and the family flag of reasoning replay (#1228);
 //! * [`commits`] — a turn's commit after its `done`, one FIFO lane per
@@ -21,6 +23,9 @@
 //! * [`remote_tools`] — `RemoteToolkit` tools (decision 3);
 //! * [`approvals`] — the person's prompt, bridged to the UI over IPC;
 //! * [`tools`] — the per-tool events, steps and before-images;
+//! * [`subagents`] — the runtime's sub-agents on a workspace turn (#1226);
+//! * [`processes`] — a workspace's background processes on the turn's
+//!   stream and the `process://event` channel (#1223);
 //! * [`recorder`] — what the commit and the changed-files card report;
 //! * [`events`] — the `agent://event` stream;
 //! * [`mentions`] — the "@" file picker and a turn's referenced paths;
@@ -38,6 +43,7 @@
 
 pub mod api;
 pub mod approvals;
+pub mod attachments;
 pub mod cache;
 pub mod catalogue;
 pub mod commits;
@@ -48,11 +54,13 @@ pub mod events;
 pub mod framing;
 pub mod mentions;
 pub mod model;
+pub mod processes;
 pub mod recorder;
 pub mod remote_tools;
 pub mod session;
 pub mod skills;
 pub mod slash_commands;
+pub mod subagents;
 pub mod tools;
 pub mod turn;
 

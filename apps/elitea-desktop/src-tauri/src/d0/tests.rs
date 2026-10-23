@@ -379,6 +379,7 @@ fn request(workspace_id: &str) -> TurnRequest {
         model: None,
         project_skills: Vec::new(),
         command: None,
+        images: Vec::new(),
     }
 }
 
@@ -512,6 +513,7 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
             "tool_result:call-remote",
             "text_delta",
             "text_delta",
+            "usage_total",
             "status:done",
             "done",
         ]
@@ -597,9 +599,12 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
         system.starts_with("Be brief.\n\n## Environment\n"),
         "{system}"
     );
+    // The recall is the turn's: in the host message before the person's,
+    // its text as the server answered it (#1227).
+    assert!(!system.contains("Memory: the user likes tea."), "{system}");
     assert!(
-        system.find("\n\nMemory: the user likes tea.") > system.find("## Environment"),
-        "{system}"
+        host_context(&first).ends_with("\n\nMemory: the user likes tea."),
+        "{first}"
     );
     assert!(system.contains("Available skill: Style."), "{system}");
     let tools: Vec<&str> = first["tools"]
@@ -617,9 +622,22 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
         .iter()
         .map(|m| m["role"].as_str().unwrap())
         .collect();
+    // The turn's host context, then the person's message (#1227).
     assert_eq!(
         roles,
-        ["system", "user", "assistant", "tool", "assistant", "tool"]
+        [
+            "system",
+            "user",
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+            "tool"
+        ]
+    );
+    assert_eq!(
+        third["messages"][1]["name"],
+        crate::d0::model::HOST_CONTEXT_NAME
     );
 
     // The remote call: 409, then the approved call with a new key.
@@ -1846,16 +1864,19 @@ async fn a_picked_skill_is_applied_to_the_turn_after_the_agents_instructions() {
     let llm = seen(&h.server, "/llm/v1/chat/completions");
     let first: Value = serde_json::from_str(&llm[0].body).unwrap();
     let system = first["messages"][0]["content"].as_str().unwrap();
+    // The system prompt is the thread's; the skill and the recall are this
+    // turn's, in the host message before the person's (#1227).
     let agent = system.find("Be brief.").unwrap();
-    let skill = system
+    let project = system.find("Run task test.").unwrap();
+    assert!(agent < project, "{system}");
+    let tail = host_context(&first);
+    let skill = tail
         .find("name=\"Style\">\nWrite tersely.\n</invoked_skill nonce=\"")
         .unwrap();
-    let project = system.find("Run task test.").unwrap();
-    let memory = system.find("Memory: the user likes tea.").unwrap();
-    assert!(
-        agent < skill && skill < project && project < memory,
-        "{system}"
-    );
+    let memory = tail.find("Memory: the user likes tea.").unwrap();
+    assert!(skill < memory, "{tail}");
+    assert!(!system.contains("Write tersely."), "{system}");
+    assert!(!system.contains("Memory: the user likes tea."), "{system}");
     // It stays in the runtime's catalogue as well; the prompt is as typed.
     assert!(system.contains("Available skill: Style."), "{system}");
     let start = &seen(
@@ -1914,24 +1935,30 @@ async fn system_prompt_order_env_before_untrusted() {
     let llm = seen(&h.server, "/llm/v1/chat/completions");
     let first: Value = serde_json::from_str(&llm[0].body).unwrap();
     let system = first["messages"][0]["content"].as_str().unwrap();
-    let at = |needle: &str| {
-        system
-            .find(needle)
-            .unwrap_or_else(|| panic!("{needle}: {system}"))
+    let tail = host_context(&first);
+    let at = |text: &str, needle: &str| {
+        text.find(needle)
+            .unwrap_or_else(|| panic!("{needle}: {text}"))
     };
     let order = [
-        at("Be brief."),
-        at("## Environment\n"),
-        at("name=\"Style\">\nWrite tersely."),
-        at("Run task test."),
-        at("## Environment (this turn)\n"),
-        at("Memory: the user likes tea."),
+        at(system, "Be brief."),
+        at(system, "## Environment\n"),
+        at(system, "Run task test."),
     ];
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{system}");
+    let tail_order = [
+        at(&tail, "## Environment (this turn)\n"),
+        at(&tail, "name=\"Style\">\nWrite tersely."),
+        at(&tail, "Memory: the user likes tea."),
+    ];
+    assert!(tail_order.windows(2).all(|w| w[0] < w[1]), "{tail}");
     let environment = &system[order[1]..];
     let environment = &environment[..environment.find("\n\n## ").unwrap()];
-    // The volatile lines (date, git) come last, after AGENTS.md (#1314).
-    let current = &system[order[4]..order[5]];
+    // The volatile lines (date, git) are the turn's, out of the system
+    // prompt (#1314, #1227).
+    let current = &tail[tail_order[0]..];
+    let current = &current[..current.find("\n\n## ").unwrap()];
+    assert!(!system.contains(environment::CURRENT_HEADING), "{system}");
     let folder = h.workspaces.get(&h.workspace_id).unwrap().unwrap().name;
     assert!(
         current.contains(&format!(
@@ -2189,9 +2216,10 @@ async fn project_skill_is_fetched_by_host_not_ui() {
     let llm = seen(&h.server, "/llm/v1/chat/completions");
     let first: Value = serde_json::from_str(&llm[0].body).unwrap();
     let system = first["messages"][0]["content"].as_str().unwrap();
+    let tail = host_context(&first);
     assert!(
-        system.contains("name=\"Deploy\">\nDeploy with care.\n</invoked_skill nonce=\""),
-        "{system}"
+        tail.contains("name=\"Deploy\">\nDeploy with care.\n</invoked_skill nonce=\""),
+        "{tail}"
     );
     // Applied to this turn only: the load_skill catalogue stays the version's.
     assert!(system.contains("Available skill: Style."), "{system}");
@@ -3450,13 +3478,37 @@ fn seed_requests(server: &MockServer) -> usize {
         .count()
 }
 
-/// `(role, content text, tool names)` of a request body, without the system message.
+/// The turn's host context message of a request body (#1227): the
+/// environment's volatile part, the turn's skills and the recall.
+fn host_context(body: &Value) -> String {
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == crate::d0::model::HOST_CONTEXT_NAME)
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// The person's messages of a request body (not the host's context).
+fn person_messages(body: &Value) -> Vec<&Value> {
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "user" && m["name"] != crate::d0::model::HOST_CONTEXT_NAME)
+        .collect()
+}
+
+/// `(role, content text, tool names)` of a request body, without the system
+/// message and the turn's host context message.
 fn shape(body: &Value) -> Vec<(String, String, Vec<String>)> {
     body["messages"]
         .as_array()
         .unwrap()
         .iter()
-        .filter(|m| m["role"] != "system")
+        .filter(|m| m["role"] != "system" && m["name"] != crate::d0::model::HOST_CONTEXT_NAME)
         .map(|m| {
             (
                 m["role"].as_str().unwrap().to_owned(),
@@ -5844,10 +5896,11 @@ async fn long_session_compacts_under_small_window() {
 async fn compaction_marker_reused_next_turn() {
     let convo = Arc::new(Mutex::new(Convo::default()));
     let summaries = Arc::new(AtomicUsize::new(0));
-    // 12k, not 8k: with the planner's tools (#1225) offered every turn, the
-    // schemas alone are ~2.7k tokens, so a compacted 8k request no longer
-    // leaves room for the next turn's prompt and it would compact again.
-    let server = small_window_platform(12_288, convo, reading_script(summaries.clone())).await;
+    // 16k, not 8k: with the planner's tools (#1225) and the background
+    // process tools (#1223) offered every turn, the schemas alone are ~4k
+    // tokens, so a compacted 8k request no longer leaves room for the next
+    // turn's prompt and it would compact again.
+    let server = small_window_platform(16_384, convo, reading_script(summaries.clone())).await;
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
     write_big(&h);
     run_turn(&h, "read big.txt 8 times").await;
@@ -6957,4 +7010,890 @@ async fn a_model_that_cannot_reason_gets_no_effort_and_keeps_the_temperature() {
     assert_eq!(bodies[1]["reasoning_effort"], "high");
     assert!(bodies[1].get("temperature").is_none());
     assert_eq!(running_models(&h)[0]["chosen"], true);
+}
+
+// ---- Image input (#1229) ----
+
+/// A 1x1 PNG.
+const PIXEL_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+/// The platform with `gpt-test` marked as seeing images (or not), and the
+/// model answering with `script`.
+fn vision_platform(
+    vision: Option<bool>,
+    script: impl Fn(&Value) -> Res + Send + Sync + 'static,
+) -> impl Fn(&Req) -> Res {
+    let inner = platform(agent_details(), &[]);
+    move |req: &Req| {
+        if req.path.starts_with("/api/v2/configurations/models/1?") {
+            let mut row = json!({
+                "name": "gpt-test", "project_id": 1, "section": "llm",
+                "context_window": 200_000, "max_output_tokens": 4096,
+            });
+            if let Some(vision) = vision {
+                row["supports_vision"] = json!(vision);
+            }
+            return Res::json(200, &json!({"total": 1, "items": [row]}));
+        }
+        if req.path == "/llm/v1/chat/completions" {
+            return script(&serde_json::from_str(&req.body).unwrap_or_default());
+        }
+        inner(req)
+    }
+}
+
+fn pasted(h: &Harness) -> super::attachments::ImagePick {
+    let added = h
+        .host
+        .attachment_add_bytes(&h.workspace_id, None, PIXEL_PNG)
+        .unwrap();
+    super::attachments::ImagePick {
+        source: super::attachments::ImageSource::Clipboard,
+        token: added.token,
+    }
+}
+
+#[tokio::test]
+async fn user_image_is_sent_as_image_url_data_uri() {
+    let server = serve(vision_platform(Some(true), |_| say("A single pixel."))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let pick = pasted(&h);
+    let mut asked = request(&h.workspace_id);
+    asked.prompt = "what is wrong in this dialog?".into();
+    asked.images = vec![pick];
+    let started = h.host.start(asked).await.unwrap();
+    until_done_of(&h, &started.turn_id).await;
+
+    let bodies = llm_bodies(&h.server);
+    let user = person_messages(&bodies[0])[0];
+    let parts = user["content"].as_array().expect("text and image parts");
+    assert_eq!(parts.len(), 2, "{parts:?}");
+    assert_eq!(parts[0]["type"], "text");
+    assert!(
+        parts[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("what is wrong in this dialog?")
+    );
+    assert_eq!(parts[1]["type"], "image_url");
+    assert_eq!(
+        parts[1]["image_url"]["url"],
+        format!("data:image/png;base64,{PIXEL_PNG}")
+    );
+
+    // The commit notes the attachment (name, type, size), never the bytes.
+    let commit = seen(
+        &h.server,
+        &format!("/api/v2/elitea_core/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    );
+    let body: Value = serde_json::from_str(&commit[0].body).unwrap();
+    let note = &body["user_message"]["images"];
+    assert_eq!(note[0]["mime"], "image/png");
+    assert_eq!(note[0]["name"], "pasted-image");
+    assert!(!commit[0].body.contains(PIXEL_PNG));
+
+    // The thread history keeps the thumbnail, not the image.
+    let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+    let stored = &turns[0].images;
+    assert_eq!(stored.len(), 1);
+    assert!(
+        stored[0]
+            .thumbnail
+            .as_deref()
+            .unwrap()
+            .starts_with("data:image/jpeg;base64,")
+    );
+    // The token is used up by the turn that carried it.
+    assert_eq!(h.host.attachments_held(), 0);
+}
+
+#[tokio::test]
+async fn text_only_body_is_unchanged() {
+    let server = serve(vision_platform(Some(true), |_| say("ok"))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    let bodies = llm_bodies(&h.server);
+    let user = person_messages(&bodies[0])[0];
+    // A plain string, as before images existed: prompt caches key on it.
+    assert_eq!(user["content"], "Write notes and file a bug");
+    assert_eq!(
+        user.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["content", "role"]
+    );
+    let commit = seen(
+        &h.server,
+        &format!("/api/v2/elitea_core/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    );
+    let body: Value = serde_json::from_str(&commit[0].body).unwrap();
+    assert_eq!(
+        body["user_message"],
+        json!({"content": "Write notes and file a bug"})
+    );
+}
+
+#[tokio::test]
+async fn non_vision_model_refuses_images_before_start() {
+    // A model the catalogue marks without vision, or does not describe.
+    for vision in [Some(false), None] {
+        let server = serve(vision_platform(vision, |_| say("ok"))).await;
+        let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+        let started = |h: &Harness| {
+            seen(
+                &h.server,
+                "/api/v2/elitea_core/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555",
+            )
+            .len()
+        };
+        // The person chose the model: known before anything starts.
+        let pick = pasted(&h);
+        let mut asked = request(&h.workspace_id);
+        asked.images = vec![pick];
+        asked.model = Some(crate::d0::definition::ModelChoice::parse("gpt-test", None).unwrap());
+        let error = h.host.start(asked).await.unwrap_err();
+        assert_eq!(error.code, "model_no_vision", "{vision:?}");
+        assert_eq!(started(&h), 0, "no local turn was started");
+        // The image stays attached: the person may switch model and send again.
+        assert_eq!(h.host.attachments_held(), 1);
+        // The agent's own (or the thread's kept) model is known under the
+        // session: refused before the model is asked.
+        let pick = pasted(&h);
+        let mut asked = request(&h.workspace_id);
+        asked.images = vec![pick];
+        let error = h.host.start(asked).await.unwrap_err();
+        assert_eq!(error.code, "model_no_vision", "{vision:?}");
+        assert!(llm_bodies(&h.server).is_empty());
+        assert_eq!(h.host.attachments_held(), 2);
+    }
+}
+
+#[tokio::test]
+async fn an_unread_catalogue_leaves_images_to_the_gateway() {
+    // The catalogue fails (a 503): nothing says the model cannot see, so
+    // the image goes and the gateway decides.
+    let inner = vision_platform(Some(false), |_| say("ok"));
+    let server = serve(move |req: &Req| {
+        if req.path.starts_with("/api/v2/configurations/models/1?") {
+            return Res::json(503, &json!({"error": "unavailable"}));
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    for chosen in [false, true] {
+        let mut asked = request(&h.workspace_id);
+        asked.images = vec![pasted(&h)];
+        if chosen {
+            asked.model =
+                Some(crate::d0::definition::ModelChoice::parse("gpt-test", None).unwrap());
+        }
+        let started = h.host.start(asked).await.unwrap();
+        until_done_of(&h, &started.turn_id).await;
+    }
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies.len(), 2);
+    for body in &bodies {
+        let user = *person_messages(body).last().unwrap();
+        assert_eq!(user["content"][1]["type"], "image_url", "{user}");
+    }
+}
+
+#[tokio::test]
+async fn an_attachment_belongs_to_one_workspace_and_a_turn_takes_five() {
+    let server = serve(vision_platform(Some(true), |_| say("ok"))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let mut asked = request(&h.workspace_id);
+    asked.images = vec![super::attachments::ImagePick {
+        source: super::attachments::ImageSource::File,
+        token: "no-such-token".into(),
+    }];
+    assert_eq!(
+        h.host.start(asked).await.unwrap_err().code,
+        "attachment_unknown"
+    );
+    let mut asked = request(&h.workspace_id);
+    asked.images = (0..6).map(|_| pasted(&h)).collect();
+    assert_eq!(
+        h.host.start(asked).await.unwrap_err().code,
+        "too_many_images"
+    );
+    // Not an image: refused when attached, not when sent.
+    let error = h
+        .host
+        .attachment_add_bytes(&h.workspace_id, None, "aGVsbG8=")
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_request");
+}
+
+#[tokio::test]
+async fn attachment_add_refuses_denied_paths() {
+    let server = serve(vision_platform(Some(true), |_| say("ok"))).await;
+    let policy = json!({
+        "allowed": true, "shell": true, "max_sandbox_mode": "workspace-write",
+        "path_deny": ["private/**"],
+    });
+    let h = harness(server, Some(policy), UiDecision::AllowOnce).await;
+    let png =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, PIXEL_PNG).unwrap();
+    let write = |path: std::path::PathBuf| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &png).unwrap();
+        path.to_string_lossy().into_owned()
+    };
+    // The app's own data (the harness passes its config dir as a host dir).
+    let app_file = write(h.app.path().join("config").join("secret.png"));
+    let error = h
+        .host
+        .attachment_add(&h.workspace_id, &app_file)
+        .unwrap_err();
+    assert_eq!(error.code, "path_denied", "{error:?}");
+    // Inside the workspace, matching path_deny.
+    let denied = write(h.folder.path().join("private").join("x.png"));
+    assert_eq!(
+        h.host
+            .attachment_add(&h.workspace_id, &denied)
+            .unwrap_err()
+            .code,
+        "path_denied"
+    );
+    // A link is not followed: a link to a denied file does not get it in.
+    let link = h.folder.path().join("innocent.png");
+    std::os::unix::fs::symlink(&app_file, &link).unwrap();
+    assert!(
+        h.host
+            .attachment_add(&h.workspace_id, &link.to_string_lossy())
+            .is_err()
+    );
+    // A relative path is not a drop.
+    assert_eq!(
+        h.host
+            .attachment_add(&h.workspace_id, "x.png")
+            .unwrap_err()
+            .code,
+        "invalid_request"
+    );
+    // A file in the workspace, and one elsewhere, are taken.
+    let inside = write(h.folder.path().join("shots").join("ok.png"));
+    let added = h.host.attachment_add(&h.workspace_id, &inside).unwrap();
+    assert_eq!(
+        (added.name.as_str(), added.mime.as_str()),
+        ("ok.png", "image/png")
+    );
+    let elsewhere = tempfile::tempdir().unwrap();
+    let outside = write(elsewhere.path().join("drop.png"));
+    assert!(h.host.attachment_add(&h.workspace_id, &outside).is_ok());
+    let text = elsewhere.path().join("a.txt");
+    std::fs::write(&text, "not an image").unwrap();
+    assert!(
+        h.host
+            .attachment_add(&h.workspace_id, &text.to_string_lossy())
+            .is_err(),
+        "text is not an image"
+    );
+}
+
+/// The model reads `img.png` with `read_file`, then answers.
+fn reads_the_image(body: &Value) -> Res {
+    let last = body["messages"].as_array().and_then(|m| m.last()).unwrap();
+    if last["role"] == "user" && last["name"] == "tool_image" || last["role"] == "tool" {
+        return say("It is a pixel.");
+    }
+    tool_call("call-img", "read_file", &json!({"path": "img.png"}))
+}
+
+#[tokio::test]
+async fn read_file_returns_the_image_to_a_vision_model_and_a_hint_to_another() {
+    for vision in [true, false] {
+        let server = serve(vision_platform(Some(vision), reads_the_image)).await;
+        let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+        let png =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, PIXEL_PNG).unwrap();
+        std::fs::write(h.folder.path().join("img.png"), png).unwrap();
+        let mut asked = request(&h.workspace_id);
+        asked.prompt = "look at img.png".into();
+        let started = h.host.start(asked).await.unwrap();
+        until_done_of(&h, &started.turn_id).await;
+        let bodies = llm_bodies(&h.server);
+        assert_eq!(bodies.len(), 2, "{vision}");
+        let messages = bodies[1]["messages"].as_array().unwrap();
+        let tool = messages.iter().find(|m| m["role"] == "tool").unwrap();
+        let tool_text = tool["content"].as_str().unwrap();
+        assert!(!tool_text.contains("image_base64"), "{tool_text}");
+        assert!(!tool_text.contains(PIXEL_PNG), "{tool_text}");
+        let image = messages.iter().find(|m| m["name"] == "tool_image");
+        if vision {
+            let image = image.expect("the image follows the tool message");
+            assert_eq!(image["role"], "user");
+            assert_eq!(
+                image["content"][1]["image_url"]["url"],
+                format!("data:image/png;base64,{PIXEL_PNG}")
+            );
+            assert!(tool_text.contains("\"kind\":\"image\""), "{tool_text}");
+        } else {
+            assert!(image.is_none());
+            assert!(tool_text.contains("cannot view images"), "{tool_text}");
+        }
+        // The thread history and the session never keep the bytes.
+        let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+        assert!(
+            !serde_json::to_string(&turns[0].events)
+                .unwrap()
+                .contains(PIXEL_PNG)
+        );
+    }
+}
+
+/// Whether a model request is a sub-agent's (#1226): its system prompt
+/// starts with the runtime's child preamble.
+fn is_child_request(body: &Value) -> bool {
+    body["messages"][0]["content"]
+        .as_str()
+        .is_some_and(|system| system.starts_with(elitea_agent_runtime::subagents::CHILD_PREAMBLE))
+}
+
+/// The sub-agent ids the tool results in `body` carry (`a_` + 8 hex).
+fn spawned_ids(body: &Value) -> Vec<String> {
+    let text = body["messages"].to_string();
+    let mut ids = Vec::new();
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find("a_") {
+        let candidate = rest.get(at + 2..at + 10).unwrap_or_default();
+        if candidate.len() == 8 && candidate.chars().all(|c| c.is_ascii_hexdigit()) {
+            let id = format!("a_{candidate}");
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        rest = &rest[at + 2..];
+    }
+    ids
+}
+
+/// The platform of [`platform`] whose parent model spawns one sub-agent,
+/// waits for it and answers; the sub-agent reads a file and reports. While
+/// `hang` is set the sub-agent's model never answers (for at most 5 s).
+async fn subagent_platform(hang: Arc<AtomicBool>) -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    let parent_calls = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            let body: Value = serde_json::from_str(&req.body).unwrap();
+            if is_child_request(&body) {
+                if hang.load(Ordering::SeqCst) {
+                    tokio::task::block_in_place(|| {
+                        for _ in 0..250 {
+                            if !hang.load(Ordering::SeqCst) {
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                    });
+                }
+                let answered = body["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m["role"] == "tool");
+                return if answered {
+                    say("notes.txt says hello.")
+                } else {
+                    tool_call("child-read", "read_file", &json!({"path": "notes.txt"}))
+                };
+            }
+            return match parent_calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-spawn",
+                    "spawn_agent",
+                    &json!({"task": "Summarise notes.txt", "label": "notes"}),
+                ),
+                1 => tool_call(
+                    "call-wait",
+                    "wait_agent",
+                    &json!({"agent_ids": spawned_ids(&body)}),
+                ),
+                _ => say("The notes say hello."),
+            };
+        }
+        inner(req)
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn subagent_spend_uses_the_turn_execution_id() {
+    let h = harness(
+        subagent_platform(Arc::new(AtomicBool::new(false))).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    std::fs::write(h.folder.path().join("notes.txt"), "hello\n").unwrap();
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+
+    // Every model call, the sub-agent's included, is the turn's spend.
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let child: Vec<&Req> = llm
+        .iter()
+        .filter(|req| is_child_request(&serde_json::from_str(&req.body).unwrap()))
+        .collect();
+    assert_eq!(child.len(), 2, "the sub-agent read, then reported");
+    for req in &llm {
+        assert_eq!(req.headers["x-elitea-execution-id"], EXECUTION);
+    }
+    // The sub-agent's prompt holds the environment, never the agent's own
+    // instructions, and it is offered read-only tools only.
+    let body: Value = serde_json::from_str(&child[0].body).unwrap();
+    let system = body["messages"][0]["content"].as_str().unwrap();
+    assert!(!system.contains("Be brief."), "{system}");
+    assert!(system.contains("## Environment"), "{system}");
+    let offered: Vec<&str> = body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap())
+        .collect();
+    assert!(offered.contains(&"read_file"), "{offered:?}");
+    for writer in [
+        "write_file",
+        "edit_file",
+        "apply_patch",
+        "run_command",
+        "spawn_agent",
+        "Jira_create_issue",
+    ] {
+        assert!(!offered.contains(&writer), "{offered:?}");
+    }
+
+    // The lane's events: started under the spawn call, the child's own
+    // tool call, and its end.
+    let started = of_kind(&events, "subagent_started");
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0]["parent_call_id"], "call-spawn");
+    assert_eq!(started[0]["label"], "notes");
+    let agent_id = started[0]["agent_id"].as_str().unwrap().to_owned();
+    let inner: Vec<Value> = of_kind(&events, "subagent_event")
+        .into_iter()
+        .map(|event| event["inner"].clone())
+        .collect();
+    assert!(
+        inner
+            .iter()
+            .any(|e| e["kind"] == "tool_call" && e["tool"] == "read_file"),
+        "{inner:?}"
+    );
+    let finished = of_kind(&events, "subagent_finished");
+    assert_eq!(finished[0]["agent_id"], agent_id.as_str());
+    assert_eq!(finished[0]["status"], "completed");
+    assert_eq!(finished[0]["result"], "notes.txt says hello.");
+    // The child's read is no `tool_call` of the turn's own.
+    assert!(
+        of_kind(&events, "tool_call")
+            .iter()
+            .all(|call| call["tool"] != "read_file")
+    );
+
+    // The commit carries the child's call under the spawn call.
+    let commit = &commit_bodies(&h.server)[0];
+    let calls = commit["tool_calls"].as_object().unwrap();
+    // Keyed under the child: a model's call ids are unique only per agent.
+    assert!(!calls.contains_key("child-read"));
+    let read = &calls[&format!("{agent_id}:child-read")];
+    assert_eq!(read["parent_agent_call_id"], "call-spawn");
+    assert_eq!(read["sibling_ordinal"], 1);
+    assert_eq!(read["parent_agent_name"], "notes");
+    assert_eq!(
+        read["parent_agent_path"],
+        json!([{"name": "notes", "call_id": "call-spawn", "sibling_ordinal": 1}])
+    );
+    assert!(calls["call-spawn"].get("parent_agent_call_id").is_none());
+    let order: Vec<&String> = calls.keys().collect();
+    assert!(order.contains(&&"call-wait".to_owned()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn turn_cancel_stops_children() {
+    let hang = Arc::new(AtomicBool::new(true));
+    let h = harness(
+        subagent_platform(hang.clone()).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+    // Until the child runs and the parent waits for it.
+    for _ in 0..500 {
+        if h.emitter.kinds().contains(&"subagent_started")
+            && seen(&h.server, "/llm/v1/chat/completions").len() >= 3
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let cancelled_at = std::time::Instant::now();
+    h.host.cancel(&started.turn_id).unwrap();
+    let events = done_event(&h.emitter).await;
+    assert!(cancelled_at.elapsed() < Duration::from_secs(2));
+    hang.store(false, Ordering::SeqCst);
+    let finished = of_kind(&events, "subagent_finished");
+    assert_eq!(finished.len(), 1, "{:?}", h.emitter.kinds());
+    assert_eq!(finished[0]["status"], "cancelled");
+    assert_eq!(events.last().unwrap().payload["committed"], false);
+}
+
+/// The thread's framing nonce, as the system prompt's AGENTS.md block carries it.
+fn framing_nonce(body: &Value) -> String {
+    let system = body["messages"][0]["content"].as_str().unwrap();
+    let at = system
+        .find("<agents_md nonce=\"")
+        .unwrap_or_else(|| panic!("{system}"))
+        + "<agents_md nonce=\"".len();
+    system[at..at + 32].to_owned()
+}
+
+/// #1227: with nothing stable changed, every turn of a thread sends the same
+/// system message and tools (the cacheable prefix); before the per-thread
+/// nonce each turn's AGENTS.md block carried a fresh one.
+#[tokio::test]
+async fn system_prefix_is_stable_across_turns_of_a_thread() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("AGENTS.md"), "Run task test.").unwrap();
+    run_turn(&h, "create hello.txt with hi").await;
+    run_turn(&h, "what file did you just create?").await;
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies.len(), 3);
+    let (first, last) = (&bodies[0], &bodies[2]);
+    assert_eq!(first["messages"][0], last["messages"][0]);
+    assert_eq!(first["tools"], last["tools"]);
+    // The turns differ after the prefix: the history, the tail, the message.
+    assert_ne!(first["messages"], last["messages"]);
+    assert!(!host_context(last).is_empty());
+}
+
+#[tokio::test]
+async fn nonce_is_per_thread_and_not_in_workspace() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("AGENTS.md"), "Run task test.").unwrap();
+    run_turn(&h, "create hello.txt with hi").await;
+    run_turn(&h, "what file did you just create?").await;
+    let bodies = llm_bodies(&h.server);
+    let nonce = framing_nonce(&bodies[0]);
+    assert_eq!(nonce.len(), 32);
+    assert!(nonce.bytes().all(|b| b.is_ascii_hexdigit()));
+    assert_eq!(framing_nonce(&bodies[2]), nonce, "one nonce per thread");
+    // Only the prompt to /llm carries it: no other request, no file of the
+    // workspace (the store keeps it as bytes in the app's data).
+    for req in h.server.seen() {
+        if req.path != "/llm/v1/chat/completions" {
+            assert!(!req.body.contains(&nonce), "{}", req.path);
+        }
+    }
+    let mut dirs = vec![h.folder.path().to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                let bytes = std::fs::read(&path).unwrap();
+                assert!(
+                    !String::from_utf8_lossy(&bytes).contains(&nonce),
+                    "{}",
+                    path.display()
+                );
+            }
+        }
+    }
+    // A session re-seeded from the server draws a new one.
+    h.host.mark_session_stale(CONVERSATION_UUID).await;
+    run_turn(&h, "and what was in it?").await;
+    let bodies = llm_bodies(&h.server);
+    assert_ne!(framing_nonce(bodies.last().unwrap()), nonce);
+}
+
+/// The memory recall moves from the end of the system prompt to the end of
+/// the turn's host message, its text exactly as the server answered it.
+#[tokio::test]
+async fn recall_moves_to_the_tail_with_identical_text() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h).await;
+    let bodies = llm_bodies(&h.server);
+    const RECALL: &str = "Memory: the user likes tea.";
+    for body in &bodies {
+        let system = body["messages"][0]["content"].as_str().unwrap();
+        assert!(!system.contains(RECALL), "{system}");
+        let tail = host_context(body);
+        assert_eq!(tail.matches(RECALL).count(), 1, "{tail}");
+        assert!(tail.ends_with(&format!("\n\n{RECALL}")), "{tail}");
+        // Right before the person's message, every step of the turn.
+        let messages = body["messages"].as_array().unwrap();
+        let at = messages
+            .iter()
+            .position(|m| m["name"] == crate::d0::model::HOST_CONTEXT_NAME)
+            .unwrap();
+        assert_eq!(messages[at + 1]["content"], "Write notes and file a bug");
+    }
+}
+
+#[tokio::test]
+async fn usage_event_carries_cached_and_reasoning_tokens() {
+    let usage = |prompt: u64, cached: u64| {
+        json!({"choices": [], "usage": {"prompt_tokens": prompt, "completion_tokens": 12,
+            "total_tokens": prompt + 12,
+            "prompt_tokens_details": {"cached_tokens": cached, "cache_write_tokens": 40},
+            "completion_tokens_details": {"reasoning_tokens": 3}}})
+    };
+    let script: Script = Box::new(move |body: &Value| {
+        if last_message(body)["role"] == "tool" {
+            sse(&[
+                json!({"choices": [{"delta": {"content": "Done."}}]}),
+                json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+                usage(2_100, 1_536),
+            ])
+        } else {
+            sse(&[
+                json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call-u",
+                    "type": "function", "function": {"name": "write_file",
+                    "arguments": json!({"path": "u.txt", "content": "u"}).to_string()}}]}}]}),
+                json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+                usage(2_000, 0),
+            ])
+        }
+    });
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, script)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let turn_id = run_turn(&h, "write u.txt").await;
+    let events = events_of(&h, &turn_id);
+    let usage = of_kind(&events, "usage");
+    assert_eq!(usage.len(), 2);
+    assert_eq!(usage[0]["step"], 1);
+    assert_eq!(usage[0]["model"], "gpt-test");
+    assert!(usage[0].get("cached_tokens").is_none(), "{:?}", usage[0]);
+    assert_eq!(usage[1]["step"], 2);
+    assert_eq!(usage[1]["prompt_tokens"], 2_100);
+    assert_eq!(usage[1]["cached_tokens"], 1_536);
+    assert_eq!(usage[1]["cache_write_tokens"], 40);
+    assert_eq!(usage[1]["reasoning_tokens"], 3);
+    assert!(usage[1]["context"]["percent"].is_u64(), "{:?}", usage[1]);
+    // The turn's total, before its `done`, which the thread history keeps.
+    let total = of_kind(&events, "usage_total");
+    assert_eq!(
+        total,
+        [json!({"prompt": 4_100, "completion": 24, "cached": 1_536,
+            "cache_write": 80, "reasoning": 6, "calls": 2})]
+    );
+    let kinds: Vec<&str> = events.iter().map(|e| e.kind).collect();
+    let at = |kind: &str| kinds.iter().position(|k| *k == kind).unwrap();
+    assert!(at("usage_total") < at("done"));
+}
+
+/// The local MCP fixture server (`libs/rust/local-tools/tests/fixtures`),
+/// copied executable into a folder of its own: outside the workspace and
+/// the app's directories (the sandbox hides those from every server).
+fn mcp_fixture_program() -> (tempfile::TempDir, String) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let bin = tempfile::tempdir().unwrap();
+    let path = bin.path().join("mcp-fixture.sh");
+    std::fs::write(
+        &path,
+        include_str!("../../../../../libs/rust/local-tools/tests/fixtures/mcp/server.sh"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = path.canonicalize().unwrap().display().to_string();
+    (bin, path)
+}
+
+/// The agent calls `mcp__fx__echo` first when it is offered, then answers.
+fn mcp_platform() -> impl Fn(&Req) -> Res {
+    let inner = platform(agent_details(), &[]);
+    move |req: &Req| {
+        if req.path != "/llm/v1/chat/completions" {
+            return inner(req);
+        }
+        let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
+        let offered = body["tools"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|tool| tool["function"]["name"] == "mcp__fx__echo");
+        let answered = req.body.contains("call-mcp");
+        if offered && !answered {
+            return tool_call("call-mcp", "mcp__fx__echo", &json!({}));
+        }
+        sse(&[json!({"choices": [{"delta": {"content": "Done."}, "finish_reason": "stop"}]})])
+    }
+}
+
+fn mcp_allowed() -> Option<Value> {
+    Some(json!({"allowed": true, "shell": true, "local_mcp": true}))
+}
+
+/// Each `/llm` request's tool names.
+fn offered_per_request(server: &MockServer) -> Vec<Vec<String>> {
+    llm_bodies(server)
+        .iter()
+        .map(|body| {
+            body["tools"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .collect()
+}
+
+/// The person's MCP server is offered only while the policy allows local
+/// MCP servers: off, nothing starts; on, the server starts under the
+/// sandbox, its tool is asked on first use and runs, the report names the
+/// call (not its arguments), and turning the policy off stops it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn turn_offers_mcp_tools_only_when_policy_allows() {
+    let server = serve(mcp_platform()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let (_bin, program) = mcp_fixture_program();
+    h.host
+        .mcp_files()
+        .save_server(
+            elitea_local_tools::mcp::config::Scope::User,
+            None,
+            "fx",
+            elitea_local_tools::mcp::config::ServerConfig::new(program),
+        )
+        .unwrap();
+
+    run_turn(&h, "hello").await;
+    let offered = offered_per_request(&h.server);
+    assert!(
+        offered
+            .iter()
+            .flatten()
+            .all(|name| !name.starts_with("mcp__")),
+        "{offered:?}"
+    );
+    let (session, _) = h.host.process_session(&h.workspace_id).unwrap();
+    assert!(
+        session.mcp().status().is_empty(),
+        "nothing configured, nothing started"
+    );
+
+    h.policy.set(mcp_allowed());
+    let before = offered.len();
+    run_turn(&h, "hello again").await;
+    let offered = offered_per_request(&h.server);
+    assert!(
+        offered[before].iter().any(|name| name == "mcp__fx__echo"),
+        "{:?}",
+        offered[before]
+    );
+    let events = h.emitter.all();
+    let asked: Vec<&AgentEvent> = events
+        .iter()
+        .filter(|e| e.kind == "approval_request" && e.payload["tool"] == "mcp_call")
+        .collect();
+    assert_eq!(asked.len(), 1, "first use is asked");
+    assert_eq!(asked[0].payload["mcp"]["server"], "fx");
+    assert_eq!(asked[0].payload["mcp"]["tool"], "echo");
+    let result = events
+        .iter()
+        .find(|e| e.kind == "tool_result" && e.payload["call_id"] == "call-mcp")
+        .unwrap();
+    assert_eq!(result.payload["ok"], true, "{:?}", result.payload);
+    // The model read the server's answer, framed under the thread's nonce.
+    let bodies = llm_bodies(&h.server);
+    let last = bodies.last().unwrap().to_string();
+    assert!(last.contains("hello pid="), "{last}");
+    assert!(last.contains("mcp_result nonce="), "{last}");
+    let commits = local_commits(&h.server);
+    let commands = &commits.last().unwrap()["local_work"]["commands"];
+    assert_eq!(commands[0]["command"], "mcp fx echo", "{commands}");
+    // The server runs in the session until the policy turns MCP off.
+    let (session, _) = h.host.process_session(&h.workspace_id).unwrap();
+    assert_eq!(
+        session.mcp().status()[0].state,
+        elitea_local_tools::mcp::ServerState::Ready
+    );
+    h.policy.set(allowed());
+    run_turn(&h, "and again").await;
+    let offered = offered_per_request(&h.server);
+    assert!(
+        offered
+            .last()
+            .unwrap()
+            .iter()
+            .all(|name| !name.starts_with("mcp__")),
+        "{offered:?}"
+    );
+    let (replaced, _) = h.host.process_session(&h.workspace_id).unwrap();
+    assert!(
+        replaced.mcp().status().is_empty(),
+        "the old session stopped with it"
+    );
+}
+
+/// A repository's `.mcp.json` is a proposal: no server starts from it
+/// until the person accepts it, and accepting copies it into host data.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repo_mcp_json_is_proposed_not_started() {
+    let server = serve(mcp_platform()).await;
+    let h = harness(server, mcp_allowed(), UiDecision::AllowOnce).await;
+    let (_bin, program) = mcp_fixture_program();
+    std::fs::write(
+        h.folder.path().join(".mcp.json"),
+        json!({"mcpServers": {"fx": {"command": program, "env": {"API_TOKEN": "repo-secret-1"}}}})
+            .to_string(),
+    )
+    .unwrap();
+
+    run_turn(&h, "hello").await;
+    let offered = offered_per_request(&h.server);
+    assert!(
+        offered
+            .iter()
+            .flatten()
+            .all(|name| !name.starts_with("mcp__")),
+        "{offered:?}"
+    );
+    let (session, _) = h.host.process_session(&h.workspace_id).unwrap();
+    assert!(
+        session.mcp().status().is_empty(),
+        "the repository configured nothing"
+    );
+
+    let (root, deny) = h.host.rules_folder(&h.workspace_id).unwrap();
+    let files = h.host.mcp_files();
+    let pending = files.pending_proposals(&h.workspace_id, &root, &deny);
+    assert_eq!(pending.len(), 1);
+    assert!(
+        !serde_json::to_string(&pending[0])
+            .unwrap()
+            .contains("repo-secret-1")
+    );
+    let digest = pending[0].file_sha256.clone();
+    files
+        .answer(&h.workspace_id, &root, &deny, &digest, &["fx".to_owned()])
+        .unwrap();
+    h.host.mcp_reconfigure(Some(&h.workspace_id));
+    assert!(
+        files
+            .pending_proposals(&h.workspace_id, &root, &deny)
+            .is_empty()
+    );
+
+    let before = offered.len();
+    run_turn(&h, "hello again").await;
+    let offered = offered_per_request(&h.server);
+    assert!(
+        offered[before].iter().any(|name| name == "mcp__fx__echo"),
+        "accepted, it runs: {:?}",
+        offered[before]
+    );
 }

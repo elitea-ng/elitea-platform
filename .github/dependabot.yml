@@ -135,6 +135,8 @@ updates:
       - /services/elitea-vector
       - /services/elitea-doc-extractor
       - /apps/elitea-desktop/src-tauri
+      # The desktop's document extractor: xberg in a lockfile of its own.
+      - /apps/elitea-desktop/doc-extract-sidecar
     multi-ecosystem-group: weekly
     patterns: ["*"]
     ignore:

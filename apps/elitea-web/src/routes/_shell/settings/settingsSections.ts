@@ -92,6 +92,7 @@ export function buildSettingsSections(gates: SettingsSectionGates): SettingsSect
         ...(import.meta.env.MODE === 'desktop'
           ? [
               { id: 'approval-rules', label: 'Approval rules' },
+              { id: 'mcp-servers', label: 'MCP servers' },
               { id: 'troubleshoot', label: 'Troubleshoot' },
             ]
           : []),
