@@ -316,7 +316,7 @@ func TestSyncCarriesAudioPricesToUpsert(t *testing.T) {
 	// The token price stays nil, because a second-billed model has no token
 	// price to record. The gateway does NOT discard such a row: cost.go
 	// lookupCatalog keeps it for its audio rates and fills the token pair from
-	// the pylon default table, so a caller that somehow reports tokens for
+	// the legacy default table, so a caller that somehow reports tokens for
 	// whisper-1 still gets the legacy answer. Writing a token price here would
 	// therefore not be inert — it would override that default — so leaving the
 	// column NULL is the load-bearing part.

@@ -26,7 +26,7 @@ services:
       #
       # The line stays here because this file also runs against a DIFFERENT
       # database (the staging dump), and a reader needs to see which key opens
-      # it. pylon-indexer used to read the same rows from the base compose
+      # it. The legacy indexer used to read the same rows from the base compose
       # file's value; #339 deleted that service.
       SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY:?set in your environment}"
       # Inherits the local oidc-mock service from docker-compose.yml (issue

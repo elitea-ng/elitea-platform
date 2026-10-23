@@ -1301,8 +1301,8 @@ fn match_cli(text: &str) -> Option<Vec<ApiSurface>> {
 // base class whose name merely ends in `Resource` matches. The graph side
 // (`match_plugin_class_api`) skips the plugin-mounted variant when the file
 // IS the plugin name; the page side (`derive_plugin_endpoints`) does not.
-// Kept as found when the Pylon names were removed: behaviour, goldens and
-// both quirks unchanged.
+// Kept as found when the legacy framework names were removed: behaviour,
+// goldens and both quirks unchanged.
 
 pattern!(
     CLASS_API_BASE,

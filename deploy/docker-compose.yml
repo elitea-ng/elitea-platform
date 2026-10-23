@@ -227,7 +227,7 @@ services:
       # value. That is why this is required rather than defaulted: a default
       # here would be a second key source, and a committed one.
       #
-      # pylon-indexer was the third reader. #339 deleted it, so this stack now
+      # The legacy indexer was the third reader. #339 deleted it, so this stack now
       # has one fewer place for the two answers of #418 to disagree.
       #
       # Make a key with:

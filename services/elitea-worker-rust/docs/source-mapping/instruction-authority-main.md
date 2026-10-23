@@ -6,9 +6,9 @@ The current sources were read on 2026-09-09. This mapping describes Main admissi
 
 | Current source | Required behavior | Main owner |
 | --- | --- | --- |
-| `projects/centry/pylon_main/plugins/elitea_core/utils/predict_utils.py::get_project_context` | Read project configuration; default enabled to true; keep content bytes; derive content SHA-256 | `internal/infra/db/repos/agent_project_context.go::ResolveCurrentAgentProjectContext` |
-| `projects/centry/pylon_main/plugins/elitea_core/utils/project_context_utils.py::prepare_project_context_delivery` | Empty or disabled content is absent. Empty activation description means eager instructions. Other content is disclosed on demand | `agentexecution/instruction_snapshots.go::freezeCurrentInstructionSnapshots`; Python `sdk_adapter.py::_project_context_delivery` |
-| `projects/centry/pylon_main/plugins/elitea_core/rpc/chat_all.py` application and ad-hoc branches | Skip application pipelines and `meta.ignore_project_context`; use project content in ordinary chat | Shared `CurrentApplicationToolSnapshotService`; application and ad-hoc input builders |
+| `legacy/centry/<main runtime>/plugins/elitea_core/utils/predict_utils.py::get_project_context` | Read project configuration; default enabled to true; keep content bytes; derive content SHA-256 | `internal/infra/db/repos/agent_project_context.go::ResolveCurrentAgentProjectContext` |
+| `legacy/centry/<main runtime>/plugins/elitea_core/utils/project_context_utils.py::prepare_project_context_delivery` | Empty or disabled content is absent. Empty activation description means eager instructions. Other content is disclosed on demand | `agentexecution/instruction_snapshots.go::freezeCurrentInstructionSnapshots`; Python `sdk_adapter.py::_project_context_delivery` |
+| `legacy/centry/<main runtime>/plugins/elitea_core/rpc/chat_all.py` application and ad-hoc branches | Skip application pipelines and `meta.ignore_project_context`; use project content in ordinary chat | Shared `CurrentApplicationToolSnapshotService`; application and ad-hoc input builders |
 | Core skill projection and stored `entity_skill_mapping` | Resolve skill and selected version content before invocation; retain invoked, attached and applied channels | `agent_chat.sql` skill projections; `agentexecution/skills.go::projectCurrentApplicationSkills` |
 | SDK `runtime/clients/client.py::application`, `predict_agent`, `_inject_project_context` | Pass on-demand context to the existing middleware | Python `sdk_adapter.py::execute_application`, `execute_adhoc` |
 

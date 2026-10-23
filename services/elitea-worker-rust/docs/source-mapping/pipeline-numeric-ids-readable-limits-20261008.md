@@ -12,7 +12,7 @@ per-node 64 KiB caps unchanged for now.
 **Current platform (reference only).** `elitea_sdk/runtime/langchain/langraph_agent.py:1246` loads the pipeline with
 `yaml.safe_load`, so `id: 1` is a Python `int`. `clean_string` (`elitea_sdk/runtime/utils/utils.py:72-74`) calls
 `re.sub` on it and raises `TypeError` at `langraph_agent.py:1272` (node id), `:1264-1265` (interrupt lists, outside any
-`try`) and `:1687` (`entry_point`, only `KeyError` is caught). Nothing in the Pylon plugins str-coerces ids first.
+`try`) and `:1687` (`entry_point`, only `KeyError` is caught). Nothing in the legacy plugins str-coerces ids first.
 Numeric ids therefore **crash** the current platform. Supporting them is a deliberate improvement, not a port.
 
 **New platform.**

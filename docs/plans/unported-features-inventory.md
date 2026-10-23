@@ -47,7 +47,7 @@ hand. This is the highest-value bucket: each row blocks a real deployment.
 | ~~A10~~ | **DONE (edc51f02).** `values.yaml` referenced a mint script that never existed. | `deploy/helm/elitea/values.yaml:2131` | Operators are pointed at a script that was never written |
 | A4 | **PARTLY DONE (edc51f02): an opt-in objectInit hook exists, default off.** Artifact bucket must pre-exist. elitea-main probes the object store at boot and refuses to start. | `deploy/README.md` "What a Kubernetes install does NOT give you" | The migration Job fails and the release aborts, before anything can create it |
 | A5 | **`CREATE DATABASE` (agent-state) and `CREATE EXTENSION vector`.** Already solved on BOTH stacks — `templates/dbInit/job.yaml` (enabled by default, weight -20) and `docker-compose.standalone-full.yml:287-299`. My "compose has no equivalent hook" was wrong | `values.yaml:116-124` | Residual work is a guard for `worker.enabled` + `dbInit.enabled=false`, size S |
-| ~~A6~~ | **STRUCK.** pylon-indexer is deliberately absent from the chart — index ingest is served by the Go runtime plane through the agent worker. There is no template and no chart for it. `deploy/README.md:449-450` is stale text about the legacy compose file | `values.yaml:38-42` | Nothing to build |
+| ~~A6~~ | **STRUCK.** The legacy indexer is deliberately absent from the chart — index ingest is served by the Go runtime plane through the agent worker. There is no template and no chart for it. `deploy/README.md:449-450` is stale text about the legacy compose file | `values.yaml:38-42` | Nothing to build |
 
 **Not a gap, despite appearing in the seed scripts:** PAT rows
 (`POST /api/v2/auth/token/` + the `/settings/tokens` page are both real —
@@ -126,10 +126,10 @@ only renders it):
 
 | Section | Reason | Action |
 |---|---|---|
-| `observability` | pylon plugin config | **REMOVE the section, port one field.** `tracing_enabled` is env-owned per process (`libs/go/observability` reads `OTEL_*` in four binaries) so a DB row would be a second source of truth; `audit_trail_enabled` toggles a writer that does not exist (see A11); `analytics_enabled` is a genuine `platform_config` flag and belongs on the **Features** page beside `mcp_in_menu` — gate the `v2/analytics` routes on it too, or you ship a hidden button over an open endpoint |
-| `runtime` | pylon plugin config | **REMOVE.** Ten fields, three owners, none of them this page: `ai_project_id` is read from env by elitea-main **and by the gateway, a separate process**; `ai_project_allowed_domains` is deployment-mounted YAML read once at startup; the four scheduling fields are `centry.schedule` rows the **Schedules & Tasks** page already edits; the rest are pylon-indexer's mounted YAML |
-| `admin_panel` | pylon plugin config | **REMOVE.** Zero fields, and the same subject as `advanced`, which was removed 2026-08-24 for exactly this reason. A strictly worse `advanced`: it makes the promise and has nothing to describe |
-| `service_descriptors` | provider hub is pylon-only | Blocked on C2 |
+| `observability` | legacy plugin config | **REMOVE the section, port one field.** `tracing_enabled` is env-owned per process (`libs/go/observability` reads `OTEL_*` in four binaries) so a DB row would be a second source of truth; `audit_trail_enabled` toggles a writer that does not exist (see A11); `analytics_enabled` is a genuine `platform_config` flag and belongs on the **Features** page beside `mcp_in_menu` — gate the `v2/analytics` routes on it too, or you ship a hidden button over an open endpoint |
+| `runtime` | legacy plugin config | **REMOVE.** Ten fields, three owners, none of them this page: `ai_project_id` is read from env by elitea-main **and by the gateway, a separate process**; `ai_project_allowed_domains` is deployment-mounted YAML read once at startup; the four scheduling fields are `centry.schedule` rows the **Schedules & Tasks** page already edits; the rest are the legacy indexer's mounted YAML |
+| `admin_panel` | legacy plugin config | **REMOVE.** Zero fields, and the same subject as `advanced`, which was removed 2026-08-24 for exactly this reason. A strictly worse `advanced`: it makes the promise and has nothing to describe |
+| `service_descriptors` | provider hub is legacy-runtime-only | Blocked on C2 |
 | `mcp_servers` | → `managed_surface: mcp_prebuilt_servers` | Done, no work |
 | `llm_proxy` | → `managed_surface: llm_proxy` | Done, no work |
 | `auth` | → `managed_surface: identity_providers` | Done, no work |
@@ -209,7 +209,7 @@ documentation mismatch, not a missing feature.
 Listed so they stop reappearing in gap reviews. Each is something the target
 architecture drops on purpose, and each already answers honestly.
 
-- Pylon runtime administration — plugin reload, remote plugin config, plugin
+- Legacy runtime administration — plugin reload, remote plugin config, plugin
   listing (`v2/admin/handler.go:184`).
 - Arbiter task nodes (`v2/admin/handler.go:289`), and the Arbiter/RabbitMQ
   transport generally (AGENTS.md forbids it; provisioning drops `rabbit_vhost`).

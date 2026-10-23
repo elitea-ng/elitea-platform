@@ -177,7 +177,7 @@ EXPECTED
 # routes answered a shape the published contract rejects.
 # ELITEA_APPLICATION_SKILLS_ENABLED left it when #395 landed, and
 # ELITEA_INDEX_TYPES_ENABLED left it when #394 landed. Each route now answers
-# the published envelope keys beside the Pylon keys, so both shipped clients
+# the published envelope keys beside the legacy keys, so both shipped clients
 # accept one body, and both flags are asserted ON in the standalone list above
 # instead. Re-add a loop here, with an issue reference, the next time a route
 # has to ship dark.

@@ -1,7 +1,7 @@
 // Package testpg puts every PostgreSQL connection a test opens into a
 // session time zone that is NOT UTC.
 //
-// The pylon-era tables keep created_at/updated_at as `timestamp` WITHOUT
+// The legacy-era tables keep created_at/updated_at as `timestamp` WITHOUT
 // time zone holding the UTC wall clock, beside timestamptz columns. Postgres
 // converts between the two through the SESSION time zone, so a writer that
 // stores a bare now() or a reader that compares a naive column with a

@@ -2,7 +2,7 @@
 
 ## Source mapping
 
-Core paths below start at `projects/centry/pylon_main/plugins/elitea_core` in the umbrella workspace.
+Core paths below start at `legacy/centry/<main runtime>/plugins/elitea_core` in the umbrella workspace.
 Main paths start at `services/elitea-main` in this repository.
 
 | Current platform source | Main owner | Required behavior |

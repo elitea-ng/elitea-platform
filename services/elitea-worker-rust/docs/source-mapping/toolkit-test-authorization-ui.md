@@ -7,7 +7,7 @@
 | `projects/EliteaUI/src/[fsd]/features/toolkits/lib/hooks/useToolkitChat.hooks.js` | Web `features/toolkits/lib/hooks/useToolkitChatDispatch.hooks.ts` | Forward the authorization challenge to the existing callback. |
 | `projects/EliteaUI/src/[fsd]/features/mcp/lib/hooks/useMcpAuthModal.hooks.js` | Web `features/mcps/model/useMcpLogin.ts`, `McpAuthModal` | Reuse the existing OAuth dialog and completion callback. |
 | `projects/elitea-sdk/elitea_sdk/runtime/toolkits/tools.py`, authorization exception enrichment | Rust direct execution and Main toolkit result projection | Keep the toolkit identity with the authorization challenge. |
-| `projects/centry/pylon_main/plugins/elitea_core/api/v2/test_toolkit_tool.py` | Main toolkit Test route; Web `features/toolkits/api/toolkitTestRun.ts` | Run one named operation with explicit arguments. |
+| `legacy/centry/<main runtime>/plugins/elitea_core/api/v2/test_toolkit_tool.py` | Main toolkit Test route; Web `features/toolkits/api/toolkitTestRun.ts` | Run one named operation with explicit arguments. |
 
 Web paths are relative to `apps/elitea-web/src`.
 Rust and Main own the typed challenge and invocation admission. The browser does not plan another operation.

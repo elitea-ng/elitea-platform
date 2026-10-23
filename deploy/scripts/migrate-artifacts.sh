@@ -3,13 +3,14 @@
 # Copy the current platform's artifact objects into the Go object store (#337).
 #
 # WHY A COPY AND NOT A CONFIGURATION CHANGE. The current platform stores objects
-# through Apache libcloud with the LOCAL driver: a directory tree on pylon_main's
-# own disk, where BOTH the container directory name and the object file name are
-# url-safe base64 of the real name (legacy plugins/shared/tools/storage_engines/
-# libcloud.py, and `storage_libcloud_encoder: base64` in the deployed
-# shared.yml). That is not an S3, Azure or GCS endpoint, so no setting of
-# elitea-main can read it in place — internal/infra/storage has no filesystem
-# backend and ADR-0016 SS8 says it never will. The objects move once.
+# through Apache libcloud with the LOCAL driver: a directory tree on the legacy
+# main service's own disk, where BOTH the container directory name and the
+# object file name are url-safe base64 of the real name (legacy
+# plugins/shared/tools/storage_engines/libcloud.py, and
+# `storage_libcloud_encoder: base64` in the deployed shared.yml). That is not an
+# S3, Azure or GCS endpoint, so no setting of elitea-main can read it in place —
+# internal/infra/storage has no filesystem backend and ADR-0016 SS8 says it
+# never will. The objects move once.
 #
 # THE MAPPING, and it is the whole script:
 #

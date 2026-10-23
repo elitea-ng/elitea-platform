@@ -14,7 +14,7 @@ application-family activation is live today: every pipeline with nested applicat
 |---|---|---|
 | Sub-agent fan-out bookkeeping | The legacy supervisor writes parent state per park/reconcile round; no bound on parent writes. | At most 2 parent rows per activation visit, enforced in code with a typed refusal. Pause cards ride on the pause row. |
 | Child start | One task per child, sequential state reads. | One batched writer activation and one batched receipt read for all children of an activation. |
-| Observability | Celery/pylon logs, no fan-out spans. | `graph.fanout.activation` / `graph.fanout.child` spans and short lifecycle logs with safe fields; `agent.checkpoint.persist` carries `payload_bytes`, `round_trips`, `pool_wait_ms`. |
+| Observability | Celery/legacy-runtime logs, no fan-out spans. | `graph.fanout.activation` / `graph.fanout.child` spans and short lifecycle logs with safe fields; `agent.checkpoint.persist` carries `payload_bytes`, `round_trips`, `pool_wait_ms`. |
 | Streamed child output | One socket frame per delta. | Unchanged in this PR. The per-activation coalescer (250 ms / 64 KiB) is built and tested, and is wired by the Wave 2a runner together with the aggregated browser frame (no flag). |
 | Model failure retry | Retries whole agent turns. | Unchanged in this PR. The pre-output classifier is built and tested, and is wired by Gate 5b. |
 

@@ -7,7 +7,7 @@ ADK-Rust is an internal execution substrate.
 The reconstruction baseline for SDK behavior is the Python worker's production
 lock: `elitea-sdk==0.9.8` at source revision
 `b5113a129329b85d23c2d5c2bf55f18e307414ec`. The legacy Centry comparison is
-`pylon_indexer/plugins/indexer_worker` at
+`legacy/centry/<indexer runtime>/plugins/indexer_worker` at
 `add5821eddf28f0aa9d7ba5757a53d3c25f9d4c1`. Standalone repository heads may
 move independently, so they are drift evidence rather than an implicit change
 to these pinned business contracts.

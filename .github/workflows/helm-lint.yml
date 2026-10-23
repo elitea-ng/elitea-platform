@@ -716,7 +716,7 @@ jobs:
             -schema-location "$CRD_SCHEMAS" \
             "/tmp/${{ matrix.chart }}.yaml"
 
-      # The pylon-free capability set (#382). It renders objects no other pass
+      # The standalone capability set (#382). It renders objects no other pass
       # produces — the runtime material volume and the three runtime listener
       # ports on both the Deployment and the Service — so a schema error in
       # them is invisible everywhere else.

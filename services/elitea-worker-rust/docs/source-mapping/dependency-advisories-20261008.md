@@ -9,7 +9,7 @@ decision 2026-10-08).
 No product behaviour changes. This slice changes which toolchain and crate versions the shipped images are built
 with, and proves one existing security property of the SQL toolkit.
 
-- The current platform has no equivalent: Pylon images take whatever Python and library versions their base images
+- The current platform has no equivalent: the legacy runtime's images take whatever Python and library versions their base images
   carry. Nothing was ported.
 - Deliberately not done:
   - Bumping the Go series. Go 1.25 still has a fixed patch (1.25.13); the workspace stays on the 1.25 series, as

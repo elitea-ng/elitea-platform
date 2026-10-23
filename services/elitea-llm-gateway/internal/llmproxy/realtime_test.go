@@ -369,7 +369,7 @@ func (f *realtimeFixture) realtimeURL(model string) string {
 	return "ws" + strings.TrimPrefix(f.server.URL, "http") + "/llm/v1/realtime?model=" + model + "&intent=transcription"
 }
 
-// dial opens a client session, exactly as the pylon relay does: a plain GET with
+// dial opens a client session, exactly as the legacy relay does: a plain GET with
 // the identity header, no Origin and no subprotocol.
 func (f *realtimeFixture) dial(t *testing.T) *websocket.Conn {
 	t.Helper()
@@ -1392,7 +1392,7 @@ func TestRealtime_TheFrameReachesTheCallerBeforeBillingRuns(t *testing.T) {
 // TestRealtime_TurnStartTriggerAlsoGates covers the ADDITIONAL trigger.
 //
 // FACT F3: bifrost reports a turn start for exactly `response.create` and the
-// SERVER-side `input_audio_buffer.committed`, and the pylon relay sends neither
+// SERVER-side `input_audio_buffer.committed`, and the legacy relay sends neither
 // — which is why the periodic re-check is the mandatory mechanism. A client that
 // DOES send one must still be gated at that moment, and this test is what keeps
 // the second trigger wired: the re-check interval here is longer than the whole
@@ -2480,7 +2480,7 @@ func (e secondsOnlyCatalogEstimator) CostUnits(ctx context.Context, p, m string,
 // A model the catalogue prices by SECONDS alone is admitted by H2. The provider
 // then reports TOKENS for a turn. Units.Basis() is tokens, so CostUnits takes
 // the token arm — and that arm never fails: NULL token columns are filled from
-// the pylon default table, so the turn prices at an invented rate. Counting the
+// the legacy default table, so the turn prices at an invented rate. Counting the
 // mismatch and billing anyway put a made-up figure on the authoritative counter
 // of a socket the tenant holds open, which is the precise outcome decision H2
 // was taken to prevent at the upgrade.
@@ -2683,7 +2683,7 @@ func TestRealtime_ARefusedTurnStartCountsAsATurn(t *testing.T) {
 //
 // The provider's subprotocol is no longer known when the caller's socket is
 // accepted, so the gateway offers this surface's ONE name. Both callers must
-// still work: the pylon relay asks for none, and a browser client asks for
+// still work: the legacy relay asks for none, and a browser client asks for
 // "realtime". RFC 6455 always allows the empty one.
 func TestRealtime_SubprotocolNegotiation(t *testing.T) {
 	f := newRealtimeFixture(t)

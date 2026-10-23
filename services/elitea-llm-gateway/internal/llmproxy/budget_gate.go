@@ -127,7 +127,7 @@ const perImageFallbackNano int64 = 40_000_000
 // billingPeriodStart returns the first second of the current calendar month in
 // UTC as a Unix timestamp. Budget counters are keyed by this value (design §8,
 // NATS counter subject format). A monthly period is a safe conservative
-// assumption that aligns with the pylon accumulator design.
+// assumption that aligns with the legacy accumulator design.
 func billingPeriodStart(now time.Time) int64 {
 	y, m, _ := now.UTC().Date()
 	return time.Date(y, m, 1, 0, 0, 0, 0, time.UTC).Unix()
@@ -778,7 +778,7 @@ func (h *Handler) updateUsageUnits(
 		//
 		// The seconds and characters bases cannot reach here: audioCost refuses
 		// a rate that is not from the catalog, so they bill a real price or
-		// nothing. The token basis is different — it falls back to the pylon
+		// nothing. The token basis is different — it falls back to the legacy
 		// default table like every other route, which is longstanding and
 		// disclosed. The consequence for AUDIO is what was silent: the amount is
 		// non-zero and plausible, so MetricAudioUnpriced cannot fire (a price
@@ -798,7 +798,7 @@ func (h *Handler) updateUsageUnits(
 	}
 
 	// The catalog row has an input price and no output price, so the output
-	// tokens were billed at the pylon input x 3 estimate. That is the shape
+	// tokens were billed at the legacy input x 3 estimate. That is the shape
 	// issue #6719 hid: gpt-image-2 billed its image output at half its real
 	// rate, and every log line looked like a catalog price. The bill does not
 	// change here; the estimate becomes visible.

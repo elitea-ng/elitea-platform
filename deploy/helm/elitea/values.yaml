@@ -13,7 +13,7 @@
 # ── What this chart does NOT create ─────────────────────────────────────────
 #
 # Checked against deploy/docker-compose.standalone-full.yml, the reference
-# pylon-free stack. Every service in it is now covered by this chart except the
+# standalone stack. Every service in it is now covered by this chart except the
 # ones below, which are deliberately the operator's:
 #
 #   PostgreSQL          `postgresql` names its secret. The operator's lifecycle
@@ -47,7 +47,7 @@
 # even when it can read/write objects. Whichever way it is created, it must be
 # named by `main.env.STORAGE_CONTAINER` before the first sync.
 #
-# GONE, and not only from this chart: pylon-indexer. Index ingest is served by
+# GONE, and not only from this chart: the legacy indexer. Index ingest is served by
 # the Go runtime plane through the agent worker, on the same command stream and
 # consumer group as agent execution, so one worker serves both capabilities.
 # Issue #339 deleted the service, its Containerfile, its bake target and its
@@ -1569,7 +1569,7 @@ natsBootstrap:
 # elitea-valkey, rendered into REDIS_URL for elitea-main and the scheduler) is
 # GONE. Its three uses moved or were deleted: the project SSE stream to NATS
 # core pub/sub, canvas presence to a NATS KV bucket,
-# and the scheduler's Redis tick lock went with the legacy pylon RPC dispatcher
+# and the scheduler's Redis tick lock went with the legacy-runtime RPC dispatcher
 # it guarded. A values file that still sets `redis:` is ignored.
 
 # ── Database preparation ────────────────────────────────────────────────────
@@ -1998,7 +1998,7 @@ main:
   #
   # CAPABILITY FLAGS (issue #382). cmd/elitea-main gates whole capabilities on
   # environment variables, and this file sets every one of them. It did not
-  # before, so the same image served the pylon-free configuration on compose and
+  # before, so the same image served the standalone configuration on compose and
   # served none of it on Kubernetes. Read the "Capability flags" block in the env
   # map below, and the runtime: block further down.
   #
@@ -2551,10 +2551,10 @@ main:
     # "false" when it does not. A value stated here always wins.
     #
     # Neither flag has a contract problem any more. The index-types read answers
-    # the published DocumentLoadersResponse keys (items, total) beside the Pylon
+    # the published DocumentLoadersResponse keys (items, total) beside the legacy
     # keys (document_types, image_types, code_types). The attached-skills read
     # answers the published SkillsList keys (items, total, page, page_size,
-    # total_pages) beside the Pylon keys (skills, max_skills). Both shipped
+    # total_pages) beside the legacy keys (skills, max_skills). Both shipped
     # clients accept one body (#394, #395).
     #
     # These used to ship "false", and that is no longer a safe default. #394 and
@@ -3406,7 +3406,7 @@ main:
   # Agent execution, the execution-events stream, index ingest, index scheduling
   # and configuration validation. This is the biggest capability the chart left
   # dark, and it is the one that decides whether a Kubernetes install can run
-  # without pylon at all.
+  # without the legacy runtime at all.
   #
   # ALL-OR-NOTHING. internal/runtimecomposition/config.go builds this
   # configuration with a `required()` helper: every name must be present and
@@ -4021,7 +4021,7 @@ scheduler:
   # READ services/elitea-scheduler/RETIREMENT.md AND THIS CHART'S README BEFORE
   # INSTALLING. In short: this binary carries independent background workers
   # and dispatches no schedules — the legacy centry.schedule poller that
-  # PUBLISHed Pylon RPC over Redis was deleted (nothing consumed it, issue
+  # PUBLISHed legacy-runtime RPC over Redis was deleted (nothing consumed it, issue
   # #305), and with it this component's only use of Redis:
   #   1. (removed) the legacy centry.schedule poller;
   #   2. the price-catalog sync worker (PRICE_SYNC_ENABLED, off by default);
@@ -4402,7 +4402,7 @@ llmGateway:
     # How often a LIVE session re-asks the budget gate. This is the ONLY thing
     # that bounds a session's spend: an HTTP request is gated once because it
     # ends, and a session does not end. bifrost reports a turn start for two
-    # events the pylon relay never sends, so a re-check armed on turn start alone
+    # events the legacy relay never sends, so a re-check armed on turn start alone
     # would never fire at all. Lower it to cut the spend that can follow an
     # exhausted budget; raise it to cut budget reads. A non-positive or
     # unparsable value keeps the 15 s default.
@@ -4438,7 +4438,7 @@ llmGateway:
     # credentials. Empty admits only a handshake whose Origin matches the
     # gateway's own host, or one with no Origin at all — which is every
     # non-browser client, including the SDK worker this route exists for
-    # (pylon-indexer was that client until #339 deleted it). Name a browser
+    # (the legacy indexer was that client until #339 deleted it). Name a browser
     # origin only on purpose; the startup log states which
     # mode is armed.
     LLM_REALTIME_ALLOWED_ORIGINS: ""

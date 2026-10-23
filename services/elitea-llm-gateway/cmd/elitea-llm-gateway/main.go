@@ -470,11 +470,11 @@ func main() {
 	// bypass; TestMainWiring asserts both are present.
 	// The realtime WebSocket route (issue #323 follow-up). Its four options are
 	// all load-bearing and TestMainWiring asserts each of them:
-	//   - WithRealtimeDialer      without it the route answers 501 and the
-	//                             pylon-indexer relay keeps its own LiteLLM.
+	//   - WithRealtimeDialer      without it the route answers 501 to every
+	//                             session elitea-main's /llm edge forwards.
 	//   - WithRealtimeBudgetRecheck  a session is otherwise gated ONCE for its
 	//                             whole life; bifrost's turn-start signal is one
-	//                             the only known caller never sends.
+	//                             the route's original caller never sent.
 	//   - WithRealtimeSessionLimit   a hijacked connection has no server-side
 	//                             timeout, so nothing else bounds the pool.
 	//   - WithRealtimeOrigins     a WebSocket handshake is not subject to CORS.

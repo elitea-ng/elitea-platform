@@ -18,7 +18,7 @@ import (
 // never writes to the vault (elitea-main's secrets handler owns writes).
 //
 // Encryption scheme (Python cryptography.fernet.Fernet — must byte-match the
-// pylon secrets plugin and elitea-main's internal/api/v2/secrets handler):
+// legacy secrets plugin and elitea-main's internal/api/v2/secrets handler):
 //
 //	32-byte key   = <first-16 bytes: HMAC-SHA256 signing key>
 //	                <last-16 bytes:  AES-128-CBC encryption key>
@@ -176,7 +176,7 @@ func (v *FernetVault) readVault(ctx context.Context, projectID string) (vaultDat
 //
 // It accepts BOTH stored representations. The one centry actually writes is the
 // 44-byte URL-safe base64 ENCODING of the 32 key bytes — that is what
-// `cryptography.fernet.Fernet.generate_key()` returns and what the pylon secrets
+// `cryptography.fernet.Fernet.generate_key()` returns and what the legacy secrets
 // plugin's `_write_key` persists verbatim (or master-key-wrapped). The raw 32
 // bytes are the legacy form earlier builds of elitea-main's secrets handler
 // wrote; those rows must keep opening, or an upgrade locks projects out of their

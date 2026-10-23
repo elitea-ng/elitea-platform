@@ -379,9 +379,11 @@ type Config struct {
 	// handshake is not subject to CORS, so a browser page can open one
 	// cross-site with the ambient credentials of the user. With this empty the
 	// gateway admits only a handshake whose Origin matches its OWN host, or one
-	// that carries no Origin at all — which is every non-browser client,
-	// including the pylon-indexer relay this route exists for. A browser origin
-	// must be named here on purpose.
+	// that carries no Origin at all — which is every non-browser client. The
+	// route's original caller, the legacy indexer's realtime ASR relay, was
+	// deleted with that service (#339); today a handshake reaches the gateway
+	// through elitea-main's /llm edge proxy, which forwards the caller's own
+	// headers, Origin included. A browser origin must be named here on purpose.
 	RealtimeAllowedOrigins []string
 
 	// WorkloadIdentityEnabled arms keyless PLATFORM credentials

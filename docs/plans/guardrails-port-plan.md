@@ -3,7 +3,7 @@
 Unit plan. Closes the first of the not-yet-ported admin Configuration sections:
 `guardrails`, whose five fields are declared in
 `services/elitea-main/internal/api/v2/admin/config_schemas.go` and today answer
-501 with `pylonPluginConfigUnavailable`.
+501 because the legacy plugin configuration is unavailable.
 
 ## 1. What guardrails is
 
@@ -43,7 +43,7 @@ become live rather than stay withheld.
   `toolkit_names`/`toolkit_tools` "have no source of truth in this service". That
   is stale: `internal/runtimecomposition/current_toolkit_schema_snapshot.json` is
   a digest-pinned projection of the SDK toolkit registry with per-type properties
-  AND per-tool argument schemas. It is exactly the registry pylon read.
+  AND per-tool argument schemas. It is exactly the registry the legacy runtime read.
 - **The Python worker is in this repo.** `services/elitea-worker-python`. So
   driving the SDK's sensitive-tool guard needs NO elitea-sdk change:
   `configure_sensitive_tools()` and `configure_blocklist()` are already public SDK
@@ -69,13 +69,13 @@ Every consumer.
 
 ## 4. Design decisions
 
-### D1 — One matching package, ported from the SDK, not from pylon
+### D1 — One matching package, ported from the SDK, not from the legacy runtime
 
 `internal/domain/guardrails` owns normalisation and every membership test.
 
 The two reference implementations DISAGREE and the difference is load-bearing:
 
-- pylon's `toolkit_security.py` compares with a plain `.lower()`, and supports no
+- The legacy runtime's `toolkit_security.py` compares with a plain `.lower()`, and supports no
   wildcard.
 - the SDK's `security.py` uses `canonical_match_key` — lowercase then strip every
   non-alphanumeric character, so `CreateFile`, `create_file`, `create-file` and
@@ -217,7 +217,7 @@ agent-input vectors, so no vector work follows.
   so they do stop working in agents while remaining visible to admins. Those two
   facts must both be in the copy.
 - **The `*` wildcard is sensitive-tools only.** See the correction under D1. A
-  deployment migrating a pylon `blocked_tools` map gets identical behaviour; the
+  deployment migrating a legacy `blocked_tools` map gets identical behaviour; the
   `{"*": ["delete_file"]}` shape the shipped compose files set works for
   `sensitive_tools`, which is the field they actually set.
 

@@ -16,7 +16,7 @@
 # a volume fix) belongs in BOTH files — check the other one before assuming a
 # fix here is complete, and vice versa.
 #
-# There is no pylon, no centry, no LiteLLM in this stack. LiteLLM is superseded
+# There is no legacy runtime, no centry, no LiteLLM in this stack. LiteLLM is superseded
 # by the gateway, and elitea-main can no longer talk to it at all: the facade,
 # its administration client and the ELITEA_LITELLM_BASE_URL /
 # ELITEA_LITELLM_MASTER_KEY_FILE env surface are deleted. The gateway is the
@@ -1120,7 +1120,7 @@ services:
       # services/elitea-main/api/openapi/v2.yaml).
       #
       # The route answers ONE body both shipped clients accept: the published
-      # DocumentLoadersResponse keys (items, total) beside the Pylon keys
+      # DocumentLoadersResponse keys (items, total) beside the legacy keys
       # (document_types, image_types, code_types). Both halves project the same
       # pinned SDK snapshot, so they cannot disagree.
       #
@@ -1135,7 +1135,7 @@ services:
       #
       # It answers only the skills attached to the named agent version, read
       # from entity_skill_mapping, in the published SkillsList envelope beside
-      # the Pylon keys (skills, max_skills). The web app's skill-mention
+      # the legacy keys (skills, max_skills). The web app's skill-mention
       # dropdowns read the `items` half.
       ELITEA_APPLICATION_SKILLS_ENABLED: "true"
       # The brand pack's FILE layer (ADR-0024). Empty by default: the stack
@@ -1876,7 +1876,7 @@ services:
       VITE_SERVER_URL: "/api/v2"
       VITE_BASE_URI: "/app/"
       # Empty on purpose. There is no socket.io server in this stack — the Go
-      # backend never implemented one (it was a legacy pylon passthrough), so the
+      # backend never implemented one (it was a legacy-runtime passthrough), so the
       # app installs createNoopSocketClient. Pointing this anywhere would only
       # produce connection errors.
       VITE_SOCKET_SERVER: ""

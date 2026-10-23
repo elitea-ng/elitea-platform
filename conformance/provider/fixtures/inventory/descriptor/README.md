@@ -6,7 +6,7 @@ The host serves `legacy-v2`.
 ## `legacy-v0` — what the legacy plugin declared
 
 Recorded from `legacy/plugins/inventory_plugin/methods/descriptor.py`. It is the
-record of what the Pylon plugin actually advertised, and it is what a **parity**
+record of what the legacy plugin actually advertised, and it is what a **parity**
 question is asked against: "did the port drop anything the legacy product
 declared?" is only answerable against this file.
 

@@ -3,7 +3,7 @@
 ## Scope and maturity
 
 This repository is the greenfield replatform prototype for Elitea. The target is
-one Go modular monolith for the current `pylon_main` and `pylon_auth` product
+one Go modular monolith for the legacy runtime's main and auth product
 domains, plus independently scalable Python workers for LangChain/LangGraph
 execution and indexing. The candidate architecture and approval state are
 indexed in `../elitea-docs/docs/internal/03-architecture/adrs/index.mdx`;
@@ -38,9 +38,9 @@ prototype shortcuts into new code merely to preserve current behavior.
   corrections intentionally break header trust, implicit admin, unscoped or
   unsafe token/session behavior, open redirects, raw errors and cross-tenant
   access; compatibility never requires preserving a vulnerability.
-- Do not preserve Pylon plugin loading, Arbiter pickle payloads, global service
-  locators, internal Python RPC aliases, or hot-installed dependencies as target
-  architecture.
+- Do not preserve, port or reintroduce the legacy runtime's plugin loading,
+  Arbiter pickle payloads, global service locators, internal Python RPC aliases,
+  or hot-installed dependencies as target architecture.
 - Durable asynchronous worker commands use the runtime command bus, NATS
   JetStream (docs/runtime-command-bus.md); PostgreSQL is the authority and the
   bus is transport only.
@@ -98,9 +98,9 @@ prototype shortcuts into new code merely to preserve current behavior.
 - Keep API errors typed and safe for callers. Log internal causes with trace and
   execution identifiers; never return raw `err.Error()` across a trust boundary.
 - Enforce authentication, project authorization, and tenant context before
-  mounting product, admin, or storage handlers. Do not add a pylon bridge back:
-  the shadow comparator, the cutover reverse proxy and endpoint tracker, and the
-  Redis remote-call auth client are deleted (issue #383), and
+  mounting product, admin, or storage handlers. Do not add a legacy-runtime
+  bridge back: the shadow comparator, the cutover reverse proxy and endpoint
+  tracker, and the Redis remote-call auth client are deleted (issue #383), and
   `internal/api/TestNoLegacyBridgeWiringReturns` fails if one returns.
 - Use transaction-local tenant selection and repository-owned versioned
   migrations. Never return a pooled connection after releasing it or use

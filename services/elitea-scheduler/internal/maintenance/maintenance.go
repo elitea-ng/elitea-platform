@@ -3,8 +3,8 @@
 //
 // ## What this is NOT
 //
-// It is not a port of pylon's `maintenance_gate.py`. That helper existed
-// because pylon's maintenance splash was a gevent hook on the HTTP router,
+// It is not a port of the legacy runtime's `maintenance_gate.py`. That helper existed
+// because the legacy maintenance splash was a gevent hook on the HTTP router,
 // while cron ticks were wired straight to arbiter events — so cron work took a
 // path the hook could not see, and each cron RPC had to remember to ask.
 //

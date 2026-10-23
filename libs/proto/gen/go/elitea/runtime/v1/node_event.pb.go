@@ -22,7 +22,7 @@ const (
 )
 
 // NodeEventV1 is the language-neutral data-plane form of the current
-// pylon_indexer NodeEvent consumed by EliteaUI. Field names deliberately match
+// legacy indexer NodeEvent consumed by EliteaUI. Field names deliberately match
 // the current UI-facing JSON contract. Event type remains a bounded string so
 // adding a current-baseline event does not require synchronized enum releases.
 //

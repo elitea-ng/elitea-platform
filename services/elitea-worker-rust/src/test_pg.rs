@@ -1,6 +1,6 @@
 //! Test `PostgreSQL` sessions run in a non-UTC time zone.
 //!
-//! The pylon-era tables keep `created_at`/`updated_at` as `timestamp`
+//! The legacy-era tables keep `created_at`/`updated_at` as `timestamp`
 //! WITHOUT time zone holding the UTC wall clock, beside timestamptz columns.
 //! Postgres converts between the two through the SESSION time zone, so a
 //! defect that mixes them is visible only off UTC; CI's `PostgreSQL` runs in

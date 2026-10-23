@@ -16,7 +16,7 @@ or migration change.
    "toolkit discovery unavailable").
 
 Behaviour kept from the current platform (EliteaUI `useDropdownData.jsx`,
-`PlusChatSubmenu.jsx`; Pylon `elitea_core/utils/application_tools.py::toolkits_listing`):
+`PlusChatSubmenu.jsx`; legacy `elitea_core/utils/application_tools.py::toolkits_listing`):
 
 - the MCP and Toolkit sections are separate lists, each paged server-side by
   offset, 20 rows per page, loading the next page on scroll near the end, with a
@@ -29,9 +29,9 @@ Not ported:
 
 - `sort_by`/`sort_order`, `toolkit_type`, `author_id`, `ids`, `search_artifact`
   and folder filters. The picker does not use them.
-- Pylon's lenient `mcp` parsing (any value other than `true` meant `false`).
+- The legacy runtime's lenient `mcp` parsing (any value other than `true` meant `false`).
   Main refuses anything but `true`/`false` with 400.
-- Pylon counting a string `meta.mcp = "true"` as MCP. Main follows the new Web's
+- The legacy runtime counting a string `meta.mcp = "true"` as MCP. Main follows the new Web's
   `isMcpToolkit` rule (boolean `true` only), so server and client agree.
 
 ## Cause

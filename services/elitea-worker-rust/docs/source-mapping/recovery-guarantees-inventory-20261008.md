@@ -5,7 +5,7 @@ backlog behind [recovery-guarantees.md](../recovery-guarantees.md). It changes n
 
 ## 1. Business behaviour from the current platform
 
-The current Elitea platform (Pylon and Arbiter) keeps task results in arbiter memory. Results are ephemeral. The
+The current Elitea platform (the legacy runtime and Arbiter) keeps task results in arbiter memory. Results are ephemeral. The
 retention is about 3600 s, and a file-backed result is deleted on read. A lost worker means "run again from scratch".
 
 This change does not port that behaviour or its defects. The replatform target is class R: execution continues from
