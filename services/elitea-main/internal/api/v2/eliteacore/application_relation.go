@@ -317,6 +317,20 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
+		// FU-244: refuse an attach that breaks a composition bound the Worker
+		// enforces (a circular reference, nesting past its tier, depth or scope
+		// bounds, the hop budget, a pausing pipeline under a pipeline's Agent
+		// node), naming the path, instead of letting every run fail later. The
+		// parent is walked as it would be stored, with the new attachment, before
+		// anything is written, under the parent row lock taken above.
+		if refused := h.refuseComposition(ctx, w, transaction, s, parentApplicationID, parentVersionID,
+			applicationcomposition.Attachment{
+				Alias:    childName,
+				Identity: applicationcomposition.Identity{ApplicationID: childAppNumber, VersionID: childVersionNumber},
+			}); refused {
+			return
+		}
+
 		if err := insertApplicationToolReference(
 			ctx, transaction, s, parentVersionID, childName,
 			childAppNumber, childVersionNumber,
@@ -324,22 +338,6 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 		); err != nil {
 			slog.ErrorContext(ctx, "application relation: attach failed", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "relation write failed"})
-			return
-		}
-		// FU-244: refuse an attach that breaks a composition bound the Worker
-		// enforces (a circular reference, nesting past its tier, depth or scope
-		// bounds, the hop budget, a pausing pipeline under a pipeline's Agent
-		// node), naming the path, instead of letting every run fail later. Read
-		// in this transaction, so the new attachment is part of the walk, under
-		// the parent row lock taken above.
-		root := applicationcomposition.Identity{ApplicationID: parentApplicationID, VersionID: parentVersionID}
-		if err := applicationcomposition.Check(ctx, repos.NewCompositionSource(transaction, s), root, nil); err != nil {
-			if refusal := applicationcomposition.Refusal(err); refusal != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]any{"error": refusal.Message, "code": refusal.Code})
-				return
-			}
-			slog.ErrorContext(ctx, "application relation: composition check failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "relation lookup failed"})
 			return
 		}
 	} else {
@@ -368,6 +366,30 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 		"version_id":     childVersionID,
 		"has_relation":   body.HasRelation,
 	})
+}
+
+// refuseComposition writes the composition refusal (or a lookup failure) and
+// answers true when the parent version with attachment added breaks a bound.
+func (h *Handler) refuseComposition(ctx context.Context, w http.ResponseWriter, q relationQuerier, schema string,
+	parentApplicationID, parentVersionID int64, attachment applicationcomposition.Attachment,
+) bool {
+	source := repos.NewCompositionSource(q, schema)
+	root := applicationcomposition.Identity{ApplicationID: parentApplicationID, VersionID: parentVersionID}
+	parent, ok, err := source.Version(ctx, root)
+	if err == nil && ok {
+		parent.Attachments = append(parent.Attachments, attachment)
+		err = applicationcomposition.Check(ctx, source, root, &parent)
+	}
+	if refusal := applicationcomposition.Refusal(err); refusal != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": refusal.Message, "code": refusal.Code})
+		return true
+	}
+	if err != nil {
+		slog.ErrorContext(ctx, "application relation: composition check failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "relation lookup failed"})
+		return true
+	}
+	return false
 }
 
 // jsonNumberIfNumeric turns a stored id string into the NUMBER the freeze's
