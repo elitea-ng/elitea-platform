@@ -2633,7 +2633,9 @@ impl AgentHost {
 
     /// The agent's model behind the step compaction (#1217, `context.rs`),
     /// or as it is when the agent's settings turn compaction off or its
-    /// limits admit no budget.
+    /// limits admit no budget. `summary_model` is the low-tier model the
+    /// summaries go to ([`context::ModelFacts::summary_model`]); `None`:
+    /// the agent's own.
     #[allow(clippy::too_many_arguments)]
     fn compacting_model(
         &self,
@@ -2645,6 +2647,7 @@ impl AgentHost {
         host: ContextHost,
         compact: bool,
         turn_context: &TurnContext,
+        summary_model: Option<context::LowTierModel>,
     ) -> Result<Arc<dyn Llm>, TurnError> {
         let Some(policy) = context::policy(&admitted.version_details) else {
             return Ok(model);
@@ -2662,18 +2665,28 @@ impl AgentHost {
                 return Ok(model);
             }
         };
-        // The summary model: the agent's own, quiet, on the turn's transport
-        // (its execution id: the spend is the turn's).
+        // The summary model: the low-tier one, else the agent's own; quiet,
+        // on the turn's transport (its execution id: the spend is the turn's).
+        let (summary_name, summary_output, summary_replay) = match summary_model {
+            Some(low) => (low.name, low.limits.max_output_tokens, low.replay),
+            None => (
+                model_request.model_name.clone(),
+                limits.max_output_tokens,
+                transport.replay,
+            ),
+        };
         let summarizer = GatewayTransport {
             quiet: true,
             lane: UsageLane::Summary,
             tail: None,
             cache_hints: false,
+            replay: summary_replay,
             ..transport.clone()
         }
         .bind(ModelRequest {
+            model_name: summary_name,
             system_instruction: String::new(),
-            max_tokens: Some(SUMMARY_MAX_OUTPUT_TOKENS.min(limits.max_output_tokens)),
+            max_tokens: Some(SUMMARY_MAX_OUTPUT_TOKENS.min(summary_output)),
             temperature: None,
             reasoning_effort: None,
             max_model_turns: 1,
@@ -2772,10 +2785,12 @@ impl AgentHost {
                 models,
             ),
         );
+        let summary_model = model_facts.summary_model(&model_facts.limits).cloned();
         let context::ModelFacts {
             limits,
             replay,
             vision,
+            ..
         } = model_facts;
         // `read_file` returns an image part only to a model that sees images
         // (attached images passed the same check at the start).
@@ -2896,6 +2911,7 @@ impl AgentHost {
             },
             request.compact,
             turn_context,
+            summary_model,
         )?;
 
         // Skills and project context: the runtime's instruction authority.

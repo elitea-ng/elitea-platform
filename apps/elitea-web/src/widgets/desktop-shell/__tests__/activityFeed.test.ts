@@ -128,15 +128,15 @@ describe('the activity feed', () => {
 });
 
 describe('token usage', () => {
-  it('sums what the calls sent, keeps the latest call as the context in use, and shows it with the turn', () => {
+  it('leaves the turn as it was: the composer, not the island, shows the context', () => {
     const store = createActivityFeedStore();
     const at = (seq: number) => ({ turn_id: 't1', seq });
     store.getState().applyAgentEvent({ ...at(1), kind: 'status', payload: { phase: 'running' } }, 1);
-    expect(buildActivities(facts(store))[0]?.stats).toBe('');
+    const before = store.getState().turns['t1'];
     store.getState().applyAgentEvent({ ...at(2), kind: 'usage', payload: { prompt_tokens: 3000, completion_tokens: 200, total_tokens: 3200 } }, 2);
-    store.getState().applyAgentEvent({ ...at(3), kind: 'usage', payload: { prompt_tokens: 12_400, completion_tokens: 1000, total_tokens: 13_400 } }, 3);
-    expect(store.getState().turns['t1']?.usage).toEqual({ inputTokens: 15_400, outputTokens: 1200, contextTokens: 12_400 });
-    expect(buildActivities(facts(store))[0]?.stats).toBe('12.4K context · 1.2K out');
+    store.getState().applyAgentEvent({ ...at(3), kind: 'usage_total', payload: { prompt: 3000, completion: 200, cached: 0, cache_write: 0, reasoning: 0, calls: 1 } }, 3);
+    expect(store.getState().turns['t1']).toEqual(before);
+    expect(buildActivities(facts(store))[0]?.label).toBe('Working…');
   });
 });
 

@@ -1887,7 +1887,10 @@ window; the request's output reservation when larger), folds everything
 before a cut point into a `context_summary` v1 record, keeping about the
 newest 20k tokens (at most half the trigger) verbatim. A cut is at a turn's
 start or at a step with no tool call open (a call and its result are never
-parted). The summary is asked of the agent's own model through the same
+parted). The summary is asked of the project's low-tier default model
+(the catalogue's `low_tier_default_model_name`) when the catalogue lists
+it with a described `context_window` at least the agent's, else of the
+agent's own model, through the same
 `/llm` route and execution id (its spend is the turn's), without tools and
 without prompt-cache directives, and streams nothing to the UI (the meter's
 `context` event says `compacting` while it runs); it carries

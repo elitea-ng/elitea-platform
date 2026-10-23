@@ -17,10 +17,12 @@
 //! * **Budget.** [`ProviderBudget`] measures the body the gateway transport
 //!   sends ([`super::model::request_body_in`]), not an estimate of the adk
 //!   contents.
-//! * **Summary model.** The agent's own model, through the same `/llm`
-//!   transport and execution id (spend is the turn's), bound quiet: the
-//!   webview sees no text or usage of it. No prompt-cache directives are
-//!   sent.
+//! * **Summary model.** The project's low-tier default model when the
+//!   catalogue lists one whose described window is at least the agent's
+//!   ([`ModelFacts::summary_model`]), else the agent's own model; either
+//!   through the same `/llm` transport and execution id (spend is the
+//!   turn's), bound quiet: the webview sees no text or usage of it. No
+//!   prompt-cache directives are sent.
 //! * **Marker.** A compaction appends an adk `EventCompaction` to the
 //!   turn's session ([`ContextHost`]), placed after the last event it
 //!   covers: the next turn's history starts from the summary instead of
@@ -76,11 +78,35 @@ pub const MARKER_AUTHOR: &str = "elitea_context_compaction";
 /// What a turn knows of its model from the catalogue: its context limits,
 /// whether its reasoning goes back to the provider (#1228) and whether it
 /// sees images (#1229; `false` when the catalogue was not read for it).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ModelFacts {
     pub limits: ModelContextLimits,
     pub replay: ReasoningReplay,
     pub vision: bool,
+    /// The project's low-tier default model, when the catalogue lists one.
+    pub low_tier: Option<LowTierModel>,
+}
+
+/// A low-tier model a compaction may summarise with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LowTierModel {
+    pub name: String,
+    pub limits: ModelContextLimits,
+    pub replay: ReasoningReplay,
+}
+
+impl ModelFacts {
+    /// The compaction's summary model other than the agent's own: the
+    /// low-tier default when its window is described and at least the
+    /// agent's `limits` (the summary request is sized to the agent's
+    /// window); `None`: the agent's own model.
+    #[must_use]
+    pub fn summary_model(&self, limits: &ModelContextLimits) -> Option<&LowTierModel> {
+        self.low_tier.as_ref().filter(|model| {
+            !model.limits.context_window_fallback
+                && model.limits.context_window_tokens >= limits.context_window_tokens
+        })
+    }
 }
 
 /// The facts of the turn's model (module docs), with at most one catalogue
@@ -112,13 +138,15 @@ pub async fn model_facts(
         let known = from_hand.or(kept);
         return ModelFacts {
             limits: frozen,
-            replay: known.map(|facts| facts.replay).unwrap_or_default(),
-            vision: known.is_some_and(|facts| facts.vision),
+            replay: known.as_ref().map(|facts| facts.replay).unwrap_or_default(),
+            vision: known.as_ref().is_some_and(|facts| facts.vision),
+            low_tier: known.and_then(|facts| facts.low_tier),
         };
     }
+    let kept_already = kept.is_some();
     if let Some(facts) = from_hand.or(kept) {
-        if let (Some(key), None) = (key, kept) {
-            caches.keep_limits(key, facts);
+        if let (Some(key), false) = (key, kept_already) {
+            caches.keep_limits(key, facts.clone());
         }
         return facts;
     }
@@ -130,11 +158,12 @@ pub async fn model_facts(
             limits: FALLBACK_LIMITS,
             replay: ReasoningReplay::Never,
             vision: false,
+            low_tier: None,
         };
     };
     let facts = facts_of(&catalogue, model_name);
     if let Some(key) = key {
-        caches.keep_limits(key, facts);
+        caches.keep_limits(key, facts.clone());
     }
     facts
 }
@@ -152,6 +181,13 @@ fn facts_of(catalogue: &Catalogue, model_name: &str) -> ModelFacts {
             .and_then(|model| model.row.get("supports_vision"))
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        low_tier: catalogue.low_tier_default().and_then(|model| {
+            Some(LowTierModel {
+                name: model.name.clone(),
+                limits: limits_of(&model.row)?,
+                replay: ReasoningReplay::of(Some(model)),
+            })
+        }),
     }
 }
 
@@ -489,6 +525,45 @@ mod tests {
         assert!(output_only.context_window_fallback && !output_only.max_output_fallback);
         assert!(limits_of(&json!({"context_window": -1})).is_none());
         assert!(limits_of(&json!({"context_window": 1000, "max_output_tokens": 1000})).is_none());
+    }
+
+    #[test]
+    fn summaries_go_to_the_low_tier_model_only_when_its_window_is_as_large() {
+        let catalogue = |low_window: Value| {
+            Catalogue::from_body(
+                &json!({
+                    "items": [
+                        {"name": "agent", "project_id": 1, "context_window": 200_000, "max_output_tokens": 32_000},
+                        {"name": "small", "project_id": 1, "context_window": low_window,
+                         "max_output_tokens": 8_000, "openai_compatible": false},
+                    ],
+                    "low_tier_default_model_name": "small",
+                    "low_tier_default_model_project_id": 1,
+                }),
+                1,
+            )
+        };
+        let facts = facts_of(&catalogue(json!(200_000)), "agent");
+        let low = facts.summary_model(&facts.limits).unwrap();
+        assert_eq!(low.name, "small");
+        assert_eq!(low.limits.max_output_tokens, 8_000);
+        assert_eq!(low.replay, ReasoningReplay::SignedBlocks);
+        // A smaller window, or one the catalogue does not describe: the
+        // agent's own model.
+        let smaller = facts_of(&catalogue(json!(128_000)), "agent");
+        assert!(smaller.low_tier.is_some());
+        assert!(smaller.summary_model(&smaller.limits).is_none());
+        let undescribed = facts_of(&catalogue(json!(null)), "agent");
+        assert!(undescribed.summary_model(&undescribed.limits).is_none());
+        // Measured against the limits the turn runs on (frozen ones too).
+        let frozen = ModelContextLimits {
+            context_window_tokens: 100_000,
+            ..facts.limits
+        };
+        assert!(smaller.summary_model(&frozen).is_some());
+        // No low-tier default configured.
+        let none = facts_of(&Catalogue::default(), "agent");
+        assert!(none.summary_model(&FALLBACK_LIMITS).is_none());
     }
 
     #[test]

@@ -14,6 +14,11 @@
 //!   catalogue could not answer, the choice goes to the gateway, which
 //!   decides: governance stays on the server (the gateway refuses a model
 //!   the project may not use, or a request over budget, per request).
+//! * **Low tier.** The answer's `low_tier_default_model_name` and
+//!   `low_tier_default_model_project_id` name the project's low-tier
+//!   default, when one is configured and listed
+//!   ([`Catalogue::low_tier_default`]): the compaction's summary model when
+//!   its window is at least the agent's (`super::context`).
 //! * **Family.** `openai_compatible: false` names a provider whose own API
 //!   carries signed reasoning blocks back in history (Anthropic);
 //!   [`ReasoningReplay`] says so. Every other model is spoken to through the
@@ -46,6 +51,8 @@ pub struct CatalogueModel {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Catalogue {
     pub models: Vec<CatalogueModel>,
+    /// The low-tier default's place in `models` (module docs).
+    low_tier: Option<usize>,
 }
 
 impl Catalogue {
@@ -55,7 +62,14 @@ impl Catalogue {
         self.models.iter().find(|model| model.name == name)
     }
 
-    fn from_body(body: &Value, project_id: i64) -> Self {
+    /// The project's low-tier default model, when the catalogue names one
+    /// it lists.
+    #[must_use]
+    pub fn low_tier_default(&self) -> Option<&CatalogueModel> {
+        self.low_tier.and_then(|index| self.models.get(index))
+    }
+
+    pub(super) fn from_body(body: &Value, project_id: i64) -> Self {
         let mut models: Vec<CatalogueModel> = body
             .get("items")
             .and_then(Value::as_array)
@@ -80,7 +94,20 @@ impl Catalogue {
             })
             .collect();
         models.sort_by_key(|model| model.project_id != project_id);
-        Self { models }
+        // An empty name (and the `""` project id) is "none configured".
+        let low_tier = body
+            .get("low_tier_default_model_name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+            .and_then(|name| {
+                let owner = body
+                    .get("low_tier_default_model_project_id")
+                    .and_then(Value::as_i64);
+                models.iter().position(|model| {
+                    model.name == name && owner.is_none_or(|owner| model.project_id == owner)
+                })
+            });
+        Self { models, low_tier }
     }
 }
 
@@ -242,6 +269,42 @@ mod tests {
         );
         assert_eq!(ReasoningReplay::of(None), ReasoningReplay::Never);
         assert!(catalogue.find("embed").is_none());
+    }
+
+    #[test]
+    fn the_low_tier_default_is_the_listed_model_it_names() {
+        let body = |name: Value, project: Value| {
+            json!({
+                "items": [
+                    {"name": "big", "project_id": 1},
+                    {"name": "small", "project_id": 2},
+                    {"name": "small", "project_id": 1},
+                ],
+                "low_tier_default_model_name": name,
+                "low_tier_default_model_project_id": project,
+            })
+        };
+        let shared = Catalogue::from_body(&body(json!("small"), json!(2)), 1);
+        let chosen = shared.low_tier_default().unwrap();
+        assert_eq!((chosen.name.as_str(), chosen.project_id), ("small", 2));
+        // No project id: the project's own model first.
+        let own = Catalogue::from_body(&body(json!("small"), json!("")), 1);
+        assert_eq!(own.low_tier_default().unwrap().project_id, 1);
+        // None configured, or one the catalogue does not list.
+        for (name, project) in [
+            (json!(""), json!("")),
+            (json!(null), json!(null)),
+            (json!("gone"), json!(1)),
+            (json!("small"), json!(9)),
+        ] {
+            assert!(
+                Catalogue::from_body(&body(name.clone(), project), 1)
+                    .low_tier_default()
+                    .is_none(),
+                "{name}"
+            );
+        }
+        assert!(Catalogue::default().low_tier_default().is_none());
     }
 
     #[test]

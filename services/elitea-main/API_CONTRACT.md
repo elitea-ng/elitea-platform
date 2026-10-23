@@ -281,6 +281,8 @@ Contract 1.15 lets a native client change a conversation's internal tools withou
 
 Contract 1.17 records the model a local turn ran on (issue 1228). `commitLocalTurn` takes `assistant_message.model_name` (at most 256 bytes): the agent's own model, or the chat model the person chose for that turn in the desktop app. The answer's metadata carries it as `model_name`, as a cloud turn's answer does; a commit without it (an older client) leaves the key out and digests as before. The server does not check it against the catalogue: the gateway already governed every model request of the turn.
 
+Contract 1.18 records a local turn's context summary (issue 1368). `commitLocalTurn` takes `context_summary`: the latest summary the turn's model requests started from or made when the desktop compacted the thread, in the runtime's shared v1 record (a JSON object with `version` 1, at most 32 KiB compacted, no NUL escape; anything else is 400 `invalid_local_turn`). The answer's metadata carries it as `context_summary`, for the cloud executor that takes the thread over. A commit without it (an older client, or a turn that never compacted) leaves the key out and digests as before.
+
 The client policy has no operation of its own. Its public part is in the discovery document, and the full policy is `client_policy` in every token response.
 
 `info.x-elitea-client-contract` states the version, for example `"1.0"`. Discovery serves the same value as `client_contract`.

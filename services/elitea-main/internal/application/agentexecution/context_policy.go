@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextsettings"
@@ -44,6 +45,7 @@ func (service *CurrentApplicationStartService) freezeVersionWithContext(
 		if fieldErr != nil {
 			return nil, nil, unsupportedStartBecause("context policy validation", fieldErr)
 		}
+		runtimeSettings.SessionCompaction = versionSessionCompaction(request.VersionDetails)
 		settings, err = json.Marshal(runtimeSettings)
 		if err != nil {
 			return nil, nil, ErrUnsupportedCurrentAgentStart
@@ -125,4 +127,57 @@ func validateContinuationModelSelection(selected, frozen json.RawMessage) error 
 		}
 	}
 	return nil
+}
+
+// versionSessionCompaction is the version's `context_settings.session_compaction`
+// as the worker admits it (elitea-agent-runtime CompactionPolicy::admit): `true`,
+// `false`, or an object of `reserve_tokens` and `keep_recent_tokens` (1 to
+// 2^32-1) and `fresh_window` (bool), each optional. nil when the version says
+// nothing. A malformed value is forwarded as `true` (the defaults), as the
+// desktop reads it: an authored typo never fails a turn.
+func versionSessionCompaction(version json.RawMessage) json.RawMessage {
+	var details struct {
+		ContextSettings struct {
+			SessionCompaction json.RawMessage `json:"session_compaction"`
+		} `json:"context_settings"`
+	}
+	if json.Unmarshal(version, &details) != nil {
+		return nil
+	}
+	value := bytes.TrimSpace(details.ContextSettings.SessionCompaction)
+	switch {
+	case len(value) == 0 || bytes.Equal(value, []byte("null")):
+		return nil
+	case bytes.Equal(value, []byte("true")) || bytes.Equal(value, []byte("false")):
+		return json.RawMessage(value)
+	}
+	var fields map[string]json.RawMessage
+	if decodeCurrentJSON(value, &fields) != nil || fields == nil {
+		return json.RawMessage("true")
+	}
+	policy := map[string]any{}
+	for key, raw := range fields {
+		switch key {
+		case "reserve_tokens", "keep_recent_tokens":
+			// A bare integer only: a quoted or fractional number is malformed.
+			parsed, err := strconv.ParseUint(string(bytes.TrimSpace(raw)), 10, 32)
+			if err != nil || parsed == 0 {
+				return json.RawMessage("true")
+			}
+			policy[key] = parsed
+		case "fresh_window":
+			var fresh bool
+			if json.Unmarshal(raw, &fresh) != nil {
+				return json.RawMessage("true")
+			}
+			policy[key] = fresh
+		default:
+			return json.RawMessage("true")
+		}
+	}
+	encoded, err := json.Marshal(policy)
+	if err != nil {
+		return json.RawMessage("true")
+	}
+	return encoded
 }

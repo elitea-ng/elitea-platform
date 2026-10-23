@@ -25,13 +25,6 @@ export interface PendingApproval {
   title: string;
 }
 
-/** A turn's tokens: what its calls sent (summed), what they produced, and the context the latest call used. */
-export interface TurnUsage {
-  inputTokens: number;
-  outputTokens: number;
-  contextTokens: number;
-}
-
 export interface TrackedTurn {
   turnId: string;
   workspaceId: string | null;
@@ -49,8 +42,6 @@ export interface TrackedTurn {
   commit: 'none' | 'pending' | 'failed';
   finished: boolean;
   changedFiles: number;
-  /** Tokens over the turn's model calls so far; `null` until the gateway reported usage. */
-  usage: TurnUsage | null;
 }
 
 export interface TrackedIndex {
@@ -131,36 +122,12 @@ function blankTurn(turnId: string, now: number): TrackedTurn {
     commit: 'none',
     finished: false,
     changedFiles: 0,
-    usage: null,
   };
 }
 
 function withApproval(turn: TrackedTurn, payload: ApprovalRequestPayload): TrackedTurn {
   const label = payload.kind === 'continue' ? 'continue' : payload.tool;
   return { ...turn, approvals: [...turn.approvals.filter((a) => a.requestId !== payload.request_id), { requestId: payload.request_id, tool: label, title: payload.title }] };
-}
-
-/** Each model call re-sends the conversation: the turn's input is the sum, the context in use the latest call's. */
-type UsageEvent = Extract<AgentEvent, { kind: 'usage' | 'usage_total' }>;
-const USAGE_KINDS: ReadonlySet<AgentEvent['kind']> = new Set(['usage', 'usage_total']);
-
-function isUsageEvent(event: AgentEvent): event is UsageEvent {
-  return USAGE_KINDS.has(event.kind);
-}
-
-/** A call's usage adds to the turn's; `usage_total` (the run ended, #1227) is the turn's, sub-agents and summaries included. */
-function withUsage(turn: TrackedTurn, event: UsageEvent): TrackedTurn {
-  const before = turn.usage ?? { inputTokens: 0, outputTokens: 0, contextTokens: 0 };
-  if (event.kind === 'usage_total') return { ...turn, usage: { ...before, inputTokens: event.payload.prompt, outputTokens: event.payload.completion } };
-  const usage = event.payload;
-  return {
-    ...turn,
-    usage: {
-      inputTokens: before.inputTokens + usage.prompt_tokens,
-      outputTokens: before.outputTokens + usage.completion_tokens,
-      contextTokens: usage.prompt_tokens,
-    },
-  };
 }
 
 /** `done`: finished unless its commit is still to land. */
@@ -186,6 +153,8 @@ type QuietKind =
   | 'thinking_delta'
   | 'thinking_end'
   | 'context'
+  | 'usage'
+  | 'usage_total'
   | 'subagent_started'
   | 'subagent_event'
   | 'subagent_finished'
@@ -198,6 +167,8 @@ const QUIET_KINDS: ReadonlySet<AgentEvent['kind']> = new Set<QuietKind>([
   'thinking_delta',
   'thinking_end',
   'context',
+  'usage',
+  'usage_total',
   'subagent_started',
   'subagent_event',
   'subagent_finished',
@@ -207,7 +178,8 @@ const QUIET_KINDS: ReadonlySet<AgentEvent['kind']> = new Set<QuietKind>([
 ]);
 
 /**
- * Streamed text and reasoning, the composer's meter (`context`) and the
+ * Streamed text and reasoning, the composer's meter (`context`, and the
+ * token counts of `usage` / `usage_total`: the composer shows them) and the
  * sub-agents' own events (the turn's `spawn_agent` / `wait_agent` calls are
  * its steps), and a background process's start, output and exit (its
  * `run_command` call is the step): nothing the feed shows.
@@ -237,7 +209,6 @@ function foldPlan(turn: TrackedTurn, event: PlanEvent): TrackedTurn {
 export function foldTurn(turn: TrackedTurn, event: AgentEvent): TrackedTurn {
   if (changesNothing(event)) return turn;
   if (isPlanEvent(event)) return foldPlan(turn, event);
-  if (isUsageEvent(event)) return withUsage(turn, event);
   switch (event.kind) {
     case 'status':
       return withPhase(turn, event.payload.phase);

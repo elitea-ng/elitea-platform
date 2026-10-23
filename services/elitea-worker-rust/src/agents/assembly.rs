@@ -56,6 +56,10 @@ pub(crate) struct OrdinaryNoToolProfile {
     step_limit: u32,
     chat_history: Vec<Content>,
     context_management: ContextManagementPlan,
+    /// The root's step compaction (`session_compaction`, #1368): when set,
+    /// it replaces the durable compaction of the root request; nested agents
+    /// and pipeline nodes keep the durable one.
+    step_compaction: Option<super::context_management::CompactionPolicy>,
     context_budget: Option<super::context_budget::RequestContextBudget>,
     summary_model: Option<Arc<SummaryModelProfile>>,
     internal_tools: InternalToolCatalog,
@@ -238,6 +242,7 @@ impl OrdinaryNoToolProfile {
             step_limit: validate_step_limit(request.payload.steps_limit)?,
             chat_history: common.chat_history,
             context_management: common.context_management,
+            step_compaction: common.step_compaction,
             internal_tools,
             instruction_plan: super::instruction_authority::InstructionPlan::admit(request)?,
             edit_format: application_edit_format(request),
@@ -286,6 +291,7 @@ impl OrdinaryNoToolProfile {
             step_limit: validate_step_limit(request.payload.steps_limit)?,
             chat_history: common.chat_history,
             context_management: common.context_management,
+            step_compaction: common.step_compaction,
             internal_tools,
             instruction_plan: super::instruction_authority::InstructionPlan::admit(request)?,
             edit_format: application_edit_format(request),
@@ -405,6 +411,7 @@ impl OrdinaryNoToolProfile {
             // The child owns its history. Carry only the admitted policy;
             // its model capacity is resolved independently above.
             context_management: fallback.context_management.clone(),
+            step_compaction: None,
             internal_tools,
             instruction_plan: super::instruction_authority::InstructionPlan::nested(
                 version,
@@ -497,6 +504,10 @@ impl OrdinaryNoToolProfile {
         self.context_management.clone()
     }
 
+    pub(crate) fn step_compaction(&self) -> Option<super::context_management::CompactionPolicy> {
+        self.step_compaction.clone()
+    }
+
     pub(crate) fn summary_model(&self) -> Option<&SummaryModelProfile> {
         match self.context_management {
             ContextManagementPlan::Disabled => None,
@@ -513,6 +524,7 @@ impl OrdinaryNoToolProfile {
 struct CommonProfile {
     chat_history: Vec<Content>,
     context_management: ContextManagementPlan,
+    step_compaction: Option<super::context_management::CompactionPolicy>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -546,6 +558,7 @@ fn validate_common_profile(
         &payload.context_settings,
         payload.conversation_id.as_deref(),
     )?;
+    let step_compaction = context_management.step_policy(&payload.context_settings)?;
     let allows_mcp_authority = matches!(
         mode,
         CommonProfileMode::DirectGuardrailContinuation | CommonProfileMode::McpAuthorization
@@ -642,6 +655,7 @@ fn validate_common_profile(
     Ok(CommonProfile {
         chat_history,
         context_management,
+        step_compaction,
     })
 }
 

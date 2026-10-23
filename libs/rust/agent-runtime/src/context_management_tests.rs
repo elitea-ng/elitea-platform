@@ -245,6 +245,7 @@ async fn keeps_recent_tokens_at_turn_boundary() {
         history_digest(&contents[..compactions[0].covered_events])
     );
     assert!(compactions[0].based_on.is_none());
+    assert_eq!(compaction.compactions(), 1);
     assert!(prepared.contents.len() < contents.len());
     // Under the trigger, nothing is summarized and nothing changes.
     let short = session(1, 1, 100);
@@ -255,6 +256,7 @@ async fn keeps_recent_tokens_at_turn_boundary() {
         .unwrap();
     assert!(same_all(&same.contents, &short));
     assert_eq!(fresh.summary_calls(), 0);
+    assert_eq!(fresh.compactions(), 0);
 }
 
 #[tokio::test]
@@ -872,10 +874,54 @@ fn the_policy_is_opt_in_and_checked() {
     assert!(with(json!({"other": 1})).is_err());
     assert!(with(json!({"reserve_tokens": 0})).is_err());
     assert!(with(json!("yes")).is_err());
-    // The worker's admission still refuses it: it does not compose it.
+    // The worker admits it and composes it at the root (#1368).
     let mut settings = Map::new();
     settings.insert(SESSION_COMPACTION_KEY.to_owned(), json!(true));
-    assert!(ContextManagementPlan::admit_current(&settings, Some("c")).is_err());
+    let plan = ContextManagementPlan::admit_current(&settings, Some("c")).unwrap();
+    assert_eq!(
+        plan.step_policy(&settings).unwrap(),
+        Some(CompactionPolicy::default())
+    );
+}
+
+#[test]
+fn the_worker_step_policy_follows_the_plan() {
+    let settings = |pairs: Value| pairs.as_object().unwrap().clone();
+    let step = |value: Value| {
+        let settings = settings(value);
+        ContextManagementPlan::admit_current(&settings, Some("c"))
+            .and_then(|plan| plan.step_policy(&settings))
+    };
+    // Absent, false, or a plan that is off: no step compaction.
+    assert_eq!(step(json!({"enabled": true})).unwrap(), None);
+    assert_eq!(step(json!({"session_compaction": false})).unwrap(), None);
+    assert_eq!(
+        step(json!({"enabled": false, "session_compaction": true})).unwrap(),
+        None
+    );
+    assert_eq!(
+        step(json!({"enable_summarization": false, "session_compaction": true})).unwrap(),
+        None
+    );
+    // Explicit instructions guide it; the plan's default does not.
+    let guided = step(json!({
+        "session_compaction": {"keep_recent_tokens": 5_000},
+        "summary_instructions": "Keep the file names",
+    }))
+    .unwrap()
+    .unwrap();
+    assert_eq!(guided.keep_recent_tokens, 5_000);
+    assert_eq!(guided.guidance, "Keep the file names");
+    assert_eq!(
+        step(json!({"session_compaction": true}))
+            .unwrap()
+            .unwrap()
+            .guidance,
+        ""
+    );
+    // Malformed is refused even when the plan is off.
+    assert!(step(json!({"enabled": false, "session_compaction": "yes"})).is_err());
+    assert!(step(json!({"session_compaction": {"reserve_tokens": 0}})).is_err());
 }
 
 #[test]

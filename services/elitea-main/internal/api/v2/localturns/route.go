@@ -108,6 +108,8 @@ type commitBody struct {
 	ThinkingSteps []json.RawMessage          `json:"thinking_steps"`
 	HITLExchanges []localturn.HITLExchange   `json:"hitl_exchanges"`
 	LocalWork     *localturn.LocalWorkReport `json:"local_work"`
+	// ContextSummary is the turn's latest v1 context summary (#1368).
+	ContextSummary json.RawMessage `json:"context_summary"`
 }
 
 // caller is the token principal both operations require. A local turn is a
@@ -223,6 +225,7 @@ func (h *handler) commit(writer http.ResponseWriter, request *http.Request) {
 		AssistantIsError: body.AssistantMessage.IsError,
 		AssistantError:   body.AssistantMessage.Error,
 		ModelName:        body.AssistantMessage.ModelName,
+		ContextSummary:   body.ContextSummary,
 		ToolCalls:        body.ToolCalls, ThinkingSteps: body.ThinkingSteps,
 		HITLExchanges: body.HITLExchanges, Report: report, AuditRoute: CommitPath,
 	})

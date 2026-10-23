@@ -141,6 +141,8 @@ pub(super) struct ModelCheckpointWriter {
     validated_digest: Option<[u8; 32]>,
     request_budget: Option<Arc<dyn super::context_budget::ModelRequestBudget>>,
     context_compaction: Option<Arc<super::context_compaction::DurableContextCompaction>>,
+    /// The root's step compaction (#1368), instead of `context_compaction`.
+    step_compaction: Option<Arc<super::context_management::StepCompaction>>,
     context_events: Option<super::graph::PipelineNodeEventSender>,
     context_measurement: Arc<Mutex<Option<super::context_budget::RequestContextUsage>>>,
     application_tools: Arc<HashSet<String>>,
@@ -164,6 +166,7 @@ impl ModelCheckpointWriter {
             validated_digest: None,
             request_budget: None,
             context_compaction: None,
+            step_compaction: None,
             context_events: None,
             context_measurement: Arc::default(),
             application_tools: Arc::default(),
@@ -227,6 +230,19 @@ impl ModelCheckpointWriter {
         compaction: Option<Arc<super::context_compaction::DurableContextCompaction>>,
     ) -> Self {
         self.context_compaction = compaction;
+        self
+    }
+
+    /// Prepare every model request with `compaction` (`session_compaction`,
+    /// #1368). It is called here rather than wrapped around the model, so
+    /// the answer still streams; the request it returns is the one persisted
+    /// below, so a recovery replays it, and the next turn's history starts
+    /// from its summary (the history snapshot).
+    pub(super) fn with_step_compaction(
+        mut self,
+        compaction: Option<Arc<super::context_management::StepCompaction>>,
+    ) -> Self {
+        self.step_compaction = compaction;
         self
     }
 
@@ -500,6 +516,12 @@ impl ModelCheckpointWriter {
                         .await
                 })
                 .await?
+        } else if let Some(step) = &self.step_compaction {
+            let request = super::replay_history::model_history(request)?;
+            let before = step.compactions();
+            let request = step.prepare(request, false).await?;
+            compacted = step.compactions() > before;
+            (request, None)
         } else {
             (request, None)
         };
@@ -524,7 +546,8 @@ impl ModelCheckpointWriter {
                     )
                 })
                 .transpose()?,
-            self.context_compaction.as_ref().map(|_| agent_name),
+            (self.context_compaction.is_some() || self.step_compaction.is_some())
+                .then_some(agent_name),
         )
         .await?;
         if let Some(compaction) = &self.context_compaction {
@@ -1165,6 +1188,130 @@ mod tests {
             writer
                 .restore(load().await.expect("load").as_ref())
                 .is_err()
+        );
+    }
+
+    /// `session_compaction` (#1368): the step compaction prepares the root
+    /// request in the checkpoint, the compacted request is the one persisted,
+    /// and its history snapshot is kept so the next turn starts from it.
+    #[tokio::test]
+    async fn step_compaction_persists_the_compacted_request_and_its_history() {
+        use super::super::context_budget::{
+            ModelRequestBudget, RequestContextBudget, RequestContextUsage,
+        };
+        use super::super::context_management::{
+            CompactionPolicy, NoCompactionHost, StepCompaction, summary_of,
+        };
+        use super::super::request::ModelContextLimits;
+
+        struct Window;
+        impl ModelRequestBudget for Window {
+            fn measure(&self, request: &LlmRequest) -> adk_rust::Result<RequestContextUsage> {
+                RequestContextBudget::resolve(
+                    Some(ModelContextLimits {
+                        context_window_tokens: 8_000,
+                        max_output_tokens: 1_000,
+                        context_window_fallback: false,
+                        max_output_fallback: false,
+                        max_input_tokens: None,
+                    }),
+                    &serde_json::Map::new(),
+                    Some(1_000),
+                )
+                .unwrap()
+                .unwrap()
+                .measure_provider_request(&serde_json::to_vec(request).unwrap(), 8 * 1024 * 1024)
+            }
+        }
+        struct Summarizer(AtomicUsize);
+        #[async_trait]
+        impl Llm for Summarizer {
+            fn name(&self) -> &'static str {
+                "summary"
+            }
+            async fn generate_content(
+                &self,
+                _: LlmRequest,
+                _: bool,
+            ) -> adk_rust::Result<LlmResponseStream> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                let record = json!({
+                    "version": 1, "objective": "Fix the build.", "constraints": [],
+                    "decisions": [], "key_facts": [], "completed_work": [], "open_work": [],
+                    "next_steps": [], "unresolved_issues": [], "references": [],
+                });
+                let response =
+                    LlmResponse::new(Content::new("model").with_text(record.to_string()));
+                Ok(Box::pin(adk_rust::futures::stream::iter([Ok(response)])))
+            }
+        }
+
+        let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+        let session = sessions
+            .create(CreateRequest {
+                app_name: "checkpoint-test".into(),
+                user_id: "user".into(),
+                session_id: Some("session".into()),
+                state: HashMap::new(),
+            })
+            .await
+            .unwrap();
+        let summarizer = Arc::new(Summarizer(AtomicUsize::new(0)));
+        let step = Arc::new(StepCompaction::new(
+            CompactionPolicy::default(),
+            Arc::new(Window),
+            summarizer.clone(),
+            Arc::new(NoCompactionHost),
+        ));
+        let writer = ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 7, [7; 32])
+            .with_request_budget(Some(Arc::new(Window)))
+            .with_step_compaction(Some(step.clone()));
+        // Eight turns of about 1k tokens each: past the 6k trigger of an 8k window.
+        let mut contents = Vec::new();
+        for turn in 0..8 {
+            contents.push(
+                Content::new("user").with_text(format!("question {turn} {}", "q".repeat(2_000))),
+            );
+            contents.push(
+                Content::new("model").with_text(format!("answer {turn} {}", "a".repeat(2_000))),
+            );
+        }
+        contents.push(Content::new("user").with_text("the newest question"));
+        let BeforeModelResult::Continue(prepared) = writer
+            .before_model(
+                session.try_identity().unwrap(),
+                "invocation",
+                "agent",
+                LlmRequest::new("model", contents.clone()),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("the request goes on to the model");
+        };
+        assert_eq!(summarizer.0.load(Ordering::SeqCst), 1);
+        assert_eq!(step.compactions(), 1);
+        assert!(summary_of(&prepared.contents[0]).is_some());
+        assert!(prepared.contents.len() < contents.len());
+        let stored = sessions
+            .get(GetRequest {
+                app_name: "checkpoint-test".into(),
+                user_id: "user".into(),
+                session_id: "session".into(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .unwrap();
+        let marker = stored.events().all().pop().expect("the checkpoint event");
+        // The persisted request is the compacted one, and it is the history
+        // the next turn's Runner view starts from.
+        let history = history_contents(&marker, [7; 32], "agent").unwrap();
+        assert!(summary_of(&history[0]).is_some());
+        assert_eq!(history.len(), prepared.contents.len());
+        assert_eq!(
+            checkpoint(sessions.as_ref()).await["phase"],
+            "model_pending"
         );
     }
 }
