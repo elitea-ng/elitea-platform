@@ -21,9 +21,11 @@ import type { PlanProposalPayload, PlanView } from '@/shared/desktop/planIpc';
 import type { TurnModel } from '@/shared/desktop/turnModel';
 import type { AgentEvent, ApprovalRequestPayload, ContextMeter, TurnPhase } from '@/shared/desktop/workspaceIpc';
 
+import { applySubAgentEvent, isSubAgentEvent, type SubAgentLane } from './subAgentEvents';
 import type { TranscriptItem } from './transcriptItem';
 import { applySideEvent, isSideEvent } from './turnSideEvents';
 
+export type { SubAgentLane } from './subAgentEvents';
 export type { TranscriptItem } from './transcriptItem';
 
 interface TurnDone {
@@ -55,6 +57,8 @@ export interface TurnView {
   planAccepted?: string;
   /** The model the turn runs on (from `status` `running`). */
   model?: TurnModel;
+  /** The turn's read-only sub-agents, in start order: each shown under its `spawn_agent` row. */
+  subAgents?: SubAgentLane[];
 }
 
 /** A stored event; a merged text run covers the seqs `seq..last`, each seen. */
@@ -194,9 +198,21 @@ function applyPlanEvent(view: TurnView, event: PlanEvent, resolved: readonly str
   }
 }
 
-function applyEvent(view: TurnView, event: AgentEvent, resolved: readonly string[]): TurnView {
+type AsideEvent = PlanEvent | Parameters<typeof applySideEvent>[1] | Parameters<typeof applySubAgentEvent>[1];
+
+/** The events beside the transcript's main line: the plan, the meter, reasoning, sub-agents. */
+function isAsideEvent(event: AgentEvent): event is AsideEvent {
+  return isPlanEvent(event) || isSideEvent(event) || isSubAgentEvent(event);
+}
+
+function applyAsideEvent(view: TurnView, event: AsideEvent, resolved: readonly string[]): TurnView {
   if (isPlanEvent(event)) return applyPlanEvent(view, event, resolved);
   if (isSideEvent(event)) return applySideEvent(view, event);
+  return applySubAgentEvent(view, event);
+}
+
+function applyEvent(view: TurnView, event: AgentEvent, resolved: readonly string[]): TurnView {
+  if (isAsideEvent(event)) return applyAsideEvent(view, event, resolved);
   switch (event.kind) {
     case 'status':
       return onStatus(view, event);

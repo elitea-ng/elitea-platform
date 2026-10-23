@@ -282,6 +282,13 @@ fn tool_guidance(tools: &[String]) -> Vec<String> {
                 .to_owned(),
         );
     }
+    if has("spawn_agent") {
+        clauses.push(
+            "hand independent investigations that would fill your context to read-only \
+             sub-agents (spawn_agent, several at once; collect their reports with wait_agent)"
+                .to_owned(),
+        );
+    }
     if writes || has("run_command") {
         clauses.push("denied paths and .git are not writable".to_owned());
         clauses.push("never use sudo; ask the person when a destructive step is needed".to_owned());

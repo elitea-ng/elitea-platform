@@ -546,7 +546,7 @@ const maxCurrentAgentStepLimit = 1024
 // `agent_internal_tool_skipped` — the native one for the five it has not
 // implemented (data_analysis, image_generation, internal_mcp, pyodide, swarm;
 // services/elitea-worker-rust/src/agents/internal_tools.rs). It serves
-// planner, lazy_tools_mode (Smart Tools Selection) and attachments itself. The Python worker's image now ships everything in this
+// planner, lazy_tools_mode (Smart Tools Selection), attachments and subagents itself. The Python worker's image now ships everything in this
 // map (#872 gave it a pinned Deno runtime plus the SDK's own sandbox
 // entrypoint, closing the one gap it had —
 // services/elitea-worker-python/src/elitea_worker/agents/internal_tools.py).
@@ -572,7 +572,9 @@ var currentPlatformInternalTools = map[string]bool{
 	"project_context_builder": true,
 	"pyodide":                 true,
 	"skills_builder":          true,
-	"swarm":                   true,
+	// The runtime's read-only sub-agents (#1226), served natively.
+	"subagents": true,
+	"swarm":     true,
 }
 
 func currentRuntimeInternalTools(raw json.RawMessage) ([]byte, error) {

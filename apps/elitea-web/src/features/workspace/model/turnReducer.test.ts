@@ -296,3 +296,66 @@ describe('turnReducer', () => {
     expect(replayView([proposal(1, 'r1')]).planProposal).toBeUndefined();
   });
 });
+
+describe('sub-agents (#1226)', () => {
+  const spawn = (seq: number, id: string): AgentEvent => ({
+    turn_id: T,
+    seq,
+    kind: 'tool_call',
+    payload: { call_id: id, tool: 'spawn_agent', args_summary: 'Find the callers', remote: false },
+  });
+  const started = (seq: number, agentId: string, parent: string, ordinal: number): AgentEvent => ({
+    turn_id: T,
+    seq,
+    kind: 'subagent_started',
+    payload: { agent_id: agentId, parent_call_id: parent, ordinal, label: `child ${ordinal}` },
+  });
+  const inner = (seq: number, agentId: string, event: Extract<AgentEvent, { kind: 'subagent_event' }>['payload']['inner']): AgentEvent => ({
+    turn_id: T,
+    seq,
+    kind: 'subagent_event',
+    payload: { agent_id: agentId, inner: event },
+  });
+  const finished = (seq: number, agentId: string, status: 'completed' | 'cancelled', result?: string): AgentEvent => ({
+    turn_id: T,
+    seq,
+    kind: 'subagent_finished',
+    payload: { agent_id: agentId, status, steps: 2, input_tokens: 100, output_tokens: 20, ...(result === undefined ? {} : { result }) },
+  });
+
+  it('opens a lane per child under its spawn call, with its own rows, and settles it', () => {
+    const view = activeView(
+      run([
+        spawn(1, 'c1'),
+        started(2, 'a_1', 'c1', 1),
+        spawn(3, 'c2'),
+        started(4, 'a_2', 'c2', 2),
+        inner(5, 'a_1', { kind: 'tool_call', call_id: 'k1', tool: 'read_file', args_summary: 'a.rs', remote: false }),
+        inner(6, 'a_1', { kind: 'tool_result', call_id: 'k1', ok: true, summary: 'fn main', truncated: false }),
+        inner(7, 'a_1', { kind: 'text_delta', text: 'Found it.' }),
+        finished(8, 'a_1', 'completed', 'main is in a.rs'),
+      ]),
+    );
+    // The children's calls are not the turn's own rows.
+    expect(view.items.map((item) => (item.type === 'tool' ? item.tool : item.type))).toEqual(['spawn_agent', 'spawn_agent']);
+    const [first, second] = view.subAgents ?? [];
+    expect(first).toMatchObject({ agentId: 'a_1', parentCallId: 'c1', status: 'completed', steps: 2, inputTokens: 100, result: 'main is in a.rs' });
+    expect(first?.items).toEqual([
+      { type: 'tool', key: 'ck1', callId: 'k1', tool: 'read_file', argsSummary: 'a.rs', remote: false, result: { ok: true, summary: 'fn main', truncated: false } },
+      { type: 'text', key: 't7', text: 'Found it.' },
+    ]);
+    expect(second).toMatchObject({ agentId: 'a_2', parentCallId: 'c2', status: 'running', label: 'child 2' });
+  });
+
+  it('runs again when a continued child sends events, and replays from the history as it ran', () => {
+    const events = [spawn(1, 'c1'), started(2, 'a_1', 'c1', 1), finished(3, 'a_1', 'completed', 'one'), inner(4, 'a_1', { kind: 'text_delta', text: 'more' })];
+    expect(activeView(run(events)).subAgents?.[0]?.status).toBe('running');
+    expect(replayView([...events, finished(5, 'a_1', 'cancelled')]).subAgents?.[0]).toMatchObject({ status: 'cancelled', steps: 2 });
+    expect(replayView([...events, finished(5, 'a_1', 'cancelled')]).subAgents?.[0]?.result).toBeUndefined();
+  });
+
+  it('ignores an event for a child whose start it never heard, and a repeated start', () => {
+    const view = activeView(run([inner(1, 'a_9', { kind: 'text_delta', text: 'x' }), finished(2, 'a_9', 'completed'), spawn(3, 'c1'), started(4, 'a_1', 'c1', 1), started(5, 'a_1', 'c1', 1)]));
+    expect(view.subAgents?.map((lane) => lane.agentId)).toEqual(['a_1']);
+  });
+});

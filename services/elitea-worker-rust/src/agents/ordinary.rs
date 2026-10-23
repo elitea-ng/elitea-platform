@@ -420,6 +420,33 @@ impl OrdinaryNativeAgentAssembler {
         };
         let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
         tracing::Span::current().record("output_continuation", output_continuation);
+        // The read-only sub-agents (#1226): on the toggle, and on every
+        // cloud-executor workspace turn. Bound last, so a child is offered
+        // the read-only tools of every toolset above.
+        let runtime =
+            if profile.internal_tools().subagents_enabled() || context.workspace().is_some() {
+                let (adapter, _) = model_adapter(&profile);
+                let invocation = model_invocation(&profile, "", output_continuation);
+                let facade = Arc::clone(&self.model_facade);
+                let context = Arc::clone(&context);
+                let model_project_id = profile.model_project_id();
+                runtime.with_subagents(move |toolsets, excluded| {
+                    super::subagents::toolset(
+                        super::subagents::WorkerSubAgents {
+                            facade,
+                            context,
+                            adapter,
+                            model_project_id,
+                            invocation,
+                            toolsets: super::subagents::WorkerSubAgents::child_toolsets(toolsets),
+                            config: std::sync::OnceLock::new(),
+                        },
+                        excluded,
+                    )
+                })
+            } else {
+                runtime
+            };
         let model = self.bind_model(
             &profile,
             &runtime.instruction_suffix(profile.instructions()),
@@ -634,6 +661,7 @@ impl OrdinaryNativeAgentAssembler {
             elitea_agent_runtime::planner::TOOLSET_NAME.to_owned(),
             elitea_agent_runtime::lazy_tools::TOOLSET_NAME.to_owned(),
             "elitea_nested_applications".to_owned(),
+            elitea_agent_runtime::subagents::TOOLSET_NAME.to_owned(),
         ]);
         let frozen = freeze_toolsets(toolsets, "elitea_ordinary_tool_binding")
             .await
@@ -890,25 +918,8 @@ impl OrdinaryNativeAgentAssembler {
         context: &crate::transport::runtime_context::ClaimScopedEliteaContext,
         output_continuation: bool,
     ) -> Result<BoundModelFacade, NativeAgentAssemblyError> {
-        let invocation = ModelInvocation {
-            response_schema: None,
-            allow_text_continuation: false,
-            context_budget: profile.context_budget(),
-            model_name: profile.model_name().to_owned(),
-            system_instruction: system_instruction.to_owned(),
-            max_tokens: profile.max_tokens(),
-            reasoning_effort: profile
-                .reasoning_effort()
-                .map(|effort| continuation_reasoning_effort(effort, output_continuation)),
-            temperature: profile.temperature(),
-            max_model_turns: profile.step_limit(),
-        };
-        let (adapter, adapter_name) = match profile.model_provider() {
-            OrdinaryModelProvider::OpenAiChat => {
-                (ModelAdapterKind::OpenAiCompatible, "openai_compatible")
-            }
-            OrdinaryModelProvider::NativeAnthropic => (ModelAdapterKind::Anthropic, "anthropic"),
-        };
+        let invocation = model_invocation(profile, system_instruction, output_continuation);
+        let (adapter, adapter_name) = model_adapter(profile);
         tracing::Span::current().record("model_adapter", adapter_name);
         tracing::Span::current().record("model_project_id", profile.model_project_id());
         tracing::Span::current().record("stage", "model_binding");
@@ -921,6 +932,39 @@ impl OrdinaryNativeAgentAssembler {
                 profile.summary_model(),
             )
             .map_err(model_binding_error)
+    }
+}
+
+/// The agent's model call: its model and generation controls, and its turns.
+fn model_invocation(
+    profile: &super::assembly::OrdinaryNoToolProfile,
+    system_instruction: &str,
+    output_continuation: bool,
+) -> ModelInvocation {
+    ModelInvocation {
+        response_schema: None,
+        allow_text_continuation: false,
+        context_budget: profile.context_budget(),
+        model_name: profile.model_name().to_owned(),
+        system_instruction: system_instruction.to_owned(),
+        max_tokens: profile.max_tokens(),
+        reasoning_effort: profile
+            .reasoning_effort()
+            .map(|effort| continuation_reasoning_effort(effort, output_continuation)),
+        temperature: profile.temperature(),
+        max_model_turns: profile.step_limit(),
+    }
+}
+
+/// The facade adapter for the agent's model provider, and its span name.
+fn model_adapter(
+    profile: &super::assembly::OrdinaryNoToolProfile,
+) -> (ModelAdapterKind, &'static str) {
+    match profile.model_provider() {
+        OrdinaryModelProvider::OpenAiChat => {
+            (ModelAdapterKind::OpenAiCompatible, "openai_compatible")
+        }
+        OrdinaryModelProvider::NativeAnthropic => (ModelAdapterKind::Anthropic, "anthropic"),
     }
 }
 

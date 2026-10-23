@@ -2691,8 +2691,8 @@ export const getUpdateConversationInternalToolsUrl = (
  * must be in the internal-tools catalogue the agent turn admits:
  * `ask_user`, `attachments`, `data_analysis`, `image_generation`,
  * `internal_mcp`, `lazy_tools_mode`, `planner`,
- * `project_context_builder`, `pyodide`, `skills_builder`, `swarm`. A
- * name outside it, a missing or non-array `internal_tools`, or any
+ * `project_context_builder`, `pyodide`, `skills_builder`, `subagents`,
+ * `swarm`. A name outside it, a missing or non-array `internal_tools`, or any
  * other key answers 400 and writes nothing. Whether the configured
  * worker runs a tool is a separate question (runtime capabilities).
  *

@@ -435,6 +435,26 @@ impl OrdinaryRuntimeBindings {
         self
     }
 
+    /// Add the runtime's read-only sub-agents (#1226), last: `bind` gets the
+    /// toolsets bound so far (a child is offered their read-only tools) and
+    /// the names a child must never be offered, the tools that need a
+    /// confirmation or a delegated authorization, and returns the toolset.
+    #[must_use]
+    pub(crate) fn with_subagents(
+        mut self,
+        bind: impl FnOnce(&[Arc<dyn Toolset>], Vec<String>) -> Arc<dyn Toolset>,
+    ) -> Self {
+        let excluded = self
+            .sensitive_tools
+            .every_tool_name()
+            .chain(self.delegated_authorization.tool_names())
+            .map(ToOwned::to_owned)
+            .collect();
+        let toolset = bind(&self.toolsets, excluded);
+        self.toolsets.push(toolset);
+        self
+    }
+
     fn has_confirmation_guards(&self) -> bool {
         !self.sensitive_tools.is_empty()
             || !self.delegated_authorization.is_empty()

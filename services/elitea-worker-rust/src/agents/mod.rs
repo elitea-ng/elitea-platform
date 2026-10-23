@@ -34,6 +34,7 @@ pub(crate) mod runtime;
 pub(crate) mod sensitive_tools;
 pub(crate) mod session;
 pub(crate) mod skipped_capabilities;
+pub(crate) mod subagents;
 pub(crate) use elitea_agent_runtime::tool_namespacing;
 pub(crate) mod variables;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

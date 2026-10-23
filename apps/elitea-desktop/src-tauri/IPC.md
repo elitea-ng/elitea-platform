@@ -367,6 +367,35 @@ message}`; the model revises the plan. The turn's `hitl_exchanges` record
 it as `kind: "plan_approval"`, `decision: "accept" | "decline"`, `value`
 the feedback. The next turn starts in the profile its own `plan_mode` says.
 
+**Sub-agents** (#1226). Every workspace turn, plan mode included, is
+offered the runtime's sub-agent tools (`elitea-agent-runtime`
+`subagents`, the `elitea_subagents` toolset; a remote tool may not take
+their names): `spawn_agent {task, label?, max_steps?}` starts a read-only
+child and returns `{agent_id, status: "running"}` at once, `send_input
+{agent_id, message}` continues one, `wait_agent {agent_ids?, timeout_seconds?}`
+returns `{results: [{agent_id, status, result?, steps, input_tokens,
+output_tokens, error?}]}` once all settled or at the timeout (default 300 s,
+at most 900; no `agent_ids`: every child still running, else every one the
+turn started, so a spawn and a wait can share one round of calls), and `close_agent {agent_id}` stops one. A child has a fresh
+context (the task only, under the environment section and the workspace's
+AGENTS.md, never the agent's instructions or the conversation), the
+read-only local tools and the index tools (no writes, commands, remote
+toolkits, `exit_plan_mode` or sub-agent tools), at most 30 model steps
+unless the task asks for up to 60, and 60k cumulative input tokens: past
+either it stops with `budget_exhausted` and what it had. At most 4 run at
+once and 12 start in one turn; a refusal is a tool result the model reads.
+A child calls `/llm` with the turn's execution id (the turn's spend, under
+the gateway's budget), quiet: its text reaches the UI as `subagent_event`s,
+not as the turn's `text_delta`. Its tool calls are in the commit's
+`tool_calls`, after the `spawn_agent` call, each carrying
+`parent_agent_call_id` (the `spawn_agent` call id), `parent_agent_name`
+(the label, else the agent id), `parent_agent_path`
+(`[{name, call_id, sibling_ordinal}]`) and `sibling_ordinal`, the shape the
+cloud writes for a nested agent's calls; they count toward the 512-call
+cap. An approval a child's read needs (a workspace rule that asks) is the
+turn's own prompt. The turn's end, its cancel and a cloud handoff stop
+every child (`subagent_finished` `cancelled`); none outlives the turn.
+
 **Decline with feedback** (#1225). A call the person denies (a local tool's
 approval or a remote toolkit's confirmation) answers the model with a typed
 failure: the usual `{status: "error", code, message}` plus `ok: false` and
@@ -1471,13 +1500,16 @@ order. Kinds and payloads:
 | `plan_updated` | `{plan: {title, explanation?, status: "in_progress" \| "completed", steps: [{n, step, status: "pending" \| "in_progress" \| "completed" \| "cancelled"}]} \| null}` — the agent's checklist changed (the runtime planner's `update_plan`, `start_step`, `complete_step`, `delete_plan`, or the host copying an accepted plan in): the whole plan, `null` once deleted. The latest one is the plan; the thread history stores it like every event, so the todo pane replays after a restart. The plan itself lives in the session (`elitea.plan.v1:` state), so the next turn's planner reads it back |
 | `plan_proposed` | `{request_id, call_id, plan}` — the agent's `exit_plan_mode`: the plan (Markdown, model-written) as a card with Accept / Decline; answered with `approval_respond` `accept` or `decline` (+ `feedback`). See **Plan mode** |
 | `plan_accepted` | `{call_id}` — the person accepted the plan: the session left plan mode and the same turn goes on with every tool; the composer's plan switch turns off |
+| `subagent_started` | `{agent_id, parent_call_id, ordinal: number, label?}` — the agent's `spawn_agent` call `parent_call_id` started a read-only sub-agent (**Sub-agents**, below); `ordinal` is its place among the turn's sub-agents, from 1 |
+| `subagent_event` | `{agent_id, inner}` — what the sub-agent did: `inner` is `{kind: "tool_call", call_id, tool, args_summary, remote}`, `{kind: "tool_result", call_id, ok, summary, truncated}` (its own tool calls, never the turn's `tool_call`s) or `{kind: "text_delta", text}` (one model answer's text, at most 2 KiB); at most 200 per sub-agent |
+| `subagent_finished` | `{agent_id, status: "completed" \| "failed" \| "budget_exhausted" \| "cancelled", steps, input_tokens, output_tokens, result?, error?}` — the sub-agent settled: its report (`result` at most 8 KiB), once per run (a `send_input` that continues it starts another); `cancelled` when it was closed or the turn ended or was cancelled before it answered |
 | `approval_closed` | `{request_id, reason: "timeout"}` — the host closed an open `approval_request` nobody answered within its wait (today: an MCP sign-in, 10 minutes); the card goes, the turn's `hitl_exchanges` record it with `decision: "timeout"`, and an `approval_respond` for it answers `approval_closed` |
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
-`running` → (`thinking_delta`, `thinking_end`, `text_delta`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`)* →
+`running` → (`thinking_delta`, `thinking_end`, `text_delta`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`, `subagent_started`, `subagent_event`, `subagent_finished`)* →
 `status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
 ends `status` `cancelled` → `done` with `commit: "none"`; nothing is
 committed and its execution expires on the server. A run that fails after

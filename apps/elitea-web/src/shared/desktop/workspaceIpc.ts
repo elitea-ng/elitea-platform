@@ -11,6 +11,7 @@ import type { ContextMeter } from './contextMeter';
 import type { AttachedImage, CustomCommand, StoredImage, TurnStartRequest } from './turnStart';
 import type { HostInvoke } from './hostBridge';
 import type { PlanProposalPayload, PlanView } from './planIpc';
+import type { SubAgentFinishedPayload, SubAgentInnerEvent, SubAgentStartedPayload } from './subAgentIpc';
 import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel } from './turnModel';
 
 export type { ContextMeter } from './contextMeter';
@@ -123,6 +124,8 @@ export interface ApprovalRequestPayload {
   can_remember: boolean;
 }
 
+export type { SubAgentFinishedPayload, SubAgentInnerEvent, SubAgentStartedPayload, SubAgentStatus } from './subAgentIpc';
+
 interface EventBase {
   turn_id: string;
   seq: number;
@@ -181,6 +184,12 @@ export type AgentEvent =
   | (EventBase & { kind: 'plan_proposed'; payload: PlanProposalPayload })
   /** The person accepted the plan: the session left plan mode and the turn goes on with every tool. */
   | (EventBase & { kind: 'plan_accepted'; payload: { call_id: string } })
+  /** A read-only sub-agent started under the turn's `spawn_agent` call `parent_call_id` (#1226; IPC.md "Sub-agents"). */
+  | (EventBase & { kind: 'subagent_started'; payload: SubAgentStartedPayload })
+  /** One of a sub-agent's own events: its `tool_call`, `tool_result` or `text_delta`, as `inner`. */
+  | (EventBase & { kind: 'subagent_event'; payload: { agent_id: string; inner: SubAgentInnerEvent } })
+  /** A sub-agent settled: once per run of it (a `send_input` that continues it settles again). */
+  | (EventBase & { kind: 'subagent_finished'; payload: SubAgentFinishedPayload })
   | (EventBase & { kind: 'error'; payload: { code: string; message: string } })
   | (EventBase & { kind: 'done'; payload: TurnDonePayload })
   /** After `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again. */

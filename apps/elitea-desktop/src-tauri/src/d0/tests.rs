@@ -7269,3 +7269,199 @@ async fn read_file_returns_the_image_to_a_vision_model_and_a_hint_to_another() {
         );
     }
 }
+
+/// Whether a model request is a sub-agent's (#1226): its system prompt
+/// starts with the runtime's child preamble.
+fn is_child_request(body: &Value) -> bool {
+    body["messages"][0]["content"]
+        .as_str()
+        .is_some_and(|system| system.starts_with(elitea_agent_runtime::subagents::CHILD_PREAMBLE))
+}
+
+/// The sub-agent ids the tool results in `body` carry (`a_` + 8 hex).
+fn spawned_ids(body: &Value) -> Vec<String> {
+    let text = body["messages"].to_string();
+    let mut ids = Vec::new();
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find("a_") {
+        let candidate = rest.get(at + 2..at + 10).unwrap_or_default();
+        if candidate.len() == 8 && candidate.chars().all(|c| c.is_ascii_hexdigit()) {
+            let id = format!("a_{candidate}");
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        rest = &rest[at + 2..];
+    }
+    ids
+}
+
+/// The platform of [`platform`] whose parent model spawns one sub-agent,
+/// waits for it and answers; the sub-agent reads a file and reports. While
+/// `hang` is set the sub-agent's model never answers (for at most 5 s).
+async fn subagent_platform(hang: Arc<AtomicBool>) -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    let parent_calls = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            let body: Value = serde_json::from_str(&req.body).unwrap();
+            if is_child_request(&body) {
+                if hang.load(Ordering::SeqCst) {
+                    tokio::task::block_in_place(|| {
+                        for _ in 0..250 {
+                            if !hang.load(Ordering::SeqCst) {
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                    });
+                }
+                let answered = body["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m["role"] == "tool");
+                return if answered {
+                    say("notes.txt says hello.")
+                } else {
+                    tool_call("child-read", "read_file", &json!({"path": "notes.txt"}))
+                };
+            }
+            return match parent_calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-spawn",
+                    "spawn_agent",
+                    &json!({"task": "Summarise notes.txt", "label": "notes"}),
+                ),
+                1 => tool_call(
+                    "call-wait",
+                    "wait_agent",
+                    &json!({"agent_ids": spawned_ids(&body)}),
+                ),
+                _ => say("The notes say hello."),
+            };
+        }
+        inner(req)
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn subagent_spend_uses_the_turn_execution_id() {
+    let h = harness(
+        subagent_platform(Arc::new(AtomicBool::new(false))).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    std::fs::write(h.folder.path().join("notes.txt"), "hello\n").unwrap();
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+
+    // Every model call, the sub-agent's included, is the turn's spend.
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let child: Vec<&Req> = llm
+        .iter()
+        .filter(|req| is_child_request(&serde_json::from_str(&req.body).unwrap()))
+        .collect();
+    assert_eq!(child.len(), 2, "the sub-agent read, then reported");
+    for req in &llm {
+        assert_eq!(req.headers["x-elitea-execution-id"], EXECUTION);
+    }
+    // The sub-agent's prompt holds the environment, never the agent's own
+    // instructions, and it is offered read-only tools only.
+    let body: Value = serde_json::from_str(&child[0].body).unwrap();
+    let system = body["messages"][0]["content"].as_str().unwrap();
+    assert!(!system.contains("Be brief."), "{system}");
+    assert!(system.contains("## Environment"), "{system}");
+    let offered: Vec<&str> = body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap())
+        .collect();
+    assert!(offered.contains(&"read_file"), "{offered:?}");
+    for writer in [
+        "write_file",
+        "edit_file",
+        "apply_patch",
+        "run_command",
+        "spawn_agent",
+        "Jira_create_issue",
+    ] {
+        assert!(!offered.contains(&writer), "{offered:?}");
+    }
+
+    // The lane's events: started under the spawn call, the child's own
+    // tool call, and its end.
+    let started = of_kind(&events, "subagent_started");
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0]["parent_call_id"], "call-spawn");
+    assert_eq!(started[0]["label"], "notes");
+    let agent_id = started[0]["agent_id"].as_str().unwrap().to_owned();
+    let inner: Vec<Value> = of_kind(&events, "subagent_event")
+        .into_iter()
+        .map(|event| event["inner"].clone())
+        .collect();
+    assert!(
+        inner
+            .iter()
+            .any(|e| e["kind"] == "tool_call" && e["tool"] == "read_file"),
+        "{inner:?}"
+    );
+    let finished = of_kind(&events, "subagent_finished");
+    assert_eq!(finished[0]["agent_id"], agent_id.as_str());
+    assert_eq!(finished[0]["status"], "completed");
+    assert_eq!(finished[0]["result"], "notes.txt says hello.");
+    // The child's read is no `tool_call` of the turn's own.
+    assert!(
+        of_kind(&events, "tool_call")
+            .iter()
+            .all(|call| call["tool"] != "read_file")
+    );
+
+    // The commit carries the child's call under the spawn call.
+    let commit = &commit_bodies(&h.server)[0];
+    let calls = commit["tool_calls"].as_object().unwrap();
+    let read = &calls["child-read"];
+    assert_eq!(read["parent_agent_call_id"], "call-spawn");
+    assert_eq!(read["sibling_ordinal"], 1);
+    assert_eq!(read["parent_agent_name"], "notes");
+    assert_eq!(
+        read["parent_agent_path"],
+        json!([{"name": "notes", "call_id": "call-spawn", "sibling_ordinal": 1}])
+    );
+    assert!(calls["call-spawn"].get("parent_agent_call_id").is_none());
+    let order: Vec<&String> = calls.keys().collect();
+    assert!(order.contains(&&"call-wait".to_owned()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn turn_cancel_stops_children() {
+    let hang = Arc::new(AtomicBool::new(true));
+    let h = harness(
+        subagent_platform(hang.clone()).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+    // Until the child runs and the parent waits for it.
+    for _ in 0..500 {
+        if h.emitter.kinds().contains(&"subagent_started")
+            && seen(&h.server, "/llm/v1/chat/completions").len() >= 3
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let cancelled_at = std::time::Instant::now();
+    h.host.cancel(&started.turn_id).unwrap();
+    let events = done_event(&h.emitter).await;
+    assert!(cancelled_at.elapsed() < Duration::from_secs(2));
+    hang.store(false, Ordering::SeqCst);
+    let finished = of_kind(&events, "subagent_finished");
+    assert_eq!(finished.len(), 1, "{:?}", h.emitter.kinds());
+    assert_eq!(finished[0]["status"], "cancelled");
+    assert_eq!(events.last().unwrap().payload["committed"], false);
+}

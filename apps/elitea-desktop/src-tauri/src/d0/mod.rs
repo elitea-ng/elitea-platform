@@ -23,6 +23,7 @@
 //! * [`remote_tools`] — `RemoteToolkit` tools (decision 3);
 //! * [`approvals`] — the person's prompt, bridged to the UI over IPC;
 //! * [`tools`] — the per-tool events, steps and before-images;
+//! * [`subagents`] — the runtime's sub-agents on a workspace turn (#1226);
 //! * [`recorder`] — what the commit and the changed-files card report;
 //! * [`events`] — the `agent://event` stream;
 //! * [`mentions`] — the "@" file picker and a turn's referenced paths;
@@ -56,6 +57,7 @@ pub mod remote_tools;
 pub mod session;
 pub mod skills;
 pub mod slash_commands;
+pub mod subagents;
 pub mod tools;
 pub mod turn;
 

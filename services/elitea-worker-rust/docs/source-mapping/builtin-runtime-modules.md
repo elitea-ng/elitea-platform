@@ -9,7 +9,7 @@ Swarm Mode is excluded. Keep the existing code until its removal or migration ha
 The current application's Modules control supplies the functional inventory.
 New UI `apps/elitea-web/src/features/agents/lib/internalTools.ts` owns authorable flags.
 Main `internal/application/agentexecution/tools.go` freezes selections and `internal/db/queries/agent_chat.sql` controls admission.
-Rust `src/agents/internal_tools.rs::InternalToolCatalog` serves `ask_user`, the two builders, and (since the planner / attachments / Smart Tools Selection port below) `planner`, `attachments` and `lazy_tools_mode`; it records the remaining unavailable module flags.
+Rust `src/agents/internal_tools.rs::InternalToolCatalog` serves `ask_user`, the two builders, and (since the planner / attachments / Smart Tools Selection port below) `planner`, `attachments` and `lazy_tools_mode`, and `subagents` (#1226: the runtime's read-only sub-agents, `libs/rust/agent-runtime/src/subagents/`, bound on the toggle and on every cloud-executor workspace turn by `src/agents/subagents.rs`); it records the remaining unavailable module flags.
 A successful chat with an unavailable-module notice does not prove the module executes.
 
 ## Ask User editor control, 2026-09-30

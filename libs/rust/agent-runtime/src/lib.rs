@@ -11,8 +11,9 @@
 //!   no digest depends on `serde_json`'s `preserve_order`;
 //! * [`exact_number`] — exact integer reading of JSON number text, never
 //!   through `f64`, shared by typed state reducers and data shaping;
-//! * [`planner`], [`lazy_tools`] — the `planner` and `lazy_tools_mode`
-//!   (Smart Tools Selection) internal tools;
+//! * [`planner`], [`lazy_tools`], [`subagents`] — the `planner`,
+//!   `lazy_tools_mode` (Smart Tools Selection) and `subagents` internal
+//!   tools;
 //! * [`tool_namespacing`] — the provider-alias notice for renamed tools;
 //! * [`context`] — shrinking older tool results in a long turn's model
 //!   requests (host opt-in);
@@ -68,6 +69,7 @@ pub mod planner;
 pub mod platform;
 pub mod request;
 pub mod step_limit;
+pub mod subagents;
 pub mod text;
 pub mod tool_namespacing;
 pub mod toolkits;

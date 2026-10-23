@@ -166,11 +166,28 @@ impl Recorder {
         });
     }
 
-    /// A tool call is about to begin: recorded, unless the turn already
-    /// holds [`MAX_TOOL_CALLS`] (then `false`: the call must not run, as
-    /// the commit could not carry it).
+    /// A turn's own tool call, for the recorder's tests.
+    #[cfg(test)]
     #[must_use]
     pub fn tool_started(&self, run_id: &str, tool_name: &str, inputs: &Value) -> bool {
+        self.tool_started_under(run_id, tool_name, inputs, None)
+    }
+
+    /// A tool call is about to begin: recorded, unless the turn already
+    /// holds [`MAX_TOOL_CALLS`] (then `false`: the call must not run, as
+    /// the commit could not carry it). A call made under another agent (a
+    /// sub-agent's, #1226) has `hierarchy`: its `parent_agent_call_id`,
+    /// `parent_agent_path`, `sibling_ordinal` and `parent_agent_name`, the
+    /// shape the cloud worker writes for a nested agent's calls. It counts
+    /// toward the cap like any call.
+    #[must_use]
+    pub fn tool_started_under(
+        &self,
+        run_id: &str,
+        tool_name: &str,
+        inputs: &Value,
+        hierarchy: Option<&Map<String, Value>>,
+    ) -> bool {
         let mut entry = Map::new();
         entry.insert("run_id".into(), json!(run_id));
         entry.insert("tool_name".into(), json!(tool_name));
@@ -183,6 +200,9 @@ impl Recorder {
             },
         );
         entry.insert("timestamp_start".into(), json!(now()));
+        if let Some(hierarchy) = hierarchy {
+            entry.extend(hierarchy.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
         self.with(|state| {
             if state.steps.len() >= MAX_TOOL_CALLS {
                 return false;
@@ -336,13 +356,24 @@ impl Recorder {
 
     /// The commit's `tool_calls` map, keyed by run id, in the model's call
     /// order (a call the model's answer did not name keeps its start
-    /// order, after the named ones).
+    /// order, after the named ones). A sub-agent's calls follow the
+    /// `spawn_agent` call that started it, in their start order.
     #[must_use]
     pub fn tool_calls(&self) -> ToolCalls {
         self.with(|state| {
             let position = |id: &str| state.planned.iter().position(|known| known == id);
+            let order = |(id, entry): &Step| {
+                position(id)
+                    .or_else(|| {
+                        entry
+                            .get("parent_agent_call_id")
+                            .and_then(Value::as_str)
+                            .and_then(position)
+                    })
+                    .unwrap_or(usize::MAX)
+            };
             let mut steps: Vec<(usize, &Step)> = state.steps.iter().enumerate().collect();
-            steps.sort_by_key(|(started, (id, _))| (position(id).unwrap_or(usize::MAX), *started));
+            steps.sort_by_key(|(started, step)| (order(step), *started));
             ToolCalls(steps.into_iter().map(|(_, step)| step.clone()).collect())
         })
         .unwrap_or_default()

@@ -44,7 +44,8 @@ test.use({ storageState: STORAGE_STATE.admin });
 // are skipped by the Rust worker; the rest it serves natively.
 const RUST_SKIPPED_INTERNAL_TOOLS = ['image_generation', 'internal_mcp', 'swarm', 'pyodide'] as const;
 // data_analysis is served by Rust as structured table tools (ADR-0033).
-const RUST_SERVED_INTERNAL_TOOLS = ['planner', 'lazy_tools_mode', 'attachments', 'data_analysis'] as const;
+// subagents: the runtime's read-only sub-agents (#1226).
+const RUST_SERVED_INTERNAL_TOOLS = ['planner', 'lazy_tools_mode', 'attachments', 'data_analysis', 'subagents'] as const;
 const REPORTED_INTERNAL_TOOLS = [...RUST_SKIPPED_INTERNAL_TOOLS, ...RUST_SERVED_INTERNAL_TOOLS] as const;
 
 interface RuntimeCapabilities {

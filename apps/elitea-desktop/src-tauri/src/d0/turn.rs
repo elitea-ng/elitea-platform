@@ -46,6 +46,7 @@ use elitea_agent_runtime::request::{
     NextInputSuggestionPolicy, ProjectContextSnapshot, UserInput,
 };
 use elitea_agent_runtime::step_limit::{self, StepBudget};
+use elitea_agent_runtime::subagents::{self, SubAgentConfig, SubAgents};
 use elitea_local_index::tools::{IndexToolProvider, NAMES as INDEX_TOOLS};
 use elitea_local_tools::approvals::{JsonFileChoices, PermissionProfile, WorkspaceSettings};
 use elitea_local_tools::find::FoundPath;
@@ -80,6 +81,7 @@ use super::remote_tools::{
 use super::session::{AGENT_AUTHOR, Refusal, SessionError, SessionPlan};
 use super::skills::{self, InvokedSkill};
 use super::slash_commands::{self, CommandPick, ExpandedCommand, ListedCommand};
+use super::subagents::DesktopSubAgents;
 use super::tools::{AcceptedPlanNote, ObservedToolset, PlanGatedToolset, ToolObserver};
 use crate::history::{
     HistoryStore, NewTurn, Owner, StoredImage, StoredTurn, ThreadCopy, ThreadCopyTarget, TurnTap,
@@ -404,15 +406,27 @@ const TURN_RUNNING: &str = "A turn is already running in this workspace.";
 const CONTEXT_WITHHELD: &str =
     "You cannot view this project's context, so this turn runs without it.";
 
-/// The names a remote tool may not take: every local tool's and every index
+/// The names a remote tool may not take: every local tool's, every index
 /// tool's (whether or not this workspace has an index: names stay stable as
-/// the index comes and goes).
+/// the index comes and goes) and the runtime's sub-agent tools (the
+/// `elitea_subagents` toolset every workspace turn is offered, #1226).
 fn local_tool_names() -> Vec<&'static str> {
     TOOLS
         .iter()
         .map(|tool| tool.name)
         .chain(INDEX_TOOLS)
+        .chain(subagents::TOOL_NAMES)
         .collect()
+}
+
+/// Closes a turn's sub-agents when its run ends, however it ends (an answer,
+/// an error, or a cancel that drops the run): none outlives the turn.
+struct CloseSubAgents(SubAgents);
+
+impl Drop for CloseSubAgents {
+    fn drop(&mut self) {
+        self.0.close_all();
+    }
 }
 
 /// The conversation's participant that answers with the request's agent
@@ -2686,7 +2700,24 @@ impl AgentHost {
         if index.is_some() {
             extra_tools.extend(INDEX_TOOLS.iter().map(|name| (*name).to_owned()));
         }
+        // A sub-agent's environment names what it is offered: the read-only
+        // local tools and the index tools (#1226).
+        let child_facts = environment::Facts {
+            plan_mode: false,
+            tools: workspace
+                .session
+                .available_tools()
+                .iter()
+                .filter(|tool| tool.kind.is_read_only())
+                .map(|tool| tool.name.to_owned())
+                .chain(extra_tools.iter().cloned())
+                .collect(),
+            ..facts.clone()
+        };
         extra_tools.extend(PLANNER_TOOLS.iter().map(|name| (*name).to_owned()));
+        // The runtime's sub-agents, offered to every workspace turn, plan
+        // mode included (a child only reads).
+        extra_tools.extend(subagents::TOOL_NAMES.iter().map(|name| (*name).to_owned()));
         facts.tools.extend(extra_tools.iter().cloned());
         // ModelTransport: /llm with the native token and the execution id.
         let transport = GatewayTransport {
@@ -2735,6 +2766,7 @@ impl AgentHost {
         let bound = transport
             .bind(model_request.clone())
             .map_err(|e| failed("model_unavailable", &e.to_string()))?;
+        let child_model = model_request.clone();
         let model = self.compacting_model(
             &transport,
             model_request,
@@ -2802,7 +2834,35 @@ impl AgentHost {
             recorder: recorder.clone(),
             session: Some(workspace.session.clone()),
             planner: Some(planner.clone()),
+            child: None,
         };
+        // Sub-agents: the turn's model, quiet, and its local and index tools
+        // (never the remote toolkits); the AGENTS.md sections under this
+        // turn's nonce, never the agent's instructions or the history.
+        let child_instruction = system_instruction(
+            "",
+            &environment::preamble(&child_facts),
+            &[],
+            project,
+            &environment::current(&child_facts),
+            "",
+            &nonce,
+        );
+        let children = SubAgents::new(
+            Arc::new(DesktopSubAgents::new(
+                transport.clone(),
+                child_model,
+                toolsets
+                    .iter()
+                    .filter(|toolset| toolset.name() != REMOTE_TOOLSET)
+                    .cloned()
+                    .collect(),
+                events.clone(),
+                recorder.clone(),
+            )),
+            SubAgentConfig::new(child_instruction),
+        );
+        let children = CloseSubAgents(children);
 
         let mut builder = LlmAgentBuilder::new(AGENT_NAME)
             .model(model)
@@ -2854,6 +2914,15 @@ impl AgentHost {
         }
         builder = builder.toolset(Arc::new(ObservedToolset::new(
             planner.toolset(),
+            ToolObserver {
+                session: None,
+                planner: None,
+                ..observer.clone()
+            },
+            false,
+        )) as Arc<dyn Toolset>);
+        builder = builder.toolset(Arc::new(ObservedToolset::new(
+            children.0.toolset(),
             ToolObserver {
                 session: None,
                 planner: None,
