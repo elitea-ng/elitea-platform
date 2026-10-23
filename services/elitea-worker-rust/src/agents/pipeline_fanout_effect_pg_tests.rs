@@ -156,25 +156,25 @@ impl Tool for CrashingMcpTool {
 /// node materializes its own participant (same shape as the 2a-1 fixture).
 struct SavedAgentVersions;
 
-#[async_trait]
-impl RuntimeContextRpc for SavedAgentVersions {
-    async fn post(
+#[tonic::async_trait]
+impl crate::transport::input_content::content_fake::ContextRoutes for SavedAgentVersions {
+    async fn answer(
         &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, RuntimeContextTransportError> {
-        let value = if request.uri().path().ends_with("/elitea-client-token") {
+        call: crate::transport::input_content::content_fake::ContextCall,
+    ) -> Result<crate::transport::input_content::content_fake::ContextAnswer, tonic::Status> {
+        let value = if call.route == "elitea-client-token" {
             json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":17,
                 "token":"ephemeral-fanout-token"})
-        } else if request.uri().path().ends_with("/3/versions/4") {
+        } else if call.route.ends_with("/3/versions/4") {
             json!({"schema_version":"elitea.runtime.application-version.v1","project_id":17,
                 "application_id":3,"version_id":4,"version_details":effectful_agent(),
                 // Main's authenticated digest of the frozen version: the saved
                 // participant fingerprint a Parallel branch is bound to.
                 "frozen_definition_sha256":"ab".repeat(32)})
         } else {
-            return Err(RuntimeContextTransportError::Unavailable);
+            return Err(tonic::Status::unavailable("fixture route"));
         };
-        Ok(runtime_response(&value))
+        Ok(crate::transport::input_content::content_fake::ContextAnswer::from(&value))
     }
 }
 
@@ -182,7 +182,7 @@ fn saved_runtime(
     outcomes: Vec<TestModelGatewayOutcome>,
 ) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
     let runtime = RuntimeContextClient::with_rpc(
-        SavedAgentVersions,
+        crate::transport::input_content::content_fake::Routes(SavedAgentVersions),
         RuntimeContextConfig {
             origin: "https://content.internal".to_owned(),
             deadline: Duration::from_secs(1),

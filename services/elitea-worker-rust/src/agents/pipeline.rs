@@ -456,6 +456,7 @@ impl PipelineNativeAgentAssembler {
             office_runtime: None,
             #[cfg(test)]
             fixed_parallel_for_tests: false,
+            #[cfg(test)]
             fresh_start_continuation: ApplicationContinuation::Scoped,
         }
     }
@@ -481,6 +482,7 @@ impl PipelineNativeAgentAssembler {
             office_runtime: None,
             #[cfg(test)]
             fixed_parallel_for_tests: false,
+            #[cfg(test)]
             fresh_start_continuation: ApplicationContinuation::Scoped,
         }
     }

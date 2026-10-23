@@ -35,42 +35,66 @@ struct ReplyRpc {
     body: Arc<std::sync::Mutex<Vec<u8>>>,
 }
 
-#[async_trait::async_trait]
-impl super::super::InputContentRpc for ReplyRpc {
-    async fn get(
-        &self,
-        request: Request<Body>,
-    ) -> Result<http::Response<Body>, super::super::InputContentTransportError> {
+impl ReplyRpc {
+    /// The HTTP-era status of a case as the gRPC status Main answers (§7.1).
+    fn answer(&self) -> Result<Vec<u8>, tonic::Status> {
+        match self.status {
+            200 => Ok(serde_json::to_vec(&self.reply).expect("json")),
+            401 | 403 => Err(tonic::Status::permission_denied("claim denied")),
+            409 => Err(tonic::Status::already_exists("conflict")),
+            404 => Err(tonic::Status::not_found("not found")),
+            400 => Err(tonic::Status::invalid_argument("invalid")),
+            _ => Err(tonic::Status::unavailable("unavailable")),
+        }
+    }
+
+    fn expect_claim<T>(&self, request: &tonic::Request<T>, operation: &str) {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        assert_eq!(request.method(), Method::POST);
-        assert_eq!(request.version(), Version::HTTP_2);
-        assert_eq!(
-            request.uri().path(),
-            format!(
-                "/executions/{EXECUTION}/generations/1/interrupts/{}",
-                self.operation
-            )
-        );
-        assert_eq!(request.headers()[CLAIM_HEADER], "claim-1");
-        assert_eq!(
-            request.headers()[FENCE_HEADER],
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([b'f'; 32])
-        );
-        let body = request
-            .into_body()
-            .collect()
-            .await
-            .expect("body")
-            .to_bytes();
-        *self.body.lock().expect("body") = body.to_vec();
-        Ok(http::Response::builder()
-            .status(self.status)
-            .version(Version::HTTP_2)
-            .header(CONTENT_TYPE, "application/json")
-            .body(Body::new(http_body_util::Full::new(bytes::Bytes::from(
-                serde_json::to_vec(&self.reply).expect("json"),
-            ))))
-            .expect("response"))
+        assert_eq!(self.operation, operation);
+        let (claim, fence) = super::super::content_fake::claim_of(request);
+        assert_eq!(claim, "claim-1");
+        assert_eq!(fence, [b'f'; 32]);
+    }
+}
+
+#[tonic::async_trait]
+impl super::super::content_fake::ContentFake for ReplyRpc {
+    async fn fetch_execution_interrupts(
+        &self,
+        request: tonic::Request<crate::protocol::elitea::runtime::v1::FetchExecutionInterruptsRequestV1>,
+    ) -> Result<
+        tonic::Response<crate::protocol::elitea::runtime::v1::FetchExecutionInterruptsResponseV1>,
+        tonic::Status,
+    > {
+        self.expect_claim(&request, "fetch");
+        let scope = request.get_ref().scope.clone().expect("scope");
+        assert_eq!(scope.execution_id, EXECUTION);
+        assert_eq!(scope.generation, 1);
+        Ok(tonic::Response::new(
+            crate::protocol::elitea::runtime::v1::FetchExecutionInterruptsResponseV1 {
+                fetch_json: self.answer()?,
+            },
+        ))
+    }
+
+    async fn acknowledge_execution_interrupt(
+        &self,
+        request: tonic::Request<
+            crate::protocol::elitea::runtime::v1::AcknowledgeExecutionInterruptRequestV1,
+        >,
+    ) -> Result<
+        tonic::Response<
+            crate::protocol::elitea::runtime::v1::AcknowledgeExecutionInterruptResponseV1,
+        >,
+        tonic::Status,
+    > {
+        self.expect_claim(&request, "ack");
+        *self.body.lock().expect("body") = request.get_ref().ack_json.clone();
+        Ok(tonic::Response::new(
+            crate::protocol::elitea::runtime::v1::AcknowledgeExecutionInterruptResponseV1 {
+                outcome_json: self.answer()?,
+            },
+        ))
     }
 }
 
