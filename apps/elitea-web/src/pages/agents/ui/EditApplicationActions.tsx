@@ -8,7 +8,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { useNavigate } from '@tanstack/react-router';
 
 import { EntityLifecycleControls } from '@/features/agent-lifecycle';
-import { DeleteApplicationButton, ExportApplicationButton } from '@/features/agents';
+import { DeleteApplicationButton, ExportApplicationButton, applicationServerErrorMessage } from '@/features/agents';
 
 import { ChatWithAgentButton } from './ChatWithAgentButton';
 import { useForkTargetProjects } from '../lib/useForkTargetProjects';
@@ -86,7 +86,9 @@ export function EditApplicationActions({
     [],
   );
   const handleChatError = useCallback(
-    () => setError(t('pages.agents.editApplication.chatError', 'Failed to open a chat with this agent.')),
+    // The server's own refusal when it gave one (an agent or pipeline whose
+    // attachments break the composition rule, FU-244), else the generic text.
+    (error?: unknown) => setError(applicationServerErrorMessage(error, t('pages.agents.editApplication.chatError', 'Failed to open a chat with this agent.'))),
     [],
   );
 

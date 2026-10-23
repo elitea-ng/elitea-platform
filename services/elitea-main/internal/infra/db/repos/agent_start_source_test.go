@@ -49,6 +49,10 @@ func sourceVersionExecutor(t *testing.T) *rootSourceVersionExecutor {
 }
 func TestOriginalRootSourceResolverRetainsRawBeforeNestedSkills(t *testing.T) {
 	e := sourceVersionExecutor(t)
+	// The start's composition check (FU-244) reads the root version and its
+	// attachments in the same project transaction: a plain agent, no rows.
+	e.rowResults = []scriptedRow{{values: []any{"Root", "agent", ""}}, {values: []any{nil}}}
+	e.rowsResults = []*scriptedRows{{}}
 	store := &rootSourceProjectStore{rootSourceVersionExecutor: e}
 	repo, err := newCurrentAgentStartRepository(store, 1)
 	if err != nil {

@@ -3,6 +3,34 @@
 Branch `fix/fu244-typed-bound-refusals`, from `main` `6b0cea32c` (#1407). Step 0 of the 2a-2 brief
 (`handoffs/point5-wave1-20261008/T-2A2-parallel-brief.md`).
 
+## The rule (PLAN §8.8, user 2026-10-24, binding)
+
+- **Cycles** — an agent reaching itself through agents or pipelines, including self-reference, a version switch and
+  a saved pipeline — are always refused. Cycles are per **version** (a parent that reaches *another* version of
+  itself is not a cycle; the #5719 lesson).
+- **Ordinary agent nesting: at most 3 levels** (Orchestrator → Sub-orchestrator → Leaf, the root counted). A level may
+  hold several sub-orchestrators. Pipelines are the native nesting primitive with their own bounds (3 levels of saved
+  pipelines, 2 levels of pipeline Agent nodes, 25 attachments per run).
+- **Refused at authoring time**, typed and readable, wherever a stack is composed, and again at assembly as defence in
+  depth. Never dropped silently.
+
+| Where a stack is composed | Main enforcement | Proof |
+|---|---|---|
+| Attach an agent or pipeline as a tool | `eliteacore/application_relation.go:326,373` (before any write, parent locked) | PG attach tests; browser B |
+| Save pipeline instructions (Agent nodes) | `repos/applications.go:831,996` | PG save test; browser A |
+| Add to a conversation (incl. conversation create) | `repos/conversations.go:3124` → `repos/application_composition.go:213` | `TestAddingAParticipantWhoseCompositionBreaksABoundIsRefused` |
+| Switch a participant's version | `repos/conversations.go:1316` | `TestSwitchingAParticipantToAVersionThatClosesACycleIsRefused` |
+| Switch references by deleting a version with a replacement | `applications/handler.go:1763,1782` | `TestHandlerPostgres_DeleteVersionRefusesAReplacementThatClosesACycle` |
+| Publish | `eliteacore/handler.go:2008` (replaces the old walk, which counted pipeline hops as levels and never looked into pipelines) | `TestPublishValidationRefusesACycleThroughAPipelineAndAFourthLevel` |
+| Run start (selected agent) | `repos/agent_start.go:438` → `application_composition.go:271` (422 typed); the old start walk keeps its row checks only | route test; browser C |
+| Assembly (Worker) | `application.composition_bound` (below) | Worker tests; browser C2 |
+
+Current-app gaps not ported (#5680/#5778): unbounded nesting (bounded here); pipeline children skipped in the sub-agent
+tree walk (the cycle search follows every attachment, `composition.go:219`); version-switch bypass (participant switch
+and re-pointing are checked); name-only pipeline nodes (an Agent node's alias resolves to exactly one attachment by its
+stored name, Worker and Main alike); depth-blind container checks (levels are counted, not "has children"); the Web's
+depth-1 "container" guard is removed (`useAgentPipelineAssociation.tsx`), Main is authoritative.
+
 ## Business behaviour
 
 - **Current platform (reference only).** Attaching an agent as a tool when the child already reaches the parent is
@@ -32,8 +60,8 @@ Branch `fix/fu244-typed-bound-refusals`, from `main` `6b0cea32c` (#1407). Step 0
     resume, an unavailable capability): the run answers without them, and now **every root names them**, pipeline roots
     included (FU-243): the `skipped_capabilities` notice of `agent_start` / `full_message` lists them as it does for an
     ordinary Agent.
-- **Not ported.** The legacy depth-1 "container agent" rule (#5680) stays a Web-only guard as today; the server bounds
-  are the Worker's real limits, so Main never refuses what the runtime runs.
+- **Not ported.** The legacy depth-1 "container agent" rule (#5680) is gone (the Web guard is removed); the 3-level
+  rule and cycles are Main's, equal to the Worker's bounds through the shared contract.
 
 ## Design
 
@@ -135,12 +163,14 @@ New or changed tests (red before the change where marked):
 
 ## Performance
 
-- **Budget (Main save check).** One walk reads each saved version at most once (per-walk cache) and enters at most
-  `MaxApplicationHops` = 25 attachments, so a check costs at most 27 version reads (root, 25 entered, the refused one);
-  each read is one version row plus the attachment rows (one query, plus the legacy-table probe and read on a
-  legacy-migrated tenant): at most 27 × 3 = 81 statements, in the attach transaction or the save's pool. Proven by
-  `TestEachVersionIsReadAtMostOnceWithinTheHopBudget` (diamond read once per version; a refused walk reads ≤ 27). Only
-  an attach and a write that carries pipeline instructions pay it; an agent save never walks.
+- **Budget (Main checks).** One check reads each saved version at most once (per-check cache): the cycle search follows
+  every attachment and reads at most `MaxCycleVersions` = 128 versions; the bound walk reuses the cache and enters at
+  most 25 attachments. Each read is one version row plus the attachment rows (one query, plus the legacy-table probe
+  and read on a legacy-migrated tenant): at most 129 × 3 statements, in the attach transaction, the save's pool, the
+  participant transaction or the start's read-only project transaction. Proven by
+  `TestEachVersionIsReadAtMostOnceWithinTheHopBudget` (a diamond read once per version; every version read once, at
+  most 129). Only composing writes and a selected agent's start pay it; an agent save without pipeline instructions
+  never walks.
 - Pipeline text is parsed only within the save-time bounds (`pipelinelimits.Check`: 512 KiB, alias expansion budget)
   and only top-level `nodes` / `interrupt_*` are read; an over-bound stored text is not read past its length
   (`CASE … octet_length … <= $3` in the version query).
