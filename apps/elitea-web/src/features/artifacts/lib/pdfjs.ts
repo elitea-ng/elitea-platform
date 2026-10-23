@@ -36,15 +36,25 @@ export function loadPdfjs(): Promise<PdfjsModule> {
  * no eval path left (its `isEvalSupported` option is gone with it), so
  * neither CSP needs `unsafe-eval`.
  *
- * No CMap, standard-font or wasm URL is given, so pdf.js fetches nothing:
- * fonts a PDF does not embed fall back to system fonts, and image codecs that
- * pdf.js ships as WebAssembly (JPEG 2000, JBIG2) are off, since neither CSP
- * allows `wasm-unsafe-eval`. A page with such an image renders without it.
+ * No CMap or standard-font URL is given, so fonts a PDF does not embed fall
+ * back to system fonts. WebAssembly is off (neither CSP allows
+ * `wasm-unsafe-eval`), so JPEG 2000 and JBIG2 images decode through pdf.js's
+ * plain-JavaScript fallbacks, which it imports from `wasmUrl`: the build emits
+ * them into a folder named for the pdf.js version beside the worker
+ * (vite.config.ts, `pdfjsNoWasmDecoders`), and the dev
+ * server serves them from the package's own `wasm/` folder.
  */
 export function openPdfDocument(pdfjs: PdfjsModule, data: Uint8Array): PdfLoadingTask {
   return pdfjs.getDocument({
     data,
     useWasm: false,
+    wasmUrl: noWasmDecodersUrl(pdfjs.version),
     enableXfa: false,
   });
+}
+
+/** Absolute, because the worker resolves it against its own URL. */
+function noWasmDecodersUrl(version: string): string {
+  const worker = new URL(pdfWorkerUrl, window.location.href);
+  return new URL(import.meta.env.DEV ? '../wasm/' : `./pdfjs-${version}/`, worker).href;
 }
