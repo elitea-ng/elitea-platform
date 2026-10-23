@@ -21,7 +21,7 @@
 -- testdata/postgres/legacy-rbac-matrix.json, exported from a real legacy
 -- database by scripts/database/export_legacy_rbac_matrix.sql, at the
 -- `mode = 'default'` rows for the `admin`, `editor` and `viewer` roles. It is
--- parity restoration, not a new policy: this is what a pylon-backed deployment
+-- parity restoration, not a new policy: this is what a legacy-backed deployment
 -- already resolves today. Nothing here is inferred from the route's verb — the
 -- matrix disagrees with the obvious guess in several places and the matrix
 -- wins:
@@ -35,20 +35,22 @@
 --   * `configuration.roles.permissions.view` is default-mode ADMIN only, which
 --     is why no product route in this change is gated on it (see the router's
 --     note on `/permissions/prompt_lib/{projectID}`, which stays ungated
---     because it is the caller's own permission self-read — pylon's
---     counterpart, auth/api/v2/permissions.py, carries no guard either).
+--     because it is the caller's own permission self-read — the legacy
+--     runtime's counterpart, auth/api/v2/permissions.py, carries no guard
+--     either).
 --
 -- The permission NAMES come from testdata/legacy/legacy-rbac-static-catalog.json
--- (machine-generated from the pylon `check_api` declarations), matched per
--- module and per verb. internal/api/router_elitea_core_permission_map_test.go
--- re-checks both directions against those two files, so a name that exists in
--- neither, or a gate whose permission this file does not grant, fails the build
--- rather than shipping as a 403.
+-- (machine-generated from the legacy runtime `check_api` declarations), matched
+-- per module and per verb.
+-- internal/api/router_elitea_core_permission_map_test.go re-checks both
+-- directions against those two files, so a name that exists in neither, or a
+-- gate whose permission this file does not grant, fails the build rather than
+-- shipping as a 403.
 --
 -- BLAST RADIUS. `legacyrbac`'s projectPermissions() falls back to the CENTRAL
 -- default-mode grants by role NAME only for a project that carries NO
 -- per-project role_permission rows. That is the fresh-Go-database shape. It is
--- never the shape of a pylon-backed database, of a legacy dump, or of the E2E
+-- never the shape of a legacy-backed database, of a legacy dump, or of the E2E
 -- stack, all of which seed per-project rows and therefore suppress the fallback
 -- entirely — so no existing deployment's members gain anything here (pinned in
 -- internal/infra/legacyrbac/elitea_core_route_grant_postgres_integration_test.go,

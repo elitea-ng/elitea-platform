@@ -17,9 +17,10 @@
 -- naming the token, the tool and the source toolkits, that one call takes
 -- `models.applications.tool.execute` instead (inventory.SourceToolGate).
 --
--- WHY A SIDE TABLE, NOT A COLUMN: auth_core__token is pylon's, for the reason
--- 0071's header gives. ON DELETE CASCADE removes the row when the token goes
--- (a revoked grant, the expiry sweep), so no delete path can forget it.
+-- WHY A SIDE TABLE, NOT A COLUMN: auth_core__token is the legacy runtime's, for
+-- the reason 0071's header gives. ON DELETE CASCADE removes the row when the
+-- token goes (a revoked grant, the expiry sweep), so no delete path can forget
+-- it.
 --
 -- source_toolkit_ids is a SNAPSHOT of the invoking toolkit's `sources` taken
 -- when the token is minted. The token lives minutes; a source removed from

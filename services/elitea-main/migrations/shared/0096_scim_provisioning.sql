@@ -8,14 +8,16 @@
 -- somebody remembers to suspend it by hand.
 --
 -- Nothing in this platform did SCIM before this migration, and neither did
--- pylon: `grep -ril scim legacy/plugins/` finds nothing. This is not a port.
+-- the legacy runtime: `grep -ril scim legacy/plugins/` finds nothing. This is
+-- not a port.
 --
 -- WHY A SIDE TABLE AND NOT COLUMNS ON `auth_core__user`. That table is owned by
--- the pylon schema (internal/infra/db/migrations/001_initial.sql seeds it, and a
--- pylon-managed deployment creates it). Claiming a pylon-owned table in a shared
--- migration has broken this repository's seeds three times with a 42P07, and the
--- rule that came out of it is: read and UPDATE those rows, never change their
--- shape. So the SCIM-specific facts live here, keyed by the user id.
+-- the legacy runtime schema (internal/infra/db/migrations/001_initial.sql seeds
+-- it, and a legacy-managed deployment creates it). Claiming a legacy-owned
+-- table in a shared migration has broken this repository's seeds three times
+-- with a 42P07, and the rule that came out of it is: read and UPDATE those
+-- rows, never change their shape. So the SCIM-specific facts live here, keyed
+-- by the user id.
 --
 -- The person's identity itself stays where it already is:
 --
@@ -40,9 +42,10 @@
 -- ApplyShared` runs this set against a database that may hold nothing else —
 -- every `dbtest` template and several integration harnesses do exactly that —
 -- and `auth_core__user` is created by a DIFFERENT corpus
--- (internal/infra/db/migrations/001_initial.sql) or by pylon's own migrations.
--- A `REFERENCES auth_core__user(id)` here made 0096 fail with a 42P01 on every
--- such database, which took six unrelated artifact suites down with it.
+-- (internal/infra/db/migrations/001_initial.sql) or by the legacy runtime's own
+-- migrations. A `REFERENCES auth_core__user(id)` here made 0096 fail with a
+-- 42P01 on every such database, which took six unrelated artifact suites down
+-- with it.
 --
 -- WHAT THE FOREIGN KEY WOULD HAVE BOUGHT was `ON DELETE CASCADE`. Without it, an
 -- operator who hard-deletes an account from the admin Users page leaves a row

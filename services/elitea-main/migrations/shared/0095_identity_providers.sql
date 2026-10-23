@@ -2,13 +2,14 @@
 -- authored definition of how this deployment federates a login.
 --
 -- WHAT THIS REPLACES. The admin Configuration page's "Authentication" section
--- describes a pylon plugin's YAML. `auth_provider: form | oidc` selects which
--- of the `pylon_auth` plugins registers the login routes, and the OIDC values
--- (`metadata_endpoint`, `client_id`, `client_secret`) are keys inside
--- `auth_oidc/config.yml`. `auth_saml/config.yml` holds the parallel set
--- (`sp_key`, `sp_cert`, `idp_cert`, `authn_destination`, `saml_issuer`). The
--- reference page edits them by shipping patched plugin YAML over the Arbiter
--- bus, and a pylon reloads its descriptor.
+-- describes a legacy runtime plugin's YAML. `auth_provider: form | oidc`
+-- selects which of the legacy auth runtime's plugins registers the login
+-- routes, and the OIDC values (`metadata_endpoint`, `client_id`,
+-- `client_secret`) are keys inside `auth_oidc/config.yml`.
+-- `auth_saml/config.yml` holds the parallel set (`sp_key`, `sp_cert`,
+-- `idp_cert`, `authn_destination`, `saml_issuer`). The reference page edits
+-- them by shipping patched plugin YAML over the Arbiter bus, and a legacy
+-- runtime reloads its descriptor.
 --
 -- This service loads no plugins. Until now the only federation configuration it
 -- had was four environment variables read once at boot
@@ -18,12 +19,12 @@
 --
 -- WHY ONE ROW PER PROVIDER AND NOT A SETTINGS DOCUMENT. The configuration
 -- provenance specification requires "one typed OIDC provider revision owns all
--- values" and "one typed SAML provider revision", because pylon spreads
--- response type, scopes, endpoints, client authentication and verification
--- behaviour through code at three separate call sites, and a flat settings
--- document reproduces exactly that scattering. A row is the revision: `config`
--- carries the whole typed document for one provider, `revision` counts its
--- authored versions, and no value that the login path reads lives anywhere
+-- values" and "one typed SAML provider revision", because the legacy runtime
+-- spreads response type, scopes, endpoints, client authentication and
+-- verification behaviour through code at three separate call sites, and a flat
+-- settings document reproduces exactly that scattering. A row is the revision:
+-- `config` carries the whole typed document for one provider, `revision` counts
+-- its authored versions, and no value that the login path reads lives anywhere
 -- else.
 --
 -- WHY NOT `centry.platform_config`. Two reasons, and either alone is decisive.

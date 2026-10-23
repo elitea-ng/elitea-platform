@@ -19,9 +19,9 @@
 --
 -- WHERE THE NAMES COME FROM, AND WHY THE ROUTES DO NOT USE `projectPermission`.
 --
--- Same as 0104, for the same reason. Agent Evaluation is NOT in the pylon
--- plugin corpus this repository carries. That was re-verified for this slice
--- rather than assumed: the whole of `legacy/plugins/*` and
+-- Same as 0104, for the same reason. Agent Evaluation is NOT in the legacy
+-- runtime plugin corpus this repository carries. That was re-verified for this
+-- slice rather than assumed: the whole of `legacy/plugins/*` and
 -- `legacy/centry/*/plugins/*` was searched for `eval_dataset`, `eval_run`,
 -- `eval_result`, `eval_suite` and `eval_dimension`, and the only hits outside
 -- vendored `site-packages/` are three vestiges of a feature that was planned
@@ -41,8 +41,8 @@
 -- The routes therefore gate through exported constants in
 -- internal/api/v2/evaluation and pass them to `apimw.RequireResolvedPermissions`
 -- directly — the identical resolver, mode and middleware `projectPermission`
--- builds, with the pylon-provenance claim dropped because it would be false and
--- router_elitea_core_permission_map_test.go is right to refuse it.
+-- builds, with the legacy-provenance claim dropped because it would be false
+-- and router_elitea_core_permission_map_test.go is right to refuse it.
 --
 -- The check that DOES bind is router_permission_grant_gate_test.go, which
 -- resolves those constants through the AST and fails unless a shared migration

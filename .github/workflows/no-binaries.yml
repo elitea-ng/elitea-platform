@@ -553,7 +553,7 @@ jobs:
           set -euo pipefail
           node --test scripts/ci/check-ci-image-references.test.mjs
           node scripts/ci/check-ci-image-references.mjs
-      - name: The legacy runtime is named only in frozen and recorded files
+      - name: The legacy runtime is named nowhere
         run: |
           set -euo pipefail
           node --test scripts/ci/check-legacy-runtime-name.test.mjs

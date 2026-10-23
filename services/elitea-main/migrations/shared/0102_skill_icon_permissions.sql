@@ -25,7 +25,7 @@
 -- legacyrbac's projectPermissions() falls back to the CENTRAL default-mode
 -- grants by role name only for a project carrying NO per-project
 -- role_permission rows, which is the fresh-Go-database shape alone. A
--- pylon-backed database, a legacy dump and the E2E stack all seed per-project
+-- legacy-backed database, a legacy dump and the E2E stack all seed per-project
 -- rows and suppress the fallback.
 --
 -- That suppression is the reason nothing here can harm an existing deployment,

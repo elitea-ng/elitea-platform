@@ -48,8 +48,9 @@ usage: migrate-artifacts.sh --source <libcloud-storage-root> --alias <rc-alias>
   --source       The libcloud LOCAL storage root: the directory named by
                  settings.storage_libcloud_params.kwargs.key in the deployed
                  shared.yml (the reference deployment uses
-                 /data/libcloud/storage, which is <centry>/pylon_main/libcloud/
-                 storage on the host).
+                 /data/libcloud/storage, which is <legacy-main-data>/libcloud/
+                 storage on the host, <legacy-main-data> being the
+                 directory the legacy main service mounts at /data).
   --alias        An `rc` alias that already addresses the target store, e.g.
                  `rc alias set target http://127.0.0.1:9000 elitea <secret>`.
   --container    Target bucket. Default: elitea-artifacts. It must equal

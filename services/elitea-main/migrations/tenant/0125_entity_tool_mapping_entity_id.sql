@@ -8,12 +8,12 @@
 --     id, entity_version_id, entity_type, tool_id, selected_tools,
 --     created_at, updated_at
 --
--- The production pylon schema this service inherits has an eighth,
+-- The production legacy runtime schema this service inherits has an eighth,
 -- `entity_id integer NOT NULL` — see internal/db/schema/agent_chat_baseline.sql:104-113,
 -- which is the sqlc COMPILER projection of the deployed shape and states in its
 -- own header that "the tenant schema lifecycle continues to own this
--- already-existing table". That lifecycle is pylon's, and nothing in this
--- repository ever reconciled the two.
+-- already-existing table". That lifecycle is the legacy runtime's, and nothing
+-- in this repository ever reconciled the two.
 --
 -- Every writer in this repository names the column:
 --
@@ -40,8 +40,8 @@
 --     and eliteacore's import passes `info.appID` with the version's `vID`.
 --
 -- So on any database provisioned by these migrations rather than restored from
--- a pylon dump — the compose/standalone stack, a freshly created tenant —
--- attaching a toolkit to an agent answers
+-- a legacy runtime dump — the compose/standalone stack, a freshly created
+-- tenant — attaching a toolkit to an agent answers
 --
 --     500 {"error":"ERROR: column \"entity_id\" of relation
 --          \"entity_tool_mapping\" does not exist (SQLSTATE 42703)"}
@@ -49,7 +49,7 @@
 -- and the chat turn's tool-resolution subquery fails on the same column.
 -- Dump-loaded stacks hide it because db.RunMigrations skips the whole baseline
 -- set once tenant schemas already exist (internal/infra/db/migrate.go:38-47),
--- so the only schema anyone had actually looked at was pylon's.
+-- so the only schema anyone had actually looked at was the legacy runtime's.
 --
 -- This cannot be an edit to 001_initial.sql: it is already applied and the
 -- ledger pins its checksum.
@@ -65,8 +65,8 @@
 --   * the only two that do not — internal/api/oapiserver/publishing.go:107 and
 --     versions.go:202, both `INSERT ... (entity_version_id, tool_id)` — omit
 --     `entity_type` as well, which is NOT NULL with no default in the bootstrap
---     table AND in the pylon shape, so they raise 23502 instead. (They are
---     written `_, _ = pool.Exec(...)`, so they have been silently writing
+--     table AND in the legacy runtime shape, so they raise 23502 instead. (They
+--     are written `_, _ = pool.Exec(...)`, so they have been silently writing
 --     nothing on every deployment; that is a separate defect, not this one, and
 --     this migration does not change their behaviour.)
 --
@@ -79,18 +79,18 @@
 -- 42703 this file removes.
 --
 -- Landing it nullable "for now" was the alternative and was rejected: it would
--- leave a Go-migrated database with a different shape from a pylon-migrated one
--- indefinitely, which is precisely the divergence that produced this defect and
--- the five before it in this branch.
+-- leave a Go-migrated database with a different shape from a legacy-migrated
+-- one indefinitely, which is precisely the divergence that produced this defect
+-- and the five before it in this branch.
 --
 -- Guarded on the TABLE with to_regclass for the same reason as 0124: several
 -- integration fixtures apply the tenant chain to a schema of their own making
 -- that has no `entity_tool_mapping` at all, and `ALTER TABLE` on a missing
 -- relation raises 42P01 and fails the whole chain. Where the table is absent
--- this migration must record itself and move on. Where pylon already created
--- the column, `ADD COLUMN IF NOT EXISTS` is a no-op and `SET NOT NULL` on an
--- already-NOT NULL column is likewise a no-op, so the mixed deployment is
--- untouched.
+-- this migration must record itself and move on. Where the legacy runtime
+-- already created the column, `ADD COLUMN IF NOT EXISTS` is a no-op and `SET
+-- NOT NULL` on an already-NOT NULL column is likewise a no-op, so the mixed
+-- deployment is untouched.
 DO $$
 BEGIN
     IF to_regclass('entity_tool_mapping') IS NULL THEN

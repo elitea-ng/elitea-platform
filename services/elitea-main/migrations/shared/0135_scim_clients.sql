@@ -28,8 +28,9 @@
 --
 -- NO FOREIGN KEY TO `auth_core__user`. `created_by` is the id of the operator
 -- who made the client, recorded for the admin screen. 0096 and 0098 state why a
--- reference into the pylon corpus is not possible here: `migrate.ApplyShared`
--- runs this corpus against a database that may hold nothing else.
+-- reference into the legacy runtime corpus is not possible here:
+-- `migrate.ApplyShared` runs this corpus against a database that may hold
+-- nothing else.
 --
 -- NO NEW PERMISSION. The admin surface that manages these rows is gated on
 -- `admin.auth.users`, the permission the SCIM tree itself required until now.

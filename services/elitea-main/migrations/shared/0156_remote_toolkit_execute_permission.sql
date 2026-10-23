@@ -11,10 +11,11 @@
 -- allowed. It needs an EXECUTE permission rather than
 -- `models.applications.tool.patch` (what test_tool takes): patch is an edit of
 -- the toolkit, and a viewer who may chat with an agent may run that agent's
--- tools in a cloud turn without being allowed to edit them. pylon has no
--- `check_api` declaration for it, so testdata/legacy/legacy-rbac-static-catalog.json
--- does not list it; the route takes it from a package constant, as the
--- evaluation routes do for their platform strings.
+-- tools in a cloud turn without being allowed to edit them. The legacy runtime
+-- has no `check_api` declaration for it, so
+-- testdata/legacy/legacy-rbac-static-catalog.json does not list it; the route
+-- takes it from a package constant, as the evaluation routes do for their
+-- platform strings.
 --
 -- WHO HOLDS IT. The roles that may chat, i.e. the holders of
 -- `models.chat.messages.create` (0070): `admin`, `editor` and `viewer` in the

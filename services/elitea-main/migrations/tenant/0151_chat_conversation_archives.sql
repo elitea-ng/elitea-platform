@@ -14,9 +14,9 @@
 --     archived_by      bigint     NOT NULL   -- the user id of the member who archived it
 --     archived_at      timestamp  NOT NULL   -- the UTC wall clock, as chat_conversations
 --
--- WHY THE TENANT SCHEMA, NOT centry. The pin is in centry because pylon's
--- Projects plugin owned that table first (shared/0064). Nothing owns an
--- archive table, and the tenant schema IS the project, so the key is the
+-- WHY THE TENANT SCHEMA, NOT centry. The pin is in centry because the legacy
+-- runtime's Projects plugin owned that table first (shared/0064). Nothing owns
+-- an archive table, and the tenant schema IS the project, so the key is the
 -- conversation alone. The foreign key does the delete cleanup: a deleted
 -- conversation takes its archive row with it, and a dropped project schema
 -- takes all of them. No delete flow and no deprovision step must remember it.
