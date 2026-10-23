@@ -59,10 +59,12 @@ export const approval = { Dialog: ApprovalDialog, Card: ApprovalCard };
 
 /**
  * Plan mode and the agent's checklist (#1225): the proposed plan's card, the todo pane (the session's Plan tab,
- * loaded only when the tab is shown) and the latest plan of a thread's turns.
+ * loaded only when the tab is shown) and the latest plan of a thread's turns; and the session's background
+ * processes (#1223): the terminal pane (the Processes tab, loaded only once the folder has a process).
  */
 export const plan = {
   Card: PlanCard,
   TodoPane: lazy(() => import('./ui/TodoPane').then((module) => ({ default: module.TodoPane }))),
   latest: latestPlan,
+  TerminalPane: lazy(() => import('./ui/TerminalPane').then((module) => ({ default: module.TerminalPane }))),
 };

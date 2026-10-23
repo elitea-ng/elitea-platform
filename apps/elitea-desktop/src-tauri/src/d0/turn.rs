@@ -53,7 +53,7 @@ use elitea_local_tools::find::FoundPath;
 use elitea_local_tools::policy::{LocalWorkPolicy, SandboxMode};
 use elitea_local_tools::project_instructions::{self, ProjectInstructions, TRUNCATED_NOTE};
 use elitea_local_tools::provider::LocalToolProvider;
-use elitea_local_tools::session::{LocalSession, SessionConfig, TOOLS};
+use elitea_local_tools::session::{LocalSession, PROCESS_TOOLS, SessionConfig, TOOLS};
 use futures::{FutureExt as _, StreamExt as _};
 use serde_json::{Map, Value, json};
 
@@ -285,6 +285,8 @@ pub fn app_dirs_for_sandbox(dirs: impl IntoIterator<Item = Option<PathBuf>>) -> 
 struct WorkspaceSession {
     session: Arc<LocalSession>,
     prompt: Arc<UiPrompt>,
+    /// Where the session's background processes report (#1223).
+    processes: Arc<super::processes::ProcessSink>,
     policy: LocalWorkPolicy,
     /// When the approval rule files it loaded last changed.
     rules_stamp: Mutex<crate::rules::Stamp>,
@@ -413,10 +415,22 @@ const CONTEXT_WITHHELD: &str =
 fn local_tool_names() -> Vec<&'static str> {
     TOOLS
         .iter()
+        .chain(PROCESS_TOOLS)
         .map(|tool| tool.name)
         .chain(INDEX_TOOLS)
         .chain(subagents::TOOL_NAMES)
         .collect()
+}
+
+/// Stop a session's background processes without waiting for them: from
+/// a lock or a synchronous caller (the session is being replaced).
+fn stop_processes_soon(session: &Arc<LocalSession>) {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        let session = session.clone();
+        handle.spawn(async move { session.stop_processes().await });
+    } else {
+        session.stop_processes_blocking(elitea_local_tools::process::TERM_GRACE);
+    }
 }
 
 /// Closes a turn's sub-agents when its run ends, however it ends (an answer,
@@ -1000,6 +1014,11 @@ impl AgentHost {
             existing.refresh_rules(&self.rules, workspace_id);
             return Ok(existing.clone());
         }
+        // The policy changed: the session it replaces ends, and its
+        // background processes with it (#1223).
+        if let Some(replaced) = sessions.remove(workspace_id) {
+            stop_processes_soon(&replaced.session);
+        }
         let data_dir = self.deps.workspaces.data_dir(workspace_id);
         // Owner-only (0700), the workspaces folder above it too: remembered
         // approvals, copy checkpoints and the index are the folder's data.
@@ -1045,9 +1064,15 @@ impl AgentHost {
                 self.rules.clone(),
                 workspace_id,
             ))));
+        let processes = Arc::new(super::processes::ProcessSink::new(
+            workspace_id,
+            self.deps.emitter.clone(),
+        ));
+        session.set_process_events(Some(processes.clone()));
         let entry = Arc::new(WorkspaceSession {
             session,
             prompt,
+            processes,
             policy: policy.clone(),
             rules_stamp: Mutex::new(loaded.stamp),
         });
@@ -2220,6 +2245,8 @@ impl AgentHost {
         // the thread unless its model or meta.edit_format changes.
         session.set_edit_profile(admitted.edit_profile);
         session.begin_turn(&checkpoint_label(&request.prompt));
+        // The processes this turn starts show on its tool cards until it ends.
+        workspace.processes.bind_turn(Some(events.clone()));
         events.running(&project.paths(), &turn_model(&admitted));
 
         let sink = Arc::new(TurnSink::with_events(events.clone()));
@@ -2266,6 +2293,13 @@ impl AgentHost {
         // What the turn left in each file it changed: the per-file revert
         // of this turn, once it is not the newest, checks against it.
         recorder.seal(session.workspace());
+        // The turn's background processes end with it, unless pinned or
+        // kept for the session; their exits reach the tool cards first.
+        session.end_turn_processes().await;
+        workspace.processes.bind_turn(None);
+        for info in session.processes() {
+            recorder.process_ended(&info);
+        }
         workspace.prompt.bind(None);
         self.broker.forget_turn(events.turn_id());
         let conversation_id = request.conversation_id.clone();
@@ -2731,7 +2765,7 @@ impl AgentHost {
                 .session
                 .available_tools()
                 .iter()
-                .filter(|tool| tool.kind.is_read_only())
+                .filter(|tool| tool.kind.is_read_only() && !tool.kind.is_process())
                 .map(|tool| tool.name.to_owned())
                 .chain(extra_tools.iter().cloned())
                 .collect(),
@@ -2909,7 +2943,11 @@ impl AgentHost {
                 events.clone(),
                 recorder.clone(),
             )),
-            SubAgentConfig::new(child_instruction),
+            // A child only reads, and never gets near the parent's processes
+            // (`process_output`, `process_list` and `process_wait` read, but
+            // what they read is the parent's terminal, #1223).
+            SubAgentConfig::new(child_instruction)
+                .with_excluded_tools(PROCESS_TOOLS.iter().map(|tool| tool.name.to_owned())),
         );
         let children = CloseSubAgents(children);
 
@@ -3157,15 +3195,65 @@ impl AgentHost {
             .owner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        self.sessions
+        // Signing out ends every session, and its background processes.
+        for (_, entry) in self
+            .sessions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
+            .drain()
+        {
+            stop_processes_soon(&entry.session);
+        }
         self.caches.clear();
         self.failed_commits
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+    }
+
+    /// The workspace's open session, if a turn opened one (the Processes
+    /// pane's commands, #1223), and whether a turn runs in it now.
+    pub fn process_session(&self, workspace_id: &str) -> Option<(Arc<LocalSession>, bool)> {
+        let sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = sessions.get(workspace_id)?;
+        Some((entry.session.clone(), entry.processes.turn_running()))
+    }
+
+    /// Stop the workspace's background processes and wait for them (the
+    /// workspace is removed, a handoff starts, #1223).
+    pub async fn kill_processes(&self, workspace_id: &str) {
+        let session = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(workspace_id)
+            .map(|entry| entry.session.clone());
+        if let Some(session) = session {
+            session.stop_processes().await;
+        }
+    }
+
+    /// The app quits: `SIGTERM` to every workspace's background processes,
+    /// `SIGKILL` to what still runs after `grace` (#1223).
+    pub fn stop_all_processes_blocking(&self, grace: std::time::Duration) {
+        let sessions: Vec<Arc<LocalSession>> = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .map(|entry| entry.session.clone())
+            .collect();
+        // One grace for all of them: the quit waits at most `grace` in all
+        // (a later session's processes then go straight to `SIGKILL`).
+        let deadline = std::time::Instant::now() + grace;
+        for session in &sessions {
+            session.stop_processes_blocking(
+                deadline.saturating_duration_since(std::time::Instant::now()),
+            );
+        }
     }
 
     /// A turn changed `changes` in the workspace: its index (if open)
@@ -3197,6 +3285,8 @@ impl AgentHost {
             workspace_id,
             "Wait for the running turn to end, or stop it, before removing this workspace.",
         )?;
+        // Nothing the agent started outlives the workspace (#1223).
+        self.kill_processes(workspace_id).await;
         // The index's refresh stopped and its database closed, and held so
         // until the directory holding it is deleted: nothing reopens it.
         let workspaces = self.deps.workspaces.clone();

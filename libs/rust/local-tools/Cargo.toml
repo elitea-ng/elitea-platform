@@ -36,6 +36,9 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 # find_files' fuzzy ranking: the matcher nucleo 0.5 re-exports (MPL-2.0,
 # linked unmodified; no serde_json, no threads), as Codex's file search uses.
 nucleo-matcher = "0.3.1"
+# Background processes on a pseudo-terminal (`process`, #1223): wezterm's
+# PTY spawn for macOS and Linux (MIT; no serde, no TLS).
+portable-pty = "0.9.0"
 # run_tests' junit reports (pytest, Surefire, Gradle). No default features:
 # no serde, no encoding; it expands no DTD entity.
 quick-xml = { version = "0.42.0", default-features = false }
@@ -50,6 +53,9 @@ tokio = { version = "1.53.1", features = ["io-util", "macros", "process", "rt", 
 tracing = "0.1.44"
 # Path comparisons the way APFS makes them (NFC/NFD-insensitive).
 unicode-normalization = "0.1.25"
+# A terminal process's rendered screen, what the model reads of an
+# interactive program (`process`; MIT, no serde).
+vt100 = "0.18.1"
 
 # Every file operation walks the workspace from a directory descriptor with
 # O_NOFOLLOW (openat/mkdirat/renameat), so a symlink swapped in mid-call

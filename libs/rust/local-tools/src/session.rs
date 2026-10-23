@@ -37,11 +37,16 @@ use crate::files;
 use crate::git::{Repo, StatusSummary, capped, check_revision, parse_status_summary};
 use crate::ledger::ReadLedger;
 use crate::policy::{LocalWorkPolicy, SandboxMode};
+use crate::process::{KeepAlive, ProcessRegistry};
 use crate::project::{self, ProjectProfile};
 use crate::run_tests;
 use crate::sandbox::{self, Enforcement, SandboxRequest};
 use crate::shell::{self, CommandSpec, ShellConfig};
 use crate::workspace::{Intent, Workspace, WsPath};
+
+mod processes;
+
+pub use processes::{PROCESS_TOOLS, RUN_COMMAND_PROCESSES};
 
 /// Everything a host decides when it opens a workspace.
 pub struct SessionConfig {
@@ -113,6 +118,9 @@ pub struct LocalSession {
     /// The project profile and the mentioned folders it was detected
     /// with: detected again only when those change or a marker does.
     project: Mutex<Option<(Vec<WsPath>, Arc<ProjectProfile>)>>,
+    /// The background processes (#1223); dropped with the session, which
+    /// stops them.
+    processes: ProcessRegistry,
 }
 
 /// How a command would be confined (see [`LocalSession::command_confinement`]).
@@ -437,6 +445,7 @@ pub fn tools_for(profile: EditProfile) -> Vec<&'static ToolSpec> {
 }
 
 #[derive(Deserialize)]
+#[allow(clippy::struct_excessive_bools)] // the tool's independent switches
 struct CommandArgs {
     command: String,
     #[serde(default)]
@@ -447,6 +456,31 @@ struct CommandArgs {
     sandbox: Option<SandboxMode>,
     #[serde(default)]
     network: bool,
+    /// The rest are [`RUN_COMMAND_PROCESSES`]' (#1223).
+    #[serde(default)]
+    background: bool,
+    #[serde(default)]
+    tty: bool,
+    #[serde(default)]
+    loopback: bool,
+    #[serde(default)]
+    yield_ms: Option<u64>,
+    #[serde(default)]
+    keep_alive: Option<KeepAlive>,
+}
+
+impl CommandArgs {
+    /// Whether it starts a background process: asked for, or implied (a
+    /// terminal program is written to later; keeping a process alive needs
+    /// one).
+    fn background(&self) -> bool {
+        self.background || self.tty || self.keep_alive == Some(KeepAlive::Session)
+    }
+
+    /// Whether it uses any of the background-process switches.
+    fn uses_processes(&self) -> bool {
+        self.background() || self.loopback || self.yield_ms.is_some() || self.keep_alive.is_some()
+    }
 }
 
 /// An `edit_file` or a `multi_edit` call.
@@ -719,6 +753,7 @@ impl LocalSession {
             edit_profile: Mutex::new(EditProfile::default()),
             vision: AtomicBool::new(false),
             project: Mutex::new(None),
+            processes: ProcessRegistry::new(),
         }))
     }
 
@@ -930,9 +965,12 @@ impl LocalSession {
     }
 
     /// The tools the model is offered now: none when local work is off, no
-    /// shell when the policy says so, no git tools outside git, only
-    /// read-only tools and `exit_plan_mode` in plan mode, and the edit tools
-    /// of the session's [`EditProfile`].
+    /// shell (nor background processes) when the policy says so, no git
+    /// tools outside git, only read-only tools and `exit_plan_mode` in plan
+    /// mode, and the edit tools of the session's [`EditProfile`]. With
+    /// [`ShellConfig::background_processes`], `run_command` is
+    /// [`RUN_COMMAND_PROCESSES`] and the [`PROCESS_TOOLS`] follow
+    /// [`TOOLS`].
     #[must_use]
     pub fn available_tools(&self) -> Vec<&'static ToolSpec> {
         let policy = self.engine.policy();
@@ -943,9 +981,20 @@ impl LocalSession {
         // refusal, so the agent and the person see why.
         let git = self.checkpoints.kind() == "git" || self.checkpoints.git_refusal().is_some();
         let plan = self.engine.plan_mode();
+        let processes = self.shell.background_processes;
         let mut tools: Vec<&'static ToolSpec> = tools_for(self.edit_profile())
             .into_iter()
-            .filter(|tool| !tool.kind.runs_commands() || policy.shell)
+            // With background processes, `run_command` takes their switches
+            // (a local-only schema: the cloud executor keeps the plain one).
+            .map(|tool| {
+                if processes && tool.name == RUN_COMMAND_PROCESSES.name {
+                    &RUN_COMMAND_PROCESSES
+                } else {
+                    tool
+                }
+            })
+            .chain(PROCESS_TOOLS.iter().filter(|_| processes))
+            .filter(|tool| !(tool.kind.runs_commands() || tool.kind.is_process()) || policy.shell)
             .filter(|tool| !matches!(tool.kind, ToolKind::GitRead | ToolKind::GitCommit) || git)
             .filter(|tool| !plan || tool.kind.plan_allows())
             .collect();
@@ -1000,6 +1049,7 @@ impl LocalSession {
         let result = self.dispatch(tool, call_id, args).await;
         if !TOOLS
             .iter()
+            .chain(PROCESS_TOOLS)
             .any(|spec| spec.name == tool && spec.kind.is_read_only())
         {
             // A change: what the sandbox masks may differ now.
@@ -1007,8 +1057,11 @@ impl LocalSession {
         }
         match result {
             Ok(mut value) => {
+                // A process tool's `status` is the process's (`running`,
+                // `exited`, …); every other success is `ok`.
                 if let Value::Object(map) = &mut value {
-                    map.insert("status".to_owned(), Value::String("ok".to_owned()));
+                    map.entry("status")
+                        .or_insert_with(|| Value::String("ok".to_owned()));
                 }
                 value
             }
@@ -1107,6 +1160,9 @@ impl LocalSession {
             ToolKind::RunCommand => self.run_command(call_id, args).await,
             ToolKind::RunTests => self.run_tests(call_id, args).await,
             ToolKind::ExitPlanMode => self.exit_plan_mode(call_id, &args).await,
+            ToolKind::ProcessRead | ToolKind::ProcessWrite | ToolKind::ProcessKill => {
+                self.process_tool(spec.name, call_id, args).await
+            }
         }
     }
 
@@ -1425,6 +1481,16 @@ impl LocalSession {
 
     async fn run_command(self: &Arc<Self>, call_id: &str, args: Value) -> ToolResult<Value> {
         let args: CommandArgs = parse(args)?;
+        if args.uses_processes() && !self.shell.background_processes {
+            return Err(ToolError::new(
+                ErrorCode::Unsupported,
+                "background processes and loopback are not available here",
+            ));
+        }
+        if args.yield_ms.is_some_and(|ms| ms > processes::MAX_YIELD_MS) {
+            return Err(ToolError::invalid("`yield_ms` is 0 to 30000"));
+        }
+        let background = args.background();
         let cwd = match &args.cwd {
             Some(cwd) => self.workspace.resolve(cwd, Intent::Read)?,
             None => WsPath::root(),
@@ -1437,14 +1503,21 @@ impl LocalSession {
             timeout: args.timeout_seconds.map(Duration::from_secs),
             mode,
             network: args.network,
+            loopback: args.loopback,
         };
+        if background {
+            // Refused before the person is asked about a process that
+            // could not start.
+            self.processes.check_room()?;
+        }
         // The sandbox this command gets now decides whether it is
         // confined: one that cannot hide what it denies (no sandbox,
-        // Landlock alone, a bubblewrap walk cut short) makes it the
-        // person's call, every time. A sandbox that cannot run at all is
-        // refused after the rules, as before.
-        let unconfined = shell::plan(&self.workspace, &self.shell, &spec)
-            .is_ok_and(|prepared| !prepared.hides_denied);
+        // Landlock alone, a bubblewrap walk cut short), or that cannot keep
+        // a loopback command to the loopback, makes it the person's call,
+        // every time. A sandbox that cannot run at all is refused after the
+        // rules, as before.
+        let unconfined = shell::runs_unconfined(&self.workspace, &self.shell, &spec);
+        let keep_alive = args.keep_alive.unwrap_or_default();
         let call = ToolCall {
             tool: ToolKind::RunCommand,
             paths: vec![spec.cwd.display_string()],
@@ -1453,10 +1526,33 @@ impl LocalSession {
             network: args.network,
             unconfined,
             runner: None,
+            loopback: args.loopback,
+            keep_alive: keep_alive == KeepAlive::Session,
         };
-        self.authorize(call_id, call, "run a command").await?;
+        let message = match (background, args.tty) {
+            (_, true) => "run a command on a terminal",
+            (true, false) => "run a command in the background",
+            (false, false) => "run a command",
+        };
+        self.authorize(call_id, call, message).await?;
         if mode != SandboxMode::ReadOnly {
             self.blocking(Self::ensure_checkpoint).await?;
+        }
+        if background {
+            return self
+                .start_process(
+                    call_id,
+                    &spec,
+                    processes::Start {
+                        tty: args.tty,
+                        keep_alive,
+                        unconfined,
+                        yield_for: Duration::from_millis(
+                            args.yield_ms.unwrap_or(processes::DEFAULT_YIELD_MS),
+                        ),
+                    },
+                )
+                .await;
         }
         // Approved as confined and the sandbox changed since: refused.
         let mut output =
@@ -1512,17 +1608,17 @@ impl LocalSession {
             timeout: Some(timeout),
             mode,
             network,
+            loopback: false,
         };
-        let unconfined = shell::plan(&self.workspace, &self.shell, &spec)
-            .is_ok_and(|prepared| !prepared.hides_denied);
+        let unconfined = shell::runs_unconfined(&self.workspace, &self.shell, &spec);
         let call = ToolCall {
-            tool: ToolKind::RunTests,
-            paths: vec![spec.cwd.display_string()],
             command: Some(spec.command.clone()),
             sandbox: Some(mode),
             network,
             unconfined,
             runner: Some(planned.kind.as_str().to_owned()),
+            paths: vec![spec.cwd.display_string()],
+            ..ToolCall::new(ToolKind::RunTests)
         };
         self.authorize(call_id, call, "run the tests").await?;
         if mode != SandboxMode::ReadOnly {

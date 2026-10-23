@@ -408,6 +408,14 @@ fn describe(request: &ApprovalRequest) -> Value {
             payload["command"] =
                 json!(shlex::split(command).unwrap_or_else(|| vec![command.clone()]));
         }
+        // A background process that serves on localhost, or lives until
+        // the session ends, says so on the card (#1223).
+        if call.loopback {
+            payload["loopback"] = json!(true);
+        }
+        if call.keep_alive {
+            payload["keep_alive"] = json!(true);
+        }
         // Which layer asks (`workspace`, `user`, `default`, …) and, for a
         // rule, which one and its justification (the card shows them).
         for key in ["source", "rule", "justification"] {

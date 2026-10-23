@@ -24,6 +24,8 @@
 //! * [`approvals`] — the person's prompt, bridged to the UI over IPC;
 //! * [`tools`] — the per-tool events, steps and before-images;
 //! * [`subagents`] — the runtime's sub-agents on a workspace turn (#1226);
+//! * [`processes`] — a workspace's background processes on the turn's
+//!   stream and the `process://event` channel (#1223);
 //! * [`recorder`] — what the commit and the changed-files card report;
 //! * [`events`] — the `agent://event` stream;
 //! * [`mentions`] — the "@" file picker and a turn's referenced paths;
@@ -52,6 +54,7 @@ pub mod events;
 pub mod framing;
 pub mod mentions;
 pub mod model;
+pub mod processes;
 pub mod recorder;
 pub mod remote_tools;
 pub mod session;

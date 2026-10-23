@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
 
+import { PROCESS_LINES } from './processEvents';
 import { activeView, earlierViews, initialTurnsState, latestPlan, MAX_UNCLAIMED_TURNS, replayView, turnReducer, type TurnAction, type TurnsState } from './turnReducer';
 
 const T = 'turn-1';
@@ -391,5 +392,47 @@ describe('usage, usage_total and context (#1227)', () => {
     const view = activeView(run([usage(1, 1_000), { turn_id: T, seq: 2, kind: 'context', payload: { ...meter, phase: 'compacting' } }]));
     expect(view.context?.phase).toBe('compacting');
     expect(view.usage?.calls).toBe(1);
+  });
+});
+
+describe('background processes (#1223)', () => {
+  const delta = (seq: number, data: string, offset: number, callId = 'c1'): AgentEvent => ({
+    turn_id: T,
+    seq,
+    kind: 'tool_output_delta',
+    payload: { call_id: callId, process_id: 'p_0000abcd', stream: 'pty', data, offset },
+  });
+  const started: AgentEvent = {
+    turn_id: T,
+    seq: 1,
+    kind: 'process_started',
+    payload: { process_id: 'p_0000abcd', call_id: 'c1', command: 'npm run dev', tty: true, sandbox: 'workspace-write', loopback: true },
+  };
+  const toolOf = (state: TurnsState) => activeView(state).items.find((item) => item.type === 'tool');
+
+  it('folds tool_output_delta into its run_command row, escape codes dropped, then settles it', () => {
+    const state = run([
+      call(0, 'c1'),
+      started,
+      delta(2, '\u001b[32mready\u001b[0m on :5173\r\n', 0),
+      delta(3, 'GET /\r\n', 25),
+      { turn_id: T, seq: 4, kind: 'process_exited', payload: { process_id: 'p_0000abcd', call_id: 'c1', status: 'exited', exit_code: 0 } },
+    ]);
+    const tool = toolOf(state);
+    expect(tool?.type === 'tool' && tool.process).toEqual({ processId: 'p_0000abcd', status: 'exited', exitCode: 0, output: 'ready on :5173\nGET /\n', end: 32 });
+    // Nothing for a call the turn never showed.
+    expect(activeView(run([delta(0, 'x', 0, 'nope')])).items).toEqual([]);
+  });
+
+  it('keeps the last 200 lines, in offset order when deltas arrive out of order', () => {
+    const lines = Array.from({ length: 250 }, (_, i) => `line ${i}`).join('\n');
+    const state = run([call(0, 'c1'), delta(3, `${lines}\n`, 6), delta(2, 'first\n', 0)]);
+    const tool = toolOf(state);
+    const output = tool?.type === 'tool' ? (tool.process?.output ?? '') : '';
+    expect(output.split('\n')).toHaveLength(PROCESS_LINES);
+    expect(output.endsWith('line 249\n')).toBe(true);
+    // Folded again in seq order: "first" came before the 250 lines, so it is past the kept 200.
+    expect(output).not.toContain('first');
+    expect(activeView(run([call(0, 'c1'), delta(2, 'b\n', 2), delta(1, 'a\n', 0)])).items[0]).toMatchObject({ process: { output: 'a\nb\n' } });
   });
 });

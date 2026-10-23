@@ -5896,10 +5896,11 @@ async fn long_session_compacts_under_small_window() {
 async fn compaction_marker_reused_next_turn() {
     let convo = Arc::new(Mutex::new(Convo::default()));
     let summaries = Arc::new(AtomicUsize::new(0));
-    // 12k, not 8k: with the planner's tools (#1225) offered every turn, the
-    // schemas alone are ~2.7k tokens, so a compacted 8k request no longer
-    // leaves room for the next turn's prompt and it would compact again.
-    let server = small_window_platform(12_288, convo, reading_script(summaries.clone())).await;
+    // 16k, not 8k: with the planner's tools (#1225) and the background
+    // process tools (#1223) offered every turn, the schemas alone are ~4k
+    // tokens, so a compacted 8k request no longer leaves room for the next
+    // turn's prompt and it would compact again.
+    let server = small_window_platform(16_384, convo, reading_script(summaries.clone())).await;
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
     write_big(&h);
     run_turn(&h, "read big.txt 8 times").await;

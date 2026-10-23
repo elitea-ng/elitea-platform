@@ -99,7 +99,7 @@ pub struct IpcError {
 }
 
 impl IpcError {
-    fn new(code: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &str, message: impl Into<String>) -> Self {
         Self {
             code: code.to_owned(),
             message: message.into(),
@@ -204,6 +204,15 @@ impl EventEmitter for MainWindowEvents {
         }
         if let Some(activity) = self.0.try_state::<Arc<crate::activity::Activity>>() {
             activity.agent(&event);
+        }
+    }
+
+    fn emit_process(&self, event: crate::d0::processes::ProcessEvent) {
+        if let Err(error) = self
+            .0
+            .emit_to("main", crate::d0::processes::EVENT_NAME, &event)
+        {
+            log::warn!("could not deliver a process event: {error}");
         }
     }
 }

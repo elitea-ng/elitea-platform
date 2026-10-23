@@ -301,6 +301,16 @@ impl Recorder {
                 if let Some(code) = result.get("exit_code").and_then(Value::as_i64) {
                     entry["exit_code"] = json!(code);
                 }
+                // A background process (#1223): its id, and its state as the
+                // turn left it (`process_ended` brings it up to date).
+                if let Some(id) = result.get("process_id").and_then(Value::as_str) {
+                    entry["background"] = json!(true);
+                    entry["process_id"] = json!(id);
+                    entry["tty"] = json!(result.get("tty").and_then(Value::as_bool) == Some(true));
+                    if let Some(status) = result.get("status").and_then(Value::as_str) {
+                        entry["status"] = json!(status);
+                    }
+                }
                 state.commands.push(entry);
             }
             if let Some(level) = result.get("enforcement").and_then(Value::as_str) {
@@ -321,6 +331,24 @@ impl Recorder {
                     && let Some(note) = result.get("enforcement_note").and_then(Value::as_str)
                 {
                     state.enforcement_note = Some(note.to_owned());
+                }
+            }
+        });
+    }
+
+    /// A background process's state at the turn's end: its command entry
+    /// gets the final `status` and `exit_code` (a pinned or kept one is
+    /// still `running`).
+    pub fn process_ended(&self, info: &elitea_local_tools::process::ProcessInfo) {
+        self.with(|state| {
+            let entry = state
+                .commands
+                .iter_mut()
+                .find(|entry| entry["process_id"].as_str() == Some(info.process_id.as_str()));
+            if let Some(entry) = entry {
+                entry["status"] = json!(info.status);
+                if let Some(code) = info.exit_code {
+                    entry["exit_code"] = json!(code);
                 }
             }
         });

@@ -1,6 +1,8 @@
 //! Running one command: working directory inside the workspace, a scrubbed
 //! environment, a timeout that kills the whole process group, output caps,
-//! and the OS sandbox around it. No PTY yet.
+//! and the OS sandbox around it. Commands that outlive the call (in the
+//! background, on a pseudo-terminal) are [`crate::process`]'s; they start
+//! from the same request and environment ([`process_environment`]).
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -45,6 +47,7 @@ pub const DEFAULT_OUTPUT_CAP: usize = 4 * 1024 * 1024;
 
 /// The host's command settings.
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)] // independent host switches
 pub struct ShellConfig {
     pub default_timeout: Duration,
     pub max_timeout: Duration,
@@ -96,6 +99,14 @@ pub struct ShellConfig {
     /// The global git config the host's git reads (`None`: the person's,
     /// from `HOME`); for hosts that keep it elsewhere and for tests.
     pub git_global_config: Option<PathBuf>,
+    /// Offer background processes (`run_command`'s `background`, `tty`
+    /// and `keep_alive`, and the `process_*` tools; [`crate::process`]).
+    /// On by default; the cloud executor's runner turns it off (it keeps no
+    /// process past a call).
+    pub background_processes: bool,
+    /// The longest a background process runs before it is stopped
+    /// (`timed_out`); 4 hours by default.
+    pub max_process_wall: Duration,
 }
 
 impl ShellConfig {
@@ -120,6 +131,8 @@ impl ShellConfig {
             allow_listen: false,
             allow_keychain: false,
             git_global_config: None,
+            background_processes: true,
+            max_process_wall: Duration::from_hours(4),
         }
     }
 
@@ -178,6 +191,9 @@ pub struct CommandSpec {
     pub timeout: Option<Duration>,
     pub mode: SandboxMode,
     pub network: bool,
+    /// Listen on and connect to the loopback addresses
+    /// ([`SandboxRequest::loopback`]).
+    pub loopback: bool,
 }
 
 /// What a command did.
@@ -392,6 +408,21 @@ fn environment(config: &ShellConfig) -> Vec<(String, String)> {
     environment_from(config, passthrough_environment(config))
 }
 
+/// A background process's environment: a command's, and on a
+/// pseudo-terminal `TERM=xterm-256color` without `NO_COLOR` (an
+/// interactive program draws its screen; the model reads it rendered).
+#[must_use]
+pub fn process_environment(config: &ShellConfig, tty: bool) -> Vec<(String, String)> {
+    let mut env = environment(config);
+    if tty {
+        env.retain(|(name, _)| name != "NO_COLOR");
+        if let Some(term) = env.iter_mut().find(|(name, _)| name == "TERM") {
+            "xterm-256color".clone_into(&mut term.1);
+        }
+    }
+    env
+}
+
 /// [`environment`] over the given passed-through variables.
 fn environment_from(config: &ShellConfig, passed: Vec<(String, String)>) -> Vec<(String, String)> {
     let mut out = passed;
@@ -496,6 +527,7 @@ pub fn sandbox_request(
         deny_globs: workspace.deny_patterns().to_vec(),
         deny_root: Some(workspace.root().to_path_buf()),
         allow_listen: config.allow_listen,
+        loopback: false,
         allow_keychain: config.allow_keychain,
     })
 }
@@ -541,7 +573,7 @@ pub fn plan(
     config: &ShellConfig,
     spec: &CommandSpec,
 ) -> ToolResult<Prepared> {
-    let request = sandbox_request(workspace, config, spec.mode, spec.network)?;
+    let request = spec_request(workspace, config, spec)?;
     let prepared = prepare(&request, &["/usr/bin/true".to_owned()], &config.sandbox)?;
     Ok(Prepared {
         // Full access with the network is no sandbox, by request: what
@@ -549,6 +581,77 @@ pub fn plan(
         hides_denied: prepared.hides_denied || request.is_unconfined(),
         ..prepared
     })
+}
+
+/// Whether `spec` would run unconfined now, as the rules judge it
+/// ([`crate::approvals::ToolCall::unconfined`]): its sandbox does not hide
+/// what the session denies, or it asks for the loopback where the sandbox
+/// cannot keep it to the loopback addresses. `false` when the sandbox
+/// cannot run at all (refused after the rules).
+#[must_use]
+pub fn runs_unconfined(workspace: &Workspace, config: &ShellConfig, spec: &CommandSpec) -> bool {
+    plan(workspace, config, spec).is_ok_and(|prepared| {
+        !prepared.hides_denied || (spec.loopback && !crate::sandbox::loopback_scoped(&prepared))
+    })
+}
+
+/// The sandbox request for `spec` (its mode, network and loopback).
+fn spec_request(
+    workspace: &Workspace,
+    config: &ShellConfig,
+    spec: &CommandSpec,
+) -> ToolResult<SandboxRequest> {
+    let mut request = sandbox_request(workspace, config, spec.mode, spec.network)?;
+    request.loopback = spec.loopback;
+    Ok(request)
+}
+
+/// `spec` ready to spawn: its working directory checked, its argv (under
+/// `/bin/sh -c` when compound) wrapped in the sandbox, and refused as
+/// [`run_checked`] refuses. What `run_command` runs now and what a
+/// background process starts from.
+///
+/// # Errors
+///
+/// As [`run_checked`], before anything runs.
+pub fn prepare_command(
+    workspace: &Workspace,
+    config: &ShellConfig,
+    spec: &CommandSpec,
+    unhidden_approved: bool,
+) -> ToolResult<PreparedCommand> {
+    if workspace.stat(&spec.cwd)? != Some(EntryKind::Dir) {
+        return Err(ToolError::invalid(format!(
+            "`{}` is not a directory in the workspace",
+            spec.cwd
+        )));
+    }
+    let (argv, shell) = match analyse(&spec.command) {
+        CommandShape::Simple(argv) => (argv, false),
+        CommandShape::Compound { .. } => (
+            vec!["/bin/sh".to_owned(), "-c".to_owned(), spec.command.clone()],
+            true,
+        ),
+    };
+    let request = spec_request(workspace, config, spec)?;
+    let prepared = prepare(&request, &argv, &config.sandbox)?;
+    refuse_unhidden(&request, &prepared, unhidden_approved)?;
+    Ok(PreparedCommand {
+        program: argv[0].clone(),
+        prepared,
+        shell,
+    })
+}
+
+/// What [`prepare_command`] made of a command.
+#[derive(Clone, Debug)]
+pub struct PreparedCommand {
+    /// The sandboxed program and its arguments.
+    pub prepared: Prepared,
+    /// Whether it runs under `/bin/sh -c` (compound).
+    pub shell: bool,
+    /// The program the command names (`/bin/sh` when compound).
+    pub program: String,
 }
 
 /// The refusal [`run_checked`] makes: the sandbox chosen now does not hide
@@ -613,22 +716,11 @@ pub async fn run_checked_up_to(
     max_timeout: Duration,
     keep_stdout_line: Option<KeepLine>,
 ) -> ToolResult<CommandOutput> {
-    if workspace.stat(&spec.cwd)? != Some(EntryKind::Dir) {
-        return Err(ToolError::invalid(format!(
-            "`{}` is not a directory in the workspace",
-            spec.cwd
-        )));
-    }
-    let (argv, shell) = match analyse(&spec.command) {
-        CommandShape::Simple(argv) => (argv, false),
-        CommandShape::Compound { .. } => (
-            vec!["/bin/sh".to_owned(), "-c".to_owned(), spec.command.clone()],
-            true,
-        ),
-    };
-    let request = sandbox_request(workspace, config, spec.mode, spec.network)?;
-    let prepared = prepare(&request, &argv, &config.sandbox)?;
-    refuse_unhidden(&request, &prepared, unhidden_approved)?;
+    let PreparedCommand {
+        prepared,
+        shell,
+        program,
+    } = prepare_command(workspace, config, spec, unhidden_approved)?;
     let timeout = spec
         .timeout
         .unwrap_or(config.default_timeout)
@@ -648,7 +740,7 @@ pub async fn run_checked_up_to(
     let started = Instant::now();
     let mut child = command
         .spawn()
-        .map_err(|error| ToolError::io(&format!("cannot start `{}`", argv[0]), &error))?;
+        .map_err(|error| ToolError::io(&format!("cannot start `{program}`"), &error))?;
     let group = child
         .id()
         .and_then(|id| i32::try_from(id).ok())
@@ -884,6 +976,7 @@ mod tests {
             timeout: None,
             mode,
             network: false,
+            loopback: false,
         }
     }
 

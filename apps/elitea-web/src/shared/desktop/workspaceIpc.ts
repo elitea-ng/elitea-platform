@@ -11,6 +11,7 @@ import type { ContextMeter } from './contextMeter';
 import type { AttachedImage, CustomCommand, StoredImage, TurnStartRequest } from './turnStart';
 import type { HostInvoke } from './hostBridge';
 import type { PlanProposalPayload, PlanView } from './planIpc';
+import type { ProcessTurnEvent } from './processTypes';
 import type { SubAgentFinishedPayload, SubAgentInnerEvent, SubAgentStartedPayload } from './subAgentIpc';
 import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel } from './turnModel';
 import type { ThreadForkRequest } from './threadForkIpc';
@@ -194,6 +195,8 @@ export type AgentEvent =
   | (EventBase & { kind: 'subagent_event'; payload: { agent_id: string; inner: SubAgentInnerEvent } })
   /** A sub-agent settled: once per run of it (a `send_input` that continues it settles again). */
   | (EventBase & { kind: 'subagent_finished'; payload: SubAgentFinishedPayload })
+  /** A background process its `run_command` call started, its output and its end, while this turn runs (#1223). */
+  | (EventBase & ProcessTurnEvent)
   | (EventBase & { kind: 'error'; payload: { code: string; message: string } })
   | (EventBase & { kind: 'done'; payload: TurnDonePayload })
   /** After `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again. */

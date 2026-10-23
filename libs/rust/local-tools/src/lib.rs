@@ -34,6 +34,7 @@ mod line_ending;
 pub mod patch;
 pub mod picture;
 pub mod policy;
+pub mod process;
 pub mod project;
 pub mod project_instructions;
 pub mod provider;

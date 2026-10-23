@@ -259,6 +259,7 @@ async fn remembered_shell_choices_and_approve_always_never_allow_a_commit() {
                 sandbox: Some(SandboxMode::FullAccess),
                 network: true,
                 runner: None,
+                loopback: false,
             })
             .expect("remember");
     }

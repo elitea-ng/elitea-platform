@@ -1010,6 +1010,9 @@ impl HandoffHost {
             workspace_id,
             "Wait for the running turn to end before sending this thread.",
         )?;
+        // The thread leaves this device: nothing the agent started here
+        // keeps running (or writing) while the snapshot is taken (#1223).
+        self.deps.agents.kill_processes(workspace_id).await;
         self.emit(uuid, "snapshot", 0, 1, None);
         let config = self.send_config(&root, uuid, &device, &effective, &folder, leave);
         let source = self.open(&config)?;

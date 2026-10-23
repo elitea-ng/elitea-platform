@@ -181,7 +181,17 @@ function ended(turn: TrackedTurn, phase: TurnPhase): TrackedTurn {
   return { ...turn, phase, tool: null, approvals: [], finished: turn.commit === 'none' };
 }
 
-type QuietKind = 'text_delta' | 'thinking_delta' | 'thinking_end' | 'context' | 'subagent_started' | 'subagent_event' | 'subagent_finished';
+type QuietKind =
+  | 'text_delta'
+  | 'thinking_delta'
+  | 'thinking_end'
+  | 'context'
+  | 'subagent_started'
+  | 'subagent_event'
+  | 'subagent_finished'
+  | 'process_started'
+  | 'tool_output_delta'
+  | 'process_exited';
 
 const QUIET_KINDS: ReadonlySet<AgentEvent['kind']> = new Set<QuietKind>([
   'text_delta',
@@ -191,12 +201,16 @@ const QUIET_KINDS: ReadonlySet<AgentEvent['kind']> = new Set<QuietKind>([
   'subagent_started',
   'subagent_event',
   'subagent_finished',
+  'process_started',
+  'tool_output_delta',
+  'process_exited',
 ]);
 
 /**
  * Streamed text and reasoning, the composer's meter (`context`) and the
  * sub-agents' own events (the turn's `spawn_agent` / `wait_agent` calls are
- * its steps): nothing the feed shows.
+ * its steps), and a background process's start, output and exit (its
+ * `run_command` call is the step): nothing the feed shows.
  */
 function changesNothing(event: AgentEvent): event is Extract<AgentEvent, { kind: QuietKind }> {
   return QUIET_KINDS.has(event.kind);

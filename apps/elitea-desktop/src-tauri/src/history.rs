@@ -1697,6 +1697,12 @@ impl TurnTap {
             Self::queue(store, recording, op);
             return;
         }
+        // A background process's streamed output (#1223) is live view only:
+        // the tool's own result carries what the model saw, and the stream
+        // would spend the turn's event budget on terminal noise.
+        if event.kind == "tool_output_delta" {
+            return;
+        }
         // `usage_total` too: the thread's token totals are the sum of its
         // turns' (#1227), which a long turn's cap must not lose.
         let essential = matches!(event.kind, "status" | "error" | "done" | "usage_total");
@@ -1763,6 +1769,10 @@ impl EventEmitter for TurnTap {
             }
         }
         self.inner.emit(event);
+    }
+
+    fn emit_process(&self, event: crate::d0::processes::ProcessEvent) {
+        self.inner.emit_process(event);
     }
 }
 

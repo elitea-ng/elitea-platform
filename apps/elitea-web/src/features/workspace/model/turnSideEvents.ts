@@ -2,10 +2,12 @@
  * The turn events that are not the transcript's main line, folded into the
  * turn's view (`TurnView`): the context meter and the turn's tokens (`usage`,
  * `usage_total`, `context`, #1227) and a model step's reasoning
- * (`thinking_delta`, `thinking_end`, issue 1228).
+ * (`thinking_delta`, `thinking_end`, issue 1228) and a `run_command` row's
+ * background process (`processEvents.ts`, #1223).
  */
 import type { AgentEvent, ContextMeter } from '@/shared/desktop/workspaceIpc';
 
+import { applyProcessEvent, isProcessEvent, type ProcessEvent } from './processEvents';
 import type { TranscriptItem } from './transcriptItem';
 import { addCall, settle, type TurnUsage } from './turnUsage';
 
@@ -20,7 +22,7 @@ type EventOf<K extends AgentEvent['kind']> = Extract<AgentEvent, { kind: K }>;
 
 type MeterEvent = EventOf<'usage'> | EventOf<'usage_total'> | EventOf<'context'>;
 type ThinkingEvent = EventOf<'thinking_delta'> | EventOf<'thinking_end'>;
-type SideEvent = MeterEvent | ThinkingEvent;
+type SideEvent = MeterEvent | ThinkingEvent | ProcessEvent;
 
 /** `usage` (a call that ended, with its meter), `usage_total` (the run ended) or `context` (a phase change, sent at once). */
 function isMeterEvent(event: AgentEvent): event is MeterEvent {
@@ -55,9 +57,10 @@ function isThinkingEvent(event: AgentEvent): event is ThinkingEvent {
 }
 
 export function isSideEvent(event: AgentEvent): event is SideEvent {
-  return isMeterEvent(event) || isThinkingEvent(event);
+  return isMeterEvent(event) || isThinkingEvent(event) || isProcessEvent(event);
 }
 
 export function applySideEvent<V extends SideView>(view: V, event: SideEvent): V {
+  if (isProcessEvent(event)) return applyProcessEvent(view, event);
   return isMeterEvent(event) ? onMeter(view, event) : onThinking(view, event);
 }

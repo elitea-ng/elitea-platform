@@ -49,6 +49,12 @@
 //! | `run_command` that is destructive, asks for the network or `full-access`, or would run unconfined: its sandbox cannot hide what it denies (no sandbox on a host that allows unenforced ones, Landlock alone, a bubblewrap walk cut at its cap; [`ToolCall::unconfined`], decided per command, from the sandbox chosen for it) | asked |
 //! | `run_tests` | as `run_command` (the test command it runs): no network, allowed; `network: true` asked, until "always allow" for that runner kind in this workspace |
 //! | `exit_plan_mode` (offered in the `Plan` profile only) | asked every time, as `accept` / `decline`; decided before layers 3–4, which never apply to it; denied outside `Plan` |
+//! | `run_command` with `background` or `tty` (#1223) | as `run_command` (the classifier, the sandbox mode, the network) |
+//! | `run_command` with `loopback` ([`ToolCall::loopback`]) | asked; "always allow" is remembered in the choice store for that program and argv prefix in this workspace (with the loopback, within its sandbox and network), never written as a prefix rule; a workspace or user allow rule does not cover the loopback; where the sandbox cannot keep it to loopback (Landlock alone) it is unconfined: asked every time |
+//! | `run_command` with `keep_alive: "session"` ([`ToolCall::keep_alive`]) | asked, once per process: never remembered |
+//! | `process_output`, `process_wait`, `process_list` ([`ToolKind::ProcessRead`]) | allowed (read-only; kept in plan mode) |
+//! | `process_write` ([`ToolKind::ProcessWrite`]) | allowed into the session's own processes (each was allowed when it started, and keeps its sandbox); the text is classified like a command line, line by line (a destructive line, e.g. `rm -rf` typed into a shell, is asked; a `command_deny` match is denied); never remembered |
+//! | `process_kill` ([`ToolKind::ProcessKill`]) | allowed (the session's own processes only) |
 //!
 //! Layers 1 and 2 only tighten these defaults. Layers 3 and 4 can also
 //! loosen them: a workspace allow or a remembered choice allows a call the
@@ -81,6 +87,14 @@ use crate::execpolicy::{
 };
 use crate::policy::{LocalWorkPolicy, SandboxMode};
 use crate::workspace::{CASE_INSENSITIVE_FS, Intent, Workspace, nfc};
+
+/// Why a loopback command is asked.
+const LOOPBACK_REASON: &str =
+    "listening on or connecting to localhost (127.0.0.1, ::1) needs your approval";
+
+/// Why keeping a process past its turn is asked.
+const KEEP_ALIVE_REASON: &str =
+    "keeping this process running after the turn ends needs your approval";
 
 /// The payload key a local tool call travels under in an
 /// [`ApprovalRequest`]; requests without it (HITL nodes) go straight to the
@@ -141,6 +155,14 @@ pub enum ToolKind {
     /// session leaves [`PermissionProfile::Plan`]) or declines it. Offered
     /// in plan mode only; never remembered, never answered by a rule.
     ExitPlanMode,
+    /// `process_output`, `process_wait`, `process_list`: reading the
+    /// session's background processes (#1223).
+    ProcessRead,
+    /// `process_write`: text typed into one of the session's processes,
+    /// classified like a command line ([`ToolCall::command`]).
+    ProcessWrite,
+    /// `process_kill`: stopping one of the session's processes.
+    ProcessKill,
 }
 
 impl ToolKind {
@@ -156,6 +178,17 @@ impl ToolKind {
                 | Self::ReadOutput
                 | Self::ReadDocument
                 | Self::GitRead
+                | Self::ProcessRead
+        )
+    }
+
+    /// Whether the tool works on the session's background processes (offered
+    /// with the shell only).
+    #[must_use]
+    pub const fn is_process(self) -> bool {
+        matches!(
+            self,
+            Self::ProcessRead | Self::ProcessWrite | Self::ProcessKill
         )
     }
 
@@ -176,6 +209,7 @@ impl ToolKind {
 
 /// One tool call, as the rules see it.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[allow(clippy::struct_excessive_bools)] // independent facts the rules weigh
 pub struct ToolCall {
     pub tool: ToolKind,
     /// Workspace paths it touches (as the tool resolved them).
@@ -201,6 +235,19 @@ pub struct ToolCall {
     /// "always allow" is remembered for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runner: Option<String>,
+    /// For [`ToolKind::RunCommand`]: it asks to listen on and connect to the
+    /// loopback addresses ([`crate::sandbox::SandboxRequest::loopback`]).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub loopback: bool,
+    /// For [`ToolKind::RunCommand`]: it asks to keep its background process
+    /// running past the turn (`keep_alive: "session"`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub keep_alive: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl ToolCall {
@@ -214,6 +261,8 @@ impl ToolCall {
             network: false,
             unconfined: false,
             runner: None,
+            loopback: false,
+            keep_alive: false,
         }
     }
 
@@ -380,6 +429,10 @@ pub struct RememberedChoice {
     /// runner's test commands in this workspace, whatever their arguments.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runner: Option<String>,
+    /// A command choice made with the loopback ([`ToolCall::loopback`]):
+    /// it covers the same command with the loopback too.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub loopback: bool,
 }
 
 /// Where remembered choices live (the host's data directory).
@@ -704,7 +757,13 @@ impl RulesEngine {
             );
         }
         let shape = call.command.as_deref().map(analyse);
-        let risk = call.tool.runs_commands().then(|| self.command_risk(call));
+        let risk = if call.tool.runs_commands() {
+            Some(self.command_risk(call))
+        } else if call.tool == ToolKind::ProcessWrite {
+            Some(self.input_risk(call))
+        } else {
+            None
+        };
         // A command that may run unconfined is the person's call every time:
         // neither a workspace allow nor a remembered choice vouches for it.
         let unconfined = self.runs_unconfined(call);
@@ -725,12 +784,30 @@ impl RulesEngine {
                     ),
                 );
             }
+            // A rule names a command, never the loopback: only the person's
+            // remembered choice vouches for that (or the person, now).
+            let simple = shape.as_ref().is_none_or(CommandShape::is_simple);
+            if decision.verdict == Verdict::Allow
+                && (call.keep_alive
+                    || (call.loopback && !(simple && self.remembered(call, shape.as_ref()))))
+            {
+                return Decision::new(
+                    Verdict::Ask,
+                    Source::Default,
+                    if call.keep_alive {
+                        KEEP_ALIVE_REASON
+                    } else {
+                        LOOPBACK_REASON
+                    },
+                );
+            }
             return decision;
         }
         let simple = shape.as_ref().is_none_or(CommandShape::is_simple);
         if simple
             && !unconfined
-            && call.tool != ToolKind::GitCommit
+            && !call.keep_alive
+            && !matches!(call.tool, ToolKind::GitCommit | ToolKind::ProcessWrite)
             && self.remembered(call, shape.as_ref())
         {
             return Decision::new(
@@ -746,6 +823,7 @@ impl RulesEngine {
             }
             (_, Some(Risk::Routine)) => allow("a routine command in the sandbox"),
             (ToolKind::GitCommit, None) => allow("commits never stage denied paths"),
+            (ToolKind::ProcessKill, None) => allow("the session's own processes may be stopped"),
             (tool, None) if tool.is_read_only() => allow("read-only tools are allowed"),
             (_, None) => {
                 allow("changes inside the workspace are allowed; the checkpoint undoes them")
@@ -761,6 +839,12 @@ impl RulesEngine {
         }
         if call.network {
             return Risk::Destructive("network access needs your approval".to_owned());
+        }
+        if call.loopback {
+            return Risk::Destructive(LOOPBACK_REASON.to_owned());
+        }
+        if call.keep_alive {
+            return Risk::Destructive(KEEP_ALIVE_REASON.to_owned());
         }
         if self.runs_unconfined(call) {
             return Risk::Destructive(
@@ -778,6 +862,29 @@ impl RulesEngine {
         )
     }
 
+    /// Text typed into a process, as the classifier sees command lines: each
+    /// line on its own (a shell runs them one by one), the first
+    /// destructive one asked.
+    fn input_risk(&self, call: &ToolCall) -> Risk {
+        let (cwd, _) = self.resolution(call);
+        call.command
+            .as_deref()
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                assess(
+                    line,
+                    Place {
+                        root: self.policy_paths.root(),
+                        cwd: &cwd,
+                    },
+                )
+            })
+            .find(|risk| matches!(risk, Risk::Destructive(_)))
+            .unwrap_or(Risk::Routine)
+    }
+
     fn policy_ceiling(&self, call: &ToolCall) -> Option<Decision> {
         let deny = |reason: String| Some(Decision::new(Verdict::Deny, Source::Policy, reason));
         if !self.policy.allowed {
@@ -792,6 +899,25 @@ impl RulesEngine {
             if let Some(error) = denied {
                 return deny(error.message().to_owned());
             }
+        }
+        if call.tool.is_process() {
+            if !self.policy.shell {
+                return deny("the shell is disabled by policy".to_owned());
+            }
+            // A line the policy denies is denied typed into a shell too.
+            let typed = call.command.as_deref().unwrap_or_default();
+            if let Some(argv) = typed
+                .lines()
+                .flat_map(|line| analyse(line).segments())
+                .find(|argv| {
+                    self.command_deny
+                        .iter()
+                        .any(|pattern| pattern.matches_name(argv))
+                })
+            {
+                return deny(format!("`{}` is denied by policy", argv.join(" ")));
+            }
+            return None;
         }
         if !call.tool.runs_commands() {
             return None;
@@ -1039,6 +1165,7 @@ impl RulesEngine {
             choice.tool == call.tool
                 && call.sandbox_mode() <= choice.sandbox.unwrap_or(SandboxMode::WorkspaceWrite)
                 && (!call.network || choice.network)
+                && (!call.loopback || choice.loopback)
                 && match (&choice.command, argv) {
                     (Some(prefix), Some(argv)) => CommandPattern::from_tokens(prefix.clone())
                         .is_some_and(|pattern| pattern.matches_in(argv, &cwd, &search)),
@@ -1125,6 +1252,7 @@ impl RulesEngine {
                 sandbox: call.sandbox,
                 network: call.network,
                 runner: Some(runner),
+                loopback: false,
             });
         }
         let command = match call.command.as_deref().map(analyse) {
@@ -1156,7 +1284,9 @@ impl RulesEngine {
                 return Err(compound_refusal());
             }
         };
-        if let (Some(tokens), Some(sink)) = (&command, self.rule_sink()) {
+        // A loopback choice stays in the choice store: a prefix rule has no
+        // loopback bound, and a rule must never vouch for it.
+        if let (Some(tokens), Some(sink), false) = (&command, self.rule_sink(), call.loopback) {
             match self.remember_as_rule(call, tokens.clone(), sink.as_ref()) {
                 Ok(()) => return Ok(()),
                 // A refused or broken rules file is left alone; the choice
@@ -1194,6 +1324,7 @@ impl RulesEngine {
             sandbox: call.sandbox,
             network: call.network,
             runner: None,
+            loopback: call.loopback,
         })
     }
 }
@@ -1272,6 +1403,18 @@ impl RulesEngine {
         }
         if call.tool == ToolKind::RunTests && call.runner.is_none() {
             return Some(ToolError::invalid("a test run names its runner"));
+        }
+        if call.tool == ToolKind::ProcessWrite {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "what is typed into a process is asked every time",
+            ));
+        }
+        if call.keep_alive {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "keeping a process past its turn is asked for each process",
+            ));
         }
         if self.runs_unconfined(call) {
             return Some(ToolError::new(
@@ -2521,6 +2664,7 @@ mod tests {
                 sandbox: None,
                 network: false,
                 runner: None,
+                loopback: false,
             })
             .expect("legacy");
         assert_eq!(
@@ -2629,6 +2773,7 @@ mod tests {
                 sandbox: None,
                 network: false,
                 runner: None,
+                loopback: false,
             })
             .expect("remember");
         let reopened = JsonFileChoices::open(path).expect("reopen");
@@ -3138,6 +3283,105 @@ mod tests {
         );
     }
 
+    /// #1223: loopback is asked by default, whatever an allow rule says;
+    /// "always allow" is remembered (in the choice store, never as a rule)
+    /// for that program and prefix only, and never covers another command.
+    #[test]
+    fn loopback_is_asked_by_default() {
+        let (_dir, engine) = engine_with(
+            policy(),
+            vec![WorkspaceRule {
+                tools: vec![ToolKind::RunCommand],
+                command: Some("python3".to_owned()),
+                path: None,
+                verdict: Verdict::Allow,
+            }],
+        );
+        let sink = Arc::new(VecSink::default());
+        engine.set_rule_sink(Some(sink.clone()));
+        let loopback = |command: &str| ToolCall {
+            loopback: true,
+            ..shell(command)
+        };
+        let server = loopback("python3 -m http.server 8000");
+        assert_eq!(
+            verdict(&engine, &shell("python3 -m http.server")).0,
+            Verdict::Allow
+        );
+        assert_eq!(verdict(&engine, &server), (Verdict::Ask, Source::Default));
+        assert!(engine.decide(&server).reason.contains("localhost"));
+        assert!(engine.can_remember(&server));
+        engine
+            .remember(&server, Some("python3 -m http.server"))
+            .expect("remembered");
+        assert!(
+            sink.0.lock().expect("lock").rules().is_empty(),
+            "never a rule"
+        );
+        assert_eq!(
+            verdict(&engine, &loopback("python3 -m http.server 9000")).0,
+            Verdict::Allow
+        );
+        assert_eq!(
+            verdict(&engine, &loopback("curl -sf http://127.0.0.1:8000")).0,
+            Verdict::Ask
+        );
+        assert_eq!(
+            verdict(&engine, &loopback("python3 other.py")).0,
+            Verdict::Ask
+        );
+        // Keeping a process past its turn: asked, every time.
+        let kept = ToolCall {
+            keep_alive: true,
+            ..shell("python3 -m http.server 8000")
+        };
+        assert_eq!(verdict(&engine, &kept).0, Verdict::Ask);
+        assert!(!engine.can_remember(&kept));
+        // The policy ceiling holds for the process tools too.
+        let mut off = policy();
+        off.shell = false;
+        let (_dir, closed) = engine_with(off, Vec::new());
+        assert_eq!(
+            verdict(&closed, &ToolCall::new(ToolKind::ProcessRead)),
+            (Verdict::Deny, Source::Policy)
+        );
+    }
+
+    #[test]
+    fn process_write_of_a_destructive_line_is_asked() {
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        let typed = |text: &str| ToolCall {
+            command: Some(text.to_owned()),
+            paths: vec![".".to_owned()],
+            ..ToolCall::new(ToolKind::ProcessWrite)
+        };
+        assert_eq!(verdict(&engine, &typed("1+1\n")).0, Verdict::Allow);
+        assert_eq!(verdict(&engine, &typed("ls -la\n")).0, Verdict::Allow);
+        assert_eq!(
+            verdict(&engine, &typed("echo hi\ngit reset --hard HEAD~3\n")),
+            (Verdict::Ask, Source::Default)
+        );
+        assert!(!engine.can_remember(&typed("git reset --hard HEAD~3\n")));
+        // A command_deny program typed into a shell is denied.
+        assert_eq!(
+            verdict(&engine, &typed("rm -rf build\n")),
+            (Verdict::Deny, Source::Policy)
+        );
+        for tool in [ToolKind::ProcessRead, ToolKind::ProcessKill] {
+            assert_eq!(verdict(&engine, &ToolCall::new(tool)).0, Verdict::Allow);
+        }
+        engine.set_profile(PermissionProfile::Plan);
+        assert_eq!(
+            verdict(&engine, &ToolCall::new(ToolKind::ProcessRead)).0,
+            Verdict::Allow
+        );
+        assert_eq!(verdict(&engine, &typed("1+1\n")).0, Verdict::Deny);
+        assert_eq!(
+            verdict(&engine, &ToolCall::new(ToolKind::ProcessKill)).0,
+            Verdict::Deny
+        );
+    }
+
     #[derive(Default)]
     struct VecSink(Mutex<crate::execpolicy::RuleSet>);
 
@@ -3320,6 +3564,7 @@ mod tests {
             sandbox: Some(SandboxMode::ReadOnly),
             network: true,
             runner: None,
+            loopback: false,
         };
         let rule = super::choice_as_rule(&choice).expect("a command choice");
         assert_eq!(rule.display_pattern(), "/usr/bin/make test");
@@ -3337,6 +3582,7 @@ mod tests {
             sandbox: None,
             network: false,
             runner: None,
+            loopback: false,
         };
         assert!(super::choice_as_rule(&file_choice).is_none());
     }

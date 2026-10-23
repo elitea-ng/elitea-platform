@@ -744,6 +744,100 @@ The host keeps the last 20 turns of each workspace for `turn_changes`,
 `checkpoint_preview` and `checkpoint_restore`; an older turn rejects with `turn_expired`, an id it
 never ran with `turn_unknown`.
 
+## Background processes (`src/d0/processes.rs`, `libs/rust/local-tools/src/process.rs`, #1223)
+
+The agent can start a command in the background (`run_command` with
+`background: true`, or `tty: true` for an interactive program on a
+pseudo-terminal), read its output later (`process_output`, from a byte
+offset; `screen: true` gives a terminal process's rendered screen), type
+into it (`process_write`), wait for it (`process_wait`), stop it
+(`process_kill`) and list them (`process_list`). These tools and the
+extended `run_command` schema are **local-only**: the cloud executor has no
+persistent processes, so its tool list keeps the plain `run_command`.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `process_list` | `{workspace_id}` | `ProcessInfo[]` — the workspace session's processes, running and ended (an ended one stays listed until the session ends), oldest first; `[]` when the workspace has no session yet |
+| `process_read` | `{workspace_id, process_id, since?: number}` | `{data: string, offset: number, next_offset: number, dropped_bytes: number, screen?: string}` — the output from byte `since`, or without it the latest 256 KiB the buffer holds (a pane opened late catches up with it), at most 256 KiB; `offset` is the byte offset of `data`'s first byte (offsets count the process's raw bytes; `data` is that text cut at a whole character, any invalid UTF-8 replaced). `dropped_bytes` is what the buffer no longer holds between `since` and `data`; `screen` (terminal processes) is the rendered screen, rows joined by `\n`. Rejects `process_unknown`, `workspace_unknown` |
+| `process_write` | `{workspace_id, process_id, data: string}` | `null` — the person's keystrokes into the pane (a terminal process's input, or a piped process's stdin), at most 64 KiB, sent as typed (never classified: the person typed it). Rejects `process_unknown`, `process_ended`, `invalid_request` |
+| `process_resize` | `{workspace_id, process_id, rows: number, cols: number}` | `null` — a terminal process's size (1 to 1000 each; it starts at 40 × 120); a piped process ignores it. Rejects `process_unknown`, `invalid_request` |
+| `process_kill` | `{workspace_id, process_id}` | `null` — stops the process's whole process group (`SIGTERM`, then `SIGKILL` after 2 s); an ended one is not an error. Rejects `process_unknown` |
+| `process_pin` | `{workspace_id, process_id, pinned: boolean}` | `null` — a pinned process outlives the end of its turn (until the session ends, below); unpinning one whose turn has ended and that the agent did not keep stops it. Rejects `process_unknown` |
+
+```ts
+type ProcessInfo = {
+  process_id: string;          // "p_" + 8 hex digits
+  call_id: string;             // the run_command call that started it
+  command: string;
+  cwd: string;                 // workspace-relative ("." for the root)
+  tty: boolean;                // on a pseudo-terminal
+  sandbox: "read-only" | "workspace-write" | "full-access";
+  network: boolean;
+  loopback: boolean;
+  keep_alive: "turn" | "session"; // "session": the person approved keeping it past its turn
+  pinned: boolean;
+  status: "running" | "exited" | "killed" | "timed_out";
+  exit_code?: number;          // exited
+  signal?: string;             // killed: "SIGTERM", "SIGKILL", …
+  started_at: number;          // Unix milliseconds
+  ended_at?: number;
+  bytes: number;               // output so far: the next byte's offset
+};
+```
+
+**Lifecycle.** At most 8 live processes per workspace session (a ninth
+`run_command` is refused with `local_tools.too_many_processes`); each runs
+at most 4 hours (then `timed_out`). Every process is stopped (its process
+group: `SIGTERM`, then `SIGKILL` after 2 s) when the turn that started it
+ends, unless it is pinned or the agent asked to keep it
+(`keep_alive: "session"`, approved by the person once per process); every
+one, pinned and kept ones included, when the session ends: the workspace is
+removed, its policy changes (the session is reopened), the person signs out
+or connects elsewhere, a thread of the workspace is handed off to the cloud
+(before the send starts), and when the app quits (the quit waits at most
+2 s for them).
+
+**Output.** A piped process's stdout and stderr share one pipe, as a
+terminal shows them (`stream: "stdout"`); a terminal process's output is
+the terminal's (`stream: "pty"`, escape codes included; the model reads the
+rendered screen or the stream without them). Each process keeps 1 MiB: the
+first 64 KiB and the latest bytes after it, with offsets that only grow; a
+read from an offset the buffer dropped reports `dropped_bytes`. The buffer
+lives in memory only (never uploaded except as the bounded tool results in
+the commit) and goes with the session.
+
+**Sandbox.** Every process starts through the same sandbox as
+`run_command` (the session's deny list, the scrubbed environment;
+`TERM=xterm-256color` instead of `dumb` for a terminal process) in its own
+process group, and keeps the sandbox it started with: a later approval
+never widens a running process, and a process started `read-only` stays
+read-only whatever is typed into it. What the model types
+(`process_write`) is classified like a command line, line by line: a
+destructive line is asked. `loopback: true` (with the network off) lets a
+command listen on and connect to `127.0.0.1` / `::1` only: Seatbelt allows
+exactly those addresses; bubblewrap keeps its private network namespace,
+whose own loopback reaches only the processes of that one command (a server
+and a client must run in the same command there); Landlock alone cannot
+scope addresses, so a loopback command there gets TCP and is asked every
+time. A loopback call is asked; "always allow" remembers it for that
+program and argv prefix in this workspace only.
+
+Events go on `process://event` (`{workspace_id, seq, kind, payload}`,
+`seq` per workspace from 0):
+
+| `kind` | `payload` |
+| --- | --- |
+| `process_started` | `ProcessInfo` |
+| `process_output` | `{process_id, stream: "stdout" \| "pty", data: string, offset: number}` — at most 20 per second per process, at most 16 KiB of output each; `offset` is the byte offset of `data`'s first byte. A process writing faster than that skips ahead: the next `offset` is past the end of the previous `data` (`process_read` fills the gap) |
+| `process_updated` | `ProcessInfo` — pinned or unpinned |
+| `process_exited` | `ProcessInfo` — ended (`status` final), after its last `process_output` |
+
+While the turn that started a process runs, its turn's `agent://event`
+stream also carries `process_started` `{process_id, call_id, command, tty,
+sandbox, loopback}`, `tool_output_delta` `{call_id, process_id, stream,
+data, offset}` (the same throttle) and `process_exited` `{process_id,
+call_id, status, exit_code?}`, for the `run_command` card.
+
 ## Thread history (`src/history.rs`)
 
 | Command | Arguments | Result |
@@ -1480,9 +1574,10 @@ for them.
 
 ## Events
 
-Five event names, all emitted to the `main` window only: `app://command`
+Six event names, all emitted to the `main` window only: `app://command`
 (above), `app://context-menu` (`{request_id, id}`, the outcome of `context_menu_show`),
-`agent://event`, `index://event` and `handoff://event` (Cloud handoff, above). The webview may listen
+`agent://event`, `index://event`, `handoff://event` (Cloud handoff, above) and
+`process://event` (Background processes, above). The webview may listen
 (`core:event:allow-listen` / `allow-unlisten`), never emit.
 
 `index://event`:
@@ -1523,20 +1618,23 @@ order. Kinds and payloads:
 | `usage` | `{model: string, step: number, prompt_tokens: number, completion_tokens: number, total_tokens: number, cached_tokens?: number, cache_write_tokens?: number, reasoning_tokens?: number, context?: ContextMeter}` — one of the turn's own model calls as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage); `step` counts the turn's calls from 1. `prompt_tokens` is what that call sent, its cached reads (`prompt_tokens_details.cached_tokens`) and cache writes (`…cache_write_tokens`, Anthropic) included; `reasoning_tokens` are part of `completion_tokens` (`completion_tokens_details.reasoning_tokens`); each optional count only when non-zero. A step retried after a context overflow (below) sends the dropped call's usage too: both calls were billed. `context` (below) is that call's request occupancy as the host measured it before sending: the composer's context meter. A summary call's and a sub-agent's calls send none; they count in `usage_total` |
 | `usage_total` | `{prompt: number, completion: number, cached: number, cache_write: number, reasoning: number, calls: number, subagents?: {same fields}}` — once the run ended, before `status` `done`/`error`/`cancelled`: every model call made on the turn's execution id (the agent's steps, compaction summaries and sub-agents together: what the gateway's request log holds for it); `subagents` is the sub-agents' share, when any ran. The thread history keeps it past its event cap; a thread's total is the sum of its turns' |
 | `context` | `ContextMeter` (below) — the request occupancy when its `phase` changes: `compacting` as a summary call starts (the meter says "Summarizing…" while it runs), `compacted` once the step's request is the compacted one, `measured` again at the next call (or when a summary failed and the request went out uncompacted). A turn starts `measured`; calls that stay `measured` send none, their occupancy rides on `usage` |
-| `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
+| `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, loopback?: true, keep_alive?: true, can_remember: boolean}` — `loopback` and `keep_alive` mark a background command that may serve on localhost or that lives until the session ends (**Background processes**); `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
 | `plan_updated` | `{plan: {title, explanation?, status: "in_progress" \| "completed", steps: [{n, step, status: "pending" \| "in_progress" \| "completed" \| "cancelled"}]} \| null}` — the agent's checklist changed (the runtime planner's `update_plan`, `start_step`, `complete_step`, `delete_plan`, or the host copying an accepted plan in): the whole plan, `null` once deleted. The latest one is the plan; the thread history stores it like every event, so the todo pane replays after a restart. The plan itself lives in the session (`elitea.plan.v1:` state), so the next turn's planner reads it back |
 | `plan_proposed` | `{request_id, call_id, plan}` — the agent's `exit_plan_mode`: the plan (Markdown, model-written) as a card with Accept / Decline; answered with `approval_respond` `accept` or `decline` (+ `feedback`). See **Plan mode** |
 | `plan_accepted` | `{call_id}` — the person accepted the plan: the session left plan mode and the same turn goes on with every tool; the composer's plan switch turns off |
 | `subagent_started` | `{agent_id, parent_call_id, ordinal: number, label?}` — the agent's `spawn_agent` call `parent_call_id` started a read-only sub-agent (**Sub-agents**, below); `ordinal` is its place among the turn's sub-agents, from 1 |
 | `subagent_event` | `{agent_id, inner}` — what the sub-agent did: `inner` is `{kind: "tool_call", call_id, tool, args_summary, remote}`, `{kind: "tool_result", call_id, ok, summary, truncated}` (its own tool calls, never the turn's `tool_call`s) or `{kind: "text_delta", text}` (one model answer's text, at most 2 KiB); at most 200 per sub-agent |
 | `subagent_finished` | `{agent_id, status: "completed" \| "failed" \| "budget_exhausted" \| "cancelled", steps, input_tokens, output_tokens, result?, error?}` — the sub-agent settled: its report (`result` at most 8 KiB), once per run (a `send_input` that continues it starts another); `cancelled` when it was closed or the turn ended or was cancelled before it answered |
+| `process_started` | `{process_id, call_id, command, tty: boolean, sandbox, loopback: boolean}` — a `run_command` call started a background process (**Background processes**) |
+| `tool_output_delta` | `{call_id, process_id, stream: "stdout" \| "pty", data, offset: number}` — its output while this turn runs: at most 20 per second per process, at most 16 KiB each, `offset` the byte offset of `data` in the process's output |
+| `process_exited` | `{process_id, call_id, status: "exited" \| "killed" \| "timed_out", exit_code?}` — it ended while this turn runs (the turn's end stops the ones it does not keep) |
 | `approval_closed` | `{request_id, reason: "timeout"}` — the host closed an open `approval_request` nobody answered within its wait (today: an MCP sign-in, 10 minutes); the card goes, the turn's `hitl_exchanges` record it with `decision: "timeout"`, and an `approval_respond` for it answers `approval_closed` |
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
-`running` → (`thinking_delta`, `thinking_end`, `text_delta`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`, `subagent_started`, `subagent_event`, `subagent_finished`)* →
+`running` → (`thinking_delta`, `thinking_end`, `text_delta`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`, `subagent_started`, `subagent_event`, `subagent_finished`, `process_started`, `tool_output_delta`, `process_exited`)* →
 `usage_total` → `status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
 ends `usage_total` → `status` `cancelled` → `done` with `commit: "none"`; nothing is
 committed and its execution expires on the server. A run that fails after

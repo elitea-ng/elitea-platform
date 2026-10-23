@@ -172,6 +172,10 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
     let prompt = Arc::new(CloudPrompt::default());
     let mut shell = ShellConfig::new(config.data_dir.join("tmp"));
     shell.sandbox.container = true;
+    // A cloud turn's tool calls end with the turn and nobody watches a
+    // terminal there: `run_command` stays foreground-only, and the
+    // `process_*` tools are not offered (#1223).
+    shell.background_processes = false;
     shell.sandbox.container_env =
         elitea_local_tools::sandbox::ContainerEnv::new(config.env.clone());
     // The workspace volume's top directory is not owned by the runner's uid

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-process-resize"
+description = "Enables the process_resize command without any pre-configured scope."
+commands.allow = ["process_resize"]
+
+[[permission]]
+identifier = "deny-process-resize"
+description = "Denies the process_resize command without any pre-configured scope."
+commands.deny = ["process_resize"]

@@ -89,3 +89,41 @@ fn exit_plan_mode_is_local_only() {
     assert!(TOOLS.iter().all(|spec| spec.name != name));
     assert!(WORKSPACE_TOOLS.iter().all(|spec| spec.name != name));
 }
+
+/// #1223: background processes are local-only. The shared `TOOLS` table
+/// keeps the foreground `run_command` (the cloud executor offers the same
+/// schema); the desktop swaps in `RUN_COMMAND_PROCESSES` and appends
+/// `PROCESS_TOOLS`, none of which the cloud table names.
+#[test]
+fn background_processes_are_local_only() {
+    use elitea_local_tools::session::{PROCESS_TOOLS, RUN_COMMAND_PROCESSES};
+    for spec in PROCESS_TOOLS {
+        assert!(
+            TOOLS.iter().all(|tool| tool.name != spec.name),
+            "{}",
+            spec.name
+        );
+        assert!(
+            WORKSPACE_TOOLS.iter().all(|tool| tool.name != spec.name),
+            "{}",
+            spec.name
+        );
+    }
+    let foreground = TOOLS
+        .iter()
+        .find(|spec| spec.name == RUN_COMMAND_PROCESSES.name)
+        .expect("run_command");
+    let cloud = WORKSPACE_TOOLS
+        .iter()
+        .find(|spec| spec.name == RUN_COMMAND_PROCESSES.name)
+        .expect("run_command");
+    assert_eq!((foreground.parameters)(), (cloud.parameters)());
+    let local = (RUN_COMMAND_PROCESSES.parameters)();
+    for switch in ["background", "tty", "loopback", "keep_alive"] {
+        assert!(local["properties"].get(switch).is_some(), "{switch}");
+        assert!(
+            (cloud.parameters)()["properties"].get(switch).is_none(),
+            "{switch}"
+        );
+    }
+}

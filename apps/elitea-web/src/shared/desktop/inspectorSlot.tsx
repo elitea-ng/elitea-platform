@@ -1,6 +1,6 @@
 /**
  * The desktop frame's inspector: ONE right panel whose tabs the page on
- * screen contributes (Local work: Changes, Approvals, Plan, Index; the chat:
+ * screen contributes (Local work: Changes, Approvals, Plan, Processes, Index; the chat:
  * Conversation). The panel stacks its tabs in one or two groups, and a tab can
  * open in a window of its own.
  *
@@ -23,7 +23,7 @@ import { createPortal } from 'react-dom';
 import { ThemeProvider, type Theme } from '@mui/material/styles';
 
 /** Every tab a page can contribute. Ids are unique across pages, so a tab id names its page too. */
-export type InspectorTabId = 'changes' | 'approvals' | 'plan' | 'index' | 'conversation';
+export type InspectorTabId = 'changes' | 'approvals' | 'plan' | 'processes' | 'index' | 'conversation';
 
 /** The kind of page an inspector belongs to: the layout (groups, widths) is remembered per kind. */
 export type InspectorPage = 'local' | 'chat';
@@ -32,6 +32,7 @@ export const INSPECTOR_TAB_PAGE: Readonly<Record<InspectorTabId, InspectorPage>>
   changes: 'local',
   approvals: 'local',
   plan: 'local',
+  processes: 'local',
   index: 'local',
   conversation: 'chat',
 };

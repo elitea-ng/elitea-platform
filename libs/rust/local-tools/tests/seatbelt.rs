@@ -110,6 +110,16 @@ async fn assert_refused(fixture: &Fixture, probe: &str, secret: &str) {
 }
 
 async fn sh(fixture: &Fixture, command: &str, mode: SandboxMode, network: bool) -> CommandOutput {
+    sh_loopback(fixture, command, mode, network, false).await
+}
+
+async fn sh_loopback(
+    fixture: &Fixture,
+    command: &str,
+    mode: SandboxMode,
+    network: bool,
+    loopback: bool,
+) -> CommandOutput {
     let output = run(
         &fixture.workspace,
         &fixture.config,
@@ -119,6 +129,7 @@ async fn sh(fixture: &Fixture, command: &str, mode: SandboxMode, network: bool) 
             timeout: None,
             mode,
             network,
+            loopback,
         },
     )
     .await
@@ -485,6 +496,70 @@ async fn network_is_blocked_when_denied_and_open_when_allowed() {
     let allowed = sh(&fixture, &probe, SandboxMode::WorkspaceWrite, true).await;
     assert_eq!(allowed.exit_code, Some(0), "{}", allowed.stderr);
     drop(listener);
+}
+
+/// #1223: without the loopback switch a command reaches nothing on
+/// localhost, its own listener included.
+#[tokio::test]
+async fn loopback_off_denies_localhost_connect() {
+    if !available() {
+        return;
+    }
+    let fixture = fixture();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
+    let port = listener.local_addr().expect("addr").port();
+    let probe = format!("/usr/bin/nc -z -G 3 127.0.0.1 {port}");
+    let denied = sh_loopback(&fixture, &probe, SandboxMode::WorkspaceWrite, false, false).await;
+    assert_ne!(denied.exit_code, Some(0), "{}", denied.stdout);
+    let own = sh_loopback(
+        &fixture,
+        "/usr/bin/nc -l 127.0.0.1 0",
+        SandboxMode::WorkspaceWrite,
+        false,
+        false,
+    )
+    .await;
+    assert_ne!(own.exit_code, Some(0), "listened without loopback");
+    drop(listener);
+}
+
+/// #1223: with the loopback switch a command serves and connects on
+/// localhost, and still reaches nothing else.
+#[tokio::test]
+async fn loopback_on_allows_localhost_but_not_external() {
+    if !available() {
+        return;
+    }
+    let fixture = fixture();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
+    let port = listener.local_addr().expect("addr").port();
+    let probe = format!("/usr/bin/nc -z -G 3 127.0.0.1 {port}");
+    let reached = sh_loopback(&fixture, &probe, SandboxMode::WorkspaceWrite, false, true).await;
+    assert_eq!(reached.exit_code, Some(0), "{}", reached.stderr);
+    drop(listener);
+
+    // Its own server and client in one command.
+    let served = sh_loopback(
+        &fixture,
+        "/usr/bin/python3 -c 'import socket; s = socket.socket(); s.bind((\"127.0.0.1\", 0)); \
+         s.listen(1); c = socket.create_connection(s.getsockname()); print(\"served\")'",
+        SandboxMode::WorkspaceWrite,
+        false,
+        true,
+    )
+    .await;
+    assert_eq!(served.exit_code, Some(0), "{}", served.stderr);
+    assert!(served.stdout.contains("served"), "{}", served.stdout);
+
+    let external = sh_loopback(
+        &fixture,
+        "/usr/bin/nc -z -G 3 1.1.1.1 443",
+        SandboxMode::WorkspaceWrite,
+        false,
+        true,
+    )
+    .await;
+    assert_ne!(external.exit_code, Some(0), "loopback reached the network");
 }
 
 /// M5: checkpoint refs and objects live in `.git`, so a sandboxed command

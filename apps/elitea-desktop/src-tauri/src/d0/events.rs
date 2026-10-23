@@ -26,6 +26,10 @@ pub struct AgentEvent {
 /// Where events go: the main window in the app, a vector in tests.
 pub trait EventEmitter: Send + Sync {
     fn emit(&self, event: AgentEvent);
+
+    /// A background process's event on the app channel
+    /// (`process://event`, #1223); nowhere by default.
+    fn emit_process(&self, _event: super::processes::ProcessEvent) {}
 }
 
 /// A turn's phases, as `status` events name them.
@@ -567,6 +571,8 @@ pub struct VecEmitter {
     pub events: Mutex<Vec<AgentEvent>>,
     /// Called with each event after it is stored (an approval answerer).
     pub on_event: Mutex<Option<EventHook>>,
+    /// The app channel's process events (#1223).
+    pub process_events: Mutex<Vec<super::processes::ProcessEvent>>,
 }
 
 #[cfg(test)]
@@ -578,6 +584,10 @@ impl VecEmitter {
     pub fn kinds(&self) -> Vec<&'static str> {
         self.all().iter().map(|event| event.kind).collect()
     }
+
+    pub fn processes(&self) -> Vec<super::processes::ProcessEvent> {
+        self.process_events.lock().expect("lock").clone()
+    }
 }
 
 #[cfg(test)]
@@ -587,6 +597,10 @@ impl EventEmitter for VecEmitter {
         if let Some(callback) = self.on_event.lock().expect("lock").as_ref() {
             callback(&event);
         }
+    }
+
+    fn emit_process(&self, event: super::processes::ProcessEvent) {
+        self.process_events.lock().expect("lock").push(event);
     }
 }
 
