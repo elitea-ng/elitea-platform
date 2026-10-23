@@ -110,6 +110,8 @@ fi
 configured=$(awk '
   /^[[:space:]]+directory:/      { sub(/^[[:space:]]+directory:[[:space:]]*/, ""); print; next }
   /^[[:space:]]+directories:/    { inlist = 1; next }
+  # A comment inside the list (a note on one directory) does not end it.
+  inlist && /^[[:space:]]*#/     { next }
   inlist && /^[[:space:]]+-[[:space:]]*\//  { sub(/^[[:space:]]+-[[:space:]]*/, ""); print; next }
   inlist && !/^[[:space:]]+-/    { inlist = 0 }
 ' "$CONFIG" | sed -E 's|^/?||; s|/$||')
