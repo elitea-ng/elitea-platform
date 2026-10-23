@@ -1,5 +1,5 @@
 use super::*;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::symlink;
 
 fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(30)
@@ -18,7 +18,19 @@ fn platform() -> Platform {
 }
 fn fixture_image(directory: &Path) -> CargoImage {
     let cargo = directory.join("cargo-fixture");
-    std::fs::write(&cargo,r#"#!/bin/sh
+    // A child writes the script, so this process never holds it open for
+    // writing. Tests run in parallel threads, and a thread that forks while a
+    // write handle is open passes it to its child until that child execs;
+    // exec of the script then fails with ETXTBSY ("Cargo could not start"),
+    // and the retained test timed out waiting for a marker that never came.
+    let mut writer = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg("cat > \"$0\" && chmod 700 \"$0\"")
+        .arg(&cargo)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(&mut writer.stdin.take().unwrap(), r#"#!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "$(dirname "$0")/commands"
 case "$*" in
@@ -32,8 +44,8 @@ case "$*" in
   ;;
  *) exit 90 ;;
 esac
-"#).unwrap();
-    std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o700)).unwrap();
+"#.as_bytes()).unwrap();
+    assert!(writer.wait().unwrap().success());
     // Constructors keep all paths in the trusted fixture. The production command exposes no path options.
     CargoImage::fixture(cargo, directory.join("rustup"), "/usr/bin:/bin".into())
 }
@@ -254,17 +266,24 @@ async fn retained_acquisition_waits_for_release_and_reuses_the_original_objects(
     )
     .unwrap();
     let retained = retain_in(&workspace, &image);
-    let release = async {
-        let limit = deadline();
-        while !workspace.join(".elitea-native-preparation.json").exists() {
-            assert!(Instant::now() < limit);
-            tokio::time::sleep(Duration::from_millis(10)).await;
+    tokio::pin!(retained);
+    let limit = deadline();
+    // Polling the acquisition here too: it cannot finish before the release,
+    // so finishing early is its error, which a bare wait would hide behind
+    // the deadline.
+    while !workspace.join(".elitea-native-preparation.json").exists() {
+        assert!(
+            Instant::now() < limit,
+            "no preparation marker before the deadline"
+        );
+        tokio::select! {
+            early = &mut retained => panic!("acquisition finished before its release: {:?}", early.err()),
+            () = tokio::time::sleep(Duration::from_millis(10)) => {}
         }
-        assert!(!workspace.join("result.json").exists());
-        exclusive_file(&workspace.join(".elitea-native-preparation-release"), b"").unwrap();
-    };
-    let (record, _) = tokio::join!(retained, release);
-    record.unwrap();
+    }
+    assert!(!workspace.join("result.json").exists());
+    exclusive_file(&workspace.join(".elitea-native-preparation-release"), b"").unwrap();
+    retained.await.unwrap();
     let original = std::fs::read(workspace.join("commands")).unwrap();
     retain_in(&workspace, &image).await.unwrap();
     assert_eq!(std::fs::read(workspace.join("commands")).unwrap(), original);

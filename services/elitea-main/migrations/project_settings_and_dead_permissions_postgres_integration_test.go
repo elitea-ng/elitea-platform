@@ -141,8 +141,8 @@ func TestDeadPermissionStringsAreRemovedWithoutWideningARole(t *testing.T) {
 	ctx, cancel := testContext()
 	defer cancel()
 
-	// What pylon re-seeds on a shared database, and what the old Roles matrix
-	// saved when an operator clicked a group toggle.
+	// Bare section nodes, and what the old Roles matrix saved when an operator
+	// clicked a group toggle.
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.auth_core__role_permission (role_id, permission)
 SELECT role.id, dead.permission

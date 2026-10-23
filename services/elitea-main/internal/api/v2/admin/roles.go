@@ -241,11 +241,10 @@ ORDER BY 1`)
 // holds a grant for. It is the whole composition, so a test can build the
 // catalogue the handler builds without a database.
 //
-// A retired name is left out even when a row still carries it. The legacy
-// runtime re-seeds some of them on every start while it shares the database, so
-// a row can come back after shared migration 0136 removed it. Leaving the name
-// out of the catalogue keeps it off the Roles matrix, and parseMatrixBody then
-// refuses a save that names it.
+// A retired name is left out even when a row still carries it. Shared
+// migrations 0136 and 0172 delete those rows, and leaving the name out of the
+// catalogue keeps a save from writing one back: parseMatrixBody refuses a save
+// that names a string the catalogue does not hold.
 func catalogueFrom(granted []string) []string {
 	live := make([]string, 0, len(granted))
 	for _, name := range granted {
@@ -265,14 +264,10 @@ func catalogueFrom(granted []string) []string {
 // operator clicked a group toggle, and strings a legacy migration seeded for
 // features that never checked them.
 //
-// The legacy admin UI still gates its sections on the bare nodes
-// (legacy/plugins/admin/module.py). Where it runs against this database, it
-// loses those sections after 0136 until it re-seeds its roles on restart.
-// The re-seeded rows are why this list also filters the catalogue.
-//
-// Shared migration 0136 deletes the rows. This list MUST equal the list in that
-// file; internal/api/router_permission_retired_gate_test.go checks both that,
-// and that no route gate checks any name here.
+// Shared migrations 0136 and 0172 delete the rows. This list MUST equal the
+// union of the lists in those files;
+// internal/api/router_permission_retired_gate_test.go checks both that, and
+// that no route gate checks any name here.
 var retiredPermissions = map[string]struct{}{
 	"projects":                              {},
 	"configuration":                         {},
@@ -289,10 +284,14 @@ var retiredPermissions = map[string]struct{}{
 	"models.promptlib_shared.public_collection.details": {},
 	"models.promptlib_shared.approve_collection.post":   {},
 	"models.promptlib_shared.reject_collection.delete":  {},
+	// 0172: the legacy admin module's Roles and Projects section names.
+	"configuration.roles": {},
+	"projects.projects":   {},
 }
 
 // RetiredPermissions returns the retired names, sorted. It exists for the
-// source gate in internal/api, which compares it with shared migration 0136.
+// source gate in internal/api, which compares it with the shared migrations
+// that retire names (0136, 0172).
 func RetiredPermissions() []string {
 	names := make([]string, 0, len(retiredPermissions))
 	for name := range retiredPermissions {

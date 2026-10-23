@@ -23,9 +23,8 @@ What owns scheduled work now:
   `elitea_runtime.scheduled_job_cursors` and
   `elitea_runtime.scheduled_occurrences` own planning, takeover, and completion.
 - `centry.schedule` rows are still listed and edited by the admin Schedules
-  surface. In a hybrid deployment, a legacy-runtime scheduling plugin running
-  against the same database is the only thing that executes them; nothing in
-  this repository does.
+  surface, and nothing executes them: no legacy component shares this
+  database. Moving their execution onto the platform scheduler is #1369.
 
 ## What this binary still runs
 
