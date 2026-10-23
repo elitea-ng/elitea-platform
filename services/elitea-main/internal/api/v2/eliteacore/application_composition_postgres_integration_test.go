@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -142,4 +143,32 @@ func TestAPausingPipelineUnderAPipelineAgentNodeIsRefusedAtAttachAndAtSave(t *te
 		applications.Version{AgentType: "pipeline", Instructions: agentNodePipeline("Missing alias", false)}); err != nil {
 		t.Fatalf("an Agent node on no attachment is the Worker's to refuse, not the composition check's: %v", err)
 	}
+}
+
+// The save check at its hop budget on real PostgreSQL: 25 attachments under
+// one root, walked through the same source the routes use. The bound is
+// generous (the measurement is recorded in the source mapping); the shape
+// under test is that the walk is bounded, not the machine's speed.
+func TestTheCompositionCheckAtItsHopBudgetIsFast(t *testing.T) {
+	pool := newPublishCopyPool(t)
+	root := seedComposed(t, pool, "Wide root", "agent", "root")
+	for n := 0; n < applicationcomposition.MaxApplicationHops; n++ {
+		mustAttach(t, pool, root, seedComposed(t, pool, fmt.Sprintf("Leaf %02d", n), "agent", "leaf"))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	id := applicationcomposition.Identity{ApplicationID: int64(root.appID), VersionID: int64(root.versionID)}
+	var slowest time.Duration
+	for range 20 {
+		started := time.Now()
+		if err := applicationcomposition.Check(ctx, repos.NewCompositionSource(pool, `"p_1"`), id, nil); err != nil {
+			t.Fatalf("the hop budget itself must pass: %v", err)
+		}
+		slowest = max(slowest, time.Since(started))
+	}
+	t.Logf("composition check, %d attachments, slowest of 20: %s", applicationcomposition.MaxApplicationHops, slowest)
+	if slowest > 2*time.Second {
+		t.Fatalf("a bounded walk took %s", slowest)
+	}
+	expectRefused(t, pool, root, seedComposed(t, pool, "One too many", "agent", "leaf"), "more than 25")
 }
