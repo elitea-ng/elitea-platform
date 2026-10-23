@@ -875,27 +875,42 @@ fn scope_chain(scopes: usize) -> (BTreeMap<Saved, Value>, Vec<Value>) {
     (versions, vec![reference((10, 11), "pipeline", "first")])
 }
 
+/// The assembly result and the saved versions the platform was asked for.
 async fn assemble_scopes(
     scopes: usize,
-) -> Result<(), super::super::runtime::NativeAgentAssemblyError> {
+) -> (
+    Result<(), super::super::runtime::NativeAgentAssemblyError>,
+    Vec<Saved>,
+) {
     let (sessions, checkpointer) = state();
     let (versions, tools) = scope_chain(scopes);
-    let (assembler, _, _) = process(&sessions, &checkpointer, &versions, Vec::new());
+    let (assembler, _, reads) = process(&sessions, &checkpointer, &versions, Vec::new());
     let request = root_request(&root_yaml("first"), tools);
-    assembler.assemble(authorized(&request)).await.map(|_| ())
+    let result = assembler.assemble(authorized(&request)).await.map(|_| ());
+    let reads = reads.lock().expect("version reads").clone();
+    (result, reads)
 }
 
+/// One scope past the budget is never built: the Agent that would open it runs
+/// without that attachment (a pipeline `agent` node degrades its Agent's
+/// unbuildable attachments, #990), so the run assembles and the scope past the
+/// budget is never read.
 #[tokio::test(flavor = "current_thread")]
-async fn the_ordinary_graph_scope_budget_admits_the_limit_and_refuses_one_more() {
-    assemble_scopes(MAX_ORDINARY_GRAPH_SCOPES)
-        .await
-        .expect("exactly the scope budget assembles");
-    let Err(error) = assemble_scopes(MAX_ORDINARY_GRAPH_SCOPES + 1).await else {
-        panic!("one scope past the budget must be refused");
-    };
-    assert_eq!(
-        error.code(),
-        NativeAgentAssemblyErrorCode::UnsupportedCapability
+async fn the_ordinary_graph_scope_budget_admits_the_limit_and_never_builds_one_more() {
+    let (result, reads) = assemble_scopes(MAX_ORDINARY_GRAPH_SCOPES).await;
+    result.expect("exactly the scope budget assembles");
+    let last = MAX_ORDINARY_GRAPH_SCOPES as u64 - 1;
+    assert!(
+        reads.contains(&(11 + last * 2, 12 + last * 2)),
+        "the last Agent within the budget is read: {reads:?}"
+    );
+    let (result, reads) = assemble_scopes(MAX_ORDINARY_GRAPH_SCOPES + 1).await;
+    result.expect("the scope past the budget is dropped, not a failed run");
+    let past = MAX_ORDINARY_GRAPH_SCOPES as u64;
+    let beyond_agent = (11 + past * 2, 12 + past * 2);
+    assert!(
+        !reads.contains(&beyond_agent),
+        "the Agent past the scope budget is never read: {reads:?}"
     );
 }
 

@@ -539,7 +539,7 @@ async fn saved_graph_entry_keeps_actual_descendant_presentations_across_graph_wr
     assert!(fixture.models.lock().unwrap().is_empty());
 }
 #[tokio::test]
-async fn mixed_graph_agent_cycle_is_refused_before_provider_effects() {
+async fn mixed_graph_agent_cycle_edge_is_dropped_before_provider_effects() {
     let mut input = versions();
     input.insert(
         (32, 42),
@@ -554,13 +554,31 @@ async fn mixed_graph_agent_cycle_is_refused_before_provider_effects() {
         .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(runtime.is_none());
-    assert_eq!(skipped.len(), 1);
+    assert_outer_offered_without_the_offending_edge(runtime.as_ref(), &skipped);
     assert!(fixture.models.lock().unwrap().is_empty());
     assert_eq!(
         *fixture.reads.lock().unwrap(),
         vec![(31, 41), (32, 42), (31, 41)]
     );
+}
+/// A bound violation (cycle, graph depth, ordinary-scope budget) deep inside a
+/// saved pipeline is not built: the pipeline `agent` node whose Agent would reach
+/// it runs without that one edge (`bind_scoped_agent`), so the outer pipeline is
+/// still offered and nothing past the bound is read, built or called.
+fn assert_outer_offered_without_the_offending_edge(
+    runtime: Option<&MaterializedApplicationRuntime>,
+    skipped: &[SkippedApplicationChild],
+) {
+    let runtime = runtime.expect("the outer pipeline is offered");
+    assert_eq!(
+        runtime
+            .tools
+            .iter()
+            .map(|tool| tool.alias.as_str())
+            .collect::<Vec<_>>(),
+        ["outer"]
+    );
+    assert!(skipped.is_empty(), "{skipped:?}");
 }
 fn two_scope_versions() -> BTreeMap<Identity, Value> {
     let mut input = versions();
@@ -642,7 +660,7 @@ async fn second_ordinary_graph_scope_produces_bounded_exact_activation_chain() {
     assert_eq!(fixture.models.lock().unwrap().len(), 2);
 }
 #[tokio::test]
-async fn third_ordinary_graph_scope_is_refused_before_provider_effects() {
+async fn third_ordinary_graph_scope_is_dropped_before_provider_effects() {
     let mut input = two_scope_versions();
     input.insert(
         (35, 45),
@@ -658,13 +676,12 @@ async fn third_ordinary_graph_scope_is_refused_before_provider_effects() {
         .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(runtime.is_none());
-    assert_eq!(skipped.len(), 1);
+    assert_outer_offered_without_the_offending_edge(runtime.as_ref(), &skipped);
     assert!(fixture.models.lock().unwrap().is_empty());
     assert!(!fixture.reads.lock().unwrap().contains(&(36, 46)));
 }
 #[tokio::test]
-async fn second_scope_mixed_cycle_is_refused_before_provider_effects() {
+async fn second_scope_mixed_cycle_edge_is_dropped_before_provider_effects() {
     let mut input = two_scope_versions();
     input.insert(
         (34, 44),
@@ -679,13 +696,12 @@ async fn second_scope_mixed_cycle_is_refused_before_provider_effects() {
         .build(reference((31, 41), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(runtime.is_none());
-    assert_eq!(skipped.len(), 1);
+    assert_outer_offered_without_the_offending_edge(runtime.as_ref(), &skipped);
     assert!(fixture.models.lock().unwrap().is_empty());
     assert_eq!(fixture.reads.lock().unwrap().last(), Some(&(31, 41)));
 }
 #[tokio::test]
-async fn second_scope_mixed_graph_depth_is_refused_before_provider_effects() {
+async fn second_scope_mixed_graph_depth_is_dropped_before_provider_effects() {
     let mut input = two_scope_versions();
     input.insert(
         (30, 40),
@@ -708,8 +724,7 @@ async fn second_scope_mixed_graph_depth_is_refused_before_provider_effects() {
         .build(reference((29, 39), "pipeline", "outer"))
         .await
         .unwrap();
-    assert!(runtime.is_none());
-    assert_eq!(skipped.len(), 1);
+    assert_outer_offered_without_the_offending_edge(runtime.as_ref(), &skipped);
     assert!(fixture.models.lock().unwrap().is_empty());
 }
 #[tokio::test]
