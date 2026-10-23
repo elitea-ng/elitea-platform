@@ -2762,6 +2762,7 @@
   "widgets.chatBox.greetingPrompt": "What can I do for you today?",
   "widgets.chatBox.inputPlaceholder": "Type your message...",
   "widgets.chatBox.projectSkills": "Project skills",
+  "widgets.chatBox.projectSkillsUnavailable": "The project skills could not be loaded, so the message was sent without them.",
   "widgets.chatBox.turnNotDelivered": "The message was not sent: no chat connection is available. Reload the page and try again.",
   "widgets.contextBudget.highUsage": "Context usage is high. Consider configuring budget settings.",
   "widgets.contextBudget.info": "Shows how much of your conversation context window is being used",

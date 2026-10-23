@@ -47,6 +47,9 @@ var (
 	// ErrBelowMinimum reports a schedule that fires more often than the
 	// routine allows.
 	ErrBelowMinimum = errors.New("schedule fires more often than this routine allows")
+	// ErrNeverFires reports a cron expression that names no real instant
+	// (`0 0 31 2 *`): it parses, but nothing would ever run.
+	ErrNeverFires = errors.New("schedule never fires")
 )
 
 // ParseSchedule parses a Go duration (a fixed interval) or a cron expression.
@@ -71,12 +74,18 @@ func ParseSchedule(text string) (Schedule, error) {
 // String returns the expression as written.
 func (s Schedule) String() string { return s.text }
 
+// Interval is the fixed gap of an interval schedule, zero for a cron
+// expression. A planner that advances its cursor on every tick needs it to
+// measure an interval from the previous occurrence instead.
+func (s Schedule) Interval() time.Duration { return s.interval }
+
 // IsZero reports an unparsed Schedule.
 func (s Schedule) IsZero() bool { return s.interval == 0 && s.cron == nil }
 
 // Next returns the first instant strictly after t at which the schedule fires.
-// An interval fires one interval after t, which is how the workers' fixed
-// tickers behaved relative to the end of the previous pass.
+// An interval fires one interval after t: callers pass the end of the previous
+// pass (or the previous occurrence), so an interval is a gap between runs. A
+// cron expression that never fires returns the zero time; callers skip it.
 func (s Schedule) Next(t time.Time) time.Time {
 	if s.cron != nil {
 		return s.cron.Next(t)
@@ -114,12 +123,15 @@ func (s Schedule) MinGap(from time.Time) time.Duration {
 	return minimum
 }
 
-// ValidateSchedule parses text and refuses one that fires more often than
-// minInterval. A zero minInterval only requires the text to parse.
+// ValidateSchedule parses text and refuses one that never fires or fires more
+// often than minInterval. A zero minInterval skips the frequency bound.
 func ValidateSchedule(text string, minInterval time.Duration, now time.Time) (Schedule, error) {
 	schedule, err := ParseSchedule(text)
 	if err != nil {
 		return Schedule{}, err
+	}
+	if schedule.Next(now).IsZero() {
+		return Schedule{}, ErrNeverFires
 	}
 	if minInterval > 0 && schedule.MinGap(now) < minInterval {
 		return Schedule{}, fmt.Errorf("%w: at least %s between runs", ErrBelowMinimum, minInterval)

@@ -1,14 +1,16 @@
 /**
  * The project's own skills, for the "~" menu's "Project skills" section: every
- * skill of the conversation's project (`listSkills`, page by page), read once
- * the menu is first opened and cached 30 s. The chat request names a picked
+ * skill of the conversation's project (`listSkills`, page by page), read when
+ * an agent's composer mounts and cached 30 s. Read up front, not when the menu
+ * opens: a `~Name` typed or pasted without opening the menu must still resolve
+ * to its id at send. The chat request names a picked
  * one by id; elitea-main reads it again itself under the caller's permissions,
  * so a skill listed here and gone (or hidden) by the send is refused there
  * (`project_skill_unknown`), never applied from this list's text.
  */
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { getListSkillsQueryKey, listSkills } from '@/shared/api/generated/skills/skills';
 import { unwrapListPage } from '@/shared/api/unwrap';
@@ -41,24 +43,36 @@ async function readProjectSkills(projectId: string): Promise<SkillRow[]> {
   return rows.slice(0, MAX_SKILLS);
 }
 
-/** `[]` until `enabled` has been true once, while it loads and when the read fails. */
-export function useProjectSkillList(projectId: string | undefined, enabled: boolean): readonly ProjectSkillEntry[] {
-  const usable = projectId !== undefined && projectId !== '';
-  const query = useQuery({
-    queryKey: [...getListSkillsQueryKey(projectId ?? ''), 'chatInput.all'] as const,
-    queryFn: () => readProjectSkills(projectId ?? ''),
-    enabled: usable && enabled,
-    staleTime: 30_000,
-  });
-  return useMemo(
-    () =>
-      usable
-        ? (query.data ?? []).flatMap((row): ProjectSkillEntry[] =>
-            typeof row.name === 'string' && row.name.trim() !== '' && (typeof row.id === 'number' || typeof row.id === 'string')
-              ? [{ id: String(row.id), name: row.name, ...(typeof row.description === 'string' && row.description !== '' ? { description: row.description } : {}) }]
-              : [],
-          )
-        : [],
-    [usable, query.data],
+function toEntries(rows: readonly SkillRow[]): readonly ProjectSkillEntry[] {
+  return rows.flatMap((row): ProjectSkillEntry[] =>
+    typeof row.name === 'string' && row.name.trim() !== '' && (typeof row.id === 'number' || typeof row.id === 'string')
+      ? [{ id: String(row.id), name: row.name, ...(typeof row.description === 'string' && row.description !== '' ? { description: row.description } : {}) }]
+      : [],
   );
+}
+
+export interface ProjectSkillList {
+  /** `[]` while `enabled` is false, while the read is in flight and when it fails. */
+  readonly entries: readonly ProjectSkillEntry[];
+  /** Whether `entries` is the project's list (always true without a project: there is nothing to read). */
+  readonly ready: boolean;
+  /** The list, read now if it is not cached; rejects when the read fails. */
+  readonly resolve: () => Promise<readonly ProjectSkillEntry[]>;
+}
+
+export function useProjectSkillList(projectId: string | undefined, enabled: boolean): ProjectSkillList {
+  const usable = projectId !== undefined && projectId !== '';
+  const queryClient = useQueryClient();
+  const options = useMemo(
+    () => ({
+      queryKey: [...getListSkillsQueryKey(projectId ?? ''), 'chatInput.all'] as const,
+      queryFn: () => readProjectSkills(projectId ?? ''),
+      staleTime: 30_000,
+    }),
+    [projectId],
+  );
+  const query = useQuery({ ...options, enabled: usable && enabled });
+  const entries = useMemo(() => (usable ? toEntries(query.data ?? []) : []), [usable, query.data]);
+  const resolve = useCallback(async () => (usable ? toEntries(await queryClient.query(options)) : []), [usable, queryClient, options]);
+  return { entries, ready: !usable || query.isSuccess, resolve };
 }

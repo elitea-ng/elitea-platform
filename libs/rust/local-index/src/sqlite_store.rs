@@ -484,13 +484,7 @@ impl SqliteGraphStore {
         work: impl FnOnce(&Self) -> Result<T> + Send + 'static,
     ) -> Result<T> {
         let store = self.handle();
-        match tokio::task::spawn_blocking(move || work(&store)).await {
-            Ok(answer) => answer,
-            Err(error) => match error.try_into_panic() {
-                Ok(panic) => std::panic::resume_unwind(panic),
-                Err(_) => Err(StoreError::Closed),
-            },
-        }
+        elitea_content_source::blocking_or(move || work(&store), || StoreError::Closed).await
     }
 
     /// What an index in `dir` holds, read without loading its graph: the

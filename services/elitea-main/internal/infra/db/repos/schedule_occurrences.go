@@ -172,6 +172,50 @@ func (r *ScheduleOccurrenceRepository) MaterializeAndAdvance(
 	return nil
 }
 
+// DisableAndAdvance supersedes a switched-off job's pending occurrences, so
+// switching it back on does not run them late, and advances its cursor. An
+// occurrence a replica holds a live lease on is left to settle on its own.
+func (r *ScheduleOccurrenceRepository) DisableAndAdvance(
+	ctx context.Context,
+	claim schedulingapp.PlanningClaim,
+	through time.Time,
+) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite,
+	})
+	if err != nil {
+		return fmt.Errorf("begin disabled scheduled job advance: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	queries := sqlcgen.New(tx)
+	if err := queries.SupersedePendingScheduledJobOccurrences(
+		ctx,
+		sqlcgen.SupersedePendingScheduledJobOccurrencesParams{
+			CompletedAt: timestamptz(through.UTC()),
+			JobID:       claim.JobID,
+		},
+	); err != nil {
+		return fmt.Errorf("supersede disabled scheduled job occurrences: %w", err)
+	}
+	affected, err := queries.AdvanceScheduledJobCursor(ctx, sqlcgen.AdvanceScheduledJobCursorParams{
+		ObservedThrough:  timestamptz(through.UTC()),
+		JobID:            claim.JobID,
+		ScheduleRevision: claim.ScheduleRevision,
+		LeaseEpoch:       claim.LeaseEpoch,
+		ClaimFence:       claim.ClaimFence[:],
+	})
+	if err != nil {
+		return fmt.Errorf("advance disabled scheduled job cursor: %w", err)
+	}
+	if affected != 1 {
+		return schedulingapp.ErrStaleFence
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit disabled scheduled job advance: %w", err)
+	}
+	return nil
+}
+
 func (r *ScheduleOccurrenceRepository) ClaimPage(
 	ctx context.Context,
 	registered []schedulingapp.RegisteredJob,

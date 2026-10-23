@@ -62,8 +62,17 @@ function ScheduleCell({
     if (draft !== null) inputRef.current?.focus();
   }, [draft]);
 
+  // Enter commits and closes the editor, and closing it blurs the input, whose
+  // onBlur still holds the old draft: without this guard the same edit is sent
+  // twice and the second PUT answers 409 "changed while editing".
+  const committedRef = useRef(false);
+  const open = useCallback((schedule: string) => {
+    committedRef.current = false;
+    setDraft(schedule);
+  }, []);
   const commit = useCallback(() => {
-    if (draft === null || !onScheduleChange) return;
+    if (draft === null || !onScheduleChange || committedRef.current) return;
+    committedRef.current = true;
     onScheduleChange(row, draft);
     setDraft(null);
   }, [draft, onScheduleChange, row]);
@@ -84,7 +93,7 @@ function ScheduleCell({
       component="button"
       type="button"
       underline="hover"
-      onClick={() => setDraft(row.schedule)}
+      onClick={() => open(row.schedule)}
       sx={{ fontFamily: monoFontFamily }}
     >
       {row.schedule}
@@ -111,7 +120,10 @@ function ScheduleCell({
       onKeyDown={(event) => {
         if (event.key === 'Enter') commit();
         // Escape ABANDONS rather than committing; blur is the save.
-        if (event.key === 'Escape') setDraft(null);
+        if (event.key === 'Escape') {
+          committedRef.current = true;
+          setDraft(null);
+        }
       }}
     />
   );

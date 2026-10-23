@@ -10,7 +10,7 @@
  *  - that a control the server would refuse is not offered as though it worked.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 
@@ -219,6 +219,26 @@ describe('AdminSchedulesTasks - the write', () => {
 
     await waitFor(() => expect(writes()).toHaveLength(1));
     expect(writes()[0]!.body).toEqual({ schedule: '30m' });
+  });
+
+  it('sends a schedule committed with Enter once, although the closing editor also blurs', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminSchedulesTasks />);
+    await waitForRoutines();
+
+    await user.click(screen.getByRole('button', { name: '*/5 * * * *' }));
+    const field = await screen.findByRole('textbox', { name: 'Schedule (interval or cron)' });
+    await user.clear(field);
+    await user.type(field, '30m');
+    // One act: the blur reaches the handler that still holds the draft.
+    act(() => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+      fireEvent.blur(field);
+    });
+
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(writes()).toHaveLength(1);
   });
 
   it('sends an empty schedule to restore the default of an overridden routine', async () => {

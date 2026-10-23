@@ -43,7 +43,7 @@ import { MentionPhase, SKILL_TRIGGER } from '../constants/mention.constants';
 import type { MentionPhaseValue } from '../constants/mention.constants';
 import { parseMentionRanges } from '../utils/instructionsMention.utils';
 import { useProjectSkillList } from './useProjectSkillList';
-import type { ProjectSkillEntry } from './useProjectSkillList';
+import type { ProjectSkillEntry, ProjectSkillList } from './useProjectSkillList';
 import type { MentionableItem, MentionRange } from '../utils/instructionsMention.utils';
 import type { ChatInputHandle } from '../chatInputHandle';
 
@@ -135,9 +135,11 @@ function withProjectSkills(versionItems: readonly SkillMentionItem[], project: r
   return [...versionItems, ...extra];
 }
 
-/** Whether the "~" menu is open on an agent: the project's skills are read then, not before. */
-function readsProjectSkills(isAgent: boolean, phase: MentionPhaseValue): boolean {
-  return isAgent && phase !== MentionPhase.Idle;
+/** A "~" that could start a mention: at the start or after whitespace, followed by a name. */
+const SKILL_TRIGGER_PATTERN = new RegExp(`(^|\\s)${SKILL_TRIGGER}\\S`);
+
+function hasSkillTrigger(text: string): boolean {
+  return SKILL_TRIGGER_PATTERN.test(text);
 }
 
 /** The ids of the project skills `text` mentions as `~Name`, each once, in text order. */
@@ -161,8 +163,35 @@ export interface UseChatSkillMentionResult {
   readonly onSelectSkill: (item: SkillMentionItem) => void;
   readonly resetSkill: () => void;
   readonly skillHighlightRanges: readonly MentionRange[];
-  /** The ids of the project skills `text` mentions (`~Name`), each once: what the send puts in `payload.skills`. Empty when it names none. */
-  readonly projectSkillIdsFor: (text: string) => readonly string[];
+  /** The ids of the project skills `text` mentions (`~Name`), each once: what the send puts in `payload.skills`. Empty when it names none; `null` when `text` has a "~" and the project's skills are not read yet (or the read failed), so the answer is not known — the send then awaits `resolveProjectSkillIds`. */
+  readonly projectSkillIdsFor: (text: string) => readonly string[] | null;
+  /** `projectSkillIdsFor` after reading the project's skills if they are not loaded; rejects when they cannot be read. */
+  readonly resolveProjectSkillIds: (text: string) => Promise<readonly string[]>;
+}
+
+/** `projectSkillIdsFor`/`resolveProjectSkillIds` of the hook's result: see `UseChatSkillMentionResult`. */
+function useProjectSkillIds(
+  isAgent: boolean,
+  projectSkills: ProjectSkillList,
+  versionItems: readonly SkillMentionItem[],
+  mentionableItems: readonly SkillMentionItem[],
+): Pick<UseChatSkillMentionResult, 'projectSkillIdsFor' | 'resolveProjectSkillIds'> {
+  // Not an agent: nothing is sent by id, so the answer is always known.
+  const ready = !isAgent || projectSkills.ready;
+  const resolveProject = projectSkills.resolve;
+  const projectSkillIdsFor = useCallback(
+    (text: string): readonly string[] | null => (ready || !hasSkillTrigger(text) ? mentionedProjectSkillIds(text, mentionableItems) : null),
+    [ready, mentionableItems],
+  );
+  const resolveProjectSkillIds = useCallback(
+    async (text: string): Promise<readonly string[]> => {
+      const known = projectSkillIdsFor(text);
+      if (known !== null) return known;
+      return mentionedProjectSkillIds(text, withProjectSkills(versionItems, await resolveProject()));
+    },
+    [projectSkillIdsFor, versionItems, resolveProject],
+  );
+  return { projectSkillIdsFor, resolveProjectSkillIds };
 }
 
 export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppVersionId, projectId }: UseChatSkillMentionParams): UseChatSkillMentionResult {
@@ -181,11 +210,11 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
 
   const applicationSkillsQuery = useListApplicationSkills(participantProjectId ?? '', appVersionId ?? 0, { query: { enabled: skillsEnabled } });
 
-  // The project's skills are read once the "~" menu is first opened (the hook
-  // keeps the result after it closes, so a typed `~Name` still highlights).
-  // They belong to the CONVERSATION's project, which is the one the send's
-  // route reads them from, not to the agent's own (possibly public) project.
-  const projectSkills = useProjectSkillList(projectId, readsProjectSkills(isAgent, phase));
+  // The project's skills are read when an agent's composer mounts, so a typed
+  // or pasted `~Name` resolves without the menu ever opening. They belong to
+  // the CONVERSATION's project, which is the one the send's route reads them
+  // from, not to the agent's own (possibly public) project.
+  const projectSkills = useProjectSkillList(projectId, isAgent);
 
   const versionItems = useMemo<readonly SkillMentionItem[]>(() => {
     // See `applicationParticipants.ts`'s header (this app's established
@@ -201,7 +230,8 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
     return toSkillMentionItems(normaliseSkills(wire.items as unknown as readonly SkillWire[]));
   }, [applicationSkillsQuery.data]);
 
-  const mentionableItems = useMemo(() => withProjectSkills(versionItems, projectSkills), [versionItems, projectSkills]);
+  const projectEntries = projectSkills.entries;
+  const mentionableItems = useMemo(() => withProjectSkills(versionItems, projectEntries), [versionItems, projectEntries]);
 
   const resetSkill = useCallback(() => {
     mentionAnchorRef.current = null;
@@ -276,7 +306,7 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
     [phase, filteredItems, highlightedIndex, onSelectSkill, resetSkill],
   );
 
-  const projectSkillIdsFor = useCallback((text: string): readonly string[] => mentionedProjectSkillIds(text, mentionableItems), [mentionableItems]);
+  const { projectSkillIdsFor, resolveProjectSkillIds } = useProjectSkillIds(isAgent, projectSkills, versionItems, mentionableItems);
 
   const skillHighlightRanges = useMemo(() => parseMentionRanges(inputContent, mentionableItems, SKILL_TRIGGER), [inputContent, mentionableItems]);
 
@@ -296,5 +326,6 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
     resetSkill,
     skillHighlightRanges,
     projectSkillIdsFor,
+    resolveProjectSkillIds,
   };
 }

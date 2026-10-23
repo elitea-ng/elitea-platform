@@ -174,3 +174,73 @@ func TestLoopFallsBackToTheDefaultWhenAStoredScheduleIsInvalid(t *testing.T) {
 		t.Fatalf("runs = %d, want 1", *runs)
 	}
 }
+
+func TestLoopOutageAfterAReadKeepsTheRegistryClock(t *testing.T) {
+	m, c := &memory{}, &clock{t: noon}
+	l, runs := newLoop(m, c, "1h")
+	pass := counting(runs)
+	l.Step(t.Context(), pass) // runs and records noon
+
+	m.getErr = errors.New("connection refused")
+	c.t = noon.Add(10 * time.Minute)
+	l.Step(t.Context(), pass) // degraded: the last run was ten minutes ago
+	if *runs != 1 {
+		t.Fatalf("runs = %d, want 1: an outage must not trigger an immediate pass", *runs)
+	}
+	c.t = noon.Add(time.Hour)
+	l.Step(t.Context(), pass)
+	if *runs != 2 {
+		t.Fatalf("runs = %d, want 2: one interval after the recorded run", *runs)
+	}
+}
+
+func TestLoopOutageKeepsADisabledRoutineOff(t *testing.T) {
+	m, c := &memory{}, &clock{t: noon}
+	l, runs := newLoop(m, c, "1m")
+	pass := counting(runs)
+	l.Step(t.Context(), pass)
+	m.row.Enabled = false
+	c.t = noon.Add(time.Minute)
+	l.Step(t.Context(), pass) // reads the disable
+
+	m.getErr = errors.New("connection refused")
+	for i := 2; i <= 5; i++ {
+		c.t = noon.Add(time.Duration(i) * time.Hour)
+		l.Step(t.Context(), pass)
+	}
+	if *runs != 1 {
+		t.Fatalf("runs = %d, want 1: the last read said disabled", *runs)
+	}
+}
+
+func TestLoopPlansTheNextRunFromTheEndOfALongPass(t *testing.T) {
+	m, c := &memory{}, &clock{t: noon}
+	l, runs := newLoop(m, c, "10m")
+	slow := func(context.Context) (string, error) {
+		*runs++
+		c.t = c.t.Add(25 * time.Minute) // the pass outlasts the interval
+		return OutcomeOK, nil
+	}
+	l.Step(t.Context(), slow)
+	if m.row.NextRunAt == nil || !m.row.NextRunAt.Equal(noon.Add(35*time.Minute)) {
+		t.Fatalf("next_run_at = %v, want ten minutes after the pass ended", m.row.NextRunAt)
+	}
+	l.Step(t.Context(), slow)
+	if *runs != 1 {
+		t.Fatalf("runs = %d, want 1: no back-to-back pass", *runs)
+	}
+}
+
+func TestLoopSkipsAScheduleThatNeverFires(t *testing.T) {
+	never := "0 0 31 2 *"
+	m := &memory{row: &Row{Enabled: true, ScheduleOverride: &never}}
+	c := &clock{t: noon}
+	l, runs := newLoop(m, c, "1h")
+	for i := range 3 {
+		c.t = noon.Add(time.Duration(i) * time.Minute)
+		l.Step(t.Context(), counting(runs))
+	}
+	if *runs != 0 || m.row.NextRunAt != nil {
+		t.Fatalf("runs = %d, next_run_at = %v: a never-firing schedule must not run", *runs, m.row.NextRunAt)
+	}
+}

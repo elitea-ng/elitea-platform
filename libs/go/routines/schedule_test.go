@@ -55,3 +55,11 @@ func TestValidateScheduleEnforcesTheMinimumGap(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateScheduleRefusesACronThatNeverFires(t *testing.T) {
+	for _, min := range []time.Duration{0, time.Hour} {
+		if _, err := ValidateSchedule("0 0 31 2 *", min, noon); !errors.Is(err, ErrNeverFires) {
+			t.Errorf("min %s: err = %v, want ErrNeverFires", min, err)
+		}
+	}
+}

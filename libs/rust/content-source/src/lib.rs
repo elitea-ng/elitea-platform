@@ -99,13 +99,28 @@ pub trait ContentSource: Send + Sync {
 pub async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, SourceError> + Send + 'static,
 ) -> Result<T, SourceError> {
+    blocking_or(work, || {
+        SourceError::Unavailable("the source was stopped before it read".to_owned())
+    })
+    .await
+}
+
+/// [`blocking`] for work with its own error type: `stopped` is the error
+/// answered when the runtime shut down before the work ran. The local index
+/// store runs its synchronous calls through it.
+///
+/// # Errors
+///
+/// What `work` returns, or `stopped()`.
+pub async fn blocking_or<T: Send + 'static, E: Send + 'static>(
+    work: impl FnOnce() -> Result<T, E> + Send + 'static,
+    stopped: impl FnOnce() -> E,
+) -> Result<T, E> {
     match tokio::task::spawn_blocking(work).await {
         Ok(answer) => answer,
         Err(error) => match error.try_into_panic() {
             Ok(panic) => std::panic::resume_unwind(panic),
-            Err(_) => Err(SourceError::Unavailable(
-                "the source was stopped before it read".to_owned(),
-            )),
+            Err(_) => Err(stopped()),
         },
     }
 }

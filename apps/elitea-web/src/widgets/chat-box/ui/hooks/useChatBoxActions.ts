@@ -6,9 +6,10 @@
  * clear chat, conversation-starter send).
  */
 import type { RefObject } from 'react';
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 
 import { currentNodeRecoveryBinding } from '@/features/chat-messages';
+import { t } from '@/shared/i18n';
 import type { ChatMessage, useDeleteMessageAlert } from '@/features/chat-messages';
 
 import { useStableRef } from './useStableRef';
@@ -31,6 +32,8 @@ export interface UseChatBoxActionsParams {
   readonly isAgentsPage: boolean | undefined;
   readonly readAloudStop: () => void;
   readonly onConversationCreated?: ((conversation: { readonly id?: string | number; readonly uuid?: string }) => void) | undefined;
+  /** Tells the user a message went out without the project skills it names, which could not be read. */
+  readonly onSkillsUnavailable?: ((message: string) => void) | undefined;
 }
 
 export interface UseChatBoxActionsResult {
@@ -56,10 +59,11 @@ export function useChatBoxActions({
   isAgentsPage,
   readAloudStop,
   onConversationCreated,
+  onSkillsUnavailable,
 }: UseChatBoxActionsParams): UseChatBoxActionsResult {
-  const handleSend = useCallback(
-    (question: string) => {
-      if (!question.trim() || data.hasPendingHitlInterrupt || currentNodeRecoveryBinding(messages) || state.isActiveParticipantBroken) return;
+  const resolvingSkillsRef = useRef(false);
+  const sendResolved = useCallback(
+    (question: string, projectSkillIds: readonly string[]) => {
       const isSendingToUser = state.isMentioningEveryone || state.selectedUsers.length > 0;
       // USER ids, not the participant ids the picker is keyed by. The start
       // route parses `user_ids` as `centry.notifications.user_id`; a
@@ -83,7 +87,7 @@ export function useChatBoxActions({
       chatInputRef.current?.reset?.();
       const pendingAttachments = data.attachments.state.attachments;
       data.attachments.state.onClearAttachments();
-      void handlers.sendQuestion({ question, attachments: pendingAttachments, isSendingToUser, userIds, isMentioningEveryone, projectSkillIds: state.skill.projectSkillIdsFor(question) }).then((result) => {
+      void handlers.sendQuestion({ question, attachments: pendingAttachments, isSendingToUser, userIds, isMentioningEveryone, projectSkillIds }).then((result) => {
         // Announced on `result.createdConversation` alone, NOT on `success`:
         // the row is committed before any transport is tried, so a turn that
         // then fails still leaves a conversation the route and the rail have
@@ -91,16 +95,33 @@ export function useChatBoxActions({
         if (result.createdConversation) onConversationCreated?.(result.createdConversation);
       });
     },
-    [
-      data.hasPendingHitlInterrupt,
-      messages,
-      data.attachments.state,
-      handlers,
-      state,
-      chatInputRef,
-      onConversationCreated,
-      readAloudStop,
-    ],
+    [data.attachments.state, handlers, state, chatInputRef, onConversationCreated, readAloudStop],
+  );
+
+  const handleSend = useCallback(
+    (question: string) => {
+      if (!question.trim() || data.hasPendingHitlInterrupt || currentNodeRecoveryBinding(messages) || state.isActiveParticipantBroken) return;
+      // A `~Name` of one of the project's skills is sent by id, so the send
+      // waits for the project's skills when they are not read yet. If they
+      // cannot be read the message still goes (a skills outage must not lock
+      // the composer), and the user is told the project skills were left out.
+      const known = state.skill.projectSkillIdsFor(question);
+      if (known !== null) {
+        sendResolved(question, known);
+        return;
+      }
+      if (resolvingSkillsRef.current) return;
+      resolvingSkillsRef.current = true;
+      state.skill.resolveProjectSkillIds(question).then(
+        (ids) => { resolvingSkillsRef.current = false; sendResolved(question, ids); },
+        () => {
+          resolvingSkillsRef.current = false;
+          onSkillsUnavailable?.(t('widgets.chatBox.projectSkillsUnavailable', 'The project skills could not be loaded, so the message was sent without them.'));
+          sendResolved(question, []);
+        },
+      );
+    },
+    [data.hasPendingHitlInterrupt, messages, state, sendResolved, onSkillsUnavailable],
   );
 
   const handleSendStarter = useCallback(

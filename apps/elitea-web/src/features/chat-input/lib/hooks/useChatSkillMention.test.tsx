@@ -211,17 +211,30 @@ describe('useChatSkillMention', () => {
       expect(result.current.filteredItems.map((i) => i.isProject)).toEqual([false, false, true, true]);
     });
 
-    it('reads the project’s skills only once the "~" menu is opened', async () => {
+    it('reads the project’s skills when an agent’s composer mounts, so a pasted ~Name resolves without the menu', async () => {
       mockSkills([{ id: 's-1', name: 'Alpha' }]);
       const seen = { count: 0 };
       mockProjectSkills([{ id: 9, name: 'Triage' }], seen);
       const chatInput = makeRef();
       const { result } = renderHookWithProviders(() => useChatSkillMention({ chatInput, activeParticipant: AGENT_PARTICIPANT, projectId: 'proj-1' }));
 
-      await waitFor(() => expect(result.current.skillPhase).toBe('idle'));
-      expect(seen.count).toBe(0);
-      act(() => result.current.onSkillInputChange('~'));
       await waitFor(() => expect(seen.count).toBe(1));
+      expect(result.current.skillPhase).toBe('idle');
+      await waitFor(() => expect(result.current.projectSkillIdsFor('please ~Triage this')).toEqual(['9']));
+    });
+
+    it('answers null for a ~ while the project’s skills are not read, and resolveProjectSkillIds reads them', async () => {
+      mockSkills([]);
+      server.use(http.get(`${BASE}/elitea_core/skills/prompt_lib/proj-1`, () => HttpResponse.json({ error: 'down' }, { status: 500 })));
+      const chatInput = makeRef();
+      const { result } = renderHookWithProviders(() => useChatSkillMention({ chatInput, activeParticipant: AGENT_PARTICIPANT, projectId: 'proj-1' }));
+
+      expect(result.current.projectSkillIdsFor('no skills named here')).toEqual([]);
+      expect(result.current.projectSkillIdsFor('use ~Triage')).toBeNull();
+      await expect(result.current.resolveProjectSkillIds('use ~Triage')).rejects.toBeDefined();
+
+      mockProjectSkills([{ id: 9, name: 'Triage' }]);
+      await expect(result.current.resolveProjectSkillIds('use ~Triage')).resolves.toEqual(['9']);
     });
 
     it('offers no project skills to a participant that is not an agent', () => {

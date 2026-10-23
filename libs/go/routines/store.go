@@ -220,8 +220,12 @@ func (s *Store) Update(ctx context.Context, id string, patch Patch, now time.Tim
 		if err != nil {
 			return Row{}, err
 		}
-		planned := parsed.Next(now)
-		next = &planned
+		// A schedule that never fires (only a default can get here: overrides
+		// are validated above) leaves nothing planned rather than year 1.
+		next = nil
+		if planned := parsed.Next(now); !planned.IsZero() {
+			next = &planned
+		}
 	}
 
 	updated, err := scanRow(s.db.QueryRow(ctx, `

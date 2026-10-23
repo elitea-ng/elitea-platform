@@ -369,6 +369,29 @@ func (q *Queries) ScheduledDatabaseNow(ctx context.Context) (pgtype.Timestamptz,
 	return column_1, err
 }
 
+const supersedePendingScheduledJobOccurrences = `-- name: SupersedePendingScheduledJobOccurrences :exec
+UPDATE elitea_runtime.scheduled_occurrences
+SET state = 'SUPERSEDED',
+    lease_owner = NULL,
+    claim_fence = NULL,
+    lease_expires_at = NULL,
+    completed_at = $1,
+    updated_at = $1
+WHERE job_id = $2
+  AND state = 'PENDING'
+  AND (lease_expires_at IS NULL OR lease_expires_at <= $1)
+`
+
+type SupersedePendingScheduledJobOccurrencesParams struct {
+	CompletedAt pgtype.Timestamptz `db:"completed_at" json:"completed_at"`
+	JobID       string             `db:"job_id" json:"job_id"`
+}
+
+func (q *Queries) SupersedePendingScheduledJobOccurrences(ctx context.Context, arg SupersedePendingScheduledJobOccurrencesParams) error {
+	_, err := q.db.Exec(ctx, supersedePendingScheduledJobOccurrences, arg.CompletedAt, arg.JobID)
+	return err
+}
+
 const supersedeScheduledJobRevision = `-- name: SupersedeScheduledJobRevision :exec
 UPDATE elitea_runtime.scheduled_occurrences
 SET state = 'SUPERSEDED',

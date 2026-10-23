@@ -181,6 +181,10 @@ type Store interface {
 		[]OccurrenceSeed,
 		time.Time,
 	) error
+	// DisableAndAdvance supersedes the job's pending occurrences that no
+	// replica holds a live lease on and advances the cursor to the supplied
+	// time, under the same fence as MaterializeAndAdvance.
+	DisableAndAdvance(context.Context, PlanningClaim, time.Time) error
 	ClaimPage(
 		context.Context,
 		[]RegisteredJob,
@@ -199,6 +203,9 @@ type Control struct {
 	Enabled bool
 	// Schedule replaces the job's registered schedule when non-nil.
 	Schedule Schedule
+	// NextRunAt is the next run the registry shows, so the runner rewrites it
+	// only when it changes.
+	NextRunAt *time.Time
 }
 
 // RoutineReport is what a runner tells the registry after a tick. Zero fields

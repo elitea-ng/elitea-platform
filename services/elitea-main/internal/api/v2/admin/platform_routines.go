@@ -136,7 +136,8 @@ func (h *Handler) UpdatePlatformRoutine(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "no updatable field supplied"})
 	case errors.Is(err, routines.ErrConflict):
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "the routine changed while you were editing it; reload and try again"})
-	case errors.Is(err, routines.ErrInvalidSchedule), errors.Is(err, routines.ErrBelowMinimum):
+	case errors.Is(err, routines.ErrInvalidSchedule), errors.Is(err, routines.ErrBelowMinimum),
+		errors.Is(err, routines.ErrNeverFires):
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to update the routine"})

@@ -54,7 +54,7 @@ func (c *PlatformRoutineControls) Resolve(ctx context.Context) (map[string]sched
 	}
 	controls := make(map[string]schedulingapp.Control, len(rows))
 	for _, row := range rows {
-		control := schedulingapp.Control{Enabled: row.Enabled}
+		control := schedulingapp.Control{Enabled: row.Enabled, NextRunAt: row.NextRunAt}
 		if row.Overridden() {
 			if parsed, parseErr := routines.ParseSchedule(*row.ScheduleOverride); parseErr == nil {
 				control.Schedule = parsed

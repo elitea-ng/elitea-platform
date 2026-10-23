@@ -203,15 +203,22 @@ func (r *Runner) plan(ctx context.Context, now time.Time, controls map[string]Co
 		}
 		result.PlanLeases++
 		if !control.Enabled {
-			// A switched-off job still advances its cursor, with no occurrences:
-			// leaving it behind would make switching it back on replay every
-			// slot it missed.
-			if err := r.store.MaterializeAndAdvance(ctx, claim, nil, now); err != nil && !errors.Is(err, ErrStaleFence) {
+			// A switched-off job still advances its cursor, with no occurrences,
+			// and drops the ones planned before the switch that no replica is
+			// running: leaving either behind would make switching it back on
+			// replay what it missed.
+			if err := r.store.DisableAndAdvance(ctx, claim, now); err != nil && !errors.Is(err, ErrStaleFence) {
 				return result, fmt.Errorf("advance disabled scheduled job %q: %w", job.ID, err)
 			}
 			continue
 		}
 		seeds, through, err := materialize(job, claim.ObservedThrough, now, r.config.MaxOccurrencesPerPlan)
+		if errors.Is(err, errNeverFires) {
+			// One job's schedule naming no real instant must not stop the
+			// others from being planned. Its lease lapses on its own.
+			r.logger.Warn("scheduled jobs: schedule never fires; not planning", "job", job.ID)
+			continue
+		}
 		if err != nil {
 			return result, err
 		}
@@ -223,7 +230,7 @@ func (r *Runner) plan(ctx context.Context, now time.Time, controls map[string]Co
 			return result, fmt.Errorf("materialize scheduled job %q: %w", job.ID, err)
 		}
 		result.Planned += len(seeds)
-		r.reportNext(ctx, job, now)
+		r.reportNext(ctx, job, control, through)
 	}
 	return result, nil
 }
@@ -264,8 +271,9 @@ func controlFor(controls map[string]Control, jobID string) Control {
 	return Control{Enabled: true}
 }
 
-// claimableJobs drops the jobs an operator switched off, so their already
-// planned occurrences wait in the ledger instead of running.
+// claimableJobs drops the jobs an operator switched off, so occurrences
+// planned before the switch do not run in the moment before the planner
+// supersedes them.
 func (r *Runner) claimableJobs(controls map[string]Control) []RegisteredJob {
 	registered := r.registry.registeredJobs()
 	if r.controls == nil {
@@ -280,12 +288,15 @@ func (r *Runner) claimableJobs(controls map[string]Control) []RegisteredJob {
 	return enabled
 }
 
-func (r *Runner) reportNext(ctx context.Context, job Job, now time.Time) {
+// reportNext shows the job's next occurrence, planned from the cursor exactly
+// as the next tick will plan it. The row is written only when that differs
+// from what Resolve read, not on every tick.
+func (r *Runner) reportNext(ctx context.Context, job Job, control Control, cursor time.Time) {
 	if r.controls == nil || job.Cadence == "" {
 		return
 	}
-	next := job.Schedule.Next(now)
-	if next.IsZero() {
+	next := job.Schedule.Next(cursor)
+	if next.IsZero() || (control.NextRunAt != nil && control.NextRunAt.Equal(next)) {
 		return
 	}
 	if err := r.controls.Report(ctx, RoutineReport{JobID: job.ID, NextRunAt: next}); err != nil {
@@ -305,31 +316,64 @@ func (r *Runner) reportRun(parent context.Context, job Job, outcome string) {
 	}
 }
 
+// errNeverFires marks a schedule whose Next is the zero time (a cron such as
+// `0 0 31 2 *`). plan skips that job instead of failing the tick.
+var errNeverFires = errors.New("scheduled job schedule never fires")
+
+// gapIntervalSchedule is a schedule that fires a fixed gap after its previous
+// occurrence (routines.Schedule for `30m`), rather than on wall-clock slots.
+type gapIntervalSchedule interface {
+	Interval() time.Duration
+}
+
+// materialize plans the occurrences due in (after, through] and returns the new
+// cursor.
+//
+// A wall-clock schedule (cron) plans every slot in the window and moves the
+// cursor to through. An interval is measured from its previous occurrence, so
+// its cursor stays on that occurrence until the next one is due: moving it to
+// through on every one-minute tick would push a `30m` interval out of reach
+// forever. An overdue interval (the cursor is older than one gap) plans one
+// occurrence at through, never a replay of the gaps it missed.
 func materialize(job Job, after, through time.Time, limit int) ([]OccurrenceSeed, time.Time, error) {
 	if through.Before(after) {
 		return nil, after, nil
+	}
+	if interval, ok := job.Schedule.(gapIntervalSchedule); ok && interval.Interval() > 0 {
+		next := job.Schedule.Next(after)
+		if next.After(through) {
+			return nil, after, nil
+		}
+		due := through.UTC()
+		return []OccurrenceSeed{seedFor(job, due)}, due, nil
 	}
 	seeds := make([]OccurrenceSeed, 0, min(limit, 16))
 	cursor := after
 	for len(seeds) < limit {
 		next := job.Schedule.Next(cursor)
-		if next.IsZero() || !next.After(cursor) {
+		if next.IsZero() {
+			return nil, after, fmt.Errorf("%w: %q", errNeverFires, job.ID)
+		}
+		if !next.After(cursor) {
 			return nil, after, fmt.Errorf("scheduled job %q returned a non-advancing occurrence", job.ID)
 		}
 		if next.After(through) {
 			return seeds, through, nil
 		}
-		due := next.UTC()
-		seeds = append(seeds, OccurrenceSeed{
-			InvocationID:     invocationID(job.ID, job.Revision, due),
-			JobID:            job.ID,
-			ScheduleRevision: job.Revision,
-			DueAt:            due,
-			Mode:             job.Mode,
-		})
+		seeds = append(seeds, seedFor(job, next.UTC()))
 		cursor = next
 	}
 	return seeds, cursor.UTC(), nil
+}
+
+func seedFor(job Job, due time.Time) OccurrenceSeed {
+	return OccurrenceSeed{
+		InvocationID:     invocationID(job.ID, job.Revision, due),
+		JobID:            job.ID,
+		ScheduleRevision: job.Revision,
+		DueAt:            due,
+		Mode:             job.Mode,
+	}
 }
 
 func invocationID(jobID, revision string, dueAt time.Time) string {
