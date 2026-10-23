@@ -505,6 +505,23 @@ async fn postgres_three_call_batch_with_one_sensitive_call_resumes_once_after_pr
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn postgres_older_conversation_recovers_mid_continuation_on_its_own_resolver() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!(
+            "SKIP: set ELITEA_TEST_DATABASE_URL for the scoped continuation PostgreSQL proof"
+        );
+        return;
+    };
+    let db = run_scenario(&url, "older_recover", &["start", "crash", "recover"]).await;
+    assert_eq!(
+        receipt_rows(&db.pool).await,
+        0,
+        "the recovered older conversation never gains a graph-call receipt"
+    );
+    db.pool.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn postgres_conversation_an_older_worker_paused_continues_unscoped_without_receipts() {
     let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!(
@@ -564,11 +581,12 @@ fn assembler(
         assembler
     };
     // Only the first leg of the older scenario is the older worker.
-    let assembler = if matches!(scenario, "older" | "older_effectful") && phase == "start" {
-        assembler.with_fresh_start_continuation(ApplicationContinuation::LegacyUnscoped)
-    } else {
-        assembler
-    };
+    let assembler =
+        if matches!(scenario, "older" | "older_effectful" | "older_recover") && phase == "start" {
+            assembler.with_fresh_start_continuation(ApplicationContinuation::LegacyUnscoped)
+        } else {
+            assembler
+        };
     (assembler, captured, tool_calls)
 }
 
@@ -639,6 +657,76 @@ async fn postgres_scoped_child() {
                     .iter()
                     .any(|event| event["content"] == "first turn done"),
                 "first: the earlier turn finishes: {browser:?}"
+            );
+        }
+        "crash" if scenario == "older_recover" => {
+            // The current Worker answers the older conversation's card and is killed
+            // during the child's next model call, mid-continuation.
+            let card: Value = serde_json::from_str(&pending).expect("pending card");
+            let (assembler, _, _) = assembler(
+                &pool,
+                &scenario,
+                &phase,
+                vec![TestModelGatewayOutcome::ExitProcess(CRASH_EXIT_CODE)],
+            );
+            let request = answer(request(&scenario), &card, 41);
+            let invocation = assembler
+                .assemble(authorized_turn(&request, "execution-answer", 2))
+                .await
+                .expect("crash: assembles");
+            let _ = collect_pipeline_failure(invocation).await;
+            panic!("crash: the child model call never ran");
+        }
+        "recover" if scenario == "older_recover" => {
+            let card: Value = serde_json::from_str(&pending).expect("pending card");
+            let (assembler, captured, _) = assembler(
+                &pool,
+                &scenario,
+                &phase,
+                vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+                    "answered once",
+                ))],
+            );
+            let request = answer(request(&scenario), &card, 41);
+            // A checkpoint recovery cannot take this call: an application node on the
+            // frontier is not a supported recovery frontier, so no recovery start ever
+            // re-runs the child from its task input.
+            let inspected = crate::agents::runtime::NativeAgentAssembler::inspect_checkpoint(
+                &assembler,
+                &request,
+                &AuthorizedNativeCommandBinding::fixture_for_execution("execution-answer"),
+                crate::protocol::control::test_session_authority_for_claim(
+                    "execution-answer",
+                    super::restart_pg_tests::GENERATION,
+                    3,
+                ),
+                Arc::new(crate::state::TestStateWriterLease::current()),
+            )
+            .await;
+            assert!(
+                inspected.is_err(),
+                "recover: an application frontier is never a checkpoint recovery"
+            );
+            // Main re-claims the execution and re-sends its command: the decided pause
+            // continues on the resolver that paused it, with the answer it was given.
+            let invocation = assembler
+                .assemble(authorized_turn(&request, "execution-answer", 3))
+                .await
+                .expect("recover: the re-claimed execution assembles");
+            let browser = collect_pipeline_completion(invocation).await;
+            assert!(
+                browser
+                    .iter()
+                    .any(|event| event["content"] == "answered once"),
+                "recover: the child finishes with its answer: {browser:?}"
+            );
+            let requests = captured.lock().expect("captured model requests");
+            assert_eq!(requests.len(), 1, "recover: one child model call");
+            let body = String::from_utf8_lossy(&requests[0].body).into_owned();
+            assert!(
+                body.contains("ask_user"),
+                "recover: the child continues its history (its answered ask_user call), \
+                 not a fresh run from the task input: {body}"
             );
         }
         "answer"

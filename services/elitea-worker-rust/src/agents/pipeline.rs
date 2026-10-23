@@ -1230,7 +1230,7 @@ impl PipelineNativeAgentAssembler {
                     | super::runtime::PipelineNativeStart::Regenerate
             ) {
                 fresh_start
-            } else if !continues_a_decided_pause(&start) {
+            } else if !resumes_a_stored_conversation(&start) {
                 ApplicationContinuation::Scoped
             } else {
                 let checkpoint = state
@@ -1833,15 +1833,17 @@ pub(super) async fn materialize_saved_pipeline_tool(
     Ok((definition, bound.runtimes, bound.presentations))
 }
 
-/// Whether this start continues a pause the user decided, the only start an older worker's
-/// unscoped call can be waiting on. A recovery re-runs an unfinished node and continues no
-/// decided pause: a missing receipt there means no call was proven yet (a crash between the
-/// frontier save and the first receipt revision), so it prepares scoped and stays scoped.
-pub(super) fn continues_a_decided_pause(start: &super::runtime::PipelineNativeStart) -> bool {
+/// Whether this start resumes a stored conversation, so its resolver is read from the
+/// checkpoint (`continuation_for_checkpoint`). A decided pause does, and so does a recovery:
+/// a recovery of a conversation an older worker continued has no receipt and an application
+/// node on its frontier, and only the resolver that paused it can continue that call without
+/// running its child again from the task input. A recovery of a new conversation that died
+/// before its first receipt revision takes that resolver too: its child never started, so the
+/// call simply starts, as it would on either resolver.
+pub(super) fn resumes_a_stored_conversation(start: &super::runtime::PipelineNativeStart) -> bool {
     !matches!(
         start,
-        super::runtime::PipelineNativeStart::Checkpoint
-            | super::runtime::PipelineNativeStart::Fresh
+        super::runtime::PipelineNativeStart::Fresh
             | super::runtime::PipelineNativeStart::Regenerate
     )
 }

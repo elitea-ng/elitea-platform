@@ -340,9 +340,10 @@ impl PipelineApplicationNodeRuntime {
                     .await
                     .unwrap_or_else(failure);
             }
-            // Another typed refusal of the decided card: the node fails, as an
-            // unscoped Agent node does, not as a broken scope.
-            ChildFailure::Refused => return node_refused(&self.node_name),
+            // Another typed refusal of the decided card (stale, invalid or
+            // corrupt decision, or an exhausted budget): the node fails with a
+            // registered reason, not as a broken scope.
+            ChildFailure::Refused(code) => (code, node_refused(&self.node_name)),
             // Not a refusal of the decided card: unchanged scope failure.
             ChildFailure::Child => return failure(),
         };
@@ -574,8 +575,9 @@ enum ChildFailure {
     /// The approved call may have started (`RECOVERY_REFUSED_UPSTREAM_CODE`),
     /// or its dispatch record could not be written (`DISPATCH_UNRECORDED_CODE`).
     ApprovedCallStop(&'static str),
-    /// The nested Agent refused its decided card for another typed reason.
-    Refused,
+    /// The nested Agent refused its decided card for another typed reason;
+    /// the registered public code.
+    Refused(&'static str),
     /// The child failed for a reason that is not a direct-HITL refusal.
     Child,
 }
@@ -593,8 +595,10 @@ impl ChildFailure {
             Self::ApprovedCallStop(DISPATCH_UNRECORDED_CODE)
         } else if code == DirectHitlErrorCode::UnsupportedCapability.as_str() {
             Self::ReplayUnsupported
+        } else if code == DirectHitlErrorCode::ResourceExhausted.as_str() {
+            Self::Refused(REFUSED_LIMIT_PUBLIC_CODE)
         } else if code.starts_with("direct_hitl.") {
-            Self::Refused
+            Self::Refused(REFUSED_PUBLIC_CODE)
         } else {
             Self::Child
         }
@@ -603,6 +607,11 @@ impl ChildFailure {
 
 /// Registered public code for a decided call that cannot run (no effect ran).
 const REPLAY_UNSUPPORTED_PUBLIC_CODE: &str = "pipeline.tool_unavailable";
+/// Registered public code for a decided card the nested Agent refused as stale,
+/// invalid or corrupt.
+const REFUSED_PUBLIC_CODE: &str = "pipeline.input_invalid";
+/// Registered public code for a decided card refused for an exhausted budget.
+const REFUSED_LIMIT_PUBLIC_CODE: &str = "pipeline.input_limit";
 
 fn node_refused(node: &str) -> GraphError {
     GraphError::NodeExecutionFailed {
@@ -638,6 +647,75 @@ mod tests {
     use adk_rust::graph::{Checkpoint, ExecutionConfig, MemoryCheckpointer, State};
     use adk_rust::{Content, FunctionResponseData};
     use serde_json::json;
+
+    /// Each typed refusal of a scoped Agent node's child ends the run with its
+    /// registered public code; a broken scope or an untyped child failure sends
+    /// none and keeps the scope failure.
+    #[tokio::test]
+    async fn every_child_refusal_reports_its_registered_public_code() {
+        use crate::agents::direct_hitl::DirectHitlErrorCode;
+        use crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE;
+        use crate::protocol::output::RuntimeFailureKind;
+        use crate::protocol::output::{RECOVERY_REFUSED_UPSTREAM_CODE, model_failure};
+        let definition=PipelineDefinition::from_yaml("state: {answer: str}\nentry_point: child\nnodes:\n  - id: child\n    type: agent\n    tool: assistant\n    input_mapping: {task: {type: fixed, value: work}}\n    output: [answer]\n    transition: END\n").unwrap();
+        let cases = [
+            (
+                DirectHitlErrorCode::UnsupportedCapability.as_str(),
+                Some(RuntimeFailureKind::PipelineToolUnavailable),
+            ),
+            (
+                DirectHitlErrorCode::StaleDecision.as_str(),
+                Some(RuntimeFailureKind::PipelineInputInvalid),
+            ),
+            (
+                DirectHitlErrorCode::InvalidInput.as_str(),
+                Some(RuntimeFailureKind::PipelineInputInvalid),
+            ),
+            (
+                DirectHitlErrorCode::CorruptSession.as_str(),
+                Some(RuntimeFailureKind::PipelineInputInvalid),
+            ),
+            (
+                DirectHitlErrorCode::ResourceExhausted.as_str(),
+                Some(RuntimeFailureKind::PipelineInputLimit),
+            ),
+            (
+                RECOVERY_REFUSED_UPSTREAM_CODE,
+                Some(RuntimeFailureKind::RecoveryRefused),
+            ),
+            (DISPATCH_UNRECORDED_CODE, Some(RuntimeFailureKind::Internal)),
+            ("model_gateway.provider_error", None),
+        ];
+        for (child_code, expected) in cases {
+            let scope = PipelineApplicationScope::new(String::new(), &definition, None).unwrap();
+            let (events, receiver) = pipeline_node_event_channel();
+            let runtime = PipelineApplicationNodeRuntime::new(
+                scope,
+                "child".to_owned(),
+                Arc::new(ApplicationRuntimeProjection::default()),
+                events,
+                Arc::new(Mutex::new(())),
+            );
+            let error = runtime
+                .child_failure(ChildFailure::from_child(child_code))
+                .await;
+            let sent = receiver.try_failure_code().await;
+            assert_eq!(
+                sent.map(|code| model_failure(Some(code))),
+                expected,
+                "{child_code}"
+            );
+            let GraphError::NodeExecutionFailed { node, .. } = error else {
+                panic!("{child_code}: a node failure");
+            };
+            let expected_node = if expected.is_some() {
+                "child"
+            } else {
+                "application_scope"
+            };
+            assert_eq!(node, expected_node, "{child_code}");
+        }
+    }
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)] // Keep start, child events, completion, and routing assertions in one ordered proof.

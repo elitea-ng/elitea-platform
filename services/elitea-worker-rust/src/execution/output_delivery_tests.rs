@@ -3597,6 +3597,8 @@ type ProductionAssembler = crate::agents::native_runtime::NativeRuntimeAssembler
 
 struct StaticToolAssembler {
     inner: ProductionAssembler,
+    /// The root Agent's attached tools.
+    tools: Vec<serde_json::Value>,
 }
 
 #[async_trait]
@@ -3607,9 +3609,10 @@ impl NativeAgentAssembler for StaticToolAssembler {
         &self,
         assembly: AuthorizedNativeAssembly<'_>,
     ) -> Result<AssembledNativeAgentInvocation<Self::Completion>, NativeAgentAssemblyError> {
-        let request = crate::agents::pipeline_tests::scoped_tests::ordinary_agent_request(vec![
-            crate::agents::pipeline_tests::scoped_tests::reference((7, 8), "pipeline", "inner"),
-        ]);
+        let mut request =
+            crate::agents::pipeline_tests::scoped_tests::ordinary_agent_request(self.tools.clone());
+        // The root may also ask a question in the same step (the mixed-pause case).
+        request.payload.internal_tools = vec!["ask_user".to_owned()];
         self.inner.assemble(assembly.with_request(&request)).await
     }
 }
@@ -3639,11 +3642,235 @@ fn static_tool_pause_is_the_acked_completed_terminal_with_its_inventory() {
 /// ends the turn as the acknowledged COMPLETED terminal whose full message
 /// carries the pause inventory (what Main stores and continues from), never a
 /// pause without a card (`agent_pause.invalid_state`, no acknowledgement).
-#[allow(clippy::too_many_lines)] // One end-to-end terminal proof keeps authority ordering explicit.
 async fn static_tool_pause_lifecycle_case() {
-    use crate::agents::pipeline_tests::scoped_tests::{
-        STATIC_GRAPH, saved_runtime_for_project, saved_version, tool_call_response,
+    let frames = static_lifecycle_frames(
+        crate::agents::pipeline_tests::scoped_tests::tool_call_response(
+            "inner-call",
+            "elitea_agent_7_v_8",
+            &json!({"task":"inner work"}),
+        ),
+    )
+    .await;
+    let events = frames
+        .iter()
+        .filter_map(|frame| match frame.payload.as_ref() {
+            Some(execution_output_frame_v1::Payload::NodeEvent(event)) => Some(event),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .all(|event| event.r#type != "agent_hitl_interrupt")
+    );
+    let results = events
+        .iter()
+        .filter(|event| event.r#type == "full_message")
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), 1, "one result message");
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&results[0].response_metadata).expect("result metadata");
+    assert_eq!(
+        metadata["pipeline_static_tools_v1"]["pauses"]
+            .as_array()
+            .map(Vec::len),
+        Some(1),
+        "{metadata}"
+    );
+    let Some(execution_output_frame_v1::Payload::AgentExecution(result)) =
+        frames.last().and_then(|frame| frame.payload.as_ref())
+    else {
+        panic!("the static pause terminal must carry the bound agent result");
     };
+    assert_eq!(
+        AgentExecutionTerminalStateV1::try_from(result.terminal_state),
+        Ok(AgentExecutionTerminalStateV1::Completed)
+    );
+    assert!(
+        result
+            .result_artifact
+            .as_ref()
+            .is_some_and(|artifact| artifact.artifact_id.ends_with(":full-message"))
+    );
+}
+
+/// One model step that calls a static-pausing pipeline tool and `ask_user`: the
+/// card pause stops the step, so the turn ends as the acknowledged PAUSED terminal
+/// with exactly one card and no static inventory. Main never receives two terminals
+/// for one turn. (If the static pause were recorded first, the lifecycle refuses
+/// with the registered unsupported-capability failure; see
+/// `native_agent_lifecycle.rs`.)
+async fn mixed_static_and_card_pause_lifecycle_case() {
+    let frames = static_lifecycle_frames(two_call_static_and_ask_response()).await;
+    let events = frames
+        .iter()
+        .filter_map(|frame| match frame.payload.as_ref() {
+            Some(execution_output_frame_v1::Payload::NodeEvent(event)) => Some(event),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        events.iter().all(|event| event.r#type != "full_message"),
+        "no static inventory is published beside the card"
+    );
+    let mut cards = events
+        .iter()
+        .filter(|event| event.r#type == "agent_hitl_interrupt")
+        .filter_map(|event| {
+            serde_json::from_slice::<serde_json::Value>(&event.response_metadata).ok()
+        })
+        .map(|metadata| metadata["hitl_interrupt"]["interrupt_id"].clone())
+        .collect::<Vec<_>>();
+    cards.dedup();
+    assert_eq!(cards.len(), 1, "one card: {cards:?}");
+    let Some(execution_output_frame_v1::Payload::AgentExecution(result)) =
+        frames.last().and_then(|frame| frame.payload.as_ref())
+    else {
+        panic!("the mixed step ends with the bound agent result");
+    };
+    assert_eq!(
+        AgentExecutionTerminalStateV1::try_from(result.terminal_state),
+        Ok(AgentExecutionTerminalStateV1::PausedHitl)
+    );
+}
+
+#[test]
+fn a_step_calling_a_static_pipeline_and_ask_user_pauses_once_on_the_card() {
+    std::thread::Builder::new()
+        .name("mixed-pause-4mib-stack".to_owned())
+        .stack_size(4 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("bounded mixed pause test runtime")
+                .block_on(mixed_static_and_card_pause_lifecycle_case());
+        })
+        .expect("bounded mixed pause test thread")
+        .join()
+        .expect("mixed pause lifecycle fits the bounded thread stack");
+}
+
+/// Agent -> sub-Agent -> saved pipeline stopping at a static pause (depth 2):
+/// the root's acknowledged COMPLETED terminal carries the nested pause in its
+/// inventory, as for a pipeline tool of the root itself.
+async fn nested_static_tool_pause_lifecycle_case() {
+    use crate::agents::pipeline_tests::scoped_tests::{
+        STATIC_GRAPH, plain_agent, reference, saved_version, tool_call_response,
+    };
+    let frames = static_lifecycle_frames_with(
+        BTreeMap::from([
+            (
+                (5, 6),
+                plain_agent(vec![reference((7, 8), "pipeline", "inner")]),
+            ),
+            (
+                (7, 8),
+                saved_version("pipeline", STATIC_GRAPH, &json!({}), Vec::new()),
+            ),
+        ]),
+        vec![reference((5, 6), "agent", "helper")],
+        vec![
+            tool_call_response("helper-call", "elitea_agent_5_v_6", &json!({"task":"help"})),
+            tool_call_response(
+                "inner-call",
+                "elitea_agent_7_v_8",
+                &json!({"task":"inner work"}),
+            ),
+        ],
+    )
+    .await;
+    let results = frames
+        .iter()
+        .filter_map(|frame| match frame.payload.as_ref() {
+            Some(execution_output_frame_v1::Payload::NodeEvent(event))
+                if event.r#type == "full_message" =>
+            {
+                Some(event)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), 1, "one result message");
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&results[0].response_metadata).expect("result metadata");
+    assert_eq!(
+        metadata["pipeline_static_tools_v1"]["pauses"]
+            .as_array()
+            .map(Vec::len),
+        Some(1),
+        "{metadata}"
+    );
+    let Some(execution_output_frame_v1::Payload::AgentExecution(result)) =
+        frames.last().and_then(|frame| frame.payload.as_ref())
+    else {
+        panic!("the nested static pause ends with the bound agent result");
+    };
+    assert_eq!(
+        AgentExecutionTerminalStateV1::try_from(result.terminal_state),
+        Ok(AgentExecutionTerminalStateV1::Completed)
+    );
+}
+
+#[test]
+fn a_sub_agents_static_pipeline_pause_is_the_acked_completed_terminal() {
+    std::thread::Builder::new()
+        .name("nested-static-4mib-stack".to_owned())
+        .stack_size(4 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("bounded nested static pause test runtime")
+                .block_on(nested_static_tool_pause_lifecycle_case());
+        })
+        .expect("bounded nested static pause test thread")
+        .join()
+        .expect("nested static pause lifecycle fits the bounded thread stack");
+}
+
+/// One streamed model step calling the static pipeline tool and `ask_user`.
+fn two_call_static_and_ask_response() -> http::Response<tonic::body::Body> {
+    let call = |index: usize, id: &str, name: &str, arguments: &str| json!({"index":index,"id":id,"type":"function","function":{"name":name,"arguments":arguments}});
+    let ask = r#"{"questions":[{"question":"Which environment?","header":"Environment","options":[{"label":"Staging"},{"label":"Production"}]}]}"#;
+    let chunk = json!({"choices":[{"delta":{"tool_calls":[
+        call(0, "inner-call", "elitea_agent_7_v_8", r#"{"task":"inner work"}"#),
+        call(1, "ask-call", "ask_user", ask)]},"finish_reason":null}]});
+    let raw = format!(
+        "data: {chunk}\n\ndata: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: {{\"choices\":[],\"usage\":{{\"prompt_tokens\":3,\"completion_tokens\":2}}}}\n\ndata: [DONE]\n\n"
+    );
+    crate::transport::openai_compatible_facade::test_model_gateway_response(tonic::body::Body::new(
+        http_body_util::Full::<bytes::Bytes>::from(raw),
+    ))
+}
+
+/// The production lifecycle over the production assembler composition, with one
+/// scripted model step: the frames it published, after it settled and was
+/// acknowledged.
+async fn static_lifecycle_frames(
+    response: http::Response<tonic::body::Body>,
+) -> Vec<ExecutionOutputFrameV1> {
+    use crate::agents::pipeline_tests::scoped_tests::{STATIC_GRAPH, reference, saved_version};
+    static_lifecycle_frames_with(
+        BTreeMap::from([(
+            (7, 8),
+            saved_version("pipeline", STATIC_GRAPH, &json!({}), Vec::new()),
+        )]),
+        vec![reference((7, 8), "pipeline", "inner")],
+        vec![response],
+    )
+    .await
+}
+
+/// [`static_lifecycle_frames`] over the given saved versions, root tools and
+/// scripted model steps (in call order).
+#[allow(clippy::too_many_lines)] // One end-to-end terminal proof keeps authority ordering explicit.
+async fn static_lifecycle_frames_with(
+    versions: BTreeMap<(u64, u64), serde_json::Value>,
+    tools: Vec<serde_json::Value>,
+    responses: Vec<http::Response<tonic::body::Body>>,
+) -> Vec<ExecutionOutputFrameV1> {
+    use crate::agents::pipeline_tests::scoped_tests::saved_runtime_for_project;
     let trace = Arc::new(Mutex::new(Vec::new()));
     let (temporary, output_root) = root();
     let outcome = preflight(output_root, "worker-1")
@@ -3680,26 +3907,18 @@ async fn static_tool_pause_lifecycle_case() {
         state: Arc::clone(&progress_state),
     };
     let retirer = Arc::new(recovery_retirer(Arc::clone(&trace), Ok(())));
-    let versions = BTreeMap::from([(
-        (7, 8),
-        saved_version("pipeline", STATIC_GRAPH, &json!({}), Vec::new()),
-    )]);
     // The signed fixture command's resource project.
     let (platform, model_facade, _captured, _) = saved_runtime_for_project(
         &versions,
-        vec![
-            crate::transport::openai_compatible_facade::TestModelGatewayOutcome::Response(
-                tool_call_response(
-                    "inner-call",
-                    "elitea_agent_7_v_8",
-                    &json!({"task":"inner work"}),
-                ),
-            ),
-        ],
+        responses
+            .into_iter()
+            .map(crate::transport::openai_compatible_facade::TestModelGatewayOutcome::Response)
+            .collect(),
         7,
     );
     let lifecycle = Arc::new(NativeAuthorizedAgentLifecycle::new(
         Arc::new(StaticToolAssembler {
+            tools,
             inner: crate::agents::native_runtime::NativeRuntimeAssembler::new(
                 crate::agents::ordinary::OrdinaryNativeAgentAssembler::new(
                     platform,
@@ -3753,51 +3972,14 @@ async fn static_tool_pause_lifecycle_case() {
         completion.disposition(),
         AgentAuthorizedLifecycleDisposition::ExecutedSettledAcked { .. }
     ));
-    let frames = progress_state.frames.lock().expect("static pause frames");
-    let events = frames
-        .iter()
-        .filter_map(|frame| match frame.payload.as_ref() {
-            Some(execution_output_frame_v1::Payload::NodeEvent(event)) => Some(event),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        events
-            .iter()
-            .all(|event| event.r#type != "agent_hitl_interrupt")
-    );
-    let results = events
-        .iter()
-        .filter(|event| event.r#type == "full_message")
-        .collect::<Vec<_>>();
-    assert_eq!(results.len(), 1, "one result message");
-    let metadata: serde_json::Value =
-        serde_json::from_slice(&results[0].response_metadata).expect("result metadata");
-    assert_eq!(
-        metadata["pipeline_static_tools_v1"]["pauses"]
-            .as_array()
-            .map(Vec::len),
-        Some(1),
-        "{metadata}"
-    );
-    let Some(execution_output_frame_v1::Payload::AgentExecution(result)) =
-        frames.last().and_then(|frame| frame.payload.as_ref())
-    else {
-        panic!("the static pause terminal must carry the bound agent result");
-    };
-    assert_eq!(
-        AgentExecutionTerminalStateV1::try_from(result.terminal_state),
-        Ok(AgentExecutionTerminalStateV1::Completed)
-    );
-    assert!(
-        result
-            .result_artifact
-            .as_ref()
-            .is_some_and(|artifact| artifact.artifact_id.ends_with(":full-message"))
-    );
+    let frames = progress_state
+        .frames
+        .lock()
+        .expect("lifecycle frames")
+        .clone();
     assert_eq!(admission.available_capacity(), 1);
-    drop(frames);
     drop(temporary);
+    frames
 }
 
 struct SandboxStopFixture {

@@ -4873,7 +4873,7 @@
   "features.chatMessages.hitl.submitEdit": "Submit Edit",
   "features.chatMessages.hitl.unknownAction": "Unknown action",
   "features.chatMessages.staticPause.continue": "Continue",
-  "features.chatMessages.staticPause.message": "Execution paused at {{node}}. Choose the action to proceed.",
+  "features.chatMessages.staticPause.message": "Execution paused at static interrupt. Choose the action to proceed or type the continuation message in chat.",
   "features.chatMessages.staticPause.pipeline": "Pipeline",
   "features.chatMessages.toolkitAuthorization.authorizationServer": "Authorization server",
   "features.chatMessages.toolkitAuthorization.authorize": "Authorize",

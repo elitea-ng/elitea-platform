@@ -2940,7 +2940,7 @@ pub(crate) async fn materialize_application_runtime(
         selected_aliases,
     )
     .await?;
-    let mut materialized = materialize_application_tools(
+    let (mut materialized, skipped_nested) = materialize_application_tools(
         snapshot,
         platform,
         runtime_context,
@@ -2951,6 +2951,18 @@ pub(crate) async fn materialize_application_runtime(
     )
     .await?;
     materialized.extend(pipeline_children);
+    // A nested Agent's unbuildable pipeline attachment degrades the same way a
+    // root one does (#990): skipped and named on the root's notice, never a
+    // failed turn for the Agents that do not call it.
+    let mut skipped_pipeline_children = skipped_pipeline_children;
+    for child in skipped_nested {
+        if skipped_pipeline_children.len() >= MAX_SKIPPED_APPLICATION_CHILDREN {
+            break;
+        }
+        if !skipped_pipeline_children.contains(&child) {
+            skipped_pipeline_children.push(child);
+        }
+    }
     // No TOOL means no descendant channel: `ApplicationEventStreamingAgent`
     // selects on a receiver whose only senders live in the tools, so installing
     // it with none would leave it selecting on a closed channel forever. The
@@ -3106,10 +3118,16 @@ pub(crate) async fn materialize_application_tools(
     fallback_profile: &OrdinaryNoToolProfile,
     dependencies: ApplicationToolDependencies<'_>,
     selected_aliases: Option<&BTreeSet<String>>,
-) -> Result<Vec<MaterializedApplicationTool>, NativeAgentAssemblyError> {
+) -> Result<
+    (
+        Vec<MaterializedApplicationTool>,
+        Vec<SkippedApplicationChild>,
+    ),
+    NativeAgentAssemblyError,
+> {
     let references = application_references(snapshot, selected_aliases)?;
     if references.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let mut state = ApplicationAssemblyState {
         platform,
@@ -3129,6 +3147,7 @@ pub(crate) async fn materialize_application_tools(
         code: dependencies.code,
         conversation_thread_id: dependencies.conversation_thread_id,
         materialization: dependencies.materialization,
+        skipped: Vec::new(),
     };
     let mut tools = Vec::with_capacity(references.len());
     for reference in references {
@@ -3153,7 +3172,7 @@ pub(crate) async fn materialize_application_tools(
             )),
         });
     }
-    Ok(tools)
+    Ok((tools, state.skipped))
 }
 
 struct ApplicationAssemblyState<'a> {
@@ -3174,6 +3193,9 @@ struct ApplicationAssemblyState<'a> {
     code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
     conversation_thread_id: Option<String>,
     materialization: ApplicationMaterializationPath,
+    /// Nested pipeline attachments this Worker could not build, named on the
+    /// root's skipped notice (#990).
+    skipped: Vec<SkippedApplicationChild>,
 }
 
 impl ApplicationAssemblyState<'_> {
@@ -3353,7 +3375,7 @@ impl ApplicationAssemblyState<'_> {
     }
 
     async fn materialize_nested_pipeline_children(
-        &self,
+        &mut self,
         frozen: &AdmittedToolSnapshot<'_>,
         profile: &OrdinaryNoToolProfile,
     ) -> Result<Vec<MaterializedApplicationTool>, NativeAgentAssemblyError> {
@@ -3389,9 +3411,18 @@ impl ApplicationAssemblyState<'_> {
             None,
         )
         .await?;
-        // Scoped projection must contain every frozen pipeline attachment.
-        if !built.skipped.is_empty() {
-            return Err(unsupported_capability());
+        // One attachment this Worker cannot build is skipped and named (#990),
+        // as at the root: the nested Agent keeps every attachment it can run,
+        // and a turn that never calls it is unaffected. A conversation paused
+        // inside a child that can no longer be built is refused when it is
+        // continued (`validate_continuation`), not here.
+        for child in built.skipped {
+            if self.skipped.len() >= MAX_SKIPPED_APPLICATION_CHILDREN {
+                break;
+            }
+            if !self.skipped.contains(&child) {
+                self.skipped.push(child);
+            }
         }
         Ok(built.tools)
     }

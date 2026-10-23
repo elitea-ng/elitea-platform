@@ -567,6 +567,18 @@ impl PipelineNodeEventReceiver {
     }
 }
 
+#[cfg(test)]
+impl PipelineNodeEventReceiver {
+    /// The registered code of the next queued execution failure, if one is buffered.
+    pub(crate) async fn try_failure_code(&self) -> Option<&'static str> {
+        let mut guard = self.inner.lock().await;
+        match guard.as_mut()?.try_recv().ok()? {
+            PipelineNodeEventSignal::ExecutionFailed { code } => Some(code),
+            _ => None,
+        }
+    }
+}
+
 impl PipelineNodeEventDrain<'_> {
     /// Await the next node event, or `None` once the channel has closed.
     pub(crate) async fn recv(&mut self) -> Option<adk_rust::Result<Event>> {

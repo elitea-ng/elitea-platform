@@ -39,11 +39,11 @@ const styles = {
   buttons: { display: 'flex', gap: '0.625rem', alignItems: 'center', flexWrap: 'wrap' },
 } as const;
 
-export function StaticPauseCard({ nodeName, disabled = false, error, onContinue }: StaticPauseCardProps): ReactNode {
+export function StaticPauseCard({ disabled = false, error, onContinue }: StaticPauseCardProps): ReactNode {
   return (
     <Box data-testid="chat-static-pause-panel" sx={styles.container}>
       <Typography variant="bodyMedium" component="p" sx={styles.message}>
-        {t('features.chatMessages.staticPause.message', 'Execution paused at {{node}}. Choose the action to proceed.', { node: nodeName })}
+        {t('features.chatMessages.staticPause.message', 'Execution paused at static interrupt. Choose the action to proceed or type the continuation message in chat.')}
       </Typography>
       {error && (
         <Typography variant="bodySmall" component="p" role="alert" sx={{ color: 'error.main' }}>

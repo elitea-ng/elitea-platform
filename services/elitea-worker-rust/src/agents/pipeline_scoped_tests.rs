@@ -126,7 +126,7 @@ pub(super) fn asking_agent() -> Value {
     )
 }
 
-pub(super) fn plain_agent(tools: Vec<Value>) -> Value {
+pub(crate) fn plain_agent(tools: Vec<Value>) -> Value {
     saved_version("agent", "Resolve the release.", &json!({}), tools)
 }
 
@@ -606,6 +606,42 @@ async fn an_ordinary_agent_offers_a_static_saved_pipeline_and_continues_it_once(
     assert!(
         !body.contains("COUNT 2"),
         "the tick is not replayed: {body}"
+    );
+}
+
+/// A pipeline attachment of a NESTED Agent that this Worker cannot build (its
+/// `agent` node names a tool the child does not attach) degrades the way a root
+/// attachment does (#990): skipped and named, and the root Agent still answers.
+/// It never fails every turn of the root.
+#[tokio::test(flavor = "current_thread")]
+async fn an_unbuildable_pipeline_of_a_nested_agent_is_skipped_and_the_root_still_answers() {
+    const UNBUILDABLE: &str = "state:\n  answer: str\n  messages: list\nentry_point: delegate\nnodes:\n  - id: delegate\n    type: agent\n    tool: \"missing\"\n    input_mapping:\n      task: {type: fixed, value: 'Summarize'}\n    output: [answer, messages]\n    transition: END\n";
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let versions = BTreeMap::from([
+        (
+            (5, 6),
+            plain_agent(vec![reference((7, 8), "pipeline", "broken-flow")]),
+        ),
+        (
+            (7, 8),
+            saved_version("pipeline", UNBUILDABLE, &json!({}), Vec::new()),
+        ),
+    ]);
+    let (assembler, captured) = ordinary_assembler(&sessions, &versions, vec![text("root answer")]);
+    let request = ordinary_agent_request(vec![reference((5, 6), "agent", "worker")]);
+    let (browser, paused) = run_ordinary(&assembler, &request).await;
+    assert!(!paused, "{browser:?}");
+    assert!(
+        browser
+            .iter()
+            .any(|event| event["content"] == "root answer"),
+        "the root Agent answers: {browser:?}"
+    );
+    assert_eq!(model_calls(&captured), 1);
+    let rendered = serde_json::to_string(&browser).expect("browser events");
+    assert!(
+        rendered.contains("broken-flow"),
+        "the skipped nested attachment is named: {rendered}"
     );
 }
 
@@ -1149,19 +1185,92 @@ async fn a_three_call_batch_with_one_sensitive_call_resumes_after_approval() {
 }
 
 #[test]
-fn a_recovery_start_never_takes_the_older_conversation_resolver() {
-    use crate::agents::pipeline::continues_a_decided_pause;
+fn a_recovery_start_reads_its_resolver_from_the_checkpoint() {
+    use crate::agents::pipeline::resumes_a_stored_conversation;
     use crate::agents::runtime::PipelineNativeStart;
-    // A recovery re-runs an unfinished node: a missing receipt there is a crash before the
-    // first receipt revision, never an older worker's in-flight call, so it stays scoped.
-    for start in [
-        PipelineNativeStart::Checkpoint,
-        PipelineNativeStart::Fresh,
-        PipelineNativeStart::Regenerate,
-    ] {
-        assert!(!continues_a_decided_pause(&start));
-    }
-    assert!(continues_a_decided_pause(
+    // A recovery resumes a stored conversation: an older one recovers on the resolver
+    // that paused it (no receipt, an application node on the frontier), never re-running
+    // its child from the task input. Only a new turn starts on the scoped resolver unasked.
+    assert!(resumes_a_stored_conversation(
+        &PipelineNativeStart::Checkpoint
+    ));
+    assert!(resumes_a_stored_conversation(
         &PipelineNativeStart::StaticTools(Vec::new())
     ));
+    for start in [PipelineNativeStart::Fresh, PipelineNativeStart::Regenerate] {
+        assert!(!resumes_a_stored_conversation(&start));
+    }
+}
+
+/// Agent -> sub-Agent -> static saved pipeline (depth 2): the root's terminal
+/// carries the nested pause's inventory, and one continuation resumes the
+/// sub-Agent's pipeline, then the sub-Agent and the root each answer once.
+#[tokio::test(flavor = "current_thread")]
+async fn a_static_pause_of_a_sub_agents_pipeline_completes_and_continues_once() {
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let versions = BTreeMap::from([
+        (
+            (5, 6),
+            plain_agent(vec![reference((7, 8), "pipeline", "inner")]),
+        ),
+        (
+            (7, 8),
+            saved_version("pipeline", STATIC_GRAPH, &json!({}), Vec::new()),
+        ),
+    ]);
+    let tools = vec![reference((5, 6), "agent", "helper")];
+    let (assembler, _) = ordinary_assembler(
+        &sessions,
+        &versions,
+        vec![
+            TestModelGatewayOutcome::Response(tool_call_response(
+                "helper-call",
+                "elitea_agent_5_v_6",
+                &json!({"task":"help"}),
+            )),
+            TestModelGatewayOutcome::Response(tool_call_response(
+                "inner-call",
+                "elitea_agent_7_v_8",
+                &json!({"task":"inner work"}),
+            )),
+        ],
+    );
+    let (browser, paused) = run_ordinary(&assembler, &ordinary_agent_request(tools.clone())).await;
+    assert!(
+        !paused,
+        "the nested static pause completes the turn: {browser:?}"
+    );
+    let terminal = browser.last().expect("a completed result");
+    assert_eq!(terminal["type"], "full_message", "{browser:?}");
+    let inventory = terminal["response_metadata"]["pipeline_static_tools_v1"]["pauses"]
+        .as_array()
+        .cloned()
+        .unwrap_or_else(|| panic!("nested static pause inventory missing: {terminal:?}"));
+    assert_eq!(inventory.len(), 1);
+
+    let (replacement, replaced_calls) = ordinary_assembler(
+        &sessions,
+        &versions,
+        vec![text("helper continued"), text("root continued")],
+    );
+    let mut resume = ordinary_agent_request(tools);
+    resume.binding.request_content_digest = [24; 32];
+    resume.payload.should_continue = true;
+    resume.payload.meta.insert(
+        "pipeline_static_tool_resume_v1".to_owned(),
+        json!({"revision":1,"decisions":[{
+            "pause_id":inventory[0]["proof"]["pause_id"],
+            "child_thread_id":inventory[0]["child_thread_id"],
+            "tool_call_id":inventory[0]["tool_call_id"],
+            "action":"continue","value":"finish once"}]}),
+    );
+    let (resumed, paused) = run_ordinary(&replacement, &resume).await;
+    assert!(!paused, "{resumed:?}");
+    assert!(
+        resumed
+            .iter()
+            .any(|event| event["content"] == "root continued"),
+        "{resumed:?}"
+    );
+    assert_eq!(model_calls(&replaced_calls), 2, "{resumed:?}");
 }
