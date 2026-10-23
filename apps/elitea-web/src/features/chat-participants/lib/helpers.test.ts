@@ -8,6 +8,7 @@ import {
   getParticipantName,
   isParticipantOKForChat,
   isParticipantsEqual,
+  isSkippedContainerParticipant,
   transformParticipant,
 } from './helpers';
 
@@ -162,5 +163,33 @@ describe('transformParticipant version resolution', () => {
   it('leaves version_id absent on a list row, which carries no version at all', () => {
     const listRow = { id: 'a1', name: 'RustProbe', project_id: 'p1', agent_type: 'openai' };
     expect(transformParticipant(ChatParticipantType.Applications, listRow).entity_settings).not.toHaveProperty('version_id');
+  });
+});
+
+// EliteaUI participants.helpers.test.js (#5778), on Main's participant meta (FU-244, PLAN §8.8).
+describe('isSkippedContainerParticipant', () => {
+  const agent = (meta: Record<string, unknown>, entityName = ChatParticipantType.Applications) => ({
+    entity_name: entityName,
+    entity_meta: { id: 7 },
+    meta: { is_container: true, ...meta },
+  });
+
+  it('offers an agent whose subtree fits one level below the chat model', () => {
+    expect(isSkippedContainerParticipant(agent({ agent_subtree_tiers: 2, max_agent_nesting_tiers: 3 }))).toBe(false);
+  });
+
+  it('flags an agent at the nesting limit', () => {
+    expect(isSkippedContainerParticipant(agent({ agent_subtree_tiers: 3, max_agent_nesting_tiers: 3 }))).toBe(true);
+  });
+
+  it('never flags a participant that is not a container or not an agent', () => {
+    expect(isSkippedContainerParticipant(agent({ is_container: false, agent_subtree_tiers: 3, max_agent_nesting_tiers: 3 }))).toBe(false);
+    expect(isSkippedContainerParticipant(agent({}, ChatParticipantType.Toolkits))).toBe(false);
+    expect(isSkippedContainerParticipant(undefined)).toBe(false);
+  });
+
+  it('falls back to the container ban without the tier fields', () => {
+    expect(isSkippedContainerParticipant(agent({ agent_subtree_tiers: 2 }))).toBe(true);
+    expect(isSkippedContainerParticipant(agent({}))).toBe(true);
   });
 });
