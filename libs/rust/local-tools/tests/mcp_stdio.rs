@@ -14,7 +14,7 @@
 //! unenforced sandboxes, so each start is asked and approved.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use adk_core::{CallbackContext, Content, EventActions, ReadonlyContext, Tool, ToolContext};
@@ -425,6 +425,8 @@ async fn a_server_that_fails_is_reported_not_fatal() {
 
 #[cfg(target_os = "macos")]
 mod seatbelt {
+    use std::path::Path;
+
     use super::*;
 
     fn available() -> bool {
