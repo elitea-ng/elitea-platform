@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
@@ -1747,8 +1748,15 @@ func (h *Handler) repointVersionReferences(ctx context.Context, schema, applicat
 	if replacementID == versionID {
 		return apierr.BadRequest("the replacement version cannot be the version being deleted")
 	}
+	// One transaction: the parents are locked, walked with the replacement and
+	// re-pointed, so no attach can change a parent between the check and the move.
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		return apierr.Internal("could not move the references to the replacement version")
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	var sameApplication bool
-	if err := h.pool.QueryRow(ctx, fmt.Sprintf(
+	if err := tx.QueryRow(ctx, fmt.Sprintf(
 		`SELECT EXISTS (SELECT 1 FROM %s.application_versions WHERE id = $1 AND application_id = $2)`, schema),
 		replacementID, applicationID).Scan(&sameApplication); err != nil {
 		slog.ErrorContext(ctx, "delete version: replacement lookup failed",
@@ -1760,10 +1768,10 @@ func (h *Handler) repointVersionReferences(ctx context.Context, schema, applicat
 	}
 	// FU-244: re-pointing is a version switch for every parent; each parent
 	// must still hold with the replacement (no cycle, at most 3 agent levels).
-	if err := h.checkRepointedParents(ctx, schema, applicationID, versionID, replacementID); err != nil {
+	if err := checkRepointedParents(ctx, tx, schema, applicationID, versionID, replacementID); err != nil {
 		return err
 	}
-	if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`
 		UPDATE %s.elitea_tools AS tool
 		SET settings = jsonb_set(tool.settings, '{application_version_id}', to_jsonb($1::int)) - 'version_id'
 		WHERE tool.type = 'application'
@@ -1773,27 +1781,36 @@ func (h *Handler) repointVersionReferences(ctx context.Context, schema, applicat
 			"schema", schema, "version_id", versionID, "replacement_version_id", replacementID, "err", err)
 		return apierr.Internal("could not move the references to the replacement version")
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return apierr.Internal("could not move the references to the replacement version")
+	}
 	return nil
 }
 
 // checkRepointedParents walks every parent that references versionID as if it
-// referenced replacementID instead, and answers the composition refusal of the
-// first parent the switch would break.
-func (h *Handler) checkRepointedParents(ctx context.Context, schema, applicationID, versionID, replacementID string) error {
+// referenced replacementID (FU-244): re-pointing is a version switch for each of
+// them. The substitution applies to the whole walk, so a parent reached through
+// another parent sees the replacement too. The parents are locked first (the
+// relation attach locks the same rows).
+func checkRepointedParents(ctx context.Context, tx pgx.Tx, schema, applicationID, versionID, replacementID string) error {
 	appID, appErr := strconv.ParseInt(applicationID, 10, 64)
 	oldID, oldErr := strconv.ParseInt(versionID, 10, 64)
 	newID, newErr := strconv.ParseInt(replacementID, 10, 64)
 	if appErr != nil || oldErr != nil || newErr != nil {
 		return apierr.BadRequest("replacement_version_id must be a version id")
 	}
-	rows, err := h.pool.Query(ctx, fmt.Sprintf(`
-		SELECT DISTINCT version.application_id, version.id
-		FROM %s.elitea_tools AS tool
-		JOIN %s.entity_tool_mapping AS mapping ON mapping.tool_id = tool.id
-		JOIN %s.application_versions AS version ON version.id = mapping.entity_version_id
-		WHERE tool.type = 'application'
-		  AND COALESCE(tool.settings->>'application_version_id', tool.settings->>'version_id') = $1
-		  AND mapping.entity_version_id <> $1::int`, schema, schema, schema), versionID)
+	rows, err := tx.Query(ctx, fmt.Sprintf(`
+		SELECT version.application_id, version.id
+		FROM %s.application_versions AS version
+		WHERE version.id IN (
+			SELECT mapping.entity_version_id
+			FROM %s.elitea_tools AS tool
+			JOIN %s.entity_tool_mapping AS mapping ON mapping.tool_id = tool.id
+			WHERE tool.type = 'application'
+			  AND COALESCE(tool.settings->>'application_version_id', tool.settings->>'version_id') = $1
+			  AND mapping.entity_version_id <> $1::int)
+		ORDER BY version.id
+		FOR UPDATE OF version`, schema, schema, schema), versionID)
 	if err != nil {
 		return apierr.Internal("could not read the versions that use this one")
 	}
@@ -1810,23 +1827,13 @@ func (h *Handler) checkRepointedParents(ctx context.Context, schema, application
 	if rows.Err() != nil {
 		return apierr.Internal("could not read the versions that use this one")
 	}
-	source := repos.NewCompositionSource(h.pool, schema)
-	from := applicationcomposition.Identity{ApplicationID: appID, VersionID: oldID}
-	to := applicationcomposition.Identity{ApplicationID: appID, VersionID: newID}
+	source := repointedSource{
+		inner: repos.NewCompositionSource(tx, schema),
+		from:  applicationcomposition.Identity{ApplicationID: appID, VersionID: oldID},
+		to:    applicationcomposition.Identity{ApplicationID: appID, VersionID: newID},
+	}
 	for _, parent := range parents {
-		version, ok, err := source.Version(ctx, parent)
-		if err != nil {
-			return apierr.Internal("could not read the versions that use this one")
-		}
-		if !ok {
-			continue
-		}
-		for index := range version.Attachments {
-			if version.Attachments[index].Identity == from {
-				version.Attachments[index].Identity = to
-			}
-		}
-		err = applicationcomposition.Check(ctx, source, parent, &version)
+		err := applicationcomposition.Check(ctx, source, parent, nil)
 		if refusal := applicationcomposition.Refusal(err); refusal != nil {
 			return refusal
 		}
@@ -1835,6 +1842,27 @@ func (h *Handler) checkRepointedParents(ctx context.Context, schema, application
 		}
 	}
 	return nil
+}
+
+// repointedSource reads every version as it will be once the references to
+// from point at to.
+type repointedSource struct {
+	inner    *repos.CompositionSource
+	from, to applicationcomposition.Identity
+}
+
+func (s repointedSource) Version(ctx context.Context, id applicationcomposition.Identity) (applicationcomposition.Version, bool, error) {
+	version, ok, err := s.inner.Version(ctx, id)
+	for index := range version.Attachments {
+		if version.Attachments[index].Identity == s.from {
+			version.Attachments[index].Identity = s.to
+		}
+	}
+	return version, ok, err
+}
+
+func (s repointedSource) Prefetch(ctx context.Context, ids []applicationcomposition.Identity) error {
+	return s.inner.Prefetch(ctx, ids)
 }
 
 // isNumericID admits only the digits a row id is made of — the same guard the

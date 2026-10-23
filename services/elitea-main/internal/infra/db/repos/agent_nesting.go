@@ -349,10 +349,12 @@ func currentApplicationAgentTierContribution(agentType string) int {
 }
 
 // filterCurrentAdhocApplicationNesting answers the tools an ad-hoc turn offers
-// its chat model. An agent or pipeline participant that is valid as a root but
-// does not fit one level below the chat model (applicationcomposition.ChatToolFit,
-// PLAN §8.8) is not offered: it runs only when selected directly, and the
-// participant list says so (meta.agent_subtree_tiers, enrichParticipantNesting).
+// its chat model. The Worker builds every offered agent or pipeline under one
+// chat root sharing its budgets, so they are judged together, in the turn's
+// order (applicationcomposition.ChatToolFits, PLAN §8.8): one that is valid as a
+// root but does not fit below the chat model with the ones before it is not
+// offered. It runs only when selected directly, and the participant list says
+// so (meta.agent_subtree_tiers, enrichParticipantNesting).
 func filterCurrentAdhocApplicationNesting(
 	ctx context.Context,
 	queries currentApplicationNestingQuerier,
@@ -370,31 +372,40 @@ func filterCurrentAdhocApplicationNesting(
 		return nil, errInvalidCurrentApplicationNesting
 	}
 
-	filtered := make([]any, 0, len(items))
-	for _, item := range items {
+	var candidates []applicationcomposition.Identity
+	candidateOf := map[int]int{}
+	for index, item := range items {
 		tool, ok := item.(map[string]any)
 		if !ok {
 			return nil, errInvalidCurrentApplicationNesting
 		}
-		toolType, _ := tool["type"].(string)
-		if toolType != "application" {
+		if toolType, _ := tool["type"].(string); toolType != "application" {
+			continue
+		}
+		settings, _ := tool["settings"].(map[string]any)
+		applicationID, validApplication := positiveCurrentApplicationNestingValue(settings["application_id"])
+		versionID, validVersion := positiveCurrentApplicationNestingValue(settings["application_version_id"])
+		if validApplication && validVersion {
+			candidateOf[index] = len(candidates)
+			candidates = append(candidates, applicationcomposition.Identity{
+				ApplicationID: int64(applicationID), VersionID: int64(versionID),
+			})
+		}
+	}
+	fits, err := applicationcomposition.ChatToolFits(ctx, source, candidates)
+	if err != nil {
+		return nil, err
+	}
+
+	filtered := make([]any, 0, len(items))
+	for index, item := range items {
+		tool := item.(map[string]any)
+		if toolType, _ := tool["type"].(string); toolType != "application" {
 			filtered = append(filtered, tool)
 			continue
 		}
-		if settings, ok := tool["settings"].(map[string]any); ok {
-			applicationID, validApplication := positiveCurrentApplicationNestingValue(settings["application_id"])
-			versionID, validVersion := positiveCurrentApplicationNestingValue(settings["application_version_id"])
-			if validApplication && validVersion {
-				_, fits, fitErr := applicationcomposition.ChatToolFit(ctx, source, applicationcomposition.Identity{
-					ApplicationID: int64(applicationID), VersionID: int64(versionID),
-				})
-				if fitErr != nil {
-					return nil, fitErr
-				}
-				if !fits {
-					continue
-				}
-			}
+		if candidate, ok := candidateOf[index]; ok && !fits[candidate].Fits {
+			continue
 		}
 		materialized, materializeErr := materializeCurrentApplicationToolNestedSkills(
 			ctx,

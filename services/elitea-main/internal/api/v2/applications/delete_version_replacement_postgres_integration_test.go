@@ -213,3 +213,41 @@ func TestHandlerPostgres_DeleteVersionRefusesAReplacementThatClosesACycle(t *tes
 		t.Errorf("the refused delete removed the version anyway")
 	}
 }
+
+// Review item 8: the replacement is walked for the whole composition, not only
+// in the parent being checked. P1 attaches P2 and the version being deleted;
+// P2 attaches it too. The replacement is a 2-level agent, so through P2 it puts
+// a fourth level under P1, which neither parent shows when only its own
+// reference is swapped.
+func TestHandlerPostgres_DeleteVersionWalksTheReplacementThroughEveryParent(t *testing.T) {
+	pool := newHandlerTestPool(t)
+	seedHandlerUser(t, pool, 1, "one@elitea.ai")
+	router := newHandlerTestServer(t, pool, auth.User{ID: "1", UserID: "1", Email: "one@elitea.ai"})
+	create := func(name string) (string, string) {
+		_, created := do(t, router, http.MethodPost, "/applications/prompt_lib/1", j14CreateBody(name))
+		return created["id"].(string), created["version_details"].(map[string]any)["id"].(string)
+	}
+
+	leafApp, leafVersion := create("depth-leaf")
+	targetApp, targetBase := create("depth-target")
+	_, second := do(t, router, http.MethodPost, "/versions/prompt_lib/1/"+targetApp, map[string]any{"name": "v2"})
+	targetSecond := second["id"].(string)
+	// The replacement (base) is two levels: it attaches the leaf.
+	attachSubAgentReference(t, pool, targetApp, targetBase, leafApp, leafVersion)
+	p2App, p2Version := create("depth-p2")
+	p2Tool := attachSubAgentReference(t, pool, p2App, p2Version, targetApp, targetSecond)
+	p1App, p1Version := create("depth-p1")
+	attachSubAgentReference(t, pool, p1App, p1Version, p2App, p2Version)
+	attachSubAgentReference(t, pool, p1App, p1Version, targetApp, targetSecond)
+
+	recorder, body := do(t, router, http.MethodDelete,
+		"/version/prompt_lib/1/"+targetApp+"/"+targetSecond+"?replacement_version_id="+targetBase, nil)
+	message, _ := body["error"].(string)
+	if recorder.Code != http.StatusBadRequest ||
+		!strings.Contains(message, `"depth-p1" → "depth-p2" → "depth-target" → "depth-leaf"`) {
+		t.Fatalf("a re-point nesting a fourth level answered %d %s", recorder.Code, recorder.Body.String())
+	}
+	if got := referencedVersionID(t, pool, p2Tool); got != targetSecond {
+		t.Errorf("the refused re-point moved the reference to %q", got)
+	}
+}

@@ -344,9 +344,9 @@ func TestChatToolFitOffersOnlyWhatFitsBelowTheChatModel(t *testing.T) {
 			if violation := check(t, tc.src, 1); violation != nil {
 				t.Fatalf("each case is valid as a root: %v", violation)
 			}
-			tiers, fits, err := applicationcomposition.ChatToolFit(context.Background(), tc.src, id(1))
-			if err != nil || tiers != tc.tiers || fits != tc.fits {
-				t.Fatalf("ChatToolFit = (%d, %v, %v), want (%d, %v)", tiers, fits, err, tc.tiers, tc.fits)
+			fits, err := applicationcomposition.ChatToolFits(context.Background(), tc.src, []applicationcomposition.Identity{id(1)})
+			if err != nil || fits[0] != (applicationcomposition.Fit{Tiers: tc.tiers, Fits: tc.fits}) {
+				t.Fatalf("ChatToolFits = (%+v, %v), want (%d, %v)", fits, err, tc.tiers, tc.fits)
 			}
 		})
 	}
@@ -363,15 +363,96 @@ func TestChatToolFitCountsTheChatModelsHop(t *testing.T) {
 	if violation := check(t, source, 1); violation != nil {
 		t.Fatalf("the hop budget is valid as a root: %v", violation)
 	}
-	tiers, fits, err := applicationcomposition.ChatToolFit(context.Background(), source, id(1))
-	if err != nil || fits || tiers != applicationcomposition.MaxAgentTiers {
-		t.Fatalf("ChatToolFit = (%d, %v, %v), want the limit and no fit", tiers, fits, err)
+	fits, err := applicationcomposition.ChatToolFits(context.Background(), source, []applicationcomposition.Identity{id(1)})
+	if err != nil || fits[0] != (applicationcomposition.Fit{Tiers: applicationcomposition.MaxAgentTiers}) {
+		t.Fatalf("ChatToolFits = (%+v, %v), want the limit and no fit", fits, err)
 	}
 }
 
 func TestChatToolFitLeavesAnUnreadableVersionToTheTurn(t *testing.T) {
-	tiers, fits, err := applicationcomposition.ChatToolFit(context.Background(), fakeSource{}, id(9))
-	if err != nil || !fits || tiers != 0 {
-		t.Fatalf("ChatToolFit = (%d, %v, %v)", tiers, fits, err)
+	fits, err := applicationcomposition.ChatToolFits(context.Background(), fakeSource{}, []applicationcomposition.Identity{id(9)})
+	if err != nil || fits[0] != (applicationcomposition.Fit{Fits: true}) {
+		t.Fatalf("ChatToolFits = (%+v, %v)", fits, err)
+	}
+}
+
+// PLAN §8.8, review item 3: the Worker builds every offered participant under one
+// chat root sharing its hop budget, so three participants that each fit alone are
+// offered only while they fit together; the one that does not is not offered and
+// does not consume the budget, so a later small one is still offered.
+func TestChatToolFitsShareTheChatModelsHopBudget(t *testing.T) {
+	source := fakeSource{}
+	wide := func(root, first int64, children int) {
+		var attached []int64
+		for n := first; n < first+int64(children); n++ {
+			source[n] = agent(fmt.Sprintf("Leaf %d", n))
+			attached = append(attached, n)
+		}
+		source[root] = agent(fmt.Sprintf("Root %d", root), attached...)
+	}
+	// Each participant costs 1 + its children hops below the chat model.
+	wide(1, 100, 11) // 12 hops
+	wide(2, 200, 11) // 12 hops: 24 together
+	wide(3, 300, 11) // 12 hops: would be 36
+	source[4] = agent("Small leaf")
+	for _, n := range []int64{1, 2, 3, 4} {
+		if violation := check(t, source, n); violation != nil {
+			t.Fatalf("participant %d is valid alone: %v", n, violation)
+		}
+	}
+	fits, err := applicationcomposition.ChatToolFits(context.Background(), source,
+		[]applicationcomposition.Identity{id(1), id(2), id(3), id(4)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []applicationcomposition.Fit{{Tiers: 2, Fits: true}, {Tiers: 2, Fits: true}, {Tiers: applicationcomposition.MaxAgentTiers}, {Tiers: 1, Fits: true}}
+	for i := range want {
+		if fits[i] != want[i] {
+			t.Fatalf("fits = %+v, want %+v", fits, want)
+		}
+	}
+}
+
+// Review item 4: the checkpoint-path budget of a saved pipeline composition.
+func TestCheckpointPathsAdmitTheLimitAndRefuseOneMore(t *testing.T) {
+	withNodes := func(nodes int) fakeSource {
+		source := fakeSource{2: agent("Leaf")}
+		root := applicationcomposition.Version{Kind: applicationcomposition.KindPipeline, Name: "Wide flow",
+			Attachments: []applicationcomposition.Attachment{{Alias: "a2", Identity: id(2)}}}
+		for n := 0; n < nodes; n++ {
+			root.AgentNodes = append(root.AgentNodes, applicationcomposition.AgentNode{ID: fmt.Sprintf("n%d", n), Alias: "a2"})
+		}
+		source[1] = root
+		return source
+	}
+	if violation := check(t, withNodes(applicationcomposition.MaxCheckpointPaths), 1); violation != nil {
+		t.Fatalf("the path limit must save: %v", violation)
+	}
+	violation := check(t, withNodes(applicationcomposition.MaxCheckpointPaths+1), 1)
+	expect(t, violation, applicationcomposition.BoundCheckpoints)
+	if !strings.Contains(violation.Error(), `"Wide flow"`) {
+		t.Fatalf("the refusal names the pipeline: %s", violation)
+	}
+}
+
+// Paths are counted through the saved pipelines the Agent nodes run.
+func TestCheckpointPathsCountNestedPipelines(t *testing.T) {
+	inner := applicationcomposition.Version{Kind: applicationcomposition.KindPipeline, Name: "Inner",
+		Attachments: []applicationcomposition.Attachment{{Alias: "a3", Identity: id(3)}}}
+	for n := 0; n < 64; n++ {
+		inner.AgentNodes = append(inner.AgentNodes, applicationcomposition.AgentNode{ID: fmt.Sprintf("i%d", n), Alias: "a3"})
+	}
+	outer := applicationcomposition.Version{Kind: applicationcomposition.KindPipeline, Name: "Outer",
+		Attachments: []applicationcomposition.Attachment{{Alias: "a2", Identity: id(2)}},
+		AgentNodes:  []applicationcomposition.AgentNode{{ID: "o1", Alias: "a2"}, {ID: "o2", Alias: "a2"}}}
+	// 2 + 2×64 = 130 paths.
+	expect(t, check(t, fakeSource{1: outer, 2: inner, 3: agent("Leaf")}, 1), applicationcomposition.BoundCheckpoints)
+}
+
+func TestTheDepthRefusalNamesTheAgentNodeOnce(t *testing.T) {
+	violation := check(t, pipelineChain(applicationcomposition.MaxPipelineDepth, true), 1)
+	expect(t, violation, applicationcomposition.BoundPipelineDepth)
+	if !strings.Contains(violation.Error(), `→ Agent node "`) || strings.Contains(violation.Error(), `"Agent node`) {
+		t.Fatalf("the node is quoted once: %s", violation)
 	}
 }

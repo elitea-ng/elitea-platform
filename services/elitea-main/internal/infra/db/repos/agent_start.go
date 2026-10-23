@@ -615,11 +615,17 @@ func (repository *CurrentAgentStartRepository) resolveCatalogueApplicationSource
 			if err := currentCatalogueVersionAdmissible(details); err != nil {
 				return err
 			}
-			if validationErr := validateCurrentApplicationNesting(
+			// FU-244: one composition rule for every start path; then the row
+			// checks of the nesting walk, as for a same-project start.
+			if err := checkStartComposition(ctx, tx,
+				schema(strconv.FormatInt(int64(repository.catalogueProjectID), 10)),
+				reference.applicationID, reference.versionID); err != nil {
+				return err
+			}
+			if validationErr := validateCurrentApplicationRows(
 				ctx,
 				nesting,
 				reference.versionID,
-				1,
 			); validationErr != nil {
 				if contextErr := ctx.Err(); contextErr != nil {
 					return contextErr
@@ -795,7 +801,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentAdhoc(
 				}
 				tools, queryErr = filterCurrentAdhocApplicationNesting(
 					ctx, nesting,
-					CompositionSource{q: tx, schema: schema(strconv.FormatInt(request.ProjectID, 10))},
+					newCompositionSource(tx, schema(strconv.FormatInt(request.ProjectID, 10))),
 					tools,
 				)
 				if queryErr != nil {

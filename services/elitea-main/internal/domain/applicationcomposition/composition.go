@@ -43,6 +43,15 @@ const (
 	MaxOrdinaryGraphScopes = 2
 	// MaxApplicationHops is the most attached agents and pipelines one run builds.
 	MaxApplicationHops = 25
+	// MaxCheckpointPaths is the most Agent-node paths one saved pipeline
+	// composition holds (a pipeline root or tool and the saved pipelines its
+	// Agent nodes run).
+	MaxCheckpointPaths = 128
+	// MaxVersionBytes is the Worker's load budget for one composition. Main
+	// cannot measure the frozen documents the Worker loads, so it is not
+	// checked here: an attachment past it is left out and named, and a root
+	// that cannot load its own composition ends with SizeRuntimeMessage.
+	MaxVersionBytes = 4 * 1024 * 1024
 )
 
 // Code is the public refusal code; the Worker's run-time refusal maps to it too.
@@ -52,6 +61,10 @@ const Code = "APPLICATION_COMPOSITION_INVALID"
 // stored composition (application-composition-limits-v1.json runtime_message):
 // the Worker sends it, and Main's start refusal (ErrAtStart) answers it.
 const RuntimeMessage = "This agent or pipeline cannot run: its attachments form a circular reference, nest deeper than allowed, or include a pipeline that pauses where the pause cannot be continued. Review its attachments and change the one that breaks the rule."
+
+// SizeRuntimeMessage is the registered, data-free text of a run whose own
+// composition exceeds MaxVersionBytes (size_runtime_message).
+const SizeRuntimeMessage = "This agent or pipeline cannot run: its attached agents and pipelines are too large to load together. Remove attachments or shorten their instructions."
 
 // ErrAtStart refuses a run whose stored composition Main's start validation
 // rejects for a bound (a circular reference, the hop or tier bound): a
@@ -69,6 +82,7 @@ const (
 	BoundGraphScopes   Bound = "ordinary_graph_scopes"
 	BoundHops          Bound = "application_hops"
 	BoundStaticPause   Bound = "static_pause_under_graph_root"
+	BoundCheckpoints   Bound = "checkpoint_paths"
 )
 
 // Kind is a saved version's kind.
@@ -114,6 +128,13 @@ type Source interface {
 	Version(ctx context.Context, id Identity) (version Version, ok bool, err error)
 }
 
+// Prefetcher is a Source that reads many versions in one round trip. The walk
+// prefetches the versions it can reach level by level before it walks them, so
+// a check costs a few batched reads instead of one read per version.
+type Prefetcher interface {
+	Prefetch(ctx context.Context, ids []Identity) error
+}
+
 // Violation is a refused composition; Error is the readable refusal naming
 // the attachment and the path that reaches it.
 type Violation struct {
@@ -152,29 +173,64 @@ func Check(ctx context.Context, source Source, root Identity, override *Version)
 	return err
 }
 
-// ChatToolFit answers whether the saved version id can be offered to a
-// conversation's chat model as a tool: walked as an attachment of an agent root,
-// one level below where it runs when selected directly (PLAN §8.8). A version
-// that fits reports its own agent subtree tiers (pipelines consume none); one
-// that does not reports MaxAgentTiers, the nesting limit, so a reader's
+// Fit is whether one participant can be offered to a conversation's chat model.
+// Tiers is its own agent subtree tiers (pipelines consume none) when it fits,
+// and MaxAgentTiers, the nesting limit, when it does not, so a reader's
 // `1 + tiers > MaxAgentTiers` gate flags exactly the participants an ad-hoc
-// turn does not bind. A version that cannot be read fits (ok is false): the
-// turn's own resolution decides it.
-func ChatToolFit(ctx context.Context, source Source, id Identity) (tiers int, fits bool, err error) {
-	participant, ok, err := source.Version(ctx, id)
-	if err != nil || !ok {
-		return 0, true, err
+// turn does not offer (PLAN §8.8).
+type Fit struct {
+	Tiers int
+	Fits  bool
+}
+
+// ChatToolFits answers, in order, which participants an ad-hoc turn can offer
+// its chat model. The Worker builds every offered participant as an attachment
+// of one agent root, one level below where each runs when selected directly,
+// and they share that root's hop budget. A participant is offered when it fits
+// together with the ones offered before it; one that does not is not offered
+// and does not consume the budget. A version that cannot be read fits and is
+// left to the turn's own resolution.
+func ChatToolFits(ctx context.Context, source Source, ids []Identity) ([]Fit, error) {
+	fits := make([]Fit, len(ids))
+	chat := Version{Kind: KindAgent, Name: "chat"}
+	for _, id := range ids {
+		chat.Attachments = append(chat.Attachments, Attachment{Identity: id})
 	}
-	chat := Version{Kind: KindAgent, Name: "chat", Attachments: []Attachment{{Identity: id}}}
-	maxTier, err := check(ctx, source, Identity{}, chat, map[Identity]Version{id: participant})
-	var refused *Violation
-	if errors.As(err, &refused) {
-		return MaxAgentTiers, false, nil
+	w := walker{source: source, cache: map[Identity]Version{}, maxTier: 1}
+	if err := w.prefetch(ctx, []Version{chat}); err != nil {
+		return nil, err
 	}
-	if err != nil {
-		return 0, false, err
+	root := path{ancestors: []Identity{{}}, trail: []string{label(chat.Name)}, tier: 1}
+	seen := map[Identity]bool{}
+	for i, id := range ids {
+		participant, ok, err := w.read(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			fits[i] = Fit{Fits: true}
+			continue
+		}
+		hops, maxTier, wasSeen := w.hops, w.maxTier, seen[id]
+		w.maxTier = 1
+		alone := Version{Attachments: []Attachment{{Identity: id}}}
+		err = w.cycles(ctx, alone, map[Identity]int{{}: visiting}, root.trail)
+		if err == nil {
+			err = w.attach(ctx, chat, root, Attachment{Identity: id}, participant, seen)
+		}
+		var refused *Violation
+		switch {
+		case errors.As(err, &refused):
+			w.hops, seen[id] = hops, wasSeen
+			fits[i] = Fit{Tiers: MaxAgentTiers}
+		case err != nil:
+			return nil, err
+		default:
+			fits[i] = Fit{Tiers: w.maxTier - 1, Fits: true}
+		}
+		w.maxTier = max(w.maxTier, maxTier)
 	}
-	return maxTier - 1, true, nil
+	return fits, nil
 }
 
 // check walks version as root and answers the deepest agent tier it reached;
@@ -185,6 +241,9 @@ func check(ctx context.Context, source Source, root Identity, version Version, k
 		cache[id] = read
 	}
 	w := walker{source: source, cache: cache, maxTier: 1}
+	if err := w.prefetch(ctx, []Version{version}); err != nil {
+		return 0, err
+	}
 	// A cycle through ANY attachment is refused (PLAN §8.8), whether or not a
 	// pipeline's Agent node runs it: an agent reaching itself is an authoring
 	// error even where today's run would not follow the edge.
@@ -332,46 +391,55 @@ func (w *walker) walkAgent(ctx context.Context, agent Version, p path) error {
 		if !ok {
 			continue
 		}
-		if child.Kind == KindAgent {
-			// The Worker builds each attached agent once (application_references).
-			if seen[attachment.Identity] {
-				continue
-			}
-			seen[attachment.Identity] = true
-			next, err := w.enterAgent(p, attachment.Identity, child)
-			if err != nil {
-				return err
-			}
-			if err := w.walkAgent(ctx, child, next); err != nil {
-				return err
-			}
-			continue
-		}
-		next, err := w.enterPipeline(p, attachment.Identity, child)
-		if err != nil {
-			return err
-		}
-		if p.graphRoot {
-			if paused, err := w.pauses(ctx, child, map[Identity]bool{attachment.Identity: true}); err != nil {
-				return err
-			} else if paused {
-				return violation(BoundStaticPause, fmt.Sprintf(
-					"Pipeline %s pauses before or after a node, so it cannot be a tool of agent %s inside a pipeline: an Agent node cannot continue that pause (%s). Remove the pause or the attachment before saving.",
-					label(child.Name), label(agent.Name), chain(p.trail, child.Name)))
-			}
-		}
-		if err := w.walkPipeline(ctx, child, next, 0); err != nil {
+		if err := w.attach(ctx, agent, p, attachment, child, seen); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// attach enters one attachment of agent at p and walks it.
+func (w *walker) attach(ctx context.Context, agent Version, p path, attachment Attachment, child Version, seen map[Identity]bool) error {
+	if child.Kind == KindAgent {
+		// The Worker builds each attached agent once (application_references).
+		if seen[attachment.Identity] {
+			return nil
+		}
+		seen[attachment.Identity] = true
+		next, err := w.enterAgent(p, attachment.Identity, child)
+		if err != nil {
+			return err
+		}
+		return w.walkAgent(ctx, child, next)
+	}
+	next, err := w.enterPipeline(p, attachment.Identity, child)
+	if err != nil {
+		return err
+	}
+	if p.graphRoot {
+		if paused, err := w.pauses(ctx, child, map[Identity]bool{attachment.Identity: true}); err != nil {
+			return err
+		} else if paused {
+			return violation(BoundStaticPause, fmt.Sprintf(
+				"Pipeline %s pauses before or after a node, so it cannot be a tool of agent %s inside a pipeline: an Agent node cannot continue that pause (%s). Remove the pause or the attachment before saving.",
+				label(child.Name), label(agent.Name), chain(p.trail, child.Name)))
+		}
+	}
+	return w.walkPipeline(ctx, child, next, 0)
+}
+
 // walkPipeline follows a pipeline's Agent nodes, as a graph's assembly binds them.
 // composition is the saved-pipeline nesting below the nearest pipeline root or tool.
 func (w *walker) walkPipeline(ctx context.Context, pipeline Version, p path, composition int) error {
 	if composition == MaxPipelineDepth && len(pipeline.AgentNodes) > 0 {
-		return depthViolation(chain(p.trail, "Agent node "+label(pipeline.AgentNodes[0].ID)))
+		return depthViolation(strings.Join(append(append([]string(nil), p.trail...),
+			"Agent node "+label(pipeline.AgentNodes[0].ID)), " → "))
+	}
+	if composition == 0 {
+		paths := 0
+		if err := w.checkpointPaths(ctx, pipeline, 0, &paths, map[Identity]bool{}); err != nil {
+			return err
+		}
 	}
 	bound := map[string]bool{}
 	for _, node := range pipeline.AgentNodes {
@@ -414,6 +482,84 @@ func (w *walker) walkPipeline(ctx context.Context, pipeline Version, p path, com
 		if err := w.walkAgent(ctx, child, next); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkpointPaths counts the Agent-node paths of a saved pipeline composition
+// as the Worker's collect_paths does: every Agent node, and the nodes of the
+// saved pipeline it runs, below the pipeline root or tool. Depth past the bound
+// is walkPipeline's refusal; visiting guards a cycle (refused by the cycle check).
+func (w *walker) checkpointPaths(ctx context.Context, pipeline Version, depth int, paths *int, visiting map[Identity]bool) error {
+	if depth >= MaxPipelineDepth {
+		return nil
+	}
+	for _, node := range pipeline.AgentNodes {
+		if *paths == MaxCheckpointPaths {
+			return violation(BoundCheckpoints, fmt.Sprintf(
+				"Pipeline %s runs more than %d Agent nodes across the saved pipelines it runs. Reduce the Agent nodes before saving.",
+				label(pipeline.Name), MaxCheckpointPaths))
+		}
+		*paths++
+		attachment, ok := attached(pipeline, node.Alias)
+		if !ok || visiting[attachment.Identity] {
+			continue
+		}
+		child, ok, err := w.read(ctx, attachment.Identity)
+		if err != nil {
+			return err
+		}
+		if !ok || child.Kind != KindPipeline {
+			continue
+		}
+		visiting[attachment.Identity] = true
+		err = w.checkpointPaths(ctx, child, depth+1, paths, visiting)
+		delete(visiting, attachment.Identity)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// prefetch reads, level by level, the versions reachable from roots through
+// any attachment, so the walks that follow read from the cache. It stops after
+// MaxCycleVersions versions; anything past that is read on demand.
+func (w *walker) prefetch(ctx context.Context, roots []Version) error {
+	batch, ok := w.source.(Prefetcher)
+	if !ok {
+		return nil
+	}
+	seen := map[Identity]bool{}
+	var frontier []Identity
+	next := func(versions []Version) {
+		for _, version := range versions {
+			for _, attachment := range version.Attachments {
+				if !seen[attachment.Identity] && len(seen) < MaxCycleVersions {
+					seen[attachment.Identity] = true
+					frontier = append(frontier, attachment.Identity)
+				}
+			}
+		}
+	}
+	next(roots)
+	for len(frontier) > 0 {
+		level := frontier
+		frontier = nil
+		if err := batch.Prefetch(ctx, level); err != nil {
+			return err
+		}
+		read := make([]Version, 0, len(level))
+		for _, id := range level {
+			version, ok, err := w.read(ctx, id)
+			if err != nil {
+				return err
+			}
+			if ok {
+				read = append(read, version)
+			}
+		}
+		next(read)
 	}
 	return nil
 }

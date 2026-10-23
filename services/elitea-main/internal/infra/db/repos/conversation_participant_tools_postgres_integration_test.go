@@ -76,6 +76,7 @@ VALUES ($1, 1, 'agent', $2, '["read"]'::jsonb)`, versionID, toolID); err != nil 
 
 func attachAgentParticipant(t *testing.T, repo *ConversationsRepo, conversationID, agentName string, entityID int, settings map[string]any) {
 	t.Helper()
+	ensureApplicationCompositionColumns(t, repo)
 	body := map[string]any{
 		"entity_name": "application",
 		"entity_meta": map[string]any{"id": entityID, "project_id": 1, "name": agentName},
@@ -246,5 +247,22 @@ func TestParticipantsLoadWhereTheToolkitTablesDoNotExist(t *testing.T) {
 	}
 	if _, resolved := meta["tools"]; resolved {
 		t.Errorf("a tenant with no toolkit tables resolved a tool list: %v", meta)
+	}
+}
+
+// ensureApplicationCompositionColumns completes the package's minimal
+// `p_1.application_versions` fixture (and its `applications` parent) with what
+// the participant composition check reads (FU-244); a deployment has the full
+// legacy table. `IF NOT EXISTS`, like ensureApplicationVersionPublicationColumns,
+// so a fuller seed that ran first is left as it is.
+func ensureApplicationCompositionColumns(t *testing.T, repo *ConversationsRepo) {
+	t.Helper()
+	if _, err := repo.pool.Exec(context.Background(), `
+ALTER TABLE p_1.application_versions
+    ADD COLUMN IF NOT EXISTS application_id INTEGER,
+    ADD COLUMN IF NOT EXISTS agent_type VARCHAR,
+    ADD COLUMN IF NOT EXISTS instructions TEXT;
+CREATE TABLE IF NOT EXISTS p_1.applications (id SERIAL PRIMARY KEY, name VARCHAR(128));`); err != nil {
+		t.Fatalf("prepare the application composition columns: %v", err)
 	}
 }

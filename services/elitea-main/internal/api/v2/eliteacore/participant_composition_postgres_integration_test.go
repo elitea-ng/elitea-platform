@@ -10,6 +10,7 @@ package eliteacore_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -53,7 +54,7 @@ SELECT $4, 'agent', tool.id, $5, now() FROM tool`, name, child.app, child.versio
 func participantBody(version composedVersion) map[string]any {
 	return map[string]any{
 		"entity_name":     "application",
-		"entity_meta":     map[string]any{"id": float64(version.app), "name": "agent"},
+		"entity_meta":     map[string]any{"id": float64(version.app), "name": "agent", "project_id": float64(1)},
 		"entity_settings": map[string]any{"version_id": float64(version.version)},
 	}
 }
@@ -190,5 +191,69 @@ func TestTheParticipantReadFlagsAnAgentThatRunsOnlyWhenSelected(t *testing.T) {
 	}
 	if seen != len(want) {
 		t.Fatalf("saw %d of %d agent participants", seen, len(want))
+	}
+}
+
+// Review items 3 and 5: participants are judged together, in participant
+// order, against the chat model's shared hop budget; and a participant of
+// another project (here the catalogue) is never judged on the conversation's
+// own application that happens to carry the same ids.
+func TestTheParticipantReadJudgesParticipantsTogetherAndOnlyInTheirOwnProject(t *testing.T) {
+	pool := newPublishCopyPool(t)
+	repo := repos.NewConversationsRepo(pool)
+	conversation := seedCompositionConversation(t, pool)
+	ctx := context.Background()
+
+	wide := func(name string) composedVersion {
+		root := seedComposedVersion(t, pool, name)
+		for n := 0; n < 11; n++ {
+			attachForTest(t, pool, root, seedComposedVersion(t, pool, fmt.Sprintf("%s leaf %d", name, n)), fmt.Sprintf("leaf %d", n))
+		}
+		return root
+	}
+	// 12 hops each below the chat model: two fit together, the third does not.
+	first, second, third := wide("First"), wide("Second"), wide("Third")
+	small := seedComposedVersion(t, pool, "Small")
+	if _, err := repo.AddParticipants(ctx, "1", conversation, []map[string]any{
+		participantBody(first), participantBody(second), participantBody(third), participantBody(small),
+	}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	// A catalogue participant whose ids collide with First: written directly,
+	// as the catalogue project is not provisioned in this harness.
+	if _, err := pool.Exec(ctx, `
+WITH participant AS (
+  INSERT INTO p_1.chat_participants (uuid, entity_name, entity_meta, meta)
+  VALUES (gen_random_uuid(), 'application', jsonb_build_object('id', $1::int, 'project_id', 999), '{"name": "Catalogue"}'::json)
+  RETURNING id)
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at)
+SELECT c.id, participant.id, jsonb_build_object('version_id', $2::int), now()
+FROM participant, p_1.chat_conversations c WHERE c.uuid::text = $3`, first.app, first.version, conversation); err != nil {
+		t.Fatal(err)
+	}
+	participants, err := repo.ListParticipants(ctx, "1", conversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tiers := map[string]any{}
+	for _, participant := range participants {
+		if participant.EntityName != "application" {
+			continue
+		}
+		name, _ := participant.Meta["name"].(string)
+		if participant.EntityMeta["project_id"] == float64(999) {
+			name = "Catalogue"
+		}
+		tiers[name+fmt.Sprint(participant.EntityMeta["id"])] = participant.Meta["agent_subtree_tiers"]
+	}
+	key := func(name string, version composedVersion) string { return name + fmt.Sprint(float64(version.app)) }
+	want := map[string]any{
+		key("agent", first): 2, key("agent", second): 2, key("agent", third): applicationcomposition.MaxAgentTiers,
+		key("agent", small): 1, key("Catalogue", first): nil,
+	}
+	for name, value := range want {
+		if tiers[name] != value {
+			t.Fatalf("agent_subtree_tiers = %v, want %v", tiers, want)
+		}
 	}
 }

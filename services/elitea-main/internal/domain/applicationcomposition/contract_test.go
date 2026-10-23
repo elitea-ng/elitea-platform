@@ -29,8 +29,11 @@ func TestBoundsMatchTheSharedContract(t *testing.T) {
 		MaxPipelineDepth       int    `json:"max_pipeline_depth"`
 		MaxOrdinaryGraphScopes int    `json:"max_ordinary_graph_scopes"`
 		MaxApplicationHops     int    `json:"max_application_hops"`
+		MaxCheckpointPaths     int    `json:"max_checkpoint_paths"`
+		MaxVersionBytes        int    `json:"max_version_bytes"`
 		PublicCode             string `json:"public_code"`
 		RuntimeMessage         string `json:"runtime_message"`
+		SizeRuntimeMessage     string `json:"size_runtime_message"`
 	}
 	if err := json.Unmarshal(raw, &contract); err != nil {
 		t.Fatalf("decode the composition contract: %v", err)
@@ -39,14 +42,19 @@ func TestBoundsMatchTheSharedContract(t *testing.T) {
 		contract.MaxPipelineDepth != applicationcomposition.MaxPipelineDepth ||
 		contract.MaxOrdinaryGraphScopes != applicationcomposition.MaxOrdinaryGraphScopes ||
 		contract.MaxApplicationHops != applicationcomposition.MaxApplicationHops ||
+		contract.MaxCheckpointPaths != applicationcomposition.MaxCheckpointPaths ||
+		contract.MaxVersionBytes != applicationcomposition.MaxVersionBytes ||
 		contract.PublicCode != applicationcomposition.Code ||
-		contract.RuntimeMessage != applicationcomposition.RuntimeMessage {
+		contract.RuntimeMessage != applicationcomposition.RuntimeMessage ||
+		contract.SizeRuntimeMessage != applicationcomposition.SizeRuntimeMessage {
 		t.Fatalf("contract %+v drifted from the save check", contract)
 	}
 	// The output plane refuses a runtime failure whose safe message exceeds
 	// 256 bytes (application/output RuntimeFailureFrame.Validate).
-	if len(contract.RuntimeMessage) > 256 {
-		t.Fatalf("the registered message is %d bytes; the output plane admits 256", len(contract.RuntimeMessage))
+	for _, message := range []string{contract.RuntimeMessage, contract.SizeRuntimeMessage} {
+		if len(message) > 256 {
+			t.Fatalf("a registered message is %d bytes; the output plane admits 256", len(message))
+		}
 	}
 }
 

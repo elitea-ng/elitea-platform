@@ -298,39 +298,50 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 }
 
 // enrichParticipantNesting tells the participant list which agents and
-// pipelines an ad-hoc turn cannot offer to the chat model (PLAN §8.8): a
-// participant valid as a root that breaks a bound one level below the chat
-// model runs only when selected directly. The fields are the ones the legacy
-// read served (EliteaUI's isSkippedContainerParticipant gate, `1 + tiers > max`):
+// pipelines an ad-hoc turn does not offer to the chat model (PLAN §8.8): a
+// participant valid as a root that does not fit below the chat model, together
+// with the ones before it, runs only when selected directly. The fields are the
+// ones the legacy read served (EliteaUI's isSkippedContainerParticipant gate,
+// `1 + tiers > max`):
 //   - meta.agent_subtree_tiers: the participant's own agent tiers (pipelines
-//     consume none), or max_agent_nesting_tiers when it does not fit;
+//     consume none), or max_agent_nesting_tiers when it is not offered;
 //   - meta.max_agent_nesting_tiers: applicationcomposition.MaxAgentTiers;
-//   - meta.is_container: it reaches other agents, or it does not fit.
+//   - meta.is_container: it reaches other agents, or it is not offered.
 //
-// The answer is applicationcomposition.ChatToolFit read in the conversation's
-// schema, the same check filterCurrentAdhocApplicationNesting applies at the
-// turn's start, so the warning and the turn cannot disagree. A failed read
-// leaves the participant as read (the keys absent), like the enrichments above.
+// It judges exactly the participants an ad-hoc turn offers (the conversation's
+// own project, a name, in participant order) with the check the turn's start
+// applies (filterCurrentAdhocApplicationNesting), in the conversation's own
+// schema, so the warning and the turn cannot disagree. Participants of another
+// project are never offered to the chat model and get no fields. A failed read
+// leaves the participants as read (the keys absent), like the enrichments above.
 func (r *ConversationsRepo) enrichParticipantNesting(ctx context.Context, s string, items []conversations.Participant) {
-	source := NewCompositionSource(r.pool, s)
+	var candidates []applicationcomposition.Identity
+	var indexes []int
 	for i := range items {
 		if items[i].EntityName != participantEntityApplication {
 			continue
 		}
 		applicationID, okApplication := positiveInteger(items[i].EntityMeta["id"])
 		versionID, okVersion := participantVersionID(items[i].EntitySettings)
-		if !okApplication || !okVersion {
+		project, okProject := positiveInteger(items[i].EntityMeta["project_id"])
+		name, _ := items[i].Meta["name"].(string)
+		if !okApplication || !okVersion || !okProject || name == "" || schema(strconv.FormatInt(project, 10)) != s {
 			continue
 		}
-		tiers, fits, err := applicationcomposition.ChatToolFit(ctx, source, applicationcomposition.Identity{
-			ApplicationID: applicationID, VersionID: int64(versionID),
-		})
-		if err != nil {
-			continue
-		}
-		items[i].Meta["agent_subtree_tiers"] = tiers
+		candidates = append(candidates, applicationcomposition.Identity{ApplicationID: applicationID, VersionID: int64(versionID)})
+		indexes = append(indexes, i)
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	fits, err := applicationcomposition.ChatToolFits(ctx, NewCompositionSource(r.pool, s), candidates)
+	if err != nil {
+		return
+	}
+	for k, i := range indexes {
+		items[i].Meta["agent_subtree_tiers"] = fits[k].Tiers
 		items[i].Meta["max_agent_nesting_tiers"] = applicationcomposition.MaxAgentTiers
-		items[i].Meta["is_container"] = !fits || tiers > 1
+		items[i].Meta["is_container"] = !fits[k].Fits || fits[k].Tiers > 1
 	}
 }
 

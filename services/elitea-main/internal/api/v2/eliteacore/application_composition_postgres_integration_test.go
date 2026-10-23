@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
@@ -171,4 +172,84 @@ func TestTheCompositionCheckAtItsHopBudgetIsFast(t *testing.T) {
 		t.Fatalf("a bounded walk took %s", slowest)
 	}
 	expectRefused(t, pool, root, seedComposed(t, pool, "One too many", "agent", "leaf"), "more than 25")
+}
+
+// Review item 7: turning an agent into a pipeline walks its stored
+// instructions as the pipeline it becomes, even when the write sends none.
+func TestTurningAnAgentIntoAPipelineWalksItsStoredInstructions(t *testing.T) {
+	pool := newPublishCopyPool(t)
+	approval := seedComposed(t, pool, "Approval", "pipeline", "state:\n  messages: list\nentry_point: a\ninterrupt_before: [a]\nnodes:\n  - id: a\n    type: llm\n    transition: END\n")
+	reviewer := seedComposed(t, pool, "Reviewer", "agent", "review")
+	mustAttach(t, pool, reviewer, approval)
+	// As an agent its instructions are a prompt; as a pipeline they run Reviewer
+	// from an Agent node, whose pausing pipeline tool a pipeline root cannot continue.
+	switcher := seedComposed(t, pool, "Switcher", "agent", agentNodePipeline("Reviewer", false))
+	mustAttach(t, pool, switcher, reviewer)
+	repo := repos.NewApplicationsRepo(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	_, err := repo.UpdateVersion(ctx, "1", fmt.Sprint(switcher.appID), fmt.Sprint(switcher.versionID),
+		applications.Version{AgentType: "pipeline"})
+	apiErr, ok := err.(*apierr.APIError)
+	if !ok || apiErr.Status != http.StatusBadRequest || apiErr.Code != applicationcomposition.Code || !strings.Contains(apiErr.Message, `Pipeline "Approval"`) {
+		t.Fatalf("switch err = %v", err)
+	}
+	var agentType string
+	if err := pool.QueryRow(ctx, `SELECT agent_type FROM p_1.application_versions WHERE id = $1`, switcher.versionID).Scan(&agentType); err != nil {
+		t.Fatal(err)
+	}
+	if agentType != "agent" {
+		t.Fatalf("a refused switch stored %q", agentType)
+	}
+}
+
+// countingReader counts the statements a composition read sends.
+type countingReader struct {
+	pool       *pgxpool.Pool
+	statements int
+}
+
+func (c *countingReader) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	c.statements++
+	return c.pool.Query(ctx, sql, args...)
+}
+
+func (c *countingReader) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	c.statements++
+	return c.pool.QueryRow(ctx, sql, args...)
+}
+
+// Review item 9: a participant read judges every participant through one
+// source that reads a level of the composition per batch, so its statement
+// count does not grow with the number of participants.
+func TestJudgingParticipantsCostsAFixedNumberOfStatements(t *testing.T) {
+	pool := newPublishCopyPool(t)
+	var participants []applicationcomposition.Identity
+	for n := range 8 {
+		orchestrator := seedComposed(t, pool, fmt.Sprintf("Orchestrator %d", n), "agent", "o")
+		mustAttach(t, pool, orchestrator, seedComposed(t, pool, fmt.Sprintf("Worker %d", n), "agent", "w"))
+		participants = append(participants, applicationcomposition.Identity{ApplicationID: int64(orchestrator.appID), VersionID: int64(orchestrator.versionID)})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cost := func(ids []applicationcomposition.Identity) int {
+		reader := &countingReader{pool: pool}
+		fits, err := applicationcomposition.ChatToolFits(ctx, repos.NewCompositionSource(reader, `"p_1"`), ids)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, fit := range fits {
+			if !fit.Fits || fit.Tiers != 2 {
+				t.Fatalf("fits = %+v", fits)
+			}
+		}
+		return reader.statements
+	}
+	n, twice := cost(participants[:4]), cost(participants)
+	// One legacy-table probe, and per level of the composition one batched read
+	// of the versions and one of their attachments (two levels here).
+	if n != twice || twice > 5 {
+		t.Fatalf("statements: %d for 4 participants, %d for 8; want the same, at most 5", n, twice)
+	}
+	t.Logf("statements for 4 and 8 participants: %d, %d", n, twice)
 }

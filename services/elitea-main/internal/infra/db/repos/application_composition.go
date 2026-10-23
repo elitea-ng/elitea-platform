@@ -3,8 +3,8 @@ package repos
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/jackc/pgx/v5"
@@ -12,6 +12,8 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicproject"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // ApplicationToolReference is one agent or pipeline attached to a parent
@@ -138,78 +140,185 @@ func listApplicationToolReferences(ctx context.Context, q compositionReader, sch
 	return refs, legacyRows.Err()
 }
 
-// CompositionSource reads saved versions for applicationcomposition.Check,
-// inside the caller's transaction or pool. schema is a quoted tenant schema
-// (tenantschema.Quote). Each read is one version row plus its attachments;
-// the walk itself is bounded by the composition's hop budget.
+// CompositionSource reads saved versions for applicationcomposition, inside the
+// caller's transaction or pool. schema is a quoted tenant schema
+// (tenantschema.Quote). One source serves one request: it probes the legacy
+// attachment table once, caches every version it read (a missing one too), and
+// reads a level of the walk in one batch (Prefetch): two statements for the
+// version rows and their attachments, plus one for legacy attachments on a
+// legacy-migrated tenant. It is not safe for concurrent use.
 type CompositionSource struct {
 	q      compositionReader
 	schema string
+	legacy *bool
+	cache  map[applicationcomposition.Identity]cachedVersion
+}
+
+type cachedVersion struct {
+	version applicationcomposition.Version
+	ok      bool
 }
 
 // NewCompositionSource reads through q in the quoted tenant schema.
-func NewCompositionSource(q relationReader, schema string) CompositionSource {
-	return CompositionSource{q: pgxReader{q}, schema: schema}
+func NewCompositionSource(q relationReader, schema string) *CompositionSource {
+	return newCompositionSource(pgxReader{q}, schema)
+}
+
+func newCompositionSource(q compositionReader, schema string) *CompositionSource {
+	return &CompositionSource{q: q, schema: schema, cache: map[applicationcomposition.Identity]cachedVersion{}}
 }
 
 // Version answers one saved version of the composition. A missing version, or
 // one of another application, is ok=false: the walk does not follow it.
-func (s CompositionSource) Version(ctx context.Context, id applicationcomposition.Identity) (applicationcomposition.Version, bool, error) {
-	var name, agentType, instructions string
-	err := s.q.QueryRow(ctx, fmt.Sprintf(`
-		SELECT COALESCE(app.name, ''), COALESCE(version.agent_type, ''),
-		       CASE WHEN version.agent_type = 'pipeline' AND octet_length(COALESCE(version.instructions, '')) <= $3
-		            THEN COALESCE(version.instructions, '') ELSE '' END
-		FROM %s.application_versions AS version
-		JOIN %s.applications AS app ON app.id = version.application_id
-		WHERE version.id = $1 AND version.application_id = $2`, s.schema, s.schema),
-		id.VersionID, id.ApplicationID, pipelinelimits.MaxInstructionsBytes).Scan(&name, &agentType, &instructions)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return applicationcomposition.Version{}, false, nil
-	}
-	if err != nil {
-		return applicationcomposition.Version{}, false, fmt.Errorf("composition: read version: %w", err)
-	}
-	version := applicationcomposition.Version{Kind: applicationcomposition.KindAgent, Name: name}
-	if agentType == "pipeline" {
-		version.Kind = applicationcomposition.KindPipeline
-		version.AgentNodes, version.StaticPause = applicationcomposition.ReadPipeline(instructions)
-	}
-	version.Attachments, err = s.Attachments(ctx, id.VersionID)
-	if err != nil {
+func (s *CompositionSource) Version(ctx context.Context, id applicationcomposition.Identity) (applicationcomposition.Version, bool, error) {
+	if err := s.Prefetch(ctx, []applicationcomposition.Identity{id}); err != nil {
 		return applicationcomposition.Version{}, false, err
 	}
-	return version, true, nil
+	read := s.cache[id]
+	version := read.version
+	// The caller may append to what it gets (an attach walks the parent with
+	// the new attachment added); the cached slices stay its own.
+	version.Attachments = slices.Clone(version.Attachments)
+	version.AgentNodes = slices.Clone(version.AgentNodes)
+	return version, read.ok, nil
 }
 
-// Attachments answers the agents and pipelines attached to one version.
-// A reference whose ids are not numbers cannot be built and is left out.
-func (s CompositionSource) Attachments(ctx context.Context, versionID int64) ([]applicationcomposition.Attachment, error) {
-	refs, err := listApplicationToolReferences(ctx, s.q, s.schema, strconv.FormatInt(versionID, 10))
-	if err != nil {
-		return nil, fmt.Errorf("composition: read attachments: %w", err)
-	}
-	attachments := make([]applicationcomposition.Attachment, 0, len(refs))
-	for _, ref := range refs {
-		applicationID, appErr := strconv.ParseInt(ref.ApplicationID, 10, 64)
-		childVersionID, versionErr := strconv.ParseInt(ref.VersionID, 10, 64)
-		if appErr != nil || versionErr != nil {
+// Prefetch reads every id not read yet in one batch.
+func (s *CompositionSource) Prefetch(ctx context.Context, ids []applicationcomposition.Identity) error {
+	var applicationIDs, versionIDs []int64
+	for _, id := range ids {
+		if _, read := s.cache[id]; read {
 			continue
 		}
-		attachments = append(attachments, applicationcomposition.Attachment{
-			Alias:    ref.Name,
-			Identity: applicationcomposition.Identity{ApplicationID: applicationID, VersionID: childVersionID},
-		})
+		s.cache[id] = cachedVersion{}
+		applicationIDs = append(applicationIDs, id.ApplicationID)
+		versionIDs = append(versionIDs, id.VersionID)
 	}
-	return attachments, nil
+	if len(versionIDs) == 0 {
+		return nil
+	}
+	rows, err := s.q.Query(ctx, fmt.Sprintf(`
+		SELECT version.application_id, version.id, COALESCE(app.name, ''), COALESCE(version.agent_type, ''),
+		       CASE WHEN version.agent_type = 'pipeline' AND octet_length(COALESCE(version.instructions, '')) <= $3
+		            THEN COALESCE(version.instructions, '') ELSE '' END
+		FROM unnest($1::bigint[], $2::bigint[]) AS wanted(application_id, version_id)
+		JOIN %s.application_versions AS version
+		  ON version.id = wanted.version_id AND version.application_id = wanted.application_id
+		JOIN %s.applications AS app ON app.id = version.application_id`, s.schema, s.schema),
+		applicationIDs, versionIDs, pipelinelimits.MaxInstructionsBytes)
+	if err != nil {
+		return fmt.Errorf("composition: read versions: %w", err)
+	}
+	found := map[int64]applicationcomposition.Identity{}
+	for rows.Next() {
+		var id applicationcomposition.Identity
+		var name, agentType, instructions string
+		if err := rows.Scan(&id.ApplicationID, &id.VersionID, &name, &agentType, &instructions); err != nil {
+			rows.Close()
+			return fmt.Errorf("composition: read versions: %w", err)
+		}
+		version := applicationcomposition.Version{Kind: applicationcomposition.KindAgent, Name: name}
+		if agentType == "pipeline" {
+			version.Kind = applicationcomposition.KindPipeline
+			version.AgentNodes, version.StaticPause = applicationcomposition.ReadPipeline(instructions)
+		}
+		s.cache[id] = cachedVersion{version: version, ok: true}
+		found[id.VersionID] = id
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("composition: read versions: %w", err)
+	}
+	if len(found) == 0 {
+		return nil
+	}
+	parents := make([]int64, 0, len(found))
+	for versionID := range found {
+		parents = append(parents, versionID)
+	}
+	attachments, err := s.attachments(ctx, parents)
+	if err != nil {
+		return fmt.Errorf("composition: read attachments: %w", err)
+	}
+	for versionID, id := range found {
+		read := s.cache[id]
+		read.version.Attachments = attachments[versionID]
+		s.cache[id] = read
+	}
+	return nil
 }
+
+// attachments answers the agents and pipelines attached to each parent
+// version, in the order ListApplicationToolReferences gives them. A reference
+// whose ids are not numbers cannot be built and is left out.
+func (s *CompositionSource) attachments(ctx context.Context, parents []int64) (map[int64][]applicationcomposition.Attachment, error) {
+	if s.legacy == nil {
+		legacy, err := legacyApplicationToolsExists(ctx, s.q, s.schema)
+		if err != nil {
+			return nil, err
+		}
+		s.legacy = &legacy
+	}
+	byParent := map[int64][]applicationcomposition.Attachment{}
+	read := func(sql string) error {
+		rows, err := s.q.Query(ctx, sql, parents)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var parent, toolID int64
+			var name, applicationID, versionID string
+			if err := rows.Scan(&parent, &toolID, &name, &applicationID, &versionID); err != nil {
+				return err
+			}
+			childApplication, appErr := strconv.ParseInt(applicationID, 10, 64)
+			childVersion, versionErr := strconv.ParseInt(versionID, 10, 64)
+			if appErr != nil || versionErr != nil {
+				continue
+			}
+			byParent[parent] = append(byParent[parent], applicationcomposition.Attachment{
+				Alias:    name,
+				Identity: applicationcomposition.Identity{ApplicationID: childApplication, VersionID: childVersion},
+			})
+		}
+		return rows.Err()
+	}
+	if err := read(fmt.Sprintf(`
+		SELECT mapping.entity_version_id::bigint, tool.id, tool.name,
+		       COALESCE(tool.settings->>'application_id', ''), COALESCE(%s, '')
+		FROM %s.entity_tool_mapping AS mapping
+		JOIN %s.elitea_tools AS tool ON tool.id = mapping.tool_id
+		WHERE mapping.entity_version_id = ANY($1::bigint[])
+		  AND mapping.entity_type = 'agent'
+		  AND tool.type = 'application'
+		ORDER BY mapping.entity_version_id, tool.id`, ApplicationToolSettingsVersionSQL, s.schema, s.schema)); err != nil {
+		return nil, err
+	}
+	if !*s.legacy {
+		return byParent, nil
+	}
+	err := read(fmt.Sprintf(`
+		SELECT tool.application_version_id::bigint, tool.id, tool.name,
+		       COALESCE(tool.settings->>'application_id', ''), COALESCE(%s, '')
+		FROM %s.application_tools AS tool
+		WHERE tool.application_version_id = ANY($1::bigint[])
+		  AND tool.type = 'application'
+		ORDER BY tool.application_version_id, tool.id`, ApplicationToolSettingsVersionSQL, s.schema))
+	return byParent, err
+}
+
+// errParticipantNotFound refuses a participant whose agent or pipeline the
+// conversation cannot use, without saying whether it exists.
+var errParticipantNotFound = apierr.NotFound("The agent or pipeline was not found.")
 
 // checkParticipantComposition refuses an agent or pipeline participant whose
 // saved composition breaks a bound (FU-244, PLAN §8.8): a conversation runs it
 // as a root, so it is walked as one. A participant that is not an application,
 // or names no version yet, is not checked here (its turn's start check runs).
-// conversationSchema is the quoted schema of the conversation's project; an
-// entity of another project (entity_meta.project_id) is read in its own.
+// conversationSchema is the quoted schema of the conversation's project; the
+// project the participant names is authorized before anything is read in it
+// (participantSchema).
 func checkParticipantComposition(ctx context.Context, q relationReader, conversationSchema, entityName string, meta, settings map[string]any) error {
 	if entityName != "application" && entityName != "pipeline" {
 		return nil
@@ -219,16 +328,12 @@ func checkParticipantComposition(ctx context.Context, q relationReader, conversa
 	if !okApplication || !okVersion {
 		return nil
 	}
-	schema := conversationSchema
-	if owner, ok := positiveInteger(meta["project_id"]); ok {
-		quoted, err := tenantschema.Quote(strconv.FormatInt(owner, 10))
-		if err != nil {
-			return nil
-		}
-		schema = quoted
-	}
 	root := applicationcomposition.Identity{ApplicationID: applicationID, VersionID: versionID}
-	err := applicationcomposition.Check(ctx, NewCompositionSource(q, schema), root, nil)
+	schema, err := participantSchema(ctx, q, conversationSchema, meta["project_id"], root)
+	if err != nil {
+		return err
+	}
+	err = applicationcomposition.Check(ctx, NewCompositionSource(q, schema), root, nil)
 	if refusal := applicationcomposition.Refusal(err); refusal != nil {
 		return refusal
 	}
@@ -238,10 +343,53 @@ func checkParticipantComposition(ctx context.Context, q relationReader, conversa
 	return nil
 }
 
+// participantSchema authorizes the project a participant names before its
+// composition is read there. The caller is a member of the conversation's
+// project (the conversation route authorizes it), so that project is read as
+// is; the catalogue project is readable only for a version it publishes, as a
+// catalogue start requires; any other project is refused as not found, and no
+// read is made in it. An absent project is the conversation's own.
+func participantSchema(ctx context.Context, q relationReader, conversationSchema string, project any, root applicationcomposition.Identity) (string, error) {
+	if project == nil {
+		return conversationSchema, nil
+	}
+	owner, ok := positiveInteger(project)
+	if !ok {
+		return "", errParticipantNotFound
+	}
+	ownerSchema, err := tenantschema.Quote(strconv.FormatInt(owner, 10))
+	if err != nil {
+		return "", errParticipantNotFound
+	}
+	if ownerSchema == conversationSchema {
+		return conversationSchema, nil
+	}
+	if owner != int64(publicproject.ID()) {
+		return "", errParticipantNotFound
+	}
+	var published bool
+	if err := q.QueryRow(ctx, fmt.Sprintf(`SELECT EXISTS (
+		SELECT 1 FROM %s.application_versions
+		WHERE id = $1 AND application_id = $2 AND status = 'published')`, ownerSchema),
+		root.VersionID, root.ApplicationID).Scan(&published); err != nil {
+		return "", fmt.Errorf("conversations: participant catalogue version: %w", err)
+	}
+	if !published {
+		return "", errParticipantNotFound
+	}
+	return ownerSchema, nil
+}
+
 // positiveInteger reads a JSON id: a number, or a decimal string.
 func positiveInteger(value any) (int64, bool) {
 	var parsed int64
 	switch typed := value.(type) {
+	case int:
+		parsed = int64(typed)
+	case int64:
+		parsed = typed
+	case int32:
+		parsed = int64(typed)
 	case float64:
 		if typed != float64(int64(typed)) {
 			return 0, false
@@ -270,7 +418,7 @@ func positiveInteger(value any) (int64, bool) {
 // own project transaction.
 func checkStartComposition(ctx context.Context, q sqlExecutor, schema string, applicationID, versionID int32) error {
 	root := applicationcomposition.Identity{ApplicationID: int64(applicationID), VersionID: int64(versionID)}
-	err := applicationcomposition.Check(ctx, CompositionSource{q: q, schema: schema}, root, nil)
+	err := applicationcomposition.Check(ctx, newCompositionSource(q, schema), root, nil)
 	if applicationcomposition.Refusal(err) != nil {
 		return applicationcomposition.ErrAtStart
 	}

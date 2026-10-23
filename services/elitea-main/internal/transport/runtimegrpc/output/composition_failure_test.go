@@ -23,8 +23,9 @@ func TestApplicationCompositionFailureAdmitsOnlyTheRegisteredMessage(t *testing.
 		t.Fatalf("read the composition contract: %v", err)
 	}
 	var contract struct {
-		RuntimeMessage string `json:"runtime_message"`
-		PublicCode     string `json:"public_code"`
+		RuntimeMessage     string `json:"runtime_message"`
+		SizeRuntimeMessage string `json:"size_runtime_message"`
+		PublicCode         string `json:"public_code"`
 	}
 	if err := json.Unmarshal(raw, &contract); err != nil {
 		t.Fatalf("decode the composition contract: %v", err)
@@ -37,6 +38,11 @@ func TestApplicationCompositionFailureAdmitsOnlyTheRegisteredMessage(t *testing.
 	policy, ok := runtimeFailurePolicyForError(payload)
 	if !ok || policy.Code != contract.PublicCode || policy.SafeMessage != payload.GetSafeMessage() || policy.Retryable {
 		t.Fatalf("composition policy not preserved: %+v", policy)
+	}
+	// The size terminal (a composition too large to load) has its own registered text.
+	payload.SafeMessage = contract.SizeRuntimeMessage
+	if policy, ok = runtimeFailurePolicyForError(payload); !ok || policy.Code != contract.PublicCode || policy.SafeMessage != contract.SizeRuntimeMessage {
+		t.Fatalf("size policy not preserved: %+v", policy)
 	}
 	payload.SafeMessage = applicationCompositionInvalidSafeMessage + ` Agent "x".`
 	if policy, _ = runtimeFailurePolicyForError(payload); policy.SafeMessage == payload.GetSafeMessage() {
