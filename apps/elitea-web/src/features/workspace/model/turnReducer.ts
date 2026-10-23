@@ -25,7 +25,6 @@ import { applySubAgentEvent, isSubAgentEvent, type SubAgentLane } from './subAge
 import type { TranscriptItem } from './transcriptItem';
 import { applySideEvent, isSideEvent } from './turnSideEvents';
 
-export type { SubAgentLane } from './subAgentEvents';
 export type { TranscriptItem } from './transcriptItem';
 
 interface TurnDone {

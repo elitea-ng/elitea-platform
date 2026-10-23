@@ -14,12 +14,11 @@ import { readLastLocation, writeLastLocation } from './model/threads';
 import { latestPlan } from './model/turnReducer';
 import { ApprovalCard } from './ui/ApprovalCard';
 import { ApprovalDialog } from './ui/ApprovalDialog';
+import { ImageStrip } from './ui/ImageStrip';
 import { ModelChip } from './ui/ModelChip';
 import { PlanCard } from './ui/PlanCard';
 
 export { ChangedFilesCard } from './ui/ChangedFilesCard';
-export { ImageStrip } from './ui/ImageStrip';
-export type { StripImage } from './ui/ImageStrip';
 export { TurnTranscript } from './ui/TurnTranscript';
 export { WorkspaceList } from './ui/WorkspaceList';
 export type { ProjectChoice } from './ui/WorkspaceList';
@@ -33,7 +32,7 @@ export { SuggestionMenu } from './ui/SuggestionMenu';
 export type { SuggestionItem } from './ui/SuggestionMenu';
 export type { WorkspaceCommandId } from './model/composerCommands';
 
-/** The composer's text rules ("@"/"/" tokens, referenced paths), its "/" menu (local commands, the custom commands, the agent's skills) and its model chip, as one bundle. */
+/** The composer's text rules ("@"/"/" tokens, referenced paths), its "/" menu (local commands, the custom commands, the agent's skills), its model chip and its image strip (also under a sent prompt), as one bundle. */
 export const composer = {
   activeToken,
   mentionText,
@@ -47,6 +46,7 @@ export const composer = {
   matchingSkills,
   skillToken,
   ModelChip,
+  ImageStrip,
 };
 
 /** The folder and thread the person was last in (desktop home), read and written as one pair. */

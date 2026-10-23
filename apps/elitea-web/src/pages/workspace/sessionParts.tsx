@@ -16,7 +16,8 @@ import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
-import { composer, describeWorkspaceError, ImageStrip, replayView, TurnTranscript, type StripImage, type WorkspaceTurn } from '@/features/workspace';
+import { composer, describeWorkspaceError, replayView, TurnTranscript, type WorkspaceTurn } from '@/features/workspace';
+
 import type { CustomCommand, StoredTurn, Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
@@ -26,6 +27,9 @@ import type { ForkPoint, SessionFork } from './useForkThread';
 import type { ComposerSkill } from './useAgentSkills';
 import type { SessionCommands } from './useSessionCommands';
 import type { ServerMessage, ThreadHistory } from './useThreadHistory';
+
+/** One thumbnail of a sent prompt, as the composer's image strip takes it. */
+type StripImage = NonNullable<React.ComponentProps<typeof composer.ImageStrip>['images']>[number];
 
 /** Links in the thread read as quiet app links, not underlined web ones. */
 const linkSx = (theme: Theme) => ({
@@ -140,7 +144,7 @@ export function YourPrompt({ text, fork, images }: { text: string; fork?: (() =>
     >
       {images !== undefined && images.length > 0 && (
         <Box sx={{ marginBottom: 1 }}>
-          <ImageStrip images={images} />
+          <composer.ImageStrip images={images} />
         </Box>
       )}
       <Typography variant="bodyMedium" sx={{ whiteSpace: 'pre-wrap' }}>

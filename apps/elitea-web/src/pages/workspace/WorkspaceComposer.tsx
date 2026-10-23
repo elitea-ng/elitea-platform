@@ -39,7 +39,7 @@ import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import { NewChatInput } from '@/features/chat-input';
-import { composer, ImageStrip, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
+import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
 
 import type { ComposerSkill } from './useAgentSkills';
 import { useImageAttachments } from './useImageAttachments';
@@ -325,7 +325,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
 
   return (
     <Box data-testid="workspace-composer" onFocus={props.onFocus} onPasteCapture={attachments.onPaste} sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <ImageStrip images={attachments.images} onRemove={attachments.remove} />
+      <composer.ImageStrip images={attachments.images} onRemove={attachments.remove} />
       {attachments.error !== null && (
         <Typography variant="bodySmall" role="alert" data-testid="attachment-error" sx={(theme: Theme) => ({ color: theme.vars.palette.error.main })}>
           {attachments.error}

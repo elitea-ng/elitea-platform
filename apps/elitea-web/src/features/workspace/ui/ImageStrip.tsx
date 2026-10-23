@@ -13,7 +13,7 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 
 /** What the strip shows of one image. */
-export interface StripImage {
+interface StripImage {
   name: string;
   thumbnail: string | null;
 }

@@ -13,9 +13,11 @@ import type { HostInvoke } from './hostBridge';
 import type { PlanProposalPayload, PlanView } from './planIpc';
 import type { SubAgentFinishedPayload, SubAgentInnerEvent, SubAgentStartedPayload } from './subAgentIpc';
 import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel } from './turnModel';
+import type { ThreadForkRequest } from './threadForkIpc';
 
 export type { ContextMeter } from './contextMeter';
-export type { AttachedImage, CustomCommand, StoredImage, TurnCommand, TurnImagePick, TurnStartRequest } from './turnStart';
+export type { AttachedImage, CustomCommand, TurnCommand, TurnImagePick, TurnStartRequest } from './turnStart';
+export type { ThreadForkRequest } from './threadForkIpc';
 
 export interface Workspace {
   id: string;
@@ -124,7 +126,7 @@ export interface ApprovalRequestPayload {
   can_remember: boolean;
 }
 
-export type { SubAgentFinishedPayload, SubAgentInnerEvent, SubAgentStartedPayload, SubAgentStatus } from './subAgentIpc';
+export type { SubAgentStatus } from './subAgentIpc';
 
 interface EventBase {
   turn_id: string;
@@ -219,21 +221,6 @@ export interface StoredTurn {
   state: 'done' | 'running' | 'interrupted';
   /** The host still keeps it: `turn_changes` / `checkpoint_restore` answer for it. */
   live: boolean;
-}
-
-/** What `thread_history_fork` copies (IPC.md "Thread history"). */
-export interface ThreadForkRequest {
-  workspaceId: string;
-  sourceConversationId: string;
-  targetConversationId: string;
-  targetConversationUuid: string;
-  /** The fork point's turn: the turns up to and including it are copied. Absent: every turn. */
-  upToTurnId?: string;
-  /**
-   * The fork answer's `forked_messages` (source message UUID → the copy's): the copied turns' `done`
-   * events name the new conversation's messages, so they can be fork points in turn.
-   */
-  messageIds?: Readonly<Record<string, string>>;
 }
 
 /**
