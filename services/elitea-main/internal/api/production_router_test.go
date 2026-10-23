@@ -366,7 +366,7 @@ func TestCompatibilityRouterRetainsReviewedProductionAuthEdges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// AppsRepo is representative of the current hybrid composition and forces
+	// AppsRepo is one of the broad compatibility repositories, and it forces
 	// the compatibility router until that API has moved to production routes.
 	router := NewRouter(RouterConfig{
 		ProductionAuth:    authRoutes,

@@ -227,9 +227,8 @@ func TestToolsListReturnsAnEmptyArrayForAProjectWithNoServer(t *testing.T) {
 	}
 }
 
-// The mode-less URL is the one the Python execution worker builds, and the one
-// the hybrid edge matches. Both shapes must reach the same handler, or the
-// caller that actually exists gets a 404.
+// The mode-less URL is the one elitea-sdk builds. Both shapes must reach the
+// same handler, or the caller that actually exists gets a 404.
 func TestToolsListServesBothModeShapes(t *testing.T) {
 	pool := newMCPPool(t)
 	router := newRouter(mcp.NewHandler(pool, apimw.NewDBPersonalProjectResolver(pool), nil, nil), callerUserID)

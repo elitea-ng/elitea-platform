@@ -8502,8 +8502,9 @@ components:
               is_default: { type: boolean }
         total: { type: integer }
       description: >
-        NOTE(W2): internal/api/v2/eliteacore/handler.go:2960-2991 — nine
-        static defaults merged with publishing_guardrail extras.
+        NOTE(W2): internal/api/v2/eliteacore/handler.go:5415-5446 — nine
+        static defaults merged with the extras the admin Features page
+        authors globally (agent_publishing.agent_categories).
 
     RuntimeCapabilities:
       type: object

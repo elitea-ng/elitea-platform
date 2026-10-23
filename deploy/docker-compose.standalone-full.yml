@@ -1981,7 +1981,7 @@ services:
       # included, so toolkits that call public SaaS (api.github.com, …) verify
       # (#1203). Internal destinations get the runtime CA in code.
       #
-      # Mirrors the hybrid's fail-safe snapshot: broader than the current
+      # A fail-safe snapshot: broader than the current
       # `artifact.delete_file` rule so metadata drift cannot bypass approval;
       # `remove_index` (the indexing families' index delete) is destructive too.
       ELITEA_SENSITIVE_TOOLS: '{"*":["delete_file","remove_index"]}'

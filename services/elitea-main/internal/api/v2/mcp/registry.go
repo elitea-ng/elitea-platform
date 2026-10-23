@@ -35,10 +35,9 @@ package mcp
 //
 // The legacy `api_tools.with_modes` registers a route both with and without the
 // mode segment, so `/tools_list/1` and `/tools_list/default/1` are the same
-// endpoint. The SDK builds the mode-less form
-// (`client.py:105`), and the hybrid edge matches the mode-less form as well.
-// Registering only `/default/` would leave the caller that actually exists
-// unserved, so both are registered in `internal/api/router.go`.
+// endpoint. The SDK builds the mode-less form (`client.py:105`). Registering
+// only `/default/` would leave the caller that actually exists unserved, so
+// both are registered in `internal/api/router.go`.
 //
 // # An empty list is now a fact about rows
 //

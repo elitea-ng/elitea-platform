@@ -67,8 +67,9 @@ func NewRouter(cfg RouterConfig) chi.Router {
 
 // mountReviewedProductionRoutes is the single registration source for every
 // current-compatibility route whose production authorization contract has been
-// reviewed. Hybrid deployments add broad parity repositories, but those
-// additions must never remove or replace these admitted routes.
+// reviewed. A composition that also supplies the broad compatibility
+// repositories (AppsRepo and the like) adds routes, but those additions must
+// never remove or replace these admitted routes.
 //
 // It does not register promptcontextreadsapi.CurrentProjectContextPath:
 // per internal/api/v2/promptcontextreads/CURRENT_PARITY_EVIDENCE.md, the

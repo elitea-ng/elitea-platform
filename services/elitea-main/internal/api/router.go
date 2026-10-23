@@ -3187,10 +3187,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				//
 				// This is a global taxonomy, not project data: the handler
 				// returns nine hardcoded defaults merged with a globally
-				// authored extras row, and its own comment records that the
-				// per-project `publishing_guardrail` read "could only ever
-				// miss" because no surface writes one. So a project gate here
-				// protects nothing.
+				// authored extras row, and reads no project data. So a project
+				// gate here protects nothing.
 				//
 				// It also breaks a cross-project surface. The Agent HUB renders
 				// this list beside the PUBLIC published-agent catalogue, which
@@ -4355,8 +4353,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// mode segment, so `/tools_list/1` and `/tools_list/default/1`
 				// are one endpoint there. The Python execution worker builds
 				// the mode-less form (`elitea_sdk/runtime/clients/client.py`),
-				// and the hybrid edge matches the mode-less form too, so
-				// registering only `/default/` would leave the caller that
+				// so registering only `/default/` would leave the caller that
 				// actually exists unserved.
 				//
 				// tools_call still answers 501 with a stated reason — see

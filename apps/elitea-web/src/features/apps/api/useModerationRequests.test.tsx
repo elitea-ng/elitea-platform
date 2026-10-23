@@ -171,6 +171,21 @@ describe('useModerationRequests', () => {
     expect(result.current.getRequestStatus('inventory')).toBe(REQUEST_STATUS.PENDING);
   });
 
+  it('reads a bare {status} body as NONE, not as that status', async () => {
+    // The stub's old shape. Only a legacy runtime answered with it, and this
+    // hook no longer reads it: a body that is not the envelope is no answer.
+    server.use(
+      http.get('*/admin/moderation_status/default/:projectId/:entityId', () =>
+        HttpResponse.json({ status: REQUEST_STATUS.APPROVED }),
+      ),
+    );
+
+    const { result } = renderHookWithRouter(() => useModerationRequests(), { projectId: 'proj-1' });
+
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    expect(result.current.getRequestStatus('inventory')).toBe(REQUEST_STATUS.NONE);
+  });
+
   it('reports NONE when the envelope carries no rows', async () => {
     // An entity nobody has asked about. The stub answered "approved" here.
     server.use(

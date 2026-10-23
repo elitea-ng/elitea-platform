@@ -558,10 +558,9 @@ func TestEliteaCoreProjectScopeRejectsMalformedProjectID(t *testing.T) {
 // got a 403 where the catalogue beside it answered fine.
 //
 // The route serves a global taxonomy: nine hardcoded defaults plus a globally
-// authored extras row. Its only project-shaped read is a `publishing_guardrail`
-// lookup the handler itself documents as one that "could only ever miss",
-// because no surface writes one. So there is nothing here to protect, and a
-// caller who is neither a member nor entitled must still be served.
+// authored extras row, and no project data. So there is nothing here to
+// protect, and a caller who is neither a member nor entitled must still be
+// served.
 func TestAgentCategoriesStayUnscopedDespiteHavingAProjectInThePath(t *testing.T) {
 	querier := &memberOfProject{project: "7"}
 	// Entitled to nothing, anywhere. Any gate at all refuses this caller.

@@ -2664,8 +2664,7 @@ main:
     # CAUTION: an EMPTY value turns the admin console off, because the
     # composition root builds the admin configuration only for a non-empty path —
     # and this ConfigMap entry OVERRIDES the image's own setting. So clearing
-    # this key is a switch, not a no-op. Set it to "/nonexistent" when you deploy
-    # the `hybrid` image variant, which ships no admin bundle.
+    # this key is a switch, not a no-op.
     ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
 
     # --- circular-routing guard #1, upsert time (spec §2.6) --------------------
@@ -3796,9 +3795,8 @@ main:
     # and provision that ServiceAccount outside this chart so it exists when the
     # hook runs.
     serviceAccountName: ""
-    # -all-tenants mirrors the elitea-migrate invocation of the retired
-    # centry-hybrid PoV stack: apply the shared history, then the tenant history for every
-    # existing legacy project. Both cmd/elitea-migrate flags are idempotent —
+    # -all-tenants applies the shared history, then the tenant history for every
+    # existing project. Both cmd/elitea-migrate flags are idempotent —
     # already-applied migration files are skipped — so re-running on every
     # upgrade is safe.
     args:
