@@ -209,3 +209,37 @@ fn an_unresolvable_app_dir_is_dropped_not_fatal() {
     let missing = crate::optional_app_dir("cache", Err(tauri::Error::UnknownPath));
     assert_eq!(missing, None);
 }
+
+fn source(path: &str) -> String {
+    std::fs::read_to_string(format!("{}/{path}", env!("CARGO_MANIFEST_DIR"))).expect("source")
+}
+
+/// Every command the app registers is in the build's allowlist and granted
+/// to the window: a command missing from either is refused when the page
+/// calls it, which no unit test of the command would notice.
+#[test]
+fn every_registered_command_is_allowlisted_and_granted() {
+    let lib = source("src/lib.rs");
+    let start = lib.find("generate_handler![").expect("generate_handler");
+    let end = start + lib[start..].find(']').expect("end of generate_handler");
+    let registered: Vec<&str> = lib[start + "generate_handler![".len()..end]
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| entry.rsplit("::").next().unwrap_or(entry))
+        .collect();
+    assert!(registered.contains(&"mcp_list"), "{registered:?}");
+    let build = source("build.rs");
+    let granted = granted();
+    for command in registered {
+        assert!(
+            build.contains(&format!("\"{command}\"")),
+            "{command} is not in build.rs"
+        );
+        let permission = format!("allow-{}", command.replace('_', "-"));
+        assert!(
+            granted.contains(&permission),
+            "{permission} is not in capabilities/default.json"
+        );
+    }
+}

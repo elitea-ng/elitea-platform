@@ -2103,6 +2103,7 @@ dependencies = [
  "portable-pty",
  "quick-xml 0.42.0",
  "regex",
+ "rmcp",
  "rustix",
  "serde",
  "serde_json",

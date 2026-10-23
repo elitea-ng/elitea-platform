@@ -482,15 +482,19 @@ impl LocalSession {
         self.processes.end_turn().await;
     }
 
-    /// Stop every process (a handoff starts, the person signs out).
+    /// Stop every process (a handoff starts, the person signs out, the
+    /// workspace is removed), the local MCP servers included (#1230; a
+    /// later turn starts them again if the policy still allows them).
     pub async fn stop_processes(&self) {
         self.processes.stop_all().await;
+        self.mcp.stop_all().await;
     }
 
     /// [`Self::stop_processes`] from synchronous code (the app quits),
     /// waiting at most `grace` before `SIGKILL`.
     pub fn stop_processes_blocking(&self, grace: Duration) {
         self.processes.stop_all_blocking(grace);
+        self.mcp.stop_all_blocking(grace);
     }
 }
 

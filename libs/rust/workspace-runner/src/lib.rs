@@ -203,6 +203,9 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
             index_local_embeddings: false,
             index_remote_embeddings: false,
             index_model_mirror_url: String::new(),
+            // Stdio MCP servers are the person's, on their device: never in
+            // the cloud executor (#1230).
+            local_mcp: false,
         },
         settings: WorkspaceSettings::default(),
         choices: Arc::new(MemoryChoices::default()),

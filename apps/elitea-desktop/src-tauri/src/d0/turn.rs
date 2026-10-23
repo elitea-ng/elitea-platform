@@ -50,6 +50,7 @@ use elitea_agent_runtime::subagents::{self, SubAgentConfig, SubAgents};
 use elitea_local_index::tools::{IndexToolProvider, NAMES as INDEX_TOOLS};
 use elitea_local_tools::approvals::{JsonFileChoices, PermissionProfile, WorkspaceSettings};
 use elitea_local_tools::find::FoundPath;
+use elitea_local_tools::mcp::{Framed, McpFramer, McpToolProvider, TOOLSET_NAME as MCP_TOOLSET};
 use elitea_local_tools::policy::{LocalWorkPolicy, SandboxMode};
 use elitea_local_tools::project_instructions::{self, ProjectInstructions, TRUNCATED_NOTE};
 use elitea_local_tools::provider::LocalToolProvider;
@@ -422,6 +423,30 @@ fn local_tool_names() -> Vec<&'static str> {
         .collect()
 }
 
+/// The tags a local MCP server's text is framed in (#1230).
+const MCP_DESCRIPTION_TAG: &str = "mcp_tool_description";
+const MCP_RESULT_TAG: &str = "mcp_result";
+
+/// A local MCP server's descriptions and results under the thread's nonce:
+/// what a server says is data, and its text cannot end the block.
+struct McpFrame {
+    nonce: String,
+}
+
+impl McpFramer for McpFrame {
+    fn frame(&self, kind: Framed, server: &str, text: &str) -> String {
+        let tag = match kind {
+            Framed::Description => MCP_DESCRIPTION_TAG,
+            Framed::Result => MCP_RESULT_TAG,
+        };
+        format!(
+            "{}\n{}",
+            super::framing::ends_only_at(tag, &self.nonce),
+            super::framing::block(tag, &self.nonce, "server", server, text)
+        )
+    }
+}
+
 /// Stop a session's background processes without waiting for them: from
 /// a lock or a synchronous caller (the session is being replaced).
 fn stop_processes_soon(session: &Arc<LocalSession>) {
@@ -775,6 +800,8 @@ pub struct AgentHost {
     owner: Mutex<Option<(String, Owner)>>,
     /// The approval rule files (user and per workspace).
     rules: Arc<RuleFiles>,
+    /// The person's local MCP servers' settings (`src/mcp.rs`, #1230).
+    mcp: Arc<crate::mcp::McpFiles>,
     /// The agent versions and answering participants read this session.
     caches: TurnCaches,
     /// The commits after `done`, one lane per conversation.
@@ -943,10 +970,15 @@ impl AgentHost {
             deps.user_rules_dir.clone(),
             deps.workspaces.clone(),
         ));
+        let mcp = Arc::new(crate::mcp::McpFiles::new(
+            deps.user_rules_dir.clone(),
+            deps.workspaces.clone(),
+        ));
         Ok(Self {
             deps,
             api,
             rules,
+            mcp,
             broker: Arc::new(ApprovalBroker::default()),
             sessions: Mutex::new(HashMap::new()),
             busy: BusySet::default(),
@@ -2903,6 +2935,19 @@ impl AgentHost {
                 IndexToolProvider::new(index).with_execution_id(started.execution_id.clone()),
             ));
         }
+        // The person's local MCP servers (#1230), after the index: started
+        // (lazily, under the sandbox) by the first turn that may offer them,
+        // their tools in a stable order behind the local and index ones.
+        if workspace.policy.local_mcp {
+            self.start_mcp_servers(request, workspace, events, &started.execution_id)
+                .await;
+            provider = provider.with(Arc::new(McpToolProvider::new(
+                workspace.session.clone(),
+                Arc::new(McpFrame {
+                    nonce: nonce.clone(),
+                }),
+            )));
+        }
         let provider = provider.with(Arc::new(RemoteToolProvider::new(&remote_specs, &remote)));
         let toolsets = provider
             .toolsets(&ToolsetRequest {
@@ -2919,7 +2964,9 @@ impl AgentHost {
             child: None,
         };
         // Sub-agents: the turn's model, quiet, and its local and index tools
-        // (never the remote toolkits); the AGENTS.md sections under the
+        // (never the remote toolkits, nor the person's MCP servers: a child
+        // is not asked about, and its tools are only the read-only built-in
+        // ones); the AGENTS.md sections under the
         // thread's nonce, never the agent's instructions, the history or the
         // turn's tail. A child's prompt is its own: its volatile part stays
         // in it. Its usage counts toward the turn's (`UsageLane::SubAgent`).
@@ -2937,7 +2984,9 @@ impl AgentHost {
                 child_model,
                 toolsets
                     .iter()
-                    .filter(|toolset| toolset.name() != REMOTE_TOOLSET)
+                    .filter(|toolset| {
+                        toolset.name() != REMOTE_TOOLSET && toolset.name() != MCP_TOOLSET
+                    })
                     .cloned()
                     .collect(),
                 events.clone(),
@@ -3209,6 +3258,64 @@ impl AgentHost {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+    }
+
+    /// Start the workspace's local MCP servers that have not started, from
+    /// both settings files as they are now; a server that does not start
+    /// (or a file that is refused) is said in a `status` event, and the turn
+    /// runs without its tools (#1230).
+    async fn start_mcp_servers(
+        &self,
+        request: &TurnRequest,
+        workspace: &Arc<WorkspaceSession>,
+        events: &Arc<TurnEvents>,
+        subject: &str,
+    ) {
+        let (servers, mut problems) = self.mcp.merged(&request.workspace_id);
+        workspace.session.mcp().configure(servers);
+        for status in workspace.session.start_mcp_servers(subject).await {
+            if status.state == elitea_local_tools::mcp::ServerState::Failed {
+                problems.push(format!(
+                    "The local MCP server `{}` did not start: {}.",
+                    status.name,
+                    status.error.as_deref().unwrap_or("it failed")
+                ));
+            }
+        }
+        if !problems.is_empty() {
+            let message = problems.join(" ");
+            log::warn!("{message}");
+            events.status(Phase::Running, Some(&message));
+        }
+    }
+
+    /// The local MCP servers' settings files (IPC `mcp_*`).
+    #[must_use]
+    pub fn mcp_files(&self) -> &Arc<crate::mcp::McpFiles> {
+        &self.mcp
+    }
+
+    /// The settings changed: every open session (or `workspace_id`'s only)
+    /// takes them now, stopping a server whose entry changed or went; a new
+    /// or changed one starts with the next turn.
+    pub fn mcp_reconfigure(&self, workspace_id: Option<&str>) {
+        let sessions: Vec<(String, Arc<LocalSession>)> = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|(id, _)| workspace_id.is_none_or(|only| only == id.as_str()))
+            .map(|(id, entry)| (id.clone(), entry.session.clone()))
+            .collect();
+        for (id, session) in sessions {
+            session.mcp().configure(self.mcp.merged(&id).0);
+        }
+    }
+
+    /// Whether the policy lets local MCP servers run now.
+    #[must_use]
+    pub fn local_mcp_allowed(&self) -> bool {
+        self.policy().is_ok_and(|policy| policy.local_mcp)
     }
 
     /// The workspace's open session, if a turn opened one (the Processes

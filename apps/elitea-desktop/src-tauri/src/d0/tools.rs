@@ -400,6 +400,14 @@ impl Tool for ObservedTool {
         if let (Some(command), Ok(value)) = (command.as_ref().or(planned.as_ref()), &observed) {
             observer.recorder.command(command, value);
         }
+        // A local MCP server's tool (#1230): the report names the server and
+        // the tool.
+        if !self.remote
+            && tool.starts_with(elitea_local_tools::mcp::naming::PREFIX)
+            && let Ok(value) = &observed
+        {
+            observer.recorder.mcp_call(value);
+        }
         observer.recorder.tool_finished(
             &call_id,
             observed.as_ref().map_or(&Value::Null, |value| &**value),

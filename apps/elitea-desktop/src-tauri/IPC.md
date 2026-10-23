@@ -838,6 +838,117 @@ sandbox, loopback}`, `tool_output_delta` `{call_id, process_id, stream,
 data, offset}` (the same throttle) and `process_exited` `{process_id,
 call_id, status, exit_code?}`, for the `run_command` card.
 
+## Local MCP servers (`src/mcp.rs`, `src/mcp_commands.rs`, `libs/rust/local-tools/src/mcp/`, #1230)
+
+The person's own stdio MCP servers on this device (ADR-0029 decision 4), for
+local turns only: gated by the policy's `local_work_local_mcp` (with
+`allowed`; absent means off). Off, no server starts, no MCP tool is offered
+and every MCP call is denied; turning it off reopens the session, which stops
+the running servers. These tools are **local-only**: the cloud executor never
+runs a stdio server (its contract test `local_mcp_tools_are_local_only`
+names the exclusion), and sub-agents are never offered them.
+
+**Settings.** Two files in host data, never in the workspace folder:
+`<app config dir>/mcp.json` (every workspace) and
+`<app data>/workspaces/<id>/mcp.json` (one workspace; a server of the same
+name replaces the user one there). Each is a `0600` file in a `0700` folder,
+read without following a symlink, and refused (no server runs from it, the
+turn says so in a `status` message) when another user owns it, others can
+read it or it does not validate. The Doctor's `mcp.config` check covers the
+user file (`mcp.tighten`, `mcp.move_aside`).
+
+```ts
+type McpFile = {
+  version: 1;
+  servers: Record<string, ServerConfig>; // name: [A-Za-z0-9_-]{1,32}, at most 32
+  answered_proposals?: string[];         // workspace file: the proposals answered (file SHA-256s)
+};
+type ServerConfig = {                    // unknown keys are refused
+  command: string;               // absolute path to an executable regular file outside the workspace
+  args?: string[];               // at most 64, each at most 4 KiB
+  env?: Record<string, string>;  // keys ^[A-Z_][A-Z0-9_]*$, at most 64, values at most 4 KiB
+  cwd?: "workspace" | "none";    // the workspace root (default), or a private temporary folder
+  network?: boolean;             // default false; capped by the policy's network
+  enabled?: boolean;             // default true
+  allowed_tools?: string[] | null; // null: every tool the server lists
+  read_only_tools?: string[];    // the person marks them read-only
+  trust_read_only_hints?: boolean; // also trust the server's readOnlyHint
+  source?: string;               // "user", or "proposal:<sha256>" for an accepted proposal
+};
+type ServerStatus = {
+  name: string;
+  scope: "user" | "workspace";
+  state: "idle" | "starting" | "ready" | "failed" | "stopped";
+  tools: string[];               // the server's own tool names, when ready
+  error?: string;
+  stderr_tail: string;           // the last 8 KiB of a 64 KiB stderr ring (never logged or uploaded)
+  enforcement?: "full" | "partial" | "none" | "container";
+  network: boolean;
+  sandbox?: "read-only" | "workspace-write" | "full-access";
+};
+type ProposedServer = {
+  name: string;
+  command: string;               // as the file writes it
+  args: string[];
+  env_keys: string[];
+  env_preview: Record<string, string>; // each value masked: two characters and its length
+  problem?: string;              // why it cannot be accepted as written
+};
+type Proposal = { file: string; file_sha256: string; servers: ProposedServer[] };
+```
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `mcp_list` | `{workspace_id?}` | `{allowed: boolean, user?: {path, servers, error?}, workspace?: {path, servers, error?}, status: ServerStatus[], proposals: Proposal[]}` — both files (`error`: why one is not used), the workspace session's servers (`[]` before its first turn) and the folder's unanswered proposals (only while `allowed`). Rejects `workspace_unknown` |
+| `mcp_save` | `{scope: "user" \| "workspace", name, server: ServerConfig, workspace_id?}` | `null` — adds or replaces `name` (`source` becomes `"user"`); open sessions take it now (a changed server stops; it starts again with the next turn). `scope: "workspace"` needs `workspace_id`. Rejects `invalid_request`, `mcp_settings_refused`, `workspace_unknown` |
+| `mcp_remove` | `{scope, name, workspace_id?}` | `boolean` — whether it was there; a running server of that name stops. Rejects as `mcp_save` |
+| `mcp_restart` | `{workspace_id, name}` | `ServerStatus` — stops the server in the workspace's session and starts it again through the turn's path (sandbox, approval rules; a start that would ask is refused outside a turn, nobody is there to answer the card). Rejects `mcp_not_started` (the session has not run a turn), `mcp_server_unknown`, `local_mcp_disabled` |
+| `mcp_status` | `{workspace_id?}` | `(ServerStatus & {workspace_id})[]` — that workspace's session's servers, or every open session's |
+| `mcp_proposal_answer` | `{workspace_id, file_sha256, accept: string[]}` | `{accepted: string[]}` — copies the named servers (none: declined) of the proposal whose file hashes to `file_sha256` into the workspace's file, with `source: "proposal:<sha256>"`, the command found on the app's `PATH` when the file names a bare program, the network off; the proposal is not shown again. Nothing starts until the next turn. Rejects `conflict` (the file changed since it was shown), `invalid_request` (a server that cannot be accepted, or whose name the workspace already has), `local_mcp_disabled` |
+
+**Proposals.** When a workspace is opened (`workspace_open`), the host reads
+`.mcp.json`, `.cursor/mcp.json` and `.vscode/mcp.json` through the
+workspace's confined reads (no symlink followed, `path_deny` honoured) and,
+while the policy allows local MCP servers, sends each file it has not seen
+answered on `mcp://event` as `{kind: "mcp_proposal", workspace_id, file,
+file_sha256, servers: ProposedServer[]}`; `mcp_list` returns the same
+proposals at any time. Only stdio servers are proposed (`url` and other
+`type`s are left out); a relative command is never accepted. A later
+change to the file is a new proposal; it never updates an accepted entry.
+
+**In a turn.** The first turn that may offer MCP tools starts every
+enabled server that has not started, one after the other (each at most
+10 s for `initialize` and `tools/list`). A start goes through the same
+sandbox as `run_command` (the session's deny list; `read-only` when every
+tool is marked read-only, else `workspace-write` capped by the policy), in
+its own process group, with only the scrubbed passthrough environment
+(`PATH`, `HOME`, `LANG`, …, `TMPDIR` its own private folder) plus the
+`env` its entry names, never the app's own. A start is an approval
+(`tool: "mcp_start"`): allowed when confined without the network; asked
+when it gets the network (once per workspace session for the same settings) or
+the machine cannot confine it (asked every time); an approval rule on its
+command line decides first. A server that fails is said in the turn's
+`status` message (`phase: "running"`) and its tools are left out; the
+turn goes on. Servers keep running for the app session and stop (their
+process group: `SIGTERM`, then `SIGKILL`) when their entry changes or goes,
+when the session ends (the workspace is removed, its policy changes,
+sign-out, a handoff) and when the app quits.
+
+Their tools are named `mcp__<server>__<tool>` (sanitised to
+`[A-Za-z0-9_-]`, at most 64; a collision gets `_2`, …; a remote toolkit's
+tool never takes an `mcp__` name), sorted by server and tool so the tool
+list stays the same across a thread's turns. A tool's description and
+every result's text reach the model framed under the thread's nonce
+(`<mcp_tool_description …>`, `<mcp_result …>`), descriptions cut at 2 KiB
+and results at the command output budget. A call is an approval
+(`tool: "mcp_call"`): a tool marked read-only runs without asking (and in
+plan mode, where the others are not offered); any other is asked on first
+use, and "always allow" remembers that server's tool in this workspace.
+The `approval_request` card carries `mcp: {server, tool?, read_only}`
+(and, for a start, `network` and `unconfined`). The commit's `local_work`
+report lists each call among its `commands` as `mcp <server> <tool>` with
+`mcp: {server, tool, read_only}`, never its arguments.
+
 ## Thread history (`src/history.rs`)
 
 | Command | Arguments | Result |
@@ -1574,10 +1685,11 @@ for them.
 
 ## Events
 
-Six event names, all emitted to the `main` window only: `app://command`
+Seven event names, all emitted to the `main` window only: `app://command`
 (above), `app://context-menu` (`{request_id, id}`, the outcome of `context_menu_show`),
-`agent://event`, `index://event`, `handoff://event` (Cloud handoff, above) and
-`process://event` (Background processes, above). The webview may listen
+`agent://event`, `index://event`, `handoff://event` (Cloud handoff, above),
+`process://event` (Background processes, above) and `mcp://event` (Local MCP
+servers, above). The webview may listen
 (`core:event:allow-listen` / `allow-unlisten`), never emit.
 
 `index://event`:

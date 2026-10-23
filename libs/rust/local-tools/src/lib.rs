@@ -31,6 +31,7 @@ pub mod git;
 pub mod handoff;
 pub mod ledger;
 mod line_ending;
+pub mod mcp;
 pub mod patch;
 pub mod picture;
 pub mod policy;

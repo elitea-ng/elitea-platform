@@ -25,6 +25,8 @@ mod index;
 mod local_commands;
 mod logging;
 mod loopback;
+mod mcp;
+mod mcp_commands;
 mod menu;
 mod models;
 mod net;
@@ -449,6 +451,12 @@ pub fn run() {
             process_commands::process_resize,
             process_commands::process_kill,
             process_commands::process_pin,
+            mcp_commands::mcp_list,
+            mcp_commands::mcp_save,
+            mcp_commands::mcp_remove,
+            mcp_commands::mcp_restart,
+            mcp_commands::mcp_status,
+            mcp_commands::mcp_proposal_answer,
             index::index_status,
             index::index_open,
             index::index_enable,

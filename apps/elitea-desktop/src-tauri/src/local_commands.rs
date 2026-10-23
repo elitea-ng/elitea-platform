@@ -238,7 +238,14 @@ pub async fn workspace_open(
     let Some(path) = pick_folder(&app).await else {
         return Ok(None);
     };
-    Ok(state.workspaces.add(&path).map(Some)?)
+    let workspace = state.workspaces.add(&path)?;
+    // The folder's MCP files are proposals only (#1230): shown, never run.
+    let agents = state.agents.clone();
+    let id = workspace.id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::mcp_commands::propose_on_open(&app, &agents, &id);
+    });
+    Ok(Some(workspace))
 }
 
 /// Files whose "open with the default app" would RUN something (an app

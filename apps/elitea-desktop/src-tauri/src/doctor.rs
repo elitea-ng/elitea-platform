@@ -385,6 +385,7 @@ impl LocalDoctor {
         checks.push(self.history_check());
         checks.push(self.sessions_check());
         checks.push(self.workspaces_check());
+        checks.push(self.mcp_check());
         checks.extend(self.index_checks());
         checks.push(self.models_check());
         checks
@@ -615,6 +616,61 @@ impl LocalDoctor {
         }
     }
 
+    fn mcp_path(&self) -> PathBuf {
+        self.config_dir
+            .join(elitea_local_tools::mcp::config::FILE_NAME)
+    }
+
+    /// The person's MCP servers (`<config>/mcp.json`, #1230): owner-only
+    /// and valid, or the app runs none of them.
+    fn mcp_check(&self) -> Check {
+        const ID: &str = "mcp.config";
+        const TITLE: &str = "Local MCP servers";
+        let path = self.mcp_path();
+        match health(&path, false) {
+            Health::Missing => {
+                return Check::new(ID, TITLE, Status::Ok, "No MCP servers are set up.".into());
+            }
+            Health::Untrusted(why) => {
+                return Check::new(
+                    ID,
+                    TITLE,
+                    Status::Fail,
+                    format!("The MCP settings file {why}, so no server runs from it."),
+                )
+                .fix("mcp.move_aside", MOVE_ASIDE);
+            }
+            Health::Loose(mode) => {
+                return Check::new(
+                    ID,
+                    TITLE,
+                    Status::Warn,
+                    format!(
+                        "Other users can read the MCP settings (mode {mode:o}), so no server \
+                         runs from them."
+                    ),
+                )
+                .fix("mcp.tighten", RESTRICT);
+            }
+            Health::Healthy => {}
+        }
+        match elitea_local_tools::mcp::config::load(&path) {
+            Ok(file) => Check::new(
+                ID,
+                TITLE,
+                Status::Ok,
+                format!("{} server(s) set up.", file.servers.len()),
+            ),
+            Err(error) => Check::new(
+                ID,
+                TITLE,
+                Status::Fail,
+                format!("The MCP settings are not used: {}", error.message()),
+            )
+            .fix("mcp.move_aside", MOVE_ASIDE),
+        }
+    }
+
     fn workspaces_check(&self) -> Check {
         const ID: &str = "workspaces";
         const TITLE: &str = "Workspaces";
@@ -764,6 +820,17 @@ impl LocalDoctor {
                 }
                 Ok(message)
             }
+            "mcp.tighten" => {
+                tighten_file(&self.mcp_path())?;
+                Ok("The MCP settings are now readable by you only.".into())
+            }
+            "mcp.move_aside" => Ok(match move_aside(&self.mcp_path())? {
+                Some(aside) => format!(
+                    "Moved to {}. Set your MCP servers up again in Settings.",
+                    aside.display()
+                ),
+                None => "There was nothing to move.".into(),
+            }),
             "workspaces.move_aside" => {
                 let aside = move_aside(&self.workspaces_path())?;
                 Ok(match aside {
@@ -1997,6 +2064,33 @@ mod tests {
         // Nothing to move: no sign-out.
         doctor.fix("credentials.move_aside", false).await.unwrap();
         assert_eq!(hooks.signed_out.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn the_mcp_settings_are_checked_tightened_and_moved_aside() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let f = fixture();
+        let doctor = &f.doctor;
+        assert_eq!(check(&doctor.checks(), "mcp.config").status, Status::Ok);
+        let path = doctor.config_dir.join("mcp.json");
+        fs::write(&path, br#"{"version": 1, "servers": {}}"#).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let loose = check(&doctor.checks(), "mcp.config").clone();
+        assert_eq!(
+            (loose.status, loose.fix_id.as_deref()),
+            (Status::Warn, Some("mcp.tighten"))
+        );
+        doctor.fix("mcp.tighten", false).unwrap();
+        assert_eq!(check(&doctor.checks(), "mcp.config").status, Status::Ok);
+        fs::write(&path, br#"{"version": 1, "unknown": true}"#).unwrap();
+        let broken = check(&doctor.checks(), "mcp.config").clone();
+        assert_eq!(
+            (broken.status, broken.fix_id.as_deref()),
+            (Status::Fail, Some("mcp.move_aside"))
+        );
+        doctor.fix("mcp.move_aside", false).unwrap();
+        assert!(fs::symlink_metadata(&path).is_err());
+        assert_eq!(check(&doctor.checks(), "mcp.config").status, Status::Ok);
     }
 
     #[test]

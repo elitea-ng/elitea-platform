@@ -55,6 +55,13 @@
 //! | `process_output`, `process_wait`, `process_list` ([`ToolKind::ProcessRead`]) | allowed (read-only; kept in plan mode) |
 //! | `process_write` ([`ToolKind::ProcessWrite`]) | allowed into the session's own processes (each was allowed when it started, and keeps its sandbox); the text is classified like a command line, line by line (a destructive line, e.g. `rm -rf` typed into a shell, is asked; a `command_deny` match is denied); never remembered |
 //! | `process_kill` ([`ToolKind::ProcessKill`]) | allowed (the session's own processes only) |
+//! | starting a local MCP server ([`ToolKind::McpStart`], #1230) | allowed when its sandbox hides what the session denies and its network is off; a server with the network is asked once per app session; one its sandbox cannot confine is asked at every start; a `forbidden` (or `prompt`) prefix rule matching its command and arguments refuses (asks); never remembered |
+//! | an MCP tool ([`ToolKind::McpCall`]) | asked on first use per (server, tool); "always allow" is remembered for that server's tool in this workspace (the choice store); a tool the person marked read-only (or whose read-only hint they trust) is allowed, and is the only kind plan mode keeps |
+//!
+//! The policy ceiling for both MCP rows is `local_mcp`: off (or absent),
+//! every start and every call is denied. `path_deny` cannot be enforced
+//! inside a server's own reads beyond the sandbox, which already masks the
+//! `path_deny` paths.
 //!
 //! Layers 1 and 2 only tighten these defaults. Layers 3 and 4 can also
 //! loosen them: a workspace allow or a remembered choice allows a call the
@@ -163,6 +170,11 @@ pub enum ToolKind {
     ProcessWrite,
     /// `process_kill`: stopping one of the session's processes.
     ProcessKill,
+    /// Starting one of the person's local MCP servers (#1230): its command
+    /// and arguments in [`ToolCall::command`], its sandbox and network.
+    McpStart,
+    /// Calling a tool of a local MCP server ([`ToolCall::mcp`]).
+    McpCall,
 }
 
 impl ToolKind {
@@ -200,11 +212,31 @@ impl ToolKind {
     }
 
     /// Whether [`PermissionProfile::Plan`] offers the tool: the read-only
-    /// ones and `exit_plan_mode`.
+    /// ones and `exit_plan_mode`. (An MCP tool is kept when the person
+    /// marked it read-only: decided per call, [`McpTarget::read_only`].)
     #[must_use]
     pub const fn plan_allows(self) -> bool {
         self.is_read_only() || matches!(self, Self::ExitPlanMode)
     }
+
+    /// Whether it is about a local MCP server.
+    #[must_use]
+    pub const fn is_mcp(self) -> bool {
+        matches!(self, Self::McpStart | Self::McpCall)
+    }
+}
+
+/// Which local MCP server (and tool) a call is about.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct McpTarget {
+    /// The server's name in the person's configuration.
+    pub server: String,
+    /// The tool's name as the server lists it; `None` for a start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// The person marked the tool read-only (or trusts the server's hint).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub read_only: bool,
 }
 
 /// One tool call, as the rules see it.
@@ -243,6 +275,10 @@ pub struct ToolCall {
     /// running past the turn (`keep_alive: "session"`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub keep_alive: bool,
+    /// For [`ToolKind::McpStart`] and [`ToolKind::McpCall`]: the server and
+    /// tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<McpTarget>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
@@ -263,6 +299,7 @@ impl ToolCall {
             runner: None,
             loopback: false,
             keep_alive: false,
+            mcp: None,
         }
     }
 
@@ -732,6 +769,9 @@ impl RulesEngine {
         if let Some(decision) = self.policy_ceiling(call) {
             return decision;
         }
+        if call.tool.is_mcp() {
+            return self.decide_mcp(call);
+        }
         if call.tool == ToolKind::ExitPlanMode {
             // The person's every time: no workspace rule and no remembered
             // choice may accept a plan.
@@ -900,6 +940,15 @@ impl RulesEngine {
                 return deny(error.message().to_owned());
             }
         }
+        if call.tool.is_mcp() {
+            if !self.policy.local_mcp {
+                return deny("local MCP servers are disabled by policy".to_owned());
+            }
+            if call.network && !self.policy.network {
+                return deny("network access is disabled by policy".to_owned());
+            }
+            return None;
+        }
         if call.tool.is_process() {
             if !self.policy.shell {
                 return deny("the shell is disabled by policy".to_owned());
@@ -1004,7 +1053,7 @@ impl RulesEngine {
     /// The command prefix rules' decision (workspace file, then the
     /// person's; the strongest wins, the first of equals).
     fn prefix_rules(&self, call: &ToolCall, shape: Option<&CommandShape>) -> Option<Decision> {
-        if !call.tool.runs_commands() {
+        if !(call.tool.runs_commands() || call.tool == ToolKind::McpStart) {
             return None;
         }
         let shape = shape?;
@@ -1237,6 +1286,20 @@ impl RulesEngine {
         if let Some(refusal) = self.never_remembered(call) {
             return Err(refusal);
         }
+        if call.tool == ToolKind::McpCall {
+            // The server's tool, in the choice store: never a prefix rule.
+            let key = call.mcp.as_ref().and_then(mcp_choice_key);
+            return self.choices.remember(RememberedChoice {
+                tool: ToolKind::McpCall,
+                command: key,
+                paths: None,
+                glob: None,
+                sandbox: None,
+                network: false,
+                runner: None,
+                loopback: false,
+            });
+        }
         if call.tool == ToolKind::RunTests {
             // The runner kind, never a prefix rule: the person approved
             // "cargo's tests here", whatever filter comes next.
@@ -1410,6 +1473,19 @@ impl RulesEngine {
                 "what is typed into a process is asked every time",
             ));
         }
+        if call.tool == ToolKind::McpStart {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "starting a server is asked when it starts; it is never remembered",
+            ));
+        }
+        if call.tool == ToolKind::McpCall {
+            return call
+                .mcp
+                .as_ref()
+                .is_none_or(|target| target.tool.is_none())
+                .then(|| ToolError::invalid("an MCP call names its server and tool"));
+        }
         if call.keep_alive {
             return Some(ToolError::new(
                 ErrorCode::Denied,
@@ -1440,6 +1516,72 @@ impl RulesEngine {
     #[must_use]
     pub fn can_remember(&self, call: &ToolCall) -> bool {
         self.never_remembered(call).is_none()
+    }
+}
+
+/// A remembered MCP choice's key: `[server, tool]` in
+/// [`RememberedChoice::command`].
+fn mcp_choice_key(target: &McpTarget) -> Option<Vec<String>> {
+    Some(vec![target.server.clone(), target.tool.clone()?])
+}
+
+impl RulesEngine {
+    /// The MCP rows of the default table, under the policy ceiling (checked
+    /// by [`Self::decide`] first).
+    fn decide_mcp(&self, call: &ToolCall) -> Decision {
+        let ask = |reason: &str| Decision::new(Verdict::Ask, Source::Default, reason);
+        let allow = |reason: &str| Decision::new(Verdict::Allow, Source::Default, reason);
+        let Some(target) = call.mcp.as_ref() else {
+            return Decision::new(Verdict::Deny, Source::Default, "no MCP server named");
+        };
+        if call.tool == ToolKind::McpStart {
+            // The person's prefix rules see the server's command line; only
+            // a rule that tightens applies (an allow never vouches for the
+            // network or a missing sandbox).
+            let shape = call.command.as_deref().map(analyse);
+            if let Some(decision) = self.prefix_rules(call, shape.as_ref())
+                && decision.verdict != Verdict::Allow
+            {
+                return decision;
+            }
+            if !self.confined || call.unconfined {
+                return ask(
+                    "this server would run without a sandbox hiding credentials and the app's data",
+                );
+            }
+            if call.network {
+                return ask("a server with network access is confirmed when it starts");
+            }
+            return allow("a configured server, started in the sandbox");
+        }
+        if self.plan_mode() && !target.read_only {
+            return Decision::new(
+                Verdict::Deny,
+                Source::PlanMode,
+                "plan mode allows only MCP tools you marked read-only until the plan is accepted",
+            );
+        }
+        if let Some(decision) = self.path_rules(call, None, None) {
+            return decision;
+        }
+        if target.read_only {
+            return allow("tools you marked read-only are allowed");
+        }
+        let key = mcp_choice_key(target);
+        if key.is_some()
+            && self
+                .choices
+                .list()
+                .iter()
+                .any(|choice| choice.tool == ToolKind::McpCall && choice.command == key)
+        {
+            return Decision::new(
+                Verdict::Allow,
+                Source::Remembered,
+                "you chose to always allow this here",
+            );
+        }
+        ask("the first use of this MCP tool here needs your approval")
     }
 }
 
@@ -1614,6 +1756,7 @@ mod tests {
             index_local_embeddings: false,
             index_remote_embeddings: false,
             index_model_mirror_url: String::new(),
+            local_mcp: true,
         }
     }
 
@@ -3623,5 +3766,148 @@ mod tests {
         assert_eq!(seen[0].payload["justification"], "Make may install things.");
         assert_eq!(seen[0].payload["rule"], "workspace#2");
         assert_eq!(seen[0].payload["source"], "workspace");
+    }
+
+    fn mcp_call(tool: &str, read_only: bool) -> ToolCall {
+        ToolCall {
+            mcp: Some(super::McpTarget {
+                server: "gh".to_owned(),
+                tool: Some(tool.to_owned()),
+                read_only,
+            }),
+            ..ToolCall::new(ToolKind::McpCall)
+        }
+    }
+
+    fn mcp_start(command: &str, network: bool, unconfined: bool) -> ToolCall {
+        ToolCall {
+            command: Some(command.to_owned()),
+            network,
+            unconfined,
+            mcp: Some(super::McpTarget {
+                server: "gh".to_owned(),
+                tool: None,
+                read_only: false,
+            }),
+            ..ToolCall::new(ToolKind::McpStart)
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_call_is_asked_on_first_use() {
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        let engine = Arc::new(engine);
+        assert_eq!(
+            verdict(&engine, &mcp_call("create_issue", false)),
+            (Verdict::Ask, Source::Default)
+        );
+        assert!(engine.can_remember(&mcp_call("create_issue", false)));
+        let prompt = Arc::new(ScriptedPrompt {
+            answer: ApprovalOutcome::Decided {
+                action: super::APPROVE_ALWAYS.to_owned(),
+                value: json!({}),
+            },
+            seen: Mutex::new(Vec::new()),
+        });
+        let channel = RuleApprovals::new(engine.clone(), prompt.clone());
+        let first = channel
+            .request(request(&mcp_call("create_issue", false)))
+            .await
+            .expect("ask");
+        assert!(
+            matches!(first, ApprovalOutcome::Decided { ref action, .. } if action == "approve")
+        );
+        assert_eq!(prompt.seen.lock().expect("lock").len(), 1);
+        assert!(
+            prompt.seen.lock().expect("lock")[0]
+                .available_actions
+                .contains(&super::APPROVE_ALWAYS.to_owned())
+        );
+        // Remembered for that server's tool in this workspace, not others.
+        assert_eq!(
+            verdict(&engine, &mcp_call("create_issue", false)),
+            (Verdict::Allow, Source::Remembered)
+        );
+        assert_eq!(
+            verdict(&engine, &mcp_call("delete_repo", false)),
+            (Verdict::Ask, Source::Default)
+        );
+    }
+
+    #[test]
+    fn mcp_read_only_tool_is_allowed_in_plan_mode() {
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        assert_eq!(
+            verdict(&engine, &mcp_call("search_issues", true)),
+            (Verdict::Allow, Source::Default)
+        );
+        engine.set_profile(PermissionProfile::Plan);
+        assert_eq!(
+            verdict(&engine, &mcp_call("search_issues", true)),
+            (Verdict::Allow, Source::Default)
+        );
+        assert_eq!(
+            verdict(&engine, &mcp_call("create_issue", false)),
+            (Verdict::Deny, Source::PlanMode)
+        );
+    }
+
+    #[test]
+    fn local_mcp_off_denies_every_mcp_call() {
+        let off = LocalWorkPolicy {
+            local_mcp: false,
+            ..policy()
+        };
+        let (_dir, engine) = engine_with(off, Vec::new());
+        for call in [
+            mcp_call("search_issues", true),
+            mcp_call("create_issue", false),
+            mcp_start("/usr/bin/gh-mcp stdio", false, false),
+        ] {
+            assert_eq!(verdict(&engine, &call), (Verdict::Deny, Source::Policy));
+        }
+        assert!(!LocalWorkPolicy::default().local_mcp, "absent is off");
+    }
+
+    #[test]
+    fn mcp_starts_ask_for_the_network_and_a_missing_sandbox_and_honour_prefix_rules() {
+        let (_dir, engine) = engine_with_rules(
+            LocalWorkPolicy {
+                network: true,
+                ..policy()
+            },
+            r#"{"version":1,"rules":[{"pattern":["/usr/bin/bad-mcp"],"decision":"forbidden"}]}"#,
+            NONE,
+        );
+        assert_eq!(
+            verdict(&engine, &mcp_start("/usr/bin/gh-mcp stdio", false, false)),
+            (Verdict::Allow, Source::Default)
+        );
+        assert_eq!(
+            verdict(&engine, &mcp_start("/usr/bin/gh-mcp stdio", true, false)),
+            (Verdict::Ask, Source::Default)
+        );
+        assert_eq!(
+            verdict(&engine, &mcp_start("/usr/bin/gh-mcp stdio", false, true)),
+            (Verdict::Ask, Source::Default)
+        );
+        assert_eq!(
+            verdict(
+                &engine,
+                &mcp_start("/usr/bin/bad-mcp --stdio", false, false)
+            )
+            .0,
+            Verdict::Deny
+        );
+        assert!(!engine.can_remember(&mcp_start("/usr/bin/gh-mcp", false, false)));
+        let offline = LocalWorkPolicy {
+            network: false,
+            ..policy()
+        };
+        let (_dir, engine) = engine_with(offline, Vec::new());
+        assert_eq!(
+            verdict(&engine, &mcp_start("/usr/bin/gh-mcp", true, false)),
+            (Verdict::Deny, Source::Policy)
+        );
     }
 }

@@ -7660,3 +7660,207 @@ async fn usage_event_carries_cached_and_reasoning_tokens() {
     let at = |kind: &str| kinds.iter().position(|k| *k == kind).unwrap();
     assert!(at("usage_total") < at("done"));
 }
+
+/// The local MCP fixture server (`libs/rust/local-tools/tests/fixtures`),
+/// copied executable into a folder of its own: outside the workspace and
+/// the app's directories (the sandbox hides those from every server).
+fn mcp_fixture_program() -> (tempfile::TempDir, String) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let bin = tempfile::tempdir().unwrap();
+    let path = bin.path().join("mcp-fixture.sh");
+    std::fs::write(
+        &path,
+        include_str!("../../../../../libs/rust/local-tools/tests/fixtures/mcp/server.sh"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = path.canonicalize().unwrap().display().to_string();
+    (bin, path)
+}
+
+/// The agent calls `mcp__fx__echo` first when it is offered, then answers.
+fn mcp_platform() -> impl Fn(&Req) -> Res {
+    let inner = platform(agent_details(), &[]);
+    move |req: &Req| {
+        if req.path != "/llm/v1/chat/completions" {
+            return inner(req);
+        }
+        let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
+        let offered = body["tools"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|tool| tool["function"]["name"] == "mcp__fx__echo");
+        let answered = req.body.contains("call-mcp");
+        if offered && !answered {
+            return tool_call("call-mcp", "mcp__fx__echo", &json!({}));
+        }
+        sse(&[json!({"choices": [{"delta": {"content": "Done."}, "finish_reason": "stop"}]})])
+    }
+}
+
+fn mcp_allowed() -> Option<Value> {
+    Some(json!({"allowed": true, "shell": true, "local_mcp": true}))
+}
+
+/// Each `/llm` request's tool names.
+fn offered_per_request(server: &MockServer) -> Vec<Vec<String>> {
+    llm_bodies(server)
+        .iter()
+        .map(|body| {
+            body["tools"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .collect()
+}
+
+/// The person's MCP server is offered only while the policy allows local
+/// MCP servers: off, nothing starts; on, the server starts under the
+/// sandbox, its tool is asked on first use and runs, the report names the
+/// call (not its arguments), and turning the policy off stops it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn turn_offers_mcp_tools_only_when_policy_allows() {
+    let server = serve(mcp_platform()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let (_bin, program) = mcp_fixture_program();
+    h.host
+        .mcp_files()
+        .save_server(
+            elitea_local_tools::mcp::config::Scope::User,
+            None,
+            "fx",
+            elitea_local_tools::mcp::config::ServerConfig::new(program),
+        )
+        .unwrap();
+
+    run_turn(&h, "hello").await;
+    let offered = offered_per_request(&h.server);
+    assert!(
+        offered
+            .iter()
+            .flatten()
+            .all(|name| !name.starts_with("mcp__")),
+        "{offered:?}"
+    );
+    let (session, _) = h.host.process_session(&h.workspace_id).unwrap();
+    assert!(
+        session.mcp().status().is_empty(),
+        "nothing configured, nothing started"
+    );
+
+    h.policy.set(mcp_allowed());
+    let before = offered.len();
+    run_turn(&h, "hello again").await;
+    let offered = offered_per_request(&h.server);
+    assert!(
+        offered[before].iter().any(|name| name == "mcp__fx__echo"),
+        "{:?}",
+        offered[before]
+    );
+    let events = h.emitter.all();
+    let asked: Vec<&AgentEvent> = events
+        .iter()
+        .filter(|e| e.kind == "approval_request" && e.payload["tool"] == "mcp_call")
+        .collect();
+    assert_eq!(asked.len(), 1, "first use is asked");
+    assert_eq!(asked[0].payload["mcp"]["server"], "fx");
+    assert_eq!(asked[0].payload["mcp"]["tool"], "echo");
+    let result = events
+        .iter()
+        .find(|e| e.kind == "tool_result" && e.payload["call_id"] == "call-mcp")
+        .unwrap();
+    assert_eq!(result.payload["ok"], true, "{:?}", result.payload);
+    // The model read the server's answer, framed under the thread's nonce.
+    let bodies = llm_bodies(&h.server);
+    let last = bodies.last().unwrap().to_string();
+    assert!(last.contains("hello pid="), "{last}");
+    assert!(last.contains("mcp_result nonce="), "{last}");
+    let commits = local_commits(&h.server);
+    let commands = &commits.last().unwrap()["local_work"]["commands"];
+    assert_eq!(commands[0]["command"], "mcp fx echo", "{commands}");
+    // The server runs in the session until the policy turns MCP off.
+    let (session, _) = h.host.process_session(&h.workspace_id).unwrap();
+    assert_eq!(
+        session.mcp().status()[0].state,
+        elitea_local_tools::mcp::ServerState::Ready
+    );
+    h.policy.set(allowed());
+    run_turn(&h, "and again").await;
+    let offered = offered_per_request(&h.server);
+    assert!(
+        offered
+            .last()
+            .unwrap()
+            .iter()
+            .all(|name| !name.starts_with("mcp__")),
+        "{offered:?}"
+    );
+    let (replaced, _) = h.host.process_session(&h.workspace_id).unwrap();
+    assert!(
+        replaced.mcp().status().is_empty(),
+        "the old session stopped with it"
+    );
+}
+
+/// A repository's `.mcp.json` is a proposal: no server starts from it
+/// until the person accepts it, and accepting copies it into host data.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repo_mcp_json_is_proposed_not_started() {
+    let server = serve(mcp_platform()).await;
+    let h = harness(server, mcp_allowed(), UiDecision::AllowOnce).await;
+    let (_bin, program) = mcp_fixture_program();
+    std::fs::write(
+        h.folder.path().join(".mcp.json"),
+        json!({"mcpServers": {"fx": {"command": program, "env": {"API_TOKEN": "repo-secret-1"}}}})
+            .to_string(),
+    )
+    .unwrap();
+
+    run_turn(&h, "hello").await;
+    let offered = offered_per_request(&h.server);
+    assert!(
+        offered
+            .iter()
+            .flatten()
+            .all(|name| !name.starts_with("mcp__")),
+        "{offered:?}"
+    );
+    let (session, _) = h.host.process_session(&h.workspace_id).unwrap();
+    assert!(
+        session.mcp().status().is_empty(),
+        "the repository configured nothing"
+    );
+
+    let (root, deny) = h.host.rules_folder(&h.workspace_id).unwrap();
+    let files = h.host.mcp_files();
+    let pending = files.pending_proposals(&h.workspace_id, &root, &deny);
+    assert_eq!(pending.len(), 1);
+    assert!(
+        !serde_json::to_string(&pending[0])
+            .unwrap()
+            .contains("repo-secret-1")
+    );
+    let digest = pending[0].file_sha256.clone();
+    files
+        .answer(&h.workspace_id, &root, &deny, &digest, &["fx".to_owned()])
+        .unwrap();
+    h.host.mcp_reconfigure(Some(&h.workspace_id));
+    assert!(
+        files
+            .pending_proposals(&h.workspace_id, &root, &deny)
+            .is_empty()
+    );
+
+    let before = offered.len();
+    run_turn(&h, "hello again").await;
+    let offered = offered_per_request(&h.server);
+    assert!(
+        offered[before].iter().any(|name| name == "mcp__fx__echo"),
+        "accepted, it runs: {:?}",
+        offered[before]
+    );
+}

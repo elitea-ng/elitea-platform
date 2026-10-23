@@ -127,3 +127,30 @@ fn background_processes_are_local_only() {
         );
     }
 }
+
+/// The person's stdio MCP servers (#1230) are local-only: they run on the
+/// device with the person's own credentials, never in the cloud executor
+/// (the #1187 handoff note lists them as unavailable there). No shared or
+/// cloud tool carries the `mcp__` prefix, and the runner's session has
+/// `local_mcp` off, so no server could start in it.
+#[tokio::test]
+async fn local_mcp_tools_are_local_only() {
+    use elitea_local_tools::mcp::naming::PREFIX;
+    assert!(TOOLS.iter().all(|tool| !tool.name.starts_with(PREFIX)));
+    assert!(
+        WORKSPACE_TOOLS
+            .iter()
+            .all(|tool| !tool.name.starts_with(PREFIX))
+    );
+    let workspace = tempfile::tempdir().expect("workspace");
+    let data = tempfile::tempdir().expect("data");
+    let session = elitea_workspace_runner::open_session(&elitea_workspace_runner::RunnerConfig {
+        root: workspace.path().to_path_buf(),
+        data_dir: data.path().to_path_buf(),
+        policy: elitea_workspace_runner::RunnerPolicy::default(),
+        env: Vec::new(),
+    })
+    .expect("session");
+    assert!(!session.rules().policy().local_mcp);
+    assert_eq!(session.start_mcp_servers("cloud").await.len(), 0);
+}

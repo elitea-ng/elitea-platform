@@ -416,6 +416,19 @@ fn describe(request: &ApprovalRequest) -> Value {
         if call.keep_alive {
             payload["keep_alive"] = json!(true);
         }
+        // A local MCP server's start or tool (#1230): which server and tool,
+        // and for a start whether it gets the network or runs unconfined.
+        if let Some(target) = &call.mcp {
+            let mut mcp = json!({ "server": target.server, "read_only": target.read_only });
+            if let Some(tool) = &target.tool {
+                mcp["tool"] = json!(tool);
+            }
+            payload["mcp"] = mcp;
+            if call.tool == elitea_local_tools::approvals::ToolKind::McpStart {
+                payload["network"] = json!(call.network);
+                payload["unconfined"] = json!(call.unconfined);
+            }
+        }
         // Which layer asks (`workspace`, `user`, `default`, …) and, for a
         // rule, which one and its justification (the card shows them).
         for key in ["source", "rule", "justification"] {

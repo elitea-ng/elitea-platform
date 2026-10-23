@@ -36,6 +36,7 @@ use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::files;
 use crate::git::{Repo, StatusSummary, capped, check_revision, parse_status_summary};
 use crate::ledger::ReadLedger;
+use crate::mcp::{McpServers, ServerStatus};
 use crate::policy::{LocalWorkPolicy, SandboxMode};
 use crate::process::{KeepAlive, ProcessRegistry};
 use crate::project::{self, ProjectProfile};
@@ -121,6 +122,9 @@ pub struct LocalSession {
     /// The background processes (#1223); dropped with the session, which
     /// stops them.
     processes: ProcessRegistry,
+    /// The person's local MCP servers (#1230); dropped with the session,
+    /// which stops them.
+    mcp: McpServers,
 }
 
 /// How a command would be confined (see [`LocalSession::command_confinement`]).
@@ -754,6 +758,7 @@ impl LocalSession {
             vision: AtomicBool::new(false),
             project: Mutex::new(None),
             processes: ProcessRegistry::new(),
+            mcp: McpServers::new(),
         }))
     }
 
@@ -815,6 +820,34 @@ impl LocalSession {
         let profile = Arc::new(project::detect(&self.workspace, &mentioned));
         *cached = Some((mentioned, Arc::clone(&profile)));
         profile
+    }
+
+    /// The session's local MCP servers (#1230): the host configures them
+    /// ([`McpServers::configure`]) and reads their status.
+    #[must_use]
+    pub fn mcp(&self) -> &McpServers {
+        &self.mcp
+    }
+
+    /// Start the configured MCP servers that have not started yet (the
+    /// questions asked are named after `subject`, the turn); their
+    /// statuses. Nothing starts when the policy's `local_mcp` is off.
+    pub async fn start_mcp_servers(self: &Arc<Self>, subject: &str) -> Vec<ServerStatus> {
+        let policy = self.engine.policy();
+        if !(policy.allowed && policy.local_mcp) {
+            return self.mcp.status();
+        }
+        self.mcp.start_all(self, subject).await
+    }
+
+    /// The command settings (the MCP servers start from them).
+    pub(crate) fn shell_config(&self) -> &ShellConfig {
+        &self.shell
+    }
+
+    /// The tools' output budgets.
+    pub(crate) fn budgets(&self) -> Budgets {
+        self.budgets
     }
 
     /// The session's deny list (built once at open).
@@ -1163,6 +1196,11 @@ impl LocalSession {
             ToolKind::ProcessRead | ToolKind::ProcessWrite | ToolKind::ProcessKill => {
                 self.process_tool(spec.name, call_id, args).await
             }
+            // MCP tools are no `ToolSpec`: their own toolset calls them.
+            ToolKind::McpStart | ToolKind::McpCall => Err(ToolError::new(
+                ErrorCode::Denied,
+                format!("`{tool}` is not available"),
+            )),
         }
     }
 
@@ -1335,7 +1373,12 @@ impl LocalSession {
     }
 
     /// Ask the approval channel about `call`.
-    async fn authorize(&self, call_id: &str, call: ToolCall, message: &str) -> ToolResult<()> {
+    pub(crate) async fn authorize(
+        &self,
+        call_id: &str,
+        call: ToolCall,
+        message: &str,
+    ) -> ToolResult<()> {
         let request = ApprovalRequest {
             subject: call_id.to_owned(),
             message: message.to_owned(),
@@ -1528,6 +1571,7 @@ impl LocalSession {
             runner: None,
             loopback: args.loopback,
             keep_alive: keep_alive == KeepAlive::Session,
+            mcp: None,
         };
         let message = match (background, args.tty) {
             (_, true) => "run a command on a terminal",

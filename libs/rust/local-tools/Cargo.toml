@@ -36,6 +36,9 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 # find_files' fuzzy ranking: the matcher nucleo 0.5 re-exports (MPL-2.0,
 # linked unmodified; no serde_json, no threads), as Codex's file search uses.
 nucleo-matcher = "0.3.1"
+# The stdio MCP client (`mcp`, #1230): the same rmcp the runtime links
+# through adk-tool, over the child's pipes (MIT; no new crate).
+rmcp = { version = "3.5.0", default-features = false, features = ["client", "transport-async-rw"] }
 # Background processes on a pseudo-terminal (`process`, #1223): wezterm's
 # PTY spawn for macOS and Linux (MIT; no serde, no TLS).
 portable-pty = "0.9.0"

@@ -336,6 +336,30 @@ impl Recorder {
         });
     }
 
+    /// A call to one of the person's local MCP servers (#1230), from its
+    /// result: listed with the commands (the server's audit keeps
+    /// `command`), as `mcp <server> <tool>`, never with its arguments.
+    pub fn mcp_call(&self, result: &Value) {
+        let text = |key: &str| result.get(key).and_then(Value::as_str).unwrap_or_default();
+        let (server, tool) = (text("server"), text("tool"));
+        if server.is_empty() || tool.is_empty() {
+            return;
+        }
+        self.with(|state| {
+            if state.commands.len() < MAX_COMMANDS {
+                state.commands.push(json!({
+                    "command": format!("mcp {server} {tool}"),
+                    "mcp": {
+                        "server": server,
+                        "tool": tool,
+                        "read_only": result.get("read_only") == Some(&Value::Bool(true)),
+                    },
+                    "status": text("status"),
+                }));
+            }
+        });
+    }
+
     /// A background process's state at the turn's end: its command entry
     /// gets the final `status` and `exit_code` (a pinned or kept one is
     /// still `running`).
@@ -675,6 +699,24 @@ mod tests {
         // A file the turn did not change cannot be vouched for.
         std::fs::write(dir.path().join("other.txt"), "x").unwrap();
         assert!(!recorder.unchanged_since_turn(&workspace, "other.txt"));
+    }
+
+    #[test]
+    fn mcp_calls_are_reported_without_their_arguments() {
+        let recorder = Recorder::default();
+        recorder.mcp_call(&json!({
+            "server": "fx", "tool": "echo", "read_only": true, "status": "ok",
+            "text": "the secret answer",
+        }));
+        recorder.mcp_call(&json!({ "status": "ok" }));
+        let report = recorder.work_report("workspace-write");
+        assert_eq!(report["commands"].as_array().map(Vec::len), Some(1));
+        assert_eq!(report["commands"][0]["command"], "mcp fx echo");
+        assert_eq!(
+            report["commands"][0]["mcp"],
+            json!({"server": "fx", "tool": "echo", "read_only": true})
+        );
+        assert!(!report.to_string().contains("secret"));
     }
 
     #[test]
