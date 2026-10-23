@@ -1642,7 +1642,7 @@ dbInit:
 
   image:
     repository: docker.io/library/postgres
-    tag: "17"
+    tag: "18-trixie"
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
@@ -6543,10 +6543,11 @@ worker:
       key: database-url
 
     # psql to write the row, openssl to read the certificate's SPIFFE URI.
-    # postgres:17 (Debian) rather than :17-alpine, which ships no openssl.
+    # postgres:18-trixie (Debian 13) rather than an -alpine tag, which ships no
+    # openssl.
     image:
       repository: docker.io/library/postgres
-      tag: "17"
+      tag: "18-trixie"
       pullPolicy: IfNotPresent
 
     # Re-stamped on every install and upgrade, which is the point: expires_at is

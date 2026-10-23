@@ -89,7 +89,7 @@ func TestRetiredPermissionsAgreeBetweenMigrationAndCatalogue(t *testing.T) {
 	fromCatalogue := v2admin.RetiredPermissions()
 	if !slices.Equal(fromMigration, fromCatalogue) {
 		t.Fatalf("retired lists disagree.\n  the migrations delete: %v\n  catalogue hides: %v\n"+
-			"  A name only a migration knows comes back on the Roles matrix if a row carrying it is re-seeded.\n"+
+			"  A name only a migration knows stays grantable on the Roles matrix, so a save can write it back.\n"+
 			"  A name only the catalogue knows keeps its rows forever.",
 			fromMigration, fromCatalogue)
 	}

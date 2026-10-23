@@ -123,10 +123,9 @@ func TestMatrixSaveAcceptsADeclaredPermissionNobodyHolds(t *testing.T) {
 	}
 }
 
-// TestPermissionCatalogueHidesRetiredNames covers #6874's recurrence guard. A
-// retired string can still sit in a row: the legacy runtime re-seeds some on
-// every start. The matrix must not show it, and a save that names it must fail,
-// so the legacy group toggle can no longer write a prefix node back as a row.
+// TestPermissionCatalogueHidesRetiredNames covers #6874's recurrence guard. If a
+// retired string still sits in a row, the matrix must not show it, and a save
+// that names it must fail, so no save can write a retired name back as a row.
 func TestPermissionCatalogueHidesRetiredNames(t *testing.T) {
 	granted := append([]string{"projects.projects.projects.view"}, RetiredPermissions()...)
 	catalogue := catalogueFrom(granted)

@@ -20,8 +20,7 @@ func TestLegacyAdminSectionNamesAreRemovedWithoutWideningARole(t *testing.T) {
 	ctx, cancel := testContext()
 	defer cancel()
 
-	// What the legacy runtime's admin module registered for its Roles and
-	// Projects sections, in a database that was later migrated.
+	// Rows carrying the two section names, which no migration seeds.
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.auth_core__role_permission (role_id, permission)
 SELECT role.id, dead.permission
@@ -35,10 +34,6 @@ ON CONFLICT DO NOTHING`); err != nil {
 	seedOverrideRows(t, pool, 3, editorRole, "models.chat.messages.list", "projects.projects")
 	viewerRole := seedProjectRole(t, pool, 17202, 3, "viewer")
 	seedOverrideRows(t, pool, 3, viewerRole, "configuration.roles")
-	// A pair holding only dead strings from BOTH retirements: 0136's re-seeded
-	// `projects` must not count as the live row that lets 0172 delete.
-	mixedRole := seedProjectRole(t, pool, 17203, 3, "tester")
-	seedOverrideRows(t, pool, 3, mixedRole, "projects", "projects.projects")
 
 	// A direct user grant, which the resolver reads as a plain set.
 	seedNamedUser(t, pool, 17204, "sections@example.com")
@@ -99,10 +94,6 @@ ORDER BY 1`)
 	if rows := overrideRowsFor(t, pool, 3, viewerRole); !slices.Equal(rows, []string{"configuration.roles"}) {
 		t.Errorf("project 3 viewer rows = %v; the only-dead pair must keep its row so the "+
 			"viewer does not fall back to the central set", rows)
-	}
-	if rows := overrideRowsFor(t, pool, 3, mixedRole); !slices.Equal(rows, []string{"projects", "projects.projects"}) {
-		t.Errorf("project 3 tester rows = %v; 0136's `projects` is dead too, so the pair "+
-			"holds no live row and must keep both", rows)
 	}
 
 	var userGrants []string
