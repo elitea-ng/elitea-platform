@@ -631,15 +631,9 @@ type ToolkitCallToolCommandV1 struct {
 	// from, and toolkit_version the immutable version of that row where the
 	// deployment records one. They are identity, not content: they let the worker
 	// and the settlement reader agree on WHICH toolkit ran.
-	ToolkitId      string `protobuf:"bytes,5,opt,name=toolkit_id,json=toolkitId,proto3" json:"toolkit_id,omitempty"`
-	ToolkitVersion string `protobuf:"bytes,6,opt,name=toolkit_version,json=toolkitVersion,proto3" json:"toolkit_version,omitempty"`
-	// attribution_execution_id is the local (desktop) turn a remote toolkit call
-	// was made for (#1238). The worker sends it as the execution id of the
-	// call's metered web operations, so their spend lands on the turn rather
-	// than on this separate call execution. Main records it on the call's
-	// execution and its edge accepts it only for the claim of that execution;
-	// empty for every other call.
-	AttributionExecutionId string `protobuf:"bytes,7,opt,name=attribution_execution_id,json=attributionExecutionId,proto3" json:"attribution_execution_id,omitempty"`
+	ToolkitId              string `protobuf:"bytes,5,opt,name=toolkit_id,json=toolkitId,proto3" json:"toolkit_id,omitempty"`
+	ToolkitVersion         string `protobuf:"bytes,6,opt,name=toolkit_version,json=toolkitVersion,proto3" json:"toolkit_version,omitempty"`
+	AttributionExecutionId string `protobuf:"bytes,16,opt,name=attribution_execution_id,json=attributionExecutionId,proto3" json:"attribution_execution_id,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -1177,7 +1171,7 @@ const file_elitea_runtime_v1_toolkit_proto_rawDesc = "" +
 	"\n" +
 	"toolkit_id\x18\x05 \x01(\tR\ttoolkitId\x12'\n" +
 	"\x0ftoolkit_version\x18\x06 \x01(\tR\x0etoolkitVersion\x128\n" +
-	"\x18attribution_execution_id\x18\a \x01(\tR\x16attributionExecutionIdJ\x04\b\b\x10\x10\"\x95\x02\n" +
+	"\x18attribution_execution_id\x18\x10 \x01(\tR\x16attributionExecutionIdJ\x04\b\a\x10\x10\"\x95\x02\n" +
 	"\"ToolkitCallToolArtifactReferenceV1\x12\x1f\n" +
 	"\vartifact_id\x18\x01 \x01(\tR\n" +
 	"artifactId\x12+\n" +
