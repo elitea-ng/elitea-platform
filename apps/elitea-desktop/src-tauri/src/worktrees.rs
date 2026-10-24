@@ -32,7 +32,7 @@ use elitea_agent_runtime::host::{
     HostError as RuntimeError, HostErrorCode, ToolProvider, ToolsetRequest,
 };
 use elitea_agent_runtime::subagents::ChildIdentity;
-use elitea_local_tools::apply::{self, Mode};
+use elitea_local_tools::apply::{self, ApplyOutcome, Outcome};
 use elitea_local_tools::deny::DenyList;
 use elitea_local_tools::error::{ErrorCode, ToolError};
 use elitea_local_tools::git::{RegisteredWorktree, Repo, register_worktree};
@@ -101,6 +101,30 @@ pub struct Entry {
 pub struct Diff {
     pub diff: String,
     pub truncated: bool,
+}
+
+/// What a merge-back preview found, as `worktree_merge_preflight` has
+/// always answered it (the shared engine's outcome, mapped).
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Mode {
+    Nothing,
+    FastForward,
+    Merge,
+    Conflicts,
+}
+
+impl Mode {
+    fn of(report: &ApplyOutcome) -> Self {
+        match report.outcome {
+            Outcome::Conflicts | Outcome::Error => Self::Conflicts,
+            _ if report.changed_paths.is_empty() && report.skipped_paths.is_empty() => {
+                Self::Nothing
+            }
+            Outcome::FastPath => Self::FastForward,
+            Outcome::CleanMerge => Self::Merge,
+        }
+    }
 }
 
 /// `worktree_merge_preflight`'s answer.
@@ -650,10 +674,15 @@ impl WorktreeHost {
         let id = uuid::Uuid::new_v4().simple().to_string();
         let answer = MergePreflight {
             preflight_id: id.clone(),
-            mode: preflight.mode,
-            applied_paths: preflight.applied_paths.clone(),
-            conflict_paths: preflight.conflict_paths.clone(),
-            skipped_paths: preflight.skipped_paths.clone(),
+            mode: Mode::of(&preflight.report),
+            // Conflicts are never applied from here (no markers).
+            applied_paths: if preflight.report.outcome == Outcome::Conflicts {
+                Vec::new()
+            } else {
+                preflight.report.touched()
+            },
+            conflict_paths: preflight.report.conflict_paths.clone(),
+            skipped_paths: preflight.report.skipped(),
             branch: branch.clone(),
         };
         let mut held = self
@@ -732,7 +761,7 @@ impl WorktreeHost {
             Ok(MergeApplied {
                 written: applied.written,
                 deleted: applied.deleted,
-                skipped_paths: applied.skipped_paths,
+                skipped_paths: applied.report.skipped(),
                 checkpoint_id: applied.checkpoint.map(|seq| format!("{}:{seq}", parent.id)),
             })
         })
