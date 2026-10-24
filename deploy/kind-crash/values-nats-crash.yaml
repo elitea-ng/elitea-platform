@@ -1,0 +1,32 @@
+# Overrides for deploy/helm/nats, layered AFTER values-scale1.yaml:
+#
+#   helm upgrade --install elitea-nats deploy/helm/nats -n elitea \
+#     -f deploy/helm/nats/values-scale1.yaml -f deploy/kind-crash/values-nats-crash.yaml
+#
+# Scale 1 with a PVC (KX-07 keeps it, KX-08 deletes it). The upstream chart is a
+# dependency (Chart.yaml), so `helm dependency build` needs the network:
+# approval item. Dependency charts are NOT vendored in this worktree, so this
+# file could not be rendered. See README "Unverified".
+nats:
+  # kind has no Prometheus Operator CRDs; the exporter and PodMonitor are off,
+  # which removes the prometheus-nats-exporter image from the approval list.
+  promExporter:
+    enabled: false
+    podMonitor:
+      enabled: false
+  config:
+    jetstream:
+      fileStore:
+        pvc:
+          enabled: true
+          size: 2Gi
+  # UNVERIFIED key path (upstream nats-io/k8s chart 1.3.9 podTemplate merge).
+  podTemplate:
+    merge:
+      spec:
+        nodeSelector:
+          elitea.ai/crash-role: platform
+
+# alerts.enabled with the exporter off is refused by the chart (values.yaml:173).
+alerts:
+  enabled: false

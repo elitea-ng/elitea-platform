@@ -1,0 +1,45 @@
+{
+  "id": "CR-WK-P03",
+  "cell": "Worker (container restart) x P03",
+  "matrix_cell": "Worker (container restart) x P03",
+  "now": "R/F1\u00b7P*",
+  "target": "R",
+  "fixture": "model-slow",
+  "trigger": {
+    "kind": "obs",
+    "until": "streaming",
+    "timeout_s": 120,
+    "params": {
+      "min_events": 10
+    }
+  },
+  "faults": [
+    {
+      "action": "kill9",
+      "target": "worker"
+    },
+    {
+      "action": "start",
+      "target": "worker",
+      "after_s": 2,
+      "healthy": false
+    }
+  ],
+  "expect": {
+    "takeovers": [
+      1
+    ],
+    "settlement": "SUCCEEDED",
+    "error_codes": [],
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    },
+    "budget_s": 420
+  },
+  "browser": true,
+  "notes": "Mid-stream kill. The recovered projector resets the partial text; the user sees one answer.",
+  "gap": null,
+  "repeat": 3,
+  "tier": "T0"
+}

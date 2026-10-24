@@ -1,0 +1,20 @@
+# Thrown-error fixture: the user's Code raises. Expected outcome is a typed Code failure for the user
+# (PIPELINE_CODE_FAILED) with a support reference, and no operator reconcile card: a thrown error is a
+# completed attempt, not an unknown external effect.
+state:
+  input: {type: str}
+  messages: {type: list}
+entry_point: thrower
+nodes:
+  - id: thrower
+    type: code
+    language: javascript
+    code:
+      type: fixed
+      value: |
+        export default async function run(state) {
+          throw new Error("CRASHTHROW deliberate fixture error");
+        }
+    input: [input]
+    output: [messages]
+    transition: END

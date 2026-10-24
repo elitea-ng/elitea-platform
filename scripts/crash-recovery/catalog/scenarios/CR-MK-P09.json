@@ -1,0 +1,46 @@
+{
+  "id": "CR-MK-P09",
+  "cell": "Main x P09, preparer resolving and downloading",
+  "matrix_cell": "Main x P09",
+  "now": "R/F2\u00b7P*",
+  "target": "R",
+  "fixture": "python-prepared-sleep-50",
+  "trigger": {
+    "kind": "obs",
+    "until": "preparation_resolving",
+    "timeout_s": 180,
+    "params": {
+      "min_age_s": 1
+    }
+  },
+  "faults": [
+    {
+      "action": "kill9",
+      "target": "main"
+    },
+    {
+      "action": "start",
+      "target": "main",
+      "after_s": 2,
+      "healthy": true
+    }
+  ],
+  "expect": {
+    "takeovers": [
+      0,
+      1
+    ],
+    "settlement": "SUCCEEDED",
+    "error_codes": [],
+    "budget_s": 480,
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    }
+  },
+  "notes": "Kill while the trusted preparer resolves and downloads the pinned wheels.",
+  "gap": null,
+  "repeat": 3,
+  "browser": false,
+  "tier": "T0b"
+}

@@ -1,0 +1,35 @@
+{
+  "id": "BASE-code-throw",
+  "cell": "no fault: the user's Code throws",
+  "now": "-",
+  "target": "F",
+  "matrix_cell": null,
+  "fixture": "code-throw",
+  "trigger": {
+    "kind": "obs",
+    "until": "admitted",
+    "timeout_s": 30
+  },
+  "faults": [],
+  "expect": {
+    "takeovers": [
+      0
+    ],
+    "settlement": "FAILED",
+    "error_codes": [],
+    "replay_codes": [
+      "PIPELINE_CODE_FAILED"
+    ],
+    "no_reconcile_card": true,
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    },
+    "budget_s": 180
+  },
+  "repeat": 1,
+  "notes": "A thrown user error is a typed Code failure with a support reference and no operator reconcile card (#1084).",
+  "gap": null,
+  "browser": false,
+  "tier": "T0"
+}

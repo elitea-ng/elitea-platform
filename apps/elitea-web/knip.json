@@ -15,6 +15,10 @@
     // picks up playwright.config.ts, so the live config's imports from
     // scripts/lib/e2e-live-assumptions.mjs would read as unused exports.
     "playwright.live.config.ts",
+    // The crash-recovery Playwright config: opt-in, started by
+    // scripts/crash-recovery/crashctl.py, never by CI. Same reason as the
+    // live config above: knip only picks up playwright.config.ts.
+    "playwright.crash.config.ts",
     // The DeepWiki oracle pipeline: operator-run, not imported. It regenerates
     // src/features/wiki-generation/lib/__fixtures__/generation-oracle.json
     // from the legacy JSX.

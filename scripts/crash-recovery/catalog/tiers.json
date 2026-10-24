@@ -1,0 +1,80 @@
+{
+  "T0": [
+    "BASE-code-50",
+    "BASE-code-150",
+    "BASE-model-slow",
+    "BASE-code-throw",
+    "CR-WK-P10",
+    "CR-WPK-P10",
+    "CX-01",
+    "CR-MK-P10",
+    "CR-SK-P10",
+    "CX-03b",
+    "CR-NK-P10",
+    "CR-NK-P01q",
+    "CR-WK-P02",
+    "CR-WK-P03",
+    "CR-MK-P03",
+    "CR-WK-P03-stock"
+  ],
+  "T0-base": [
+    "BASE-code-50",
+    "BASE-code-150",
+    "BASE-model-slow",
+    "BASE-code-throw"
+  ],
+  "T0-code": [
+    "CR-WK-P10",
+    "CR-WPK-P10",
+    "CX-01",
+    "CR-MK-P10",
+    "CR-SK-P10",
+    "CX-03b",
+    "CR-NK-P10",
+    "CR-NK-P01q"
+  ],
+  "T0-model": [
+    "CR-WK-P02",
+    "CR-WK-P03",
+    "CR-MK-P03",
+    "CR-WK-P03-stock"
+  ],
+  "T0b": [
+    "BASE-python-prepared",
+    "CR-WK-P09",
+    "CR-WK-P09-hyd",
+    "CR-WK-P10-prep",
+    "CR-SK-P09",
+    "CR-SK-P09-hyd",
+    "CR-SK-P10-prep",
+    "CR-MK-P09",
+    "CR-MK-P09-hyd",
+    "CR-MK-P10-prep",
+    "CR-WPK-P09",
+    "BASE-rust-compiled",
+    "CR-MK-P11",
+    "CR-SK-P11"
+  ],
+  "T0b-preparation": [
+    "BASE-python-prepared",
+    "CR-WK-P09",
+    "CR-WK-P09-hyd",
+    "CR-WK-P10-prep",
+    "CR-SK-P09",
+    "CR-SK-P09-hyd",
+    "CR-SK-P10-prep",
+    "CR-MK-P09",
+    "CR-MK-P09-hyd",
+    "CR-MK-P10-prep",
+    "CR-WPK-P09"
+  ],
+  "T0b-compiled": [
+    "BASE-rust-compiled",
+    "CR-MK-P11",
+    "CR-SK-P11"
+  ],
+  "T0b-gap": [
+    "CR-WSP-P09-lease",
+    "CR-WSP-P09-lease-stop"
+  ]
+}

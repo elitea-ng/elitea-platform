@@ -1,0 +1,31 @@
+{
+  "id": "BASE-python-prepared",
+  "cell": "baseline (no fault): prepared Python node",
+  "now": "-",
+  "target": "R",
+  "matrix_cell": null,
+  "fixture": "python-prepared-sleep-50",
+  "trigger": {
+    "kind": "obs",
+    "until": "admitted",
+    "timeout_s": 30
+  },
+  "faults": [],
+  "expect": {
+    "takeovers": [
+      0
+    ],
+    "settlement": "SUCCEEDED",
+    "error_codes": [],
+    "budget_s": 420,
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    }
+  },
+  "repeat": 1,
+  "notes": "Control run: sets the job and preparation-count oracle.",
+  "gap": null,
+  "browser": false,
+  "tier": "T0b"
+}
