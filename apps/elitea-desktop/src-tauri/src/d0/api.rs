@@ -725,6 +725,96 @@ impl PlatformApi {
         )
         .await
     }
+
+    /// `startLocalChildTurn` (#1239): a nested agent of the turn's agent,
+    /// started as a cloud child turn under the live turn `execution_id`.
+    ///
+    /// # Errors
+    ///
+    /// No answer arrived, or an id is not a path segment.
+    pub async fn child_turn_start(
+        &self,
+        project_id: i64,
+        execution_id: &str,
+        body: &Value,
+    ) -> Result<Answer, ApiError> {
+        let execution = path_segment(execution_id)?;
+        self.send(
+            Method::POST,
+            &format!("/api/v2/elitea_core/local_child_turn/prompt_lib/{project_id}/{execution}"),
+            Some(body),
+            &[],
+        )
+        .await
+    }
+
+    /// `readLocalChildTurn` (#1239): the child's state.
+    ///
+    /// # Errors
+    ///
+    /// No answer arrived, or an id is not a path segment.
+    pub async fn child_turn_read(
+        &self,
+        project_id: i64,
+        execution_id: &str,
+        child_execution_id: &str,
+    ) -> Result<Answer, ApiError> {
+        let execution = path_segment(execution_id)?;
+        let child = path_segment(child_execution_id)?;
+        self.send(
+            Method::GET,
+            &format!(
+                "/api/v2/elitea_core/local_child_turn/prompt_lib/{project_id}/{execution}/{child}"
+            ),
+            None,
+            &[],
+        )
+        .await
+    }
+
+    /// `continueChatExecution` (`agent.continue.hitl.v1`) on a child's
+    /// conversation: the person's decision on its pause.
+    ///
+    /// # Errors
+    ///
+    /// No answer arrived, or an id is not a path segment.
+    pub async fn child_turn_decide(
+        &self,
+        project_id: i64,
+        conversation_uuid: &str,
+        body: &Value,
+    ) -> Result<Answer, ApiError> {
+        let conversation = path_segment(conversation_uuid)?;
+        self.send(
+            Method::POST,
+            &format!(
+                "/api/v2/elitea_core/continue_predict/prompt_lib/{project_id}/{conversation}?execution_contract=agent.continue.hitl.v1"
+            ),
+            Some(body),
+            &[],
+        )
+        .await
+    }
+
+    /// `cancelChatExecution` on a child's answer: stops the child.
+    ///
+    /// # Errors
+    ///
+    /// No answer arrived, or an id is not a path segment.
+    pub async fn child_turn_cancel(
+        &self,
+        project_id: i64,
+        response_message_id: &str,
+    ) -> Result<Answer, ApiError> {
+        let response = path_segment(response_message_id)?;
+        self.send(
+            Method::DELETE,
+            &format!("/api/v2/elitea_core/task/prompt_lib/{project_id}/{response}"),
+            None,
+            &[],
+        )
+        .await
+    }
 }
 
 /// Percent-encode one path segment (a conversation id is a number or a

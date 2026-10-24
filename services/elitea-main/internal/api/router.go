@@ -619,6 +619,11 @@ type RouterConfig struct {
 	// case. Composed wherever a database is configured; 501 where no toolkit
 	// worker is.
 	CurrentRemoteToolkit http.Handler
+	// CurrentChildTurns serves startLocalChildTurn and readLocalChildTurn
+	// (issue 1239): a desktop local turn's nested agent run as a cloud
+	// child. Composed wherever a database is configured; 501 where no agent
+	// plane is.
+	CurrentChildTurns http.Handler
 	// PlatformMCPTools is the bridge CurrentRemoteToolkit runs a platform MCP
 	// server's tool through (issue 1231); the router binds it to the MCP
 	// server it builds (mountMCPServerRoutes). Nil when not composed.

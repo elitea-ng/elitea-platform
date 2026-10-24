@@ -21,6 +21,7 @@
 //! * [`definition`] — what D0 runs, and the refusals for what it does not;
 //! * [`model`] — `ModelTransport` over `/llm` (llm-wire + reqwest);
 //! * [`remote_tools`] — `RemoteToolkit` tools (decision 3);
+//! * [`child_agent`] — nested agents as cloud child turns (#1239);
 //! * [`approvals`] — the person's prompt, bridged to the UI over IPC;
 //! * [`memory`] — the person's memories as the runtime's `MemoryStore`
 //!   (#1233), over the public memory routes;
@@ -50,6 +51,7 @@ pub mod approvals;
 pub mod attachments;
 pub mod cache;
 pub mod catalogue;
+pub mod child_agent;
 pub mod commits;
 pub mod context;
 pub mod definition;

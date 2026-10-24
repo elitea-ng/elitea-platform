@@ -2,10 +2,11 @@
 //! refusals for what it does not run locally yet.
 //!
 //! D0 runs one ordinary agent: its instructions, its model, its frozen
-//! skills and project context, and its credentialed toolkits and platform
-//! MCP servers as remote tools. A pipeline, a nested agent and a platform MCP
-//! server without a `toolkit_ref` (an older platform) are refused before the
-//! turn starts, so no execution is opened for them.
+//! skills and project context, its credentialed toolkits and platform MCP
+//! servers as remote tools, and its nested agents as cloud child turns
+//! (#1239, [`ChildAgentSpec`]). A pipeline, a nested pipeline and a platform
+//! MCP server without a `toolkit_ref` (an older platform) are refused before
+//! the turn starts, so no execution is opened for them.
 
 use serde_json::{Map, Value};
 
@@ -167,6 +168,19 @@ pub struct RemoteToolInfo {
     pub description: String,
 }
 
+/// One nested agent the model may call (#1239): it runs as a cloud child
+/// turn (`startLocalChildTurn`), never on this computer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChildAgentSpec {
+    /// The name the model sees (unique in the turn).
+    pub exposed_name: String,
+    pub application_id: i64,
+    pub version_id: i64,
+    /// The nested agent's name, as the parent's tool names it.
+    pub name: String,
+    pub description: String,
+}
+
 /// At most this many named tools reach one generic tool's description and
 /// enum (a server lists a few dozen).
 pub const MAX_NAMED_TOOLS: usize = 64;
@@ -177,6 +191,8 @@ pub struct Admitted {
     pub instructions: String,
     pub model: ModelSettings,
     pub remote_tools: Vec<RemoteToolSpec>,
+    /// The nested agents, each a cloud child tool (#1239).
+    pub child_agents: Vec<ChildAgentSpec>,
     /// Model steps per run: the workspace's own setting (see
     /// [`Admitted::with_workspace_step_limit`]), else the agent's
     /// `meta.step_limit`, else [`DEFAULT_STEP_LIMIT`]; at most
@@ -217,15 +233,13 @@ pub fn admit(resolved: &ResolvedVersion, reserved: &[&str]) -> Result<Admitted, 
         .and_then(Value::as_array)
         .map_or(&[][..], Vec::as_slice);
     let mut remote_tools = Vec::new();
+    let mut child_agents = Vec::new();
     for tool in tools {
         match tool.get("kind").and_then(Value::as_str) {
             Some("remote_toolkit") => remote_tools.extend(remote_specs(tool)?),
-            Some("application") => {
-                return Err(Refusal::new(
-                    "nested_agents_unsupported",
-                    "This agent uses other agents as tools, which do not run locally yet; run it in the cloud.",
-                ));
-            }
+            // A nested agent runs as a cloud child turn (#1239); a nested
+            // pipeline does not run from a workspace yet.
+            Some("application") => child_agents.push(child_spec(tool)?),
             // A platform MCP server runs on the platform like a credentialed
             // toolkit (ADR-0029 decision 3): a server that hands it a
             // `toolkit_ref` (client contract 1.16) is called through
@@ -248,6 +262,9 @@ pub fn admit(resolved: &ResolvedVersion, reserved: &[&str]) -> Result<Admitted, 
         }
     }
     name_tools(&mut remote_tools, reserved);
+    let mut taken: Vec<&str> = reserved.to_vec();
+    taken.extend(remote_tools.iter().map(|t| t.exposed_name.as_str()));
+    name_children(&mut child_agents, &taken);
     let model = model_settings(details)?;
     let edit_profile = EditProfile::select(&model.model_name, agent_edit_format(details));
     Ok(Admitted {
@@ -258,6 +275,7 @@ pub fn admit(resolved: &ResolvedVersion, reserved: &[&str]) -> Result<Admitted, 
             .to_owned(),
         model,
         remote_tools,
+        child_agents,
         step_limit: agent_step_limit(details).unwrap_or(DEFAULT_STEP_LIMIT),
         edit_profile,
         version_details: details.clone(),
@@ -498,6 +516,45 @@ fn remote_specs(tool: &Value) -> Result<Vec<RemoteToolSpec>, Refusal> {
     Ok(selected.into_iter().map(|name| spec(Some(name))).collect())
 }
 
+/// A nested agent's cloud child spec, or the refusal of what cannot run as
+/// one: a nested pipeline, or a reference without its ids.
+fn child_spec(tool: &Value) -> Result<ChildAgentSpec, Refusal> {
+    if tool.get("agent_type").and_then(Value::as_str) == Some("pipeline") {
+        return Err(Refusal::new(
+            "nested_agents_unsupported",
+            "This agent uses a pipeline as a tool, which does not run from a workspace yet; run it in the cloud.",
+        ));
+    }
+    let id = |key: &str| {
+        tool.get(key)
+            .and_then(Value::as_i64)
+            .filter(|id| *id > 0 && *id <= i64::from(i32::MAX))
+    };
+    let (Some(application_id), Some(version_id)) =
+        (id("application_id"), id("application_version_id"))
+    else {
+        return Err(Refusal::new(
+            "nested_agent_unresolved",
+            "A nested agent of this agent has no version reference; update the platform or run it in the cloud.",
+        ));
+    };
+    let text = |key: &str| {
+        tool.get(key)
+            .and_then(Value::as_str)
+            .filter(|v| !v.trim().is_empty())
+    };
+    Ok(ChildAgentSpec {
+        exposed_name: String::new(),
+        application_id,
+        version_id,
+        name: text("name")
+            .or_else(|| text("toolkit_name"))
+            .unwrap_or("nested_agent")
+            .to_owned(),
+        description: text("description").unwrap_or_default().to_owned(),
+    })
+}
+
 /// A platform MCP server's `tools` (`[{name, description}]`): named,
 /// de-duplicated, at most [`MAX_NAMED_TOOLS`].
 fn named_tools(tool: &Value) -> Vec<RemoteToolInfo> {
@@ -553,6 +610,39 @@ fn sanitize(value: &str) -> String {
     name
 }
 
+/// `base`, or `base_2`, `base_3` … when taken, within [`MAX_TOOL_NAME`].
+fn unique_name(base: &str, taken: &[String]) -> String {
+    let mut name = base.to_owned();
+    let mut n = 2;
+    while taken.iter().any(|t| t == &name) {
+        let suffix = format!("_{n}");
+        let mut trimmed = base.to_owned();
+        trimmed.truncate(MAX_TOOL_NAME - suffix.len());
+        name = format!("{trimmed}{suffix}");
+        n += 1;
+    }
+    name
+}
+
+/// The nested agents' tool names: the agent's name, sanitised, unique among
+/// `taken` (the local and remote names) and each other, and never in the
+/// local MCP tools' `mcp__` namespace.
+fn name_children(specs: &mut [ChildAgentSpec], taken: &[&str]) {
+    let mut taken: Vec<String> = taken.iter().map(|name| (*name).to_owned()).collect();
+    for spec in specs {
+        let mut base = sanitize(&spec.name);
+        if base.is_empty() {
+            base = "nested_agent".to_owned();
+        }
+        if base.starts_with(elitea_local_tools::mcp::naming::PREFIX) {
+            base = sanitize(&format!("agent_{base}"));
+        }
+        let name = unique_name(&base, &taken);
+        taken.push(name.clone());
+        spec.exposed_name = name;
+    }
+}
+
 /// `<toolkit>_<tool>` (or `<toolkit>_call` for `all_tools`), sanitised,
 /// unique, never one of the `reserved` local tool names and never in the
 /// local MCP tools' `mcp__` namespace.
@@ -569,15 +659,7 @@ fn name_tools(specs: &mut [RemoteToolSpec], reserved: &[&str]) {
         if base.starts_with(elitea_local_tools::mcp::naming::PREFIX) {
             base = sanitize(&format!("remote_{base}"));
         }
-        let mut name = base.clone();
-        let mut n = 2;
-        while taken.contains(&name) {
-            let suffix = format!("_{n}");
-            let mut trimmed = base.clone();
-            trimmed.truncate(MAX_TOOL_NAME - suffix.len());
-            name = format!("{trimmed}{suffix}");
-            n += 1;
-        }
+        let name = unique_name(&base, &taken);
         taken.push(name.clone());
         spec.exposed_name = name;
     }
@@ -746,13 +828,23 @@ mod tests {
             admit(&pipeline, &[]).unwrap_err().code,
             "pipeline_unsupported"
         );
-        let nested = resolved(json!({
+        // A nested pipeline does not run from a workspace (#1239).
+        let nested_pipeline = resolved(json!({
             "llm_settings": {"model_name": "m"},
-            "tools": [{"kind": "application", "type": "application", "application_id": 2, "application_version_id": 3}]
+            "tools": [{"kind": "application", "type": "application", "agent_type": "pipeline",
+                       "application_id": 2, "application_version_id": 3}]
         }));
         assert_eq!(
-            admit(&nested, &[]).unwrap_err().code,
+            admit(&nested_pipeline, &[]).unwrap_err().code,
             "nested_agents_unsupported"
+        );
+        let unresolved = resolved(json!({
+            "llm_settings": {"model_name": "m"},
+            "tools": [{"kind": "application", "type": "application", "application_id": 2}]
+        }));
+        assert_eq!(
+            admit(&unresolved, &[]).unwrap_err().code,
+            "nested_agent_unresolved"
         );
         let old_platform = resolved(json!({
             "llm_settings": {"model_name": "m"},
@@ -765,6 +857,38 @@ mod tests {
         );
         let no_model = resolved(json!({"tools": []}));
         assert_eq!(admit(&no_model, &[]).unwrap_err().code, "model_unresolved");
+    }
+
+    /// #1239 regression: before, any `application` tool refused the whole
+    /// definition (`nested_agents_unsupported`); now each nested agent is a
+    /// cloud child tool named after it, unique beside the local and remote
+    /// tools.
+    #[test]
+    fn nested_agent_is_a_cloud_child_tool() {
+        let admitted = admit(
+            &resolved(json!({
+                "llm_settings": {"model_name": "m"},
+                "tools": [
+                    toolkit(true, &[]),
+                    {"kind": "application", "type": "application", "agent_type": "agent",
+                     "name": "Jira call", "description": "Reads Jira.",
+                     "application_id": 2, "application_version_id": 3},
+                    {"kind": "application", "type": "application",
+                     "name": "read_file", "application_id": 4, "application_version_id": 5}
+                ]
+            })),
+            &["read_file"],
+        )
+        .unwrap();
+        assert_eq!(admitted.remote_tools[0].exposed_name, "Jira_call");
+        let children: Vec<_> = admitted
+            .child_agents
+            .iter()
+            .map(|c| (c.exposed_name.as_str(), c.application_id, c.version_id))
+            .collect();
+        assert_eq!(children, [("Jira_call_2", 2, 3), ("read_file_2", 4, 5)]);
+        assert_eq!(admitted.child_agents[0].name, "Jira call");
+        assert_eq!(admitted.child_agents[0].description, "Reads Jira.");
     }
 
     #[test]

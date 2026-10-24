@@ -47,7 +47,8 @@ use super::api::PlatformApi;
 use super::approvals::{
     MCP_AUTHORIZATION_PAYLOAD_KEY, REMOTE_PAYLOAD_KEY, TIMEOUT_ACTION, WAIT_PAYLOAD_KEY,
 };
-use super::definition::RemoteToolSpec;
+use super::child_agent::{ChildAgentContext, CloudChildAgentTool};
+use super::definition::{ChildAgentSpec, RemoteToolSpec};
 
 /// The toolset's name.
 pub const TOOLSET_NAME: &str = "remote_toolkits";
@@ -684,6 +685,21 @@ impl RemoteToolProvider {
                 })
                 .collect(),
         }
+    }
+
+    /// The turn's nested agents as cloud child tools (#1239), beside the
+    /// toolkits' tools: the same toolset, so plan mode and the local
+    /// sub-agents treat them alike.
+    #[must_use]
+    pub fn with_children(
+        mut self,
+        specs: &[ChildAgentSpec],
+        context: &Arc<ChildAgentContext>,
+    ) -> Self {
+        self.tools.extend(specs.iter().map(|spec| {
+            Arc::new(CloudChildAgentTool::new(spec.clone(), context.clone())) as Arc<dyn Tool>
+        }));
+        self
     }
 }
 
