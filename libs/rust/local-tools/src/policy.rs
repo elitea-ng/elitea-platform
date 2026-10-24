@@ -2,10 +2,10 @@
 //! 6), as far as local tools read it.
 //!
 //! The desktop receives the policy with every token response and enforces
-//! it here; the server cannot verify what a client did. Fields this crate
-//! does not use (`memory_write`, `cloud_sync`) are ignored when
-//! deserialising. Every default fails closed (`local_index` too: the server
-//! sends `true` by default, a policy without the field turns it off).
+//! it here; the server cannot verify what a client did. A field this crate
+//! does not use (`cloud_sync`) is ignored when deserialising. Every default
+//! fails closed (`local_index` and `memory_write` too: the server sends
+//! `true` by default, a policy without the field turns it off).
 
 use serde::{Deserialize, Serialize};
 
@@ -87,6 +87,11 @@ pub struct LocalWorkPolicy {
     /// own stdio MCP servers may run on this device ([`crate::mcp`]). Only
     /// with `allowed`; off when absent, and turning it off stops them.
     pub local_mcp: bool,
+    /// `local_work_memory_write` (ADR-0029 decision 8, #1233): a local turn
+    /// may save and delete the person's memories (`save_memory`,
+    /// `delete_memory`). Recall and `search_memory` never depend on it. Off
+    /// when absent: the tools are not offered and their calls are denied.
+    pub memory_write: bool,
 }
 
 impl Default for LocalWorkPolicy {
@@ -105,6 +110,7 @@ impl Default for LocalWorkPolicy {
             index_remote_embeddings: false,
             index_model_mirror_url: String::new(),
             local_mcp: false,
+            memory_write: false,
         }
     }
 }
@@ -118,7 +124,7 @@ mod tests {
         let policy: LocalWorkPolicy = serde_json::from_value(serde_json::json!({
             "allowed": true,
             "max_sandbox_mode": "full-access",
-            "memory_write": true,
+            "cloud_sync": true,
             "local_index": false
         }))
         .expect("parse");
@@ -163,5 +169,17 @@ mod tests {
         assert!(mcp.local_mcp);
         assert!(SandboxMode::ReadOnly < SandboxMode::WorkspaceWrite);
         assert!(SandboxMode::WorkspaceWrite < SandboxMode::FullAccess);
+    }
+
+    #[test]
+    fn memory_write_absent_is_off() {
+        let absent: LocalWorkPolicy =
+            serde_json::from_value(serde_json::json!({"allowed": true})).expect("parse");
+        assert!(!absent.memory_write);
+        assert!(!LocalWorkPolicy::default().memory_write);
+        let on: LocalWorkPolicy =
+            serde_json::from_value(serde_json::json!({"allowed": true, "memory_write": true}))
+                .expect("parse");
+        assert!(on.memory_write);
     }
 }

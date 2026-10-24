@@ -367,11 +367,13 @@ pub struct MemoryRecall {
 
 /// Personal memory, owned by Main: the only memory store (decision 8).
 ///
-/// No worker code exists yet: today Main recalls at admission
-/// (`ResolveCurrentMemoryRecall`) and the agent-facing tools are worker
-/// gate 7b. Cloud: a new runtime-context memory route. Desktop: the public
+/// The agent-facing tools over it are [`crate::memory_tools`] (worker gate
+/// 7b), the same for both hosts. Main recalls at admission
+/// (`ResolveCurrentMemoryRecall`). Desktop: the public
 /// `/memories/prompt_lib/{project}` routes, recall from decision 5c `start`.
-/// Neither host caches recall between turns.
+/// Cloud: a runtime-context memory route, not built yet (extraction stage
+/// 7), so the worker offers no memory tools today. Neither host caches
+/// recall between turns.
 #[async_trait]
 pub trait MemoryStore: Send + Sync {
     /// The recall for this turn, computed by Main for `input`.

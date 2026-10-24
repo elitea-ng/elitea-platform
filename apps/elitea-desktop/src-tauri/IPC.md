@@ -950,6 +950,21 @@ The `approval_request` card carries `mcp: {server, tool?, read_only}`
 report lists each call among its `commands` as `mcp <server> <tool>` with
 `mcp: {server, tool, read_only}`, never its arguments.
 
+## Memory tools (`src/d0/memory.rs`, `libs/rust/agent-runtime/src/memory_tools.rs`, #1233)
+
+No command or event of its own. Every workspace turn is offered the
+runtime's `search_memory`; with `local_work.memory_write` (off when
+absent) also `save_memory` and `delete_memory`, outside plan mode (a
+plan-mode turn gets them once its plan is accepted). They work on the
+person's memories in the turn's project over the public memory routes
+(`listMemories?q=`, `createMemory`, `deleteMemory`), with the turn's
+pinned credentials; recall stays what `start` answered. A call is an
+approval with `tool` `search_memory`, `save_memory` or `delete_memory`:
+search and save run without asking, a delete is always asked (never
+remembered; the card's `detail` is `memory <id>`). The commit's
+`local_work` report gains `memories_saved` and `memories_deleted` (the
+ids, in call order) when the turn saved or deleted one.
+
 ## Thread history (`src/history.rs`)
 
 | Command | Arguments | Result |

@@ -392,10 +392,25 @@ fn describe(request: &ApprovalRequest) -> Value {
             .ok()
             .and_then(|v| v.as_str().map(str::to_owned))
             .unwrap_or_default();
-        let detail = call
+        let mut detail = call
             .command
             .clone()
             .unwrap_or_else(|| call.paths.join(", "));
+        // A runtime memory call (#1233): the text it saves or searches for,
+        // or the memory it deletes.
+        if let Some(memory) = request
+            .payload
+            .get(elitea_agent_runtime::memory_tools::APPROVAL_PAYLOAD_KEY)
+        {
+            detail = match (
+                memory.get("content").and_then(Value::as_str),
+                memory.get("id"),
+            ) {
+                (Some(text), _) => cut(text, 4096),
+                (None, Some(id)) => format!("memory {id}"),
+                (None, None) => detail,
+            };
+        }
         let mut payload = json!({
             "tool": tool,
             "title": capitalised(&request.message),

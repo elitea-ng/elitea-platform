@@ -39,6 +39,7 @@ use elitea_agent_runtime::host::{
     ModelTransport, RunOutcome, ToolProvider, ToolsetRequest,
 };
 use elitea_agent_runtime::instruction_authority::InstructionPlan;
+use elitea_agent_runtime::memory_tools::{self, MemoryTools};
 use elitea_agent_runtime::planner::{self, Planner};
 use elitea_agent_runtime::request::ModelContextLimits;
 use elitea_agent_runtime::request::{
@@ -72,6 +73,7 @@ use super::definition::{self, Admitted, ModelChoice};
 use super::environment;
 use super::events::{EventEmitter, Phase, Timed, TurnEvents, UsageLane};
 use super::framing;
+use super::memory::PlatformMemoryStore;
 use super::mentions;
 use super::model::{GatewayTransport, TurnTail};
 use super::recorder::{self, FileChange, Recorder, ToolCalls};
@@ -411,8 +413,9 @@ const CONTEXT_WITHHELD: &str =
 
 /// The names a remote tool may not take: every local tool's, every index
 /// tool's (whether or not this workspace has an index: names stay stable as
-/// the index comes and goes) and the runtime's sub-agent tools (the
-/// `elitea_subagents` toolset every workspace turn is offered, #1226).
+/// the index comes and goes), the runtime's sub-agent tools (the
+/// `elitea_subagents` toolset every workspace turn is offered, #1226) and
+/// its memory tools (#1233, whatever the policy offers).
 fn local_tool_names() -> Vec<&'static str> {
     TOOLS
         .iter()
@@ -420,6 +423,7 @@ fn local_tool_names() -> Vec<&'static str> {
         .map(|tool| tool.name)
         .chain(INDEX_TOOLS)
         .chain(subagents::TOOL_NAMES)
+        .chain(memory_tools::TOOL_NAMES)
         .collect()
 }
 
@@ -2822,6 +2826,41 @@ impl AgentHost {
         // The runtime's sub-agents, offered to every workspace turn, plan
         // mode included (a child only reads).
         extra_tools.extend(subagents::TOOL_NAMES.iter().map(|name| (*name).to_owned()));
+        // The runtime's memory tools over the person's memories in the
+        // turn's project (#1233): `search_memory` always; `save_memory` and
+        // `delete_memory` only with `memory_write`, and in plan mode only
+        // once the plan is accepted (the gate). A sub-agent gets none. Every
+        // call goes through the session's rules (search and save allowed,
+        // delete asked).
+        let memory_write = workspace.policy.memory_write;
+        let memories = MemoryTools::new(Arc::new(PlatformMemoryStore::new(
+            api.clone(),
+            request.project_id,
+            elitea_agent_runtime::host::MemoryRecall {
+                instruction_text: started.memory_recall.text.clone(),
+                // The commit's `memories_used` is stamped server-side.
+                used: Vec::new(),
+            },
+            memory_write,
+            recorder.clone(),
+        )))
+        .with_writes(memory_write)
+        .with_write_gate({
+            let session = workspace.session.clone();
+            Arc::new(move || session.profile() != PermissionProfile::Plan)
+        })
+        .with_approvals(workspace.session.approvals());
+        extra_tools.push(memory_tools::SEARCH_MEMORY.to_owned());
+        // What a plan-mode turn is offered once its plan is accepted.
+        let mut build_extra_tools = extra_tools.clone();
+        if memory_write {
+            build_extra_tools.extend(
+                [memory_tools::SAVE_MEMORY, memory_tools::DELETE_MEMORY].map(str::to_owned),
+            );
+            if !request.plan_mode {
+                extra_tools.clone_from(&build_extra_tools);
+            }
+        }
         facts.tools.extend(extra_tools.iter().cloned());
         // A command's expansion, framed under the thread's nonce, is the
         // person's message to the model; anything else goes as typed.
@@ -3036,7 +3075,7 @@ impl AgentHost {
                 folder: folder.to_owned(),
                 policy: workspace.policy.clone(),
                 mentioned: mentioned.to_vec(),
-                extra_tools: extra_tools.clone(),
+                extra_tools: build_extra_tools,
             }
             .bind_builder(builder);
         }
@@ -3066,6 +3105,15 @@ impl AgentHost {
         }
         builder = builder.toolset(Arc::new(ObservedToolset::new(
             planner.toolset(),
+            ToolObserver {
+                session: None,
+                planner: None,
+                ..observer.clone()
+            },
+            false,
+        )) as Arc<dyn Toolset>);
+        builder = builder.toolset(Arc::new(ObservedToolset::new(
+            memories.toolset(),
             ToolObserver {
                 session: None,
                 planner: None,

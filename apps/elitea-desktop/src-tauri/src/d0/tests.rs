@@ -7897,3 +7897,280 @@ async fn repo_mcp_json_is_proposed_not_started() {
         offered[before]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Memory tools (#1233)
+// ---------------------------------------------------------------------------
+
+/// A policy with local work on and `memory_write` as given.
+fn memory_policy(memory_write: bool) -> Option<Value> {
+    Some(json!({"allowed": true, "shell": true, "memory_write": memory_write}))
+}
+
+/// The person's memories on the mock platform: `(id, content, enabled)`.
+type Memories = Arc<Mutex<Vec<(u64, String, bool)>>>;
+
+/// [`platform`] with the memory routes over `memories` and a model that
+/// makes `calls` one per step, then says "Done.".
+async fn memories_platform(calls: Vec<(String, String, Value)>, memories: Memories) -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    let steps = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        let path = req.path.as_str();
+        if path == "/llm/v1/chat/completions" {
+            return match calls.get(steps.fetch_add(1, Ordering::SeqCst)) {
+                Some((id, name, args)) => tool_call(id, name, args),
+                None => say("Done."),
+            };
+        }
+        let list = "/api/v2/elitea_core/memories/prompt_lib/1";
+        let item = |(id, content, enabled): &(u64, String, bool)| {
+            json!({"id": id.to_string(), "project_id": "1", "content": content, "tags": [],
+                "enabled": enabled, "created_at": "2026-10-01T00:00:00Z",
+                "updated_at": "2026-10-01T00:00:00Z"})
+        };
+        if path == list && req.method == "POST" {
+            let body: Value = serde_json::from_str(&req.body).unwrap();
+            let mut memories = memories.lock().unwrap();
+            let id = memories.len() as u64 + 1;
+            memories.push((id, body["content"].as_str().unwrap().to_owned(), true));
+            return Res::json(201, &item(memories.last().unwrap()));
+        }
+        if (path == list || path.starts_with(&format!("{list}?"))) && req.method == "GET" {
+            let query = path
+                .split_once("?q=")
+                .map(|(_, q)| {
+                    url::form_urlencoded::parse(format!("q={q}").as_bytes())
+                        .next()
+                        .unwrap()
+                        .1
+                        .to_lowercase()
+                })
+                .unwrap_or_default();
+            let items: Vec<Value> = memories
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, content, _)| content.to_lowercase().contains(&query))
+                .rev()
+                .map(item)
+                .collect();
+            return Res::json(200, &json!({"total": items.len(), "items": items}));
+        }
+        if let Some(id) = path.strip_prefix("/api/v2/elitea_core/memory/prompt_lib/1/")
+            && req.method == "DELETE"
+        {
+            let id: u64 = id.parse().unwrap();
+            memories
+                .lock()
+                .unwrap()
+                .retain(|(known, _, _)| *known != id);
+            return Res {
+                status: 204,
+                headers: Vec::new(),
+                body: String::new(),
+                raw: Vec::new(),
+            };
+        }
+        inner(req)
+    })
+    .await
+}
+
+fn memory_call(id: &str, name: &str, args: Value) -> (String, String, Value) {
+    (id.to_owned(), name.to_owned(), args)
+}
+
+/// The committed tool result of call `run_id`, as JSON.
+fn committed_output(server: &MockServer, run_id: &str) -> Value {
+    let commit = commit_bodies(server).pop().expect("a commit");
+    let output = commit["tool_calls"][run_id]["tool_output"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no output for {run_id}: {commit}"));
+    serde_json::from_str(output).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn memory_tools_absent_when_memory_write_is_off() {
+    for (policy, offered) in [
+        (allowed(), vec!["search_memory"]),
+        (memory_policy(false), vec!["search_memory"]),
+        // The host sends its tools sorted by name (a stable prompt prefix).
+        (
+            memory_policy(true),
+            vec!["delete_memory", "save_memory", "search_memory"],
+        ),
+    ] {
+        let server = serve(platform(agent_details(), &[])).await;
+        let h = harness(server, policy.clone(), UiDecision::AllowOnce).await;
+        run_turn(&h, "hello").await;
+        let tools = offered_tools(&h.server);
+        let memory: Vec<&str> = tools
+            .iter()
+            .map(String::as_str)
+            .filter(|name| elitea_agent_runtime::memory_tools::TOOL_NAMES.contains(name))
+            .collect();
+        assert_eq!(memory, offered, "{policy:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plan_mode_offers_search_memory_only() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, memory_policy(true), UiDecision::AllowOnce).await;
+    let mut req = request(&h.workspace_id);
+    req.plan_mode = true;
+    h.host.start(req).await.unwrap();
+    until_done(&h).await;
+    let tools = offered_tools(&h.server);
+    assert!(tools.iter().any(|t| t == "search_memory"), "{tools:?}");
+    assert!(
+        !tools
+            .iter()
+            .any(|t| t == "save_memory" || t == "delete_memory"),
+        "{tools:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn save_memory_posts_to_create_memory_with_the_turn_project() {
+    let memories = Memories::default();
+    let server = memories_platform(
+        vec![memory_call(
+            "call-save",
+            "save_memory",
+            json!({"content": "This repo uses pnpm."}),
+        )],
+        memories.clone(),
+    )
+    .await;
+    let h = harness(server, memory_policy(true), UiDecision::Deny).await;
+    let events = {
+        h.host.start(request(&h.workspace_id)).await.unwrap();
+        until_done(&h).await
+    };
+    // Allowed by default: nobody was asked (the UI would have denied it).
+    assert!(of_kind(&events, "approval_request").is_empty());
+    let posts: Vec<Req> = seen(&h.server, "/api/v2/elitea_core/memories/prompt_lib/1")
+        .into_iter()
+        .filter(|req| req.method == "POST")
+        .collect();
+    assert_eq!(posts.len(), 1);
+    let body: Value = serde_json::from_str(&posts[0].body).unwrap();
+    assert_eq!(body, json!({"content": "This repo uses pnpm."}));
+    assert_eq!(
+        committed_output(&h.server, "call-save"),
+        json!({"status": "ok", "id": 1})
+    );
+    let commit = commit_bodies(&h.server).pop().unwrap();
+    assert_eq!(commit["local_work"]["memories_saved"], json!([1]));
+    assert!(commit["local_work"].get("memories_deleted").is_none());
+    // The call is in the transcript with what it saved.
+    assert_eq!(
+        commit["tool_calls"]["call-save"]["tool_inputs"]["content"],
+        "This repo uses pnpm."
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delete_memory_is_asked_by_default() {
+    for (decision, deleted) in [(UiDecision::Deny, false), (UiDecision::AllowOnce, true)] {
+        let memories = Memories::default();
+        memories
+            .lock()
+            .unwrap()
+            .push((1, "uses npm".to_owned(), true));
+        let server = memories_platform(
+            vec![memory_call(
+                "call-delete",
+                "delete_memory",
+                json!({"id": 1}),
+            )],
+            memories.clone(),
+        )
+        .await;
+        let h = harness(server, memory_policy(true), decision.clone()).await;
+        h.host.start(request(&h.workspace_id)).await.unwrap();
+        let events = until_done(&h).await;
+        let asked = of_kind(&events, "approval_request");
+        assert_eq!(asked.len(), 1, "{decision:?}");
+        assert_eq!(asked[0]["tool"], "delete_memory");
+        assert_eq!(asked[0]["detail"], "memory 1");
+        assert_eq!(asked[0]["can_remember"], false);
+        let deletes = seen(&h.server, "/api/v2/elitea_core/memory/prompt_lib/1/1");
+        assert_eq!(deletes.len(), usize::from(deleted), "{decision:?}");
+        assert_eq!(memories.lock().unwrap().is_empty(), deleted);
+        let commit = commit_bodies(&h.server).pop().unwrap();
+        if deleted {
+            assert_eq!(commit["local_work"]["memories_deleted"], json!([1]));
+        } else {
+            assert_eq!(
+                committed_output(&h.server, "call-delete")["code"],
+                "rejected"
+            );
+            assert!(commit["local_work"].get("memories_deleted").is_none());
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_memory_write_the_policy_turned_off_is_refused_and_nothing_is_sent() {
+    let memories = Memories::default();
+    let server = memories_platform(
+        vec![memory_call(
+            "call-save",
+            "save_memory",
+            json!({"content": "uses pnpm"}),
+        )],
+        memories.clone(),
+    )
+    .await;
+    let h = harness(server, memory_policy(false), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h).await;
+    // A tool the turn did not offer is not run.
+    assert!(memories.lock().unwrap().is_empty());
+    assert!(
+        seen(&h.server, "/api/v2/elitea_core/memories/prompt_lib/1")
+            .iter()
+            .all(|req| req.method != "POST")
+    );
+}
+
+/// The shared conformance fixture
+/// (`libs/rust/agent-runtime/tests/fixtures/memory_conformance.json`): the
+/// desktop answers each call exactly as the runtime's in-memory host does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_desktop_answers_the_shared_memory_fixture() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../libs/rust/agent-runtime/tests/fixtures/memory_conformance.json"
+    ))
+    .unwrap();
+    let calls: Vec<(String, String, Value, Value)> = fixture["calls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|call| {
+            (
+                call["id"].as_str().unwrap().to_owned(),
+                call["tool"].as_str().unwrap().to_owned(),
+                call["args"].clone(),
+                call["result"].clone(),
+            )
+        })
+        .collect();
+    let server = memories_platform(
+        calls
+            .iter()
+            .map(|(id, tool, args, _)| (id.clone(), tool.clone(), args.clone()))
+            .collect(),
+        Memories::default(),
+    )
+    .await;
+    let h = harness(server, memory_policy(true), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h).await;
+    for (id, tool, _, expected) in &calls {
+        assert_eq!(&committed_output(&h.server, id), expected, "{tool} ({id})");
+    }
+}

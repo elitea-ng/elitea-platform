@@ -58,10 +58,23 @@
 //! | starting a local MCP server ([`ToolKind::McpStart`], #1230) | allowed when its sandbox hides what the session denies and its network is off; a server with the network is asked once per app session; one its sandbox cannot confine is asked at every start; a `forbidden` (or `prompt`) prefix rule matching its command and arguments refuses (asks); never remembered |
 //! | an MCP tool ([`ToolKind::McpCall`]) | asked on first use per (server, tool); "always allow" is remembered for that server's tool in this workspace (the choice store); a tool the person marked read-only (or whose read-only hint they trust) is allowed, and is the only kind plan mode keeps |
 //!
+//! | `search_memory` ([`ToolKind::SearchMemory`], #1233) | allowed (it only reads; kept in plan mode) |
+//! | `save_memory` ([`ToolKind::SaveMemory`]) | allowed (the transcript shows the saved text; the person deletes it in Settings → Memory); denied in plan mode |
+//! | `delete_memory` ([`ToolKind::DeleteMemory`]) | asked every time (it removes data the person may have saved on the web); never remembered; denied in plan mode |
+//!
 //! The policy ceiling for both MCP rows is `local_mcp`: off (or absent),
 //! every start and every call is denied. `path_deny` cannot be enforced
 //! inside a server's own reads beyond the sandbox, which already masks the
 //! `path_deny` paths.
+//!
+//! The memory rows' ceiling is `memory_write`: off (or absent), a save or a
+//! delete is denied (the host does not offer them either); a search needs
+//! only `allowed`. The memory tools are the runtime's
+//! ([`elitea_agent_runtime::memory_tools`]): their approval requests carry
+//! [`elitea_agent_runtime::memory_tools::APPROVAL_PAYLOAD_KEY`], which
+//! [`RuleApprovals`] reads as the matching [`ToolKind`]. Workspace rules and
+//! remembered choices do not apply to them (a memory names no path or
+//! command); only these defaults do.
 //!
 //! Layers 1 and 2 only tighten these defaults. Layers 3 and 4 can also
 //! loosen them: a workspace allow or a remembered choice allows a call the
@@ -175,6 +188,12 @@ pub enum ToolKind {
     McpStart,
     /// Calling a tool of a local MCP server ([`ToolCall::mcp`]).
     McpCall,
+    /// `search_memory`: reading the person's saved memories (#1233).
+    SearchMemory,
+    /// `save_memory`: saving one memory to the platform.
+    SaveMemory,
+    /// `delete_memory`: deleting one of the person's memories.
+    DeleteMemory,
 }
 
 impl ToolKind {
@@ -191,6 +210,7 @@ impl ToolKind {
                 | Self::ReadDocument
                 | Self::GitRead
                 | Self::ProcessRead
+                | Self::SearchMemory
         )
     }
 
@@ -223,6 +243,27 @@ impl ToolKind {
     #[must_use]
     pub const fn is_mcp(self) -> bool {
         matches!(self, Self::McpStart | Self::McpCall)
+    }
+
+    /// Whether it is one of the runtime's memory tools.
+    #[must_use]
+    pub const fn is_memory(self) -> bool {
+        matches!(
+            self,
+            Self::SearchMemory | Self::SaveMemory | Self::DeleteMemory
+        )
+    }
+
+    /// The memory tool named `name`, as the runtime names it.
+    #[must_use]
+    pub fn memory_tool(name: &str) -> Option<Self> {
+        use elitea_agent_runtime::memory_tools::{DELETE_MEMORY, SAVE_MEMORY, SEARCH_MEMORY};
+        match name {
+            SEARCH_MEMORY => Some(Self::SearchMemory),
+            SAVE_MEMORY => Some(Self::SaveMemory),
+            DELETE_MEMORY => Some(Self::DeleteMemory),
+            _ => None,
+        }
     }
 }
 
@@ -772,6 +813,9 @@ impl RulesEngine {
         if call.tool.is_mcp() {
             return self.decide_mcp(call);
         }
+        if call.tool.is_memory() {
+            return self.decide_memory(call);
+        }
         if call.tool == ToolKind::ExitPlanMode {
             // The person's every time: no workspace rule and no remembered
             // choice may accept a plan.
@@ -939,6 +983,12 @@ impl RulesEngine {
             if let Some(error) = denied {
                 return deny(error.message().to_owned());
             }
+        }
+        if call.tool.is_memory() {
+            if call.tool != ToolKind::SearchMemory && !self.policy.memory_write {
+                return deny("saving and deleting memories is disabled by policy".to_owned());
+            }
+            return None;
         }
         if call.tool.is_mcp() {
             if !self.policy.local_mcp {
@@ -1452,6 +1502,12 @@ impl RulesEngine {
     /// compound command, or a command that would run unconfined. The one precondition [`Self::can_remember`] and
     /// [`Self::remember`] share.
     fn never_remembered(&self, call: &ToolCall) -> Option<ToolError> {
+        if call.tool.is_memory() {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "memory calls follow the defaults; a delete is asked every time",
+            ));
+        }
         if call.tool == ToolKind::ExitPlanMode {
             return Some(ToolError::new(
                 ErrorCode::Denied,
@@ -1526,6 +1582,37 @@ fn mcp_choice_key(target: &McpTarget) -> Option<Vec<String>> {
 }
 
 impl RulesEngine {
+    /// The memory rows of the default table, under the policy ceiling
+    /// (checked by [`Self::decide`] first).
+    fn decide_memory(&self, call: &ToolCall) -> Decision {
+        if call.tool == ToolKind::SearchMemory {
+            return Decision::new(
+                Verdict::Allow,
+                Source::Default,
+                "searching saved memories only reads",
+            );
+        }
+        if self.plan_mode() {
+            return Decision::new(
+                Verdict::Deny,
+                Source::PlanMode,
+                "plan mode allows read-only tools until the plan is accepted",
+            );
+        }
+        if call.tool == ToolKind::SaveMemory {
+            return Decision::new(
+                Verdict::Allow,
+                Source::Default,
+                "a saved memory is shown in the transcript and can be deleted in Settings",
+            );
+        }
+        Decision::new(
+            Verdict::Ask,
+            Source::Default,
+            "deleting removes a memory you may have saved on the web",
+        )
+    }
+
     /// The MCP rows of the default table, under the policy ceiling (checked
     /// by [`Self::decide`] first).
     fn decide_mcp(&self, call: &ToolCall) -> Decision {
@@ -1624,6 +1711,24 @@ impl RuleApprovals {
     }
 }
 
+/// A runtime memory tool's request ([`elitea_agent_runtime::memory_tools`]),
+/// as the rules see it: its [`ToolKind`], also put under [`PAYLOAD_KEY`] so
+/// the host's prompt describes it like any local call.
+fn memory_call(request: &mut ApprovalRequest) -> Option<ToolCall> {
+    use elitea_agent_runtime::memory_tools::APPROVAL_PAYLOAD_KEY;
+    let tool = request
+        .payload
+        .get(APPROVAL_PAYLOAD_KEY)?
+        .get("tool")?
+        .as_str()
+        .and_then(ToolKind::memory_tool)?;
+    let call = ToolCall::new(tool);
+    if let Value::Object(payload) = &mut request.payload {
+        payload.insert(PAYLOAD_KEY.to_owned(), json!(call));
+    }
+    Some(call)
+}
+
 /// A decision answered inline, as the model sees it (a repository's
 /// justification left out).
 fn decided(action: &str, decision: &Decision) -> ApprovalOutcome {
@@ -1648,7 +1753,8 @@ impl ApprovalChannel for RuleApprovals {
             .payload
             .get(PAYLOAD_KEY)
             .cloned()
-            .and_then(|value| serde_json::from_value::<ToolCall>(value).ok());
+            .and_then(|value| serde_json::from_value::<ToolCall>(value).ok())
+            .or_else(|| memory_call(&mut request));
         let Some(call) = call else {
             return self.prompt.request(request).await;
         };
@@ -1757,6 +1863,7 @@ mod tests {
             index_remote_embeddings: false,
             index_model_mirror_url: String::new(),
             local_mcp: true,
+            memory_write: true,
         }
     }
 
@@ -3832,6 +3939,85 @@ mod tests {
             verdict(&engine, &mcp_call("delete_repo", false)),
             (Verdict::Ask, Source::Default)
         );
+    }
+
+    #[test]
+    fn memory_defaults_allow_search_and_save_and_ask_delete() {
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        let search = ToolCall::new(ToolKind::SearchMemory);
+        let save = ToolCall::new(ToolKind::SaveMemory);
+        let delete = ToolCall::new(ToolKind::DeleteMemory);
+        assert_eq!(verdict(&engine, &search), (Verdict::Allow, Source::Default));
+        assert_eq!(verdict(&engine, &save), (Verdict::Allow, Source::Default));
+        assert_eq!(verdict(&engine, &delete), (Verdict::Ask, Source::Default));
+        assert!(
+            !engine.can_remember(&delete),
+            "a delete is asked every time"
+        );
+        engine.set_profile(PermissionProfile::Plan);
+        assert_eq!(verdict(&engine, &search), (Verdict::Allow, Source::Default));
+        assert_eq!(verdict(&engine, &save), (Verdict::Deny, Source::PlanMode));
+        assert_eq!(verdict(&engine, &delete), (Verdict::Deny, Source::PlanMode));
+    }
+
+    #[test]
+    fn memory_write_off_denies_save_and_delete_but_not_search() {
+        let off = LocalWorkPolicy {
+            memory_write: false,
+            ..policy()
+        };
+        let (_dir, engine) = engine_with(off, Vec::new());
+        for tool in [ToolKind::SaveMemory, ToolKind::DeleteMemory] {
+            assert_eq!(
+                verdict(&engine, &ToolCall::new(tool)),
+                (Verdict::Deny, Source::Policy)
+            );
+        }
+        assert_eq!(
+            verdict(&engine, &ToolCall::new(ToolKind::SearchMemory)),
+            (Verdict::Allow, Source::Default)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_channel_reads_a_runtime_memory_request_as_its_tool_kind() {
+        use elitea_agent_runtime::memory_tools::{
+            APPROVAL_PAYLOAD_KEY, DELETE_MEMORY, SAVE_MEMORY,
+        };
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        let prompt = Arc::new(ScriptedPrompt {
+            answer: ApprovalOutcome::Decided {
+                action: "approve".to_owned(),
+                value: json!({}),
+            },
+            seen: Mutex::new(Vec::new()),
+        });
+        let channel = RuleApprovals::new(Arc::new(engine), prompt.clone());
+        let memory = |call: serde_json::Value| ApprovalRequest {
+            subject: "call-1".to_owned(),
+            message: "memory".to_owned(),
+            available_actions: vec!["approve".to_owned(), "reject".to_owned()],
+            payload: json!({ APPROVAL_PAYLOAD_KEY: call }),
+        };
+        // A save is allowed by the rules: the person is not asked.
+        let saved = channel
+            .request(memory(json!({"tool": SAVE_MEMORY, "content": "uses pnpm"})))
+            .await
+            .expect("save");
+        assert!(
+            matches!(saved, ApprovalOutcome::Decided { ref action, .. } if action == "approve")
+        );
+        assert!(prompt.seen.lock().expect("lock").is_empty());
+        // A delete is asked, approve or reject only, described as a local call.
+        channel
+            .request(memory(json!({"tool": DELETE_MEMORY, "id": 4})))
+            .await
+            .expect("delete");
+        let seen = prompt.seen.lock().expect("lock");
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].available_actions, ["approve", "reject"]);
+        assert_eq!(seen[0].payload[PAYLOAD_KEY]["tool"], "delete_memory");
+        assert_eq!(seen[0].payload[APPROVAL_PAYLOAD_KEY]["id"], 4);
     }
 
     #[test]

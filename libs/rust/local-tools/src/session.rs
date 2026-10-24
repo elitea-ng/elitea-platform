@@ -1196,8 +1196,13 @@ impl LocalSession {
             ToolKind::ProcessRead | ToolKind::ProcessWrite | ToolKind::ProcessKill => {
                 self.process_tool(spec.name, call_id, args).await
             }
-            // MCP tools are no `ToolSpec`: their own toolset calls them.
-            ToolKind::McpStart | ToolKind::McpCall => Err(ToolError::new(
+            // MCP and memory tools are no `ToolSpec`: their own toolsets
+            // call them.
+            ToolKind::McpStart
+            | ToolKind::McpCall
+            | ToolKind::SearchMemory
+            | ToolKind::SaveMemory
+            | ToolKind::DeleteMemory => Err(ToolError::new(
                 ErrorCode::Denied,
                 format!("`{tool}` is not available"),
             )),
