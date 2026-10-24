@@ -24,6 +24,11 @@
 /// Supervisor ledger failure code for a lost runtime. Earlier Workers read it
 /// as an ordinary sandbox failure; it fits the ledger `failure_code` check.
 pub const FAILURE_CODE: &str = "sandbox.runtime_lost";
+/// Supervisor failure codes written only before the job's dispatch fence, when
+/// the runtime never became ready (its provisioning died with its owner). The
+/// runner waits for the dispatch file, so user code never started: the attempt
+/// can be re-run like a lost runtime, whatever the node's platform client.
+pub const NEVER_DISPATCHED_FAILURE_CODES: [&str; 1] = ["sandbox.preparation_incomplete"];
 /// Synthesized envelope status. Only the runtime adapters produce it.
 pub(crate) const RECEIPT_STATUS: &str = "runtime_lost";
 /// Exit codes of a runner that did not finish: SIGKILL and SIGTERM from outside
@@ -233,7 +238,7 @@ mod tests {
         );
         assert_eq!(policy["retry_window_ms"], RUNTIME_LOST_RETRY_WINDOW_MS);
         let terminal = crate::protocol::output::runtime_error(
-            crate::protocol::output::model_failure(Some("pipeline.code_failed")),
+            crate::protocol::output::model_failure(Some("pipeline.code_runtime_unavailable")),
         );
         let name =
             crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::try_from(terminal.code)
@@ -246,6 +251,12 @@ mod tests {
                 .map(|code| format!("RUNTIME_ERROR_CODE_V1_{code}"))
                 .as_deref()
         );
+        // Main accepts exactly this sentence for the code, as retryable.
+        assert_eq!(
+            terminal.safe_message,
+            "A required runtime dependency is unavailable."
+        );
+        assert!(terminal.retryable);
     }
 
     #[test]

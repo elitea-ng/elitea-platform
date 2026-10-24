@@ -50,6 +50,10 @@ impl CodePreparationFailure {
     }
 }
 
+/// Upstream code of an infrastructure Code failure. It projects to the existing
+/// `DEPENDENCY_UNAVAILABLE` runtime error Main already accepts (retryable).
+pub(crate) const CODE_RUNTIME_UNAVAILABLE: &str = "pipeline.code_runtime_unavailable";
+
 fn terminal_failure_code(
     class: NodeFailureClass,
     preparation: Option<CodePreparationFailure>,
@@ -60,19 +64,27 @@ fn terminal_failure_code(
         | NodeFailureClass::AuthorizationDenied
         | NodeFailureClass::SensitiveRejected => Some("pipeline.code_authorization_failed"),
         NodeFailureClass::Cancelled if preparation.is_none() => Some("pipeline.code_cancelled"),
+        // The platform, not the code, failed (a lost or never-ready runtime,
+        // an unavailable dependency): an infrastructure failure, never the
+        // "check its source" Code text.
         NodeFailureClass::DependencyUnavailable
+        | NodeFailureClass::WorkerInterrupted
+        | NodeFailureClass::RuntimeLost
+            if preparation.is_none() =>
+        {
+            Some(CODE_RUNTIME_UNAVAILABLE)
+        }
+        NodeFailureClass::DependencyUnavailable
+        | NodeFailureClass::WorkerInterrupted
+        | NodeFailureClass::RuntimeLost
         | NodeFailureClass::RateLimited
         | NodeFailureClass::AttemptTimeout
-        | NodeFailureClass::WorkerInterrupted
         | NodeFailureClass::InvalidConfiguration
         | NodeFailureClass::InvalidInput
         | NodeFailureClass::InvalidResult
         | NodeFailureClass::ModelOutputIncomplete
         | NodeFailureClass::Cancelled
-        | NodeFailureClass::Unknown
-        // Lost-runtime re-runs exhausted or out of time: the same typed Code
-        // failure Main and Web already render (wire-compatible).
-        | NodeFailureClass::RuntimeLost => {
+        | NodeFailureClass::Unknown => {
             Some(preparation.map_or("pipeline.code_failed", CodePreparationFailure::code))
         }
     }

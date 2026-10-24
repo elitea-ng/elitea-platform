@@ -15,6 +15,9 @@ use adk_rust::graph::GraphError;
 pub(super) enum CodePreparationFailure {
     Existing(GraphError),
     Workspace(CodeWorkspaceFailure),
+    /// The platform failed around a successful compile (publication, or an
+    /// unconfirmed compilation): an infrastructure failure, not the code's.
+    Unavailable(GraphError),
 }
 impl From<GraphError> for CodePreparationFailure {
     fn from(error: GraphError) -> Self {
@@ -30,18 +33,19 @@ impl CodePreparationFailure {
     pub(super) fn class(&self) -> NodeFailureClass {
         match self {
             Self::Existing(_) => NodeFailureClass::Unknown,
+            Self::Unavailable(_) => NodeFailureClass::DependencyUnavailable,
             Self::Workspace(error) => error.class(),
         }
     }
     pub(super) fn phase(&self) -> CodeAttemptPhase {
         match self {
-            Self::Existing(_) => CodeAttemptPhase::Preparation,
+            Self::Existing(_) | Self::Unavailable(_) => CodeAttemptPhase::Preparation,
             Self::Workspace(_) => CodeAttemptPhase::Hydration,
         }
     }
     fn into_graph_error(self) -> GraphError {
         match self {
-            Self::Existing(error) => error,
+            Self::Existing(error) | Self::Unavailable(error) => error,
             Self::Workspace(_) => failed("Code repository preparation is refused or unconfirmed."),
         }
     }
@@ -318,7 +322,7 @@ impl RemoteCodeRuntime {
                     ),
                 )
                 .await
-                .map_err(|_| super::uncertain())?;
+                .map_err(|_| CodePreparationFailure::Unavailable(super::uncertain()))?;
                 match result {
                     Ok(CompilationOutcome::Captured { canonical, .. }) => {
                         self.journal
@@ -337,23 +341,27 @@ impl RemoteCodeRuntime {
                     Ok(CompilationOutcome::Cancelled) => {
                         return Err(failed("Compilation was cancelled.").into());
                     }
-                    Ok(
-                        CompilationOutcome::Failed { code }
-                        | CompilationOutcome::Uncertain { code },
-                    ) => return Err(failed(&code).into()),
+                    // The compiler's own failure is the code's; an unconfirmed
+                    // compilation is the platform's.
+                    Ok(CompilationOutcome::Failed { code }) => return Err(failed(&code).into()),
+                    Ok(CompilationOutcome::Uncertain { code }) => {
+                        return Err(CodePreparationFailure::Unavailable(failed(&code)));
+                    }
                     Err(error) if super::preparation::retryable(&error) => {}
                     Err(error) => return Err(failed(&error.to_string()).into()),
                 }
                 if tokio::time::Instant::now() >= deadline {
-                    return Err(super::uncertain().into());
+                    return Err(CodePreparationFailure::Unavailable(super::uncertain()));
                 }
                 tokio::time::sleep(code_timing::CODE_FAST_RECONCILE_INTERVAL).await;
             }
         };
         let selected = SelectedSnapshot::select(binding.clone(), canonical.clone())
             .map_err(|_| failed("Captured snapshot metadata is invalid."))?;
+        // The compile succeeded: a publication failure is never the code's.
         self.publish_compilation(profile, job, &binding, &canonical, activation, deadline)
-            .await?;
+            .await
+            .map_err(CodePreparationFailure::Unavailable)?;
         self.journal
             .resolve(&scope, activation, &digest, profile.client.audience())
             .await
@@ -437,6 +445,17 @@ mod tests {
         assert!(!public_error.contains("synthetic-secret"));
         assert!(!public_error.contains("private.invalid"));
     }
+    /// FU-230: a publication or unconfirmed compilation is the platform's
+    /// failure: an infrastructure class, never the user-Code `Unknown` text.
+    #[test]
+    fn platform_failures_around_a_compile_are_infrastructure_typed() {
+        let unavailable = CodePreparationFailure::Unavailable(failed("sandbox.receipt_invalid"));
+        assert_eq!(unavailable.class(), NodeFailureClass::DependencyUnavailable);
+        assert_eq!(unavailable.phase(), CodeAttemptPhase::Preparation);
+        let compile_error = CodePreparationFailure::from(failed("sandbox.code_failed"));
+        assert_eq!(compile_error.class(), NodeFailureClass::Unknown);
+    }
+
     #[test]
     fn compile_activation_is_distinct_stable_and_cannot_move_with_changed_content() {
         let activation = [7; 32];
