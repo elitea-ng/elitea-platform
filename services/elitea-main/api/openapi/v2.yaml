@@ -4223,6 +4223,23 @@ components:
           type: array
           maxItems: 2000
           items: { type: string }
+        memories_saved:
+          type: array
+          maxItems: 500
+          description: >-
+            Client contract 1.20. The ids of the memories the turn's
+            save_memory calls created, in call order; absent when none. Stored
+            on `local_work` (at most 200, with `memories_saved_total`) and
+            counted in the commit's audit entry.
+          items: { type: integer, format: int64, minimum: 1 }
+        memories_deleted:
+          type: array
+          maxItems: 500
+          description: >-
+            Client contract 1.20. The ids of the memories the turn's
+            delete_memory calls removed, in call order; absent when none.
+            Stored and audited as `memories_saved` is.
+          items: { type: integer, format: int64, minimum: 1 }
     LocalTurnCommitRequest:
       type: object
       description: >-

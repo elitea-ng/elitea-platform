@@ -74,6 +74,16 @@ impl MemoryStore for InMemoryStore {
             .collect())
     }
 
+    async fn get(&self, id: u64) -> Result<Option<MemoryEntry>, HostError> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|entry| entry.id == id)
+            .cloned())
+    }
+
     async fn delete(&self, id: u64) -> Result<(), HostError> {
         let mut entries = self.0.lock().unwrap();
         let before = entries.len();

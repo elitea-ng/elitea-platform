@@ -47,6 +47,10 @@ export const localTurnWorkReportCommandsMax = 500;
 
 export const localTurnWorkReportPathsTouchedMax = 2000;
 
+export const localTurnWorkReportMemoriesSavedMax = 500;
+
+export const localTurnWorkReportMemoriesDeletedMax = 500;
+
 export const LocalTurnWorkReport = zod
   .object({
     sandbox_mode: zod
@@ -69,6 +73,20 @@ export const LocalTurnWorkReport = zod
       .array(zod.string())
       .max(localTurnWorkReportPathsTouchedMax)
       .optional(),
+    memories_saved: zod
+      .array(zod.int().min(1))
+      .max(localTurnWorkReportMemoriesSavedMax)
+      .optional()
+      .describe(
+        "Client contract 1.20. The ids of the memories the turn's save_memory calls created, in call order; absent when none. Stored on `local_work` (at most 200, with `memories_saved_total`) and counted in the commit's audit entry.",
+      ),
+    memories_deleted: zod
+      .array(zod.int().min(1))
+      .max(localTurnWorkReportMemoriesDeletedMax)
+      .optional()
+      .describe(
+        "Client contract 1.20. The ids of the memories the turn's delete_memory calls removed, in call order; absent when none. Stored and audited as `memories_saved` is.",
+      ),
   })
   .describe(
     "What the client reports it did on the device. Stored on the answer as `local_work` with at most 50 commands and 200 paths (cut to 300 and 400 bytes) plus the reported totals. NOTE(W2): internal/application/localturn/localturn.go:199 (`LocalWorkReport`).",

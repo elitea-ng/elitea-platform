@@ -13874,6 +13874,24 @@
                   "enforcement": {
                     "type": "string"
                   },
+                  "memories_deleted": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 1
+                    },
+                    "max_items": 500
+                  },
+                  "memories_saved": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 1
+                    },
+                    "max_items": 500
+                  },
                   "paths_touched": {
                     "type": "array",
                     "items": {

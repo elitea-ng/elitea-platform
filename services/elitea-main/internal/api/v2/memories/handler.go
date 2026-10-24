@@ -34,7 +34,9 @@ import (
 )
 
 const (
-	// MaxContentBytes bounds one memory's text. Generous enough for a real
+	// MaxContentBytes bounds one memory's text, counted in characters
+	// (runes) after trimming, despite the name: the API refuses past 4000
+	// characters. Generous enough for a real
 	// fact ("prefers TypeScript over Python for new services") while keeping
 	// a user's full enabled set cheap to read every turn — the recall path
 	// (agentexecution's resolver) additionally caps how much of this text

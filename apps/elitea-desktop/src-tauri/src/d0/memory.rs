@@ -8,9 +8,10 @@
 //!   fetch, and nothing kept past the turn (one store per turn).
 //! * `save` is `createMemory`, `search` is `listMemories?q=` (the person's
 //!   enabled entries only: a disabled one is kept out of turns, as recall
-//!   keeps it out), `delete` is `deleteMemory` after a listing shows the id
-//!   is the person's (the route answers 204 for any id, so a wrong id would
-//!   read as deleted).
+//!   keeps it out), `get` finds an id in a listing of every entry, and
+//!   `delete` is `deleteMemory` after `get` shows the id is the person's
+//!   (the route answers 204 for any id, so a wrong id would read as
+//!   deleted).
 //! * Without `local_work.memory_write` a save or a delete is refused here
 //!   too, whatever the tools offered.
 //!
@@ -124,7 +125,9 @@ fn invalid_response() -> HostError {
 
 fn status_error(status: u16) -> HostError {
     match status {
-        400 => HostError::new(
+        // A conflict, a body too large or a refused field: the memory, not
+        // the store, is what the platform would not take.
+        400 | 409 | 413 | 422 => HostError::new(
             HostErrorCode::InvalidInput,
             "the platform refused the memory",
         ),
@@ -133,6 +136,13 @@ fn status_error(status: u16) -> HostError {
             "the platform refused the memory request",
         ),
         404 => HostError::new(HostErrorCode::NotFound, "no such memory"),
+        // The deployment's minimum-version gate: not retryable, and the
+        // person has to update the app (the sign-in's UpgradeRequired).
+        426 => HostError::new(
+            HostErrorCode::InvalidConfiguration,
+            "this version of Elitea is older than the deployment allows; update the app",
+        )
+        .with_reason("upgrade_required"),
         _ => HostError::new(
             HostErrorCode::DependencyUnavailable,
             "the memory store is unavailable",
@@ -180,33 +190,35 @@ impl MemoryStore for PlatformMemoryStore {
         Ok(saved)
     }
 
-    async fn search(&self, query: &str, limit: u32) -> Result<Vec<MemoryEntry>, HostError> {
-        let mut entries = self.list(query).await?;
-        entries.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
-        Ok(entries)
+    // The tools cut the answer to the model's limit.
+    async fn search(&self, query: &str, _limit: u32) -> Result<Vec<MemoryEntry>, HostError> {
+        self.list(query).await
     }
 
-    async fn delete(&self, id: u64) -> Result<(), HostError> {
-        self.refuse_writes()?;
+    async fn get(&self, id: u64) -> Result<Option<MemoryEntry>, HostError> {
         // Disabled entries are the person's too: look in every one.
-        let path = self.list_path();
         let answer = self
             .api
-            .send(Method::GET, &path, None, &[])
+            .send(Method::GET, &self.list_path(), None, &[])
             .await
             .map_err(|error| host_error(&error))?;
         if !(200..300).contains(&answer.status) {
             return Err(status_error(answer.status));
         }
-        let owned = answer
+        Ok(answer
             .body
             .get("items")
             .and_then(Value::as_array)
             .ok_or_else(invalid_response)?
             .iter()
             .filter_map(entry)
-            .any(|known| known.id == id);
-        if !owned {
+            .find(|known| known.id == id))
+    }
+
+    async fn delete(&self, id: u64) -> Result<(), HostError> {
+        self.refuse_writes()?;
+        // Checked again here, whoever calls: the route answers 204 for any id.
+        if self.get(id).await?.is_none() {
             return Err(HostError::new(HostErrorCode::NotFound, "no such memory"));
         }
         let answer = self
@@ -227,5 +239,29 @@ impl MemoryStore for PlatformMemoryStore {
         }
         self.recorder.memory_deleted(id);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_memory_is_invalid_and_an_old_app_is_told_to_update() {
+        for status in [400, 409, 413, 422] {
+            assert_eq!(
+                status_error(status).code(),
+                HostErrorCode::InvalidInput,
+                "{status}"
+            );
+        }
+        let old = status_error(426);
+        assert_eq!(old.code(), HostErrorCode::InvalidConfiguration);
+        assert_eq!(old.reason_code(), "upgrade_required");
+        assert!(old.to_string().contains("update the app"));
+        assert_eq!(
+            status_error(503).code(),
+            HostErrorCode::DependencyUnavailable
+        );
     }
 }

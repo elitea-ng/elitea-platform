@@ -44,6 +44,16 @@ impl MemoryStore for FakeStore {
             .collect())
     }
 
+    async fn get(&self, id: u64) -> Result<Option<MemoryEntry>, HostError> {
+        Ok(self
+            .entries
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|entry| entry.id == id)
+            .cloned())
+    }
+
     async fn delete(&self, id: u64) -> Result<(), HostError> {
         let mut entries = self.entries.lock().unwrap();
         let before = entries.len();
@@ -195,6 +205,8 @@ async fn save_refuses_content_that_looks_like_a_secret() {
         "The user prefers British spelling.",
         "Run tests with `cargo test -p elitea-local-tools`; the password reset flow lives in auth/.",
         "Docs are at https://docs.example.com/guide",
+        "api_key: stored in the team 1Password vault",
+        "password: rotated every quarter by the platform team",
     ] {
         assert!(!looks_like_secret(fact), "{fact}");
     }
@@ -251,14 +263,66 @@ async fn every_call_is_asked_first_and_a_rejection_writes_nothing() {
             .contains("the person said no")
     );
     assert!(store.saves.lock().unwrap().is_empty());
-    call(&tools, DELETE_MEMORY, json!({"id": 3})).await;
+    // A delete of an id the person has none of is answered without asking.
+    let answer = call(&tools, DELETE_MEMORY, json!({"id": 3})).await;
+    assert_eq!(answer["code"], "not_found");
+    assert_eq!(channel.asked.lock().unwrap().len(), 1);
+    store.entries.lock().unwrap().push(MemoryEntry {
+        id: 3,
+        content: "uses pnpm".to_owned(),
+    });
+    let answer = call(&tools, DELETE_MEMORY, json!({"id": 3})).await;
+    assert_eq!(answer["code"], "rejected");
+    assert_eq!(
+        store.entries.lock().unwrap().len(),
+        1,
+        "nothing was deleted"
+    );
     let asked = channel.asked.lock().unwrap();
     assert_eq!(
         asked[0].payload,
         json!({APPROVAL_PAYLOAD_KEY: {"tool": SAVE_MEMORY, "content": "fact"}})
     );
+    // The approval shows what would be deleted.
     assert_eq!(
         asked[1].payload,
-        json!({APPROVAL_PAYLOAD_KEY: {"tool": DELETE_MEMORY, "id": 3}})
+        json!({APPROVAL_PAYLOAD_KEY: {"tool": DELETE_MEMORY, "id": 3, "content": "uses pnpm"}})
     );
+}
+
+/// Defers every request, or fails it with `code`.
+struct Unanswered(Option<HostErrorCode>);
+
+#[async_trait]
+impl ApprovalChannel for Unanswered {
+    async fn request(&self, _request: ApprovalRequest) -> Result<ApprovalOutcome, HostError> {
+        match self.0 {
+            None => Ok(ApprovalOutcome::Deferred),
+            Some(code) => Err(HostError::new(code, "closed")),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_deferred_approval_is_pending_and_a_closed_channel_is_not() {
+    for (channel, code) in [
+        (Unanswered(None), "approval_pending"),
+        (
+            Unanswered(Some(HostErrorCode::ExecutionEnded)),
+            "execution_ended",
+        ),
+        (
+            Unanswered(Some(HostErrorCode::DependencyUnavailable)),
+            "approval_unavailable",
+        ),
+    ] {
+        let store = Arc::new(FakeStore::default());
+        let tools = offered(&writable(&store).with_approvals(Arc::new(channel))).await;
+        let answer = call(&tools, SAVE_MEMORY, json!({"content": "fact"})).await;
+        assert_eq!(answer["code"], code);
+        assert!(
+            store.saves.lock().unwrap().is_empty(),
+            "{code}: nothing saved"
+        );
+    }
 }

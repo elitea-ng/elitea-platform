@@ -385,6 +385,12 @@ pub trait MemoryStore: Send + Sync {
     /// Search the user's memories in the project.
     async fn search(&self, query: &str, limit: u32) -> Result<Vec<MemoryEntry>, HostError>;
 
+    /// One of the user's memories by id, a disabled one included; `None`
+    /// when the user has no memory with that id. `delete_memory` reads it
+    /// before it asks, so the approval shows what would be deleted and a
+    /// wrong id is answered without asking.
+    async fn get(&self, id: u64) -> Result<Option<MemoryEntry>, HostError>;
+
     /// Delete one of the user's memories.
     async fn delete(&self, id: u64) -> Result<(), HostError>;
 }

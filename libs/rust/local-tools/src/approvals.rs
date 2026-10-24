@@ -58,7 +58,6 @@
 //! | starting a local MCP server ([`ToolKind::McpStart`], #1230) | allowed when its sandbox hides what the session denies and its network is off; a server with the network is asked once per app session; one its sandbox cannot confine is asked at every start; a `forbidden` (or `prompt`) prefix rule matching its command and arguments refuses (asks); never remembered |
 //! | the `workspace_index` tools (`elitea-local-index`: `search_workspace`, `repo_map`, the Inventory-named reads) | allowed (read-only; kept in plan mode). They are not session tools, so no call reaches this engine: the host offers them only while the policy's `local_index` is on, and they read through the confined workspace (`path_deny`, the deny list) |
 //! | an MCP tool ([`ToolKind::McpCall`]) | asked on first use per (server, tool); "always allow" is remembered for that server's tool in this workspace (the choice store); a tool the person marked read-only (or whose read-only hint they trust) is allowed, and is the only kind plan mode keeps |
-//!
 //! | `search_memory` ([`ToolKind::SearchMemory`], #1233) | allowed (it only reads; kept in plan mode) |
 //! | `save_memory` ([`ToolKind::SaveMemory`]) | allowed (the transcript shows the saved text; the person deletes it in Settings → Memory); denied in plan mode |
 //! | `delete_memory` ([`ToolKind::DeleteMemory`]) | asked every time (it removes data the person may have saved on the web); never remembered; denied in plan mode |

@@ -44,7 +44,7 @@ use crate::graph::Graph;
 use crate::retrieval::query::citations_of;
 use elitea_graph_algos::pagerank::{PageRankParams, personalized_pagerank};
 use serde_json::{Map, Value};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// The entity types a map lists as symbols.
 const DEFINITION_TYPES: [&str; 12] = [
@@ -105,7 +105,7 @@ impl Focus<'_> {
     fn names(&self, ident: &str) -> bool {
         self.symbols
             .iter()
-            .any(|symbol| symbol == ident || symbol.eq_ignore_ascii_case(ident))
+            .any(|symbol| symbol.eq_ignore_ascii_case(ident))
     }
 }
 
@@ -180,6 +180,17 @@ fn count_f64(n: usize) -> f64 {
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn rank(graph: &Graph, focus: &Focus<'_>, admit: impl Fn(&str) -> bool) -> Ranking {
+    // `admit` is asked once per path: every citation and every reference
+    // names a file, and the host's answer walks its deny rules.
+    let mut admitted: HashMap<String, bool> = HashMap::new();
+    let mut admit = |path: &str| {
+        if let Some(&known) = admitted.get(path) {
+            return known;
+        }
+        let answer = admit(path);
+        admitted.insert(path.to_owned(), answer);
+        answer
+    };
     // Every file the map may name, and the definitions in each.
     let mut files: BTreeSet<&str> = BTreeSet::new();
     // ident → the files defining it.
@@ -294,13 +305,13 @@ pub fn rank(graph: &Graph, focus: &Focus<'_>, admit: impl Fn(&str) -> bool) -> R
                 mass += personalize;
             }
             // A path component (or the file name without its extension)
-            // that names a focus symbol.
+            // that names a focus symbol, in any ASCII case, as a symbol is.
             let name = path.rsplit('/').next().unwrap_or(path);
             let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
             if path
                 .split('/')
                 .chain(std::iter::once(stem))
-                .any(|part| focus.symbols.iter().any(|symbol| symbol == part))
+                .any(|part| focus.names(part))
             {
                 mass += personalize;
             }
@@ -425,20 +436,55 @@ pub fn estimate_tokens(text: &str) -> usize {
     text.len().div_ceil(BYTES_PER_TOKEN)
 }
 
-/// Reads a file's lines once for every render of the search.
+/// Reads a file once for every render of the search.
 struct Lines<'r> {
     read: &'r mut dyn FnMut(&str) -> Option<String>,
-    files: BTreeMap<String, Option<Vec<String>>>,
+    files: BTreeMap<String, Option<FileText>>,
+}
+
+/// A file's text and the byte offsets of the lines found so far: a symbol
+/// near the top of a large file does not split the rest of it.
+struct FileText {
+    text: String,
+    /// Where each line found so far starts; the first is 0.
+    starts: Vec<usize>,
+}
+
+impl FileText {
+    /// The `index`th line (0-based), without its line ending.
+    fn line(&mut self, index: usize) -> Option<&str> {
+        while self.starts.len() <= index + 1 {
+            let last = *self.starts.last()?;
+            if last >= self.text.len() {
+                break;
+            }
+            let next = self.text[last..]
+                .find('\n')
+                .map_or(self.text.len(), |at| last + at + 1);
+            self.starts.push(next);
+        }
+        let start = *self.starts.get(index)?;
+        let end = *self.starts.get(index + 1)?;
+        if start >= self.text.len() {
+            return None;
+        }
+        let line = &self.text[start..end];
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        Some(line.strip_suffix('\r').unwrap_or(line))
+    }
 }
 
 impl Lines<'_> {
     fn line(&mut self, path: &str, line: i64) -> Option<String> {
         let index = usize::try_from(line).ok()?.checked_sub(1)?;
         if !self.files.contains_key(path) {
-            let lines = (self.read)(path).map(|text| text.lines().map(str::to_owned).collect());
-            self.files.insert(path.to_owned(), lines);
+            let text = (self.read)(path).map(|text| FileText {
+                text,
+                starts: vec![0],
+            });
+            self.files.insert(path.to_owned(), text);
         }
-        let found = self.files.get(path)?.as_ref()?.get(index)?.trim();
+        let found = self.files.get_mut(path)?.as_mut()?.line(index)?.trim();
         (!found.is_empty()).then(|| found.to_owned())
     }
 }
@@ -497,6 +543,25 @@ fn render_prefix(entries: &[Entry], count: usize, lines: &mut Lines<'_>) -> (Str
     (out, order.len())
 }
 
+/// The fewest bytes `entry` can add to a map that names the files in
+/// `named`, without reading its file: its path line when the file is new,
+/// and a symbol line of one character.
+fn entry_floor(entry: &Entry, named: &BTreeSet<&str>) -> usize {
+    let header = if named.contains(entry.path()) {
+        0
+    } else {
+        entry.path().len() + 1
+    };
+    header
+        + match entry {
+            Entry::Symbol(Symbol {
+                line: Some(line), ..
+            }) if *line > 0 => format!("  {line}: x\n").len(),
+            Entry::Symbol(_) => "  x\n".len(),
+            Entry::File(_) => 0,
+        }
+}
+
 /// The bytes `entry` adds to a map that already names the files in
 /// `named`: its file's path line when the file is new, and its symbol line.
 fn entry_cost<'e>(entry: &'e Entry, named: &mut BTreeSet<&'e str>, lines: &mut Lines<'_>) -> usize {
@@ -516,12 +581,12 @@ fn entry_cost<'e>(entry: &'e Entry, named: &mut BTreeSet<&'e str>, lines: &mut L
 /// `heading` (counted in the budget). `read` returns a file's text (`None`
 /// when it cannot be read: the symbol shows its stored signature then);
 /// each file is read at most once, and only the files of the entries
-/// considered.
+/// considered: no file past the first entry that does not fit, and not that
+/// one's when even its shortest possible line would not fit.
 ///
 /// Aider binary-searches the prefix length, rendering each guess. A
 /// prefix's size here is the sum of its entries' costs (the rendering only
-/// reorders), so one scan in rank order finds the same largest prefix and
-/// reads no file past the cut.
+/// reorders), so one scan in rank order finds the same largest prefix.
 #[must_use]
 pub fn render(
     ranking: &Ranking,
@@ -538,6 +603,9 @@ pub fn render(
     let mut count = 0;
     let mut named = BTreeSet::new();
     for entry in &ranking.entries {
+        if size + entry_floor(entry, &named) > budget {
+            break;
+        }
         let cost = entry_cost(entry, &mut named, &mut lines);
         if size + cost > budget {
             break;
@@ -836,6 +904,68 @@ mod tests {
                 assert!(sizes[map.entries + 1] > budget * 4, "{budget}");
             }
         }
+    }
+
+    #[test]
+    fn lines_are_found_lazily_and_as_text_lines_splits_them() {
+        let text = "first\r\n\n  third  \nlast";
+        let mut file = FileText {
+            text: text.to_owned(),
+            starts: vec![0],
+        };
+        assert_eq!(file.line(0), Some("first"));
+        assert_eq!(file.starts, [0, 7], "only what line 1 needs");
+        let split: Vec<&str> = text.lines().collect();
+        for (index, expected) in split.iter().enumerate() {
+            assert_eq!(file.line(index), Some(*expected), "{index}");
+        }
+        assert_eq!(file.line(split.len()), None);
+        let mut ended = FileText {
+            text: "only\n".to_owned(),
+            starts: vec![0],
+        };
+        assert_eq!(ended.line(1), None);
+    }
+
+    #[test]
+    fn render_does_not_read_a_file_whose_entry_cannot_fit() {
+        let ranking = Ranking {
+            entries: vec![
+                Entry::File("a.rs".to_owned()),
+                Entry::Symbol(Symbol {
+                    path: "b.rs".to_owned(),
+                    name: "beta".to_owned(),
+                    entity_type: "function".to_owned(),
+                    line: Some(1),
+                    signature: None,
+                }),
+            ],
+        };
+        let mut read: Vec<String> = Vec::new();
+        let mut source = |path: &str| {
+            read.push(path.to_owned());
+            Some("fn beta() {}\n".to_owned())
+        };
+        // "a.rs\n" fits two tokens; "b.rs\n" and "  1: x\n" cannot.
+        let map = render(&ranking, "", 2, &mut source);
+        assert_eq!(map.entries, 1);
+        assert!(read.is_empty(), "{read:?}");
+    }
+
+    #[test]
+    fn a_path_component_names_a_focus_symbol_in_any_case() {
+        let ranked = |symbol: &str| {
+            let symbols = [symbol.to_owned()];
+            let focus = Focus {
+                paths: &[],
+                symbols: &symbols,
+            };
+            rank(&fixture(), &focus, admit)
+        };
+        // "claim" names no identifier, only the file `src/claim.rs`.
+        let lower = ranked("claim");
+        assert_ne!(lower, rank(&fixture(), &Focus::default(), admit));
+        assert_eq!(ranked("CLAIM"), lower);
     }
 
     #[test]

@@ -35,14 +35,16 @@
 //!
 //! Failures are results the model reads (`{"status": "error", "code", …}`
 //! with `memory_write_disabled`, `memory_unavailable`, `not_found`,
-//! `invalid_argument`, `looks_like_secret`, `rejected` or
-//! `approval_pending`), never a failed run.
+//! `invalid_argument`, `looks_like_secret`, `rejected`,
+//! `approval_pending` (the decision was deferred to a later resume, as the
+//! local tools answer it), `execution_ended` or `approval_unavailable` (the
+//! approval could not be asked)), never a failed run.
 
 use std::sync::{Arc, LazyLock};
 
 use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
-use regex::RegexSet;
+use regex::{Regex, RegexSet};
 use serde_json::{Value, json};
 
 use crate::host::{
@@ -197,6 +199,12 @@ fn store_failure(error: &HostError, write: bool) -> Value {
             "the user's memories cannot be read here",
         ),
         HostErrorCode::InvalidInput => failure("invalid_argument", error.to_string()),
+        // The host cannot serve the store as configured (the desktop: the
+        // app is older than the deployment allows); its message says what
+        // the person must do, and retrying will not help.
+        HostErrorCode::InvalidConfiguration => {
+            failure("memory_unavailable", format!("{error}; tell the user"))
+        }
         _ => failure(
             "memory_unavailable",
             "the memory store could not be reached; try again later",
@@ -298,9 +306,19 @@ impl MemoryTool {
                     .unwrap_or("the person rejected it");
                 Some(failure("rejected", format!("not allowed: {reason}")))
             }
-            Ok(ApprovalOutcome::Deferred) | Err(_) => Some(failure(
+            Ok(ApprovalOutcome::Deferred) => Some(failure(
                 "approval_pending",
                 "waiting for the person's approval",
+            )),
+            // A channel that could not ask is not a pending decision: the
+            // model must not wait for an answer that never comes.
+            Err(error) if error.code() == HostErrorCode::ExecutionEnded => Some(failure(
+                "execution_ended",
+                "this conversation has ended, so nothing was changed",
+            )),
+            Err(_) => Some(failure(
+                "approval_unavailable",
+                "the approval could not be asked, so nothing was changed",
             )),
         }
     }
@@ -386,7 +404,14 @@ impl MemoryTool {
         let Some(id) = args.get("id").and_then(Value::as_u64).filter(|id| *id >= 1) else {
             return failure("invalid_argument", "`id` is a memory id from search_memory");
         };
-        let call = json!({ "tool": DELETE_MEMORY, "id": id });
+        // Look first: a wrong id is answered without asking, and the
+        // approval shows the text that would be deleted, not just its id.
+        let entry = match self.shared.store.get(id).await {
+            Ok(Some(entry)) => entry,
+            Ok(None) => return failure("not_found", "no saved memory has that id"),
+            Err(error) => return store_failure(&error, true),
+        };
+        let call = json!({ "tool": DELETE_MEMORY, "id": id, "content": entry.content });
         if let Some(refusal) = self
             .ask(call_id, format!("delete saved memory {id}"), call)
             .await
@@ -412,9 +437,9 @@ fn search_result(entries: &[MemoryEntry], limit: u32) -> Value {
 
 /// Credential shapes a memory must never hold: private keys, provider
 /// tokens (AWS, GitHub, Slack, OpenAI-style `sk-`, Google, the platform's
-/// own native tokens), JWTs, bearer tokens, `password=…`-style assignments
-/// and URLs with a password. A cheap guard against the obvious, not a
-/// scanner.
+/// own native tokens), JWTs, bearer tokens and URLs with a password; the
+/// `password=…`-style assignments are [`ASSIGNMENT`]. A cheap guard against
+/// the obvious, not a scanner.
 const SECRET_PATTERNS: &[&str] = &[
     r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----",
     r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b",
@@ -426,17 +451,45 @@ const SECRET_PATTERNS: &[&str] = &[
     r"\beln(?:at|rt|ac)_[A-Za-z0-9_-]{16,}",
     r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
     r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}",
-    r#"(?i)\b(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key)["']?\s*[:=]\s*["']?[^\s"']{6,}"#,
     r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@",
 ];
 
-static SECRETS: LazyLock<Option<RegexSet>> = LazyLock::new(|| RegexSet::new(SECRET_PATTERNS).ok());
+/// A credential-named key and the value assigned to it (`api_key = …`,
+/// `password: …`). Only a token-like value makes it a secret
+/// ([`token_like`]): `api_key: stored in the team vault` names where a key
+/// lives and is a fact worth keeping.
+const ASSIGNMENT: &str = r#"(?i)\b(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key)["']?\s*[:=]\s*["']?([^\s"']+)"#;
+
+static SECRETS: LazyLock<Option<(RegexSet, Regex)>> = LazyLock::new(|| {
+    Some((
+        RegexSet::new(SECRET_PATTERNS).ok()?,
+        Regex::new(ASSIGNMENT).ok()?,
+    ))
+});
+
+/// Whether an assigned value reads as a credential rather than a word: at
+/// least 6 characters with a digit or a symbol (`hunter2`, `9f8e7d6c5b4a`,
+/// `p@ss!`), or at least 20 of anything (a random letters-only token). A
+/// plain word ("stored", "rotated") is not one.
+fn token_like(value: &str) -> bool {
+    let length = value.chars().count();
+    let mixed = value.chars().any(|c| c.is_ascii_digit())
+        || value
+            .chars()
+            .any(|c| !c.is_alphanumeric() && !matches!(c, '-' | '_' | '.' | ',' | ';'));
+    (length >= 6 && mixed) || length >= 20
+}
 
 /// Whether `text` looks like it holds a credential (the patterns above).
 /// Fails closed: if the patterns could not be compiled, everything does.
 #[must_use]
 pub fn looks_like_secret(text: &str) -> bool {
-    SECRETS.as_ref().is_none_or(|set| set.is_match(text))
+    SECRETS.as_ref().is_none_or(|(set, assignment)| {
+        set.is_match(text)
+            || assignment
+                .captures_iter(text)
+                .any(|found| found.get(1).is_some_and(|value| token_like(value.as_str())))
+    })
 }
 
 #[cfg(test)]

@@ -961,9 +961,13 @@ person's memories in the turn's project over the public memory routes
 pinned credentials; recall stays what `start` answered. A call is an
 approval with `tool` `search_memory`, `save_memory` or `delete_memory`:
 search and save run without asking, a delete is always asked (never
-remembered; the card's `detail` is `memory <id>`). The commit's
+remembered; the card's `detail` is `memory <id>: <its text>`, cut to
+1 KiB; an id the person has no memory with is answered `not_found`
+without asking). The commit's
 `local_work` report gains `memories_saved` and `memories_deleted` (the
-ids, in call order) when the turn saved or deleted one.
+ids, in call order) when the turn saved or deleted one; the platform
+stores them on the answer's `local_work` and counts them in the commit's
+audit entry (contract 1.20, #1415).
 
 ## Thread history (`src/history.rs`)
 

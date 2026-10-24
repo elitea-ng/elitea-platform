@@ -77,6 +77,9 @@ const (
 	MaxReportedCommandBytes = 300
 	MaxReportedPaths        = 200
 	MaxReportedPathBytes    = 400
+	// MaxReportedMemoryIDs bounds each of the report's memory id lists
+	// (memories_saved, memories_deleted); further ids are counted only.
+	MaxReportedMemoryIDs = 200
 
 	// auditPreviewItems is how many commands and paths the audit event names.
 	auditPreviewItems = 3
@@ -211,6 +214,11 @@ type LocalWorkReport struct {
 	Enforcement string          `json:"enforcement,omitempty"`
 	Commands    []CommandRecord `json:"commands"`
 	Paths       []string        `json:"paths_touched"`
+	// MemoriesSaved and MemoriesDeleted are the ids of the person's memories
+	// the turn's memory tools saved and deleted, in call order (#1415).
+	// omitempty keeps the commit digest of a report without them unchanged.
+	MemoriesSaved   []int64 `json:"memories_saved,omitempty"`
+	MemoriesDeleted []int64 `json:"memories_deleted,omitempty"`
 }
 
 // Credential names the credential family a caller authenticated with: the
@@ -606,7 +614,13 @@ type boundedReport struct {
 	CommandsTotal int             `json:"commands_total"`
 	Paths         []string        `json:"paths_touched"`
 	PathsTotal    int             `json:"paths_total"`
-	Reported      string          `json:"reported_by"`
+	// The memory ids (at most MaxReportedMemoryIDs each, positive only) and
+	// how many the client reported.
+	MemoriesSaved        []int64 `json:"memories_saved"`
+	MemoriesSavedTotal   int     `json:"memories_saved_total"`
+	MemoriesDeleted      []int64 `json:"memories_deleted"`
+	MemoriesDeletedTotal int     `json:"memories_deleted_total"`
+	Reported             string  `json:"reported_by"`
 }
 
 func boundReport(report LocalWorkReport) boundedReport {
@@ -614,6 +628,8 @@ func boundReport(report LocalWorkReport) boundedReport {
 		SandboxMode: report.SandboxMode, Enforcement: report.Enforcement,
 		Commands: []CommandRecord{}, Paths: []string{}, Reported: "client",
 		CommandsTotal: len(report.Commands), PathsTotal: len(report.Paths),
+		MemoriesSaved: boundMemoryIDs(report.MemoriesSaved), MemoriesSavedTotal: len(report.MemoriesSaved),
+		MemoriesDeleted: boundMemoryIDs(report.MemoriesDeleted), MemoriesDeletedTotal: len(report.MemoriesDeleted),
 	}
 	for _, command := range report.Commands {
 		if len(out.Commands) == MaxReportedCommands {
@@ -631,6 +647,21 @@ func boundReport(report LocalWorkReport) boundedReport {
 		}
 		if text := cleanReported(path, MaxReportedPathBytes); text != "" {
 			out.Paths = append(out.Paths, text)
+		}
+	}
+	return out
+}
+
+// boundMemoryIDs keeps the first MaxReportedMemoryIDs positive ids; a memory
+// id is a positive row id, so anything else is not one.
+func boundMemoryIDs(ids []int64) []int64 {
+	out := []int64{}
+	for _, id := range ids {
+		if len(out) == MaxReportedMemoryIDs {
+			break
+		}
+		if id > 0 {
+			out = append(out, id)
 		}
 	}
 	return out
@@ -680,6 +711,10 @@ func commitAuditAction(report boundedReport) string {
 	action += ", " + strconv.Itoa(report.PathsTotal) + " paths"
 	if len(paths) > 0 {
 		action += " (" + preview(paths) + ")"
+	}
+	if report.MemoriesSavedTotal > 0 || report.MemoriesDeletedTotal > 0 {
+		action += ", memories " + strconv.Itoa(report.MemoriesSavedTotal) + " saved " +
+			strconv.Itoa(report.MemoriesDeletedTotal) + " deleted"
 	}
 	if report.SandboxMode != "" {
 		action += ", sandbox " + report.SandboxMode

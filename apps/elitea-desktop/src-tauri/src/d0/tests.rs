@@ -8095,7 +8095,7 @@ async fn delete_memory_is_asked_by_default() {
         let asked = of_kind(&events, "approval_request");
         assert_eq!(asked.len(), 1, "{decision:?}");
         assert_eq!(asked[0]["tool"], "delete_memory");
-        assert_eq!(asked[0]["detail"], "memory 1");
+        assert_eq!(asked[0]["detail"], "memory 1: uses npm");
         assert_eq!(asked[0]["can_remember"], false);
         let deletes = seen(&h.server, "/api/v2/elitea_core/memory/prompt_lib/1/1");
         assert_eq!(deletes.len(), usize::from(deleted), "{decision:?}");
@@ -8111,6 +8111,34 @@ async fn delete_memory_is_asked_by_default() {
             assert!(commit["local_work"].get("memories_deleted").is_none());
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delete_memory_of_an_unknown_id_is_not_asked() {
+    let memories = Memories::default();
+    memories
+        .lock()
+        .unwrap()
+        .push((1, "uses npm".to_owned(), true));
+    let server = memories_platform(
+        vec![memory_call(
+            "call-delete",
+            "delete_memory",
+            json!({"id": 9}),
+        )],
+        memories.clone(),
+    )
+    .await;
+    let h = harness(server, memory_policy(true), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    assert!(of_kind(&events, "approval_request").is_empty());
+    assert_eq!(
+        committed_output(&h.server, "call-delete")["code"],
+        "not_found"
+    );
+    assert!(seen(&h.server, "/api/v2/elitea_core/memory/prompt_lib/1/9").is_empty());
+    assert_eq!(memories.lock().unwrap().len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
