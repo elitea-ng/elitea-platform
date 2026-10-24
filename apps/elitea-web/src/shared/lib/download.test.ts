@@ -4,11 +4,16 @@
  * beforeunload guard), Content-Disposition filename parsing, the export URL
  * assembly, and the fetch→blob→download orchestrator's failure paths.
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+import { CORE_SCHEMA, load } from 'js-yaml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HttpResponse, http } from 'msw';
 
 import { server } from '../../test/setup';
 import {
+  EXPORT_MARKDOWN,
   exportNetworkError,
   exportNoContentDisposition,
   exportNotFound,
@@ -25,6 +30,19 @@ import {
 } from './download';
 
 const ORIGIN = window.location.origin;
+
+describe('the markdown export probe body', () => {
+  it("is exportApplication's text/markdown example in v2.yaml", () => {
+    // The handler's body is a constant because the generated mock cannot
+    // serve one media type of three; this keeps it equal to the contract.
+    const specPath = resolve(import.meta.dirname, '../../../../../services/elitea-main/api/openapi/v2.yaml');
+    const spec = load(readFileSync(specPath, 'utf8'), { schema: CORE_SCHEMA }) as {
+      paths: Record<string, { get: { responses: Record<string, { content: Record<string, { example?: unknown }> }> } }>;
+    };
+    const op = spec.paths['/elitea_core/export_import/prompt_lib/{project_id}/{id}'];
+    expect(op?.get.responses['200']?.content['text/markdown']?.example).toBe(EXPORT_MARKDOWN);
+  });
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();

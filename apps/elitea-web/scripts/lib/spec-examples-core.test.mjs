@@ -12,6 +12,33 @@ describe('toJsonSchema', () => {
     expect(toJsonSchema({ allOf: [{ type: 'integer' }], nullable: false })).toEqual({ allOf: [{ type: 'integer' }] });
   });
 
+  it('descends only into schema-valued keywords; literals and property names stay verbatim', () => {
+    const schema = {
+      type: 'object',
+      properties: { nullable: { type: 'boolean' }, $ref: { type: 'string', nullable: true } },
+      patternProperties: { '^x-': { $ref: '#/components/schemas/X' } },
+      additionalProperties: { type: 'integer' },
+      items: [{ type: 'string' }, true],
+      not: { type: 'null' },
+      enum: [{ nullable: true, $ref: '#/kept' }],
+      default: { nullable: true },
+    };
+    expect(toJsonSchema(schema)).toEqual({
+      type: 'object',
+      properties: { nullable: { type: 'boolean' }, $ref: { anyOf: [{ type: 'string' }, { type: 'null' }] } },
+      patternProperties: { '^x-': { $ref: 'spec#/components/schemas/X' } },
+      additionalProperties: { type: 'integer' },
+      items: [{ type: 'string' }, true],
+      not: { type: 'null' },
+      enum: [{ nullable: true, $ref: '#/kept' }],
+      default: { nullable: true },
+    });
+  });
+
+  it('drops a boolean exclusive bound that has no sibling bound', () => {
+    expect(toJsonSchema({ type: 'number', exclusiveMinimum: true })).toEqual({ type: 'number' });
+  });
+
   it('rewrites the 3.0 boolean exclusive bounds to draft-07 numbers', () => {
     expect(toJsonSchema({ minimum: 0, exclusiveMinimum: true, maximum: 9, exclusiveMaximum: false })).toEqual({
       exclusiveMinimum: 0,

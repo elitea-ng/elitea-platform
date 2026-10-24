@@ -282,7 +282,7 @@ for (const [id, mechanism, tag] of OXLINT_CASES) {
 // fixtures are gone: a mock body is now a contract example (checked here,
 // against its schema) or a typed constant (checked by tsc).
 {
-  const load = (name) => yaml.load(readFileSync(join(FIXTURES, 'spec-examples', name), 'utf8'));
+  const load = (name) => yaml.load(readFileSync(join(FIXTURES, 'spec-examples', name), 'utf8'), { schema: yaml.CORE_SCHEMA });
   const rm3Red = checkSpecExamples(load('bad.yaml'));
   const rm3Green = checkSpecExamples(load('good.yaml'));
   record(

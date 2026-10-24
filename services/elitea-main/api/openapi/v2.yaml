@@ -23158,6 +23158,8 @@ paths:
                 ---
 
                 Answer the user's question.
+            application/zip:
+              schema: { type: string, format: binary }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
@@ -27623,7 +27625,7 @@ paths:
                 email: example.user@example.test
                 avatar: ""
                 description: ""
-                personal_project_id: "1"
+                personal_project_id: "42"
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '426': { $ref: '#/components/responses/ClientUpgradeRequired' }

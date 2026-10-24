@@ -6483,7 +6483,7 @@ export interface operations {
                      *       "email": "example.user@example.test",
                      *       "avatar": "",
                      *       "description": "",
-                     *       "personal_project_id": "1"
+                     *       "personal_project_id": "42"
                      *     }
                      */
                     "application/json": components["schemas"]["SocialAuthorProfile"];

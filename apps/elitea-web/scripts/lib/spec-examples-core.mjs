@@ -47,35 +47,48 @@ function deref(spec, node) {
   return cur;
 }
 
+const SCHEMA_MAPS = ['properties', 'patternProperties'];
+const SCHEMA_LISTS = ['allOf', 'anyOf', 'oneOf'];
+
 /**
  * OpenAPI 3.0 schema → JSON Schema (draft-07, Ajv's default). Local refs are
  * re-pointed at the whole spec, registered under SPEC_ID, so an inline schema
  * can reach `#/components/schemas/*`.
+ *
+ * Schema-aware on purpose: it descends only into the keywords whose values
+ * ARE schemas (properties, items, allOf, …). Everything else — `enum`,
+ * `default`, `example`, and a property that happens to be NAMED `nullable` or
+ * `$ref` — is copied verbatim, never treated as a keyword.
  */
-export function toJsonSchema(node) {
-  if (Array.isArray(node)) return node.map(toJsonSchema);
-  if (node === null || typeof node !== 'object') return node;
+export function toJsonSchema(schema) {
+  if (schema === null || typeof schema !== 'object') return schema; // `true`/`false` schemas
   const out = {};
-  for (const [key, value] of Object.entries(node)) {
+  for (const [key, value] of Object.entries(schema)) {
     if (key === 'nullable') continue;
     if (key === '$ref' && typeof value === 'string' && value.startsWith('#')) {
       out.$ref = `${SPEC_ID}${value}`;
-      continue;
+    } else if (SCHEMA_MAPS.includes(key)) {
+      out[key] = Object.fromEntries(Object.entries(value).map(([name, sub]) => [name, toJsonSchema(sub)]));
+    } else if (SCHEMA_LISTS.includes(key) || (key === 'items' && Array.isArray(value))) {
+      out[key] = value.map(toJsonSchema);
+    } else if (key === 'items' || key === 'additionalProperties' || key === 'not') {
+      out[key] = toJsonSchema(value);
+    } else {
+      out[key] = value;
     }
-    out[key] = toJsonSchema(value);
   }
   // 3.0's boolean exclusiveMinimum/Maximum modify minimum/maximum; draft-07's
-  // are the bound itself.
+  // are the bound itself. `true` with no sibling bound constrains nothing.
   for (const [exclusive, bound] of [['exclusiveMinimum', 'minimum'], ['exclusiveMaximum', 'maximum']]) {
     if (typeof out[exclusive] !== 'boolean') continue;
-    if (out[exclusive]) {
+    if (out[exclusive] && typeof out[bound] === 'number') {
       out[exclusive] = out[bound];
       delete out[bound];
     } else {
       delete out[exclusive];
     }
   }
-  return node.nullable === true ? { anyOf: [out, { type: 'null' }] } : out;
+  return schema.nullable === true ? { anyOf: [out, { type: 'null' }] } : out;
 }
 
 /** Every value an `examples` map carries, with its pointer. */
@@ -184,7 +197,8 @@ function makeAjv(spec) {
   ajv.addFormat('int64', { type: 'number', validate: (n) => Number.isInteger(n) });
   ajv.addFormat('binary', true);
   ajv.addFormat('byte', true);
-  ajv.addSchema({ $id: SPEC_ID, components: toJsonSchema(spec.components ?? {}) });
+  const schemas = Object.entries(spec.components?.schemas ?? {}).map(([name, schema]) => [name, toJsonSchema(schema)]);
+  ajv.addSchema({ $id: SPEC_ID, components: { schemas: Object.fromEntries(schemas) } });
   return ajv;
 }
 

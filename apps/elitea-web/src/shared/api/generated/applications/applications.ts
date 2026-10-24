@@ -10079,6 +10079,11 @@ export type exportApplicationResponse200TextMarkdown = {
   status: 200;
 };
 
+export type exportApplicationResponse200ApplicationZip = {
+  data: Blob;
+  status: 200;
+};
+
 export type exportApplicationResponse401 = {
   data: N401Response;
   status: 401;
@@ -10097,6 +10102,7 @@ export type exportApplicationResponse404 = {
 export type exportApplicationResponseSuccess = (
   | exportApplicationResponse200ApplicationJson
   | exportApplicationResponse200TextMarkdown
+  | exportApplicationResponse200ApplicationZip
 ) & {
   headers: Headers;
 };

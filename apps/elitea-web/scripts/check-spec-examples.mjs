@@ -34,7 +34,9 @@ function parseArgs(argv) {
 }
 
 const specPath = parseArgs(process.argv.slice(2));
-const spec = yaml.load(readFileSync(specPath, 'utf8'));
+// CORE_SCHEMA, not js-yaml's default: the default turns an unquoted
+// `2026-07-20` into a Date, and an example would then be judged as an object.
+const spec = yaml.load(readFileSync(specPath, 'utf8'), { schema: yaml.CORE_SCHEMA });
 const { checked, findings } = checkSpecExamples(spec);
 const name = relative(process.cwd(), specPath);
 

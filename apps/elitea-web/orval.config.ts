@@ -168,6 +168,11 @@ export default defineConfig({
           // The 200 result and 202 receipt have different required fields.
           // Use a complete default response; recovery tests provide explicit 202 fixtures.
           getToolkitToolResult: { mock: { data: () => ({ ok: true, result: {} }) } },
+          // The 200 has three media types (JSON document, ?format=md markdown,
+          // multi-version zip); orval's mock would pick one at random per
+          // request. The default registry answers the JSON document, always;
+          // the markdown probes live in src/test/msw/handlers/download.ts.
+          exportApplication: { mock: { data: () => ({ ok: true, applications: [], toolkits: [] }) } },
         },
         query: { useQuery: true, useSuspenseQuery: false, signal: true },
         zod: {

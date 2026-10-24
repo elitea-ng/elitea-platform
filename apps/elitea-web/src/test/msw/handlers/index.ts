@@ -12,6 +12,8 @@ import { getSkillsMock } from '../../../shared/api/generated/skills/skills.msw';
 import { getTagsMock } from '../../../shared/api/generated/tags/tags.msw';
 import { getToolkitsMock } from '../../../shared/api/generated/toolkits/toolkits.msw';
 
+import { exportDocumentDefault } from './download';
+
 /**
  * MSW handler registry (spec §6.5 R-M2/R-M3), unit M1.
  *
@@ -34,7 +36,7 @@ import { getToolkitsMock } from '../../../shared/api/generated/toolkits/toolkits
  * response is the contract's own documented one rather than faker noise.
  *
  * ── Why the 4 hand-authored files (transport/upload/artifacts/download)
- *    are DELIBERATELY NOT spread in here ─────────────────────────────────
+ *    are NOT spread in here (one stateless exception) ─────────────────────
  *
  * `handlers/{transport,upload,artifacts,download}.ts` (units F4/S6) do not
  * export a static `RequestHandler[]` at all — every export is a FACTORY
@@ -52,9 +54,11 @@ import { getToolkitsMock } from '../../../shared/api/generated/toolkits/toolkits
  * factories into the base registry would (a) not typecheck for the
  * parameterised ones without inventing arbitrary defaults, and (b) reinstate
  * exactly the cross-test state leakage `afterEach(() => server.resetHandlers())`
- * in src/test/setup.ts exists to prevent. So there is no "route-pattern
- * overlap" to resolve by precedence at the array level: the two sources
- * never occupy the same array. Where a hand-authored factory's route DOES
+ * in src/test/setup.ts exists to prevent. The one exception is
+ * `exportDocumentDefault()` (download.ts): stateless, and listed FIRST so it
+ * shadows the generated exportApplication handler, which answers an empty
+ * octet-stream because the operation also declares an application/zip body.
+ * Where a hand-authored factory's route DOES
  * overlap a generated one (e.g. `download.ts`'s `exportOk` and generated
  * `applications.msw.ts`'s `getExportApplicationMockHandler` both match GET
  * `*(/)elitea_core/export_import/prompt_lib/*` (msw wildcard-prefix pattern,
@@ -82,6 +86,9 @@ import { getToolkitsMock } from '../../../shared/api/generated/toolkits/toolkits
  *    walk `src/shared/api/generated/**`, which is codegen output.
  */
 export const handlers: RequestHandler[] = [
+  // Ahead of the generated applications handlers: the generated one for
+  // exportApplication answers an empty octet-stream (see download.ts).
+  exportDocumentDefault(),
   ...getAdminMock(),
   ...getAnalyticsMock(),
   ...getApplicationsMock(),

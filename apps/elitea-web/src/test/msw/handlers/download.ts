@@ -2,20 +2,24 @@
  * MSW handlers for unit S6's markdown-export transport (spec §5.7 row 4).
  *
  * The route is GET /api/v2/elitea_core/export_import/prompt_lib/{projectId}/
- * {applicationId}?format=md (exportApplication). v2.yaml documents the
- * markdown body as a `text/markdown` 200 with an example, but the same 200
- * also has the JSON export document, and orval's generated mock folds the two
- * media types into one random `faker.helpers.arrayElement([...])`. A test
- * cannot pick the markdown one through it, so the body is a typed constant
- * here (R-M2), equal to the spec's example.
+ * {applicationId} (exportApplication). Its 200 has three media types in
+ * v2.yaml: the JSON document, the ?format=md markdown, and the multi-version
+ * zip. orval's generated handler for such an operation answers an empty
+ * octet-stream whatever the body, so:
+ *  - `exportDocumentDefault()` is the default registry's handler for the
+ *    route (handlers/index.ts lists it ahead of the generated ones): the
+ *    generated JSON document mock, as JSON, every time;
+ *  - the markdown body is a typed constant (R-M2); download.test.ts checks it
+ *    equals the spec's `text/markdown` example.
  */
 import { http, HttpResponse } from 'msw';
 import type { RequestHandler } from 'msw';
 
+import { getExportApplicationResponseMock } from '../../../shared/api/generated/applications/applications.msw';
 import type { ErrorResponse } from '../../../shared/api/generated/model';
 
 /** The shape export_markdown.go writes: YAML frontmatter, then the instructions. */
-const EXPORT_MARKDOWN = [
+export const EXPORT_MARKDOWN: string = [
   '---',
   'name: Exported Agent',
   'description: A synthetic agent used by the export probe.',
@@ -34,6 +38,11 @@ const EXPORT_PATH = '*/elitea_core/export_import/prompt_lib/*';
 export interface CapturedExportRequest {
   url: string;
   authorization: string | null;
+}
+
+/** The default registry's answer: the JSON export document. */
+export function exportDocumentDefault(): RequestHandler {
+  return http.get(EXPORT_PATH, () => HttpResponse.json(getExportApplicationResponseMock()));
 }
 
 /** 200 with a Content-Disposition header carrying `filename`. */
