@@ -1178,13 +1178,28 @@ or `workspace_remove` deletes it.
 
 A turn in a workspace whose index is on and built is offered its tools
 (toolset `workspace_index`, reported `remote: false`): `search_workspace`
-(local only, below), then `search_knowledge_graph`,
+and `repo_map` (local only, below), then `search_knowledge_graph`,
 `get_entity_details`, `get_related_entities`, `query_graph`,
 `list_entity_types`, `impact_analysis` and `get_entity_content`, with the
 cloud Inventory tools' names and arguments. They only read, so they run
 without approval and in plan mode too. An answer from a build that may be
 out of date starts with a one-line `Note:`. A toolkit tool never takes one
 of these names (it gets a `_2` suffix), whether or not the index is on.
+
+`repo_map {focus_paths? (≤ 20), focus_symbols? (≤ 20), max_tokens = 2048
+(256–8192)}` (#1240) answers a text map: the files most relevant to the
+focus, most relevant first, each path followed by its top symbols as
+`  <line>: <first source line>` (the line read through the confined read;
+the stored signature when the file cannot be read). Files are ranked by
+personalized PageRank over a file graph built from the code graph's
+`calls` / `references` / `extends` / `implements` / `uses` edges, weighted
+as Aider's repo map weighs them (`libs/rust/inventory-core/src/repo_map.rs`),
+toward the focus paths and the files that define or reference a focus
+symbol; the map is the longest ranked prefix within `max_tokens` (a token per
+four bytes). Same build and focus, same map. A `path_deny` or deny-list file
+never appears, even when a focus names it. The map is not injected into a
+turn's prompt: the model calls the tool. The cloud executor has no index,
+so neither local-only tool is offered there.
 
 `search_workspace {query, top_k = 10 (≤ 50), path_glob?, kind = code | docs
 | any, mode = auto | lexical | semantic}` answers a JSON list of

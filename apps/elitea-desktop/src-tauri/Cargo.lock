@@ -1763,6 +1763,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-graph-algos"
+version = "0.1.0"
+
+[[package]]
 name = "elitea-inventory-core"
 version = "0.1.0"
 dependencies = [
@@ -1770,6 +1774,7 @@ dependencies = [
  "elitea-content-source",
  "elitea-doc-extract",
  "elitea-engine-core",
+ "elitea-graph-algos",
  "indexmap 2.14.2",
  "md-5 0.10.6",
  "serde",

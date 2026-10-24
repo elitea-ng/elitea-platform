@@ -11,3 +11,10 @@ This product includes software from OpenAI Codex (Apache-2.0),
 Copyright 2025 OpenAI (https://github.com/openai/codex): the Codex
 apply_patch envelope parser and its fuzzy line matching, adapted in
 libs/rust/local-tools/src/apply_patch/ (see libs/rust/local-tools/NOTICE).
+
+This product includes software from Aider (Apache-2.0), Copyright Paul
+Gauthier and Aider contributors (https://github.com/Aider-AI/aider): the
+repo map's ranking (aider/repomap.py), ported in
+libs/rust/graph-algos/src/pagerank.rs and
+libs/rust/inventory-core/src/repo_map.rs (see the NOTICE files of those
+crates).
