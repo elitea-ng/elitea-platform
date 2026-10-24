@@ -2,8 +2,11 @@
  * "Take back": get a thread running in the cloud back to this computer.
  * The dialog asks the cloud to hand it over, checks what came back against
  * your folder without touching it, and then offers what is safe: apply the
- * cloud's changes to your folder, open them as a separate worktree, or
- * discard them. Applying keeps a checkpoint; Undo puts the folder back.
+ * cloud's changes to your folder (when your folder is as sent, or changed
+ * elsewhere: a clean merge), apply them with conflict markers (when both
+ * changed the same lines), open them as a separate worktree, or discard
+ * them. With several cloud turns, the person may take back up to an
+ * earlier one. Applying keeps a checkpoint; Undo puts the folder back.
  *
  * The review shows the per-file diffs of what the take back writes, through
  * `renderFiles` (the page passes the Workspace view's changed-files card,
@@ -21,7 +24,6 @@ import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
-import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import type { ApplyResult, HandoffChangedFile, HandoffIpc, Preflight, TakeBackMode } from '@/shared/desktop/handoffIpc';
@@ -29,6 +31,7 @@ import { t } from '@/shared/i18n';
 
 import { describeHandoffError } from '../model/describeHandoffError';
 import { useTakeBack, type TakeBack } from '../model/useTakeBack';
+import { changedLabel, mutedSx, Paths, Review, type RenderFiles } from './TakeBackReview';
 
 export interface TakeBackDialogProps {
   open: boolean;
@@ -42,36 +45,6 @@ export interface TakeBackDialogProps {
   renderFiles?: ((files: readonly HandoffChangedFile[], key: string) => ReactNode) | undefined;
 }
 
-type RenderFiles = TakeBackDialogProps['renderFiles'];
-
-const mutedSx = (theme: Theme) => ({ color: theme.vars.palette.text.secondary });
-const PATHS_SHOWN = 20;
-
-function Paths({ title, paths, testId }: { title: string; paths: readonly string[]; testId: string }): React.JSX.Element | null {
-  if (paths.length === 0) return null;
-  return (
-    <Box component="section" data-testid={testId} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-      <Typography variant="labelMedium" component="h3" sx={{ margin: 0 }}>
-        {`${title} (${String(paths.length)})`}
-      </Typography>
-      <Box component="ul" sx={{ margin: 0, paddingLeft: 2.5 }}>
-        {paths.slice(0, PATHS_SHOWN).map((path) => (
-          <li key={path}>
-            <Typography variant="bodySmall" sx={{ wordBreak: 'break-all' }}>
-              {path}
-            </Typography>
-          </li>
-        ))}
-      </Box>
-      {paths.length > PATHS_SHOWN && (
-        <Typography variant="bodySmall" sx={mutedSx}>
-          {t('workspace.handoff.pathsMore', 'and {{n}} more', { n: String(paths.length - PATHS_SHOWN) })}
-        </Typography>
-      )}
-    </Box>
-  );
-}
-
 function Working({ label }: { label: string }): React.JSX.Element {
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }} data-testid="takeback-working">
@@ -83,57 +56,12 @@ function Working({ label }: { label: string }): React.JSX.Element {
   );
 }
 
-/** The diffs of what the take back writes; without a renderer (or diffs), the changed paths. */
-function ChangedInCloud({ preflight, renderFiles }: { preflight: Preflight; renderFiles: RenderFiles }): React.JSX.Element | null {
-  const title = t('workspace.handoff.paths.changed', 'Changed in the cloud');
-  if (renderFiles === undefined || preflight.files.length === 0) return <Paths title={title} paths={preflight.changed_paths} testId="takeback-changed-paths" />;
-  return (
-    <Box data-testid="takeback-diffs" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-      {renderFiles(preflight.files, `takeback-${preflight.preflight_id}`)}
-      {preflight.diffs_truncated && (
-        <Typography variant="bodySmall" data-testid="takeback-diffs-truncated" sx={mutedSx}>
-          {t('workspace.handoff.review.truncated', 'Some diffs are not shown: they are too large to show here. The files are still written.')}
-        </Typography>
-      )}
-    </Box>
-  );
-}
-
-function Review({ preflight, confirmingDiscard, renderFiles }: { preflight: Preflight; confirmingDiscard: boolean; renderFiles: RenderFiles }): React.JSX.Element {
-  const fast = preflight.outcome === 'fast_path';
-  return (
-    <>
-      {fast ? (
-        <Typography variant="bodyMedium">
-          {t('workspace.handoff.review.fast', 'Your folder is as you left it. The cloud changed {{n}} files in {{turns}} turns.', {
-            n: String(preflight.changed_paths.length),
-            turns: String(preflight.cloud_turns),
-          })}
-        </Typography>
-      ) : (
-        <Alert severity="warning" data-testid="takeback-conflicts">
-          {t(
-            'workspace.handoff.review.conflicts',
-            'Your folder changed since you sent this thread, so the cloud’s changes are not written into it. Open them as a separate worktree next to your folder, or discard them.',
-          )}
-        </Alert>
-      )}
-      <Paths title={t('workspace.handoff.paths.conflicts', 'Changed on both sides')} paths={preflight.conflict_paths} testId="takeback-conflict-paths" />
-      <ChangedInCloud preflight={preflight} renderFiles={renderFiles} />
-      <Paths title={t('workspace.handoff.paths.skipped', 'Never written or deleted here')} paths={preflight.skipped_paths} testId="takeback-skipped-paths" />
-      {confirmingDiscard && (
-        <Alert severity="warning" data-testid="takeback-discard-confirm">
-          {t('workspace.handoff.discardConfirm', 'Discard the cloud’s changes? They are not kept anywhere on this computer. Your folder stays as it is.')}
-        </Alert>
-      )}
-    </>
-  );
-}
-
 function resultTitle(result: ApplyResult): string {
   switch (result.outcome) {
     case 'applied':
       return t('workspace.handoff.result.applied', 'The cloud’s changes are in your folder as uncommitted changes.');
+    case 'applied_with_markers':
+      return t('workspace.handoff.result.markers', 'The cloud’s changes are in your folder as uncommitted changes. Files changed on both sides have conflict markers to resolve.');
     case 'worktree':
       return t('workspace.handoff.result.worktree', 'The cloud’s version is open as a separate worktree. Your folder was not changed.');
     case 'discarded':
@@ -141,18 +69,37 @@ function resultTitle(result: ApplyResult): string {
   }
 }
 
+/** The conflicted files that got markers (a binary conflict keeps the folder's file). */
+function markerPaths(preflight: Preflight): string[] {
+  const binary = new Set(preflight.skipped_paths.filter((skip) => skip.reason === 'binary_conflict').map((skip) => skip.path));
+  return preflight.conflict_paths.filter((path) => !binary.has(path));
+}
+
+/** What an apply into the folder wrote, and where the cloud's commits are. */
+function Written({ preflight, result, undone }: { preflight: Preflight; result: ApplyResult; undone: boolean }): React.JSX.Element {
+  return (
+    <>
+      {!undone && <Paths title={t('workspace.handoff.paths.applied', 'Changed in your folder')} paths={preflight.changed_paths.map(changedLabel)} testId="takeback-applied-paths" />}
+      {result.outcome === 'applied_with_markers' && !undone && (
+        <Paths title={t('workspace.handoff.paths.markers', 'With conflict markers to resolve')} paths={markerPaths(preflight)} testId="takeback-marker-paths" />
+      )}
+      {result.branch !== null && (
+        <Typography variant="bodySmall" sx={mutedSx}>
+          {t('workspace.handoff.result.branch', 'The cloud’s commits are on the branch {{branch}}.', { branch: result.branch })}
+        </Typography>
+      )}
+    </>
+  );
+}
+
 function Done({ preflight, result, undone }: { preflight: Preflight; result: ApplyResult; undone: boolean }): React.JSX.Element {
+  const written = result.outcome === 'applied' || result.outcome === 'applied_with_markers';
   return (
     <>
       <Alert severity="success" data-testid="takeback-result">
         {undone ? t('workspace.handoff.result.undone', 'Your folder is back to how it was before the take back.') : resultTitle(result)}
       </Alert>
-      {result.outcome === 'applied' && !undone && <Paths title={t('workspace.handoff.paths.applied', 'Changed in your folder')} paths={preflight.changed_paths} testId="takeback-applied-paths" />}
-      {result.outcome === 'applied' && result.branch !== null && (
-        <Typography variant="bodySmall" sx={mutedSx}>
-          {t('workspace.handoff.result.branch', 'The cloud’s commits are on the branch {{branch}}.', { branch: result.branch })}
-        </Typography>
-      )}
+      {written && <Written preflight={preflight} result={result} undone={undone} />}
       {result.outcome === 'worktree' && result.worktree_path !== null && (
         <Box data-testid="takeback-worktree" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
           <Typography variant="bodySmall" data-testid="takeback-worktree-path" sx={{ wordBreak: 'break-all' }}>
@@ -194,7 +141,7 @@ function Body({ takeBack, confirmingDiscard, renderFiles }: { takeBack: TakeBack
     case 'applying':
       return <Working label={t('workspace.handoff.working.applying', 'Applying…')} />;
     case 'review':
-      return <Review preflight={step.preflight} confirmingDiscard={confirmingDiscard} renderFiles={renderFiles} />;
+      return <Review preflight={step.preflight} confirmingDiscard={confirmingDiscard} renderFiles={renderFiles} onPickTurn={takeBack.pickTurn} />;
     case 'done':
       return <Done preflight={step.preflight} result={step.result} undone={step.undone} />;
     case 'gone':
@@ -202,12 +149,14 @@ function Body({ takeBack, confirmingDiscard, renderFiles }: { takeBack: TakeBack
   }
 }
 
-const MODE_ORDER: readonly TakeBackMode[] = ['apply', 'worktree', 'discard'];
+const MODE_ORDER: readonly TakeBackMode[] = ['apply', 'apply_with_markers', 'worktree', 'discard'];
 
 function modeLabel(mode: TakeBackMode): string {
   switch (mode) {
     case 'apply':
       return t('workspace.handoff.mode.apply', 'Apply to my folder');
+    case 'apply_with_markers':
+      return t('workspace.handoff.mode.markers', 'Apply with conflict markers');
     case 'worktree':
       return t('workspace.handoff.mode.worktree', 'Open as worktree');
     case 'discard':
