@@ -147,7 +147,7 @@ inside the folder.
 A task worktree is a linked git worktree of a workspace's repository that
 the host makes in the workspace's own data,
 `<app data>/workspaces/<id>/worktrees/<32 hex of the thread>`, on a new
-branch `elitea/<first 8 hex of the thread>` (no checkout runs a filter or
+branch `elitea/<first 12 hex of the thread>[-<n>]` (no checkout runs a filter or
 hook: files are written by `checkout-index` after the attributes check).
 Only a workspace whose folder is its repository's top has them. Each is a
 workspace of its own (`Workspace.parent_id`, listed by `workspace_list`):
@@ -173,17 +173,17 @@ other task worktrees are not readable.
 | `worktree_create` | `{workspace_id, thread_uuid, base?: "head" \| "checkpoint:<n>"}` | `WorktreeEntry` — `base` is `HEAD` (default) or the folder as its checkpoint `n` holds it. Rejects `workspace_unknown`, `not_a_git_repository` (no repository, or the folder is not its top), `unsafe_repository`, `worktree_exists` (the thread has one, or the branch exists), `invalid_request`. |
 | `worktree_list` | `{workspace_id}` | `WorktreeEntry[]`, newest first. |
 | `worktree_diff` | `{workspace_id, thread_uuid}` | `{diff: string, truncated: boolean}` — the worktree as it is now (uncommitted work included) against `base_sha`; denied paths left out. Rejects `worktree_unknown`, `workspace_busy` while a turn runs in it. |
-| `worktree_remove` | `{workspace_id, thread_uuid, force?: boolean}` | `null` — its workspace (session, turns, history, data), folder and admin directory; its branch is kept when commits are on it. Rejects `worktree_dirty` when it has uncommitted work and `force` is not `true`, `workspace_busy`. |
+| `worktree_remove` | `{workspace_id, thread_uuid, force?: boolean}` | `null` — its workspace (session, turns, history, data), folder and admin directory; its branch is kept when commits are on it, or when the worktree cannot be opened to tell (missing, refused). Rejects `worktree_dirty` when it has uncommitted work and `force` is not `true`, `workspace_busy`. |
 | `worktree_merge_preflight` | `{workspace_id, thread_uuid}` | `MergePreflight` — what merging the worktree (as it is now) into the folder would do, by `git merge-tree` from `base_sha`; writes nothing. Held 15 minutes. |
 | `worktree_merge_apply` | `{preflight_id}` | `MergeApplied` — checkpoints the folder first, then writes each path through the confined writer (path rules apply; what they refuse is in `skipped_paths`). The result lands as uncommitted changes; nothing is committed. Rejects `preflight_expired`, `merge_conflicts` (a `conflicts` preview: nothing is applied, the work stays on the branch), `folder_changed_since_preflight` (preview again), `workspace_busy`. |
-| `worktree_merge_undo` | `{checkpoint_id}` | `{restored: string[]}` — restores the checkpoint the merge took. |
+| `worktree_merge_undo` | `{checkpoint_id, confirm_older?: boolean}` | `{restored: string[]}` — restores the checkpoint the merge took (only an id `worktree_merge_apply` returned; once). Rejects `invalid_request` for any other checkpoint, `undo_not_latest` when the folder was checkpointed since (a later turn or merge, whose changes the restore reverts too) and `confirm_older` is not `true`, `workspace_busy`. |
 
 ```ts
 type WorktreeEntry = {
   workspace_id: string;        // the worktree's own workspace (turns run here)
   thread_uuid: string;
   path: string;
-  branch: string;              // "elitea/<first 8 hex of the thread>"
+  branch: string;              // "elitea/<first 12 hex of the thread>[-<n>]"
   base_sha: string;
   created_at: number;          // unix seconds
   ahead: number;               // commits on the branch since base_sha

@@ -15,6 +15,7 @@ describe('createWorktreeIpc', () => {
     await ipc.preflight('w1', 'u1');
     await ipc.apply('pf-1');
     await ipc.undo('cp-1');
+    await ipc.undo('cp-2', true);
     expect(invoke.mock.calls).toEqual([
       ['worktree_create', { workspace_id: 'w1', thread_uuid: 'u1' }],
       ['worktree_create', { workspace_id: 'w1', thread_uuid: 'u2', base: 'checkpoint:3' }],
@@ -24,6 +25,7 @@ describe('createWorktreeIpc', () => {
       ['worktree_merge_preflight', { workspace_id: 'w1', thread_uuid: 'u1' }],
       ['worktree_merge_apply', { preflight_id: 'pf-1' }],
       ['worktree_merge_undo', { checkpoint_id: 'cp-1' }],
+      ['worktree_merge_undo', { checkpoint_id: 'cp-2', confirm_older: true }],
     ]);
   });
 

@@ -198,7 +198,11 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 	if request.Mode == ForkModeRewind {
 		action = "conversation.rewind"
 	}
-	audit.Annotate(r.Context(), audit.Annotation{Action: action, EntityType: "conversation", EntityID: &forkRowID})
+	// A replay made nothing: the request is in the trail as a plain API
+	// call, not as a second fork.
+	if !result.Replayed {
+		audit.Annotate(r.Context(), audit.Annotation{Action: action, EntityType: "conversation", EntityID: &forkRowID})
+	}
 	if h.events != nil && !result.Replayed {
 		payload := map[string]any{"conversation_id": strconv.FormatInt(result.ID, 10), "name": row["name"], "forked_from": row["forked_from"]}
 		if created, ok := row["source"].(string); ok && created == LocalWorkSource {

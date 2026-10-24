@@ -167,11 +167,8 @@ func (r *ConversationsRepo) ForkConversation(ctx context.Context, projectID, con
 	if err != nil {
 		return conversations.ForkResult{}, err
 	}
-	if request.ForkID != "" {
-		if replay, found, err := replayFork(ctx, r.pool, s, access.ActorID, request, plan); found || err != nil {
-			return replay, err
-		}
-	}
+	// A fork_id is looked up once, under its lock in the transaction: a
+	// replay copies the objects this plan names, which the handler deletes.
 	copiedObjects := map[conversations.AttachmentCopy]bool{}
 	copyObjects := func(copies []conversations.AttachmentCopy) error {
 		var pending []conversations.AttachmentCopy
@@ -220,8 +217,9 @@ func (r *ConversationsRepo) ForkConversation(ctx context.Context, projectID, con
 	}
 	src, point, groups := plan.src, plan.point, plan.groups
 	if request.ForkID != "" {
-		// A retry that raced this one: its fork stands, and the objects
-		// this one copied are the handler's to delete.
+		// A retry (after a lost answer, or one that raced this request):
+		// its fork stands, and the objects this one copied are the
+		// handler's to delete.
 		if replay, found, err := replayFork(ctx, tx, s, access.ActorID, request, plan); found || err != nil {
 			return replay, err
 		}

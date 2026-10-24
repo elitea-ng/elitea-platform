@@ -953,7 +953,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 154: tenant/0154_strip_toolkit_pgvector_configuration.sql, removes the
 	// retired `pgvector_configuration` key from elitea_tools.settings (#1359).
 	// Data only, no permission, so no shared sibling.
-	require.EqualValues(t, 154, Head(tenant))
+	// 155: tenant/0155_chat_conversation_fork_id_index.sql, a partial index on
+	// chat_conversations (author_id, meta->'forked_from'->>'fork_id') for the
+	// fork's fork_id replay lookup (#1420). An index, no permission.
+	require.EqualValues(t, 155, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

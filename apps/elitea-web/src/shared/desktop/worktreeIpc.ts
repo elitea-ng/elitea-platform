@@ -17,7 +17,7 @@ export interface WorktreeEntry {
   workspace_id: string;
   thread_uuid: string;
   path: string;
-  /** `elitea/<first 8 hex of the thread uuid>`. */
+  /** `elitea/<first 12 hex of the thread uuid>`, `-<n>` added when that branch exists. */
   branch: string;
   base_sha: string;
   /** Unix seconds. */
@@ -74,7 +74,8 @@ export interface WorktreeIpc {
   remove(workspaceId: string, threadUuid: string, force: boolean): Promise<void>;
   preflight(workspaceId: string, threadUuid: string): Promise<MergePreflight>;
   apply(preflightId: string): Promise<MergeApplied>;
-  undo(checkpointId: string): Promise<{ restored: string[] }>;
+  /** Rejects `undo_not_latest` when the folder was checkpointed since, unless `confirmOlder` (that is reverted too). */
+  undo(checkpointId: string, confirmOlder?: boolean): Promise<{ restored: string[] }>;
 }
 
 export function createWorktreeIpc(invoke: HostInvoke): WorktreeIpc {
@@ -90,7 +91,8 @@ export function createWorktreeIpc(invoke: HostInvoke): WorktreeIpc {
     remove: (workspaceId, threadUuid, force) => call<null>('worktree_remove', { workspace_id: workspaceId, thread_uuid: threadUuid, force }).then(() => undefined),
     preflight: (workspaceId, threadUuid) => call<MergePreflight>('worktree_merge_preflight', { workspace_id: workspaceId, thread_uuid: threadUuid }),
     apply: (preflightId) => call<MergeApplied>('worktree_merge_apply', { preflight_id: preflightId }),
-    undo: (checkpointId) => call<{ restored: string[] }>('worktree_merge_undo', { checkpoint_id: checkpointId }),
+    undo: (checkpointId, confirmOlder) =>
+      call<{ restored: string[] }>('worktree_merge_undo', confirmOlder === true ? { checkpoint_id: checkpointId, confirm_older: true } : { checkpoint_id: checkpointId }),
   };
 }
 

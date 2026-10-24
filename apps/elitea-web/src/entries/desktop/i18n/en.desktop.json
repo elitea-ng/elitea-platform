@@ -804,6 +804,7 @@
   "workspace.worktree.checkAgain": "Check again",
   "workspace.worktree.apply": "Apply",
   "workspace.worktree.undo": "Undo merge",
+  "workspace.worktree.undoAnyway": "Undo anyway",
   "workspace.worktree.removeTitle": "Remove {{branch}}?",
   "workspace.worktree.removeDirty": "This task has changes that were never committed. Removing it deletes them for good; the main folder is not touched.",
   "workspace.worktree.keep": "Keep it",

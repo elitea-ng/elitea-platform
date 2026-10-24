@@ -85,6 +85,58 @@ func TestBuildBranchSummaryIsABoundedV1Record(t *testing.T) {
 	}
 }
 
+// Issue 1420: `<`, `>` and `&` count one byte each, as serde_json writes
+// them: a summary full of them that the desktop built at the bound is
+// accepted, and the server's own (stored, then read back) still validates.
+func TestBranchSummaryBoundIgnoresHTMLEscaping(t *testing.T) {
+	angles := strings.Repeat("<", 2000)
+	client := validSummaryValue()
+	facts := make([]any, 0, 15)
+	for range 15 {
+		facts = append(facts, angles)
+	}
+	client["key_facts"] = facts
+	if raw, _ := json.Marshal(client); len(raw) <= maxBranchSummaryBytes {
+		t.Fatalf("the fixture must exceed the bound under HTML escaping (%d bytes)", len(raw))
+	}
+	if _, err := validBranchSummary(client); err != nil {
+		t.Fatalf("a 30 KiB summary of '<' is refused: %v", err)
+	}
+	client["key_facts"] = append(facts, angles, angles)
+	if _, err := validBranchSummary(client); err == nil {
+		t.Fatal("a summary over 32 KiB is accepted")
+	}
+
+	turns := []AbandonedTurn{}
+	for range 40 {
+		turns = append(turns, AbandonedTurn{Question: true, Text: angles}, AbandonedTurn{Text: "&" + angles})
+	}
+	built := BuildBranchSummary(turns)
+	stored, err := json.Marshal(built)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var read map[string]any
+	if err := json.Unmarshal(stored, &read); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validBranchSummary(read); err != nil {
+		t.Fatalf("the built summary of '<' does not validate when read back: %v", err)
+	}
+	if facts, _ := built["key_facts"].([]any); len(facts) == 0 {
+		t.Fatal("no facts kept")
+	}
+	// Text that escapes to six bytes a character still fits: facts go.
+	controls := strings.Repeat("\x01", 1500)
+	turns = turns[:0]
+	for range 40 {
+		turns = append(turns, AbandonedTurn{Question: true, Text: controls})
+	}
+	if _, err := validBranchSummary(BuildBranchSummary(turns)); err != nil {
+		t.Fatalf("a summary of control characters does not validate: %v", err)
+	}
+}
+
 func TestForkedFromNamesTheModeAndTheCut(t *testing.T) {
 	cut := "6f9619ff-8b86-d011-b42d-00c04fc964ff"
 	meta := map[string]any{ForkedFromMetaKey: map[string]any{"conversation_id": float64(5), "mode": "rewind",

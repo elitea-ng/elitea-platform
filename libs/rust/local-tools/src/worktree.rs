@@ -33,7 +33,7 @@ use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::git::{RegisteredWorktree, Repo, capped, register_worktree, unregister_worktree};
 use crate::session::LocalSession;
 
-/// The branch prefix task worktrees get (`elitea/<first 8 of the thread>`).
+/// The branch prefix task worktrees get (`elitea/<first 12 of the thread>`).
 pub const BRANCH_PREFIX: &str = "elitea/";
 
 /// A worktree [`create`] made.
@@ -54,14 +54,22 @@ pub struct Status {
     pub dirty: u64,
 }
 
-/// The branch of a thread's worktree: [`BRANCH_PREFIX`] and the first 8
-/// letters or digits of the thread's id.
+/// How many letters or digits of the thread's id name its branch: enough
+/// that two threads of one repository practically never share one.
+const BRANCH_ID_LEN: usize = 12;
+
+/// The most `-<n>` suffixes [`create`] tries when the branch is taken.
+const MAX_BRANCH_SUFFIX: u32 = 99;
+
+/// The branch of a thread's worktree: [`BRANCH_PREFIX`] and the first 12
+/// letters or digits of the thread's id ([`create`] adds `-<n>` when a
+/// branch of that name exists already, one a removed worktree kept).
 #[must_use]
 pub fn branch_name(thread: &str) -> String {
     let short: String = thread
         .chars()
         .filter(char::is_ascii_alphanumeric)
-        .take(8)
+        .take(BRANCH_ID_LEN)
         .collect();
     format!("{BRANCH_PREFIX}{}", short.to_ascii_lowercase())
 }
@@ -70,17 +78,47 @@ fn exists(error: impl Into<String>) -> ToolError {
     ToolError::new(ErrorCode::InvalidArgument, error)
 }
 
+/// `branch` (`elitea/<short>`), or the first `elitea/<short>-<n>` that
+/// `repo` has no branch of.
+fn free_branch(repo: &Repo, branch: &str) -> ToolResult<String> {
+    let short = branch
+        .strip_prefix(BRANCH_PREFIX)
+        .filter(|rest| !rest.is_empty() && crate::git::valid_worktree_name(rest))
+        .ok_or_else(|| ToolError::invalid("not a task worktree branch"))?;
+    let taken = |name: &str| {
+        repo.git(repo.top())
+            .run(&[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{name}"),
+            ])
+            .is_ok()
+    };
+    std::iter::once(branch.to_owned())
+        .chain((2..=MAX_BRANCH_SUFFIX).map(|n| format!("{BRANCH_PREFIX}{short}-{n}")))
+        .find(|candidate| !taken(candidate))
+        .ok_or_else(|| {
+            exists(format!(
+                "the branch {branch} and its suffixes already exist"
+            ))
+        })
+}
+
 /// Create a task worktree of `repo` (the person's folder, not itself a
 /// linked worktree) at `path` (absent; its parent is the host's own,
 /// private directory), named `name` under `.git/worktrees/`, on a new
-/// `branch` at `base` (`HEAD`, a commit id, or a checkpoint's ref). It is
+/// `branch` at `base` (`HEAD`, a commit id, or a checkpoint's ref); when a
+/// branch of that name exists (a removed worktree's, kept for its
+/// commits), the first free `branch-<n>` ([`Created::branch`]). It is
 /// registered ([`register_worktree`]) before anything is checked out into
 /// it; a failure removes what was made.
 ///
 /// # Errors
 ///
-/// [`ErrorCode::InvalidArgument`] when the path, the name or the branch is
-/// taken or malformed; [`ErrorCode::UnsafeRepository`]; git failures.
+/// [`ErrorCode::InvalidArgument`] when the path or the name is taken, the
+/// branch and its suffixes are, or one is malformed;
+/// [`ErrorCode::UnsafeRepository`]; git failures.
 pub fn create(
     repo: &Repo,
     path: &Path,
@@ -99,10 +137,6 @@ pub fn create(
     if base.is_empty() || base.starts_with('-') || base.contains(['\0', '\n', ':', ' ']) {
         return Err(ToolError::invalid("not a base revision"));
     }
-    let short = branch
-        .strip_prefix(BRANCH_PREFIX)
-        .filter(|rest| !rest.is_empty() && crate::git::valid_worktree_name(rest))
-        .ok_or_else(|| ToolError::invalid("not a task worktree branch"))?;
     let common = repo.common_dir().to_path_buf();
     let top = repo.top().to_path_buf();
     let git = || repo.git(&top);
@@ -115,13 +149,7 @@ pub fn create(
             &format!("{base}^{{commit}}"),
         ])
         .map_err(|_| ToolError::invalid(format!("`{base}` is not a commit of this repository")))?;
-    let branch_ref = format!("refs/heads/{BRANCH_PREFIX}{short}");
-    if git()
-        .run(&["rev-parse", "--verify", "--quiet", &branch_ref])
-        .is_ok()
-    {
-        return Err(exists(format!("the branch {branch} already exists")));
-    }
+    let branch = free_branch(repo, branch)?;
     let admin = common.join("worktrees").join(name);
     if std::fs::symlink_metadata(&admin).is_ok() {
         return Err(exists("the repository already has a worktree of that name"));
@@ -159,7 +187,7 @@ pub fn create(
                 "add",
                 "--no-checkout",
                 "-b",
-                branch,
+                &branch,
                 &path.to_string_lossy(),
                 &base_sha,
             ])?;
@@ -183,7 +211,7 @@ pub fn create(
     }
     Ok(Created {
         entry,
-        branch: branch.to_owned(),
+        branch,
         base_sha,
     })
 }

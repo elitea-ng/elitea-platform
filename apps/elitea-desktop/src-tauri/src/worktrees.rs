@@ -4,7 +4,7 @@
 //! A task worktree is a linked git worktree of a workspace's repository that
 //! the host makes in the workspace's own data,
 //! `<app data>/workspaces/<id>/worktrees/<thread>`, on a branch
-//! `elitea/<first 8 of the thread>` (`elitea_local_tools::worktree`). It is
+//! `elitea/<first 12 of the thread>` (`elitea_local_tools::worktree`). It is
 //! a workspace of its own (`Workspace::parent_id`: its own session,
 //! checkpoints and turn claim, the parent's project), so turns run in
 //! several worktrees of one repository, and in the folder, at once.
@@ -48,6 +48,11 @@ use crate::workspaces::{Workspace, WorkspaceStore};
 
 /// The registry file in a workspace's data.
 const REGISTRY_FILE: &str = "worktrees.json";
+/// The checkpoints merges into a workspace took (`worktree_merge_undo`
+/// restores only those), in its data beside the registry.
+const MERGES_FILE: &str = "worktree-merges.json";
+/// The most merge checkpoints remembered per workspace (the oldest go first).
+const MAX_MERGES: usize = 64;
 /// The folder in a workspace's data that holds its task worktrees.
 const DIR: &str = "worktrees";
 /// How long a merge preview is held for its apply.
@@ -130,8 +135,6 @@ struct Held {
 pub struct WorktreeHost {
     pub(crate) agents: Arc<AgentHost>,
     workspaces: Arc<WorkspaceStore>,
-    /// Serialises the registry files' read-modify-write.
-    registry: Mutex<()>,
     preflights: Mutex<HashMap<String, Held>>,
 }
 
@@ -139,6 +142,82 @@ fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs())
+}
+
+/// Serialises every read-modify-write of the registry files (both
+/// [`REGISTRY_FILE`] and [`MERGES_FILE`], every workspace): the host's calls
+/// and the Doctor's prune share it, and with it the one temporary name.
+static REGISTRY_LOCK: Mutex<()> = Mutex::new(());
+
+/// `file` in `parent_id`'s data (the default when there is none): owner-only,
+/// never through a symlink; another user's or a group- or world-readable
+/// file is refused.
+fn read_private<T: serde::de::DeserializeOwned + Default>(
+    workspaces: &WorkspaceStore,
+    parent_id: &str,
+    file: &str,
+) -> Result<T, TurnError> {
+    let path = workspaces.data_dir(parent_id).join(file);
+    let opened = match crate::credentials_file::open_no_follow(&path) {
+        Ok(opened) => opened,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(T::default()),
+        Err(e) => return Err(storage(e)),
+    };
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let meta = opened.metadata().map_err(storage)?;
+        if !meta.is_file()
+            || meta.uid() != rustix::process::geteuid().as_raw()
+            || meta.mode() & 0o077 != 0
+        {
+            return Err(TurnError::new(
+                "storage",
+                "the workspace's worktree registry is not private to you; it was not used",
+            ));
+        }
+    }
+    serde_json::from_reader(opened)
+        .map_err(|_| TurnError::new("storage", "the workspace's worktree registry is damaged"))
+}
+
+/// Write `value` to `file` in `parent_id`'s data: a `0600` temporary file
+/// created before it is written, then renamed over. The caller holds
+/// [`REGISTRY_LOCK`].
+fn write_private<T: Serialize>(
+    workspaces: &WorkspaceStore,
+    parent_id: &str,
+    file: &str,
+    value: &T,
+) -> Result<(), TurnError> {
+    let dir = workspaces.data_dir(parent_id);
+    crate::credentials_file::create_private_dir(&dir).map_err(storage)?;
+    let bytes = serde_json::to_vec_pretty(value).map_err(storage)?;
+    let temp = dir.join(format!(".{file}.{}.tmp", std::process::id()));
+    let _ = std::fs::remove_file(&temp);
+    {
+        use std::io::Write as _;
+        let mut out = crate::credentials_file::create_private_file(&temp).map_err(storage)?;
+        out.write_all(&bytes)
+            .and_then(|()| out.sync_all())
+            .map_err(storage)?;
+    }
+    std::fs::rename(&temp, dir.join(file)).map_err(storage)
+}
+
+/// Read, change and write `file` in `parent_id`'s data under [`REGISTRY_LOCK`].
+fn update_private<T: serde::de::DeserializeOwned + Serialize + Default, R>(
+    workspaces: &WorkspaceStore,
+    parent_id: &str,
+    file: &str,
+    change: impl FnOnce(&mut T) -> R,
+) -> Result<R, TurnError> {
+    let _guard = REGISTRY_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut value: T = read_private(workspaces, parent_id, file)?;
+    let answer = change(&mut value);
+    write_private(workspaces, parent_id, file, &value)?;
+    Ok(answer)
 }
 
 fn storage(error: impl std::fmt::Display) -> TurnError {
@@ -181,54 +260,13 @@ impl WorktreeHost {
         Self {
             agents,
             workspaces,
-            registry: Mutex::new(()),
             preflights: Mutex::new(HashMap::new()),
         }
     }
 
-    fn registry_path(&self, parent_id: &str) -> PathBuf {
-        self.workspaces.data_dir(parent_id).join(REGISTRY_FILE)
-    }
-
     /// The registry of `parent_id` (empty when there is none).
     fn read(&self, parent_id: &str) -> Result<Vec<Record>, TurnError> {
-        let path = self.registry_path(parent_id);
-        let file = match crate::credentials_file::open_no_follow(&path) {
-            Ok(file) => file,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(storage(e)),
-        };
-        {
-            use std::os::unix::fs::MetadataExt as _;
-            let meta = file.metadata().map_err(storage)?;
-            if !meta.is_file()
-                || meta.uid() != rustix::process::geteuid().as_raw()
-                || meta.mode() & 0o077 != 0
-            {
-                return Err(TurnError::new(
-                    "storage",
-                    "the workspace's worktree registry is not private to you; it was not used",
-                ));
-            }
-        }
-        serde_json::from_reader(file)
-            .map_err(|_| TurnError::new("storage", "the workspace's worktree registry is damaged"))
-    }
-
-    fn write(&self, parent_id: &str, records: &[Record]) -> Result<(), TurnError> {
-        let dir = self.workspaces.data_dir(parent_id);
-        crate::credentials_file::create_private_dir(&dir).map_err(storage)?;
-        let bytes = serde_json::to_vec_pretty(records).map_err(storage)?;
-        let temp = dir.join(format!(".{REGISTRY_FILE}.{}.tmp", std::process::id()));
-        let _ = std::fs::remove_file(&temp);
-        {
-            use std::io::Write as _;
-            let mut file = crate::credentials_file::create_private_file(&temp).map_err(storage)?;
-            file.write_all(&bytes)
-                .and_then(|()| file.sync_all())
-                .map_err(storage)?;
-        }
-        std::fs::rename(&temp, self.registry_path(parent_id)).map_err(storage)
+        read_private(&self.workspaces, parent_id, REGISTRY_FILE)
     }
 
     fn update(
@@ -236,13 +274,7 @@ impl WorktreeHost {
         parent_id: &str,
         change: impl FnOnce(&mut Vec<Record>),
     ) -> Result<(), TurnError> {
-        let _guard = self
-            .registry
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut records = self.read(parent_id)?;
-        change(&mut records);
-        self.write(parent_id, &records)
+        update_private(&self.workspaces, parent_id, REGISTRY_FILE, change)
     }
 
     /// The workspace `parent_id` (not itself a task worktree's).
@@ -382,7 +414,7 @@ impl WorktreeHost {
             let path = created.entry.worktree.clone();
             let recorded = this
                 .workspaces
-                .add_worktree(&parent.id, &path, &thread, &branch)
+                .add_worktree(&parent.id, &path, &thread, &created.branch)
                 .map_err(storage)
                 .and_then(|workspace| {
                     let record = Record {
@@ -515,7 +547,8 @@ impl WorktreeHost {
     }
 
     /// `worktree_remove`: its workspace (session, turns, history, data), its
-    /// folder and admin directory, and its branch unless commits are on it.
+    /// folder and admin directory, and its branch unless commits are on it
+    /// (or it cannot be told: a worktree that does not open keeps it).
     /// Refused (`worktree_dirty`) with uncommitted work unless `force`.
     ///
     /// # Errors
@@ -549,9 +582,15 @@ impl WorktreeHost {
                 "The task worktree has changes that are not committed; remove it anyway?",
             ));
         }
+        // First, under its claim (refused while a turn runs there): its
+        // folder is not deleted under a running turn. A workspace already
+        // gone (an earlier remove that failed later) removes as nothing, so
+        // a retry finishes the folder and the record.
         self.agents.remove_workspace(&record.workspace_id).await?;
         let this = Arc::clone(self);
-        let keep_branch = status.is_some_and(|status| status.ahead > 0);
+        // A worktree that could not be opened (missing, refused) may still
+        // have commits on its branch: kept, as the Doctor's prune keeps it.
+        let keep_branch = status.is_none_or(|status| status.ahead > 0);
         blocking(move || {
             match this.main_repo(&parent) {
                 Ok(repo) => {
@@ -677,6 +716,19 @@ impl WorktreeHost {
                 &format!("before merging {}", held.branch),
             )
             .map_err(|e| tool_error(&e))?;
+            if let Some(seq) = applied.checkpoint {
+                // What `worktree_merge_undo` accepts: this merge's checkpoint.
+                update_private(
+                    &this.workspaces,
+                    &parent.id,
+                    MERGES_FILE,
+                    |merges: &mut Vec<u64>| {
+                        merges.push(seq);
+                        let over = merges.len().saturating_sub(MAX_MERGES);
+                        merges.drain(..over);
+                    },
+                )?;
+            }
             Ok(MergeApplied {
                 written: applied.written,
                 deleted: applied.deleted,
@@ -687,15 +739,20 @@ impl WorktreeHost {
         .await
     }
 
-    /// `worktree_merge_undo`: restore the checkpoint a merge took.
+    /// `worktree_merge_undo`: restore the checkpoint a merge took (only a
+    /// merge's, as `worktree_merge_apply` recorded it). When the folder was
+    /// checkpointed since (a later turn or merge), restoring reverts that
+    /// too: only with `confirm_older`, as `checkpoint_restore` asks.
     ///
     /// # Errors
     ///
-    /// `invalid_request` for a malformed id, `workspace_busy`, a failed
-    /// restore.
+    /// `invalid_request` for a malformed id or one no merge took,
+    /// `undo_not_latest` (newer checkpoints, no `confirm_older`),
+    /// `workspace_busy`, a failed restore.
     pub async fn merge_undo(
         self: &Arc<Self>,
         checkpoint_id: &str,
+        confirm_older: bool,
     ) -> Result<Vec<String>, TurnError> {
         let (workspace_id, seq) = checkpoint_id
             .split_once(':')
@@ -707,12 +764,37 @@ impl WorktreeHost {
             let _claim = this
                 .agents
                 .claim_workspace(&parent.id, "Wait for the running turn to end.")?;
+            let merges: Vec<u64> = read_private(&this.workspaces, &parent.id, MERGES_FILE)?;
+            if !merges.contains(&seq) {
+                return Err(TurnError::new("invalid_request", "not a merge checkpoint"));
+            }
             let session = this
                 .agents
                 .local_session(&parent.id, PathBuf::from(&parent.path))?;
+            if !confirm_older {
+                let newer = session
+                    .checkpoints()
+                    .list()
+                    .map_err(|e| tool_error(&e))?
+                    .iter()
+                    .any(|checkpoint| checkpoint.seq > seq);
+                if newer {
+                    return Err(TurnError::new(
+                        "undo_not_latest",
+                        "The folder changed after this merge (a later turn or merge). Undoing \
+                         the merge also reverts those changes; ask for that explicitly.",
+                    ));
+                }
+            }
             let report = session
                 .restore_checkpoint(seq)
                 .map_err(|e| TurnError::new("restore_failed", e.message()))?;
+            update_private(
+                &this.workspaces,
+                &parent.id,
+                MERGES_FILE,
+                |merges: &mut Vec<u64>| merges.retain(|&taken| taken != seq),
+            )?;
             let mut paths = report.restored;
             paths.extend(report.deleted);
             Ok(paths)
@@ -822,10 +904,13 @@ pub fn prune_stale(
             };
             let _ = worktree::remove(&repo, &entry, true);
         }
-        let reader = RegistryReader { workspaces };
-        let mut records = reader.read(parent_id).unwrap_or_default();
-        records.retain(|r| r.thread_uuid != record.thread_uuid);
-        write_registry(workspaces, parent_id, &records)?;
+        update_private(
+            workspaces,
+            parent_id,
+            REGISTRY_FILE,
+            |records: &mut Vec<Record>| records.retain(|r| r.thread_uuid != record.thread_uuid),
+        )
+        .map_err(|e| crate::error::HostError::Storage(e.message))?;
         pruned += 1;
     }
     for (parent_id, folder, name) in &stale.orphans {
@@ -856,29 +941,6 @@ pub fn prune_stale(
         message.push_str(&format!(" Not pruned: {}.", kept.join(", ")));
     }
     Ok(message)
-}
-
-fn write_registry(
-    workspaces: &WorkspaceStore,
-    parent_id: &str,
-    records: &[Record],
-) -> Result<(), crate::error::HostError> {
-    let dir = workspaces.data_dir(parent_id);
-    crate::credentials_file::create_private_dir(&dir)?;
-    let bytes = serde_json::to_vec_pretty(records)
-        .map_err(|e| crate::error::HostError::Internal(e.to_string()))?;
-    let temp = dir.join(format!(".{REGISTRY_FILE}.{}.tmp", std::process::id()));
-    let _ = std::fs::remove_file(&temp);
-    {
-        use std::io::Write as _;
-        let mut file = crate::credentials_file::create_private_file(&temp)
-            .map_err(|e| crate::error::HostError::Storage(e.to_string()))?;
-        file.write_all(&bytes)
-            .and_then(|()| file.sync_all())
-            .map_err(|e| crate::error::HostError::Storage(e.to_string()))?;
-    }
-    std::fs::rename(&temp, dir.join(REGISTRY_FILE))
-        .map_err(|e| crate::error::HostError::Storage(e.to_string()))
 }
 
 /// The task worktrees an isolated sub-agent of one turn gets (#1235): each

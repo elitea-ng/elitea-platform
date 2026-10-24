@@ -121,7 +121,7 @@ func forkOptions(body map[string]any, request *ForkRequest) error {
 // (its keys, its version and its bounds) and answers it as stored.
 func validBranchSummary(value any) (map[string]any, error) {
 	invalid := apierr.BadRequest("branch_summary must be a context_summary v1 record of at most 32 KiB")
-	raw, err := json.Marshal(value)
+	raw, err := summaryJSON(value)
 	if err != nil || len(raw) > maxBranchSummaryBytes {
 		return nil, invalid
 	}
@@ -132,6 +132,20 @@ func validBranchSummary(value any) (map[string]any, error) {
 		return nil, invalid
 	}
 	return summaryMap(summary), nil
+}
+
+// summaryJSON is value as compact JSON without HTML escaping: the bytes the
+// 32 KiB bound counts, as serde_json writes them on the Rust side (Go's
+// json.Marshal would spell each `<`, `>` and `&` in six). The one measure on
+// the write (request or built summary) and on the read.
+func summaryJSON(value any) ([]byte, error) {
+	var out bytes.Buffer
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
 }
 
 func summaryBounded(s branchSummary) bool {
@@ -233,6 +247,16 @@ func BuildBranchSummary(turns []AbandonedTurn) map[string]any {
 		fact := prefix + clipText(text, min(maxSummaryTextBytes/2, budget)-len(prefix))
 		budget -= len(fact)
 		summary.KeyFacts = append(summary.KeyFacts, fact)
+	}
+	// The budget's guess at escapes misses text that escapes to more than
+	// double (control characters, six bytes each): the newest facts go
+	// until the record, measured as the read measures it, fits.
+	for len(summary.KeyFacts) > 0 {
+		raw, err := summaryJSON(summaryMap(summary))
+		if err == nil && len(raw) <= maxBranchSummaryBytes {
+			break
+		}
+		summary.KeyFacts = summary.KeyFacts[:len(summary.KeyFacts)-1]
 	}
 	return summaryMap(summary)
 }

@@ -26,6 +26,11 @@ export function describeWorktreeError(error: unknown): string {
   return message === '' ? t('workspace.failed', 'That did not work. Try again.') : message;
 }
 
+/** The folder changed after the merge: undoing it reverts that too, so it is asked for again. */
+export function undoNeedsConfirm(error: unknown): boolean {
+  return toWorkspaceIpcError(error).code === 'undo_not_latest';
+}
+
 /** The preview must be taken again before an apply can succeed. */
 export function needsNewPreview(error: unknown): boolean {
   const { code } = toWorkspaceIpcError(error);

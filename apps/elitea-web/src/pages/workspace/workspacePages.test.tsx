@@ -473,7 +473,7 @@ describe('WorkspaceSessionPage', () => {
 
   describe('fork', () => {
     const FORK_UUID = '00000000-0000-4000-8000-000000000088';
-    /** Every fork request carries a fresh idempotency key. */
+    /** Every fork request carries an idempotency key, the same one when the same fork is asked for again. */
     const ANY_FORK_ID: unknown = expect.any(String);
     const forkBodies: unknown[] = [];
     const forkOfForkBodies: unknown[] = [];
@@ -634,7 +634,7 @@ describe('WorkspaceSessionPage', () => {
       await user.click(screen.getByRole('button', { name: 'More' }));
       await user.click(await screen.findByRole('menuitem', { name: 'Fork Thread' }));
 
-      await waitFor(() => expect(forkBodies).toEqual([{}]));
+      await waitFor(() => expect(forkBodies).toEqual([{ fork_id: ANY_FORK_ID }]));
       expect(ipc.calls.forks[0]).toEqual({
         workspaceId: 'w1',
         sourceConversationId: '77',
@@ -661,6 +661,18 @@ describe('WorkspaceSessionPage', () => {
       expect(await screen.findByTestId('fork-error')).toHaveTextContent('a turn is still running or waits for an approval');
       expect(ipc.calls.forks).toEqual([]);
       expect(screen.getByText('Prompt of t1')).toBeInTheDocument();
+
+      // Asked again (the first answer may have been lost): the same fork_id, so the server makes one fork at most.
+      appIpc.chooseFromContextMenu('fork');
+      fireEvent.contextMenu(prompt);
+      await waitFor(() => expect(forkBodies).toHaveLength(2));
+      const [first, again] = forkBodies as { fork_id: string }[];
+      expect(again?.fork_id).toBe(first?.fork_id);
+      // Another fork (a rewind at the same point) is another key.
+      appIpc.chooseFromContextMenu('rewind');
+      fireEvent.contextMenu(prompt);
+      await waitFor(() => expect(forkBodies).toHaveLength(3));
+      expect((forkBodies[2] as { fork_id: string }).fork_id).not.toBe(first?.fork_id);
     });
 
     it('offers no fork point on a turn whose answer is not known', async () => {

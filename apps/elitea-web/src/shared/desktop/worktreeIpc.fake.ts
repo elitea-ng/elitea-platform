@@ -92,6 +92,7 @@ export function createFakeWorktreeIpc(script: FakeWorktreeScript = {}): FakeWork
         if (lastPreview.mode === 'conflicts') throw new WorkspaceIpcError('merge_conflicts', 'both sides changed these files');
         return script.applied ?? { written: [...lastPreview.applied_paths], deleted: [], skipped_paths: [...lastPreview.skipped_paths], checkpoint_id: 'cp-1' };
       }),
-    undo: (checkpointId) => run('undo', [checkpointId], () => ({ restored: [...(lastPreview?.applied_paths ?? [])] })),
+    undo: (checkpointId, confirmOlder) =>
+      run('undo', confirmOlder === undefined ? [checkpointId] : [checkpointId, confirmOlder], () => ({ restored: [...(lastPreview?.applied_paths ?? [])] })),
   };
 }

@@ -869,3 +869,49 @@ async fn worktree_command_cannot_read_sibling_worktree() {
         "a\n"
     );
 }
+
+/// #1420: what is denied inside a task worktree (a `path_deny` match, a
+/// deny-list file) stays unreadable although the worktree, which lives in
+/// the denied data, is opened again: for the worktree's own commands (its
+/// writable root) and for host git (a readable root).
+#[tokio::test]
+async fn denied_files_inside_an_opened_worktree_stay_unreadable() {
+    if !available() {
+        return;
+    }
+    let (mut fixture, _, _) = worktree_fixture();
+    let own = fixture.workspace.root().to_path_buf();
+    fixture.workspace = Workspace::open(&own, &[".env".to_owned()]).expect("open");
+    fixture.config.deny_read.push(own.join("secret.txt"));
+    plant(&own.join(".env"), "ENV-SECRET-3");
+    plant(&own.join("secret.txt"), "LISTED-SECRET-4");
+    let readable = sh(&fixture, "cat a.txt", SandboxMode::WorkspaceWrite, false).await;
+    assert_eq!(readable.exit_code, Some(0), "{}", readable.stderr);
+    assert_refused(&fixture, "cat .env", "ENV-SECRET-3").await;
+    assert_refused(&fixture, "cat secret.txt", "LISTED-SECRET-4").await;
+
+    // Host git's view: the worktree a readable root inside the denied data.
+    let data = own.parent().and_then(Path::parent).expect("data");
+    let request = elitea_local_tools::sandbox::SandboxRequest {
+        deny_paths: vec![data.to_path_buf(), own.join("secret.txt")],
+        readable_roots: vec![own.clone()],
+        ..elitea_local_tools::sandbox::SandboxRequest::new(SandboxMode::ReadOnly, false)
+    };
+    let cat = |file: &str| {
+        let prepared = elitea_local_tools::sandbox::prepare(
+            &request,
+            &["/bin/cat".to_owned(), own.join(file).display().to_string()],
+            &elitea_local_tools::sandbox::SandboxConfig::default(),
+        )
+        .expect("prepare");
+        std::process::Command::new(&prepared.program)
+            .args(&prepared.args)
+            .output()
+            .expect("run")
+    };
+    let opened = cat("a.txt");
+    assert!(opened.status.success(), "{opened:?}");
+    let denied = cat("secret.txt");
+    assert!(!denied.status.success(), "read the denied file");
+    assert!(!String::from_utf8_lossy(&denied.stdout).contains("LISTED-SECRET-4"));
+}

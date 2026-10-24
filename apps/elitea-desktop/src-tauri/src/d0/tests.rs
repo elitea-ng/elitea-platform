@@ -8399,3 +8399,108 @@ async fn worktree_remove_refuses_dirty_without_force() {
         "one\n"
     );
 }
+
+/// The `elitea/…` branches of `dir`'s repository.
+fn elitea_branches(dir: &std::path::Path) -> String {
+    let output = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(["branch", "--list", "elitea/*"])
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// #1420: a worktree whose folder is gone cannot tell whether commits are
+/// on its branch, so removing it keeps the branch; and a remove whose
+/// workspace an earlier attempt already removed still finishes.
+#[tokio::test(flavor = "multi_thread")]
+async fn worktree_remove_keeps_the_branch_of_a_worktree_it_cannot_open() {
+    let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let worktrees = worktree_host(&h);
+    let thread = "44444444-4444-4444-8444-444444444444";
+    let entry = worktrees
+        .create(&h.workspace_id, thread, None)
+        .await
+        .unwrap();
+    let path = std::path::Path::new(&entry.path);
+    std::fs::write(path.join("b.txt"), "work\n").unwrap();
+    git_in(path, &["add", "b.txt"]);
+    git_in(path, &["commit", "-qm", "work"]);
+    std::fs::remove_dir_all(path).unwrap();
+    h.host.remove_workspace(&entry.workspace_id).await.unwrap();
+
+    worktrees
+        .remove(&h.workspace_id, thread, false)
+        .await
+        .unwrap();
+    assert!(worktrees.list(&h.workspace_id).await.unwrap().is_empty());
+    assert!(
+        elitea_branches(h.folder.path()).contains(&entry.branch),
+        "the branch and its commit are kept"
+    );
+}
+
+/// #1420: `worktree_merge_undo` restores only the checkpoint a merge took,
+/// once, and asks for `confirm_older` when the folder was checkpointed
+/// since.
+#[tokio::test(flavor = "multi_thread")]
+async fn worktree_merge_undo_takes_only_its_merges_checkpoint() {
+    let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let worktrees = worktree_host(&h);
+    let thread = "55555555-5555-4555-8555-555555555555";
+    let entry = worktrees
+        .create(&h.workspace_id, thread, None)
+        .await
+        .unwrap();
+    std::fs::write(std::path::Path::new(&entry.path).join("b.txt"), "merged\n").unwrap();
+    let preflight = worktrees
+        .merge_preflight(&h.workspace_id, thread)
+        .await
+        .unwrap();
+    let applied = worktrees
+        .merge_apply(&preflight.preflight_id)
+        .await
+        .unwrap();
+    let checkpoint = applied.checkpoint_id.expect("a checkpoint");
+    assert!(h.folder.path().join("b.txt").is_file());
+
+    let (_, seq) = checkpoint.split_once(':').unwrap();
+    let seq: u64 = seq.parse().unwrap();
+    let other = format!("{}:{}", h.workspace_id, seq + 7);
+    assert_eq!(
+        worktrees.merge_undo(&other, true).await.unwrap_err().code,
+        "invalid_request",
+        "not a checkpoint a merge took"
+    );
+
+    // A later checkpoint of the folder (a turn's): the undo would revert
+    // it too, so it is asked for.
+    h.host
+        .local_session(&h.workspace_id, h.folder.path().to_path_buf())
+        .unwrap()
+        .checkpoints()
+        .create("a later turn")
+        .unwrap();
+    assert_eq!(
+        worktrees
+            .merge_undo(&checkpoint, false)
+            .await
+            .unwrap_err()
+            .code,
+        "undo_not_latest"
+    );
+    let restored = worktrees.merge_undo(&checkpoint, true).await.unwrap();
+    assert!(restored.iter().any(|path| path == "b.txt"), "{restored:?}");
+    assert!(!h.folder.path().join("b.txt").exists());
+    assert_eq!(
+        worktrees
+            .merge_undo(&checkpoint, true)
+            .await
+            .unwrap_err()
+            .code,
+        "invalid_request",
+        "undone once"
+    );
+}

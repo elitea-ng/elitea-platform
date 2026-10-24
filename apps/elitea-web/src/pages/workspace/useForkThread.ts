@@ -32,7 +32,7 @@
  * takes the source's place in the folder's list, and the source is listed
  * under it as the earlier attempt; nothing is deleted.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -125,9 +125,12 @@ interface Created {
   messageIds: Readonly<Record<string, string>>;
 }
 
-/** The server half: the new conversation, or a throw. `fork_id` makes a resent request answer the same fork. */
-async function forkOnServer(projectId: number, conversationId: string, point: ForkPoint | undefined, mode: ForkMode): Promise<Created> {
-  const body = point === undefined ? {} : { message_id: point.messageId, ...(mode === 'rewind' ? { mode } : {}), fork_id: crypto.randomUUID() };
+/**
+ * The server half: the new conversation, or a throw. `forkId` makes a resent request answer the same fork: the
+ * caller keeps one per fork the person asked for, so trying again after a lost answer makes no second fork.
+ */
+async function forkOnServer(projectId: number, conversationId: string, point: ForkPoint | undefined, mode: ForkMode, forkId: string): Promise<Created> {
+  const body = point === undefined ? { fork_id: forkId } : { message_id: point.messageId, ...(mode === 'rewind' ? { mode } : {}), fork_id: forkId };
   const response = await forkConversation(String(projectId), conversationId, body);
   if (response.status !== 201) throw new Error(`the fork answered ${String(response.status)}`);
   const row = response.data;
@@ -153,19 +156,34 @@ async function copyLocalTurns(ipc: WorkspaceIpc, workspaceId: string, conversati
   }
 }
 
+/** The fork_id of the fork asked for: the one held while that same fork is asked for again, else a new one. */
+function intendedForkId(
+  intent: { current: { key: string; forkId: string } | null },
+  [projectId, conversationId, point, mode]: [number, string, ForkPoint | undefined, ForkMode],
+): string {
+  const key = JSON.stringify([projectId, conversationId, point?.messageId ?? null, mode]);
+  if (intent.current?.key !== key) intent.current = { key, forkId: crypto.randomUUID() };
+  return intent.current.forkId;
+}
+
 function useForkThread({ ipc, workspaceId, projectId, conversationId }: ForkThreadInput): ForkThread {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The fork_id of the fork asked for last, until it succeeds: asking again for the same one (after a failure,
+  // which may have been a lost answer) resends it; another fork point, mode or thread gets a new one.
+  const intent = useRef<{ key: string; forkId: string } | null>(null);
 
   const fork = async (point?: ForkPoint, mode: ForkMode = 'fork'): Promise<void> => {
     if (conversationId === '' || pending) return;
     setPending(true);
     setError(null);
+    const forkId = intendedForkId(intent, [projectId, conversationId, point, mode]);
     let created: Created;
     try {
-      created = await forkOnServer(projectId, conversationId, point, mode);
+      created = await forkOnServer(projectId, conversationId, point, mode, forkId);
+      intent.current = null;
     } catch (cause: unknown) {
       setError(describeForkFailure(cause));
       setPending(false);

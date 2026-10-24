@@ -80,13 +80,17 @@ pub struct Restored {
     pub restored: Vec<String>,
 }
 
-/// `worktree_merge_undo`: restore the checkpoint a merge took.
+/// `worktree_merge_undo`: restore the checkpoint a merge took
+/// (`confirm_older` when the folder was checkpointed since).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn worktree_merge_undo(
     host: State<'_, Arc<WorktreeHost>>,
     checkpoint_id: String,
+    confirm_older: Option<bool>,
 ) -> Result<Restored, IpcError> {
     Ok(Restored {
-        restored: host.merge_undo(&checkpoint_id).await?,
+        restored: host
+            .merge_undo(&checkpoint_id, confirm_older.unwrap_or(false))
+            .await?,
     })
 }

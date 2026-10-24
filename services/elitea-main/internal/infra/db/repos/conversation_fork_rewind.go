@@ -24,15 +24,18 @@ const maxForkGroups = 1000
 const abandonedTurnsRead = 64
 
 // replayFork finds the fork the request's fork_id made for this caller. It
-// answers found when there is one: the same fork (Replayed) when it was made
-// of the plan's source, fork point and mode, else ErrForkIDReused.
+// answers found when there is one: the same fork (Replayed, with the
+// forked_messages map the first answer carried) when it was made of the
+// plan's source, fork point and mode, else ErrForkIDReused. The lookup is
+// tenant/0155's partial index.
 func replayFork(ctx context.Context, q forkQuerier, s string, actorID int64, request conversations.ForkRequest, plan forkPlan) (conversations.ForkResult, bool, error) {
 	var id int64
 	var forkUUID string
 	var markerBytes []byte
 	err := q.QueryRow(ctx, fmt.Sprintf(`SELECT c.id, c.uuid::text, c.meta->'%[2]s'
 		FROM %[1]s.chat_conversations c
-		WHERE c.author_id = $1 AND c.meta->'%[2]s'->>'fork_id' = $2
+		WHERE c.author_id = $1 AND (c.meta->'%[2]s'->>'fork_id') IS NOT NULL
+		  AND (c.meta->'%[2]s'->>'fork_id') = $2
 		ORDER BY c.id LIMIT 1`, s, conversations.ForkedFromMetaKey),
 		actorID, request.ForkID).Scan(&id, &forkUUID, &markerBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -54,7 +57,51 @@ func replayFork(ctx context.Context, q forkQuerier, s string, actorID int64, req
 	if marker.ConversationUUID != plan.src.uuid || marker.MessageUUID != pointUUID || forkMode(marker.Mode) != forkMode(request.Mode) {
 		return conversations.ForkResult{}, true, conversations.ErrForkIDReused
 	}
-	return conversations.ForkResult{ID: id, UUID: forkUUID, MessageUUIDs: map[string]string{}, Replayed: true}, true, nil
+	messageUUIDs, err := replayedMessageUUIDs(ctx, q, s, id, plan.groups)
+	if err != nil {
+		return conversations.ForkResult{}, true, err
+	}
+	return conversations.ForkResult{ID: id, UUID: forkUUID, MessageUUIDs: messageUUIDs, Replayed: true}, true, nil
+}
+
+// replayedMessageUUIDs rebuilds a fork's source-to-copy group UUID map: a
+// copy keeps its source's created_at and author, and the copies were made in
+// the source's transcript order, so the n-th source group of one (created_at,
+// author) pairs with the n-th copy of it. A group added to either side since
+// pairs with nothing and is left out; so is one deleted since.
+func replayedMessageUUIDs(ctx context.Context, q forkQuerier, s string, forkID int64, groups []int64) (map[string]string, error) {
+	out := map[string]string{}
+	if len(groups) == 0 {
+		return out, nil
+	}
+	rows, err := q.Query(ctx, fmt.Sprintf(`WITH o AS (
+		  SELECT g.uuid, g.created_at, g.author_participant_id AS author,
+		         row_number() OVER (PARTITION BY g.created_at, g.author_participant_id ORDER BY src.ord) AS n
+		  FROM unnest($2::integer[]) WITH ORDINALITY AS src(id, ord)
+		  JOIN %[1]s.chat_message_group g ON g.id = src.id
+		), c AS (
+		  SELECT g.uuid, g.created_at, g.author_participant_id AS author,
+		         row_number() OVER (PARTITION BY g.created_at, g.author_participant_id ORDER BY g.id) AS n
+		  FROM %[1]s.chat_message_group g WHERE g.conversation_id = $1
+		)
+		SELECT o.uuid::text, c.uuid::text
+		FROM o JOIN c ON c.created_at = o.created_at AND c.author IS NOT DISTINCT FROM o.author AND c.n = o.n`, s),
+		forkID, groups)
+	if err != nil {
+		return nil, fmt.Errorf("conversations: fork: replay messages: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var from, to string
+		if err := rows.Scan(&from, &to); err != nil {
+			return nil, fmt.Errorf("conversations: fork: replay messages: %w", err)
+		}
+		out[from] = to
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("conversations: fork: replay messages: %w", err)
+	}
+	return out, nil
 }
 
 // refuseForkWhileHandedOff answers ErrThreadExecutorIsCloud for a Local

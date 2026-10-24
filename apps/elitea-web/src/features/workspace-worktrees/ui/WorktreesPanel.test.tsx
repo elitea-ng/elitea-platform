@@ -106,6 +106,27 @@ describe('WorktreesPanel', () => {
     expect(ipc.calls.undo).toEqual([['cp-1']]);
   });
 
+  it('asks again before an undo that would revert what changed after the merge', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeWorktreeIpc({
+      entries: [clean],
+      preflight: { mode: 'merge', applied_paths: ['src/a.ts'], conflict_paths: [], skipped_paths: [], branch: 'elitea/aaaaaaaa' },
+    });
+    renderPanel(ipc);
+    await user.click(within(await screen.findByTestId('worktree-row')).getByRole('button', { name: 'Merge back' }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByTestId('worktree-applied-paths');
+    await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    await within(dialog).findByTestId('worktree-merge-applied');
+
+    ipc.failNext('undo', 'undo_not_latest', 'The folder changed after this merge.');
+    await user.click(within(dialog).getByRole('button', { name: 'Undo merge' }));
+    expect(await within(dialog).findByText('The folder changed after this merge.')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Undo anyway' }));
+    expect(await within(dialog).findByText('Undone: 1 files restored to before the merge.')).toBeInTheDocument();
+    expect(ipc.calls.undo).toEqual([['cp-1'], ['cp-1', true]]);
+  });
+
   it('makes a new parallel task for a fresh thread UUID and lists it', async () => {
     const user = userEvent.setup();
     const ipc = createFakeWorktreeIpc();

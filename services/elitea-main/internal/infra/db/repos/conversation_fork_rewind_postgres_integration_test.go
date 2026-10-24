@@ -8,11 +8,16 @@ package repos
 
 import (
 	"context"
+	"encoding/json"
+	"maps"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 func (f *forkFixture) forkCount(t *testing.T) int {
@@ -79,16 +84,48 @@ func TestRewindKeepsTheClientsBranchSummaryAndRefusesAnInvalidOne(t *testing.T) 
 	}
 }
 
+// forkAudited is f.fork under the audit middleware's slot: the answer, and
+// whether the handler annotated the request as a fork.
+func (f *forkFixture) forkAudited(t *testing.T, body string) (map[string]any, bool) {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "/fork/1/"+f.sourceUUID, strings.NewReader(body))
+	ctx, slot := audit.ContextWithAnnotationSlot(auth.ContextWithUser(request.Context(), auth.User{UserID: "7"}))
+	recorder := httptest.NewRecorder()
+	f.router.ServeHTTP(recorder, request.WithContext(ctx))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("fork answered %d: %s", recorder.Code, recorder.Body.String())
+	}
+	row := map[string]any{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &row); err != nil {
+		t.Fatal(err)
+	}
+	annotation, present := slot.Read()
+	return row, present && annotation.Action == "conversation.fork"
+}
+
 func TestTheSameForkIDAnswersTheSameFork(t *testing.T) {
 	f := newForkFixture(t)
 	body := `{"message_id": "` + f.groups[1] + `", "fork_id": "6f9619ff-8b86-d011-b42d-00c04fc964ff"}`
-	first := f.fork(t, "7", body)
-	again := f.fork(t, "7", body)
+	first, firstAudited := f.forkAudited(t, body)
+	again, againAudited := f.forkAudited(t, body)
 	if first["uuid"] != again["uuid"] || rowID(t, first) != rowID(t, again) {
 		t.Fatalf("a replay made another fork: %v then %v", first["uuid"], again["uuid"])
 	}
 	if forks := f.forkCount(t); forks != 1 {
 		t.Fatalf("%d forks, want 1", forks)
+	}
+	// Issue 1420: the replay answers the same message map, and is not
+	// audited as a second fork.
+	if made, replayed := forkedMessages(t, first), forkedMessages(t, again); len(made) != 2 || !maps.Equal(made, replayed) {
+		t.Fatalf("forked_messages = %v, then on the replay %v", made, replayed)
+	}
+	if !firstAudited || againAudited {
+		t.Fatalf("audited as a fork: first %v, replay %v", firstAudited, againAudited)
+	}
+	var indexed bool
+	if err := f.pool.QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM pg_indexes
+		WHERE schemaname = 'p_1' AND indexname = 'chat_conversations_fork_id_idx')`).Scan(&indexed); err != nil || !indexed {
+		t.Fatalf("the fork_id index (tenant/0155) is missing (%v)", err)
 	}
 	// The key names that fork only: another fork point is a conflict.
 	code, decoded, raw := f.do(t, http.MethodPost, "7", "/fork/1/"+f.sourceUUID,

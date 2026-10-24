@@ -457,3 +457,39 @@ async fn worktree_config_with_dangerous_key_is_refused() {
     let (checkpoints, results) = exercise_at(&entry.worktree, &planted).await;
     assert_refused(&checkpoints, &results);
 }
+
+/// #1420: a branch a removed worktree kept (its commits) does not block a
+/// new worktree of the same thread: the new one gets the first free
+/// `-<n>` suffix, and 12 letters of the id name the branch.
+#[tokio::test]
+async fn a_kept_branch_gets_a_suffixed_successor() {
+    let planted = repository();
+    let name = "0123456789abcdef0123456789abcdef";
+    assert_eq!(worktree::branch_name(name), "elitea/0123456789ab");
+    let repo = Repo::discover(
+        &planted.root,
+        &SandboxConfig::default(),
+        Arc::new(DenyList::new([])),
+    )
+    .expect("discover")
+    .expect("a repository");
+    let dir = planted.data.join("worktrees");
+    std::fs::create_dir_all(&dir).expect("worktrees dir");
+    let branch = worktree::branch_name(name);
+    let first = worktree::create(&repo, &dir.join(name), name, &branch, "HEAD").expect("create");
+    assert_eq!(first.branch, branch);
+    worktree::remove(&repo, &first.entry, true).expect("remove, branch kept");
+    let second = worktree::create(&repo, &dir.join(name), name, &branch, "HEAD").expect("again");
+    assert_eq!(second.branch, format!("{branch}-2"));
+    let listed = String::from_utf8(
+        std::process::Command::new("git")
+            .current_dir(&planted.root)
+            .args(["branch", "--list", "elitea/*"])
+            .output()
+            .expect("git")
+            .stdout,
+    )
+    .expect("utf-8");
+    assert!(listed.contains("elitea/0123456789ab\n"), "{listed}");
+    assert!(listed.contains("elitea/0123456789ab-2"), "{listed}");
+}

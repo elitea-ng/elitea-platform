@@ -539,7 +539,7 @@ fn platform_prepare(
 /// profile text, so no path can change the profile's meaning.
 pub mod seatbelt {
     use std::fmt::Write as _;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use unicode_normalization::UnicodeNormalization;
 
@@ -811,16 +811,23 @@ pub mod seatbelt {
     }
 
     /// Credentials, the host's data directory and `path_deny`: contents
-    /// neither read nor written; then the writable roots inside a denied
-    /// directory are opened again.
+    /// neither read nor written; then the readable roots and the writable
+    /// roots inside a denied directory are opened again; then what is
+    /// denied inside an opened root is denied again (SBPL: the last
+    /// matching rule wins, so the opening would otherwise uncover it).
     fn push_denials(
         text: &mut String,
         params: &mut Vec<(String, String)>,
         request: &SandboxRequest,
     ) {
-        let mut denied = Vec::new();
+        // (filter, the denied path: `None` for a glob, which only matches
+        // under the workspace root)
+        let mut denied: Vec<(String, Option<&PathBuf>)> = Vec::new();
         for (index, path) in request.deny_paths.iter().enumerate() {
-            denied.push(deny_filter(path, &format!("DENY_{index}"), params));
+            denied.push((
+                deny_filter(path, &format!("DENY_{index}"), params),
+                Some(path),
+            ));
         }
         if let Some(root) = &request.deny_root {
             for (index, pattern) in request.deny_globs.iter().enumerate() {
@@ -828,14 +835,14 @@ pub mod seatbelt {
                     deny_glob_regex(root, pattern, crate::workspace::CASE_INSENSITIVE_FS)
                 {
                     let name = format!("DENY_GLOB_{index}");
-                    denied.push(format!("(regex (param \"{name}\"))"));
+                    denied.push((format!("(regex (param \"{name}\"))"), None));
                     params.push((name, regex));
                 }
             }
         }
         if !denied.is_empty() {
             text.push_str("\n; credentials and path_deny: contents neither read nor written\n(deny file-read-data file-write*");
-            for filter in &denied {
+            for (filter, _) in &denied {
                 let _ = write!(text, "\n  {filter}");
             }
             text.push_str(")\n");
@@ -857,6 +864,7 @@ pub mod seatbelt {
             })
             .map(|(index, _)| index)
             .collect();
+        let mut opened: Vec<&PathBuf> = Vec::new();
         for (index, root) in request.readable_roots.iter().enumerate() {
             let name = format!("READABLE_ROOT_{index}");
             let _ = writeln!(
@@ -864,6 +872,7 @@ pub mod seatbelt {
                 "(allow file-read* file-read-data (subpath (param \"{name}\")))"
             );
             params.push((name, root.display().to_string()));
+            opened.push(root);
         }
         for index in reopened {
             let _ = writeln!(
@@ -876,6 +885,30 @@ pub mod seatbelt {
                     "(allow file-write* (subpath (param \"WRITABLE_ROOT_{index}\")))"
                 );
             }
+            opened.push(&request.writable_roots[index]);
+        }
+        if opened.is_empty() {
+            return;
+        }
+        // Denied again: a glob (anchored under the workspace root, which
+        // may be an opened root itself) and an entry inside an opened root,
+        // never one that holds it (that would close the root again).
+        let again: Vec<&str> = denied
+            .iter()
+            .filter(|(_, path)| {
+                path.is_none_or(|path| {
+                    opened.iter().any(|root| path.starts_with(root))
+                        && !opened.iter().any(|root| root.starts_with(path))
+                })
+            })
+            .map(|(filter, _)| filter.as_str())
+            .collect();
+        if !again.is_empty() {
+            text.push_str("; what is denied inside an opened root stays denied\n(deny file-read-data file-write*");
+            for filter in again {
+                let _ = write!(text, "\n  {filter}");
+            }
+            text.push_str(")\n");
         }
     }
 
@@ -1259,6 +1292,12 @@ pub mod bubblewrap {
         }
     }
 
+    /// Hide the file `path` behind `/dev/null`.
+    fn hide_file(args: &mut Vec<String>, path: &Path) {
+        args.extend(["--ro-bind", "/dev/null"].map(str::to_owned));
+        args.push(path.display().to_string());
+    }
+
     /// The `bwrap` arguments that run `argv` under `request`.
     #[must_use]
     pub fn args(request: &SandboxRequest, masks: &Masks, argv: &[String]) -> Vec<String> {
@@ -1297,22 +1336,20 @@ pub mod bubblewrap {
                 .map(Path::new)
                 .filter(|file| file.exists()),
         ) {
-            out.extend(["--ro-bind", "/dev/null"].map(str::to_owned));
-            out.push(file.display().to_string());
+            hide_file(&mut out, file);
         }
         // A readable root inside a hidden directory (a task worktree, for
-        // host git) is bound again over the mask, read-only.
+        // host git) and a writable root there (the session's temporary
+        // directory, a task worktree's own folder) are bound again over the
+        // mask; a writable one bound after a readable one wins.
+        let mut rebound: Vec<&Path> = Vec::new();
         if request.mode != SandboxMode::FullAccess {
             for readable in &request.readable_roots {
-                // (A writable root bound again below wins over this.)
                 if masks.hide_dirs.iter().any(|dir| readable.starts_with(dir)) {
                     push(&mut out, &["--ro-bind"], readable);
+                    rebound.push(readable);
                 }
             }
-        }
-        // A writable root inside a hidden directory (the session's
-        // temporary directory) is bound again over the mask.
-        if request.mode != SandboxMode::FullAccess {
             for writable in &request.writable_roots {
                 if masks.hide_dirs.iter().any(|dir| writable.starts_with(dir)) {
                     let flag = if request.mode == SandboxMode::WorkspaceWrite {
@@ -1321,8 +1358,23 @@ pub mod bubblewrap {
                         "--ro-bind"
                     };
                     push(&mut out, &[flag], writable);
+                    rebound.push(writable);
                 }
             }
+        }
+        // Mounts stack, the last one wins: what is denied inside a root
+        // bound again (`<worktree>/.env`, a deny-list entry inside it) is
+        // masked again over that bind, or the bind would uncover it.
+        // (Never a mask that holds a bound root: that would hide it again.)
+        let inside = |path: &Path| {
+            rebound.iter().any(|root| path.starts_with(root))
+                && !rebound.iter().any(|root| root.starts_with(path))
+        };
+        for dir in masks.hide_dirs.iter().filter(|dir| inside(dir)) {
+            push(&mut out, &["--tmpfs"], dir);
+        }
+        for file in masks.hide_files.iter().filter(|file| inside(file)) {
+            hide_file(&mut out, file);
         }
         if request.mode != SandboxMode::ReadOnly {
             // `-try`: a protected path that does not exist (`commondir`,
@@ -1611,6 +1663,67 @@ mod tests {
             .position(|triple| triple == ["--ro-bind", "/data/worktrees/a", "/data/worktrees/a"])
             .expect("bound again");
         assert!(rebound > tmpfs, "bound over the mask");
+    }
+
+    /// What is denied inside a root opened again (`DenyList::reopening`: a
+    /// deny-list file in a task worktree, its `path_deny` matches) stays
+    /// denied: both sandboxes deny or mask it again AFTER the opening, as
+    /// the later rule (SBPL) or mount (bwrap) wins.
+    #[test]
+    fn denials_inside_an_opened_root_come_after_the_opening() {
+        let request = SandboxRequest {
+            deny_paths: vec![
+                PathBuf::from("/data"),
+                PathBuf::from("/data/worktrees/a/secret.txt"),
+                PathBuf::from("/data/worktrees/b/secret.txt"),
+            ],
+            readable_roots: vec![PathBuf::from("/data/worktrees/a")],
+            writable_roots: vec![PathBuf::from("/data/worktrees/w")],
+            deny_globs: vec![".env".to_owned()],
+            deny_root: Some(PathBuf::from("/data/worktrees/w")),
+            ..SandboxRequest::new(SandboxMode::WorkspaceWrite, false)
+        };
+        let (text, _) = seatbelt::profile(&request);
+        let opened = text
+            .find("(subpath (param \"READABLE_ROOT_0\")))")
+            .expect("readable root opened");
+        let reopened = text
+            .find("(allow file-write* (subpath (param \"WRITABLE_ROOT_0\")))")
+            .expect("writable root opened");
+        let again = text
+            .rfind("(deny file-read-data file-write*")
+            .expect("denied again");
+        assert!(again > opened && again > reopened, "{text}");
+        let tail = &text[again..];
+        let tail = &tail[..tail.find("\n\n").expect("closed")];
+        assert!(tail.contains("(subpath (param \"DENY_1\"))"), "{tail}");
+        assert!(tail.contains("(regex (param \"DENY_GLOB_0\"))"), "{tail}");
+        // Not what holds an opened root, nor what lies outside every one.
+        assert!(!tail.contains("\"DENY_0\""), "{tail}");
+        assert!(!tail.contains("\"DENY_2\""), "{tail}");
+
+        let masks = bubblewrap::Masks {
+            hide_dirs: vec![PathBuf::from("/data")],
+            hide_files: vec![
+                PathBuf::from("/data/worktrees/a/secret.txt"),
+                PathBuf::from("/data/worktrees/w/.env"),
+            ],
+            ..bubblewrap::Masks::default()
+        };
+        let args = bubblewrap::args(&request, &masks, &[]);
+        let last = |window: &[&str]| {
+            args.windows(window.len())
+                .rposition(|found| found == window)
+                .unwrap_or_else(|| panic!("{window:?} in {args:?}"))
+        };
+        let readable = last(&["--ro-bind", "/data/worktrees/a", "/data/worktrees/a"]);
+        let writable = last(&["--bind", "/data/worktrees/w", "/data/worktrees/w"]);
+        assert!(last(&["--ro-bind", "/dev/null", "/data/worktrees/a/secret.txt"]) > readable);
+        assert!(last(&["--ro-bind", "/dev/null", "/data/worktrees/w/.env"]) > writable);
+        assert!(
+            last(&["--tmpfs", "/data"]) < readable,
+            "the mask is not laid again"
+        );
     }
 
     #[test]

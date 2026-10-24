@@ -5,7 +5,9 @@
  * both sides changed the same files, the conflicts, in which case nothing can
  * be applied and the work stays on its branch. "Apply" sends the preview's id;
  * the host checkpoints the main folder first, so the result offers "Undo"
- * (`worktree_merge_undo`). A preview the folder has outgrown is taken again.
+ * (`worktree_merge_undo`). A preview the folder has outgrown is taken again. When the folder was checkpointed
+ * after the merge (a later turn), the undo would revert that too: the host refuses it, the host's reason is
+ * shown, and "Undo anyway" asks for it.
  */
 import { useMutation, useQuery } from '@tanstack/react-query';
 
@@ -21,7 +23,7 @@ import Typography from '@mui/material/Typography';
 import type { MergeApplied, MergePreflight, WorktreeEntry, WorktreeIpc } from '@/shared/desktop/worktreeIpc';
 import { t } from '@/shared/i18n';
 
-import { describeWorktreeError, needsNewPreview } from '../model/describeWorktreeError';
+import { describeWorktreeError, needsNewPreview, undoNeedsConfirm } from '../model/describeWorktreeError';
 
 export interface MergeBackDialogProps {
   ipc: WorktreeIpc;
@@ -117,7 +119,10 @@ function useMergeBack(ipc: WorktreeIpc, workspaceId: string, entry: WorktreeEntr
     gcTime: 0,
   });
   const apply = useMutation({ mutationFn: (preflightId: string) => ipc.apply(preflightId), onSuccess: onChanged });
-  const undo = useMutation({ mutationFn: (id: string) => ipc.undo(id), onSuccess: onChanged });
+  const undo = useMutation({
+    mutationFn: ({ id, confirmOlder }: { id: string; confirmOlder: boolean }) => ipc.undo(id, confirmOlder ? true : undefined),
+    onSuccess: onChanged,
+  });
   const preflight = preview.data;
   return {
     preview,
@@ -156,8 +161,8 @@ function MergeActions({ merge, onClose }: { merge: ReturnType<typeof useMergeBac
         </Button>
       )}
       {mayUndo && (
-        <Button disabled={busy} onClick={() => undo.mutate(checkpointId)}>
-          {t('workspace.worktree.undo', 'Undo merge')}
+        <Button disabled={busy} onClick={() => undo.mutate({ id: checkpointId, confirmOlder: undoNeedsConfirm(undo.error) })}>
+          {undoNeedsConfirm(undo.error) ? t('workspace.worktree.undoAnyway', 'Undo anyway') : t('workspace.worktree.undo', 'Undo merge')}
         </Button>
       )}
     </DialogActions>
