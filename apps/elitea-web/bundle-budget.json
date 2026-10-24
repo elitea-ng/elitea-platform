@@ -40,6 +40,17 @@
       ],
       "initialKB": 512,
       "routeChunkKB": 250,
+      "chunkLimits": {
+        "elk": {
+          "kb": 450,
+          "note": [
+            "mermaid 12 depends on elkjs 0.9.3 (the ELK layout engine), which the",
+            "bundler emits as one indivisible lazy chunk, 438.7 KiB gzip measured",
+            "2026-10-24. It loads only when a diagram uses an ELK layout and never",
+            "reaches the initial set; mermaid 11 did not ship it."
+          ]
+        }
+      },
       "workerNote": [
         "400: the pdf.js worker (pdfjs-dist 6.4.299, pdf.worker.min.mjs) that the",
         "Artifacts PDF preview starts, measured 2026-10-23 at ~375 KiB gzip. It",
@@ -142,7 +153,18 @@
         "confirmed by index.html carrying no <link rel=modulepreload> for it."
       ],
       "initialKB": 200,
-      "routeChunkKB": 250
+      "routeChunkKB": 250,
+      "chunkLimits": {
+        "elk": {
+          "kb": 450,
+          "note": [
+            "mermaid 12 depends on elkjs 0.9.3 (the ELK layout engine), which the",
+            "bundler emits as one indivisible lazy chunk, 438.7 KiB gzip measured",
+            "2026-10-24. It loads only when a diagram uses an ELK layout and never",
+            "reaches the initial set; mermaid 11 did not ship it."
+          ]
+        }
+      }
     }
   }
 }

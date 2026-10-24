@@ -18,3 +18,10 @@ repo map's ranking (aider/repomap.py), ported in
 libs/rust/graph-algos/src/pagerank.rs and
 libs/rust/inventory-core/src/repo_map.rs (see the NOTICE files of those
 crates).
+
+This product includes types written from the Agent Client Protocol schema
+(Apache-2.0, https://github.com/agentclientprotocol/agent-client-protocol,
+schema/v1 at commit e2d83349bc9e28a4059ea3acefa1c91c966f74e2) in
+apps/elitea-desktop/src-tauri/src/acp/types.rs, and examples from its
+documentation as test fixtures in
+apps/elitea-desktop/src-tauri/src/acp/fixtures/.

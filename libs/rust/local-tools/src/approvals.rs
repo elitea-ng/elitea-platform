@@ -70,6 +70,7 @@
 //! | a `PreToolUse` hook's `ask` ([`HOOK_ASK_PAYLOAD_KEY`]) | an allow from layers 3–5 is asked instead; never remembered; a deny stays a deny |
 //! | a `PreToolUse` hook's `allow` | changes nothing: hooks tighten, never loosen |
 //! | a `PreToolUse` hook's `modified_input` | checked against the tool's schema, then decided by every layer like the model's own input |
+//! | a nested agent of the agent (#1239: a cloud child turn, `startLocalChildTurn`) | allowed and shown as a sub-agent lane. It is not a session tool, so no call reaches this engine: it runs in the cloud under the person's own grants, and the child's sensitive tools pause on the platform and are confirmed through the same approval card as a remote toolkit call; not offered in plan mode |
 //!
 //! The policy ceiling for both MCP rows is `local_mcp`: off (or absent),
 //! every start and every call is denied. `path_deny` cannot be enforced

@@ -961,7 +961,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 155: tenant/0155_chat_conversation_fork_id_index.sql, a partial index on
 	// chat_conversations (author_id, meta->'forked_from'->>'fork_id') for the
 	// fork's fork_id replay lookup (#1420). An index, no permission.
-	require.EqualValues(t, 155, Head(tenant))
+	// 156: tenant/0156_chat_conversation_local_child_index.sql, two partial
+	// indexes on chat_conversations WHERE source = 'local_child' for the
+	// cloud child turn's poll (child/parent execution id) and its start's
+	// replay lookup (parent execution id, idempotency key) (#1239). Indexes,
+	// no permission.
+	require.EqualValues(t, 156, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

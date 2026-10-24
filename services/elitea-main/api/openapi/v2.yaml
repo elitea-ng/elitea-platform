@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.22"
+  x-elitea-client-contract: "1.23"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -4783,11 +4783,133 @@ components:
               x-elitea-passthrough: >-
                 NOTE(W2): the arguments to send again after authorising
                 (internal/api/v2/desktopops/remote_toolkit.go:627).
+    LocalChildTurnRequest:
+      type: object
+      additionalProperties: false
+      description: >-
+        One cloud child turn of a live local turn (issue 1239): a nested
+        agent of the turn's agent, run as an ordinary cloud turn. NOTE(W2):
+        internal/api/v2/desktopops/child_turn.go (`childTurnBody`).
+      required: [application_id, version_id, input, idempotency_key]
+      properties:
+        application_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The nested agent (an `application` tool's `application_id` in the turn's resolved version).
+        version_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Its version (the tool's `application_version_id`).
+        input:
+          type: string
+          minLength: 1
+          maxLength: 131072
+          description: The task the child is given, as its user message.
+        idempotency_key:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]+$'
+          description: One key per intended call, repeated on every retry; a retry never starts a second child.
+    LocalChildTurnStarted:
+      type: object
+      description: >-
+        The child turn admitted (or replayed). NOTE(W2):
+        internal/api/v2/desktopops/child_turn.go (`writeChildStarted`).
+      required: [child_execution_id, response_message_id, conversation_uuid, created]
+      properties:
+        child_execution_id:
+          type: string
+          description: The child's execution; readLocalChildTurn reads it by this id.
+        response_message_id:
+          type: string
+          format: uuid
+          description: The child's answer in its conversation (the chat stop and continue routes take it).
+        conversation_uuid:
+          type: string
+          format: uuid
+          description: The hidden child conversation (`source` `local_child`).
+        created:
+          type: boolean
+          description: False for a replay of an admitted child.
+    LocalChildTurnInterrupt:
+      type: object
+      description: >-
+        A child paused for a person's decision: the fields of its
+        `hitl_interrupt` (the chat HITL shape) the decision needs; the tool's
+        arguments are never relayed.
+      properties:
+        interrupt_id: { type: string, nullable: true }
+        guardrail_type: { type: string, nullable: true }
+        message: { type: string, nullable: true }
+        policy_message: { type: string, nullable: true }
+        action_label: { type: string, nullable: true }
+        available_actions:
+          type: array
+          nullable: true
+          items: { type: string }
+        tool_name: { type: string, nullable: true }
+        toolkit_name: { type: string, nullable: true }
+        toolkit_type: { type: string, nullable: true }
+    LocalChildToolCall:
+      type: object
+      required: [tool_name, is_error]
+      properties:
+        tool_name: { type: string }
+        is_error: { type: boolean }
+    LocalChildTurnUsage:
+      type: object
+      description: The model calls the gateway recorded for the child's executions.
+      required: [llm_calls, prompt_tokens, completion_tokens]
+      properties:
+        llm_calls: { type: integer, format: int64 }
+        prompt_tokens: { type: integer, format: int64 }
+        completion_tokens: { type: integer, format: int64 }
+    LocalChildTurnState:
+      type: object
+      description: >-
+        One read of a child turn. NOTE(W2):
+        internal/api/v2/desktopops/child_turn.go (`childTurnView`).
+      required: [status, child_execution_id, response_message_id, conversation_uuid, tool_calls_summary]
+      properties:
+        status:
+          type: string
+          enum: [running, completed, failed, interrupted, authorization_required, output_limit, cancelled]
+          description: >-
+            `interrupted`: paused for a decision (`interrupt`), answered with
+            continueChatExecution (`agent.continue.hitl.v1`) on the child
+            conversation; `authorization_required` and `output_limit`: paused
+            for what only the web chat answers; `cancelled`: the answer was
+            removed (a stop before any output).
+        child_execution_id:
+          type: string
+          description: The child's current execution (a resumed child runs under a new one).
+        response_message_id: { type: string, format: uuid }
+        conversation_uuid: { type: string, format: uuid }
+        output:
+          type: string
+          description: The child's answer (`completed`), at most 256 KiB.
+        output_truncated: { type: boolean }
+        error:
+          type: string
+          description: The runtime's bounded failure message (`failed`).
+        interrupt:
+          $ref: '#/components/schemas/LocalChildTurnInterrupt'
+        tool_calls_summary:
+          type: array
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/LocalChildToolCall'
+        usage:
+          $ref: '#/components/schemas/LocalChildTurnUsage'
     DesktopOperationError:
       type: object
       description: >-
         A refused desktop operation (resolveApplicationVersion,
-        executeRemoteToolkitTool). `error` is a machine code. NOTE(W2):
+        executeRemoteToolkitTool, startLocalChildTurn, readLocalChildTurn).
+        `error` is a machine code. NOTE(W2):
         internal/api/v2/desktopops/resolved_version.go:118 (`serve`).
       required: [error]
       properties:
@@ -20590,6 +20712,238 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RemoteToolkitCallResult'
+
+  /elitea_core/local_child_turn/prompt_lib/{project_id}/{execution_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: execution_id
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[0-9a-f]{32}$' }
+        description: The live local turn (startLocalTurn's `execution_id`) the child runs under.
+    post:
+      operationId: startLocalChildTurn
+      summary: Run a nested agent of a local turn as a cloud child turn
+      description: |
+        Issue 1239 (ADR-0029 decision 1). Starts a nested agent of the agent a
+        desktop runs locally as an ordinary cloud turn on a worker, in a
+        hidden child conversation (`source` `local_child`, `meta.is_hidden`,
+        `meta.parent_execution_id` naming the local turn). The desktop never
+        joins the worker protocol, and no credential of the child's toolkits
+        reaches it: the worker runs the child as it runs any chat turn.
+
+        WHO. Only a native access token or a personal access token; a browser
+        session answers 403 `local_child_turn_requires_token`. The caller
+        needs `models.chat.messages.create` in the project.
+
+        THE AUTHORITY OF THE PARENT TURN. `execution_id` must be a live local
+        turn of the caller (started by this caller in this project with the
+        same credential family, not committed, not past its deadline, local
+        work allowed), and the agent must be one of that turn's agent
+        version's own `application` tools (403 `child_agent_not_in_agent`
+        otherwise). A thread handed off to the cloud has no live local turn,
+        so it starts no child.
+
+        IDEMPOTENCY. One `idempotency_key` per intended call, repeated on every
+        retry: a retry answers the child the first attempt admitted
+        (`created: false`), never a second; the same key with another input
+        is 409 `idempotency_conflict`. At most 30 new children a minute per
+        caller on each server replica (429 `rate_limited`). Every start that
+        names an agent is audited with the parent and the child execution.
+
+        The answer streams nowhere: read the child with readLocalChildTurn,
+        stop it with cancelChatExecution on its `response_message_id`, answer
+        its pause with continueChatExecution on its conversation.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocalChildTurnRequest'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '202':
+          description: The child was admitted, or a retry found it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalChildTurnStarted'
+              # Served by the generated web test mock (orval useExamples) and
+              # validated against the schema by check-spec-examples.mjs.
+              example:
+                child_execution_id: 9b2f6c1e4d8a4f7b8c3e5a1d2f6b7c90
+                response_message_id: 3f1c2a4e-8b7d-4c6a-9e1f-2d3b4a5c6e7f
+                conversation_uuid: 7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d
+                created: true
+        '400':
+          description: >-
+            A malformed body or field (`invalid_local_child_turn`), or an
+            `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/DesktopOperationError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: No `models.chat.messages.create`, a session caller (`local_child_turn_requires_token`), local work turned off (`local_work_disabled`), or an agent the turn's agent does not nest (`child_agent_not_in_agent`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '404':
+          description: The local turn is not this caller's in this project (`local_turn_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '409':
+          description: The local turn is already committed (`local_turn_already_committed`), or the key started a child with another input (`idempotency_conflict`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '410':
+          description: The local turn passed its deadline (`local_turn_expired`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '413':
+          description: The body is larger than 132 KiB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '422':
+          description: The nested agent is a pipeline, or cannot be started on this deployment (`child_agent_unsupported`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '429':
+          description: Too many children from this caller (`rate_limited`); retry after Retry-After.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: This deployment runs no cloud agents (`local_child_turn_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '503':
+          description: Something could not be read or written right now (`local_child_turn_unavailable_now`); retry with the same key.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+
+  /elitea_core/local_child_turn/prompt_lib/{project_id}/{execution_id}/{child_execution_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: execution_id
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[0-9a-f]{32}$' }
+        description: The local turn the child was started under.
+      - name: child_execution_id
+        in: path
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }
+        description: startLocalChildTurn's `child_execution_id`.
+    get:
+      operationId: readLocalChildTurn
+      summary: Read a cloud child turn of a local turn
+      description: |
+        Issue 1239. The child's state: `running`, its answer (`completed`,
+        with a summary of its tool calls and its model usage), its failure,
+        or the pause it waits on. Only the caller who started the child,
+        under the local turn the path names, reads it (404
+        `local_child_turn_not_found` otherwise); the local turn need not
+        still be live. Token callers only, like the start.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The child's state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalChildTurnState'
+              # Served by the generated web test mock (orval useExamples) and
+              # validated against the schema by check-spec-examples.mjs.
+              example:
+                status: completed
+                child_execution_id: 9b2f6c1e4d8a4f7b8c3e5a1d2f6b7c90
+                response_message_id: 3f1c2a4e-8b7d-4c6a-9e1f-2d3b4a5c6e7f
+                conversation_uuid: 7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d
+                output: "PROJ-142 is open: the login page times out behind the proxy; assigned to the platform team."
+                output_truncated: false
+                tool_calls_summary:
+                  - tool_name: jira_get_issue
+                    is_error: false
+                usage:
+                  llm_calls: 2
+                  prompt_tokens: 1840
+                  completion_tokens: 212
+        '400':
+          description: A malformed id (`invalid_local_child_turn`), or an `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/DesktopOperationError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: No `models.chat.messages.create`, or a session caller (`local_child_turn_requires_token`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '404':
+          description: No such child of this caller under this local turn (`local_child_turn_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: This deployment runs no cloud agents (`local_child_turn_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '503':
+          description: The child cannot be read right now (`local_child_turn_unavailable_now`); retry.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
 
   /elitea_core/task/prompt_lib/{project_id}/{response_message_id}:
     parameters:

@@ -474,6 +474,28 @@ cap. An approval a child's read needs (a workspace rule that asks) is the
 turn's own prompt. The turn's end, its cancel and a cloud handoff stop
 every child (`subagent_finished` `cancelled`); none outlives the turn.
 
+**Nested agents** (#1239). An agent tool of the agent (an `application`
+tool whose agent is not a pipeline) is offered as one tool named after it,
+`{task}` (at most 8000 characters), and runs in the cloud as a child turn:
+`startLocalChildTurn` under the turn's execution id (one idempotency key per
+call, so a retry never starts a second child), then `readLocalChildTurn`
+until it settles. The child is a hidden conversation of the person's,
+under their own grants; its tools and its spend are the cloud's. Its lane
+reuses the sub-agent events, `agent_id` `cloud_<n>`: `subagent_started`
+(`label` the agent's name), then `subagent_finished` with its answer, at
+most 8 KiB, and the token usage the gateway logged for it. A pause of the
+child that is an approve/reject question is the turn's `approval_request`
+(the remote toolkit card); the answer resumes the child through
+`continueChatExecution`, and any other pause, a sign-in or the output limit
+ends the call with the child's conversation linked, to finish on the web.
+The turn's end or cancel stops the child (`cancelChatExecution`), also
+when it lands while the child's start is still in flight: the start runs to
+its answer and the child it names is stopped. At most 12 start in one turn;
+plan mode does not offer them; a nested pipeline is still refused
+(`nested_agents_unsupported`), and so is an agent that is a pipeline
+(`pipeline_unsupported`: the webview never sends one here, it offers "Run
+in cloud" instead and starts the pipeline as a cloud chat).
+
 **Decline with feedback** (#1225). A call the person denies (a local tool's
 approval or a remote toolkit's confirmation) answers the model with a typed
 failure: the usual `{status: "error", code, message}` plus `ok: false` and

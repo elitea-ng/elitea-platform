@@ -101,6 +101,34 @@ pub trait SecretStore: Send + Sync {
     fn save(&self, secret: &str) -> Result<(), HostError>;
     /// Removing an absent secret is not an error.
     fn clear(&self) -> Result<(), HostError>;
+    /// Hold the store exclusively against other processes until the guard
+    /// drops (a refresh holds it from reading the session to storing the
+    /// rotation). Blocks while another process holds it; this process's own
+    /// loads and saves still go through. A store no other process shares
+    /// holds nothing.
+    ///
+    /// # Errors
+    ///
+    /// The lock cannot be taken.
+    fn lock_exclusive(&self) -> Result<StoreLock, HostError> {
+        Ok(StoreLock::default())
+    }
+}
+
+/// What [`SecretStore::lock_exclusive`] holds; dropping it releases it.
+#[derive(Default)]
+pub struct StoreLock {
+    /// Kept only to be dropped.
+    _guard: Option<Box<dyn Send + Sync>>,
+}
+
+impl StoreLock {
+    #[must_use]
+    pub fn held(guard: impl Send + Sync + 'static) -> Self {
+        Self {
+            _guard: Some(Box::new(guard)),
+        }
+    }
 }
 
 /// Read the session out of a store. A value that does not parse is treated as

@@ -61,6 +61,8 @@ import type {
   CreatedConversation,
   ExecutionInterruptDecisionResult,
   ExecutionInterruptList,
+  LocalChildTurnStarted,
+  LocalChildTurnState,
   LocalTurnCommitted,
   LocalTurnStarted,
   MemoryEntry,
@@ -1411,6 +1413,26 @@ export const getGetWorkspaceFetchPlanResponseMock = (
 
 export const getGetWorkspaceSegmentObjectResponseMock = (): ArrayBuffer =>
   new ArrayBuffer(faker.number.int({ min: 1, max: 64 }));
+
+export const getStartLocalChildTurnResponseMock =
+  (): LocalChildTurnStarted => ({
+    child_execution_id: "9b2f6c1e4d8a4f7b8c3e5a1d2f6b7c90",
+    response_message_id: "3f1c2a4e-8b7d-4c6a-9e1f-2d3b4a5c6e7f",
+    conversation_uuid: "7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d",
+    created: true,
+  });
+
+export const getReadLocalChildTurnResponseMock = (): LocalChildTurnState => ({
+  status: "completed",
+  child_execution_id: "9b2f6c1e4d8a4f7b8c3e5a1d2f6b7c90",
+  response_message_id: "3f1c2a4e-8b7d-4c6a-9e1f-2d3b4a5c6e7f",
+  conversation_uuid: "7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d",
+  output:
+    "PROJ-142 is open: the login page times out behind the proxy; assigned to the platform team.",
+  output_truncated: false,
+  tool_calls_summary: [{ tool_name: "jira_get_issue", is_error: false }],
+  usage: { llm_calls: 2, prompt_tokens: 1840, completion_tokens: 212 },
+});
 
 export const getListExecutionInterruptsResponseMock = (
   overrideResponse: Partial<Extract<ExecutionInterruptList, object>> = {},
@@ -3096,6 +3118,58 @@ export const getGetWorkspaceSegmentObjectMockHandler = (
   );
 };
 
+export const getStartLocalChildTurnMockHandler = (
+  overrideResponse?:
+    | LocalChildTurnStarted
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<LocalChildTurnStarted> | LocalChildTurnStarted),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/local_child_turn/prompt_lib/:projectId/:executionId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getStartLocalChildTurnResponseMock(),
+        { status: 202 },
+      );
+    },
+    options,
+  );
+};
+
+export const getReadLocalChildTurnMockHandler = (
+  overrideResponse?:
+    | LocalChildTurnState
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<LocalChildTurnState> | LocalChildTurnState),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/local_child_turn/prompt_lib/:projectId/:executionId/:childExecutionId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getReadLocalChildTurnResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getCancelChatExecutionMockHandler = (
   overrideResponse?:
     | void
@@ -3643,6 +3717,8 @@ export const getChatMock = () => [
   getGetWorkspaceFetchPlanMockHandler(),
   getPutWorkspaceSegmentObjectMockHandler(),
   getGetWorkspaceSegmentObjectMockHandler(),
+  getStartLocalChildTurnMockHandler(),
+  getReadLocalChildTurnMockHandler(),
   getCancelChatExecutionMockHandler(),
   getListExecutionInterruptsMockHandler(),
   getDecideExecutionInterruptMockHandler(),

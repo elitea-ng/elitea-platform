@@ -5,6 +5,7 @@
 //! stored sign-in (an owner-only credentials file), the loopback sign-in listener, the token endpoint. Remote
 //! content is never loaded into the privileged webview (see `window.rs`).
 
+mod acp;
 mod activity;
 mod app_events;
 mod attention;
@@ -77,13 +78,13 @@ use crate::workspaces::WorkspaceStore;
 use elitea_local_index::embedding::{EmbedConfig, EmbedStatus, Embedding};
 
 /// The credentials file's slots (src/credentials_file.rs).
-const SESSION_SLOT: &str = "device-session";
+pub(crate) const SESSION_SLOT: &str = "device-session";
 /// Sign-outs whose server revoke did not get through, retried at launch.
-const PENDING_REVOKE_SLOT: &str = "pending-revoke";
+pub(crate) const PENDING_REVOKE_SLOT: &str = "pending-revoke";
 
 /// Baked in at build time when a deployment's own build registers a different
 /// client id (`ELITEA_DESKTOP_CLIENT_ID=... tauri build`); see the README.
-const BUILD_CLIENT_ID: Option<&str> = option_env!("ELITEA_DESKTOP_CLIENT_ID");
+pub(crate) const BUILD_CLIENT_ID: Option<&str> = option_env!("ELITEA_DESKTOP_CLIENT_ID");
 
 struct SystemBrowser(tauri::AppHandle);
 
@@ -96,6 +97,13 @@ impl BrowserOpener for SystemBrowser {
             .open_url(url, None::<&str>)
             .map_err(|_| HostError::Browser)
     }
+}
+
+/// `elitea-desktop --acp`: the local agent as an Agent Client Protocol
+/// agent on stdio, without a window (src/acp). Returns the exit code.
+#[must_use]
+pub fn run_acp() -> i32 {
+    acp::run()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

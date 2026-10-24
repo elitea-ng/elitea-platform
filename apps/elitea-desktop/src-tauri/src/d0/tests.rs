@@ -770,7 +770,7 @@ async fn an_agent_that_needs_secrets_is_refused_locally() {
 }
 
 #[tokio::test]
-async fn a_pipeline_and_nested_agents_are_refused_locally() {
+async fn a_pipeline_and_a_nested_pipeline_are_refused_locally() {
     let (code, _) = refused(
         json!({"agent_type": "pipeline", "tools": []}),
         &[],
@@ -780,7 +780,8 @@ async fn a_pipeline_and_nested_agents_are_refused_locally() {
     assert_eq!(code, "pipeline_unsupported");
     let nested = json!({
         "llm_settings": {"model_name": "m"},
-        "tools": [{"kind": "application", "type": "application", "application_id": 2, "application_version_id": 3}]
+        "tools": [{"kind": "application", "type": "application", "agent_type": "pipeline",
+            "application_id": 2, "application_version_id": 3}]
     });
     let (code, _) = refused(nested, &[], allowed()).await;
     assert_eq!(code, "nested_agents_unsupported");
@@ -8641,4 +8642,456 @@ async fn hooks_frame_prompt_context_and_report_stop() {
             .iter()
             .any(|e| e.kind == "error" && e.payload["code"] == "hook_denied")
     );
+}
+
+// Issue 1239: a nested agent runs as a cloud child turn.
+
+const CHILD_START: &str =
+    "/api/v2/elitea_core/local_child_turn/prompt_lib/1/0123456789abcdef0123456789abcdef";
+const CHILD_EXECUTION: &str = "fedcba9876543210fedcba9876543210";
+const CHILD_CONVERSATION: &str = "aaaaaaaa-2222-4333-8444-555555555555";
+const CHILD_RESPONSE: &str = "bbbbbbbb-2222-4333-8444-555555555555";
+
+fn child_spec() -> super::definition::ChildAgentSpec {
+    super::definition::ChildAgentSpec {
+        exposed_name: "Researcher".into(),
+        application_id: 2,
+        version_id: 3,
+        name: "Researcher".into(),
+        description: "Looks things up.".into(),
+    }
+}
+
+fn child_started() -> Res {
+    Res::json(
+        202,
+        &json!({"child_execution_id": CHILD_EXECUTION, "response_message_id": CHILD_RESPONSE,
+            "conversation_uuid": CHILD_CONVERSATION, "created": true}),
+    )
+}
+
+fn child_state(status: &str) -> Res {
+    Res::json(
+        200,
+        &json!({"status": status, "conversation_uuid": CHILD_CONVERSATION,
+            "output": "Found it.", "tool_calls_summary": [{"tool_name": "search", "is_error": false}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5}}),
+    )
+}
+
+async fn child_context(
+    server: &MockServer,
+    prompt: Arc<dyn elitea_agent_runtime::host::ApprovalChannel>,
+) -> (super::child_agent::ChildAgentContext, Arc<VecEmitter>) {
+    let emitter = Arc::new(VecEmitter::default());
+    let events = Arc::new(super::events::TurnEvents::new("t1".into(), emitter.clone()));
+    let remote = Arc::new(remote_context(server, prompt, Duration::from_secs(5)).await);
+    let poll = super::child_agent::PollPolicy {
+        first: Duration::from_millis(5),
+        max: Duration::from_millis(10),
+    };
+    (
+        super::child_agent::ChildAgentContext::new(remote, events, poll),
+        emitter,
+    )
+}
+
+/// A start the platform could not take is sent again with the same key and
+/// body, so a retry never starts a second child; the lane opens and closes.
+#[tokio::test]
+async fn child_call_reuses_idempotency_key_on_retry() {
+    let starts = Arc::new(AtomicUsize::new(0));
+    let server = serve({
+        let starts = starts.clone();
+        move |req: &Req| {
+            if req.path == CHILD_START {
+                if starts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Res::json(503, &json!({"error": "unavailable"}));
+                }
+                return child_started();
+            }
+            if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+                return child_state("completed");
+            }
+            Res::json(404, &json!({"error": "not_found"}))
+        }
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: None,
+        asked: Mutex::default(),
+    });
+    let (context, emitter) = child_context(&server, prompt).await;
+    let result = super::child_agent::call(&context, &child_spec(), "c1", "Find the doc").await;
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_eq!(result["result"], "Found it.");
+    assert_eq!(result["child_conversation_uuid"], CHILD_CONVERSATION);
+    assert_eq!(result["tool_calls"][0]["tool"], "search");
+
+    let sent = seen(&server, CHILD_START);
+    assert_eq!(sent.len(), 2, "one retry");
+    assert_eq!(sent[0].body, sent[1].body, "same key, same body");
+    let body: Value = serde_json::from_str(&sent[0].body).unwrap();
+    assert_eq!(body["application_id"], 2);
+    assert_eq!(body["version_id"], 3);
+    assert_eq!(body["input"], "Find the doc");
+    assert!(
+        body["idempotency_key"]
+            .as_str()
+            .is_some_and(|k| !k.is_empty())
+    );
+
+    let lanes: Vec<(&str, Value)> = emitter
+        .all()
+        .iter()
+        .map(|e| (e.kind, e.payload.clone()))
+        .filter(|(kind, _)| kind.starts_with("subagent_"))
+        .collect();
+    assert_eq!(lanes.len(), 2, "{lanes:?}");
+    assert_eq!(lanes[0].0, "subagent_started");
+    assert_eq!(lanes[0].1["agent_id"], "cloud_1");
+    assert_eq!(lanes[1].0, "subagent_finished");
+}
+
+/// The child's approve/reject pause reaches the person's approval card and
+/// their answer resumes the child through the continue route.
+#[tokio::test]
+async fn child_pause_is_answered_through_the_approval_card() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let server = serve({
+        let reads = reads.clone();
+        move |req: &Req| {
+            if req.path == CHILD_START {
+                return child_started();
+            }
+            if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+                if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Res::json(
+                        200,
+                        &json!({"status": "interrupted", "conversation_uuid": CHILD_CONVERSATION,
+                            "interrupt": {"interrupt_id": INTERRUPT, "guardrail_type": "sensitive_tool",
+                                "action_label": "Send the email", "available_actions": ["approve", "reject"],
+                                "tool_name": "send_email"}}),
+                    );
+                }
+                return child_state("completed");
+            }
+            if req.path.starts_with(&format!(
+                "/api/v2/elitea_core/continue_predict/prompt_lib/1/{CHILD_CONVERSATION}?"
+            )) {
+                return Res::json(200, &json!({"ok": true}));
+            }
+            Res::json(404, &json!({"error": "not_found"}))
+        }
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: Some("approve"),
+        asked: Mutex::default(),
+    });
+    let (context, _emitter) = child_context(&server, prompt.clone()).await;
+    let result = super::child_agent::call(&context, &child_spec(), "c1", "Mail Bob").await;
+    assert_eq!(result["status"], "ok", "{result}");
+
+    let asked = prompt.asked.lock().unwrap();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].message, "Send the email");
+    assert_eq!(
+        asked[0].payload[super::approvals::REMOTE_PAYLOAD_KEY]["tool"],
+        "send_email"
+    );
+    let resumed: Vec<Req> = server
+        .seen()
+        .into_iter()
+        .filter(|r| r.path.contains("/continue_predict/"))
+        .collect();
+    assert_eq!(resumed.len(), 1);
+    let body: Value = serde_json::from_str(&resumed[0].body).unwrap();
+    assert_eq!(body["hitl_resume"], true);
+    assert_eq!(body["hitl_action"], "approve");
+    assert_eq!(body["message_id"], CHILD_RESPONSE);
+    assert!(
+        resumed[0]
+            .path
+            .ends_with("execution_contract=agent.continue.hitl.v1")
+    );
+}
+
+/// A child whose state the call could not follow to its end (the reads
+/// failed, or the platform answered a state this app does not know) is
+/// stopped; a child that settled on its own is not.
+#[tokio::test]
+async fn child_follow_failure_stops_the_child() {
+    for (read, stopped) in [
+        ("http_500", true),
+        ("http_503", true),
+        ("mystery", true),
+        ("failed", false),
+        ("completed", false),
+    ] {
+        let server = serve(move |req: &Req| {
+            if req.path == CHILD_START {
+                return child_started();
+            }
+            if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+                return match read {
+                    "http_500" => Res::json(500, &json!({"error": "internal"})),
+                    "http_503" => Res::json(503, &json!({"error": "unavailable"})),
+                    status => child_state(status),
+                };
+            }
+            if req.method == "DELETE" {
+                return Res::json(200, &json!({"ok": true}));
+            }
+            Res::json(404, &json!({"error": "not_found"}))
+        })
+        .await;
+        let prompt = Arc::new(Answering {
+            decision: None,
+            asked: Mutex::default(),
+        });
+        let (context, emitter) = child_context(&server, prompt).await;
+        let result = super::child_agent::call(&context, &child_spec(), "c1", "Run").await;
+        let cancel = format!("/api/v2/elitea_core/task/prompt_lib/1/{CHILD_RESPONSE}");
+        assert_eq!(
+            seen(&server, &cancel).len(),
+            usize::from(stopped),
+            "read {read}: {result}"
+        );
+        let finished: Vec<AgentEvent> = emitter
+            .all()
+            .into_iter()
+            .filter(|e| e.kind == "subagent_finished")
+            .collect();
+        assert_eq!(
+            finished.len(),
+            1,
+            "one lane end, never a second from the guard"
+        );
+    }
+}
+
+/// An answered pause that a read still reports (the resume has not reached
+/// it yet) is not asked again: the call keeps reading until it moves on.
+#[tokio::test]
+async fn child_answered_pause_is_not_asked_again() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let server = serve({
+        let reads = reads.clone();
+        move |req: &Req| {
+            if req.path == CHILD_START {
+                return child_started();
+            }
+            if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+                if reads.fetch_add(1, Ordering::SeqCst) < 3 {
+                    return Res::json(
+                        200,
+                        &json!({"status": "interrupted", "conversation_uuid": CHILD_CONVERSATION,
+                            "interrupt": {"interrupt_id": INTERRUPT, "guardrail_type": "sensitive_tool",
+                                "action_label": "Send the email", "available_actions": ["approve", "reject"],
+                                "tool_name": "send_email"}}),
+                    );
+                }
+                return child_state("completed");
+            }
+            if req.path.starts_with(&format!(
+                "/api/v2/elitea_core/continue_predict/prompt_lib/1/{CHILD_CONVERSATION}?"
+            )) {
+                return Res::json(200, &json!({"ok": true}));
+            }
+            Res::json(404, &json!({"error": "not_found"}))
+        }
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: Some("approve"),
+        asked: Mutex::default(),
+    });
+    let (context, _emitter) = child_context(&server, prompt.clone()).await;
+    let result = super::child_agent::call(&context, &child_spec(), "c1", "Mail Bob").await;
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_eq!(prompt.asked.lock().unwrap().len(), 1, "asked once");
+    let resumed = server
+        .seen()
+        .into_iter()
+        .filter(|r| r.path.contains("/continue_predict/"))
+        .count();
+    assert_eq!(resumed, 1, "resumed once");
+    assert!(
+        reads.load(Ordering::SeqCst) >= 4,
+        "kept reading past the stale pause"
+    );
+}
+
+/// A zero retry delay never polls a child in a tight loop.
+#[test]
+fn child_poll_policy_has_a_floor() {
+    let zero = super::child_agent::PollPolicy::for_retry(RetryPolicy {
+        attempts: 3,
+        delay: Duration::ZERO,
+    });
+    assert_eq!(zero.first, super::child_agent::PollPolicy::FLOOR);
+    assert!(zero.max >= zero.first);
+    let default = super::child_agent::PollPolicy::for_retry(RetryPolicy::default());
+    assert_eq!(default.first, Duration::from_millis(500));
+    assert_eq!(default.max, Duration::from_secs(3));
+}
+
+/// A call dropped mid-run (the turn was stopped) stops the child.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn child_call_dropped_cancels_the_child() {
+    let server = serve(|req: &Req| {
+        if req.path == CHILD_START {
+            return child_started();
+        }
+        if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+            return child_state("running");
+        }
+        if req.method == "DELETE" {
+            return Res::json(200, &json!({"ok": true}));
+        }
+        Res::json(404, &json!({"error": "not_found"}))
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: None,
+        asked: Mutex::default(),
+    });
+    let (context, emitter) = child_context(&server, prompt).await;
+    let context = Arc::new(context);
+    let call = tokio::spawn({
+        let context = context.clone();
+        async move { super::child_agent::call(&context, &child_spec(), "c1", "Run long").await }
+    });
+    // Stop the call once the child runs (its first read arrived).
+    let read = format!("{CHILD_START}/{CHILD_EXECUTION}");
+    for _ in 0..400 {
+        if !seen(&server, &read).is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(!seen(&server, &read).is_empty(), "the child was followed");
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+    let cancel = format!("/api/v2/elitea_core/task/prompt_lib/1/{CHILD_RESPONSE}");
+    let mut cancelled = Vec::new();
+    for _ in 0..200 {
+        cancelled = seen(&server, &cancel);
+        if !cancelled.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(cancelled.len(), 1, "the child was stopped");
+    assert_eq!(cancelled[0].method, "DELETE");
+    let finished: Vec<AgentEvent> = emitter
+        .all()
+        .into_iter()
+        .filter(|e| e.kind == "subagent_finished")
+        .collect();
+    assert_eq!(finished.len(), 1);
+    assert_eq!(finished[0].payload["status"], "cancelled");
+}
+
+/// A call dropped while its start is still in flight (no child id known
+/// yet) still stops the child once the start answers, and never follows it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_call_dropped_during_start_cancels_the_child() {
+    let arrived = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let server = serve({
+        let (arrived, release) = (arrived.clone(), release.clone());
+        move |req: &Req| {
+            if req.path == CHILD_START {
+                arrived.store(true, Ordering::SeqCst);
+                // Hold the answer until the call was dropped.
+                for _ in 0..1000 {
+                    if release.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                return child_started();
+            }
+            if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+                return child_state("running");
+            }
+            if req.method == "DELETE" {
+                return Res::json(200, &json!({"ok": true}));
+            }
+            Res::json(404, &json!({"error": "not_found"}))
+        }
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: None,
+        asked: Mutex::default(),
+    });
+    let (context, emitter) = child_context(&server, prompt).await;
+    let context = Arc::new(context);
+    let call = tokio::spawn({
+        let context = context.clone();
+        async move { super::child_agent::call(&context, &child_spec(), "c1", "Run long").await }
+    });
+    for _ in 0..400 {
+        if arrived.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(arrived.load(Ordering::SeqCst), "the start was sent");
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+    let finished: Vec<AgentEvent> = emitter
+        .all()
+        .into_iter()
+        .filter(|e| e.kind == "subagent_finished")
+        .collect();
+    assert_eq!(finished.len(), 1, "the lane closes at once");
+    assert_eq!(finished[0].payload["status"], "cancelled");
+    release.store(true, Ordering::SeqCst);
+
+    let cancel = format!("/api/v2/elitea_core/task/prompt_lib/1/{CHILD_RESPONSE}");
+    let mut cancelled = Vec::new();
+    for _ in 0..400 {
+        cancelled = seen(&server, &cancel);
+        if !cancelled.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(cancelled.len(), 1, "the child the start named was stopped");
+    assert_eq!(cancelled[0].method, "DELETE");
+    assert_eq!(seen(&server, CHILD_START).len(), 1, "started once");
+    assert!(
+        seen(&server, &format!("{CHILD_START}/{CHILD_EXECUTION}")).is_empty(),
+        "a dropped call never follows its child"
+    );
+}
+
+/// A nested agent is offered as a tool outside plan mode and hidden in it,
+/// like every tool that acts in the cloud.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_tool_refused_in_plan_mode() {
+    let mut details = agent_details();
+    details["tools"].as_array_mut().unwrap().push(json!({
+        "kind": "application", "type": "application", "agent_type": "agent",
+        "name": "Researcher", "description": "Looks things up.",
+        "application_id": 2, "application_version_id": 3
+    }));
+    for plan_mode in [false, true] {
+        let server = serve(platform(details.clone(), &[])).await;
+        let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+        let mut req = request(&h.workspace_id);
+        req.plan_mode = plan_mode;
+        h.host.start(req).await.unwrap();
+        until_done(&h).await;
+        let tools = offered_tools(&h.server);
+        assert_eq!(
+            tools.iter().any(|t| t == "Researcher"),
+            !plan_mode,
+            "plan_mode={plan_mode}: {tools:?}"
+        );
+    }
 }

@@ -69,3 +69,31 @@ func composeRemoteToolkit(
 		Replays: platformReplays,
 	}, groupAuth, legacyrbac.NewPostgresResolver(pool))
 }
+
+// composeChildTurns builds startLocalChildTurn and readLocalChildTurn (issue
+// 1239): a nested agent of a live local turn run as an ordinary cloud turn
+// through the chat start use case (start), authorized by the 5a version
+// service (authorizer: the turn's own nested agents only). start or
+// authorizer is nil where no agent plane is composed, and the routes then
+// answer 501.
+func composeChildTurns(
+	pool *pgxpool.Pool,
+	start desktopopsapi.ChildAgentStarter,
+	authorizer desktopopsapi.ChildAgentAuthorizer,
+	policy localturn.PolicyReader,
+	recorder audit.Recorder,
+	groupAuth apimw.AuthConfig,
+	logger *slog.Logger,
+) (http.Handler, error) {
+	if pool == nil || groupAuth.PrincipalValidator == nil {
+		return nil, nil
+	}
+	turns, err := localturn.NewLiveTurns(dbrepos.NewLocalTurnsRepo(pool), policy, logger)
+	if err != nil {
+		return nil, err
+	}
+	return desktopopsapi.NewChildTurnRoute(desktopopsapi.ChildTurnDependencies{
+		Start: start, Authorizer: authorizer, Turns: turns,
+		Store: dbrepos.NewLocalChildTurnsRepo(pool), Audit: recorder,
+	}, groupAuth, legacyrbac.NewPostgresResolver(pool))
+}

@@ -26,7 +26,8 @@ base64 = "0.22"
 bytes = "1"
 percent-encoding = "2"
 rand = "0.9"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
+# `io-std`: the ACP agent mode's stdio transport (src/acp).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "time", "sync"] }
 # The one HTTP client (src/net.rs): host calls and the webview's fetch share its pool.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "http2"] }
 tauri-plugin-dialog = "2"
@@ -80,6 +81,10 @@ log = "0.4"
 # ships with, not whatever the OS has; the same libsqlite3-sys line sqlx
 # already pins in libs/rust.
 rusqlite = { version = "0.32", features = ["bundled"] }
+# The app's directories in ACP agent mode (src/acp), resolved as Tauri's
+# path resolver does without starting Tauri. Already in the tree through
+# tauri (MIT OR Apache-2.0).
+dirs = "=7.0.0"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"

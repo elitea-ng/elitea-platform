@@ -19,6 +19,11 @@
  * runs on, unless the agent pins it or the folder's settings keep it
  * (`/model` opens it, `/model <name>` sets a listed one; an unknown name or
  * a catalogue still loading is said above the composer and sets nothing).
+ *
+ * A pipeline (#1239 A3) never runs here: when it is the pick, a send runs it
+ * in the cloud and opens its chat (`useRunInCloud`; no plan mode, images or
+ * model chip); a start the host refuses with `pipeline_unsupported` offers
+ * the same for that prompt (`RunInCloudNotice`).
  */
 import { lazy, Suspense, useMemo, useState } from 'react';
 
@@ -30,10 +35,12 @@ import { t } from '@/shared/i18n';
 
 import { AgentChip, RunLocationChip } from './ComposerControls';
 import { HandoffBanner } from './HandoffControls';
+import { RunInCloudNotice } from './RunInCloudNotice';
 import { firstError, SessionNotices } from './sessionParts';
 import { useProjectSkills, type ComposerSkill } from './useAgentSkills';
 import type { CloudChat } from './useCloudChat';
 import { useCustomCommands } from './useCustomCommands';
+import { pipelineComposerBinding, useComposerPipeline, type ComposerPipeline } from './useRunInCloud';
 import type { ThreadHandoff } from './useThreadHandoff';
 import type { ThreadSession } from './useThreadSession';
 import type { SessionCommands } from './useSessionCommands';
@@ -67,6 +74,17 @@ function cloudBinding(cloud: CloudChat): Pick<WorkspaceComposerProps, 'canSend' 
     placeholder: t('workspace.cloud.placeholder', 'Message the cloud copy…'),
     showMode: false,
   };
+}
+
+type SendBinding = Partial<Pick<WorkspaceComposerProps, 'placeholder' | 'showMode' | 'acceptImages'>> & Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'>;
+
+/**
+ * Where a message goes: the cloud copy, else the pipeline's cloud run (gated on that run alone, never on the local
+ * session: nothing runs here), else the local agent loop.
+ */
+function sendBinding(cloudMode: boolean, cloud: CloudChat, pipeline: ComposerPipeline, here: SendBinding): SendBinding {
+  if (cloudMode) return cloudBinding(cloud);
+  return pipeline.pipeline ? pipelineComposerBinding(pipeline.run) : here;
 }
 
 /** The model chip and `/model <name>`: neither for a cloud thread (its own agent answers) nor when no choice is offered. */
@@ -133,7 +151,8 @@ function useSlashSources(ipc: WorkspaceIpc, workspaceId: string, projectId: numb
   const offered = useMemo(() => [...skills, ...projectSkills], [skills, projectSkills]);
   const onFocus = (): void => {
     setFocused(true);
-    prewarm();
+    // Only the local host reads ahead (not for the cloud copy or a pipeline).
+    if (local) prewarm();
   };
   return { customCommands, offered, onFocus };
 }
@@ -142,13 +161,17 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   const navigate = useNavigate();
   const { commands } = session;
   const cloudMode = handoff.status?.executor === 'cloud';
+  const composerPipeline = useComposerPipeline(projectId, session.raw, turn, cloudMode);
+  const { pipeline, run: runInCloud, remember, refusedPrompt, turnError } = composerPipeline;
   const model = useTurnModel(workspaceId, projectId, session.raw, turn, session.history);
-  const { customCommands, offered, onFocus } = useSlashSources(ipc, workspaceId, projectId, !cloudMode, skills, session.prewarm, commands.notice === 'help');
-  const local: Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'> = {
+  const local = !cloudMode && !pipeline;
+  const { customCommands, offered, onFocus } = useSlashSources(ipc, workspaceId, projectId, local, skills, session.prewarm, commands.notice === 'help');
+  const here: Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'> = {
     canSend: session.canSend && !handoff.offLaptop,
     busy: turn.busy,
     onSend: async (prompt, mentions, picked, command, images) => {
       model.dismissNotice();
+      remember(prompt);
       const sent = await session.send(prompt, commands.planMode, mentions, picked, commands.compactNext, model.choice, command, images);
       if (sent && commands.compactNext) commands.compactSent();
       return sent;
@@ -164,7 +187,8 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   return (
     <>
       <HandoffBanner handoff={handoff} />
-      <SessionNotices error={modelNotice ?? firstError(turn.startError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={offered} />
+      <SessionNotices error={modelNotice ?? firstError(turnError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={offered} />
+      <RunInCloudNotice cloudOnly={pipeline} refusedPrompt={refusedPrompt} running={runInCloud.running} error={runInCloud.error} onRun={(prompt) => void runInCloud.run(prompt)} />
       <WorkspaceComposer
         ipc={ipc}
         workspaceId={workspaceId}
@@ -172,7 +196,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         acceptImages={!cloudMode}
         planMode={commands.planMode}
         agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} disabledHint={agentHint} />}
-        {...modelBinding(model, cloudMode, commands.modelRef)}
+        {...modelBinding(model, !local, commands.modelRef)}
         runLocation={<RunLocationChip handoff={handoff} onOpenInChat={openInChat} />}
         contextMeter={<ComposerMeters meter={meter} usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} />}
         onPlanModeChange={commands.setPlanMode}
@@ -180,7 +204,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         customCommands={customCommands}
         onCommand={session.run}
         onFocus={onFocus}
-        {...(cloudMode ? cloudBinding(cloud) : local)}
+        {...sendBinding(cloudMode, cloud, composerPipeline, here)}
       />
     </>
   );

@@ -864,5 +864,10 @@
   "workspace.lsp.state.starting": "starting",
   "workspace.lsp.state.stopped": "stopped",
   "workspace.lsp.state.unavailable": "off",
-  "workspace.lsp.tooltip": "Diagnostics after edits, from language servers on this computer:"
+  "workspace.lsp.tooltip": "Diagnostics after edits, from language servers on this computer:",
+  "workspace.error.pipelineUnsupported": "Pipelines do not run on this computer yet. Run this one in the cloud: it opens as a chat.",
+  "workspace.runInCloud.action": "Run in cloud",
+  "workspace.runInCloud.failed": "The pipeline could not be started in the cloud. Try again, or run it from Chat.",
+  "workspace.runInCloud.hint": "This is a pipeline: it runs in the cloud, not on this computer. Sending starts it in a new chat and opens it.",
+  "workspace.runInCloud.placeholder": "Run this pipeline in the cloud…"
 }

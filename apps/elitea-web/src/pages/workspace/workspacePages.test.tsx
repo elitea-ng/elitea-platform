@@ -715,6 +715,71 @@ describe('WorkspaceSessionPage', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
   });
 
+  describe('a pipeline runs in the cloud (#1239 A3)', () => {
+    const UUID = 'c0ffee00-0000-4000-8000-000000000077';
+    /** The cloud side of "Run in cloud": the conversation's uuid, its participants, and the execution start. */
+    function serveCloudRun(): { body: unknown }[] {
+      const executions: { body: unknown }[] = [];
+      server.use(
+        http.post(`${BASE}/elitea_core/participants/prompt_lib/42/77`, () =>
+          HttpResponse.json([
+            { id: 30, entity_name: 'user', entity_meta: { id: 3 } },
+            { id: 31, entity_name: 'application', entity_meta: { id: 5, project_id: 42 }, entity_settings: { agent_type: 'pipeline', version_id: 9 } },
+          ]),
+        ),
+        http.get(`${BASE}/elitea_core/conversation/prompt_lib/42/77`, () => HttpResponse.json({ id: 77, uuid: UUID, name: 'release', participants: [] })),
+        http.post(`${BASE}/elitea_core/messages/prompt_lib/42/${UUID}`, async ({ request }) => {
+          executions.push({ body: await request.json() });
+          return HttpResponse.json({ execution_id: 'e1', events_url: '/api/v2/executions/42/e1/events' });
+        }),
+      );
+      return executions;
+    }
+
+    it('offers "Run in cloud" when the host refuses a pipeline, and opens the chat it started', async () => {
+      serveProject();
+      const executions = serveCloudRun();
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      ipc.failNext('startTurn', 'pipeline_unsupported', 'Pipelines do not run locally yet; run this pipeline in the cloud.');
+      const user = userEvent.setup();
+      mount(ipc, '/workspaces/w1');
+
+      await pickCoder(user);
+      await user.type(screen.getByTestId('chat-message-input'), 'release');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+
+      const offer = await screen.findByTestId('workspace-run-in-cloud-offer');
+      expect(screen.queryByText('Pipelines do not run locally yet; run this pipeline in the cloud.')).not.toBeInTheDocument();
+      await user.click(within(offer).getByRole('button', { name: 'Run in cloud' }));
+      expect(await screen.findByText('chat page')).toBeInTheDocument();
+      expect(executions).toHaveLength(1);
+      expect(executions[0]?.body).toMatchObject({ conversation_uuid: UUID, participant_id: 31, payload: { user_input: 'release' } });
+      expect(ipc.calls.started).toHaveLength(1);
+    });
+
+    it('runs a picked pipeline in the cloud on send, never on this computer', async () => {
+      serveProject();
+      const executions = serveCloudRun();
+      server.use(
+        http.get(`${BASE}/elitea_core/applications/prompt_lib/42`, ({ request }) => {
+          const pipelines = new URL(request.url).searchParams.get('agents_type') === 'pipeline';
+          const row = { id: '5', name: 'Coder', tags: [], created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', owner_id: '1', is_forked: false, meta: null, has_interrupt: false };
+          return HttpResponse.json(pipelines ? { rows: [row], total: 1 } : { rows: [], total: 0 });
+        }),
+      );
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = userEvent.setup();
+      mount(ipc, '/workspaces/w1');
+
+      expect(await screen.findByTestId('workspace-run-in-cloud-hint')).toBeInTheDocument();
+      await user.type(screen.getByTestId('chat-message-input'), 'release');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      expect(await screen.findByText('chat page')).toBeInTheDocument();
+      expect(executions).toHaveLength(1);
+      expect(ipc.calls.started).toHaveLength(0);
+    });
+  });
+
   it('retries a refused start in the conversation it already created, not a new one', async () => {
     serveProject();
     let created = 0;

@@ -67,6 +67,7 @@ use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
 use super::attachments::{Added, Attachment, Attachments, ImagePick};
 use super::cache::{ParticipantKey, TurnCaches, VersionKey};
 use super::catalogue::{self, Catalogue};
+use super::child_agent::{ChildAgentContext, PollPolicy};
 use super::commits::{self, CommitQueues, CommitRetry, lane_key};
 use super::context::{self, ContextHost, TurnContext};
 use super::definition::{self, Admitted, ModelChoice};
@@ -3150,7 +3151,16 @@ impl AgentHost {
                 }),
             )));
         }
-        let provider = provider.with(Arc::new(RemoteToolProvider::new(&remote_specs, &remote)));
+        // The nested agents, as cloud child turns of this one (#1239).
+        let children_remote = Arc::new(ChildAgentContext::new(
+            remote.clone(),
+            events.clone(),
+            PollPolicy::for_retry(self.deps.retry),
+        ));
+        let provider = provider.with(Arc::new(
+            RemoteToolProvider::new(&remote_specs, &remote)
+                .with_children(&admitted.child_agents, &children_remote),
+        ));
         let toolsets = provider
             .toolsets(&ToolsetRequest {
                 toolkits: Vec::new(),
