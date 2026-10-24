@@ -10,8 +10,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use elitea_egress_guard::Allowlist;
-use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE, LOCATION, RETRY_AFTER};
+use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER};
 use reqwest::{Request, StatusCode};
+
+use super::meter::FailureClass;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_mins(1);
@@ -95,6 +97,24 @@ impl ProviderError {
         }
     }
 
+    /// What the gateway's billing rule needs to know about this failure:
+    /// whether the provider was reached and charges for the outcome.
+    pub(crate) const fn failure_class(self) -> FailureClass {
+        match self {
+            Self::EgressRefused | Self::UrlRefused | Self::DomainRefused | Self::AddressRefused => {
+                FailureClass::NotReached
+            }
+            Self::AuthFailed | Self::RateLimited { .. } | Self::BadRequest => FailureClass::Refused,
+            Self::NotFound => FailureClass::TargetFailed,
+            Self::Timeout
+            | Self::Unavailable
+            | Self::InvalidResponse
+            | Self::TooLarge
+            | Self::TooManyRedirects
+            | Self::UnsupportedContent => FailureClass::Failed,
+        }
+    }
+
     /// The error a status maps to, `None` for a success.
     pub(crate) fn from_status(status: StatusCode, retry_after_secs: Option<u64>) -> Option<Self> {
         if status.is_success() {
@@ -117,7 +137,6 @@ pub(crate) struct HttpAnswer {
     pub(crate) status: StatusCode,
     pub(crate) content_type: Option<String>,
     pub(crate) retry_after_secs: Option<u64>,
-    pub(crate) location: Option<String>,
     pub(crate) body: Vec<u8>,
 }
 
@@ -170,7 +189,6 @@ pub(crate) async fn read_answer(
             .map(str::to_owned)
     };
     let content_type = header(CONTENT_TYPE);
-    let location = header(LOCATION);
     let retry_after_secs = header(RETRY_AFTER).and_then(|value| value.trim().parse::<u64>().ok());
     if header(CONTENT_LENGTH)
         .and_then(|value| value.parse::<usize>().ok())
@@ -194,7 +212,6 @@ pub(crate) async fn read_answer(
         status,
         content_type,
         retry_after_secs,
-        location,
         body,
     })
 }
@@ -213,7 +230,6 @@ pub(crate) async fn read_answer_truncating(
             .map(str::to_owned)
     };
     let content_type = header(CONTENT_TYPE);
-    let location = header(LOCATION);
     let retry_after_secs = header(RETRY_AFTER).and_then(|value| value.trim().parse::<u64>().ok());
     let status = response.status();
     let mut body = Vec::new();
@@ -236,7 +252,6 @@ pub(crate) async fn read_answer_truncating(
             status,
             content_type,
             retry_after_secs,
-            location,
             body,
         },
         truncated,

@@ -8,12 +8,18 @@ use std::time::Duration;
 use adk_core::ErrorCategory;
 use serde_json::{Value, json};
 
-use super::families::web::meter::{MeterError, MeterRefusal, settle_dropped_total};
+use super::WebEgressAllowlist;
+use super::families::web::meter::Meter;
+use super::families::web::meter::{
+    ADMISSION_TTL, FailureClass, MeterError, MeterRefusal, Outcome, SETTLE_ECHO_WAIT,
+    settle_dropped_total,
+};
 use super::families::web::registry::REGISTRY;
+use super::families::web::{WebToolHost, build_web_toolset};
 use super::sdk_conformance;
 use super::web_test_support::{
-    FakeMeter, FixtureTransport, all_web_providers, call, context, fixture, host_intel_toolset,
-    origin, tool, tools, web_toolset,
+    FakeLookup, FakeMeter, FixtureTransport, all_web_providers, call, context, fixture,
+    host_intel_toolset, origin, policy, settings, tool, tools, web_toolset,
 };
 
 fn tavily_ok() -> Arc<FixtureTransport> {
@@ -364,6 +370,7 @@ async fn settle_reuses_event_id_on_retry() {
     let web = web_toolset(&all_web_providers(), Some(&meter), &tavily_ok(), Vec::new());
     let result = call(&web, "web_search", json!({"query": "tokio"})).await;
     assert!(result["results"].is_array());
+    tokio::time::sleep(Duration::from_mins(1)).await;
     let settled = meter.settled();
     assert_eq!(
         settled.len(),
@@ -375,14 +382,33 @@ async fn settle_reuses_event_id_on_retry() {
             .iter()
             .all(|settle| settle.event_id == settled[0].event_id)
     );
-    assert_eq!(
-        settled[0].event_id,
-        super::families::web::meter::event_id("execution-1", "call-1", 0)
-    );
 }
 
+/// Each execution of a tool call is its own billed event: a re-execution
+/// under the same call id (an ADK retry, a backend that reuses `call_0`)
+/// calls the provider again and must not collapse into the first bill.
+#[tokio::test]
+async fn re_executed_tool_call_settles_a_new_event() {
+    let meter = FakeMeter::new();
+    let transport = FixtureTransport::answering(&[
+        fixture("tavily", "web_search_ok"),
+        fixture("tavily", "web_search_ok"),
+    ]);
+    let web = web_toolset(&all_web_providers(), Some(&meter), &transport, Vec::new());
+    for _ in 0..2 {
+        let result = call(&web, "web_search", json!({"query": "tokio"})).await;
+        assert!(result["results"].is_array(), "{result}");
+    }
+    let settled = meter.settled();
+    assert_eq!(settled.len(), 2);
+    assert_ne!(settled[0].event_id, settled[1].event_id);
+}
+
+/// The settlement outlives the tool call: the result returns after the
+/// echo wait while the settle keeps retrying, and the retries stop before
+/// the admission expires, counted as dropped.
 #[tokio::test(start_paused = true)]
-async fn settle_retry_stops_inside_dedupe_window() {
+async fn settle_retry_outlives_the_tool_call_and_stops_before_expiry() {
     let meter = FakeMeter::new();
     meter.settle_failures.store(u32::MAX, Ordering::SeqCst);
     let web = web_toolset(&all_web_providers(), Some(&meter), &tavily_ok(), Vec::new());
@@ -393,9 +419,30 @@ async fn settle_retry_stops_inside_dedupe_window() {
         result["results"].is_array(),
         "the result still reaches the model"
     );
-    assert!(started.elapsed() < Duration::from_mins(10));
-    assert!(meter.settled().len() > 3);
+    assert!(
+        result["usage"].get("cost_usd").is_none(),
+        "no settlement, no cost echo"
+    );
+    assert!(started.elapsed() <= SETTLE_ECHO_WAIT + Duration::from_secs(1));
+    let attempts_at_return = meter.settled().len();
+    tokio::time::sleep(ADMISSION_TTL + Duration::from_mins(1)).await;
+    assert!(
+        meter.settled().len() > attempts_at_return,
+        "the settle kept retrying"
+    );
     assert!(settle_dropped_total() > dropped);
+}
+
+#[tokio::test]
+async fn provider_failure_reports_its_failure_class() {
+    let meter = FakeMeter::new();
+    let transport = FixtureTransport::answering(&[fixture("tavily", "error_401")]);
+    let web = web_toolset(&all_web_providers(), Some(&meter), &transport, Vec::new());
+    let result = call(&web, "web_search", json!({"query": "tokio"})).await;
+    assert_eq!(result["error"]["code"], "auth_failed", "{result}");
+    let settled = meter.settled();
+    assert_eq!(settled[0].outcome, Outcome::ProviderError);
+    assert_eq!(settled[0].failure, Some(FailureClass::Refused));
 }
 
 #[tokio::test]
@@ -514,6 +561,57 @@ async fn direct_fetch_revalidates_every_redirect() {
     .await;
     assert_eq!(private["error"]["code"], "address_not_allowed");
     assert_eq!(served.load(Ordering::SeqCst), before, "nothing was dialled");
+}
+
+/// The provider allowlist's private permits never reach the direct fetch:
+/// a CIDR an operator added for a provider call does not open a private or
+/// loopback address to a model-chosen URL.
+#[tokio::test]
+async fn direct_fetch_ignores_the_provider_allowlists_private_permits() {
+    let meter = FakeMeter::new();
+    let host = WebToolHost::new(
+        Arc::clone(&meter) as Arc<dyn Meter>,
+        WebEgressAllowlist::parse_csv("127.0.0.1,10.0.0.0/8,localhost").expect("allowlist"),
+        "https://elitea.example",
+    )
+    .with_lookup(FakeLookup::new());
+    let web = build_web_toolset("web", &settings(&json!({})), &policy(), Some(&host))
+        .expect("web toolset");
+    for url in [
+        "https://docs.example.com/page",
+        "https://private.example.com/page",
+    ] {
+        let result = call(&web, "web_fetch", json!({"url": url})).await;
+        assert_eq!(
+            result["error"]["code"], "address_not_allowed",
+            "{url}: {result}"
+        );
+    }
+}
+
+/// A redirect's body is dropped, not read: the origin's 302 announces a
+/// 1 MiB body and stalls after 16 bytes, and the fetch still follows the
+/// Location at once instead of waiting out its 20 s timeout.
+#[tokio::test]
+async fn direct_fetch_does_not_read_redirect_bodies() {
+    let (port, _) = origin().await;
+    let meter = FakeMeter::new();
+    let web = web_toolset(&direct_settings(), Some(&meter), &tavily_ok(), vec![port]);
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        call(
+            &web,
+            "web_fetch",
+            json!({"url": format!("http://docs.example.com:{port}/redirect-stall")}),
+        ),
+    )
+    .await
+    .expect("the redirect body was not awaited");
+    assert_eq!(
+        result["final_url"],
+        format!("http://docs.example.com:{port}/page"),
+        "{result}"
+    );
 }
 
 #[tokio::test]

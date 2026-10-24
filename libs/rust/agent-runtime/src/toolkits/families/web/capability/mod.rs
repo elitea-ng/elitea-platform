@@ -9,14 +9,15 @@ pub(crate) mod host_intel;
 pub(crate) mod web_search;
 
 use std::net::IpAddr;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use super::meter::{
-    AuditTarget, Meter, MeterError, MeteredOp, Outcome, SettleRequest, Units, event_id,
-    settle_with_retry,
+    AuditTarget, Meter, MeterError, MeteredOp, Outcome, SETTLE_ECHO_WAIT, SettleRequest, Units,
+    event_id, spawn_settle,
 };
 use super::transport::ProviderError;
 
@@ -344,9 +345,12 @@ pub(crate) fn nano_usd_text(nano: i64) -> String {
 }
 
 /// Run one provider call under the meter: admit before any provider I/O,
-/// call, settle (awaited, retried with the same event id), return.
+/// call, settle, return. The settlement runs on its own task
+/// ([`spawn_settle`]): the result waits up to [`SETTLE_ECHO_WAIT`] for the
+/// cost echo, and a settlement still retrying after that finishes on its
+/// own, inside the admission's lifetime.
 pub(crate) async fn metered<T, F, U>(
-    meter: Option<&dyn Meter>,
+    meter: Option<&Arc<dyn Meter>>,
     op: MeteredOp,
     tool_call_id: &str,
     audit: AuditTarget,
@@ -363,6 +367,9 @@ where
             "web tools run only where the platform can meter them; this host cannot",
         ));
     };
+    // The admission's lifetime starts at the gateway's admit; the worker's
+    // clock starts just before it asks, so its retries end first.
+    let admitted_at = tokio::time::Instant::now();
     let admission = match meter.admit(&op).await {
         Ok(admission) => admission,
         Err(MeterError::Refused(refusal)) => {
@@ -381,23 +388,36 @@ where
             ));
         }
     };
+    // One nonce per provider call: this invocation's own billed event, the
+    // same id on every settle retry of it.
+    let invocation = nonce();
     let outcome = call.await;
-    let (units, settle_outcome) = match &outcome {
-        Ok(value) => (units_of(value), Outcome::Ok),
-        Err(failure) => (failure.units, Outcome::ProviderError),
+    let (units, settle_outcome, failure) = match &outcome {
+        Ok(value) => (units_of(value), Outcome::Ok, None),
+        Err(failure) => (
+            failure.units,
+            Outcome::ProviderError,
+            Some(failure.error.failure_class()),
+        ),
     };
-    let settlement = settle_with_retry(
-        meter,
-        &SettleRequest {
+    let mut settling = spawn_settle(
+        Arc::clone(meter),
+        SettleRequest {
             admission_id: admission.admission_id.clone(),
-            event_id: event_id(meter.attribution_execution_id(), tool_call_id, 0),
+            event_id: event_id(meter.attribution_execution_id(), tool_call_id, &invocation),
             op,
             units,
             outcome: settle_outcome,
+            failure,
             audit,
         },
-    )
-    .await;
+        admitted_at,
+    );
+    let settlement = tokio::time::timeout(SETTLE_ECHO_WAIT, &mut settling)
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten();
     match outcome {
         Ok(value) => Ok((
             value,

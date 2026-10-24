@@ -80,7 +80,8 @@ func (r *recordingAudit) Record(_ context.Context, event audit.Event) {
 // A settled call writes one row naming the tool, the provider and the target
 // the worker disclosed; an admitted call writes none (it is recorded when it
 // settles); a refused admission writes one; a target with a control character
-// is recorded empty.
+// is recorded empty; a settle retry the gateway answers as a duplicate writes
+// none, and its answer still reaches the worker unchanged.
 func TestProxy_MeteredCallsAreAudited(t *testing.T) {
 	settle := `{"admission_id":"a","event_id":"e-1","operation":"web_search","provider":"tavily",` +
 		`"units":{"requests":1},"outcome":"ok","audit":{"tool":"web_search","target":"0f3a","status":"ok"}}`
@@ -90,12 +91,15 @@ func TestProxy_MeteredCallsAreAudited(t *testing.T) {
 		status     int
 		wantRows   int
 		wantAction string
+		answer     string
 	}{
-		"settled":           {meteredSettlePath, settle, http.StatusOK, 1, `web_search via "tavily": ok; target "0f3a"; execution exec-9; event e-1`},
-		"admitted":          {meteredAdmitPath, settle, http.StatusOK, 0, ""},
-		"admission refused": {meteredAdmitPath, settle, http.StatusPaymentRequired, 1, `web_search via "tavily": refused_budget`},
-		"no audit object":   {meteredSettlePath, `{"event_id":"e"}`, http.StatusOK, 0, ""},
-		"control character": {meteredSettlePath, strings.Replace(settle, "0f3a", `a\u0007b`, 1), http.StatusOK, 1, `target ""`},
+		"settled":           {meteredSettlePath, settle, http.StatusOK, 1, `web_search via "tavily": ok; target "0f3a"; execution exec-9; event e-1`, ""},
+		"admitted":          {meteredAdmitPath, settle, http.StatusOK, 0, "", ""},
+		"admission refused": {meteredAdmitPath, settle, http.StatusPaymentRequired, 1, `web_search via "tavily": refused_budget`, ""},
+		"no audit object":   {meteredSettlePath, `{"event_id":"e"}`, http.StatusOK, 0, "", ""},
+		"control character": {meteredSettlePath, strings.Replace(settle, "0f3a", `a\u0007b`, 1), http.StatusOK, 1, `target ""`, ""},
+		"first settle":      {meteredSettlePath, settle, http.StatusOK, 1, `: ok;`, `{"billed_nano_usd":8,"duplicate":false}`},
+		"duplicate settle":  {meteredSettlePath, settle, http.StatusOK, 0, "", `{"billed_nano_usd":8,"duplicate":true}`},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -105,7 +109,11 @@ func TestProxy_MeteredCallsAreAudited(t *testing.T) {
 				forwarded = string(raw)
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(tc.status)
-				_, _ = w.Write([]byte(`{}`))
+				answer := tc.answer
+				if answer == "" {
+					answer = `{}`
+				}
+				_, _ = w.Write([]byte(answer))
 			}))
 			recorder := &recordingAudit{}
 			proxy, err := New(Config{Gateway: gatewayTo(t, backend, frozenSecret),
@@ -115,7 +123,11 @@ func TestProxy_MeteredCallsAreAudited(t *testing.T) {
 			}
 			req := httptest.NewRequestWithContext(fullCtx(), http.MethodPost, "http://edge"+tc.path, strings.NewReader(tc.body))
 			req.Header.Set(HeaderExecutionID, "exec-9")
-			proxy.ServeHTTP(httptest.NewRecorder(), req)
+			out := httptest.NewRecorder()
+			proxy.ServeHTTP(out, req)
+			if tc.answer != "" && out.Body.String() != tc.answer {
+				t.Fatalf("the worker received %q, want the gateway's answer %q", out.Body.String(), tc.answer)
+			}
 			if forwarded != tc.body {
 				t.Fatalf("the gateway received %q, want the body unchanged", forwarded)
 			}

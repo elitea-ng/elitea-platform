@@ -11,6 +11,7 @@
 //! not free. The desktop never builds one: web tools never run on the laptop.
 
 use std::fmt;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -109,6 +110,36 @@ impl Outcome {
     }
 }
 
+/// Why a failed provider call failed, as far as the gateway's billing rule
+/// needs to know: whether the provider was reached and charges for it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FailureClass {
+    /// No request reached the provider (an egress, URL, domain or address
+    /// refusal before any I/O).
+    NotReached,
+    /// The provider refused the call itself (key refused, rate limit, bad
+    /// request): providers charge nothing for it.
+    Refused,
+    /// The provider reached the target, and the target answered an error
+    /// (a 404 page). Firecrawl charges its page for it.
+    TargetFailed,
+    /// Any other failure (a timeout, a network failure, a 5xx, an unreadable
+    /// answer). Nothing is known to be charged.
+    Failed,
+}
+
+impl FailureClass {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotReached => "not_reached",
+            Self::Refused => "refused",
+            Self::TargetFailed => "target_failed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 /// What Main's audit records for one call: the URL host, the query hash or
 /// the looked-up IP. Never a full URL or a query.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -125,6 +156,8 @@ pub struct SettleRequest {
     pub op: MeteredOp,
     pub units: Units,
     pub outcome: Outcome,
+    /// Set for [`Outcome::ProviderError`] only.
+    pub failure: Option<FailureClass>,
     pub audit: AuditTarget,
 }
 
@@ -175,7 +208,7 @@ impl std::error::Error for MeterError {}
 pub trait Meter: Send + Sync {
     /// The execution the spend is attributed to: the claim's own, or the
     /// local turn's for a desktop `remote_toolkit_call`. It seeds the event
-    /// id, so a redelivered command settles under the same id.
+    /// id.
     fn attribution_execution_id(&self) -> &str;
 
     /// Admit one operation before the provider is called.
@@ -190,12 +223,15 @@ const METERED_NAMESPACE: [u8; 16] = [
     0x6f, 0x1c, 0x5e, 0x8a, 0x2b, 0x0d, 0x5c, 0x47, 0x9e, 0x3a, 0x12, 0x38, 0xa0, 0xc0, 0xff, 0xee,
 ];
 
-/// `UUIDv5(NS_ELITEA_METERED, execution_id ‖ tool_call_id ‖ attempt)`: the
-/// same tool call of the same execution always settles under the same id,
-/// so a retried settle or a redelivered command bills once.
+/// `UUIDv5(NS_ELITEA_METERED, execution_id ‖ tool_call_id ‖ invocation)`.
+/// `invocation` is a nonce drawn once per provider call, so each execution
+/// of a tool call is its own billed event (a rate-limit retry, an ADK
+/// retry, or a backend that reuses call ids such as `call_0` calls the
+/// provider again and is billed again), while every settle retry of ONE
+/// call re-sends the same id and bills once.
 #[must_use]
-pub fn event_id(execution_id: &str, tool_call_id: &str, attempt: u32) -> String {
-    let name = format!("{execution_id}\u{0}{tool_call_id}\u{0}{attempt}");
+pub fn event_id(execution_id: &str, tool_call_id: &str, invocation: &str) -> String {
+    let name = format!("{execution_id}\u{0}{tool_call_id}\u{0}{invocation}");
     uuid_v5(&METERED_NAMESPACE, name.as_bytes())
 }
 
@@ -232,45 +268,99 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
         })
 }
 
-/// The longest a settlement is retried: inside the gateway's NATS dedupe
-/// window (at least 12 minutes), so every retry is still deduplicated.
-pub const SETTLE_RETRY_WINDOW: Duration = Duration::from_mins(10);
+/// How long the gateway honours an admission, from the admit
+/// (`meteredAdmissionTTL`). It sits inside the gateway's NATS dedupe window
+/// (at least 12 minutes), so every retry is still deduplicated.
+pub const ADMISSION_TTL: Duration = Duration::from_mins(10);
+/// The last settle attempt starts at least this long before the admission
+/// expires: one attempt may take the meter's own deadline (15 s) to land.
+const SETTLE_EXPIRY_MARGIN: Duration = Duration::from_secs(30);
 const SETTLE_FIRST_BACKOFF: Duration = Duration::from_millis(500);
 const SETTLE_MAX_BACKOFF: Duration = Duration::from_secs(30);
+/// How long a tool call waits for its settlement before it returns its
+/// result without the cost echo. The settlement keeps going after that.
+pub const SETTLE_ECHO_WAIT: Duration = Duration::from_secs(3);
 
 static SETTLE_DROPPED: AtomicU64 = AtomicU64::new(0);
 
-/// `web_meter_settle_dropped_total`: settlements given up on (retry window
-/// spent, or the gateway refused the admission). The worker exports it.
+/// `web_meter_settle_dropped_total`: settlements given up on (the retry
+/// window before the admission's expiry is spent, the gateway refused the
+/// settlement, or the settle task ended without an answer). Each give-up
+/// also logs one `web_meter_settle_dropped` warning.
 #[must_use]
 pub fn settle_dropped_total() -> u64 {
     SETTLE_DROPPED.load(Ordering::Relaxed)
 }
 
-/// Settle, retrying an unavailable hop with the same event id until
-/// [`SETTLE_RETRY_WINDOW`] is spent. Awaited before the tool result is
-/// returned, so a turn cannot outrun its own billing.
-pub async fn settle_with_retry(meter: &dyn Meter, request: &SettleRequest) -> Option<Settlement> {
-    let started = tokio::time::Instant::now();
+/// The instant after which no settle attempt starts, for an admission
+/// requested at `admitted_at`.
+#[must_use]
+pub fn settle_deadline(admitted_at: tokio::time::Instant) -> tokio::time::Instant {
+    admitted_at + ADMISSION_TTL.saturating_sub(SETTLE_EXPIRY_MARGIN)
+}
+
+/// Settle, retrying an unavailable hop with the same event id while a retry
+/// can still start before `deadline` ([`settle_deadline`] of the admit).
+/// Every give-up counts in [`settle_dropped_total`].
+pub async fn settle_with_retry(
+    meter: Arc<dyn Meter>,
+    request: SettleRequest,
+    deadline: tokio::time::Instant,
+) -> Option<Settlement> {
     let mut backoff = SETTLE_FIRST_BACKOFF;
     loop {
-        match meter.settle(request).await {
+        match meter.settle(&request).await {
             Ok(settlement) => return Some(settlement),
-            Err(MeterError::Unavailable) if started.elapsed() + backoff < SETTLE_RETRY_WINDOW => {
+            Err(MeterError::Unavailable) if tokio::time::Instant::now() + backoff < deadline => {
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(SETTLE_MAX_BACKOFF);
             }
             Err(_) => {
-                SETTLE_DROPPED.fetch_add(1, Ordering::Relaxed);
-                tracing::warn!(
-                    event = "web_meter_settle_dropped",
-                    provider = request.op.provider,
-                    operation = request.op.operation,
-                    event_id = %request.event_id,
-                    "a metered web operation could not be settled; it stays unbilled"
-                );
+                record_dropped(&request);
                 return None;
             }
+        }
+    }
+}
+
+fn record_dropped(request: &SettleRequest) {
+    SETTLE_DROPPED.fetch_add(1, Ordering::Relaxed);
+    tracing::warn!(
+        event = "web_meter_settle_dropped",
+        provider = request.op.provider,
+        operation = request.op.operation,
+        event_id = %request.event_id,
+        "a metered web operation could not be settled; it stays unbilled"
+    );
+}
+
+/// Start the settlement of one admitted call on its own task, so that it
+/// outlives the tool future: a tool call is cut by the turn's deadline (90 s
+/// direct, 300 s through ADK), and the settle retries run until the
+/// admission expires. The caller may await the handle for the cost echo, and
+/// drop it to let the settlement finish on its own.
+pub fn spawn_settle(
+    meter: Arc<dyn Meter>,
+    request: SettleRequest,
+    admitted_at: tokio::time::Instant,
+) -> tokio::task::JoinHandle<Option<Settlement>> {
+    let deadline = settle_deadline(admitted_at);
+    tokio::spawn(async move {
+        // The guard counts a settle task that ends without an answer (a
+        // panic in the meter, a runtime shut down mid-retry) as dropped.
+        let mut guard = DropGuard(Some(request.clone()));
+        let settled = settle_with_retry(meter, request, deadline).await;
+        guard.0 = None;
+        settled
+    })
+}
+
+struct DropGuard(Option<SettleRequest>);
+
+impl Drop for DropGuard {
+    fn drop(&mut self) {
+        if let Some(request) = self.0.take() {
+            record_dropped(&request);
         }
     }
 }
@@ -294,10 +384,65 @@ mod tests {
 
     #[test]
     fn event_ids_are_stable_and_distinct() {
-        let first = event_id("exec-1", "call-1", 0);
-        assert_eq!(first, event_id("exec-1", "call-1", 0));
-        assert_ne!(first, event_id("exec-1", "call-2", 0));
-        assert_ne!(first, event_id("exec-1", "call-1", 1));
-        assert_ne!(first, event_id("exec-2", "call-1", 0));
+        let first = event_id("exec-1", "call-1", "n-1");
+        assert_eq!(first, event_id("exec-1", "call-1", "n-1"));
+        assert_ne!(first, event_id("exec-1", "call-2", "n-1"));
+        assert_ne!(first, event_id("exec-1", "call-1", "n-2"));
+        assert_ne!(first, event_id("exec-2", "call-1", "n-1"));
+    }
+
+    struct Unavailable(AtomicU64);
+
+    #[async_trait]
+    impl Meter for Unavailable {
+        fn attribution_execution_id(&self) -> &'static str {
+            "exec-1"
+        }
+
+        async fn admit(&self, _op: &MeteredOp) -> Result<Admission, MeterError> {
+            Err(MeterError::Unavailable)
+        }
+
+        async fn settle(&self, _request: &SettleRequest) -> Result<Settlement, MeterError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(MeterError::Unavailable)
+        }
+    }
+
+    fn request() -> SettleRequest {
+        SettleRequest {
+            admission_id: "adm".to_owned(),
+            event_id: event_id("exec-1", "call-1", "n"),
+            op: MeteredOp {
+                provider: "tavily",
+                operation: "web_search",
+                estimate: Units::credits(1),
+            },
+            units: Units::credits(1),
+            outcome: Outcome::Ok,
+            failure: None,
+            audit: AuditTarget {
+                tool: "web_search",
+                target: String::new(),
+            },
+        }
+    }
+
+    /// The retries are bounded by the admission's expiry measured from the
+    /// admit, not from the provider call: a provider call that took eight
+    /// minutes leaves less than two minutes of retries.
+    #[tokio::test(start_paused = true)]
+    async fn settle_retries_stop_before_the_admission_expires() {
+        let admitted_at = tokio::time::Instant::now();
+        tokio::time::sleep(Duration::from_mins(8)).await;
+        let meter = Arc::new(Unavailable(AtomicU64::new(0)));
+        let dropped = settle_dropped_total();
+        let settled = spawn_settle(meter.clone(), request(), admitted_at)
+            .await
+            .expect("settle task");
+        assert_eq!(settled, None);
+        assert!(tokio::time::Instant::now() < admitted_at + ADMISSION_TTL);
+        assert!(meter.0.load(Ordering::SeqCst) > 1);
+        assert!(settle_dropped_total() > dropped);
     }
 }

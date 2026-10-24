@@ -29,7 +29,7 @@ use std::sync::Arc;
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, RetryHint, Tool, ToolContext};
 use adk_tool::BasicToolset;
 use async_trait::async_trait;
-use elitea_egress_guard::{Allowlist, Lookup, SystemLookup};
+use elitea_egress_guard::{Allowlist, Lookup, PermitSet, SystemLookup};
 use serde_json::{Map, Value};
 
 use crate::toolkits::invocation::admit_materialized_toolset;
@@ -48,8 +48,10 @@ const PROVIDER_USER_AGENT: &str = "elitea-web-tools/1";
 
 /// What the host lends the web families for one claim: the meter, the
 /// deployment's egress allowlist for provider origins
-/// (`ELITEA_WEB_EGRESS_ALLOWLIST`, fail-closed) and private ranges, and the
-/// deployment origin the fetch `User-Agent` names.
+/// (`ELITEA_WEB_EGRESS_ALLOWLIST`, fail-closed), and the deployment origin
+/// the fetch `User-Agent` names. The allowlist governs the provider API
+/// calls only: its private permits (a CIDR an operator added for a provider)
+/// never reach the direct fetch, whose URL the model chooses.
 #[derive(Clone)]
 pub struct WebToolHost {
     meter: Arc<dyn Meter>,
@@ -136,8 +138,8 @@ pub(crate) struct WebState {
 }
 
 impl WebState {
-    pub(crate) fn meter(&self) -> Option<&dyn Meter> {
-        self.meter.as_deref()
+    pub(crate) const fn meter(&self) -> Option<&Arc<dyn Meter>> {
+        self.meter.as_ref()
     }
 
     /// 443 for https, 80 for http when the deployment allows http.
@@ -265,6 +267,9 @@ pub(crate) struct Parts<'a> {
     pub(crate) host: Option<&'a WebToolHost>,
     pub(crate) transports: TransportFactory<'a>,
     pub(crate) extra_fetch_ports: Vec<u16>,
+    /// Private addresses the direct fetch may dial. Production passes none
+    /// whatever the host's allowlist says; a test lifts its loopback origin.
+    pub(crate) fetch_permits: PermitSet,
 }
 
 fn providers(
@@ -330,6 +335,7 @@ pub(crate) fn build_web_toolset(
             host,
             transports: &transports,
             extra_fetch_ports: Vec::new(),
+            fetch_permits: PermitSet::default(),
         },
     )
 }
@@ -350,6 +356,7 @@ pub(crate) fn build_host_intel_toolset(
             host,
             transports: &transports,
             extra_fetch_ports: Vec::new(),
+            fetch_permits: PermitSet::default(),
         },
     )
 }
@@ -366,24 +373,21 @@ pub(crate) fn build_web_with(
             .values()
             .any(|handle| handle.kinds().contains(&kind))
     };
+    // The direct fetch dials a model-chosen URL, so it never takes the
+    // provider allowlist's private permits: a CIDR an operator added for a
+    // provider call must not open private, loopback or link-local addresses
+    // to a fetch (SSRF).
     let direct = config.direct_fetch_enabled.then(|| {
-        let (lookup, permits, user_agent) = parts.host.map_or_else(
+        let (lookup, user_agent) = parts.host.map_or_else(
             || {
                 (
                     Arc::new(SystemLookup) as Arc<dyn Lookup>,
-                    Allowlist::default().private_permits(),
                     "EliteaFetch/1".to_owned(),
                 )
             },
-            |host| {
-                (
-                    Arc::clone(&host.lookup),
-                    host.egress.private_permits(),
-                    host.user_agent.clone(),
-                )
-            },
+            |host| (Arc::clone(&host.lookup), host.user_agent.clone()),
         );
-        DirectFetcher::new(lookup, permits, user_agent)
+        DirectFetcher::new(lookup, parts.fetch_permits.clone(), user_agent)
     });
     let mut offered = Vec::new();
     if serves(Capability::WebSearch) {

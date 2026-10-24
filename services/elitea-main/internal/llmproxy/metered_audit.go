@@ -6,7 +6,8 @@ package llmproxy
 // own one, so the edge writes it: the settle (and admit) body may carry an
 // `audit` object naming the tool, its target and its outcome, and the edge
 // records ONE audit.Event per settled call, and one per admission the gateway
-// refused. The gateway ignores the key.
+// refused. The gateway ignores the key. A settle retry that the gateway answers
+// `"duplicate": true` (the event id was already settled) writes no second row.
 //
 // The target is what the worker chose to disclose: a URL HOST, a sha256 hex of
 // a query, or the looked-up IP. Never a full URL (a provider key can ride in a
@@ -114,15 +115,16 @@ func refusalStatus(code int) string {
 }
 
 // recordMeteredAudit writes the row for one metered call: a settled call
-// (rpc settle, 2xx) or a refused admission (rpc admit, non-2xx). Anything else
-// writes nothing: an admitted call is recorded when it settles.
-func (p *Proxy) recordMeteredAudit(ctx context.Context, rpc gatewayRPC, id Identity, entry *meteredAudit, status int, started time.Time) {
+// (rpc settle, 2xx, not a duplicate) or a refused admission (rpc admit,
+// non-2xx). Anything else writes nothing: an admitted call is recorded when it
+// settles, and a deduplicated settle retry was recorded by its first settle.
+func (p *Proxy) recordMeteredAudit(ctx context.Context, rpc gatewayRPC, id Identity, entry *meteredAudit, status int, started time.Time, duplicate bool) {
 	if p.audit == nil || entry == nil {
 		return
 	}
 	outcome := entry.Status
 	switch {
-	case rpc == rpcMeteredSettle && status >= 200 && status <= 299:
+	case rpc == rpcMeteredSettle && status >= 200 && status <= 299 && !duplicate:
 	case rpc == rpcMeteredAdmit && (status < 200 || status > 299):
 		outcome = refusalStatus(status)
 	default:
@@ -155,6 +157,31 @@ func optionalID(value string) *int64 {
 		return nil
 	}
 	return audit.ID(n)
+}
+
+// maxSettleAnswerBytes caps the settle answer the edge buffers to read its
+// duplicate flag (it is two fields).
+const maxSettleAnswerBytes = 16 << 10
+
+// settleWasDuplicate reads a 2xx settle answer's `duplicate` flag and puts
+// the bytes back for the caller. An unreadable answer reads as not a
+// duplicate: the row is then written, as before the flag existed.
+func settleWasDuplicate(resp *Response) bool {
+	if resp.StatusCode < 200 || resp.StatusCode > 299 || resp.Body == nil {
+		return false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSettleAnswerBytes+1))
+	_ = resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil || len(body) > maxSettleAnswerBytes {
+		resp.ContentLength = -1
+		return false
+	}
+	resp.ContentLength = int64(len(body))
+	var answer struct {
+		Duplicate bool `json:"duplicate"`
+	}
+	return json.Unmarshal(body, &answer) == nil && answer.Duplicate
 }
 
 // meteredRequestBody rewinds a buffered body for the gateway call.

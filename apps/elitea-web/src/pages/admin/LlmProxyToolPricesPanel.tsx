@@ -29,7 +29,12 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 
 import { configFailureReason } from './api/adminConfigurationApi';
-import { type MeteredPriceRow, useAdminMeteredPrices, useSaveAdminMeteredPrice } from './api/adminMeteredPricesApi';
+import {
+  type MeteredPriceRow,
+  priceText,
+  useAdminMeteredPrices,
+  useSaveAdminMeteredPrice,
+} from './api/adminMeteredPricesApi';
 import { meteredOperationLabel, meteredProviderLabel } from './meteredToolLabels';
 
 /** The column's scale: NUMERIC(20,8). The server refuses a longer fraction. */
@@ -48,9 +53,12 @@ function unitHeading(unit: string): string {
 
 function PriceRow({ row }: { readonly row: MeteredPriceRow }): ReactNode {
   const save = useSaveAdminMeteredPrice();
-  const [draft, setDraft] = useState(String(row.price_per_unit_usd));
+  // The price stays a decimal string end to end: a JS number would print a
+  // price below 1e-6 as "5e-7", which the server refuses.
+  const stored = priceText(row.price_per_unit_usd);
+  const [draft, setDraft] = useState(stored);
   const valid = PRICE_PATTERN.test(draft.trim());
-  const changed = valid && Number(draft) !== row.price_per_unit_usd;
+  const changed = valid && priceText(draft) !== stored;
   const rowId = `${row.provider}-${row.operation}`;
 
   return (
@@ -89,7 +97,7 @@ function PriceRow({ row }: { readonly row: MeteredPriceRow }): ReactNode {
               provider: row.provider,
               operation: row.operation,
               unit: row.unit,
-              price_per_unit_usd: Number(draft),
+              price_per_unit_usd: draft.trim(),
             })
           }
         >

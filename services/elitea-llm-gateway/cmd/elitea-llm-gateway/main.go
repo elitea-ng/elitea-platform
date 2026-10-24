@@ -513,6 +513,10 @@ func main() {
 			DB:     cost.NewPoolQuerier(pool),
 			Logger: logger,
 		})))
+		// A settle retry that reaches another replica is answered as a
+		// duplicate when the first settle's ledger row is already written,
+		// so the edge audits a call once.
+		handlerOpts = append(handlerOpts, llmproxy.WithMeteredLedger(&llmproxy.PoolMeteredLedger{Pool: pool}))
 	}
 	logger.Info("stream disconnect billing configured",
 		"grace", cfg.StreamGrace, "drain_max_inflight", cfg.StreamDrainLimit)

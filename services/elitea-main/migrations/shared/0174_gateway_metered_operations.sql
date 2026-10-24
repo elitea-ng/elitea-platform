@@ -36,9 +36,29 @@
 -- The writers send the new columns only for tool rows, so a gateway or a
 -- scheduler that runs before this migration keeps writing llm rows.
 --
--- Idempotent: CREATE ... IF NOT EXISTS and ADD COLUMN IF NOT EXISTS. No
--- BEGIN/COMMIT: the ledgered runner wraps the file.
-
+-- NO SCAN OF THE LEDGER TABLES. gateway.llm_usage_events and
+-- gateway.llm_request_logs are the two hottest write paths of the gateway,
+-- and the ledgered runner applies EVERY pending migration in ONE transaction
+-- (migrate/runner.go apply), so each ALTER below holds ACCESS EXCLUSIVE on
+-- its table until the whole upgrade commits. Nothing here may scan them under
+-- that lock:
+--
+--   - `operation` has a CONSTANT default ('llm'), so adding it NOT NULL is a
+--     catalog change: PostgreSQL stores the default once and rewrites and
+--     scans nothing.
+--   - Its CHECK is added NOT VALID, so the ALTER does not scan for violators.
+--     PostgreSQL still enforces it for every new and updated row. Every
+--     existing row reads the constant default 'llm', so no row can violate
+--     it. It is not VALIDATEd here: inside the one migration transaction the
+--     validation scan would run under the ALTER's lock (shared 0140 has the
+--     same rule and test).
+--   - No index is built on them. CREATE INDEX CONCURRENTLY cannot run inside
+--     the runner's transaction, and nothing needs a (project, operation,
+--     time) index: the Usage dimension read and the run analytics bound
+--     their scans by project and time with 0084's
+--     idx_llm_usage_events_project_time and 0100's request-log index, and
+--     filter on operation within that range.
+--
 CREATE TABLE IF NOT EXISTS gateway.metered_operation_prices (
     id                  BIGSERIAL     PRIMARY KEY,
     provider            VARCHAR(64)   NOT NULL,
@@ -70,17 +90,39 @@ INSERT INTO gateway.metered_operation_prices (provider, operation, unit, price_p
     ('shodan',      'host_lookup',         'credit',  0.0069)
 ON CONFLICT (provider, operation) DO NOTHING;
 
-ALTER TABLE gateway.llm_usage_events ADD COLUMN IF NOT EXISTS operation VARCHAR(16) NOT NULL DEFAULT 'llm' CHECK (operation IN ('llm', 'tool'));
+ALTER TABLE gateway.llm_usage_events ADD COLUMN IF NOT EXISTS operation VARCHAR(16) NOT NULL DEFAULT 'llm';
 ALTER TABLE gateway.llm_usage_events ADD COLUMN IF NOT EXISTS units BIGINT;
 ALTER TABLE gateway.llm_usage_events ADD COLUMN IF NOT EXISTS unit VARCHAR(16);
 
-CREATE INDEX IF NOT EXISTS idx_llm_usage_events_project_operation_time
-    ON gateway.llm_usage_events (project_id, operation, occurred_at);
-
-ALTER TABLE gateway.llm_request_logs ADD COLUMN IF NOT EXISTS operation VARCHAR(16) NOT NULL DEFAULT 'llm' CHECK (operation IN ('llm', 'tool'));
+ALTER TABLE gateway.llm_request_logs ADD COLUMN IF NOT EXISTS operation VARCHAR(16) NOT NULL DEFAULT 'llm';
 ALTER TABLE gateway.llm_request_logs ADD COLUMN IF NOT EXISTS units BIGINT;
 ALTER TABLE gateway.llm_request_logs ADD COLUMN IF NOT EXISTS unit VARCHAR(16);
 ALTER TABLE gateway.llm_request_logs ADD COLUMN IF NOT EXISTS cost_usd NUMERIC(20,8);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'llm_usage_events_operation'
+           AND conrelid = 'gateway.llm_usage_events'::regclass
+    ) THEN
+        ALTER TABLE gateway.llm_usage_events
+            ADD CONSTRAINT llm_usage_events_operation
+            CHECK (operation IN ('llm', 'tool'))
+            NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'llm_request_logs_operation'
+           AND conrelid = 'gateway.llm_request_logs'::regclass
+    ) THEN
+        ALTER TABLE gateway.llm_request_logs
+            ADD CONSTRAINT llm_request_logs_operation
+            CHECK (operation IN ('llm', 'tool'))
+            NOT VALID;
+    END IF;
+END
+$$;
 
 COMMENT ON TABLE gateway.metered_operation_prices IS
     'USD per ONE unit (request, credit or page) of a metered tool operation. An absent row is unpriced.';
@@ -96,6 +138,15 @@ COMMENT ON COLUMN gateway.llm_request_logs.cost_usd IS
 -- call only while this call execution is live and runs as the same actor in
 -- the same project, so a tool's spend lands on the turn without the worker's
 -- word for it. NULL for every other execution.
+--
+-- The partial index below is the one index this file builds, and it is kept
+-- on purpose: the edge's execution verifier looks the turn up by this column
+-- on EVERY metered admit and settle (repos/execution_attribution_verifier.go),
+-- and no other execution_jobs index bounds that lookup, because a call
+-- execution settled within the attribution slack must still verify. It is
+-- not a ledger table, the column is new and NULL in every row, so the index
+-- holds no entry; its build is one read of execution_jobs, inside the same
+-- transaction as the ALTER that already locks it.
 ALTER TABLE elitea_runtime.execution_jobs ADD COLUMN IF NOT EXISTS attribution_execution_id TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_execution_jobs_attribution_execution_id

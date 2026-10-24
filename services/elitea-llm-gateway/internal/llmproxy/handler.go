@@ -40,11 +40,18 @@ type Handler struct {
 	identitySecret []byte
 	// admissionKey signs a metered admission (metered.go). It is derived from
 	// identitySecret, so every replica verifies an admission any replica
-	// issued; with no secret it is random per process.
+	// issued; with no secret it is nil and the metered routes refuse.
 	admissionKey []byte
 	// meteredPrices prices a metered tool operation (metered.go) when the
 	// budget plane's calculator does not. nil leaves only that calculator.
 	meteredPrices MeteredPricer
+	// meteredHolds keeps a degraded admission's reservation until its settle
+	// (metered.go). It is not part of the budget plane: it holds pins, not
+	// enforcement state.
+	meteredHolds *meteredHolds
+	// meteredSettled and meteredLedger answer a settle's duplicate flag.
+	meteredSettled *meteredSettledSet
+	meteredLedger  MeteredLedger
 	// models synthesises the per-project /llm/v1/models set from Postgres
 	// (design §4.2, §3.4). nil when the gateway is booted without a database:
 	// the /v1/models surface then reports an empty set rather than erroring.
@@ -411,11 +418,18 @@ func NewHandler(router LLMRouter, logger *slog.Logger, identitySecret []byte, op
 		realtimePingBound: realtimeWriteTimeout,
 		realtimeGateBound: realtimeGateTimeout,
 		sessionClosing:    make(chan struct{}),
+		meteredHolds:      newMeteredHolds(),
+		meteredSettled:    newMeteredSettledSet(),
 	}
 	for _, opt := range opts {
 		opt(h)
 	}
 	h.admissionKey = meteredAdmissionKey(identitySecret)
+	if h.admissionKey == nil {
+		h.logger.Warn("METERED CALLS REFUSED: GATEWAY_IDENTITY_SECRET is empty, so no admission key is shared " +
+			"across replicas. /llm/v1/metered/admit and /settle answer 503 metered_signing_unconfigured, " +
+			"and every web and host tool call is refused before its provider is called.")
+	}
 	return h
 }
 

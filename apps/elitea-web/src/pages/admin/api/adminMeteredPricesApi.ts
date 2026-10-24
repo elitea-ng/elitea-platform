@@ -25,7 +25,11 @@ export interface MeteredPriceRow {
   readonly provider: string;
   readonly operation: string;
   readonly unit: MeteredUnit;
-  readonly price_per_unit_usd: number;
+  /**
+   * USD per unit as a decimal string ("0.0000005"), exactly as the column
+   * holds it. Never a JS number: a price below 1e-6 would print as "5e-7".
+   */
+  readonly price_per_unit_usd: string;
   readonly source?: string;
   readonly price_overridden: boolean;
   readonly price_overridden_at?: string;
@@ -38,7 +42,21 @@ export interface MeteredPriceDraft {
   readonly provider: string;
   readonly operation: string;
   readonly unit: MeteredUnit;
-  readonly price_per_unit_usd: number;
+  /** A decimal string, sent as written (no exponent, at most 8 decimals). */
+  readonly price_per_unit_usd: string;
+}
+
+/**
+ * A price as plain decimal text with no trailing fraction zeros
+ * ("0.00800000" -> "0.008"). A number from an older server is written out
+ * without an exponent.
+ */
+export function priceText(price: string | number): string {
+  const text = typeof price === 'number' ? price.toFixed(8) : price.trim();
+  if (!text.includes('.')) {
+    return text;
+  }
+  return text.replace(/0+$/, '').replace(/\.$/, '');
 }
 
 const meteredPriceKeys = { all: ['admin', 'llmProxy', 'meteredPrices'] as const };

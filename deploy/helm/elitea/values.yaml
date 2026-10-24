@@ -6790,12 +6790,15 @@ worker:
     # root-relative and the chat UI resolves them against its own origin.
     # Never platformOrigin: that is the in-cluster platform listener.
     publicBaseUrl: ""
-    # Rust-only. The hosts the web and host_intel toolkits' provider calls
-    # may reach (#1238), in the egresslib grammar (host, host:port,
+    # Rust-only. The hosts the web and host_intel toolkits' PROVIDER API
+    # calls may reach (#1238), in the egresslib grammar (host, host:port,
     # *.domain, CIDR). Empty: every provider the worker ships
     # (api.tavily.com, api.firecrawl.dev, api.search.brave.com,
     # api.duckduckgo.com, api.shodan.io, port 443). Narrow it to disable a
     # provider at the network edge; a malformed entry fails worker startup.
+    # It does NOT govern the key-less direct web_fetch, whose URL the model
+    # chooses: that fetch always refuses private, loopback, link-local and
+    # metadata addresses, and a CIDR or IP entry here never lifts that.
     webEgressAllowlist: []
     spoolRoot: /var/lib/elitea-worker/output-spool
     spoolSizeLimit: 2Gi

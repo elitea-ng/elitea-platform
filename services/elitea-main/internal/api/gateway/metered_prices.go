@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -51,31 +52,42 @@ const maxMeteredPricePerUnit = 1000.0
 // rounded by Postgres while the response echoed the operator's figure.
 const maxMeteredPriceDecimals = 8
 
-// MeteredPriceRow is one priced operation as this surface returns it.
+// MeteredPriceRow is one priced operation as this surface returns it. The
+// price is a DECIMAL STRING ("0.0000005"), exactly as NUMERIC(20,8) holds it:
+// a JSON number would reach a browser as a float, and a price below 1e-6
+// would print as "5e-7", which no write accepts back.
 type MeteredPriceRow struct {
-	Provider        string  `json:"provider"`
-	Operation       string  `json:"operation"`
-	Unit            string  `json:"unit"`
-	PricePerUnitUSD float64 `json:"price_per_unit_usd"`
-	Source          string  `json:"source,omitempty"`
-	Overridden      bool    `json:"price_overridden"`
-	OverriddenAt    string  `json:"price_overridden_at,omitempty"`
-	OverriddenBy    string  `json:"price_overridden_by,omitempty"`
-	UpdatedAt       string  `json:"updated_at,omitempty"`
+	Provider        string `json:"provider"`
+	Operation       string `json:"operation"`
+	Unit            string `json:"unit"`
+	PricePerUnitUSD string `json:"price_per_unit_usd"`
+	Source          string `json:"source,omitempty"`
+	Overridden      bool   `json:"price_overridden"`
+	OverriddenAt    string `json:"price_overridden_at,omitempty"`
+	OverriddenBy    string `json:"price_overridden_by,omitempty"`
+	UpdatedAt       string `json:"updated_at,omitempty"`
 }
 
-// MeteredPriceWrite is the authored half of a row. The price is the JSON
-// number as written, so it reaches NUMERIC without a float64 round trip; it
-// is raw because json.Number would also take a quoted string.
+// meteredPriceText is the shape of an authored price: plain decimal digits,
+// at most maxMeteredPriceDecimals after the point, no sign and no exponent.
+var meteredPriceText = regexp.MustCompile(`^\d+(\.\d+)?$`)
+
+// MeteredPriceWrite is the authored half of a row. The price is a decimal
+// string (the web sends one) or a JSON number written without an exponent.
+// It reaches NUMERIC as the text written, never through a float64 round trip,
+// so it is kept raw.
 type MeteredPriceWrite struct {
 	Provider        string          `json:"provider"`
 	Operation       string          `json:"operation"`
 	Unit            string          `json:"unit"`
 	PricePerUnitUSD json.RawMessage `json:"price_per_unit_usd"`
+
+	// price is the validated decimal text of PricePerUnitUSD.
+	price string
 }
 
 const listMeteredPricesSQL = `
-	SELECT provider, operation, unit, price_per_unit_usd::float8, COALESCE(source, ''),
+	SELECT provider, operation, unit, price_per_unit_usd::text, COALESCE(source, ''),
 	       price_overridden, price_overridden_at, COALESCE(price_overridden_by::text, ''), updated_at
 	  FROM gateway.metered_operation_prices
 	 ORDER BY provider, operation`
@@ -95,7 +107,7 @@ const upsertMeteredPriceSQL = `
 		price_overridden_at = now(),
 		price_overridden_by = EXCLUDED.price_overridden_by,
 		updated_at          = now()
-	RETURNING price_per_unit_usd::float8`
+	RETURNING price_per_unit_usd::text`
 
 // ListMeteredPrices serves GET /gateway/metered-prices.
 func (h *LLMProxyHandler) ListMeteredPrices(w http.ResponseWriter, r *http.Request) {
@@ -140,6 +152,7 @@ func scanMeteredPriceRow(rows pgx.Rows) (MeteredPriceRow, error) {
 	); err != nil {
 		return MeteredPriceRow{}, err
 	}
+	row.PricePerUnitUSD = trimDecimal(row.PricePerUnitUSD)
 	row.OverriddenAt = formatTime(overriddenAt)
 	row.UpdatedAt = formatTime(updatedAt)
 	return row, nil
@@ -168,9 +181,9 @@ func (h *LLMProxyHandler) UpsertMeteredPrice(w http.ResponseWriter, r *http.Requ
 			actor, actorLabel = &id, principal.ID
 		}
 	}
-	var stored float64
+	var stored string
 	if err := h.db.QueryRow(ctx, upsertMeteredPriceSQL,
-		body.Provider, body.Operation, body.Unit, string(body.PricePerUnitUSD), actor,
+		body.Provider, body.Operation, body.Unit, body.price, actor,
 	).Scan(&stored); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save the metered price")
 		return
@@ -179,7 +192,7 @@ func (h *LLMProxyHandler) UpsertMeteredPrice(w http.ResponseWriter, r *http.Requ
 		Provider:        body.Provider,
 		Operation:       body.Operation,
 		Unit:            body.Unit,
-		PricePerUnitUSD: stored,
+		PricePerUnitUSD: trimDecimal(stored),
 		Overridden:      true,
 		OverriddenBy:    actorLabel,
 	})
@@ -208,25 +221,48 @@ func decodeMeteredPriceWrite(w http.ResponseWriter, r *http.Request) (MeteredPri
 	}
 	// The price is required, and zero is a real price: a free operation
 	// bills an explicit $0 and still lands in the ledger.
-	raw := string(body.PricePerUnitUSD)
-	price, err := strconv.ParseFloat(raw, 64)
-	if raw == "" || raw[0] == '"' || err != nil {
+	raw := strings.TrimSpace(string(body.PricePerUnitUSD))
+	if raw == "" || raw == "null" {
 		writeError(w, http.StatusBadRequest, "price_per_unit_usd is required")
 		return MeteredPriceWrite{}, false
 	}
-	if price < 0 {
+	text := raw
+	if raw[0] == '"' {
+		if json.Unmarshal(body.PricePerUnitUSD, &text) != nil {
+			writeError(w, http.StatusBadRequest, "price_per_unit_usd must be a decimal string or number")
+			return MeteredPriceWrite{}, false
+		}
+		text = strings.TrimSpace(text)
+	}
+	if strings.HasPrefix(text, "-") {
 		writeError(w, http.StatusBadRequest, "a price cannot be negative")
 		return MeteredPriceWrite{}, false
 	}
-	if price > maxMeteredPricePerUnit {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("price_per_unit_usd must be %g or less", maxMeteredPricePerUnit))
+	if !meteredPriceText.MatchString(text) {
+		writeError(w, http.StatusBadRequest, "price_per_unit_usd must be plain decimal digits, without an exponent")
 		return MeteredPriceWrite{}, false
 	}
-	if strings.ContainsAny(raw, "eE") || fractionDigits(raw) > maxMeteredPriceDecimals {
+	if fractionDigits(text) > maxMeteredPriceDecimals {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("price_per_unit_usd takes at most %d decimal places", maxMeteredPriceDecimals))
 		return MeteredPriceWrite{}, false
 	}
+	// The bound check alone reads a float; the stored value is the text.
+	if price, err := strconv.ParseFloat(text, 64); err != nil || price > maxMeteredPricePerUnit {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("price_per_unit_usd must be %g or less", maxMeteredPricePerUnit))
+		return MeteredPriceWrite{}, false
+	}
+	body.price = text
 	return body, true
+}
+
+// trimDecimal drops a NUMERIC text's trailing fraction zeros ("0.00800000"
+// is "0.008", "0.00000000" is "0").
+func trimDecimal(text string) string {
+	if !strings.Contains(text, ".") {
+		return text
+	}
+	text = strings.TrimRight(text, "0")
+	return strings.TrimSuffix(text, ".")
 }
 
 func fractionDigits(raw string) int {

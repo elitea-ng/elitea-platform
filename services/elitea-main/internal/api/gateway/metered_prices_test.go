@@ -14,10 +14,10 @@ import (
 )
 
 // recordingRow answers the upsert's RETURNING with the price it was given.
-type recordingRow struct{ price float64 }
+type recordingRow struct{ price string }
 
 func (r recordingRow) Scan(dest ...any) error {
-	*dest[0].(*float64) = r.price
+	*dest[0].(*string) = r.price
 	return nil
 }
 
@@ -30,7 +30,7 @@ type recordingQuerier struct {
 
 func (q *recordingQuerier) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	q.sql, q.args = sql, args
-	return recordingRow{price: 0.008}
+	return recordingRow{price: "0.00800000"}
 }
 
 // TestUpsertMeteredPriceMarksOverriddenAndNamesTheAuthor pins the override
@@ -70,7 +70,7 @@ func TestUpsertMeteredPriceMarksOverriddenAndNamesTheAuthor(t *testing.T) {
 		t.Error("the DO UPDATE half rewrites source, losing the seeded price's provenance")
 	}
 	body := decodeLLMProxyBody(t, rec)
-	if body["price_overridden"] != true || body["price_overridden_by"] != "7" || body["price_per_unit_usd"] != 0.008 {
+	if body["price_overridden"] != true || body["price_overridden_by"] != "7" || body["price_per_unit_usd"] != "0.008" {
 		t.Fatalf("response = %v", body)
 	}
 }
@@ -98,7 +98,11 @@ func TestUpsertMeteredPriceRefusals(t *testing.T) {
 		"unknown operation": `{"provider":"tavily","operation":"web_scan","unit":"credit","price_per_unit_usd":0.01}`,
 		"unknown unit":      `{"provider":"tavily","operation":"web_search","unit":"token","price_per_unit_usd":0.01}`,
 		"unknown field":     `{"provider":"tavily","operation":"web_search","unit":"credit","price_usd":0.01}`,
-		"string price":      `{"provider":"tavily","operation":"web_search","unit":"credit","price_per_unit_usd":"0.01"}`,
+		"string exponent":   `{"provider":"tavily","operation":"web_search","unit":"credit","price_per_unit_usd":"5e-7"}`,
+		"string negative":   `{"provider":"tavily","operation":"web_search","unit":"credit","price_per_unit_usd":"-0.01"}`,
+		"string beyond":     `{"provider":"tavily","operation":"web_search","unit":"credit","price_per_unit_usd":"0.000000001"}`,
+		"string garbage":    `{"provider":"tavily","operation":"web_search","unit":"credit","price_per_unit_usd":"cheap"}`,
+		"null price":        `{"provider":"tavily","operation":"web_search","unit":"credit","price_per_unit_usd":null}`,
 	} {
 		rec := doLLMProxy(t, h.Routes(), http.MethodPut, "/metered-prices", body)
 		if rec.Code != http.StatusBadRequest {
@@ -113,6 +117,31 @@ func TestMeteredPricesWithoutAPoolAre503(t *testing.T) {
 		rec := doLLMProxy(t, h.Routes(), method, "/metered-prices", `{}`)
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Errorf("%s: status = %d, want 503", method, rec.Code)
+		}
+	}
+}
+
+// TestUpsertMeteredPriceTakesADecimalString pins the web's wire: a price below
+// 1e-6 is a decimal string ("0.0000005"), which a JS number would serialise as
+// "5e-7". It reaches NUMERIC as written, and the answer is a decimal string.
+func TestUpsertMeteredPriceTakesADecimalString(t *testing.T) {
+	db := &recordingQuerier{}
+	rec := doLLMProxy(t, NewLLMProxyHandler(db, nil).Routes(), http.MethodPut, "/metered-prices",
+		`{"provider":"tavily","operation":"web_search","unit":"credit","price_per_unit_usd":"0.0000005"}`)
+	if rec.Code != http.StatusOK || db.args[3] != "0.0000005" {
+		t.Fatalf("status = %d, args %#v, body %s", rec.Code, db.args, rec.Body.String())
+	}
+	if body := decodeLLMProxyBody(t, rec); body["price_per_unit_usd"] != "0.008" {
+		t.Fatalf("response price = %#v, want the stored decimal string", body["price_per_unit_usd"])
+	}
+}
+
+func TestTrimDecimal(t *testing.T) {
+	for in, want := range map[string]string{
+		"0.00800000": "0.008", "0.00000000": "0", "1.00000000": "1", "0.00000050": "0.0000005", "12": "12",
+	} {
+		if got := trimDecimal(in); got != want {
+			t.Errorf("trimDecimal(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

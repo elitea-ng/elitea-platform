@@ -19,8 +19,8 @@ use elitea_egress_guard::{GuardedResolver, Lookup, PermitSet, resolve_checked};
 use html_to_markdown_rs::{
     ConversionOptions, OutputFormat, PreprocessingOptions, PreprocessingPreset,
 };
-use reqwest::header::{ACCEPT, HeaderValue};
-use reqwest::{Method, Request, StatusCode};
+use reqwest::header::{ACCEPT, HeaderValue, LOCATION};
+use reqwest::{Method, Request};
 
 use super::WebState;
 use super::capability::fetch::url_violation;
@@ -113,25 +113,28 @@ impl DirectFetcher {
                 .execute(outgoing)
                 .await
                 .map_err(|error| map_reqwest(&error.without_url()))?;
-            let answer = read_answer_truncating(response, MAX_DOWNLOAD_BYTES).await?;
-            if answer.0.status.is_redirection()
-                && let Some(location) = answer.0.location.as_deref()
+            // A redirect's body is never read: take its Location and drop
+            // the response, so a hop costs a header, not 5 MiB.
+            if response.status().is_redirection()
+                && let Some(location) = response
+                    .headers()
+                    .get(LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_owned)
             {
+                drop(response);
                 if hops == MAX_REDIRECTS {
                     return Err(ProviderError::TooManyRedirects.into());
                 }
                 hops += 1;
-                url = url.join(location).map_err(|_| ProviderError::UrlRefused)?;
+                url = url.join(&location).map_err(|_| ProviderError::UrlRefused)?;
                 continue;
             }
-            break answer;
+            break read_answer_truncating(response, MAX_DOWNLOAD_BYTES).await?;
         };
         let (answer, download_truncated) = answer;
         if let Some(error) = answer.error() {
             return Err(error.into());
-        }
-        if answer.status != StatusCode::OK && !answer.status.is_success() {
-            return Err(ProviderError::Unavailable.into());
         }
         let media = answer
             .media_type()

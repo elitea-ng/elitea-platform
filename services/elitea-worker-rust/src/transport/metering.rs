@@ -17,7 +17,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use elitea_agent_runtime::toolkits::web_meter::{
-    Admission, Meter, MeterError, MeterRefusal, MeteredOp, SettleRequest, Settlement,
+    Admission, FailureClass, Meter, MeterError, MeterRefusal, MeteredOp, SettleRequest, Settlement,
 };
 use elitea_agent_runtime::toolkits::{
     WebEgressAllowlist, WebEgressAllowlistError, WebToolHost, provider_egress_entries,
@@ -255,6 +255,10 @@ impl Meter for GatewayMeter {
                     "provider": request.op.provider,
                     "units": request.units.to_json(),
                     "outcome": request.outcome.as_str(),
+                    // Whether the provider was reached and charges for the
+                    // failure: the gateway bills a failure charge only for
+                    // `target_failed` (#1238).
+                    "failure": request.failure.map(FailureClass::as_str),
                     "audit": {
                         "tool": request.audit.tool,
                         "target": request.audit.target,
@@ -394,7 +398,7 @@ mod tests {
         let gateway = Gateway::answering(200, r#"{"billed_nano_usd":8000000,"duplicate":false}"#);
         let meter = GatewayMeter::with_transport(gateway.clone(), &context(), Some("desktop-turn"));
         assert_eq!(meter.attribution_execution_id(), "desktop-turn");
-        let event = event_id("desktop-turn", "call-1", 0);
+        let event = event_id("desktop-turn", "call-1", "invocation-1");
         let settled = meter
             .settle(&SettleRequest {
                 admission_id: "adm-1".to_owned(),
@@ -402,6 +406,7 @@ mod tests {
                 op: op(),
                 units: Units::credits(2),
                 outcome: Outcome::Ok,
+                failure: None,
                 audit: AuditTarget {
                     tool: "web_search",
                     target: "f".repeat(64),
@@ -416,6 +421,7 @@ mod tests {
         assert_eq!(seen[0].body["event_id"], event);
         assert_eq!(seen[0].body["units"]["credits"], 2);
         assert_eq!(seen[0].body["audit"]["status"], "ok");
+        assert_eq!(seen[0].body["failure"], Value::Null);
         // An empty attribution is the claim's own execution.
         let own = GatewayMeter::with_transport(gateway.clone(), &context(), Some(""));
         assert_eq!(own.attribution_execution_id(), "claim-execution");
@@ -477,20 +483,25 @@ mod tests {
     async fn settle_retries_only_what_can_succeed() {
         let request = SettleRequest {
             admission_id: "adm-1".to_owned(),
-            event_id: event_id("e", "c", 0),
+            event_id: event_id("e", "c", "i"),
             op: op(),
             units: Units::credits(1),
             outcome: Outcome::ProviderError,
+            failure: Some(FailureClass::TargetFailed),
             audit: AuditTarget {
                 tool: "web_search",
                 target: String::new(),
             },
         };
         for (status, retried) in [(503, true), (429, true), (403, false), (400, false)] {
-            let meter =
-                GatewayMeter::with_transport(Gateway::answering(status, "{}"), &context(), None);
+            let gateway = Gateway::answering(status, "{}");
+            let meter = GatewayMeter::with_transport(gateway.clone(), &context(), None);
             let error = meter.settle(&request).await.expect_err("refused");
             assert_eq!(error == MeterError::Unavailable, retried, "{status}");
+            assert_eq!(
+                gateway.seen.lock().expect("seen")[0].body["failure"],
+                "target_failed"
+            );
         }
     }
 }

@@ -10,6 +10,8 @@ package migrations_test
 import (
 	"context"
 	"errors"
+	"os"
+	"regexp"
 	"testing"
 	"time"
 
@@ -93,4 +95,66 @@ func TestMigrationCorpusCreatesTheMeteredOperationCatalog(t *testing.T) {
 			t.Fatal("gateway.llm_request_logs lacks one of operation, units, unit, cost_usd")
 		}
 	})
+}
+
+const meteredOperationsMigration = "shared/0174_gateway_metered_operations.sql"
+
+// The ledgered runner applies every pending file in ONE transaction, so each
+// ALTER of gateway.llm_usage_events and gateway.llm_request_logs holds ACCESS
+// EXCLUSIVE until the upgrade commits. 0174 must not scan either table under
+// that lock: no inline (validating) CHECK on the new column and no index on
+// them. Static, so it runs without a database.
+func TestMeteredOperationsMigrationHoldsNoLockForAFullScan(t *testing.T) {
+	body, err := os.ReadFile(meteredOperationsMigration)
+	if err != nil {
+		t.Fatalf("read %s: %v", meteredOperationsMigration, err)
+	}
+	sql := stripSQLComments(string(body))
+	if regexp.MustCompile(`(?i)\bCREATE\s+(UNIQUE\s+)?INDEX\b[^;]*\bON\s+gateway\.llm_(usage_events|request_logs)\b`).MatchString(sql) {
+		t.Fatal("0174 builds an index on a ledger table inside the migration transaction")
+	}
+	if regexp.MustCompile(`(?is)ADD\s+COLUMN[^;]*\boperation\b[^;]*\bCHECK\b`).MatchString(sql) {
+		t.Fatal("0174 adds the operation column with an inline CHECK, which validates every row under the lock")
+	}
+	for _, name := range []string{"llm_usage_events_operation", "llm_request_logs_operation"} {
+		if !regexp.MustCompile(`(?is)ADD\s+CONSTRAINT\s+` + name + `.*?NOT\s+VALID`).MatchString(sql) {
+			t.Fatalf("0174 adds %s without NOT VALID", name)
+		}
+	}
+}
+
+// The operation CHECKs are NOT VALID (no scan) and still refuse a new row
+// with an unknown operation.
+func TestMeteredOperationChecksAreNotValidatedButEnforced(t *testing.T) {
+	pool := newMigratedPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	for _, tc := range []struct{ constraint, table string }{
+		{"llm_usage_events_operation", "gateway.llm_usage_events"},
+		{"llm_request_logs_operation", "gateway.llm_request_logs"},
+	} {
+		var validated bool
+		if err := pool.QueryRow(ctx, `SELECT convalidated FROM pg_constraint
+			WHERE conname = $1 AND conrelid = $2::regclass`, tc.constraint, tc.table).Scan(&validated); err != nil {
+			t.Fatalf("read %s: %v", tc.constraint, err)
+		}
+		if validated {
+			t.Fatalf("%s was validated, so the migration scanned %s", tc.constraint, tc.table)
+		}
+	}
+	_, err := pool.Exec(ctx, `INSERT INTO gateway.llm_usage_events
+		(event_id, project_id, user_id, provider, model, cost_usd, period_start, period_end, operation)
+		VALUES ('00000000-0000-0000-0000-000000001740', 1, 1, 'openai', 'gpt-4o', 0.01, now(), now() + interval '1 month', 'scan')`)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		t.Fatalf("an unknown operation: want a 23514 check violation, got %v", err)
+	}
+	var indexed bool
+	if err := pool.QueryRow(ctx,
+		`SELECT to_regclass('gateway.idx_llm_usage_events_project_operation_time') IS NOT NULL`).Scan(&indexed); err != nil {
+		t.Fatalf("probe index: %v", err)
+	}
+	if indexed {
+		t.Fatal("0174 built an index on gateway.llm_usage_events")
+	}
 }

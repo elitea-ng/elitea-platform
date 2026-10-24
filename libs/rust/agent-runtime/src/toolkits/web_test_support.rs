@@ -132,7 +132,6 @@ impl Transport for FixtureTransport {
             status: StatusCode::from_u16(answer.status).expect("status"),
             content_type: Some(answer.content_type),
             retry_after_secs: answer.retry_after.and_then(|value| value.parse().ok()),
-            location: None,
             body: answer.body,
         })
     }
@@ -284,6 +283,10 @@ pub(super) fn web_toolset(
             host: host.as_ref(),
             transports: &factory,
             extra_fetch_ports,
+            // The loopback test origin; production lifts nothing.
+            fetch_permits: Allowlist::parse_csv("127.0.0.1")
+                .expect("allowlist")
+                .private_permits(),
         },
     )
     .expect("web toolset")
@@ -304,6 +307,7 @@ pub(super) fn host_intel_toolset(
             host: host.as_ref(),
             transports: &factory,
             extra_fetch_ports: Vec::new(),
+            fetch_permits: elitea_egress_guard::PermitSet::default(),
         },
     )
     .expect("host_intel toolset")
@@ -383,6 +387,16 @@ pub(super) async fn origin() -> (u16, Arc<AtomicUsize>) {
                 counter.fetch_add(1, Ordering::SeqCst);
                 let request = String::from_utf8_lossy(&buffer[..read]).into_owned();
                 let path = request.split_whitespace().nth(1).unwrap_or("/").to_owned();
+                if path == "/redirect-stall" {
+                    // A 302 that announces a 1 MiB body, sends 16 bytes of
+                    // it and stalls: a client that reads redirect bodies
+                    // hangs here until its own timeout.
+                    let head = "HTTP/1.1 302 Found\r\nLocation: /page\r\nContent-Type: text/plain\r\nContent-Length: 1048576\r\n\r\n";
+                    let _ = stream.write_all(head.as_bytes()).await;
+                    let _ = stream.write_all(&[b'r'; 16]).await;
+                    tokio::time::sleep(std::time::Duration::from_mins(2)).await;
+                    return;
+                }
                 let (status, headers, body): (&str, String, Vec<u8>) = match path.as_str() {
                     "/page" => (
                         "200 OK",

@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -48,9 +49,13 @@ func defaultMeteredPrices() *fakeMeteredPricer {
 	}}
 }
 
+// meteredTestSecret is the identity secret of every metered test handler: the
+// metered routes refuse a gateway without one.
+var meteredTestSecret = []byte("metered-test-identity-secret")
+
 func newMeteredHandler(gate BudgetChecker, pricer MeteredPricer, opts ...HandlerOption) *Handler {
 	opts = append([]HandlerOption{WithBudgetGate(gate, &fakeCostEstimator{}), WithMeteredPrices(pricer)}, opts...)
-	return NewHandler(&trackingRouter{}, nil, nil, opts...)
+	return NewHandler(&trackingRouter{}, nil, meteredTestSecret, opts...)
 }
 
 func meteredRequest(t *testing.T, path, project, user, execution string, body any) *http.Request {
@@ -61,15 +66,7 @@ func meteredRequest(t *testing.T, path, project, user, execution string, body an
 	}
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
-	if project != "" {
-		req.Header.Set(headerProjectID, project)
-	}
-	if user != "" {
-		req.Header.Set(headerUserID, user)
-	}
-	if execution != "" {
-		req.Header.Set(headerExecutionID, execution)
-	}
+	SignIdentityHeaders(req.Header, meteredTestSecret, project, user, "", execution)
 	return req
 }
 
@@ -177,7 +174,7 @@ func TestMeteredAdmitUnpricedRefused(t *testing.T) {
 		t.Fatalf("the budget gate was asked %v for an unpriced operation", gate.checkedScopes())
 	}
 	// A gateway with no pricer at all refuses every operation the same way.
-	bare := NewHandler(&trackingRouter{}, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{}))
+	bare := NewHandler(&trackingRouter{}, nil, meteredTestSecret, WithBudgetGate(gate, &fakeCostEstimator{}))
 	if rec := admit(t, bare, "tavily", "web_search"); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("no pricer: status = %d, want 422", rec.Code)
 	}
@@ -305,7 +302,8 @@ func TestMeteredSettleRejectsForeignAdmission(t *testing.T) {
 	gate := newScopedChecker(allow(), allow())
 	h := newMeteredHandler(gate, defaultMeteredPrices())
 	admission := admissionID(t, admit(t, h, "tavily", "web_search"))
-	other := newMeteredHandler(gate, defaultMeteredPrices()) // another key: no identity secret
+	other := newMeteredHandler(gate, defaultMeteredPrices())
+	other.admissionKey = meteredAdmissionKey([]byte("another deployment's secret"))
 	tampered := admission[:len(admission)-2] + "AA"
 	cases := map[string]struct {
 		h                           *Handler
@@ -377,23 +375,32 @@ func TestMeteredZeroPriceStillWritesLedgerRow(t *testing.T) {
 	}
 }
 
-// Firecrawl charges a page for a scrape that answered 403 or 404. A provider
-// error with no reported units bills that charge; any other provider's error
-// bills nothing.
+// Firecrawl charges a page for a scrape whose page answered 404: a provider
+// error with no reported units bills that charge, but only when the worker
+// says the provider reached the target (failure "target_failed"). An egress
+// refusal before any I/O, a timeout, a refused key or a rate limit bills
+// nothing, and so does any other provider's error.
 func TestMeteredSettleBillsTheDocumentedFailureCharge(t *testing.T) {
 	cases := map[string]struct {
-		provider, operation string
-		want                int64
+		provider, operation, failure string
+		want                         int64
 	}{
-		"firecrawl fetch": {"firecrawl", "web_fetch", 3_800_000},
-		"tavily search":   {"tavily", "web_search", 0},
+		"firecrawl fetch, target failed": {"firecrawl", "web_fetch", "target_failed", 3_800_000},
+		"firecrawl fetch, not reached":   {"firecrawl", "web_fetch", "not_reached", 0},
+		"firecrawl fetch, refused":       {"firecrawl", "web_fetch", "refused", 0},
+		"firecrawl fetch, failed":        {"firecrawl", "web_fetch", "failed", 0},
+		"firecrawl fetch, no class":      {"firecrawl", "web_fetch", "", 0},
+		"tavily search, target failed":   {"tavily", "web_search", "target_failed", 0},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			h := newMeteredHandler(newScopedChecker(allow(), allow()), defaultMeteredPrices())
 			admission := admissionID(t, admit(t, h, tc.provider, tc.operation))
-			rec := settle(t, h, "42", "7", "exec-1",
-				settleBody(admission, uuid.NewString(), tc.provider, tc.operation, "provider_error", map[string]any{}))
+			body := settleBody(admission, uuid.NewString(), tc.provider, tc.operation, "provider_error", map[string]any{})
+			if tc.failure != "" {
+				body["failure"] = tc.failure
+			}
+			rec := settle(t, h, "42", "7", "exec-1", body)
 			var resp meteredSettleResponse
 			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.BilledNanoUSD != tc.want {
 				t.Fatalf("settle = %d %s, want billed %d", rec.Code, rec.Body.String(), tc.want)
@@ -401,6 +408,157 @@ func TestMeteredSettleBillsTheDocumentedFailureCharge(t *testing.T) {
 			h.DrainBilling()
 		})
 	}
+}
+
+// A gateway without GATEWAY_IDENTITY_SECRET refuses every metered call: a
+// per-process key would sign admissions no other replica can verify.
+func TestMeteredRoutesRefuseWithoutASharedSecret(t *testing.T) {
+	gate := newScopedChecker(allow(), allow())
+	h := NewHandler(&trackingRouter{}, nil, nil,
+		WithBudgetGate(gate, &fakeCostEstimator{}), WithMeteredPrices(defaultMeteredPrices()))
+	for _, path := range []string{"/llm/v1/metered/admit", "/llm/v1/metered/settle"} {
+		rec := httptest.NewRecorder()
+		req := meteredRequest(t, path, "42", "7", "exec-1", admitBody("tavily", "web_search"))
+		if path == "/llm/v1/metered/admit" {
+			h.MeteredAdmit(rec, req)
+		} else {
+			h.MeteredSettle(rec, req)
+		}
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s: status = %d, want 503", path, rec.Code)
+		}
+		if _, code := decodeErrorTypeAndCode(t, rec.Body.Bytes()); code != "metered_signing_unconfigured" {
+			t.Fatalf("%s: code = %q", path, code)
+		}
+	}
+	if len(gate.checkedScopes()) != 0 {
+		t.Fatal("the budget gate was asked without a signing key")
+	}
+}
+
+// Two replicas that share the identity secret verify each other's
+// admissions: a settle may land anywhere.
+func TestMeteredAdmissionVerifiesOnAnotherReplica(t *testing.T) {
+	gate := newScopedChecker(allow(), allow())
+	first := newMeteredHandler(gate, defaultMeteredPrices())
+	second := newMeteredHandler(gate, defaultMeteredPrices())
+	admission := admissionID(t, admit(t, first, "tavily", "web_search"))
+	rec := settle(t, second, "42", "7", "exec-1",
+		settleBody(admission, uuid.NewString(), "tavily", "web_search", "ok", map[string]any{"credits": 1}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("settle on the other replica = %d, body %s", rec.Code, rec.Body.String())
+	}
+	second.DrainBilling()
+}
+
+// A retried settle says it is a duplicate, so the edge writes one audit row
+// per call: on the same replica from its memory, on another from the ledger.
+func TestMeteredSettleReportsADuplicate(t *testing.T) {
+	gate := newScopedChecker(allow(), allow())
+	ledger := &fakeMeteredLedger{billed: map[string]bool{}}
+	h := newMeteredHandler(gate, defaultMeteredPrices(), WithMeteredLedger(ledger))
+	admission := admissionID(t, admit(t, h, "tavily", "web_search"))
+	eventID := uuid.NewString()
+	body := settleBody(admission, eventID, "tavily", "web_search", "ok", map[string]any{"credits": 1})
+	for i, want := range []bool{false, true} {
+		rec := settle(t, h, "42", "7", "exec-1", body)
+		var resp meteredSettleResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || rec.Code != http.StatusOK || resp.Duplicate != want {
+			t.Fatalf("settle %d = %d %s, want duplicate %v", i, rec.Code, rec.Body.String(), want)
+		}
+	}
+	other := newMeteredHandler(gate, defaultMeteredPrices(), WithMeteredLedger(ledger))
+	ledger.billed[eventID] = true
+	rec := settle(t, other, "42", "7", "exec-1", body)
+	var resp meteredSettleResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || !resp.Duplicate {
+		t.Fatalf("settle on another replica = %s, want duplicate from the ledger", rec.Body.String())
+	}
+	h.DrainBilling()
+	other.DrainBilling()
+}
+
+type fakeMeteredLedger struct {
+	mu     sync.Mutex
+	billed map[string]bool
+}
+
+func (f *fakeMeteredLedger) MeteredEventBilled(_ context.Context, eventID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.billed[eventID], nil
+}
+
+// reservingGate admits like the scoped checker and, as the degraded
+// CheckBudget does, reserves against a share and adds the hold to the
+// request's holds.
+type reservingGate struct {
+	*scopedBudgetChecker
+	degraded *failmode.DegradedCounters
+}
+
+func (g *reservingGate) CheckBudget(ctx context.Context, projectID int, scope, scopeID string, periodStart, estimate int64) (failmode.Decision, error) {
+	decision, err := g.scopedBudgetChecker.CheckBudget(ctx, projectID, scope, scopeID, periodStart, estimate)
+	if scope == failmode.ScopeProject && !failmode.IsCheckOnly(ctx) {
+		if hold, ok := g.degraded.TryReserve("project:42", 5, 1_000); ok {
+			failmode.HoldsFrom(ctx).Add(hold)
+		}
+	}
+	return decision, err
+}
+
+// A NATS-down admission's reservation outlives the admit handler: the
+// provider is called after it returns, so the hold goes only once the settle
+// has put the cost on the counter (CLAUDE.md, "A NATS-down admission RESERVES
+// against the share").
+func TestMeteredAdmitHoldsTheReservationUntilTheSettle(t *testing.T) {
+	gate := &reservingGate{scopedBudgetChecker: newScopedChecker(allow(), allow()), degraded: failmode.NewDegradedCounters()}
+	h := newMeteredHandler(gate, defaultMeteredPrices())
+
+	holds := failmode.NewHolds()
+	req := meteredRequest(t, "/llm/v1/metered/admit", "42", "7", "exec-1", admitBody("tavily", "web_search"))
+	rec := httptest.NewRecorder()
+	h.MeteredAdmit(rec, req.WithContext(failmode.WithHolds(req.Context(), holds)))
+	holds.End() // the admit handler returns
+	admission := admissionID(t, rec)
+	if held := gate.degraded.Held("project:42"); held != 5 {
+		t.Fatalf("held after the admit returned = %d, want 5 (the reservation must outlive the handler)", held)
+	}
+
+	settleHolds := failmode.NewHolds()
+	sreq := meteredRequest(t, "/llm/v1/metered/settle", "42", "7", "exec-1",
+		settleBody(admission, uuid.NewString(), "tavily", "web_search", "ok", map[string]any{"credits": 1}))
+	srec := httptest.NewRecorder()
+	h.MeteredSettle(srec, sreq.WithContext(failmode.WithHolds(sreq.Context(), settleHolds)))
+	settleHolds.End()
+	if srec.Code != http.StatusOK {
+		t.Fatalf("settle = %d, body %s", srec.Code, srec.Body.String())
+	}
+	h.DrainBilling()
+	if held := gate.degraded.Held("project:42"); held != 0 {
+		t.Fatalf("held after the settle billed = %d, want 0", held)
+	}
+	if h.meteredHolds.len() != 0 {
+		t.Fatal("the settled admission is still registered")
+	}
+}
+
+// An admission whose settle never comes to this replica releases its hold
+// when the admission expires.
+func TestMeteredHoldsReleaseAtExpiry(t *testing.T) {
+	holds := newMeteredHolds()
+	released := make(chan struct{})
+	holds.keep("nonce", func() { close(released) }, 10*time.Millisecond)
+	select {
+	case <-released:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the hold was not released at expiry")
+	}
+	if holds.len() != 0 {
+		t.Fatal("an expired admission is still registered")
+	}
+	// take after expiry is a no-op.
+	holds.take("nonce")()
 }
 
 func TestMeteredSettleRefusesANonUUIDEventID(t *testing.T) {

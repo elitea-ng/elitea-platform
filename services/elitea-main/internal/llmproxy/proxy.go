@@ -130,7 +130,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if rpc.metered() {
-		p.recordMeteredAudit(r.Context(), rpc, req.Identity, meteredEntry, resp.StatusCode, started)
+		duplicate := false
+		if rpc == rpcMeteredSettle {
+			duplicate = settleWasDuplicate(resp)
+		}
+		p.recordMeteredAudit(r.Context(), rpc, req.Identity, meteredEntry, resp.StatusCode, started, duplicate)
 	}
 	p.writeResponse(w, r, resp)
 }
