@@ -168,28 +168,67 @@ WHERE target_kind = 'shared' AND name = $1`, name).Scan(&appliedAt); err != nil 
 /* ── figures ─────────────────────────────────────────────────────────── */
 
 // figuresColumns is the aggregate list figuresScan reads. It runs over the
-// `calls` CTE figuresSource builds, so the rate columns exist either way.
-const figuresColumns = `count(*)::bigint,
-       coalesce(sum(prompt_tokens), 0)::bigint,
-       coalesce(sum(completion_tokens), 0)::bigint,
-       count(*) FILTER (WHERE ` + errorPredicate + `)::bigint,
-       coalesce(avg(duration_ms), 0)::double precision,
-       count(*) FILTER (WHERE in_rate IS NOT NULL OR out_rate IS NOT NULL)::bigint,
-       round(coalesce(sum(prompt_tokens::numeric * in_rate) / 1000000, 0), ` + agentCostScale + `)::text,
-       round(coalesce(sum(completion_tokens::numeric * out_rate) / 1000000, 0), ` + agentCostScale + `)::text,
-       round(coalesce(sum(prompt_tokens::numeric * in_rate) / 1000000, 0)
-             + coalesce(sum(completion_tokens::numeric * out_rate) / 1000000, 0), ` + agentCostScale + `)::text`
+// `calls` CTE figuresSource builds, so the rate and tool columns exist either
+// way.
+//
+// A metered tool settlement (#1238) is a row of the same log with operation
+// 'tool'. The model figures leave it out; it counts as a tool call, priced at
+// the cost the gateway billed, because it has no tokens to re-price. The
+// total is the re-priced model cost plus that tool cost.
+const figuresColumns = `count(*) FILTER (WHERE NOT is_tool)::bigint,
+       coalesce(sum(prompt_tokens) FILTER (WHERE NOT is_tool), 0)::bigint,
+       coalesce(sum(completion_tokens) FILTER (WHERE NOT is_tool), 0)::bigint,
+       count(*) FILTER (WHERE NOT is_tool AND ` + errorPredicate + `)::bigint,
+       coalesce(avg(duration_ms) FILTER (WHERE NOT is_tool), 0)::double precision,
+       count(*) FILTER (WHERE NOT is_tool AND (in_rate IS NOT NULL OR out_rate IS NOT NULL))::bigint,
+       round(coalesce(sum(prompt_tokens::numeric * in_rate) FILTER (WHERE NOT is_tool) / 1000000, 0), ` + agentCostScale + `)::text,
+       round(coalesce(sum(completion_tokens::numeric * out_rate) FILTER (WHERE NOT is_tool) / 1000000, 0), ` + agentCostScale + `)::text,
+       round(coalesce(sum(prompt_tokens::numeric * in_rate) FILTER (WHERE NOT is_tool) / 1000000, 0)
+             + coalesce(sum(completion_tokens::numeric * out_rate) FILTER (WHERE NOT is_tool) / 1000000, 0)
+             + coalesce(sum(tool_cost) FILTER (WHERE is_tool), 0), ` + agentCostScale + `)::text,
+       count(*) FILTER (WHERE is_tool)::bigint,
+       round(coalesce(sum(tool_cost) FILTER (WHERE is_tool), 0), ` + agentCostScale + `)::text`
+
+// figuresSources says which optional sources a figures read can join: the
+// price catalogue, and the metered columns of shared migration 0174
+// (operation, cost_usd) on the request log.
+type figuresSources struct {
+	prices  bool
+	metered bool
+}
+
+// noToolColumns and toolColumns are the two shapes of the CTE's tool
+// columns. Without 0174 no row is a tool row.
+const (
+	noToolColumns = `false AS is_tool, NULL::numeric AS tool_cost`
+	toolColumns   = `(l.operation = 'tool') AS is_tool, l.cost_usd AS tool_cost`
+)
+
+// runCallsOnLog is the route predicate of a run's figures: the model calls,
+// and with 0174 the run's metered tool settlements, whose route is not an
+// inference route.
+func runCallsOnLog(metered bool) string {
+	if !metered {
+		return inferenceRouteOnLog
+	}
+	return `
+  AND (l.route IN (` + analytics.InferenceRouteSQLList + `) OR l.operation = 'tool')`
+}
 
 // figuresSource is a `calls` CTE over the request-log rows of project $1 that
 // match scope, priced at the catalogue rate when the catalogue exists.
 //
 // The rate is joined PER ROW, before any aggregate, because one run can call
 // several models — the rule estimate.go and agentUsage follow.
-func figuresSource(pricesPresent bool, scope string) string {
-	if pricesPresent {
+func figuresSource(sources figuresSources, scope string) string {
+	tool := noToolColumns
+	if sources.metered {
+		tool = toolColumns
+	}
+	if sources.prices {
 		return `
 WITH calls AS (
-    SELECT l.*, m.input_cost_per_1m_tokens AS in_rate, m.output_cost_per_1m_tokens AS out_rate
+    SELECT l.*, m.input_cost_per_1m_tokens AS in_rate, m.output_cost_per_1m_tokens AS out_rate, ` + tool + `
     FROM gateway.llm_request_logs AS l
     LEFT JOIN gateway.gateway_models AS m
       ON m.provider = l.provider AND m.model_name = l.model
@@ -198,7 +237,7 @@ WITH calls AS (
 	}
 	return `
 WITH calls AS (
-    SELECT l.*, NULL::numeric AS in_rate, NULL::numeric AS out_rate
+    SELECT l.*, NULL::numeric AS in_rate, NULL::numeric AS out_rate, ` + tool + `
     FROM gateway.llm_request_logs AS l
     WHERE l.project_id = $1 AND ` + scope + `
 )`
@@ -208,19 +247,27 @@ WITH calls AS (
 // that folds them into the figures once the row is scanned.
 func figuresTargets(figures *analytics.UsageFigures) ([]any, func()) {
 	var pricedCalls int64
-	var inCost, outCost, totalCost string
+	var inCost, outCost, totalCost, toolCost string
 	targets := []any{
 		&figures.LLMCalls, &figures.PromptTokens, &figures.CompletionTokens,
 		&figures.Errors, &figures.AvgDurationMS, &pricedCalls,
-		&inCost, &outCost, &totalCost,
+		&inCost, &outCost, &totalCost, &figures.ToolCalls, &toolCost,
 	}
 	return targets, func() {
 		figures.TotalTokens = figures.PromptTokens + figures.CompletionTokens
 		figures.AvgDurationMS = math.Round(figures.AvgDurationMS*10) / 10
 		figures.UnpricedCalls = figures.LLMCalls - pricedCalls
 		if pricedCalls > 0 {
-			in, out, total := json.Number(inCost), json.Number(outCost), json.Number(totalCost)
-			figures.InputCost, figures.OutputCost, figures.TotalCost = &in, &out, &total
+			in, out := json.Number(inCost), json.Number(outCost)
+			figures.InputCost, figures.OutputCost = &in, &out
+		}
+		if figures.ToolCalls > 0 {
+			tool := json.Number(toolCost)
+			figures.ToolCost = &tool
+		}
+		if pricedCalls > 0 || figures.ToolCalls > 0 {
+			total := json.Number(totalCost)
+			figures.TotalCost = &total
 		}
 	}
 }
@@ -234,10 +281,10 @@ const runRowsLimit = 100
 // reported (ByCaseTruncated) rather than implied.
 const evaluationCaseRowsLimit = 1000
 
-func scopeTotals(ctx context.Context, q analyticsQuerier, prices bool, scope string, args ...any) (analytics.UsageFigures, error) {
+func scopeTotals(ctx context.Context, q analyticsQuerier, sources figuresSources, scope string, args ...any) (analytics.UsageFigures, error) {
 	var figures analytics.UsageFigures
 	targets, fold := figuresTargets(&figures)
-	if err := q.QueryRow(ctx, figuresSource(prices, scope)+`
+	if err := q.QueryRow(ctx, figuresSource(sources, scope)+`
 SELECT `+figuresColumns+` FROM calls`, args...).Scan(targets...); err != nil {
 		return analytics.UsageFigures{}, fmt.Errorf("analytics: run totals: %w", err)
 	}
@@ -245,8 +292,8 @@ SELECT `+figuresColumns+` FROM calls`, args...).Scan(targets...); err != nil {
 	return figures, nil
 }
 
-func scopeByModel(ctx context.Context, q analyticsQuerier, prices bool, scope string, args ...any) ([]analytics.ModelFigures, error) {
-	rows, err := q.Query(ctx, figuresSource(prices, scope)+`
+func scopeByModel(ctx context.Context, q analyticsQuerier, sources figuresSources, scope string, args ...any) ([]analytics.ModelFigures, error) {
+	rows, err := q.Query(ctx, figuresSource(sources, scope)+`
 SELECT provider, model, `+figuresColumns+`
 FROM calls
 WHERE model <> ''
@@ -270,8 +317,8 @@ LIMIT `+strconv.Itoa(runRowsLimit), args...)
 	return out, rows.Err()
 }
 
-func scopeByUser(ctx context.Context, q analyticsQuerier, prices bool, scope string, args ...any) ([]analytics.UserFigures, error) {
-	rows, err := q.Query(ctx, figuresSource(prices, scope)+`
+func scopeByUser(ctx context.Context, q analyticsQuerier, sources figuresSources, scope string, args ...any) ([]analytics.UserFigures, error) {
+	rows, err := q.Query(ctx, figuresSource(sources, scope)+`
 SELECT user_id, `+figuresColumns+`
 FROM calls
 WHERE user_id IS NOT NULL
@@ -318,7 +365,7 @@ LIMIT `+strconv.Itoa(runRowsLimit), args...)
 }
 
 func scopeByErrorCode(ctx context.Context, q analyticsQuerier, scope string, args ...any) ([]analytics.ErrorCodeCount, error) {
-	rows, err := q.Query(ctx, figuresSource(false, scope)+`
+	rows, err := q.Query(ctx, figuresSource(figuresSources{}, scope)+`
 SELECT coalesce(nullif(error_code, ''), 'http_' || status::text), count(*)::bigint
 FROM calls
 WHERE `+errorPredicate+`
@@ -383,8 +430,11 @@ SELECT $1::timestamptz < now() - `+requestLogRetentionSQL+`
 /* ── one execution ───────────────────────────────────────────────────── */
 
 // executionScope selects the execution's calls: $2 is the id, $3 and $4 its
-// lifetime (lifetimeOnLog).
-const executionScope = `l.execution_id = $2` + lifetimeOnLog + inferenceRouteOnLog
+// lifetime (lifetimeOnLog). With shared 0174 the calls include the run's
+// metered tool settlements.
+func executionScope(metered bool) string {
+	return `l.execution_id = $2` + lifetimeOnLog + runCallsOnLog(metered)
+}
 
 // GetExecutionAnalytics is one runtime execution's totals.
 func (r *AnalyticsRepo) GetExecutionAnalytics(ctx context.Context, projectIDRaw, executionID string) (analytics.ExecutionAnalytics, error) {
@@ -451,21 +501,27 @@ func (r *AnalyticsRepo) GetExecutionAnalytics(ctx context.Context, projectIDRaw,
 	if err != nil {
 		return analytics.ExecutionAnalytics{}, err
 	}
+	metered, err := columnPresent(ctx, tx, "gateway", "llm_request_logs", "operation")
+	if err != nil {
+		return analytics.ExecutionAnalytics{}, err
+	}
+	sources := figuresSources{prices: prices, metered: metered}
+	scope := executionScope(metered)
 	args := []any{id, executionID, result.AdmittedAt, result.SettledAt}
-	totals, err := scopeTotals(ctx, tx, prices, executionScope, args...)
+	totals, err := scopeTotals(ctx, tx, sources, scope, args...)
 	if err != nil {
 		return analytics.ExecutionAnalytics{}, err
 	}
 	result.Available = true
 	result.Totals = &totals
 
-	if result.ByModel, err = scopeByModel(ctx, tx, prices, executionScope, args...); err != nil {
+	if result.ByModel, err = scopeByModel(ctx, tx, sources, scope, args...); err != nil {
 		return analytics.ExecutionAnalytics{}, err
 	}
-	if result.ByUser, err = scopeByUser(ctx, tx, prices, executionScope, args...); err != nil {
+	if result.ByUser, err = scopeByUser(ctx, tx, sources, scope, args...); err != nil {
 		return analytics.ExecutionAnalytics{}, err
 	}
-	if result.ByErrorCode, err = scopeByErrorCode(ctx, tx, executionScope, args...); err != nil {
+	if result.ByErrorCode, err = scopeByErrorCode(ctx, tx, scope, args...); err != nil {
 		return analytics.ExecutionAnalytics{}, err
 	}
 	if err := executionTools(ctx, tx, id, executionID, &result); err != nil {
@@ -648,9 +704,10 @@ WHERE id = $1`, run).Scan(&result.ApplicationID, &result.ApplicationVersionID, &
 	if err != nil {
 		return analytics.EvaluationRunAnalytics{}, err
 	}
+	sources := figuresSources{prices: prices}
 	prefix := "eval:" + result.RunID + ":"
 	args := []any{id, likePrefix(prefix), result.CreatedAt, result.FinishedAt}
-	totals, err := scopeTotals(ctx, tx, prices, evaluationScope, args...)
+	totals, err := scopeTotals(ctx, tx, sources, evaluationScope, args...)
 	if err != nil {
 		return analytics.EvaluationRunAnalytics{}, err
 	}
@@ -667,22 +724,22 @@ WHERE id = $1`, run).Scan(&result.ApplicationID, &result.ApplicationVersionID, &
 	result.Available = true
 	result.Totals = &totals
 
-	agent, err := scopeTotals(ctx, tx, prices, evaluationScope,
+	agent, err := scopeTotals(ctx, tx, sources, evaluationScope,
 		id, likePrefix(prefix+"case:"), result.CreatedAt, result.FinishedAt)
 	if err != nil {
 		return analytics.EvaluationRunAnalytics{}, err
 	}
-	judge, err := scopeTotals(ctx, tx, prices, evaluationScope,
+	judge, err := scopeTotals(ctx, tx, sources, evaluationScope,
 		id, likePrefix(prefix+"judge:"), result.CreatedAt, result.FinishedAt)
 	if err != nil {
 		return analytics.EvaluationRunAnalytics{}, err
 	}
 	result.Agent, result.Judge = &agent, &judge
 
-	if result.ByCase, result.ByCaseTruncated, err = evaluationByCase(ctx, tx, prices, args...); err != nil {
+	if result.ByCase, result.ByCaseTruncated, err = evaluationByCase(ctx, tx, sources, args...); err != nil {
 		return analytics.EvaluationRunAnalytics{}, err
 	}
-	if result.ByModel, err = scopeByModel(ctx, tx, prices, evaluationScope, args...); err != nil {
+	if result.ByModel, err = scopeByModel(ctx, tx, sources, evaluationScope, args...); err != nil {
 		return analytics.EvaluationRunAnalytics{}, err
 	}
 	if result.ByErrorCode, err = scopeByErrorCode(ctx, tx, evaluationScope, args...); err != nil {
@@ -717,8 +774,8 @@ SELECT EXISTS (SELECT 1 FROM `+schema+`.eval_results WHERE run_id = $1 AND statu
 //
 // It returns at most evaluationCaseRowsLimit cases, in case-id order, and
 // says when it cut the list.
-func evaluationByCase(ctx context.Context, q analyticsQuerier, prices bool, args ...any) ([]analytics.EvaluationCaseFigures, bool, error) {
-	rows, err := q.Query(ctx, figuresSource(prices, evaluationScope)+`, roles AS (
+func evaluationByCase(ctx context.Context, q analyticsQuerier, sources figuresSources, args ...any) ([]analytics.EvaluationCaseFigures, bool, error) {
+	rows, err := q.Query(ctx, figuresSource(sources, evaluationScope)+`, roles AS (
     SELECT calls.*, split_part(execution_id, ':', 4) AS case_id, split_part(execution_id, ':', 3) AS role
     FROM calls
     WHERE split_part(execution_id, ':', 3) IN ('case', 'judge')
@@ -792,9 +849,9 @@ func automatedActivity(ctx context.Context, q analyticsQuerier, id int64, params
 	if err != nil {
 		return nil, err
 	}
-	rateSelect, rateJoin := `NULL::numeric AS in_rate, NULL::numeric AS out_rate`, ``
+	rateSelect, rateJoin := `NULL::numeric AS in_rate, NULL::numeric AS out_rate, `+noToolColumns, ``
 	if prices {
-		rateSelect = `m.input_cost_per_1m_tokens AS in_rate, m.output_cost_per_1m_tokens AS out_rate`
+		rateSelect = `m.input_cost_per_1m_tokens AS in_rate, m.output_cost_per_1m_tokens AS out_rate, ` + noToolColumns
 		rateJoin = `
     LEFT JOIN gateway.gateway_models AS m
       ON m.provider = l.provider AND m.model_name = l.model`

@@ -50,7 +50,6 @@ export const ToolTypes = {
   application: { label: 'Agent', value: 'application' },
   artifact: { label: 'Artifact', value: 'artifact' },
   bitbucket: { label: 'Bitbucket', value: 'bitbucket' },
-  browser: { label: 'Browser', value: 'browser' },
   confluence: { label: 'Confluence', value: 'confluence' },
   custom: { label: 'Custom', value: 'custom' },
   github: { label: 'GitHub', value: 'github' },

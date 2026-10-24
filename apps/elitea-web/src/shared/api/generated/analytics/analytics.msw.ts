@@ -203,6 +203,11 @@ export const getGetProjectAnalyticsResponseMock = (
         faker.number.float({ fractionDigits: 2 }),
         undefined,
       ]),
+      tool_calls: faker.helpers.arrayElement([faker.number.int(), undefined]),
+      tool_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
     })),
     undefined,
   ]),
@@ -1028,6 +1033,11 @@ export const getGetExecutionAnalyticsResponseMock = (
         faker.number.float({ fractionDigits: 2 }),
         undefined,
       ]),
+      tool_calls: faker.helpers.arrayElement([faker.number.int(), undefined]),
+      tool_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
     },
     undefined,
   ]),
@@ -1054,6 +1064,11 @@ export const getGetExecutionAnalyticsResponseMock = (
         undefined,
       ]),
       total_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      tool_calls: faker.helpers.arrayElement([faker.number.int(), undefined]),
+      tool_cost: faker.helpers.arrayElement([
         faker.number.float({ fractionDigits: 2 }),
         undefined,
       ]),
@@ -1087,6 +1102,11 @@ export const getGetExecutionAnalyticsResponseMock = (
         undefined,
       ]),
       total_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      tool_calls: faker.helpers.arrayElement([faker.number.int(), undefined]),
+      tool_cost: faker.helpers.arrayElement([
         faker.number.float({ fractionDigits: 2 }),
         undefined,
       ]),
@@ -1164,6 +1184,11 @@ export const getGetEvaluationRunAnalyticsResponseMock = (
         faker.number.float({ fractionDigits: 2 }),
         undefined,
       ]),
+      tool_calls: faker.helpers.arrayElement([faker.number.int(), undefined]),
+      tool_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
     },
     undefined,
   ]),
@@ -1188,6 +1213,11 @@ export const getGetEvaluationRunAnalyticsResponseMock = (
         faker.number.float({ fractionDigits: 2 }),
         undefined,
       ]),
+      tool_calls: faker.helpers.arrayElement([faker.number.int(), undefined]),
+      tool_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
     },
     undefined,
   ]),
@@ -1209,6 +1239,11 @@ export const getGetEvaluationRunAnalyticsResponseMock = (
         undefined,
       ]),
       total_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      tool_calls: faker.helpers.arrayElement([faker.number.int(), undefined]),
+      tool_cost: faker.helpers.arrayElement([
         faker.number.float({ fractionDigits: 2 }),
         undefined,
       ]),
@@ -1241,6 +1276,11 @@ export const getGetEvaluationRunAnalyticsResponseMock = (
           faker.number.float({ fractionDigits: 2 }),
           undefined,
         ]),
+        tool_calls: faker.helpers.arrayElement([faker.number.int(), undefined]),
+        tool_cost: faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          undefined,
+        ]),
       },
       judge: {
         llm_calls: faker.number.int(),
@@ -1259,6 +1299,11 @@ export const getGetEvaluationRunAnalyticsResponseMock = (
           undefined,
         ]),
         total_cost: faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          undefined,
+        ]),
+        tool_calls: faker.helpers.arrayElement([faker.number.int(), undefined]),
+        tool_cost: faker.helpers.arrayElement([
           faker.number.float({ fractionDigits: 2 }),
           undefined,
         ]),
@@ -1293,6 +1338,11 @@ export const getGetEvaluationRunAnalyticsResponseMock = (
         undefined,
       ]),
       total_cost: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        undefined,
+      ]),
+      tool_calls: faker.helpers.arrayElement([faker.number.int(), undefined]),
+      tool_cost: faker.helpers.arrayElement([
         faker.number.float({ fractionDigits: 2 }),
         undefined,
       ]),

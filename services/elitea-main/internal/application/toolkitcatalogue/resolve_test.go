@@ -197,3 +197,34 @@ func TestValidation(t *testing.T) {
 	_, err = ValidateToolkitType(string(make([]byte, maxToolkitTypeLength+1)))
 	require.Error(t, err)
 }
+
+// host_intel (#1238) is the one default-off type: no rows, an empty filter
+// and an unknown project all refuse it, and a restricted policy with a grant
+// admits it for that project only.
+func TestHostIntelDeniedWithoutGrant(t *testing.T) {
+	t.Parallel()
+	for name, filter := range map[string]Filter{
+		"zero":           {},
+		"empty":          EmptyFilter(),
+		"no policy rows": BuildFilter(7, nil, nil),
+		"other policy":   BuildFilter(7, []Policy{{ToolkitType: "github", Availability: AvailabilityEnabled}}, nil),
+	} {
+		if filter.Allows("host_intel") {
+			t.Fatalf("%s: host_intel allowed without a grant", name)
+		}
+		if decision := filter.Decision("host_intel"); decision.Allowed || decision.Reason != DefaultOffReason {
+			t.Fatalf("%s: decision = %+v", name, decision)
+		}
+		if !filter.Allows("web") {
+			t.Fatalf("%s: web must stay default-allowed", name)
+		}
+	}
+	policies := []Policy{{ToolkitType: "host_intel", Availability: AvailabilityRestricted}}
+	grants := []Grant{{ToolkitType: "host_intel", ProjectID: 7, Availability: AvailabilityEnabled}}
+	if !BuildFilter(7, policies, grants).Allows("host_intel") {
+		t.Fatal("a project grant must admit host_intel")
+	}
+	if BuildFilter(8, policies, grants).Allows("host_intel") {
+		t.Fatal("another project's grant must not admit host_intel")
+	}
+}

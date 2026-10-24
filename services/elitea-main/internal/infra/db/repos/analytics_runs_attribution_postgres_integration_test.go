@@ -259,3 +259,41 @@ func TestExecutionAttributionVerifierAcceptsOnlyTheCallersLiveRun(t *testing.T) 
 		require.Equal(t, tc.want, got, tc.name)
 	}
 }
+
+// TestExecutionVerifierAcceptsRecordedAttributionOnly is #1238's edge rule: a
+// worker running a remote toolkit call may attribute its metered web calls
+// to the desktop turn Main recorded on that call, and to nothing else.
+func TestExecutionVerifierAcceptsRecordedAttributionOnly(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	allowed := NewExecutionAttributionVerifier(pool).WithLocalWorkPolicy(&localTurnPolicy{allowed: true})
+
+	seedOriginExecutionAs(t, pool, 1, "exec-call", "manual", "8", now.Add(-time.Minute), nil)
+	seedOriginExecutionAs(t, pool, 1, "exec-call-done", "manual", "8", now.Add(-2*time.Hour), ptrTime(now.Add(-time.Hour)))
+	_, err := pool.Exec(ctx, `
+UPDATE elitea_runtime.execution_jobs
+   SET capability_id = 'toolkit.call_tool.v1',
+       attribution_execution_id = CASE execution_id WHEN 'exec-call' THEN 'turn-live' ELSE 'turn-old' END
+ WHERE execution_id IN ('exec-call', 'exec-call-done')`)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name, project, user, id string
+		verifier                *ExecutionAttributionVerifier
+		want                    bool
+	}{
+		{"recorded on a live call", "1", "8", "turn-live", allowed, true},
+		{"another actor", "1", "9", "turn-live", allowed, false},
+		{"another project", "2", "8", "turn-live", allowed, false},
+		{"recorded on a settled call", "1", "8", "turn-old", allowed, false},
+		{"never recorded", "1", "8", "turn-other", allowed, false},
+		{"local work off", "1", "8", "turn-live", NewExecutionAttributionVerifier(pool), false},
+	} {
+		got, err := tc.verifier.VerifyExecution(ctx, tc.project, tc.user, "", "", tc.id)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
+}
+
+func ptrTime(value time.Time) *time.Time { return &value }

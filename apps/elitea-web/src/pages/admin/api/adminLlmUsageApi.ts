@@ -76,6 +76,14 @@ export interface LlmUsageSlice {
   readonly completion_tokens: number;
   readonly total_tokens: number;
   readonly cost_usd: number;
+  /**
+   * Model rows only: `tool` for a metered tool operation (#1238), whose label
+   * is the operation and detail the vendor, with `units` of `unit` instead of
+   * tokens; `llm` for a model call.
+   */
+  readonly operation?: 'llm' | 'tool';
+  readonly units?: number;
+  readonly unit?: string;
 }
 
 /**

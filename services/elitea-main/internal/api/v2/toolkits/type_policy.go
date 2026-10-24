@@ -90,10 +90,14 @@ func WithTypePolicy(source ToolkitTypePolicySource) Option {
 	}
 }
 
-// allowAllTypes is the filter an unwired or unreadable source resolves to.
+// allowAllTypes is the filter an unwired or unreadable source resolves to. A
+// default-off type (host_intel) stays off: without a readable grant there is
+// no decision that turns it on.
 type allowAllTypes struct{}
 
-func (allowAllTypes) Allows(string) bool { return true }
+func (allowAllTypes) Allows(toolkitType string) bool {
+	return toolkitcatalogue.DefaultAllowed(toolkitType)
+}
 
 // typePolicyFilter resolves one request's filter, degrading to "allow" and
 // logging.

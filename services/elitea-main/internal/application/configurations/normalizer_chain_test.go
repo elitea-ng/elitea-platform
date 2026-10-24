@@ -22,8 +22,8 @@ func TestCurrentConfigurationDataNormalizerOwnsEveryPinnedTypeExactlyOnce(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 52 {
-		t.Fatalf("catalog entries = %d, want 51 pinned and cloud_executor", len(entries))
+	if len(entries) != 57 {
+		t.Fatalf("catalog entries = %d, want 51 pinned, the five web providers and cloud_executor", len(entries))
 	}
 
 	sdkTypes := 0
@@ -47,6 +47,9 @@ func TestCurrentConfigurationDataNormalizerOwnsEveryPinnedTypeExactlyOnce(t *tes
 			owners++
 		}
 		if currentArtifactsConfigurationType(entry.Type) {
+			owners++
+		}
+		if currentWebProviderConfigurationType(entry.Type) {
 			owners++
 		}
 		if owners != 1 {
@@ -132,6 +135,10 @@ func currentNormalizerChainValidCreateData(typeName string) map[string]any {
 		return map[string]any{"region_name": "region", "storage_url": "https://s3.example.test"}
 	case "s3_api_credentials":
 		return map[string]any{"access_key_id": "key", "user_id": 13}
+	case "tavily", "firecrawl", "brave_search", "shodan":
+		return map[string]any{"api_key": "key-1"}
+	case "duckduckgo_instant":
+		return map[string]any{}
 	default:
 		return map[string]any{"original": typeName}
 	}

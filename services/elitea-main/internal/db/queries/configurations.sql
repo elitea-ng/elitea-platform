@@ -15,6 +15,23 @@ WHERE project_id = sqlc.arg('project_id')::integer
   AND (NOT sqlc.arg('shared_only')::boolean OR shared = true)
 LIMIT 1;
 
+-- The web search and host-intelligence toolkits (#1238) resolve a provider's
+-- key by TYPE: the project's own row of that type, else a shared row in the
+-- public project. The oldest row wins, so a second row of a type never
+-- changes which key an existing toolkit uses.
+-- name: FindCurrentConfigurationByType :one
+SELECT uuid::text AS configuration_uuid,
+       project_id,
+       type,
+       data,
+       shared
+FROM configuration
+WHERE project_id = sqlc.arg('project_id')::integer
+  AND type = sqlc.arg('type')::text
+  AND (NOT sqlc.arg('shared_only')::boolean OR shared = true)
+ORDER BY id
+LIMIT 1;
+
 -- The current Configurations -> LiteLLM model projection keys embedding
 -- models by data.name. A two-row sentinel lets the adapter reject duplicate
 -- mutable definitions instead of selecting one silently.

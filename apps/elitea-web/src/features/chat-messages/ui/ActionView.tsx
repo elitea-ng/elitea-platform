@@ -12,6 +12,7 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
+import { BudgetUsageLink, toolResultBudgetCode } from './error-trace/BudgetUsageLink';
 import { ToolModal } from './ToolModal';
 import type { Theme } from '@mui/material/styles';
 
@@ -128,6 +129,9 @@ export function ActionView({ action, onClick, isSelected = false }: ActionViewPr
             {t('chatMessages.actionView.partialOutput', 'Partial output — some of this result did not arrive.')}
           </Typography>
         ) : null}
+        {/* A metered tool the budget refused (#1238) links to Usage exactly as
+            a refused model call does. */}
+        {isError ? <BudgetUsageLink code={toolResultBudgetCode(action.toolOutputs)} /> : null}
       </Box>
       <ToolModal
         open={isModalOpen}

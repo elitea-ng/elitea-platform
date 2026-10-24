@@ -1232,8 +1232,24 @@ components:
       properties:
         provider:
           type: string
+          description: The model provider, or for a tool row the vendor (`tavily`).
         model:
           type: string
+          description: The model, or for a tool row the operation (`web_search`).
+        operation:
+          type: string
+          enum: [llm, tool]
+          description: |
+            `tool` for a metered tool operation, which bills per unit and has
+            no tokens; `llm` for a model call.
+        units:
+          type: integer
+          format: int64
+          description: Units a tool row consumed. Absent on an llm row.
+        unit:
+          type: string
+          enum: [request, credit, page]
+          description: What `units` counts. Absent on an llm row.
         spend:
           type: number
           nullable: true
@@ -1548,6 +1564,21 @@ components:
           type: number
         total_cost:
           type: number
+          description: >
+            The model estimate plus tool_cost. Present when a call is priced
+            or a metered tool operation was billed.
+        tool_calls:
+          type: integer
+          format: int64
+          description: >
+            Metered tool operations (web search, web fetch, host lookups)
+            settled in the scope. They are not model calls and carry no
+            tokens.
+        tool_cost:
+          type: number
+          description: >
+            What the gateway billed for tool_calls, an exact decimal. Billed,
+            not estimated. ABSENT when there was no tool call.
       description: >
         One scope's model calls, tokens and estimated cost, from
         gateway.llm_request_logs. Source internal/domain/analytics/runs.go.
@@ -1589,6 +1620,21 @@ components:
           type: number
         total_cost:
           type: number
+          description: >
+            The model estimate plus tool_cost. Present when a call is priced
+            or a metered tool operation was billed.
+        tool_calls:
+          type: integer
+          format: int64
+          description: >
+            Metered tool operations (web search, web fetch, host lookups)
+            settled in the scope. They are not model calls and carry no
+            tokens.
+        tool_cost:
+          type: number
+          description: >
+            What the gateway billed for tool_calls, an exact decimal. Billed,
+            not estimated. ABSENT when there was no tool call.
       description: One (provider, model) inside a run.
 
     AnalyticsRunUser:
@@ -1631,6 +1677,21 @@ components:
           type: number
         total_cost:
           type: number
+          description: >
+            The model estimate plus tool_cost. Present when a call is priced
+            or a metered tool operation was billed.
+        tool_calls:
+          type: integer
+          format: int64
+          description: >
+            Metered tool operations (web search, web fetch, host lookups)
+            settled in the scope. They are not model calls and carry no
+            tokens.
+        tool_cost:
+          type: number
+          description: >
+            What the gateway billed for tool_calls, an exact decimal. Billed,
+            not estimated. ABSENT when there was no tool call.
       description: One caller inside a run.
 
     AnalyticsAutomatedActivity:
@@ -1683,6 +1744,21 @@ components:
           type: number
         total_cost:
           type: number
+          description: >
+            The model estimate plus tool_cost. Present when a call is priced
+            or a metered tool operation was billed.
+        tool_calls:
+          type: integer
+          format: int64
+          description: >
+            Metered tool operations (web search, web fetch, host lookups)
+            settled in the scope. They are not model calls and carry no
+            tokens.
+        tool_cost:
+          type: number
+          description: >
+            What the gateway billed for tool_calls, an exact decimal. Billed,
+            not estimated. ABSENT when there was no tool call.
       description: >
         One unattended trigger origin's calls in the window (legacy issues
         6802 and 6881). These calls are excluded from every active-user figure
@@ -12782,6 +12858,20 @@ components:
             the Hugging Face CDN (<base>/<repo>/resolve/<revision>/<file>).
             Empty (the default) is Hugging Face. Every file is checked against
             the SHA-256 the app pins.
+        web:
+          type: boolean
+          description: >-
+            Local turns may use the web toolkit (web_search, web_fetch), which
+            sends the turn's queries and URLs to third-party providers. Absent
+            or false is off (the default); the server also refuses a remote
+            web call of a turn while it is false (403
+            local_work_policy_refused).
+        host_intel:
+          type: boolean
+          description: >-
+            Local turns may use the host_intel toolkit (internet host search
+            and lookup through Shodan). Absent or false is off (the default);
+            the server refuses a remote host_intel call while it is false.
     InvalidQueryParameterError:
       type: object
       description: >-

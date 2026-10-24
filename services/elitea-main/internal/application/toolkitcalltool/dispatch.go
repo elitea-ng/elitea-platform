@@ -47,6 +47,8 @@ type Dispatch struct {
 	ToolkitVersion        string
 	SettingsEntryID       string
 	ArgumentsEntryID      string
+	// AttributionExecutionID is ToolkitCallToolCommandV1 field 7, or "".
+	AttributionExecutionID string
 }
 
 func (d Dispatch) Validate() error {
@@ -64,7 +66,7 @@ func (d Dispatch) Validate() error {
 			return ErrInvalidToolRunDispatch
 		}
 	}
-	for _, value := range []string{d.Traceparent, d.Tracestate, d.ToolkitVersion} {
+	for _, value := range []string{d.Traceparent, d.Tracestate, d.ToolkitVersion, d.AttributionExecutionID} {
 		if value != "" && !validDispatchText(value) {
 			return ErrInvalidToolRunDispatch
 		}

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
 )
@@ -124,10 +125,17 @@ func TestToolkitTypeCatalogueServesEverySDKTypeAndTheNativeFour(t *testing.T) {
 
 	want := map[string]struct{}{}
 	for _, toolkitType := range pinnedCatalogue(t).ToolkitTypes() {
-		want[toolkitType] = struct{}{}
+		// A default-off type (host_intel, #1238) is withheld until an
+		// administrator grants it, and no grant exists here.
+		if toolkitcatalogue.DefaultAllowed(toolkitType) {
+			want[toolkitType] = struct{}{}
+		}
 	}
 	for _, toolkitType := range nativeToolkitTypes {
 		want[toolkitType] = struct{}{}
+	}
+	if _, served := body["host_intel"]; served {
+		t.Error("host_intel is served without a grant")
 	}
 	if len(body) != len(want) {
 		t.Errorf("served %d types, want %d", len(body), len(want))

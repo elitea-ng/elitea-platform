@@ -1,0 +1,70 @@
+---
+title: "Web Search and Host Intelligence"
+description: "Let agents search the web, read pages and look up internet hosts: the providers, what each one costs and the terms that decide how it can be used."
+---
+
+Two toolkit types let an agent reach the public internet. Both run on the Rust worker and are read-only.
+
+- **Web Search** (`web`): `web_search` and `web_fetch`. `web_fetch` reads a page through the platform's egress guard, which refuses private and metadata addresses and checks every redirect, or through a provider's extract API.
+- **Host Intelligence** (`host_intel`): `internet_host_search` and `internet_host_lookup`, through Shodan. It is **off until a platform administrator grants it to a project** in **Admin › Toolkits**.
+
+Every call is admitted by the same budget engine as model calls before the provider is called, and billed afterwards. Tool spend appears in **Settings › Usage** as rows such as "Web search · Tavily", next to the model rows, and in run analytics. When a project or member budget runs out, the tool is refused with the same message and Usage link as a refused model call, and the provider isn't called.
+
+## Set up a provider
+
+<Steps>
+<Step title="Enable the provider">
+In **Admin › Configuration › Web search**, add the provider to **Enabled providers**. A configured key alone doesn't turn a provider on. The same section sets the default search provider, whether direct fetch is allowed, the fetch allow and deny domain lists, and the result caps.
+</Step>
+
+<Step title="Add a credential">
+Create a **tavily**, **firecrawl**, **brave_search**, **duckduckgo_instant** or **shodan** credential. A project uses its own credential first. If it has none, it uses a shared credential in the public project, except for Shodan, which only accepts a project's own key.
+</Step>
+
+<Step title="Check the price">
+Open **Admin › LLM proxy › Tools**. Each operation has a price per request, credit or page. An operation without a price is refused, and free operations have an explicit $0. Change the price if your plan differs from the default.
+</Step>
+
+<Step title="Attach the toolkit">
+Create a **Web Search** or **Host Intelligence** toolkit and attach it to an agent. On the desktop, the native client policy must also allow it (`local_work.web`, `local_work.host_intel`, both off by default).
+</Step>
+</Steps>
+
+## Providers
+
+Prices, limits and terms change, so check them with the provider before you rely on them. The default prices are the ones the **Tools** pricing tab starts with.
+
+| | Tavily | Firecrawl | Brave Search | DuckDuckGo Instant Answers | Shodan |
+|---|---|---|---|---|---|
+| **Toolkit** | Web Search: search and fetch | Web Search: search and fetch | Web Search: search | Web Search: search (instant answers only) | Host Intelligence |
+| **Pricing** | Credits: basic search 1, advanced 2, extract 1 per 5 URLs. Pay as you go $0.008 per credit | Credits: 1 per scraped page, 2 per 10 search results. Hobby $19/month for 5,000 credits, up to Scale $599/month for 1M | $5 per 1,000 search requests | Free | Query credits: Freelancer $69/month for 10,000 (about $0.0069 each), Small Business $359/month for 200,000 |
+| **Default price** | $0.008 per credit | $0.0038 per credit or page | $0.005 per request | $0 | $0.0069 per credit |
+| **Free tier** | 1,000 credits a month, no card | 1,000 credits a month, no card | $5 of credits a month (about 1,000 searches), card required | Free, no published quota | A free API plan, but most methods need at least Membership ($49 once). Academic accounts are non-commercial only |
+| **Rate limits** | 100 requests a minute on a development key, 1,000 on production | Free: 10 a minute for search and scrape. Standard: 500 a minute | 50 queries a second on the Search plan | Not published | 1 request a second on every plan |
+| **Storing results** | Terms don't cover caching results. Tavily keeps a perpetual licence to your queries and URLs | Terms don't cover it. Firecrawl caches pages itself (2 days by default). Zero data retention needs Enterprise | Transient storage only. No database of results | DuckDuckGo says it can't fully syndicate its results | Not covered. No redistribution of the content |
+| **Attribution** | Not required | Not required | Optional. If shown, "POWERED BY BRAVE" with the logo | Credit the source (usually Wikipedia) | Required. Every result carries "Data from Shodan (shodan.io)" |
+| **AI use** | Allowed. Tavily may train on its output. No competing models, no resale | Allowed. You're responsible for lawful use of what you scrape | Grounding is allowed. No training or fine-tuning on results | Not covered | Not covered |
+| **Lifecycle** | Active | Active | Active | Active. It isn't a full search API, so it's never the default provider | Active |
+| **Shared key allowed** | Yes | Yes | Yes | No key needed | **No.** The terms bar reselling or redistributing one account's data, so each project uses its own key |
+
+Elitea never stores results beyond the turn. Logs and audit record hashes, hosts and looked-up addresses, never full URLs or queries.
+
+## Available tools
+
+<Accordion title="Web Search (2)">
+
+| Tool | What it does |
+|---|---|
+| `web_search` | Searches the web through the toolkit's default provider, or the platform default |
+| `web_fetch` | Reads one page as Markdown or text, directly or through a provider |
+
+</Accordion>
+
+<Accordion title="Host Intelligence (2)">
+
+| Tool | What it does |
+|---|---|
+| `internet_host_search` | Searches Shodan's index of internet hosts. Raw banners are never returned |
+| `internet_host_lookup` | Looks up one public IP address. Private addresses are refused without a provider call |
+
+</Accordion>

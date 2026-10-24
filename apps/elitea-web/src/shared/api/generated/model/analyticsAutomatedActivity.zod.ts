@@ -75,7 +75,24 @@ export const AnalyticsAutomatedActivity = zod
         "Prompt tokens at each call's catalogue rate, an exact decimal. ABSENT when no call in the scope is priced.\n",
       ),
     output_cost: zod.number().optional(),
-    total_cost: zod.number().optional(),
+    total_cost: zod
+      .number()
+      .optional()
+      .describe(
+        "The model estimate plus tool_cost. Present when a call is priced or a metered tool operation was billed.\n",
+      ),
+    tool_calls: zod
+      .int()
+      .optional()
+      .describe(
+        "Metered tool operations (web search, web fetch, host lookups) settled in the scope. They are not model calls and carry no tokens.\n",
+      ),
+    tool_cost: zod
+      .number()
+      .optional()
+      .describe(
+        "What the gateway billed for tool_calls, an exact decimal. Billed, not estimated. ABSENT when there was no tool call.\n",
+      ),
   })
   .describe(
     "One unattended trigger origin's calls in the window (legacy issues 6802 and 6881). These calls are excluded from every active-user figure and still counted in every total. A call is unattended only when the run's actor made it inside the run's lifetime. executions and users count every run and person with an attempt.\n",
