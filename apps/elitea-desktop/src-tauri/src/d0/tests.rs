@@ -8817,6 +8817,126 @@ async fn child_pause_is_answered_through_the_approval_card() {
     );
 }
 
+/// A child whose state the call could not follow to its end (the reads
+/// failed, or the platform answered a state this app does not know) is
+/// stopped; a child that settled on its own is not.
+#[tokio::test]
+async fn child_follow_failure_stops_the_child() {
+    for (read, stopped) in [
+        ("http_500", true),
+        ("http_503", true),
+        ("mystery", true),
+        ("failed", false),
+        ("completed", false),
+    ] {
+        let server = serve(move |req: &Req| {
+            if req.path == CHILD_START {
+                return child_started();
+            }
+            if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+                return match read {
+                    "http_500" => Res::json(500, &json!({"error": "internal"})),
+                    "http_503" => Res::json(503, &json!({"error": "unavailable"})),
+                    status => child_state(status),
+                };
+            }
+            if req.method == "DELETE" {
+                return Res::json(200, &json!({"ok": true}));
+            }
+            Res::json(404, &json!({"error": "not_found"}))
+        })
+        .await;
+        let prompt = Arc::new(Answering {
+            decision: None,
+            asked: Mutex::default(),
+        });
+        let (context, emitter) = child_context(&server, prompt).await;
+        let result = super::child_agent::call(&context, &child_spec(), "c1", "Run").await;
+        let cancel = format!("/api/v2/elitea_core/task/prompt_lib/1/{CHILD_RESPONSE}");
+        assert_eq!(
+            seen(&server, &cancel).len(),
+            usize::from(stopped),
+            "read {read}: {result}"
+        );
+        let finished: Vec<AgentEvent> = emitter
+            .all()
+            .into_iter()
+            .filter(|e| e.kind == "subagent_finished")
+            .collect();
+        assert_eq!(
+            finished.len(),
+            1,
+            "one lane end, never a second from the guard"
+        );
+    }
+}
+
+/// An answered pause that a read still reports (the resume has not reached
+/// it yet) is not asked again: the call keeps reading until it moves on.
+#[tokio::test]
+async fn child_answered_pause_is_not_asked_again() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let server = serve({
+        let reads = reads.clone();
+        move |req: &Req| {
+            if req.path == CHILD_START {
+                return child_started();
+            }
+            if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+                if reads.fetch_add(1, Ordering::SeqCst) < 3 {
+                    return Res::json(
+                        200,
+                        &json!({"status": "interrupted", "conversation_uuid": CHILD_CONVERSATION,
+                            "interrupt": {"interrupt_id": INTERRUPT, "guardrail_type": "sensitive_tool",
+                                "action_label": "Send the email", "available_actions": ["approve", "reject"],
+                                "tool_name": "send_email"}}),
+                    );
+                }
+                return child_state("completed");
+            }
+            if req.path.starts_with(&format!(
+                "/api/v2/elitea_core/continue_predict/prompt_lib/1/{CHILD_CONVERSATION}?"
+            )) {
+                return Res::json(200, &json!({"ok": true}));
+            }
+            Res::json(404, &json!({"error": "not_found"}))
+        }
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: Some("approve"),
+        asked: Mutex::default(),
+    });
+    let (context, _emitter) = child_context(&server, prompt.clone()).await;
+    let result = super::child_agent::call(&context, &child_spec(), "c1", "Mail Bob").await;
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_eq!(prompt.asked.lock().unwrap().len(), 1, "asked once");
+    let resumed = server
+        .seen()
+        .into_iter()
+        .filter(|r| r.path.contains("/continue_predict/"))
+        .count();
+    assert_eq!(resumed, 1, "resumed once");
+    assert!(
+        reads.load(Ordering::SeqCst) >= 4,
+        "kept reading past the stale pause"
+    );
+}
+
+/// A zero retry delay never polls a child in a tight loop.
+#[test]
+fn child_poll_policy_has_a_floor() {
+    let zero = super::child_agent::PollPolicy::for_retry(RetryPolicy {
+        attempts: 3,
+        delay: Duration::ZERO,
+    });
+    assert_eq!(zero.first, super::child_agent::PollPolicy::FLOOR);
+    assert!(zero.max >= zero.first);
+    let default = super::child_agent::PollPolicy::for_retry(RetryPolicy::default());
+    assert_eq!(default.first, Duration::from_millis(500));
+    assert_eq!(default.max, Duration::from_secs(3));
+}
+
 /// A call dropped mid-run (the turn was stopped) stops the child.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn child_call_dropped_cancels_the_child() {

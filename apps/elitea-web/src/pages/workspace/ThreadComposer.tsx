@@ -40,7 +40,7 @@ import { firstError, SessionNotices } from './sessionParts';
 import { useProjectSkills, type ComposerSkill } from './useAgentSkills';
 import type { CloudChat } from './useCloudChat';
 import { useCustomCommands } from './useCustomCommands';
-import { useComposerPipeline, type ComposerPipeline, type RunInCloud } from './useRunInCloud';
+import { pipelineComposerBinding, useComposerPipeline, type ComposerPipeline } from './useRunInCloud';
 import type { ThreadHandoff } from './useThreadHandoff';
 import type { ThreadSession } from './useThreadSession';
 import type { SessionCommands } from './useSessionCommands';
@@ -76,25 +76,15 @@ function cloudBinding(cloud: CloudChat): Pick<WorkspaceComposerProps, 'canSend' 
   };
 }
 
-/** What differs when the pick is a pipeline: the send runs it in the cloud and opens its chat. */
-function pipelineBinding(run: RunInCloud, canSend: boolean): Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop' | 'placeholder' | 'showMode' | 'acceptImages'> {
-  return {
-    canSend: canSend && !run.running,
-    busy: run.running,
-    onSend: (prompt) => run.run(prompt),
-    onStop: () => undefined,
-    placeholder: t('workspace.runInCloud.placeholder', 'Run this pipeline in the cloud…'),
-    showMode: false,
-    acceptImages: false,
-  };
-}
-
 type SendBinding = Partial<Pick<WorkspaceComposerProps, 'placeholder' | 'showMode' | 'acceptImages'>> & Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'>;
 
-/** Where a message goes: the cloud copy, else the pipeline's cloud run, else the local agent loop. */
-function sendBinding(cloudMode: boolean, cloud: CloudChat, pipeline: ComposerPipeline, canRun: boolean, here: SendBinding): SendBinding {
+/**
+ * Where a message goes: the cloud copy, else the pipeline's cloud run (gated on that run alone, never on the local
+ * session: nothing runs here), else the local agent loop.
+ */
+function sendBinding(cloudMode: boolean, cloud: CloudChat, pipeline: ComposerPipeline, here: SendBinding): SendBinding {
   if (cloudMode) return cloudBinding(cloud);
-  return pipeline.pipeline ? pipelineBinding(pipeline.run, canRun) : here;
+  return pipeline.pipeline ? pipelineComposerBinding(pipeline.run) : here;
 }
 
 /** The model chip and `/model <name>`: neither for a cloud thread (its own agent answers) nor when no choice is offered. */
@@ -214,7 +204,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         customCommands={customCommands}
         onCommand={session.run}
         onFocus={onFocus}
-        {...sendBinding(cloudMode, cloud, composerPipeline, here.canSend, here)}
+        {...sendBinding(cloudMode, cloud, composerPipeline, here)}
       />
     </>
   );

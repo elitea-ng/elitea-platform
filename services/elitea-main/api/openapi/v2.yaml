@@ -20826,7 +20826,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/DesktopOperationError'
         '422':
-          description: The nested agent cannot be started on this deployment (`child_agent_unsupported`).
+          description: The nested agent is a pipeline, or cannot be started on this deployment (`child_agent_unsupported`).
           content:
             application/json:
               schema:

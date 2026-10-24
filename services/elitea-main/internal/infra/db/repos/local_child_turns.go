@@ -22,6 +22,12 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/localturn"
 )
 
+// childSourceLiteral is localturn.ChildConversationSource as an SQL literal.
+// The child lookups name it inline, not as a parameter, so a cached generic
+// plan still matches the partial indexes of tenant 0156 (WHERE source =
+// 'local_child'), which a parameter cannot prove.
+const childSourceLiteral = "'" + localturn.ChildConversationSource + "'"
+
 const (
 	// maxChildConversationName bounds the child conversation's title.
 	maxChildConversationName = 120
@@ -80,13 +86,13 @@ SELECT conversation.uuid::text,
             LIMIT 1
        ), 0)
   FROM %[1]s.chat_conversations AS conversation
- WHERE conversation.source = $1
-   AND conversation.author_id = $2
-   AND conversation.meta ->> 'parent_execution_id' = $3
-   AND conversation.meta ->> 'idempotency_key' = $4
+ WHERE conversation.source = %[2]s
+   AND conversation.author_id = $1
+   AND conversation.meta ->> 'parent_execution_id' = $2
+   AND conversation.meta ->> 'idempotency_key' = $3
  ORDER BY conversation.id
- LIMIT 1`, schema),
-		localturn.ChildConversationSource, request.ActorUserID, request.ParentExecutionID, request.IdempotencyKey,
+ LIMIT 1`, schema, childSourceLiteral),
+		request.ActorUserID, request.ParentExecutionID, request.IdempotencyKey,
 	).Scan(&existing.ConversationUUID, &existing.InputSHA256, &existing.ExecutionID,
 		&existing.ResponseMessageID, &existing.ParticipantID)
 	switch {
@@ -221,7 +227,7 @@ func (r *LocalChildTurnsRepo) RecordChildStart(ctx context.Context, projectID in
 	}
 	if _, err := r.pool.Exec(ctx, fmt.Sprintf(`
 UPDATE %s.chat_conversations
-   SET meta = meta || jsonb_build_object('child_execution_id', $2::text, 'child_response_message_id', $3::text)
+   SET meta = meta || jsonb_build_object('child_execution_id', $2::text, 'child_response_message_id', $3::uuid::text)
  WHERE uuid = $1::uuid AND source = $4`, schema),
 		conversationUUID, executionID, responseMessageID, localturn.ChildConversationSource); err != nil {
 		return fmt.Errorf("local child turn: record start: %w", err)
@@ -231,6 +237,13 @@ UPDATE %s.chat_conversations
 
 // DiscardChildConversation is guarded on the source and on the conversation
 // holding no message group, so it can never remove a turn's transcript.
+//
+// One transaction: the conversation row is locked under both guards, its
+// participant mappings go first (chat_participant_mapping's key to
+// chat_conversations does not cascade, so the bare DELETE failed with 23503
+// on every call and left the conversation behind), then the row itself. The
+// other tables that name a conversation (selected, archive, reads, folders)
+// cascade.
 func (r *LocalChildTurnsRepo) DiscardChildConversation(ctx context.Context, projectID int64, conversationUUID string) {
 	if r == nil || r.pool == nil || conversationUUID == "" {
 		return
@@ -239,14 +252,49 @@ func (r *LocalChildTurnsRepo) DiscardChildConversation(ctx context.Context, proj
 	if err != nil {
 		return
 	}
-	if _, err := r.pool.Exec(context.WithoutCancel(ctx), fmt.Sprintf(`
-DELETE FROM %[1]s.chat_conversations AS conversation
- WHERE conversation.uuid = $1::uuid
-   AND conversation.source = $2
-   AND NOT EXISTS (SELECT 1 FROM %[1]s.chat_message_group AS g WHERE g.conversation_id = conversation.id)`, schema),
-		conversationUUID, localturn.ChildConversationSource); err != nil {
+	if err := r.discardChildConversation(context.WithoutCancel(ctx), schema, conversationUUID); err != nil {
 		slog.WarnContext(ctx, "local child turn: discard conversation failed", "err", err)
 	}
+}
+
+func (r *LocalChildTurnsRepo) discardChildConversation(ctx context.Context, schema, conversationUUID string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var conversationID int64
+	err = tx.QueryRow(ctx, fmt.Sprintf(`
+SELECT id FROM %s.chat_conversations
+ WHERE uuid = $1::uuid AND source = $2
+   FOR UPDATE`, schema), conversationUUID, localturn.ChildConversationSource).Scan(&conversationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lock: %w", err)
+	}
+	// Checked in a statement of its own, after the lock: a group insert holds
+	// a key share on the row, so by now every one is committed (and visible to
+	// this new snapshot) or waits for this transaction.
+	var holdsTurn bool
+	if err := tx.QueryRow(ctx, fmt.Sprintf(`
+SELECT EXISTS (SELECT 1 FROM %s.chat_message_group WHERE conversation_id = $1)`, schema),
+		conversationID).Scan(&holdsTurn); err != nil {
+		return fmt.Errorf("check groups: %w", err)
+	}
+	if holdsTurn {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.chat_participant_mapping WHERE conversation_id = $1`, schema),
+		conversationID); err != nil {
+		return fmt.Errorf("delete participant mapping: %w", err)
+	}
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.chat_conversations WHERE id = $1`, schema),
+		conversationID); err != nil {
+		return fmt.Errorf("delete conversation: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 // ReadChildTurn reads the response group the child's first execution
@@ -289,13 +337,20 @@ SELECT conversation.uuid::text,
   FROM %[1]s.chat_conversations AS conversation
   LEFT JOIN %[1]s.chat_message_group AS response
     ON response.conversation_id = conversation.id
-   AND response.uuid::text = conversation.meta ->> 'child_response_message_id'
- WHERE conversation.source = $1
-   AND conversation.author_id = $2
+   -- uuid to uuid, so the group's unique uuid index applies (a text
+   -- comparison of response.uuid::text scanned the groups). The stamp is
+   -- written as a uuid (RecordChildStart); anything else matches nothing.
+   AND response.uuid = CASE
+           WHEN conversation.meta ->> 'child_response_message_id'
+                ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+           THEN (conversation.meta ->> 'child_response_message_id')::uuid
+       END
+ WHERE conversation.source = %[2]s
+   AND conversation.author_id = $1
+   AND conversation.meta ->> 'child_execution_id' = $2
    AND conversation.meta ->> 'parent_execution_id' = $3
-   AND conversation.meta ->> 'child_execution_id' = $4
- LIMIT 1`, schema),
-		localturn.ChildConversationSource, actorUserID, parentExecutionID, childExecutionID,
+ LIMIT 1`, schema, childSourceLiteral),
+		actorUserID, childExecutionID, parentExecutionID,
 	).Scan(&state.ConversationUUID, &responseID, &groupID, &executionID, &streaming, &isError,
 		&failure, &interrupt, &authorization, &outputLimit, &text)
 	if errors.Is(err, pgx.ErrNoRows) {

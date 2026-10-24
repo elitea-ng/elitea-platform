@@ -26,6 +26,7 @@ import { t } from '@/shared/i18n';
 
 import { isCloudOnlyPick, type AgentSelection } from './useAgentSelection';
 import { agentParticipants, useSignedInUserId } from './useEnsureConversation';
+import type { WorkspaceComposerProps } from './WorkspaceComposer';
 
 const MAX_NAME = 80;
 
@@ -34,6 +35,11 @@ export interface RunInCloud {
   run: (prompt: string) => Promise<boolean>;
   running: boolean;
   error: string | null;
+  /**
+   * What the cloud run needs, and nothing of the local session (nothing runs on this computer): a picked agent and
+   * version, a signed-in user, a project, and no run in flight.
+   */
+  canRun: boolean;
 }
 
 export function useRunInCloud(projectId: number, selection: AgentSelection): RunInCloud {
@@ -92,7 +98,21 @@ export function useRunInCloud(projectId: number, selection: AgentSelection): Run
     [agent, version, userId, projectId, createConversation, addParticipants, navigate],
   );
 
-  return { run, running, error };
+  const canRun = agent !== undefined && version !== undefined && userId !== undefined && projectId > 0 && !running;
+  return { run, running, error, canRun };
+}
+
+/** The composer when the pick is a pipeline: the send runs it in the cloud and opens its chat, gated on the cloud run alone. */
+export function pipelineComposerBinding(run: RunInCloud): Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop' | 'placeholder' | 'showMode' | 'acceptImages'> {
+  return {
+    canSend: run.canRun,
+    busy: run.running,
+    onSend: (prompt) => run.run(prompt),
+    onStop: () => undefined,
+    placeholder: t('workspace.runInCloud.placeholder', 'Run this pipeline in the cloud…'),
+    showMode: false,
+    acceptImages: false,
+  };
 }
 
 /** The composer's view of pipelines: whether the pick is one, the refused prompt to offer, and the turn error left to show. */

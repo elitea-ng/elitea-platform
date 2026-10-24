@@ -60,7 +60,11 @@ const MAX_PATH_BYTES: usize = 4096;
 /// Events of turns nobody routed yet (a start's own events arrive before
 /// `start` returns its turn id), kept for at most this many turns.
 const MAX_PARKED_TURNS: usize = 16;
-const MAX_PARKED_EVENTS: usize = 4096;
+pub(super) const MAX_PARKED_EVENTS: usize = 4096;
+/// Beyond `MAX_PARKED_EVENTS`, a turn's ending events (`status`, `error`,
+/// `done`) are still parked, up to this many more: a full buffer drops
+/// deltas, never the event that settles the prompt.
+const MAX_PARKED_ENDINGS: usize = 64;
 /// How long the end of the connection waits for finished turns' commits.
 const EXIT_COMMIT_WAIT: Duration = Duration::from_secs(10);
 /// The conversation's name on the server: the folder's, cut to this.
@@ -131,8 +135,20 @@ pub struct EventRouter {
 #[derive(Default)]
 struct RouterState {
     routes: HashMap<String, mpsc::UnboundedSender<AgentEvent>>,
-    parked: HashMap<String, Vec<AgentEvent>>,
+    parked: HashMap<String, Parked>,
     order: VecDeque<String>,
+}
+
+/// One unrouted turn's events, and whether any were dropped.
+#[derive(Default)]
+struct Parked {
+    events: Vec<AgentEvent>,
+    dropped: bool,
+}
+
+/// The events that settle a prompt (`Mapper` reads its end from them).
+fn is_ending(kind: &str) -> bool {
+    matches!(kind, "status" | "error" | "done")
 }
 
 impl EventRouter {
@@ -143,17 +159,29 @@ impl EventRouter {
     }
 
     /// The events of `turn_id`, those parked so far first.
+    #[cfg(test)]
     pub(super) fn route(&self, turn_id: &str) -> mpsc::UnboundedReceiver<AgentEvent> {
+        self.route_checked(turn_id).0
+    }
+
+    /// As [`Self::route`], and whether the parked events overflowed (some
+    /// of the turn's output was dropped: the prompt cannot report it whole).
+    pub(super) fn route_checked(
+        &self,
+        turn_id: &str,
+    ) -> (mpsc::UnboundedReceiver<AgentEvent>, bool) {
         let (sender, receiver) = mpsc::unbounded_channel();
         let mut state = self.state();
+        let mut dropped = false;
         if let Some(parked) = state.parked.remove(turn_id) {
-            for event in parked {
+            dropped = parked.dropped;
+            for event in parked.events {
                 let _ = sender.send(event);
             }
         }
         state.order.retain(|id| id != turn_id);
         state.routes.insert(turn_id.to_owned(), sender);
-        receiver
+        (receiver, dropped)
     }
 
     fn unroute(&self, turn_id: &str) {
@@ -178,8 +206,15 @@ impl EventEmitter for EventRouter {
             state.order.push_back(turn_id.clone());
         }
         let parked = state.parked.entry(turn_id).or_default();
-        if parked.len() < MAX_PARKED_EVENTS {
-            parked.push(event);
+        let room = if is_ending(event.kind) {
+            MAX_PARKED_EVENTS + MAX_PARKED_ENDINGS
+        } else {
+            MAX_PARKED_EVENTS
+        };
+        if parked.events.len() < room {
+            parked.events.push(event);
+        } else {
+            parked.dropped = true;
         }
     }
 }
@@ -945,11 +980,13 @@ impl Connection {
             }
         };
         let turn_id = started.turn_id;
-        let mut events = self.config.router.route(&turn_id);
+        let (mut events, dropped) = self.config.router.route_checked(&turn_id);
         {
             let mut slot = session.slot();
             slot.turn_id = Some(turn_id.clone());
-            if slot.cancel {
+            // Output already lost cannot be reported: stop the turn, and
+            // answer the prompt with an error once it settles.
+            if slot.cancel || dropped {
                 let _ = self.config.agents.cancel(&turn_id);
             }
         }
@@ -978,6 +1015,13 @@ impl Connection {
             }
         }
         self.config.router.unroute(&turn_id);
+        if dropped {
+            return Err(RpcError::refused(
+                "turn_output_dropped",
+                "The turn produced more output than could be relayed before the prompt began; it was stopped."
+                    .to_owned(),
+            ));
+        }
         match mapper.end {
             End::Cancelled => to_value(&PromptResponse {
                 stop_reason: StopReason::Cancelled,

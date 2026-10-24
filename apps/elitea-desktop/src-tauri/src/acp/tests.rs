@@ -1015,3 +1015,41 @@ fn parked_events_are_bounded() {
     // The oldest turns were dropped; the newest kept whole.
     assert_eq!(sizes, [0, 10]);
 }
+
+/// A full parked buffer drops deltas, never the events that settle the
+/// prompt, and reports the loss so the prompt ends with an error.
+#[test]
+fn a_full_parked_buffer_keeps_the_ending() {
+    use crate::d0::events::{AgentEvent, EventEmitter as _};
+    let router = EventRouter::default();
+    let event = |seq: u64, kind: &'static str, payload: Value| AgentEvent {
+        turn_id: "t1".into(),
+        seq,
+        kind,
+        payload,
+    };
+    let deltas = agent::MAX_PARKED_EVENTS as u64 + 100;
+    for seq in 0..deltas {
+        router.emit(event(seq, "text_delta", json!({"text": "x"})));
+    }
+    router.emit(event(deltas, "status", json!({"phase": "done"})));
+    router.emit(event(deltas + 1, "done", json!({})));
+
+    let (mut events, dropped) = router.route_checked("t1");
+    assert!(dropped, "the overflow is reported");
+    let mut kinds = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        kinds.push(event.kind);
+    }
+    assert_eq!(kinds.len(), agent::MAX_PARKED_EVENTS + 2);
+    assert_eq!(kinds[kinds.len() - 2..], ["status", "done"]);
+
+    // A turn that fit reports no loss.
+    router.emit(AgentEvent {
+        turn_id: "t2".into(),
+        seq: 0,
+        kind: "done",
+        payload: json!({}),
+    });
+    assert!(!router.route_checked("t2").1);
+}

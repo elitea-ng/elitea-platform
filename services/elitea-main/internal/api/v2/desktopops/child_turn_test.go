@@ -5,15 +5,19 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/localturn"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/failurelimit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
@@ -59,6 +63,7 @@ type fakeChildStore struct {
 	recordErr     error
 	state         localturn.ChildTurnState
 	reads         []string
+	discarded     []string
 }
 
 func (f *fakeChildStore) PrepareChildConversation(_ context.Context, request localturn.ChildConversationRequest) (localturn.ChildConversation, error) {
@@ -96,7 +101,11 @@ func (f *fakeChildStore) RecordChildStart(_ context.Context, _ int64, conversati
 	return nil
 }
 
-func (f *fakeChildStore) DiscardChildConversation(context.Context, int64, string) {}
+func (f *fakeChildStore) DiscardChildConversation(_ context.Context, _ int64, conversationUUID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.discarded = append(f.discarded, conversationUUID)
+}
 
 func (f *fakeChildStore) ReadChildTurn(_ context.Context, _, _ int64, parent, child string) (localturn.ChildTurnState, error) {
 	f.reads = append(f.reads, parent+"/"+child)
@@ -308,5 +317,113 @@ func TestChildTurnViewRelaysThePauseOnly(t *testing.T) {
 		if got := childTurnView(*state)["status"]; got != want {
 			t.Fatalf("%+v: %v", *state, got)
 		}
+	}
+}
+
+// gatedChildStarts holds every start until released, so concurrent requests
+// overlap inside the start.
+type gatedChildStarts struct {
+	entered atomic.Int32
+	release chan struct{}
+}
+
+func (g *gatedChildStarts) StartCurrentApplication(_ context.Context, request agentexecutionapp.CurrentApplicationStartRequest) (agentexecutionapp.CurrentApplicationStartOutcome, error) {
+	g.entered.Add(1)
+	<-g.release
+	return agentexecutionapp.CurrentApplicationStartOutcome{
+		ExecutionID: "child-" + request.QuestionID, ResponseMessageID: "6f1c2b9e-0000-4000-8000-000000000001", Created: true,
+	}, nil
+}
+
+// concurrentTurns and concurrentAuthorizer answer without recording, so
+// concurrent requests share them safely.
+type concurrentTurns struct{}
+
+func (concurrentTurns) Live(_ context.Context, _, _ int64, _ localturn.Credential, executionID string) (localturn.LiveTurn, error) {
+	return localturn.LiveTurn{ApplicationID: 11, VersionID: 12, ExecutionID: executionID}, nil
+}
+
+type concurrentAuthorizer struct{}
+
+func (concurrentAuthorizer) AuthorizeChildAgent(context.Context, storage.ChildAgentAuthorization) (storage.ChildAgentGrant, error) {
+	return storage.ChildAgentGrant{Name: "Jira reader", AgentType: "agent"}, nil
+}
+
+// The rate is charged before the start, atomically: of many concurrent
+// starts, only the limit reach the start use case, and a refused one discards
+// the conversation it created.
+func TestChildTurnRateLimitHoldsUnderConcurrentStarts(t *testing.T) {
+	const limit, callers = 2, 8
+	starts := &gatedChildStarts{release: make(chan struct{})}
+	store := &fakeChildStore{}
+	h := newChildTurnHandler(ChildTurnDependencies{
+		Start: starts, Authorizer: concurrentAuthorizer{}, Store: store, Audit: &recordedAudit{},
+		Turns:   concurrentTurns{},
+		Limiter: failurelimit.New(limit, time.Minute),
+	})
+	var refused atomic.Int32
+	var wg sync.WaitGroup
+	codes := make([]int, callers)
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			response := callChild(h, http.MethodPost, childStartURL, childBody("x", "key"+strconv.Itoa(i)))
+			codes[i] = response.Code
+			if response.Code == http.StatusTooManyRequests {
+				refused.Add(1)
+			}
+		}(i)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && starts.entered.Load()+refused.Load() < callers {
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(starts.release)
+	wg.Wait()
+	if got := starts.entered.Load(); got != limit {
+		t.Fatalf("%d starts reached the start use case, want %d (codes %v)", got, limit, codes)
+	}
+	if refused.Load() != callers-limit {
+		t.Fatalf("refused %d, want %d (codes %v)", refused.Load(), callers-limit, codes)
+	}
+	if len(store.discarded) != callers-limit {
+		t.Fatalf("discarded %d conversations, want %d", len(store.discarded), callers-limit)
+	}
+}
+
+// A restart the start use case answers as a replay admitted nothing, so it
+// gives its charge back: the limit counts only admitted starts.
+func TestChildTurnReplayIsNotCharged(t *testing.T) {
+	h, _, _, _, store, _ := childHandler()
+	h.limiter = failurelimit.New(2, time.Minute)
+	// k1 is admitted but its stamp is lost (charge 1 of 2).
+	store.recordErr = context.DeadlineExceeded
+	if response := callChild(h, http.MethodPost, childStartURL, childBody("x", "k1")); response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("k1: %d %s", response.Code, response.Body.String())
+	}
+	store.recordErr = nil
+	// The retry restarts with the same question id: a replay, refunded.
+	if response := callChild(h, http.MethodPost, childStartURL, childBody("x", "k1")); response.Code != http.StatusAccepted {
+		t.Fatalf("k1 retry: %d %s", response.Code, response.Body.String())
+	}
+	if response := callChild(h, http.MethodPost, childStartURL, childBody("y", "k2")); response.Code != http.StatusAccepted {
+		t.Fatalf("k2 was charged for k1's replay: %d %s", response.Code, response.Body.String())
+	}
+	if response := callChild(h, http.MethodPost, childStartURL, childBody("z", "k3")); response.Code != http.StatusTooManyRequests {
+		t.Fatalf("k3: %d %s", response.Code, response.Body.String())
+	}
+}
+
+// A nested pipeline is refused as the contract's 422 and starts nothing.
+func TestChildTurnRefusesANestedPipeline(t *testing.T) {
+	h, _, authorizer, starts, store, _ := childHandler()
+	authorizer.err = storage.ErrChildAgentPipeline
+	response := callChild(h, http.MethodPost, childStartURL, childBody("run it", "k1"))
+	if response.Code != http.StatusUnprocessableEntity || decodeChild(t, response)["error"] != "child_agent_unsupported" {
+		t.Fatalf("%d %s", response.Code, response.Body.String())
+	}
+	if len(starts.requests) != 0 || len(store.requests) != 0 {
+		t.Fatal("a refused pipeline prepared or started something")
 	}
 }

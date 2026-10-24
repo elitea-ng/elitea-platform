@@ -22,7 +22,7 @@ use crate::loopback::LoopbackListener;
 use crate::pkce;
 use crate::settings::{Settings, SettingsFiles, resolve_client_id};
 use crate::store::{
-    PendingRevoke, SecretStore, StoredSession, load_pending, load_session, save_pending,
+    PendingRevoke, SecretStore, StoreLock, StoredSession, load_pending, load_session, save_pending,
     save_session,
 };
 use crate::tokens::{CodeExchange, TokenEndpoint, TokenOutcome, TokenSet};
@@ -413,6 +413,11 @@ impl AuthService {
 
     async fn refresh_inner(&self, stale: Option<String>) -> Result<RefreshResult, HostError> {
         let _gate = self.refresh_gate.lock().await;
+        // And against the other process on the credentials file (the ACP
+        // agent beside the app): held from reading the session to storing
+        // its rotation, so the two never spend one refresh token twice, and
+        // the session below is read from the file as it is now.
+        let _file_lock = self.lock_store().await?;
         // A refresh that finished while this call waited already replaced the
         // token the caller saw fail: do not rotate the refresh token twice.
         if let Some(stale) = stale {
@@ -476,6 +481,15 @@ impl AuthService {
         }
     }
 
+    /// The store's cross-process lock, waited for off the async runtime
+    /// (another process may hold it across its own refresh).
+    async fn lock_store(&self) -> Result<StoreLock, HostError> {
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || store.lock_exclusive())
+            .await
+            .map_err(|e| HostError::Internal(e.to_string()))?
+    }
+
     async fn exchange_refresh(&self, endpoint: &str, session: &StoredSession) -> TokenOutcome {
         self.tokens
             .refresh(endpoint, &session.refresh_token, &session.client_id)
@@ -515,6 +529,7 @@ impl AuthService {
     ) -> Result<Option<tokio::task::JoinHandle<bool>>, HostError> {
         let pending = {
             let _gate = self.refresh_gate.lock().await;
+            let _file_lock = self.lock_store().await?;
             let pending = self
                 .current_session()
                 .await?

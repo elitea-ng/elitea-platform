@@ -17,7 +17,7 @@ import { resetConfigForTests } from '@/shared/config/get-config';
 import { server } from '../../test/setup';
 
 import { isCloudOnlyPick, type AgentSelection } from './useAgentSelection';
-import { useRunInCloud, type RunInCloud } from './useRunInCloud';
+import { pipelineComposerBinding, useRunInCloud, type RunInCloud } from './useRunInCloud';
 
 const BASE = '/api/v2';
 const UUID = 'c0ffee00-0000-4000-8000-000000000088';
@@ -145,5 +145,46 @@ describe('useRunInCloud', () => {
     serve(422);
     expect(await runOnce('ship it')).toBe(false);
     expect(screen.queryByText('chat page')).not.toBeInTheDocument();
+  });
+});
+
+describe('pipelineComposerBinding', () => {
+  const run = (overrides: Partial<RunInCloud> = {}): RunInCloud => ({ run: () => Promise.resolve(true), running: false, error: null, canRun: true, ...overrides });
+
+  it('gates the send on the cloud run alone, never on the local session', () => {
+    // Nothing here knows the local session: a busy or unready local host cannot hold the pipeline back.
+    expect(pipelineComposerBinding(run()).canSend).toBe(true);
+    expect(pipelineComposerBinding(run({ canRun: false })).canSend).toBe(false);
+    expect(pipelineComposerBinding(run({ running: true, canRun: false }))).toMatchObject({ canSend: false, busy: true, showMode: false, acceptImages: false });
+  });
+});
+
+describe('useRunInCloud canRun', () => {
+  it('needs a signed-in user and a project, not the local session', async () => {
+    server.use(http.get(`${BASE}/social/author`, () => HttpResponse.json({ id: 3, name: 'Me' })));
+    const seen: { projectId: number; canRun: boolean; ready: boolean }[] = [];
+    function Probe({ projectId }: { projectId: number }): null {
+      const cloud = useRunInCloud(projectId, selection());
+      seen.push({ projectId, canRun: cloud.canRun, ready: useGetCurrentAuthor().isSuccess });
+      return null;
+    }
+    const rootRoute = createRootRoute({
+      component: () => (
+        <>
+          <Probe projectId={42} />
+          <Probe projectId={0} />
+        </>
+      ),
+    });
+    const router = createRouter({ routeTree: rootRoute, history: createMemoryHistory({ initialEntries: ['/'] }) });
+    render(
+      <AppProviders>
+        <RouterProvider router={router} />
+      </AppProviders>,
+    );
+    // Before the user is known, nothing can run.
+    expect(seen.find((entry) => !entry.ready)?.canRun ?? false).toBe(false);
+    await waitFor(() => expect(seen.some((entry) => entry.projectId === 42 && entry.ready && entry.canRun)).toBe(true));
+    expect(seen.filter((entry) => entry.projectId === 0).every((entry) => !entry.canRun)).toBe(true);
   });
 });

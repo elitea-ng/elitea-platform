@@ -273,11 +273,16 @@ func (h *childTurnHandler) start(writer http.ResponseWriter, request *http.Reque
 		writeChildStarted(writer, conversation.ExecutionID, conversation.ResponseMessageID, conversation.ConversationUUID, false)
 		return
 	}
-	// RATE. Only a start this request may admit is charged; a replay costs
-	// nothing.
+	// RATE. Charged up front in one step (Take), so concurrent starts cannot
+	// all pass a check made before any of them is charged; refunded below
+	// when this request admitted nothing (a failed start, or a replay of a
+	// turn already admitted).
 	limitKey := "actor:" + strconv.FormatInt(actor, 10)
-	if blocked, retry := h.limiter.Blocked(limitKey); blocked {
+	if admitted, retry := h.limiter.Take(limitKey); !admitted {
 		call.outcome = "rate_limited"
+		if conversation.Created {
+			h.store.DiscardChildConversation(request.Context(), projectID, conversation.ConversationUUID)
+		}
 		writer.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retry.Seconds()))))
 		desktopwire.WriteError(writer, http.StatusTooManyRequests, "rate_limited",
 			"Too many child turns from this caller. Retry after the interval in Retry-After.")
@@ -295,6 +300,7 @@ func (h *childTurnHandler) start(writer http.ResponseWriter, request *http.Reque
 		TriggerOrigin: executiondomain.TriggerOriginManual,
 	})
 	if err != nil {
+		h.limiter.Refund(limitKey)
 		call.outcome = "start_error"
 		if conversation.Created {
 			h.store.DiscardChildConversation(request.Context(), projectID, conversation.ConversationUUID)
@@ -302,8 +308,8 @@ func (h *childTurnHandler) start(writer http.ResponseWriter, request *http.Reque
 		writeChildStartError(request.Context(), writer, err)
 		return
 	}
-	if outcome.Created {
-		h.limiter.Fail(limitKey)
+	if !outcome.Created {
+		h.limiter.Refund(limitKey)
 	}
 	if err := h.store.RecordChildStart(request.Context(), projectID, conversation.ConversationUUID,
 		outcome.ExecutionID, outcome.ResponseMessageID); err != nil {
@@ -375,6 +381,9 @@ func writeChildAuthorizationError(ctx context.Context, writer http.ResponseWrite
 	case errors.Is(err, storage.ErrChildAgentNotInAgent):
 		desktopwire.WriteError(writer, http.StatusForbidden, "child_agent_not_in_agent",
 			"This agent is not one the running agent uses as a tool, so it cannot run as its child.")
+	case errors.Is(err, storage.ErrChildAgentPipeline):
+		desktopwire.WriteError(writer, http.StatusUnprocessableEntity, "child_agent_unsupported",
+			"A pipeline does not run as a nested agent of a workspace turn; run this agent in the cloud.")
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		desktopwire.WriteError(writer, http.StatusServiceUnavailable, "local_child_turn_unavailable_now", "The call was cancelled.")
 	default:

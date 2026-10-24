@@ -51,14 +51,23 @@ pub struct PollPolicy {
 }
 
 impl PollPolicy {
+    /// The quickest a child is ever polled: a zero retry delay must not
+    /// read it in a tight loop.
+    pub const FLOOR: Duration = Duration::from_millis(50);
+
     /// The turn's polling, from its retry delay: half a second backing off
     /// to three under the default delay (2 s), and as quick as a short
-    /// test delay makes it.
+    /// test delay makes it, but never under [`Self::FLOOR`].
     #[must_use]
     pub fn for_retry(retry: RetryPolicy) -> Self {
+        let first = retry.delay.min(Duration::from_millis(500)).max(Self::FLOOR);
         Self {
-            first: retry.delay.min(Duration::from_millis(500)),
-            max: retry.delay.saturating_mul(4).min(Duration::from_secs(3)),
+            first,
+            max: retry
+                .delay
+                .saturating_mul(4)
+                .min(Duration::from_secs(3))
+                .max(first),
         }
     }
 }
@@ -243,11 +252,48 @@ pub async fn call(
             return result;
         }
     };
-    let (status, result, usage) = follow(context, spec, call_id, &started).await;
-    if let Some(lane) = guard.disarm() {
-        lane.finish(status, &result, usage.as_ref());
+    let end = follow(context, spec, call_id, &started).await;
+    if !end.settled {
+        // The child may still run (its reads failed, or its state is one
+        // this app does not know): stop it rather than leave it running
+        // unwatched. Best effort; the call answers its error either way.
+        stop_child(&context.remote, &started.response_message_id).await;
     }
-    result
+    if let Some(lane) = guard.disarm() {
+        lane.finish(end.status, &end.result, end.usage.as_ref());
+    }
+    end.result
+}
+
+/// How [`follow`] ended: its lane status, the model's result, the last usage
+/// read, and whether the child itself reached a state that ends the call (a
+/// terminal one, or a pause left for the web chat). An unsettled end leaves
+/// a child that may still run, and the call stops it.
+struct FollowEnd {
+    status: &'static str,
+    result: Value,
+    usage: Option<Value>,
+    settled: bool,
+}
+
+impl FollowEnd {
+    fn settled(status: &'static str, result: Value, usage: Option<Value>) -> Self {
+        Self {
+            status,
+            result,
+            usage,
+            settled: true,
+        }
+    }
+
+    fn unsettled(result: Value, usage: Option<Value>) -> Self {
+        Self {
+            status: "failed",
+            result,
+            usage,
+            settled: false,
+        }
+    }
 }
 
 struct Started {
@@ -318,19 +364,21 @@ async fn start(remote: Arc<RemoteContext>, body: Value) -> Result<Started, Value
     }
 }
 
-/// Read the child until it settles; answers its lane status, the model's
-/// result and the last usage read.
+/// Read the child until it settles.
 async fn follow(
     context: &ChildAgentContext,
     spec: &ChildAgentSpec,
     call_id: &str,
     started: &Started,
-) -> (&'static str, Value, Option<Value>) {
+) -> FollowEnd {
     let remote = &context.remote;
     let mut interval = context.poll.first;
     let mut failures = 0;
     let mut decisions = 0;
     let mut usage = None;
+    // The pause last answered: until the child moves past it, a read may
+    // still report it, and it is not asked again.
+    let mut answered: Option<String> = None;
     loop {
         tokio::time::sleep(interval).await;
         interval = (interval * 2).min(context.poll.max);
@@ -350,8 +398,7 @@ async fn follow(
                     .get("error")
                     .and_then(Value::as_str)
                     .map_or_else(|| format!("http_{}", answer.status), str::to_owned);
-                return (
-                    "failed",
+                return FollowEnd::unsettled(
                     error_result(&code, "the platform could not read the agent's run"),
                     usage,
                 );
@@ -359,8 +406,7 @@ async fn follow(
             _ => {
                 failures += 1;
                 if failures >= remote.retry.attempts {
-                    return (
-                        "failed",
+                    return FollowEnd::unsettled(
                         error_result(
                             "child_agent_unavailable",
                             "the platform stopped answering about the agent's run",
@@ -386,18 +432,31 @@ async fn follow(
             result["child_conversation_uuid"] = json!(started.conversation_uuid);
             result
         };
+        let interrupt_id = state
+            .get("interrupt")
+            .and_then(|interrupt| interrupt.get("interrupt_id"))
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty());
         match text("status") {
             "running" => {}
-            "completed" => return ("completed", completed(&state, started), usage),
+            // Answered already: the resume has not reached the read yet.
+            "interrupted" if interrupt_id.is_some() && interrupt_id == answered.as_deref() => {}
+            "completed" => {
+                return FollowEnd::settled("completed", completed(&state, started), usage);
+            }
             "failed" => {
                 let message = match text("error") {
                     "" => "the agent's run failed",
                     message => message,
                 };
-                return ("failed", error_result("child_agent_failed", message), usage);
+                return FollowEnd::settled(
+                    "failed",
+                    error_result("child_agent_failed", message),
+                    usage,
+                );
             }
             "cancelled" => {
-                return (
+                return FollowEnd::settled(
                     "cancelled",
                     error_result("child_agent_cancelled", "the agent's run was stopped"),
                     usage,
@@ -407,7 +466,7 @@ async fn follow(
                 decisions += 1;
                 let Some(action) = decide(context, spec, call_id, state.get("interrupt")).await
                 else {
-                    return (
+                    return FollowEnd::settled(
                         "failed",
                         open_in_chat("asked a question this app cannot answer"),
                         usage,
@@ -430,29 +489,39 @@ async fn follow(
                     // follow it either way.
                     Ok(answer) if (200..300).contains(&answer.status) || answer.status == 409 => {}
                     _ => {
-                        return (
+                        return FollowEnd::settled(
                             "failed",
                             open_in_chat("is waiting on a decision that could not be sent"),
                             usage,
                         );
                     }
                 }
+                answered = interrupt_id.map(str::to_owned);
                 interval = context.poll.first;
             }
-            "interrupted" => return ("failed", open_in_chat("keeps asking for decisions"), usage),
+            "interrupted" => {
+                return FollowEnd::settled(
+                    "failed",
+                    open_in_chat("keeps asking for decisions"),
+                    usage,
+                );
+            }
             "authorization_required" => {
-                return (
+                return FollowEnd::settled(
                     "failed",
                     open_in_chat("needs a sign-in to one of its tools"),
                     usage,
                 );
             }
             "output_limit" => {
-                return ("failed", open_in_chat("stopped at its output limit"), usage);
+                return FollowEnd::settled(
+                    "failed",
+                    open_in_chat("stopped at its output limit"),
+                    usage,
+                );
             }
             _ => {
-                return (
-                    "failed",
+                return FollowEnd::unsettled(
                     error_result(
                         "invalid_response",
                         "the platform answered an unknown run state",
@@ -594,12 +663,21 @@ impl CancelOnDrop {
     }
 }
 
-/// `cancelChatExecution` of a child, best effort.
+/// `cancelChatExecution` of a child, best effort (logged when it fails).
 async fn stop_child(context: &RemoteContext, response_message_id: &str) {
-    let _ = context
+    match context
         .api
         .child_turn_cancel(context.project_id, response_message_id)
-        .await;
+        .await
+    {
+        Ok(answer) if (200..300).contains(&answer.status) || matches!(answer.status, 404 | 409) => {
+        }
+        Ok(answer) => log::warn!(
+            "could not stop a cloud child turn: the platform answered {}",
+            answer.status
+        ),
+        Err(error) => log::warn!("could not stop a cloud child turn: {error}"),
+    }
 }
 
 impl Drop for CancelOnDrop {

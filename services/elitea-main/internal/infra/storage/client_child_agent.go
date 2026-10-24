@@ -11,6 +11,11 @@ import (
 // agent's own `application` tools, or the turn has no agent at all.
 var ErrChildAgentNotInAgent = errors.New("the agent is not one the running agent nests")
 
+// ErrChildAgentPipeline: the nested version is a pipeline. A pipeline does
+// not run as the child of a local turn (the desktop refuses it too, as
+// `nested_agents_unsupported`); the person runs the agent in the cloud.
+var ErrChildAgentPipeline = errors.New("a pipeline does not run as the child of a local turn")
+
 // ChildAgentAuthorization is one cloud child turn of a local turn to
 // authorize (issue 1239).
 type ChildAgentAuthorization struct {
@@ -42,8 +47,10 @@ type ChildAgentGrant struct {
 // agent of a version the turn does not run) is ErrChildAgentNotInAgent, so a
 // live turn is never a way to start an arbitrary agent.
 //
-// It answers ErrChildAgentNotInAgent, ErrContentUnavailable or the context's
-// error. The child is run under the caller's own grants by the ordinary start
+// A pipeline child is ErrChildAgentPipeline, whatever its nesting.
+//
+// It answers ErrChildAgentNotInAgent, ErrChildAgentPipeline,
+// ErrContentUnavailable or the context's error. The child is run under the caller's own grants by the ordinary start
 // use case, which freezes and checks it like any chat turn.
 func (service *ClientApplicationVersionService) AuthorizeChildAgent(
 	ctx context.Context,
@@ -89,6 +96,9 @@ func (service *ClientApplicationVersionService) AuthorizeChildAgent(
 	// A version whose name or type is not text still runs; only the title
 	// and the type are left empty.
 	_ = json.Unmarshal(childRecord.VersionDetails, &details)
+	if details.AgentType == "pipeline" {
+		return ChildAgentGrant{}, ErrChildAgentPipeline
+	}
 	return ChildAgentGrant{Name: details.Name, AgentType: details.AgentType}, nil
 }
 
