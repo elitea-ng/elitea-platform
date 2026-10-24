@@ -41,7 +41,7 @@ import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import { NewChatInput } from '@/features/chat-input';
-import { composer, SuggestionMenu, type StepsCommand, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
+import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
 
 import type { ComposerSkill } from './useAgentSkills';
 import { useImageAttachments } from './useImageAttachments';
@@ -106,6 +106,9 @@ export interface WorkspaceComposerProps {
   /** The composer got focus: the page lets the host read ahead for the send (#1213). */
   onFocus?: () => void;
 }
+
+/** What `/steps <value>` asks for (`composer.stepsCommand`). */
+export type StepsCommand = NonNullable<ReturnType<typeof composer.stepsCommand>>;
 
 function sendButtonSx(theme: Theme) {
   return {

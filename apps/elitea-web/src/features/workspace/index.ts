@@ -31,7 +31,7 @@ export { readThreads, recordThread, threadsQueryKey } from './model/threads';
 export type { WorkspaceTurn } from './model/useWorkspaceTurn';
 export { SuggestionMenu } from './ui/SuggestionMenu';
 export type { SuggestionItem } from './ui/SuggestionMenu';
-export type { StepsCommand, WorkspaceCommandId } from './model/composerCommands';
+export type { WorkspaceCommandId } from './model/composerCommands';
 
 /** The composer's text rules ("@"/"/" tokens, referenced paths), its "/" menu (local commands, the custom commands, the agent's skills), its model chip, its image strip (also under a sent prompt) and its usage sum (a thread's tokens), as one bundle. */
 export const composer = {

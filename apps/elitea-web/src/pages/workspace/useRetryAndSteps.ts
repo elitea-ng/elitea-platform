@@ -11,13 +11,13 @@
  */
 import { useRef } from 'react';
 
-import { describeWorkspaceError, type StepsCommand, type WorkspaceCommandId } from '@/features/workspace';
+import { describeWorkspaceError, type WorkspaceCommandId } from '@/features/workspace';
 import { DEFAULT_STEP_LIMIT, MAX_STEP_LIMIT, readStepLimit, writeStepLimit, type StepLimit } from '@/shared/desktop/stepLimit';
 import type { TurnCommand, TurnStartRequest } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
 import type { SessionCommands } from './useSessionCommands';
-import type { WorkspaceComposerProps } from './WorkspaceComposer';
+import type { StepsCommand, WorkspaceComposerProps } from './WorkspaceComposer';
 
 /** One send as the composer made it (images aside). */
 export interface SentMessage {
