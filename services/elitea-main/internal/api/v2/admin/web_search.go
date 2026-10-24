@@ -43,7 +43,7 @@ func webSearchSection() map[string]any {
 				"description": "The provider a web search uses when neither the call nor the toolkit names one. " +
 					"DuckDuckGo instant answers cannot be the default.",
 				"section": section, "default": "",
-				"enum":    append([]string{""}, platformconfig.WebSearchDefaultableProviders()...)},
+				"enum": append([]string{""}, platformconfig.WebSearchDefaultableProviders()...)},
 			{"key": platformconfig.KeyWebSearchDirectFetchEnabled, "type": "boolean", "title": "Allow Direct Fetch",
 				"description": "Whether web_fetch may download a page itself, through the platform's egress guard, " +
 					"instead of through a provider.",
@@ -55,7 +55,7 @@ func webSearchSection() map[string]any {
 				"Hosts a direct fetch may never reach."),
 			{"key": platformconfig.KeyWebSearchAllowHTTP, "type": "boolean", "title": "Allow Plain HTTP",
 				"description": "Whether a direct fetch may use http:// on port 80. Off, only https:// on port 443.",
-				"section": section, "default": defaults.AllowHTTP},
+				"section":     section, "default": defaults.AllowHTTP},
 			{"key": platformconfig.KeyWebSearchMaxResultsCap, "type": "integer", "title": "Web Search Result Cap",
 				"description": "The most results one web search returns.", "section": section,
 				"default": defaults.MaxResultsCap, "minimum": 1, "maximum": platformconfig.MaxWebMaxResultsCap},
