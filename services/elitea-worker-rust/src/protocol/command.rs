@@ -581,7 +581,11 @@ fn validate_toolkit_execute_read_command(
                 toolkit.tool_name.as_str(),
                 toolkit.arguments_entry_id.as_str(),
             ];
-            for value in [&toolkit.toolkit_id, &toolkit.toolkit_version] {
+            for value in [
+                &toolkit.toolkit_id,
+                &toolkit.toolkit_version,
+                &toolkit.attribution_execution_id,
+            ] {
                 if !value.is_empty() {
                     required.push(value.as_str());
                 }

@@ -1,0 +1,24 @@
+{
+ "status": 200,
+ "content_type": "application/json",
+ "body": {
+  "success": true,
+  "data": {
+   "web": [
+    {
+     "title": "tokio 1.53.0 release",
+     "url": "https://github.com/tokio-rs/tokio/releases/tag/tokio-1.53.0",
+     "description": "Fixed a race in the multi-thread scheduler.",
+     "position": 1
+    },
+    {
+     "title": "tokio - crates.io",
+     "url": "https://crates.io/crates/tokio",
+     "description": "An event-driven, non-blocking I/O platform.",
+     "position": 2
+    }
+   ]
+  },
+  "creditsUsed": 2
+ }
+}

@@ -153,6 +153,7 @@ fn call_command(tool: &str, inputs: &CallInputs) -> (Vec<u8>, ClaimCommandRespon
             arguments_entry_id: "toolkit-arguments".to_owned(),
             toolkit_id: "12".to_owned(),
             toolkit_version: "1".to_owned(),
+            attribution_execution_id: String::new(),
         },
     ));
     command.deadline_unix_millis = NOW + 600_000;

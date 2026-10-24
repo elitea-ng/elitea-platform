@@ -361,6 +361,20 @@ impl ProductionAgentRuntime {
                 elitea_platform_rpc::internal_tools::InternalToolClient::new(platform_channel),
             ),
         );
+        // The web families (#1238): provider egress held to the deployment's
+        // allowlist (every registry origin when it names none), metered on
+        // the model facade's channel.
+        let web_runtime = Some(Arc::new(
+            crate::transport::metering::WebRuntime::new(
+                deployment.web_egress_allowlist.as_deref(),
+                deployment
+                    .public_base_url
+                    .as_deref()
+                    .unwrap_or(&deployment.platform_origin),
+            )
+            .map_err(|_| ProductionRuntimeBuildError)?,
+        ));
+        let web_facade = Arc::clone(&model_facade);
         let assembler = Arc::new(
             NativeRuntimeAssembler::postgres(
                 Arc::clone(&platform),
@@ -378,6 +392,7 @@ impl ProductionAgentRuntime {
                     .unwrap_or(crate::transport::model_text::DEFAULT_TOOLKIT_MODEL_CALLS),
             )
             .with_office_runtime(office_runtime.clone())
+            .with_web_runtime(web_runtime.clone())
             .with_workspace_runs(workspace_runs)
             .with_mcp_connector(Arc::clone(&mcp_connector)),
         );
@@ -412,7 +427,8 @@ impl ProductionAgentRuntime {
             platform,
             index_runtime,
         )
-        .with_office(office_runtime);
+        .with_office(office_runtime)
+        .with_web(web_runtime, web_facade);
         let processor = Arc::new(ExecutionDeliveryProcessor::new(
             command_authenticator,
             agent,

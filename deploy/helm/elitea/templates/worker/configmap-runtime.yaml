@@ -53,6 +53,12 @@ data:
     {{- if $r.publicBaseUrl }}
     {{- $_ := set $config "public_base_url" $r.publicBaseUrl }}
     {{- end }}
+    {{- /* The egress allowlist of the web toolkits' provider calls (#1238).
+    Written only when set; the worker then allows every provider origin its
+    registry declares. */}}
+    {{- if $r.webEgressAllowlist }}
+    {{- $_ := set $config "web_egress_allowlist" $r.webEgressAllowlist }}
+    {{- end }}
     {{- if .Values.natsClient.tls.enabled }}
     {{- $_ := set $config "nats_ca_path" (printf "%s/ca.crt" (trimSuffix "/" .Values.natsClient.tls.mountPath)) }}
     {{- $_ := set $config "nats_certificate_path" (printf "%s/tls.crt" (trimSuffix "/" .Values.natsClient.tls.mountPath)) }}

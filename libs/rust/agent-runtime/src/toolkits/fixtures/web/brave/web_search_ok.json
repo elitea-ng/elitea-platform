@@ -1,0 +1,30 @@
+{
+ "status": 200,
+ "content_type": "application/json",
+ "body": {
+  "type": "search",
+  "query": {
+   "original": "tokio 1.53 changelog",
+   "more_results_available": true
+  },
+  "web": {
+   "type": "search",
+   "results": [
+    {
+     "title": "Release tokio-1.53.0",
+     "url": "https://github.com/tokio-rs/tokio/releases/tag/tokio-1.53.0",
+     "description": "Fixed a race in the multi-thread scheduler.",
+     "page_age": "2026-09-30T00:00:00",
+     "extra_snippets": [
+      "JoinSet::try_join_next was added."
+     ]
+    },
+    {
+     "title": "tokio - Rust",
+     "url": "https://docs.rs/tokio/latest/tokio/",
+     "description": "A runtime for writing reliable network applications."
+    }
+   ]
+  }
+ }
+}

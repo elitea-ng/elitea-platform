@@ -87,6 +87,9 @@ pub(crate) struct OrdinaryNativeAgentAssembler {
     /// The platform object client the Office families (`pptx`, `docx`, `xlsx`) read and write
     /// documents with (ADR-0032); `None` leaves them out as unsupported.
     office_runtime: Option<Arc<OfficeRuntime>>,
+    /// The web families' egress allowlist and fetch origin (#1238); `None`
+    /// leaves `web` and `host_intel` toolkits refusing every call.
+    web_runtime: Option<Arc<crate::transport::metering::WebRuntime>>,
     /// The cloud executor (ADR-0034): `None` on a worker that cannot run a
     /// handed-off thread's turn, which then fails such a turn.
     workspace_runs: Option<Arc<crate::workspace_run::turn::WorkspaceRunFactory>>,
@@ -129,6 +132,7 @@ impl OrdinaryNativeAgentAssembler {
             index_runtime: None,
             toolkit_model_call_cap: crate::transport::model_text::DEFAULT_TOOLKIT_MODEL_CALLS,
             office_runtime: None,
+            web_runtime: None,
             workspace_runs: None,
         }
     }
@@ -151,6 +155,16 @@ impl OrdinaryNativeAgentAssembler {
         office_runtime: Option<Arc<OfficeRuntime>>,
     ) -> Self {
         self.office_runtime = office_runtime;
+        self
+    }
+
+    /// Lend the web families' runtime (#1238).
+    #[must_use]
+    pub(crate) fn with_web_runtime(
+        mut self,
+        web_runtime: Option<Arc<crate::transport::metering::WebRuntime>>,
+    ) -> Self {
+        self.web_runtime = web_runtime;
         self
     }
 
@@ -563,6 +577,14 @@ impl OrdinaryNativeAgentAssembler {
             if carries_office_family {
                 artifact_authority = artifact_authority.with_office(office);
             }
+        }
+        // The web families (#1238) meter every provider call through the
+        // gateway under this claim; built only when the snapshot has one.
+        if let Some(web) = self.web_runtime.as_ref()
+            && snapshot_carries_web_family(tool_snapshot)
+        {
+            artifact_authority =
+                artifact_authority.with_web(web.host(&self.model_facade, &context, None));
         }
         // The index tools (ADR-0030 I1) act under the same claim: its vector
         // token, its redeemed context for the query embedding, and a chat
@@ -1155,6 +1177,14 @@ struct DirectToolsets {
 /// `pptx`, `docx`, `xlsx`) or one that reads and writes files through the same
 /// host (`imagegen`; `sharepoint`, whose `upload_file` reads artifacts and
 /// whose readers turn documents into text).
+/// Whether a configured `web` or `host_intel` toolkit is in the snapshot.
+pub(super) fn snapshot_carries_web_family(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
+    snapshot.iter().any(|reference| {
+        reference.kind() == FrozenToolKind::Configured
+            && matches!(reference.tool_type(), "web" | "host_intel")
+    })
+}
+
 pub(super) fn snapshot_carries_office_family(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
     snapshot.iter().any(|reference| {
         reference.kind() == FrozenToolKind::Configured

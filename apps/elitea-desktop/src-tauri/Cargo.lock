@@ -1594,6 +1594,7 @@ dependencies = [
  "bytes",
  "chrono",
  "elitea-connectors",
+ "elitea-egress-guard",
  "elitea-platform-rpc",
  "fancy-regex 0.18.0",
  "futures",
@@ -1751,6 +1752,14 @@ dependencies = [
  "chardetng",
  "elitea-content-source",
  "encoding_rs",
+]
+
+[[package]]
+name = "elitea-egress-guard"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.28",
+ "tokio",
 ]
 
 [[package]]

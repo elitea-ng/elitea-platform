@@ -94,6 +94,7 @@ fn fixture(kind: ToolkitCommandKind) -> (WorkerCommandV1, ClaimCommandResponseV1
                     arguments_entry_id: "toolkit-arguments".into(),
                     toolkit_id: "12".into(),
                     toolkit_version: "1".into(),
+                    attribution_execution_id: String::new(),
                 }),
             );
         }
