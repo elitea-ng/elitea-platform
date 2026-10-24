@@ -2264,6 +2264,11 @@ type ContextParts = {
 };
 ```
 
+The UI also sends `compact: true` when a thread was idle for 5 minutes and
+its `message_tokens` are at least 40k (the whole request at least 60k for
+a host without `parts`): the provider's prompt cache has expired by then.
+A notice says so, and the person can cancel it or turn it off.
+
 It carries estimates and budget arithmetic only, never model content. The
 host measures each part of the provider body at the same rate as the whole
 (4 bytes a token). `message_tokens` takes what is left, so the parts add up

@@ -13,7 +13,8 @@
  * A local thread's footer also shows the usage chip (`UsageChip`, lazy: the
  * latest turn's tokens, the thread's, a cost only from the catalogue's
  * price, #1227); what fills the context is the inspector's Context tab
- * (`ContextPanel`); `/compact` marks the next send. Beside them the
+ * (`ContextPanel`); `/compact` marks the next send, and so does a thread
+ * left idle (`useIdleCompaction`). Beside them the
  * language-server chip (`LspChip`, lazy, #1236): the servers behind the
  * edits' diagnostics.
  * And the model chip (`ModelChip`, `useTurnModel`): the model the next turn
@@ -31,7 +32,7 @@ import { lazy, Suspense, useMemo, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 
 import { composer, replayView, type WorkspaceTurn } from '@/features/workspace';
-import type { TurnMode, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
 import { BypassControls } from './BypassControls';
@@ -46,7 +47,7 @@ import { pipelineComposerBinding, useComposerPipeline, type ComposerPipeline } f
 import type { ThreadHandoff } from './useThreadHandoff';
 import type { ThreadSession } from './useThreadSession';
 import type { SessionCommands } from './useSessionCommands';
-import { useBypassMode } from './useBypassMode';
+import { useComposerModes } from './useComposerModes';
 import { useTurnModel, type TurnModelControl } from './useTurnModel';
 import { WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
 
@@ -65,12 +66,6 @@ export interface ThreadComposerProps {
   cloud: CloudChat;
   skills: readonly ComposerSkill[];
 }
-
-/** The turn's mode: Plan wins over a folder's bypass mode. */
-const turnMode = (planMode: boolean, bypass: boolean): TurnMode => {
-  if (planMode) return 'plan';
-  return bypass ? 'bypass' : 'act';
-};
 
 /** What differs when the thread's messages go to the cloud copy. */
 function cloudBinding(cloud: CloudChat): Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop' | 'placeholder' | 'showMode'> {
@@ -166,7 +161,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   const { pipeline, run: runInCloud, remember, refusedPrompt, turnError } = composerPipeline;
   const model = useTurnModel(workspaceId, projectId, session.raw, turn, session.history);
   const local = !cloudMode && !pipeline;
-  const bypass = useBypassMode(workspaceId);
+  const modes = useComposerModes(workspaceId, local, turn, session.history, commands);
   const { customCommands, offered, onFocus } = useSlashSources(ipc, workspaceId, projectId, local, skills, session.prewarm, commands.notice === 'help');
   const here: Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'> = {
     canSend: session.canSend && !handoff.offLaptop,
@@ -174,7 +169,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     onSend: async (prompt, mentions, picked, command, images) => {
       model.dismissNotice();
       remember(prompt);
-      const sent = await session.send(prompt, turnMode(commands.planMode, bypass.on), mentions, picked, commands.compactNext, model.choice, command, images);
+      const sent = await session.send(prompt, modes.mode, mentions, picked, commands.compactNext, model.choice, command, images);
       if (sent && commands.compactNext) commands.compactSent();
       return sent;
     },
@@ -189,7 +184,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     <>
       <HandoffBanner handoff={handoff} />
       <SessionNotices error={modelNotice ?? firstError(turnError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={offered} />
-      <BypassControls bypass={bypass} active={local && bypass.on && !commands.planMode} />
+      <BypassControls bypass={modes.bypass} active={modes.bypassActive} />
       <RunInCloudNotice cloudOnly={pipeline} refusedPrompt={refusedPrompt} running={runInCloud.running} error={runInCloud.error} onRun={(prompt) => void runInCloud.run(prompt)} />
       <WorkspaceComposer
         ipc={ipc}
@@ -197,8 +192,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         readOnly={handoff.offLaptop && !cloudMode}
         acceptImages={!cloudMode}
         planMode={commands.planMode}
-        bypass={local && bypass.on}
-        onBypassChange={local ? bypass.request : undefined}
+        {...modes.switchProps}
         agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} disabledHint={agentHint} />}
         {...modelBinding(model, !local, commands.modelRef)}
         runLocation={<RunLocationChip handoff={handoff} onOpenInChat={openInChat} />}

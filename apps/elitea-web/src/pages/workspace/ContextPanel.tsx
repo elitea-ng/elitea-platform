@@ -5,12 +5,15 @@
  * messages), then the compaction's buffer and the free space, each in
  * tokens and as a share of the window (`contextBreakdown`). The figures are
  * the host's estimates of the request it sent, never its content (IPC.md
- * "Context window"). While a summary call runs the tab says so. Loaded
- * lazily by `SessionPanel`.
+ * "Context window"). While a summary call runs the tab says so. The
+ * switch below turns idle compaction off for the app (`useIdleCompaction`).
+ * Loaded lazily by `SessionPanel`.
  */
 import { useEffect, useState } from 'react';
 
 import Box from '@mui/material/Box';
+import FormControlLabel from '@mui/material/FormControlLabel';
+import Switch from '@mui/material/Switch';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
@@ -18,6 +21,7 @@ import type { ContextMeter } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
 import { contextBreakdown, formatPercent, formatTokens, updatedAgo, WARN_PERCENT, type ContextRowKey } from './contextBreakdown';
+import { setIdleCompaction, useIdleCompactionEnabled } from './useIdleCompaction';
 
 const ROW_COLOR: Readonly<Record<ContextRowKey, (theme: Theme) => string>> = {
   system: (theme) => theme.vars.palette.primary.main,
@@ -61,7 +65,32 @@ function Notes({ meter }: { meter: ContextMeter }): React.JSX.Element {
   );
 }
 
+/** The app's switch for `useIdleCompaction`. */
+function IdleSwitch(): React.JSX.Element {
+  const enabled = useIdleCompactionEnabled();
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+      <FormControlLabel
+        control={<Switch size="small" checked={enabled} onChange={(_event, checked) => setIdleCompaction(checked)} />}
+        label={<Typography variant="bodySmall">{t('workspace.context.idleSwitch', 'Summarize after the thread is idle')}</Typography>}
+      />
+      <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
+        {t('workspace.context.idleHelp', 'After 5 minutes without a turn, the next message first summarizes a long conversation. This is for all folders.')}
+      </Typography>
+    </Box>
+  );
+}
+
 export default function ContextPanel({ meter }: { meter: ContextMeter | undefined }): React.JSX.Element {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <Figures meter={meter} />
+      <IdleSwitch />
+    </Box>
+  );
+}
+
+function Figures({ meter }: { meter: ContextMeter | undefined }): React.JSX.Element {
   if (meter === undefined) {
     return (
       <Typography data-testid="context-panel-empty" variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary })}>
@@ -83,7 +112,7 @@ export default function ContextPanel({ meter }: { meter: ContextMeter | undefine
           {t('workspace.context.ofWindow', '{{used}} / {{window}}', { used: formatTokens(breakdown.usedTokens), window: formatTokens(breakdown.windowTokens) })}
         </Typography>
       </Box>
-      <Box role="img" aria-label={t('workspace.context.aria', 'Context in use: {{label}}', { label: summary })} sx={{ display: 'flex', height: 8, borderRadius: 1, overflow: 'hidden' }}>
+      <Box aria-hidden sx={{ display: 'flex', height: 8, borderRadius: 1, overflow: 'hidden' }}>
         {breakdown.rows.map((row) => (
           <Box key={row.key} sx={(theme: Theme) => ({ width: `${String(row.percent)}%`, backgroundColor: ROW_COLOR[row.key](theme) })} />
         ))}

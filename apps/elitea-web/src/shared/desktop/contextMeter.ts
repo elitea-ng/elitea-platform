@@ -25,7 +25,7 @@ export interface ContextMeter {
 }
 
 /** What fills a measured request, in estimated tokens (IPC.md "Context window"). */
-export interface ContextParts {
+interface ContextParts {
   /** The system message: the agent's instructions, the environment and AGENTS.md. */
   system_tokens: number;
   /** The host's and the agent's tool declarations. */

@@ -17,7 +17,7 @@ export const WARN_PERCENT = 80;
 
 export type ContextRowKey = 'system' | 'tools' | 'mcp' | 'skills' | 'messages' | 'used' | 'buffer' | 'free';
 
-export interface ContextRow {
+interface ContextRow {
   key: ContextRowKey;
   label: string;
   tokens: number;

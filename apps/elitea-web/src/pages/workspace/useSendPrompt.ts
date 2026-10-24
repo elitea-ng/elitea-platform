@@ -46,6 +46,11 @@ function notifyStarted(onStarted: ((conversationId: string, prompt: string, imag
 }
 
 /** `/compact` only when asked for: the start request is otherwise as before. */
+/** `plan_mode`, and `bypass_approvals` only when it is on. */
+function modeFields(mode: TurnMode): Pick<TurnStartRequest, 'plan_mode' | 'bypass_approvals'> {
+  return mode === 'bypass' ? { plan_mode: false, bypass_approvals: true } : { plan_mode: mode === 'plan' };
+}
+
 function compactFlag(compact: boolean | undefined): { compact?: true } {
   return compact === true ? { compact: true } : {};
 }
@@ -119,8 +124,7 @@ export function useSendPrompt(
         application_id: Number(agent.id),
         version_id: version.id,
         prompt,
-        plan_mode: mode === 'plan',
-        ...(mode === 'bypass' ? { bypass_approvals: true } : {}),
+        ...modeFields(mode),
         mentions,
         skills,
         ...compactFlag(compact),
