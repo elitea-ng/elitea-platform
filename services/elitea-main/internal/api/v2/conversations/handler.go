@@ -325,6 +325,7 @@ type Handler struct {
 	candidates      ParticipantCandidateStore
 	readEvents      ReadEvents
 	warmer          AttachmentExtractionWarmer
+	namer           NameCompleter
 }
 
 // EventEmitter is the seam to internal/events.Publisher — declared locally,
