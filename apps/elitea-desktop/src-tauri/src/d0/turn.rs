@@ -2775,7 +2775,7 @@ impl AgentHost {
         model: Arc<dyn Llm>,
         limits: ModelContextLimits,
         admitted: &Admitted,
-        host: ContextHost,
+        mut host: ContextHost,
         compact: bool,
         turn_context: &TurnContext,
         summary_model: Option<context::LowTierModel>,
@@ -2825,6 +2825,7 @@ impl AgentHost {
         })
         .map_err(|e| TurnError::new("model_unavailable", e.to_string()))?
         .adk_model();
+        host.compact_at = policy.trigger_tokens(&budget);
         let compaction = Arc::new(StepCompaction::new(
             policy,
             Arc::new(context::ProviderBudget {
@@ -2833,6 +2834,7 @@ impl AgentHost {
                 replay: transport.replay,
                 tail: transport.tail.clone(),
                 cache_hints: transport.cache_hints,
+                parts: host.parts.clone(),
             }),
             summarizer,
             Arc::new(host),
@@ -3087,6 +3089,8 @@ impl AgentHost {
                 service: memory.service.clone(),
                 session_id: memory.session_id.clone(),
                 limits,
+                parts: context::MeasuredParts::default(),
+                compact_at: 0,
             },
             request.compact,
             turn_context,

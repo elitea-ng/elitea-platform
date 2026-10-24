@@ -41,6 +41,7 @@ import { SessionInspector } from './SessionPanel';
 import { ThreadComposer } from './ThreadComposer';
 import { ThreadToolbar } from './ThreadToolbar';
 import { UnboundFolder } from './UnboundFolder';
+import { threadMeter } from './contextBreakdown';
 import { useCloudChat } from './useCloudChat';
 import { useSessionFork } from './useForkThread';
 import { useAgentSkills } from './useAgentSkills';
@@ -157,6 +158,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
         decided={session.decided}
         plan={session.plan}
         planMode={commands.planMode}
+        context={handoff.status?.executor === 'cloud' ? undefined : threadMeter(turn, session.history)}
       />
       <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} />
       <approval.Dialog request={pendingApproval} queued={waiting.length} onRespond={session.answer} />

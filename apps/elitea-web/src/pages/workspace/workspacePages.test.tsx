@@ -1278,8 +1278,6 @@ describe('WorkspaceSessionPage', () => {
       });
       ipc.emit({ turn_id: 'turn-1', seq: 4, kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: [], changed_files: 1 } });
       expect(await screen.findByText('a.txt')).toBeInTheDocument();
-      // The composer's context meter shows the call's occupancy.
-      expect(await screen.findByTestId('context-meter')).toHaveTextContent('62% of 200K');
       await user.type(input, '/undo{Enter}');
       const dialog = await screen.findByRole('dialog', { name: 'Undo this turn?' });
       await user.click(within(dialog).getByRole('button', { name: 'Undo turn' }));

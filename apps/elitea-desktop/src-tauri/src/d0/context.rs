@@ -40,7 +40,7 @@ use adk_core::{Content, Event, EventCompaction, LlmRequest, Part};
 use adk_session::{GetRequest, SessionService};
 use async_trait::async_trait;
 use elitea_agent_runtime::context_budget::{
-    ModelRequestBudget, RequestContextBudget, RequestContextUsage,
+    ModelRequestBudget, RequestContextBudget, RequestContextUsage, estimate_tokens,
 };
 use elitea_agent_runtime::context_management::{
     Compaction, CompactionHost, CompactionPolicy, FileOp, FileTouch, SESSION_COMPACTION_KEY,
@@ -267,6 +267,89 @@ pub fn policy(details: &Map<String, Value>) -> Option<CompactionPolicy> {
     }
 }
 
+/// What fills a measured request, in estimated tokens: each part of the
+/// provider body at [`estimate_tokens`]' rate (estimates, never content).
+/// `message_tokens` takes the rest of the request's estimate (the history,
+/// the host context and the body's own keys), so the parts add up to it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ContextParts {
+    /// The system message: the agent's instructions, the environment and
+    /// the project instructions.
+    pub system_tokens: u64,
+    /// The declarations of the host's and the agent's tools.
+    pub tool_tokens: u64,
+    /// The declarations of the person's local MCP tools (`mcp__`).
+    pub mcp_tool_tokens: u64,
+    /// The `load_skill` catalogue and the skills picked for the turn.
+    pub skill_tokens: u64,
+    /// The conversation: everything else.
+    pub message_tokens: u64,
+}
+
+/// The parts of the last request [`ProviderBudget`] measured, for the
+/// [`ContextHost`] that reports it.
+pub type MeasuredParts = Arc<Mutex<Option<ContextParts>>>;
+
+/// The tool that loads a skill from the agent's catalogue.
+const LOAD_SKILL: &str = "load_skill";
+
+fn encoded_len(value: &Value) -> usize {
+    serde_json::to_vec(value).map_or(0, |bytes| bytes.len())
+}
+
+/// The bytes of `text` in the picked skills' section
+/// ([`super::skills::SKILLS_HEADING`] to its end line).
+fn skill_section_len(text: &str) -> usize {
+    let Some(start) = text.find(super::skills::SKILLS_HEADING) else {
+        return 0;
+    };
+    let end = text[start..]
+        .find(super::skills::END_OF_SKILLS)
+        .map_or(text.len(), |at| {
+            start + at + super::skills::END_OF_SKILLS.len()
+        });
+    end - start
+}
+
+/// The parts of `body` (a provider body whose estimate is `estimated`).
+#[must_use]
+pub fn parts_of(body: &Value, estimated: u64) -> ContextParts {
+    let mut system = 0usize;
+    let mut skills = 0usize;
+    let mut tools = 0usize;
+    let mut mcp = 0usize;
+    for (at, message) in body["messages"].as_array().into_iter().flatten().enumerate() {
+        if at == 0 && message["role"] == "system" {
+            system += encoded_len(message);
+        } else if message["name"] == super::model::HOST_CONTEXT_NAME {
+            skills += message["content"].as_str().map_or(0, skill_section_len);
+        }
+    }
+    for tool in body["tools"].as_array().into_iter().flatten() {
+        let name = tool["function"]["name"].as_str().unwrap_or_default();
+        let len = encoded_len(tool);
+        if name.starts_with(elitea_local_tools::mcp::naming::PREFIX) {
+            mcp += len;
+        } else if name == LOAD_SKILL {
+            skills += len;
+        } else {
+            tools += len;
+        }
+    }
+    let system_tokens = estimate_tokens(system);
+    let tool_tokens = estimate_tokens(tools);
+    let mcp_tool_tokens = estimate_tokens(mcp);
+    let skill_tokens = estimate_tokens(skills);
+    let named = system_tokens + tool_tokens + mcp_tool_tokens + skill_tokens;
+    ContextParts {
+        system_tokens,
+        tool_tokens,
+        mcp_tool_tokens,
+        skill_tokens,
+        message_tokens: estimated.saturating_sub(named),
+    }
+}
+
 /// Measures the provider body [`super::model::GatewayModel`] sends.
 pub struct ProviderBudget {
     pub model: ModelRequest,
@@ -277,6 +360,8 @@ pub struct ProviderBudget {
     /// lays them out (#1227): the tail weighs what it sends.
     pub tail: Option<Arc<super::model::TurnTail>>,
     pub cache_hints: bool,
+    /// Where the parts of each measured request go.
+    pub parts: MeasuredParts,
 }
 
 impl ModelRequestBudget for ProviderBudget {
@@ -293,8 +378,15 @@ impl ModelRequestBudget for ProviderBudget {
         )?;
         let encoded = serde_json::to_vec(&body)
             .map_err(|_| adk_core::AdkError::model("the model request could not be encoded"))?;
-        self.budget
-            .measure_provider_request(&encoded, MAX_MODEL_REQUEST_BYTES)
+        let usage = self
+            .budget
+            .measure_provider_request(&encoded, MAX_MODEL_REQUEST_BYTES)?;
+        *self
+            .parts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(parts_of(&body, usage.estimated_input));
+        Ok(usage)
     }
 }
 
@@ -346,6 +438,11 @@ pub struct ContextHost {
     pub service: Arc<dyn SessionService>,
     pub session_id: String,
     pub limits: ModelContextLimits,
+    /// The parts of the request just measured ([`ProviderBudget::parts`]).
+    pub parts: MeasuredParts,
+    /// The estimate at which the step compaction starts
+    /// ([`CompactionPolicy::trigger_tokens`]).
+    pub compact_at: u64,
 }
 
 #[async_trait]
@@ -367,6 +464,12 @@ impl CompactionHost for ContextHost {
             },
             window_fallback: self.limits.context_window_fallback,
             compacted_at: None,
+            measured_at: None,
+            compact_at_tokens: self.compact_at,
+            parts: *self
+                .parts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
         });
     }
 
@@ -530,6 +633,47 @@ fn touches_of(name: &str, inputs: &Value, touched: &mut Vec<FileTouch>) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_request_is_split_into_its_parts_and_the_parts_add_up() {
+        let tail = format!(
+            "Today is Monday.\n{}\nUse the style.\n{}",
+            crate::d0::skills::SKILLS_HEADING,
+            crate::d0::skills::END_OF_SKILLS
+        );
+        let body = json!({
+            "model": "m",
+            "messages": [
+                {"role": "system", "content": "Be brief.".repeat(40)},
+                {"role": "user", "content": "earlier question"},
+                {"role": "user", "name": crate::d0::model::HOST_CONTEXT_NAME, "content": tail},
+                {"role": "user", "content": "now"},
+            ],
+            "tools": [
+                {"type": "function", "function": {"name": "read_file", "description": "x".repeat(80)}},
+                {"type": "function", "function": {"name": "mcp__fx__echo", "description": "y".repeat(40)}},
+                {"type": "function", "function": {"name": "load_skill", "description": "z".repeat(20)}},
+            ],
+        });
+        let estimated = estimate_tokens(serde_json::to_vec(&body).unwrap().len());
+        let parts = parts_of(&body, estimated);
+        assert!(parts.system_tokens > parts.tool_tokens, "{parts:?}");
+        assert!(parts.tool_tokens > parts.mcp_tool_tokens, "{parts:?}");
+        assert!(parts.mcp_tool_tokens > 0 && parts.skill_tokens > 0, "{parts:?}");
+        assert!(parts.message_tokens > 0, "{parts:?}");
+        assert_eq!(
+            parts.system_tokens
+                + parts.tool_tokens
+                + parts.mcp_tool_tokens
+                + parts.skill_tokens
+                + parts.message_tokens,
+            estimated
+        );
+        // A tail without picked skills counts as messages only.
+        assert_eq!(skill_section_len("Today is Monday."), 0);
+        // Parts never pass a smaller estimate.
+        assert_eq!(parts_of(&body, 1).message_tokens, 0);
+    }
 
     #[test]
     fn catalogue_rows_give_limits_and_mark_what_they_lack() {

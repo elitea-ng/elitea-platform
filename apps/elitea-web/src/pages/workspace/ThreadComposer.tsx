@@ -9,10 +9,10 @@
  *   shown disabled and there is no plan mode;
  * - `returning`: read-only, with its notice.
  *
- * A local thread's footer also shows the context meter (`ContextMeter`, lazy)
- * once a model call reported its occupancy, and the usage chip (`UsageChip`,
- * lazy: the latest turn's tokens, the thread's, a cost only from the
- * catalogue's price, #1227); `/compact` marks the next send. Beside them the
+ * A local thread's footer also shows the usage chip (`UsageChip`, lazy: the
+ * latest turn's tokens, the thread's, a cost only from the catalogue's
+ * price, #1227); what fills the context is the inspector's Context tab
+ * (`ContextPanel`); `/compact` marks the next send. Beside them the
  * language-server chip (`LspChip`, lazy, #1236): the servers behind the
  * edits' diagnostics.
  * And the model chip (`ModelChip`, `useTurnModel`): the model the next turn
@@ -47,7 +47,6 @@ import type { SessionCommands } from './useSessionCommands';
 import { useTurnModel, type TurnModelControl } from './useTurnModel';
 import { WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
 
-const ContextMeter = lazy(() => import('./ContextMeter'));
 const UsageChip = lazy(() => import('./UsageChip'));
 const LspChip = lazy(() => import('./LspChip'));
 
@@ -96,11 +95,6 @@ function modelBinding(model: TurnModelControl, cloudMode: boolean, chipRef: Sess
   };
 }
 
-/** The latest context occupancy of the shown turns: the active one's, else the newest earlier one's. */
-function latestMeter(turn: WorkspaceTurn) {
-  return turn.view.context ?? turn.earlier.findLast((earlier) => earlier.view.context !== undefined)?.view.context;
-}
-
 type Usage = WorkspaceTurn['view']['usage'];
 
 /** Each recorded turn's usage (thread history), replayed once per history, not per render. */
@@ -119,7 +113,6 @@ function turnUsages(turn: WorkspaceTurn, recorded: readonly { turnId: string; us
 const NO_USAGE: NonNullable<Usage>[] = [];
 
 interface ComposerMetersProps {
-  meter: ReturnType<typeof latestMeter>;
   usages: NonNullable<Usage>[];
   projectId: number;
   workspaceId: string;
@@ -127,13 +120,12 @@ interface ComposerMetersProps {
   local: boolean;
 }
 
-/** The footer's language-server chip, context meter and usage chip (all lazy); the meters once a model call reported either. */
-function ComposerMeters({ meter, usages, projectId, workspaceId, local }: ComposerMetersProps): React.JSX.Element | null {
-  if (meter === undefined && usages.length === 0 && !local) return null;
+/** The footer's language-server chip and usage chip (both lazy); the usage chip once a model call reported usage. */
+function ComposerMeters({ usages, projectId, workspaceId, local }: ComposerMetersProps): React.JSX.Element | null {
+  if (usages.length === 0 && !local) return null;
   return (
     <Suspense fallback={null}>
       {local ? <LspChip workspaceId={workspaceId} /> : null}
-      {meter === undefined ? null : <ContextMeter meter={meter} />}
       {usages.length === 0 ? null : <UsageChip turns={usages} projectId={projectId} />}
     </Suspense>
   );
@@ -179,7 +171,6 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     onStop: () => void turn.cancel(),
   };
   const openInChat = conversationId === '' ? undefined : () => void navigate({ to: '/chat/$conversationId', params: { conversationId } });
-  const meter = cloudMode ? undefined : latestMeter(turn);
   const recorded = useMemo(() => recordedUsages(session.history), [session.history]);
   const usages = cloudMode ? NO_USAGE : turnUsages(turn, recorded);
   const modelNotice = cloudMode ? null : model.notice;
@@ -198,7 +189,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} disabledHint={agentHint} />}
         {...modelBinding(model, !local, commands.modelRef)}
         runLocation={<RunLocationChip handoff={handoff} onOpenInChat={openInChat} />}
-        contextMeter={<ComposerMeters meter={meter} usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} />}
+        contextMeter={<ComposerMeters usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} />}
         onPlanModeChange={commands.setPlanMode}
         skills={offered}
         customCommands={customCommands}

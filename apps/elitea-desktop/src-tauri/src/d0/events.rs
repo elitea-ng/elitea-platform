@@ -227,6 +227,13 @@ pub struct ContextMeter {
     pub window_fallback: bool,
     /// When this turn last compacted (RFC 3339, UTC).
     pub compacted_at: Option<String>,
+    /// The estimate at which the step compaction starts (0: unknown). The
+    /// window past it is the compaction's buffer.
+    pub compact_at_tokens: u64,
+    /// What fills the request, when it was measured.
+    pub parts: Option<super::context::ContextParts>,
+    /// When the request was measured (RFC 3339, UTC; stamped on send).
+    pub measured_at: Option<String>,
 }
 
 impl ContextMeter {
@@ -249,6 +256,21 @@ impl ContextMeter {
         });
         if let Some(at) = &self.compacted_at {
             value["compacted_at"] = json!(at);
+        }
+        if self.compact_at_tokens > 0 {
+            value["compact_at_tokens"] = json!(self.compact_at_tokens);
+        }
+        if let Some(parts) = &self.parts {
+            value["parts"] = json!({
+                "system_tokens": parts.system_tokens,
+                "tool_tokens": parts.tool_tokens,
+                "mcp_tool_tokens": parts.mcp_tool_tokens,
+                "skill_tokens": parts.skill_tokens,
+                "message_tokens": parts.message_tokens,
+            });
+        }
+        if let Some(at) = &self.measured_at {
+            value["measured_at"] = json!(at);
         }
         value
     }
@@ -288,9 +310,10 @@ impl TurnEvents {
                 .context
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            meter.measured_at = Some(now.clone());
             if meter.phase == "compacted" {
-                meter.compacted_at =
-                    Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+                meter.compacted_at = Some(now);
             } else if meter.compacted_at.is_none() {
                 meter.compacted_at = slot.as_ref().and_then(|last| last.compacted_at.clone());
             }

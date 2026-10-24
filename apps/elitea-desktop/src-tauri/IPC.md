@@ -2073,9 +2073,9 @@ order. Kinds and payloads:
 | `thinking_end` | `{chars: number}` — a reasoning block closed (the model moved on to its answer or its tool calls, or its stream ended); `chars` is its length |
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
-| `usage` | `{model: string, step: number, prompt_tokens: number, completion_tokens: number, total_tokens: number, cached_tokens?: number, cache_write_tokens?: number, reasoning_tokens?: number, context?: ContextMeter}` — one of the turn's own model calls as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage); `step` counts the turn's calls from 1. `prompt_tokens` is what that call sent, its cached reads (`prompt_tokens_details.cached_tokens`) and cache writes (`…cache_write_tokens`, Anthropic) included; `reasoning_tokens` are part of `completion_tokens` (`completion_tokens_details.reasoning_tokens`); each optional count only when non-zero. A step retried after a context overflow (below) sends the dropped call's usage too: both calls were billed. `context` (below) is that call's request occupancy as the host measured it before sending: the composer's context meter. A summary call's and a sub-agent's calls send none; they count in `usage_total` |
+| `usage` | `{model: string, step: number, prompt_tokens: number, completion_tokens: number, total_tokens: number, cached_tokens?: number, cache_write_tokens?: number, reasoning_tokens?: number, context?: ContextMeter}` — one of the turn's own model calls as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage); `step` counts the turn's calls from 1. `prompt_tokens` is what that call sent, its cached reads (`prompt_tokens_details.cached_tokens`) and cache writes (`…cache_write_tokens`, Anthropic) included; `reasoning_tokens` are part of `completion_tokens` (`completion_tokens_details.reasoning_tokens`); each optional count only when non-zero. A step retried after a context overflow (below) sends the dropped call's usage too: both calls were billed. `context` (below) is that call's request occupancy as the host measured it before sending: the inspector's Context tab. A summary call's and a sub-agent's calls send none; they count in `usage_total` |
 | `usage_total` | `{prompt: number, completion: number, cached: number, cache_write: number, reasoning: number, calls: number, subagents?: {same fields}}` — once the run ended, before `status` `done`/`error`/`cancelled`: every model call made on the turn's execution id (the agent's steps, compaction summaries and sub-agents together: what the gateway's request log holds for it); `subagents` is the sub-agents' share, when any ran. The thread history keeps it past its event cap; a thread's total is the sum of its turns' |
-| `context` | `ContextMeter` (below) — the request occupancy when its `phase` changes: `compacting` as a summary call starts (the meter says "Summarizing…" while it runs), `compacted` once the step's request is the compacted one, `measured` again at the next call (or when a summary failed and the request went out uncompacted). A turn starts `measured`; calls that stay `measured` send none, their occupancy rides on `usage` |
+| `context` | `ContextMeter` (below) — the request occupancy when its `phase` changes: `compacting` as a summary call starts (the Context tab says "Summarizing…" while it runs), `compacted` once the step's request is the compacted one, `measured` again at the next call (or when a summary failed and the request went out uncompacted). A turn starts `measured`; calls that stay `measured` send none, their occupancy rides on `usage` |
 | `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, loopback?: true, keep_alive?: true, can_remember: boolean, remember_scope?: "session"}` — `remember_scope: "session"` (a host-intel call, **Web toolkits**) makes "always" last until the app quits, and the card says "Allow for this session"; `loopback` and `keep_alive` mark a background command that may serve on localhost or that lives until the session ends (**Background processes**); `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
 | `plan_updated` | `{plan: {title, explanation?, status: "in_progress" \| "completed", steps: [{n, step, status: "pending" \| "in_progress" \| "completed" \| "cancelled"}]} \| null}` — the agent's checklist changed (the runtime planner's `update_plan`, `start_step`, `complete_step`, `delete_plan`, or the host copying an accepted plan in): the whole plan, `null` once deleted. The latest one is the plan; the thread history stores it like every event, so the todo pane replays after a restart. The plan itself lives in the session (`elitea.plan.v1:` state), so the next turn's planner reads it back |
 | `plan_proposed` | `{request_id, call_id, plan}` — the agent's `exit_plan_mode`: the plan (Markdown, model-written) as a card with Accept / Decline; answered with `approval_respond` `accept` or `decline` (+ `feedback`). See **Plan mode** |
@@ -2238,10 +2238,25 @@ type ContextMeter = {
   compacted: boolean;       // this turn compacted
   compacted_at?: string;    // when it last did (RFC 3339, UTC)
   window_fallback: boolean; // the 128k default: the catalogue did not name the model's
+  compact_at_tokens?: number; // the estimate at which the host compacts; the window past it is the compaction's buffer
+  parts?: ContextParts;     // what fills the request
+  measured_at?: string;     // when the host measured it (RFC 3339, UTC)
+};
+
+type ContextParts = {
+  system_tokens: number;    // the system message: instructions, environment, AGENTS.md
+  tool_tokens: number;      // the host's and the agent's tool declarations
+  mcp_tool_tokens: number;  // the person's local MCP tools (`mcp__…`)
+  skill_tokens: number;     // the `load_skill` declaration and the skills picked for the turn
+  message_tokens: number;   // the rest: the conversation and the host context
 };
 ```
 
-It carries estimates and budget arithmetic only, never model content.
+It carries estimates and budget arithmetic only, never model content. The
+host measures each part of the provider body at the same rate as the whole
+(4 bytes a token). `message_tokens` takes what is left, so the parts add up
+to `used_tokens`. The Context tab of the thread's inspector shows the parts,
+the compaction's buffer and the free space.
 Events are not replayed: a UI that may have missed one (the window was
 hidden, a cancel was answered `turn_unknown` or `turn_not_cancellable`)
 asks `agent_turn_status` and takes its `done` payload as the event.
