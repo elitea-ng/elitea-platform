@@ -420,6 +420,11 @@ pub struct ApplyAnswer {
     pub release_refused: Option<String>,
     /// `worktree`: the folder's excluded files copied into it.
     pub copied: Vec<String>,
+    /// The cloud turns after `up_to_turn`: not taken back and not imported
+    /// into the thread history (0 when every turn was taken back).
+    pub turns_not_taken: usize,
+    /// Their commits, kept on `elitea/cloud/<thread>-after-turn-<k>`.
+    pub rest_branch: Option<String>,
 }
 
 /// A release refused with one of these codes can never be acknowledged:
@@ -1728,6 +1733,10 @@ impl HandoffHost {
         )?;
         drop(claim);
         let applied = applied.map_err(|e| tool_error(&e))?;
+        let turns_not_taken = held
+            .preflight
+            .cloud_turns()
+            .saturating_sub(held.preflight.up_to_turn);
         let outcome = match mode {
             Mode::Apply => "applied",
             Mode::ApplyWithMarkers => "applied_with_markers",
@@ -1773,6 +1782,8 @@ impl HandoffHost {
             applied: applied.applied,
             outcome,
             report: applied.report,
+            turns_not_taken,
+            rest_branch: applied.rest_branch,
             checkpoint_id: applied
                 .checkpoint
                 .map(|seq| format!("{workspace_id}:{seq}")),
@@ -2134,7 +2145,15 @@ fn parse_time(value: Option<&Value>) -> Option<i64> {
 /// first): answers whose meta says `executed_by: cloud_executor` and whose
 /// `workspace_epoch` lies in `[from, to]`, each with its question (the group
 /// it replies to, else the group before it) and its commit's changes.
+///
+/// Only the turns taken back are imported: the first answer whose commit is
+/// one of the turns after `up_to_turn` ends the import (that turn and every
+/// later one stay out of the local history).
 fn cloud_turns(detail: &Value, from: u64, to: u64, preflight: &Preflight) -> Vec<ImportedTurn> {
+    let not_taken: std::collections::HashSet<&str> = preflight.chain[preflight.up_to_turn..]
+        .iter()
+        .map(|commit| commit.sha.as_str())
+        .collect();
     let groups: Vec<&Value> = detail
         .get("message_groups")
         .and_then(Value::as_array)
@@ -2156,6 +2175,13 @@ fn cloud_turns(detail: &Value, from: u64, to: u64, preflight: &Preflight) -> Vec
             .unwrap_or_default();
         if epoch < from || epoch > to {
             continue;
+        }
+        if meta
+            .get("workspace_commit")
+            .and_then(Value::as_str)
+            .is_some_and(|sha| not_taken.contains(sha))
+        {
+            break;
         }
         let question = group
             .get("reply_to_id")

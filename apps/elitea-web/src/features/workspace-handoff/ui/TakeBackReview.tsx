@@ -12,7 +12,7 @@ import type { Theme } from '@mui/material/styles';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
-import type { HandoffChangedFile, Preflight, SkipReason, SkippedPath, TakeBackChangedPath } from '@/shared/desktop/handoffIpc';
+import type { ApplyResult, HandoffChangedFile, Preflight, SkipReason, SkippedPath, TakeBackChangedPath } from '@/shared/desktop/handoffIpc';
 import { t } from '@/shared/i18n';
 
 export type RenderFiles = ((files: readonly HandoffChangedFile[], key: string) => ReactNode) | undefined;
@@ -141,6 +141,33 @@ function TurnPicker({ preflight, onPickTurn }: { preflight: Preflight; onPickTur
   );
 }
 
+/** Taking back fewer than all cloud turns: what happens to the turns after the chosen one. */
+function TurnsAfter({ preflight }: { preflight: Preflight }): React.JSX.Element | null {
+  if (preflight.up_to_turn >= preflight.cloud_turns) return null;
+  return (
+    <Alert severity="warning" data-testid="takeback-turns-after">
+      {t(
+        'workspace.handoff.turn.after',
+        'Turns {{from}} to {{to}} are not taken back. They are not added to this thread’s history here, and their conversation is deleted with the cloud copy when its grace period ends. Their changes are kept as commits on a local branch.',
+        { from: String(preflight.up_to_turn + 1), to: String(preflight.cloud_turns) },
+      )}
+    </Alert>
+  );
+}
+
+/** After the take-back: where the commits of the turns not taken back are. */
+export function RestBranch({ result }: { result: ApplyResult }): React.JSX.Element | null {
+  if (result.rest_branch === null || result.turns_not_taken === 0) return null;
+  return (
+    <Typography variant="bodySmall" data-testid="takeback-rest-branch" sx={mutedSx}>
+      {t('workspace.handoff.result.restBranch', 'The {{n}} later cloud turns were not taken back; their commits are on the branch {{branch}}.', {
+        n: String(result.turns_not_taken),
+        branch: result.rest_branch,
+      })}
+    </Typography>
+  );
+}
+
 export interface ReviewProps {
   preflight: Preflight;
   confirmingDiscard: boolean;
@@ -153,6 +180,7 @@ export function Review({ preflight, confirmingDiscard, renderFiles, onPickTurn }
     <>
       <Summary preflight={preflight} />
       <TurnPicker preflight={preflight} onPickTurn={onPickTurn} />
+      <TurnsAfter preflight={preflight} />
       <Paths title={t('workspace.handoff.paths.conflicts', 'Changed on both sides')} paths={preflight.conflict_paths} testId="takeback-conflict-paths" />
       <ChangedInCloud preflight={preflight} renderFiles={renderFiles} />
       <Paths title={t('workspace.handoff.paths.skipped', 'Never written or deleted here')} paths={preflight.skipped_paths.map(skippedLabel)} testId="takeback-skipped-paths" />

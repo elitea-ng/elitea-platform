@@ -42,18 +42,28 @@ export interface WorktreeDiff {
 }
 
 /**
+ * How a merge back is applied: `apply` writes a fast-forward or a clean
+ * merge; `apply_with_markers` writes a conflicting merge with conflict
+ * markers in its text files (a binary conflict keeps the main folder's file),
+ * the same mode the take-back offers.
+ */
+export type MergeApplyMode = 'apply' | 'apply_with_markers';
+
+/**
  * The dry run of a merge back (writes nothing). In `conflicts` mode both
- * sides changed `conflict_paths` and nothing would be applied: the work stays
- * on the branch.
+ * sides changed `conflict_paths`: a plain apply is refused (the work stays on
+ * the branch) and only `apply_with_markers` is offered.
  */
 export interface MergePreflight {
   preflight_id: string;
   mode: 'fast_forward' | 'merge' | 'conflicts' | 'nothing';
-  /** What applying writes or deletes in the main folder. */
+  /** What applying writes or deletes in the main folder (with markers for `conflicts`). */
   applied_paths: string[];
   conflict_paths: string[];
   /** Never written: denied paths, symlinks, submodules, `.git`. */
   skipped_paths: string[];
+  /** The apply modes the host accepts for this preview: none for `nothing`, only markers for `conflicts`. */
+  modes: MergeApplyMode[];
   branch: string;
 }
 
@@ -73,7 +83,7 @@ export interface WorktreeIpc {
   /** Rejects `worktree_dirty` for uncommitted work unless `force`. */
   remove(workspaceId: string, threadUuid: string, force: boolean): Promise<void>;
   preflight(workspaceId: string, threadUuid: string): Promise<MergePreflight>;
-  apply(preflightId: string): Promise<MergeApplied>;
+  apply(preflightId: string, mode?: MergeApplyMode): Promise<MergeApplied>;
   /** Rejects `undo_not_latest` when the folder was checkpointed since, unless `confirmOlder` (that is reverted too). */
   undo(checkpointId: string, confirmOlder?: boolean): Promise<{ restored: string[] }>;
 }
@@ -90,7 +100,7 @@ export function createWorktreeIpc(invoke: HostInvoke): WorktreeIpc {
     diff: (workspaceId, threadUuid) => call<WorktreeDiff>('worktree_diff', { workspace_id: workspaceId, thread_uuid: threadUuid }),
     remove: (workspaceId, threadUuid, force) => call<null>('worktree_remove', { workspace_id: workspaceId, thread_uuid: threadUuid, force }).then(() => undefined),
     preflight: (workspaceId, threadUuid) => call<MergePreflight>('worktree_merge_preflight', { workspace_id: workspaceId, thread_uuid: threadUuid }),
-    apply: (preflightId) => call<MergeApplied>('worktree_merge_apply', { preflight_id: preflightId }),
+    apply: (preflightId, mode) => call<MergeApplied>('worktree_merge_apply', mode === undefined ? { preflight_id: preflightId } : { preflight_id: preflightId, mode }),
     undo: (checkpointId, confirmOlder) =>
       call<{ restored: string[] }>('worktree_merge_undo', confirmOlder === true ? { checkpoint_id: checkpointId, confirm_older: true } : { checkpoint_id: checkpointId }),
   };

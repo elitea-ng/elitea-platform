@@ -2,10 +2,11 @@
  * An in-memory `WorktreeIpc` for tests: the folder's worktrees, a scripted
  * diff and merge preview, and every call recorded. It models what the host
  * decides: `remove` of a worktree with uncommitted work rejects
- * `worktree_dirty` unless forced, and `apply` of a conflicts preview rejects
- * `merge_conflicts`. `failNext` makes one command reject with a host code.
+ * `worktree_dirty` unless forced, and `apply` takes only a mode the preview
+ * offers: a plain apply of a conflicts preview rejects `merge_conflicts`, and
+ * its markers apply writes the conflicting paths. `failNext` makes one command reject with a host code.
  */
-import type { MergeApplied, MergePreflight, WorktreeDiff, WorktreeEntry, WorktreeIpc } from './worktreeIpc';
+import type { MergeApplied, MergeApplyMode, MergePreflight, WorktreeDiff, WorktreeEntry, WorktreeIpc } from './worktreeIpc';
 import { WorkspaceIpcError } from './workspaceIpc';
 
 type Command = keyof WorktreeIpc;
@@ -18,7 +19,8 @@ export interface FakeWorktreeIpc extends WorktreeIpc {
 export interface FakeWorktreeScript {
   entries?: WorktreeEntry[];
   diff?: WorktreeDiff;
-  preflight?: Omit<MergePreflight, 'preflight_id'>;
+  /** `modes` defaults to what the host offers for the preview's `mode`. */
+  preflight?: Omit<MergePreflight, 'preflight_id' | 'modes'> & { modes?: MergeApplyMode[] };
   applied?: MergeApplied;
 }
 
@@ -36,6 +38,11 @@ export function fakeWorktreeEntry(overrides: Partial<WorktreeEntry> = {}): Workt
     missing: false,
     ...overrides,
   };
+}
+
+function offered(mode: MergePreflight['mode']): MergeApplyMode[] {
+  if (mode === 'nothing') return [];
+  return mode === 'conflicts' ? ['apply_with_markers'] : ['apply'];
 }
 
 export function createFakeWorktreeIpc(script: FakeWorktreeScript = {}): FakeWorktreeIpc {
@@ -83,13 +90,16 @@ export function createFakeWorktreeIpc(script: FakeWorktreeScript = {}): FakeWork
       run('preflight', [workspaceId, threadUuid], () => {
         previews += 1;
         const base = script.preflight ?? { mode: 'nothing' as const, applied_paths: [], conflict_paths: [], skipped_paths: [], branch: 'elitea/0b2c4d6e' };
-        lastPreview = { ...base, preflight_id: `pf-${String(previews)}` };
+        lastPreview = { ...base, modes: base.modes ?? offered(base.mode), preflight_id: `pf-${String(previews)}` };
         return lastPreview;
       }),
-    apply: (preflightId) =>
-      run('apply', [preflightId], () => {
+    apply: (preflightId, mode) =>
+      run('apply', mode === undefined ? [preflightId] : [preflightId, mode], () => {
         if (lastPreview?.preflight_id !== preflightId) throw new WorkspaceIpcError('preflight_expired', 'preview again');
-        if (lastPreview.mode === 'conflicts') throw new WorkspaceIpcError('merge_conflicts', 'both sides changed these files');
+        if (!lastPreview.modes.includes(mode ?? 'apply')) {
+          if (lastPreview.mode === 'conflicts') throw new WorkspaceIpcError('merge_conflicts', 'both sides changed these files');
+          throw new WorkspaceIpcError('invalid_request', 'that mode is not offered');
+        }
         return script.applied ?? { written: [...lastPreview.applied_paths], deleted: [], skipped_paths: [...lastPreview.skipped_paths], checkpoint_id: 'cp-1' };
       }),
     undo: (checkpointId, confirmOlder) =>

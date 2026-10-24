@@ -252,6 +252,10 @@ pub struct Applied {
     pub worktree_path: Option<PathBuf>,
     /// `elitea/cloud/<thread>`, the replayed cloud commits.
     pub branch: Option<String>,
+    /// `elitea/cloud/<thread>-after-turn-<k>`: the cloud turns after `k`
+    /// when the person took back fewer than all (kept as commits only; they
+    /// are not part of the take-back).
+    pub rest_branch: Option<String>,
     /// The replayed commits, oldest first (`H'_1` descendants).
     pub replayed: Vec<String>,
     pub written: Vec<String>,
@@ -268,6 +272,7 @@ impl Applied {
             checkpoint: None,
             worktree_path: None,
             branch: None,
+            rest_branch: None,
             replayed: Vec::new(),
             written: Vec::new(),
             deleted: Vec::new(),
@@ -648,7 +653,7 @@ fn import_and_replay(
     source: &Source,
     preflight: &Preflight,
     exclusions: &Exclusions,
-) -> ToolResult<(String, Vec<String>)> {
+) -> ToolResult<Replayed> {
     let objects = source.objects();
     source
         .repo
@@ -689,7 +694,10 @@ fn import_and_replay(
         }
     }
     let mut replayed = Vec::new();
-    for commit in &preflight.chain[..preflight.up_to_turn] {
+    // Every turn is replayed: those after `k` go on a branch of their own,
+    // so taking back fewer turns never loses the others' commits.
+    let mut tip = previous.clone();
+    for commit in &preflight.chain {
         let tree = source
             .repo
             .git(source.top())
@@ -718,12 +726,45 @@ fn import_and_replay(
                 &message,
             ])?;
         replayed.push(previous.clone());
+        if replayed.len() == preflight.up_to_turn {
+            tip.clone_from(&previous);
+        }
     }
+    let rest = replayed.split_off(preflight.up_to_turn);
     let short = short_thread(&preflight.record.conversation_uuid);
+    let branch = keep_branch(source, &format!("elitea/cloud/{short}"), &tip)?;
+    let rest_branch = match rest.last() {
+        Some(last) => Some(keep_branch(
+            source,
+            &format!("elitea/cloud/{short}-after-turn-{}", preflight.up_to_turn),
+            last,
+        )?),
+        None => None,
+    };
+    Ok(Replayed {
+        branch,
+        commits: replayed,
+        rest_branch,
+    })
+}
+
+/// What [`import_and_replay`] made.
+struct Replayed {
+    /// `elitea/cloud/<thread>`: the turns taken back.
+    branch: String,
+    /// Their replayed commits, oldest first.
+    commits: Vec<String>,
+    /// The turns after `k`, when the person took back fewer than all.
+    rest_branch: Option<String>,
+}
+
+/// Point a free branch named `name` (or `name-2`, `name-3`, …; one already
+/// at `tip` is reused) at `tip`; its name.
+fn keep_branch(source: &Source, name: &str, tip: &str) -> ToolResult<String> {
     let heads = source.common_dir().join("refs/heads/elitea/cloud");
     std::fs::create_dir_all(&heads)
         .map_err(|error| ToolError::io("cannot create the cloud branch", &error))?;
-    let mut branch = format!("elitea/cloud/{short}");
+    let mut branch = name.to_owned();
     let mut n = 2;
     while source
         .repo
@@ -734,17 +775,17 @@ fn import_and_replay(
             "--quiet",
             &format!("refs/heads/{branch}"),
         ])
-        .is_ok_and(|sha| !sha.is_empty() && sha != previous)
+        .is_ok_and(|sha| !sha.is_empty() && sha != tip)
     {
-        branch = format!("elitea/cloud/{short}-{n}");
+        branch = format!("{name}-{n}");
         n += 1;
     }
     source
         .repo
         .git(source.top())
         .writes(std::slice::from_ref(&heads))
-        .run(&["update-ref", &format!("refs/heads/{branch}"), &previous])?;
-    Ok((branch, replayed))
+        .run(&["update-ref", &format!("refs/heads/{branch}"), tip])?;
+    Ok(branch)
 }
 
 /// Write `files` (a cloud tree's entries, each with whether the cloud
@@ -850,7 +891,11 @@ fn apply_folder(
         ),
         None => None,
     };
-    let (branch, replayed) = import_and_replay(source, preflight, exclusions)?;
+    let Replayed {
+        branch,
+        commits: replayed,
+        rest_branch,
+    } = import_and_replay(source, preflight, exclusions)?;
     let workspace = Workspace::open(source.top(), &[])?;
     let done = engine::write_plan(&preflight.objects, &workspace, &preflight.plan)?;
     Ok(Applied {
@@ -861,6 +906,7 @@ fn apply_folder(
         applied: true,
         checkpoint,
         branch: Some(branch),
+        rest_branch,
         replayed,
         written: done.written,
         deleted: done.deleted,
@@ -880,7 +926,11 @@ fn apply_worktree(
         .map_err(|error| ToolError::io("cannot create the worktree", &error))?;
     let path = std::fs::canonicalize(&path)
         .map_err(|error| ToolError::io("cannot create the worktree", &error))?;
-    let (branch, replayed) = import_and_replay(source, preflight, exclusions)?;
+    let Replayed {
+        branch,
+        commits: replayed,
+        rest_branch,
+    } = import_and_replay(source, preflight, exclusions)?;
     if !source.shadow {
         let admin = source.common_dir().join("worktrees");
         std::fs::create_dir_all(&admin)
@@ -916,6 +966,7 @@ fn apply_worktree(
         applied: true,
         worktree_path: Some(path),
         branch: Some(branch),
+        rest_branch,
         replayed,
         ..Applied::nothing(&preflight.report)
     };

@@ -236,7 +236,12 @@ export interface ApplyResult {
   checkpoint_id: string | null;
   worktree_path: string | null;
   branch: string | null;
+  /** The cloud turns added to the thread's history here: turns 1..`up_to_turn` only. */
   imported_turns: number;
+  /** The cloud turns after `up_to_turn`: not taken back and not local history (they go with the cloud copy). */
+  turns_not_taken: number;
+  /** The local branch that keeps the commits of the turns not taken back; `null` when every turn was. */
+  rest_branch: string | null;
   /** The release was acknowledged; `false`: kept and sent again with the next status. */
   released: boolean;
   /**
