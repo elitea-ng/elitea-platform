@@ -2,8 +2,9 @@
  * What the composer's local "/" commands do on the session screen, and the
  * state they drive: plan mode, the help / nothing-to-undo notice and the
  * undo confirmation request. `/retry` (from the menu or a failed turn's
- * Retry) is a request the composer answers, since it holds the send; it
- * runs `/steps` itself and shows both notices here.
+ * Retry) and a stopped turn's Continue are requests the composer answers,
+ * since it holds the send; it runs `/steps` itself. Their notices show here
+ * as one text notice.
  */
 import { useRef, useState, type RefObject } from 'react';
 
@@ -11,23 +12,25 @@ import type { WorkspaceCommandId, WorkspaceTurn } from '@/features/workspace';
 
 import type { AgentSelection } from './useAgentSelection';
 
-type SessionNotice = 'help' | 'nothingToUndo' | 'nothingToRetry' | 'compactNext' | 'modelFixed' | 'steps' | null;
+type SessionNotice = 'help' | 'nothingToUndo' | 'compactNext' | 'modelFixed' | 'text' | null;
 
 export interface SessionCommands {
   planMode: boolean;
   setPlanMode: (planMode: boolean) => void;
   notice: SessionNotice;
   closeNotice: () => void;
-  /** What the `steps` notice says (the step limit, or why it was not set). */
-  stepsText: string;
-  /** Show the `steps` notice with `text`. */
-  showSteps: (text: string) => void;
-  /** `/retry` found no message to send again. */
-  showNothingToRetry: () => void;
+  /** What the `text` notice says (the step limit, why a retry did not go out, …). */
+  noticeText: string;
+  /** Show the `text` notice with `text`. */
+  showText: (text: string) => void;
   /** Bumped by `/undo`: the changed-files card asks for confirmation. */
   undoRequest: number;
   /** Bumped by `/retry` and a failed turn's Retry: the composer sends the last message again. */
   retryRequest: number;
+  /** Bumped by a stopped turn's Continue: the composer starts a turn from the host's continue prompt. */
+  continueRequest: number;
+  /** Ask the composer to continue (a turn stopped at the tool calls one turn can save). */
+  continueTurn: () => void;
   /** The box holding the agent picker; `/agent` opens it. */
   agentRef: RefObject<HTMLDivElement | null>;
   /** The box holding the model chip; `/model` opens it (no chip: the agent's model is fixed here). */
@@ -49,9 +52,10 @@ export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTur
     setPlanMode(false);
   }
   const [notice, setNotice] = useState<SessionNotice>(null);
-  const [stepsText, setStepsText] = useState('');
+  const [noticeText, setNoticeText] = useState('');
   const [undoRequest, setUndoRequest] = useState(0);
   const [retryRequest, setRetryRequest] = useState(0);
+  const [continueRequest, setContinueRequest] = useState(0);
   const [compactNext, setCompactNext] = useState(false);
   const agentRef = useRef<HTMLDivElement>(null);
   const modelRef = useRef<HTMLDivElement>(null);
@@ -88,14 +92,15 @@ export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTur
     setPlanMode,
     notice,
     closeNotice: () => setNotice(null),
-    stepsText,
-    showSteps: (text) => {
-      setStepsText(text);
-      setNotice('steps');
+    noticeText,
+    showText: (text) => {
+      setNoticeText(text);
+      setNotice('text');
     },
-    showNothingToRetry: () => setNotice('nothingToRetry'),
     undoRequest,
     retryRequest,
+    continueRequest,
+    continueTurn: () => setContinueRequest((value) => value + 1),
     agentRef,
     modelRef,
     compactNext,

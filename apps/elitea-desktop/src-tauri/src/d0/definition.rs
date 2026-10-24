@@ -17,7 +17,9 @@ use elitea_local_tools::session::EditProfile;
 use crate::workspaces::StepLimit;
 
 /// Model steps of a workspace turn's run when the workspace's settings do
-/// not set them. At the limit the person is asked whether to continue
+/// not set them. The agent's `meta.step_limit` is not read locally: the
+/// cloud stamps 25 on every agent, and a remote definition must not set how
+/// long a run on this machine goes unattended. At the limit the person is asked whether to continue
 /// (`step_limit` in the runtime).
 pub const DEFAULT_STEP_LIMIT: u32 = 1024;
 /// The most steps a number may set, whoever sets it.
@@ -200,8 +202,8 @@ pub struct Admitted {
     pub child_agents: Vec<ChildAgentSpec>,
     /// Model steps per run: the workspace's own setting (see
     /// [`Admitted::with_workspace_step_limit`]), else
-    /// [`DEFAULT_STEP_LIMIT`] or the agent's `meta.step_limit` when it is
-    /// higher; at most [`MAX_STEP_LIMIT`], or [`UNLIMITED_STEPS`].
+    /// [`DEFAULT_STEP_LIMIT`]; at most [`MAX_STEP_LIMIT`], or
+    /// [`UNLIMITED_STEPS`].
     pub step_limit: u32,
     /// The edit tools the model is offered: the agent's
     /// `meta.edit_format` (`auto`, `str_replace`, `patch`), else the
@@ -281,8 +283,7 @@ pub fn admit(resolved: &ResolvedVersion, reserved: &[&str]) -> Result<Admitted, 
         model,
         remote_tools,
         child_agents,
-        step_limit: agent_step_limit(details)
-            .map_or(DEFAULT_STEP_LIMIT, |limit| limit.max(DEFAULT_STEP_LIMIT)),
+        step_limit: DEFAULT_STEP_LIMIT,
         edit_profile,
         version_details: details.clone(),
         model_chosen: false,
@@ -290,11 +291,8 @@ pub fn admit(resolved: &ResolvedVersion, reserved: &[&str]) -> Result<Admitted, 
 }
 
 impl Admitted {
-    /// The workspace's own step limit (its settings), which wins over the
-    /// default and the agent's `meta.step_limit`: it is the person's choice
-    /// on their own machine. An agent's value only ever raises the default:
-    /// it is often the platform's cloud default (every agent created
-    /// without one is stamped 25), far too few for a local coding turn.
+    /// The workspace's own step limit (its settings), which replaces the
+    /// default: it is the person's choice on their own machine.
     #[must_use]
     pub fn with_workspace_step_limit(mut self, workspace: Option<StepLimit>) -> Self {
         match workspace {
@@ -444,17 +442,6 @@ fn agent_edit_format(details: &Map<String, Value>) -> Option<&str> {
         .get("meta")
         .and_then(|meta| meta.get("edit_format"))
         .and_then(Value::as_str)
-}
-
-/// The agent's own `meta.step_limit`, capped at [`MAX_STEP_LIMIT`].
-fn agent_step_limit(details: &Map<String, Value>) -> Option<u32> {
-    details
-        .get("meta")
-        .and_then(|meta| meta.get("step_limit"))
-        .and_then(Value::as_u64)
-        .and_then(|limit| u32::try_from(limit).ok())
-        .filter(|limit| *limit > 0)
-        .map(|limit| limit.min(MAX_STEP_LIMIT))
 }
 
 /// One spec per selected tool, or one generic spec for `all_tools`; none
@@ -738,29 +725,26 @@ mod tests {
                 .step_limit,
             UNLIMITED_STEPS
         );
-        // The cloud's stamped 25 (or any lower value) does not lower the
-        // default; a higher one raises it. The workspace's own setting
-        // beats both.
-        assert_eq!(admit_meta(json!({"step_limit": 25})).step_limit, 1024);
-        let agent = admit_meta(json!({"step_limit": 3000}));
-        assert_eq!(agent.step_limit, 3000);
-        assert_eq!(
-            agent.clone().with_workspace_step_limit(None).step_limit,
-            3000
-        );
-        assert_eq!(
-            agent
-                .with_workspace_step_limit(Some(StepLimit::Steps(30)))
-                .step_limit,
-            30
-        );
-        // Capped; zero or nonsense is no value.
-        assert_eq!(
-            admit_meta(json!({"step_limit": 5_000_000})).step_limit,
-            MAX_STEP_LIMIT
-        );
-        assert_eq!(admit_meta(json!({"step_limit": 0})).step_limit, 1024);
-        assert_eq!(admit_meta(json!({"step_limit": "many"})).step_limit, 1024);
+        // The agent's own value is not read: not the cloud's stamped 25, not
+        // a lower cap, not a higher one. The workspace's own setting decides.
+        for meta in [
+            json!({"step_limit": 25}),
+            json!({"step_limit": 7}),
+            json!({"step_limit": 1_000_000}),
+            json!({"step_limit": "many"}),
+        ] {
+            assert_eq!(
+                admit_meta(meta.clone()).step_limit,
+                DEFAULT_STEP_LIMIT,
+                "{meta}"
+            );
+            assert_eq!(
+                admit_meta(meta)
+                    .with_workspace_step_limit(Some(StepLimit::Steps(30)))
+                    .step_limit,
+                30
+            );
+        }
     }
 
     /// #1214: the edit tools follow the model family; the agent's
@@ -817,7 +801,7 @@ mod tests {
         assert_eq!(admitted.instructions, "Be brief.");
         assert_eq!(admitted.model.model_name, "gpt-x");
         assert_eq!(admitted.model.max_tokens, Some(512));
-        // An agent's lower limit does not lower the local default.
+        // The agent's own limit is not read locally.
         assert_eq!(admitted.step_limit, DEFAULT_STEP_LIMIT);
         let names: Vec<_> = admitted
             .remote_tools

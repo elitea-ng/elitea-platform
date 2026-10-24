@@ -72,6 +72,13 @@ describe('TurnTranscript', () => {
     expect(screen.getByTestId('turn-retrying')).toHaveTextContent('retrying (3 of 25)');
   });
 
+  it('offers Continue on a turn stopped at the tool calls one turn can save', async () => {
+    const onContinue = vi.fn();
+    renderWithTheme(<TurnTranscript view={{ phase: 'done', note: 'tool_call_limit_reached', items: [], approvals: [] }} busy={false} onCancel={vi.fn()} onContinue={onContinue} />);
+    await userEvent.setup().click(screen.getByTestId('turn-continue'));
+    expect(onContinue).toHaveBeenCalledTimes(1);
+  });
+
   it('shows a recorded commit failure without Retry when nothing can resend it', () => {
     const view = { phase: 'done' as const, items: [], approvals: [], commitFailed: { executionId: 'e1', code: 'x', message: 'Not saved.', seq: 3 } };
     renderWithTheme(<TurnTranscript view={view} busy={false} onCancel={vi.fn()} />);

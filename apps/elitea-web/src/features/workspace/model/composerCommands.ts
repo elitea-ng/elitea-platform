@@ -14,7 +14,7 @@
  * message would run the command). A message runs the longest name it
  * starts with (`invokedPick`).
  */
-import { MAX_STEP_LIMIT, type StepLimit } from '@/shared/desktop/stepLimit';
+import { parseStepCount, type StepLimit } from '@/shared/desktop/stepLimit';
 import type { CustomCommand, TurnCommand } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
@@ -75,8 +75,8 @@ export function stepsCommand(text: string): StepsCommand | null {
   if (value === undefined) return null;
   if (UNLIMITED_WORDS.has(value)) return { limit: 'unlimited' };
   if (value === 'default' || value === 'reset') return { limit: null };
-  const steps = /^\d+$/u.test(value) ? Number(value) : Number.NaN;
-  return Number.isSafeInteger(steps) && steps >= 1 && steps <= MAX_STEP_LIMIT ? { limit: steps } : { invalid: value };
+  const steps = parseStepCount(value);
+  return steps === null ? { invalid: value } : { limit: steps };
 }
 
 /** How many custom commands the menu lists at most. */

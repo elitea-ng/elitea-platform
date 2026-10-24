@@ -175,13 +175,30 @@ export interface TurnTranscriptProps {
   onTextContextMenu?: (text: string, event: MouseEvent) => void;
   /** The turn failed in a way another try may mend: "Retry" sends the message again (`/retry`); absent: not offered. */
   onRetryTurn?: () => void;
+  /** The turn stopped at the tool calls one turn can save: "Continue" starts a new turn; absent: not offered. */
+  onContinue?: () => void;
+}
+
+/** The turn stopped at the 512 tool calls one turn can save: "Continue" goes on in a new turn. */
+function ToolCallLimit({ onContinue }: { onContinue?: (() => void) | undefined }): React.JSX.Element {
+  const action =
+    onContinue === undefined ? undefined : (
+      <Button color="inherit" size="small" onClick={onContinue} data-testid="turn-continue">
+        {t('workspace.toolCallLimit.continue', 'Continue')}
+      </Button>
+    );
+  return (
+    <Alert severity="info" action={action} data-testid="turn-tool-call-limit">
+      {t('workspace.toolCallLimit.message', 'The agent made the most tool calls one turn can save. Continue goes on in a new turn.')}
+    </Alert>
+  );
 }
 
 /**
  * The failures another try may mend: the host gave up on its own model retries (a cut or stalled stream, the gateway
  * unreachable, slow or rate limited). A refusal (budget, sign-in, a model the project may not use) is not offered one.
  */
-const RETRYABLE = new Set(['model_gateway.incomplete_stream', 'model_gateway.unavailable', 'model_gateway.upstream_timeout', 'model_gateway.rate_limited', 'model_gateway.conflict']);
+const RETRYABLE = new Set(['model_gateway.incomplete_stream', 'model_gateway.unavailable', 'model_gateway.upstream_timeout', 'model_gateway.rate_limited']);
 
 /** The turn's error, with "Retry" when another try may mend it. */
 function TurnError({ error, onRetry }: { error: NonNullable<TurnView['error']>; onRetry?: (() => void) | undefined }): React.JSX.Element {
@@ -233,7 +250,7 @@ function RetryNotice({ view }: { view: TurnView }): React.JSX.Element | null {
   );
 }
 
-export function TurnTranscript({ view, busy, onCancel, onRetryCommit, onTextContextMenu, onRetryTurn }: TurnTranscriptProps): React.JSX.Element {
+export function TurnTranscript({ view, busy, onCancel, onRetryCommit, onTextContextMenu, onRetryTurn, onContinue }: TurnTranscriptProps): React.JSX.Element {
   const showStatus = view.phase !== null;
   return (
     <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -256,6 +273,7 @@ export function TurnTranscript({ view, busy, onCancel, onRetryCommit, onTextCont
       )}
       {view.error !== undefined && <TurnError error={view.error} onRetry={onRetryTurn} />}
       <RetryNotice view={view} />
+      {view.note === 'tool_call_limit_reached' && <ToolCallLimit onContinue={onContinue} />}
       {view.commitFailed !== undefined && <CommitFailed key={view.commitFailed.seq} failed={view.commitFailed} {...(onRetryCommit === undefined ? {} : { onRetry: onRetryCommit })} />}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
         {view.projectInstructions !== undefined && view.projectInstructions.length > 0 && (

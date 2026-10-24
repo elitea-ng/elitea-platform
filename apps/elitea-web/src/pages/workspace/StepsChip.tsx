@@ -20,7 +20,7 @@ import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 
 import { describeWorkspaceError } from '@/features/workspace';
-import { DEFAULT_STEP_LIMIT, MAX_STEP_LIMIT, onStepLimitChange, readStepLimit, UNLIMITED, writeStepLimit, type StepLimit } from '@/shared/desktop/stepLimit';
+import { DEFAULT_STEP_LIMIT, MAX_STEP_LIMIT, onStepLimitChange, parseStepCount, readStepLimit, UNLIMITED, writeStepLimit, type StepLimit } from '@/shared/desktop/stepLimit';
 import { t } from '@/shared/i18n';
 
 /** The presets the menu offers between the default and unlimited. */
@@ -43,12 +43,6 @@ const chipSx = (theme: Theme) => ({
 function stepsLabel(limit: StepLimit | null): string {
   if (limit === UNLIMITED) return t('workspace.stepsChip.unlimited', '∞ steps');
   return t('workspace.stepsChip.label', '{{steps}} steps', { steps: String(limit ?? DEFAULT_STEP_LIMIT) });
-}
-
-/** A whole number from 1 to the maximum, else null. */
-function parseSteps(text: string): number | null {
-  const value = /^\d+$/u.test(text.trim()) ? Number(text.trim()) : Number.NaN;
-  return Number.isSafeInteger(value) && value >= 1 && value <= MAX_STEP_LIMIT ? value : null;
 }
 
 /** The workspace's limit, kept current by `/steps` and the menu; `undefined` until the host answered (or outside it). */
@@ -76,7 +70,7 @@ function useStepLimit(workspaceId: string): StepLimit | null | undefined {
 /** "Custom…": a number of your own, checked before it is sent. */
 function CustomSteps({ initial, onSet }: { initial: string; onSet: (steps: number) => void }): React.JSX.Element {
   const [text, setText] = useState(initial);
-  const steps = parseSteps(text);
+  const steps = parseStepCount(text);
   const submit = (event: SyntheticEvent): void => {
     event.preventDefault();
     if (steps !== null) onSet(steps);

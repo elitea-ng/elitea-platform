@@ -874,7 +874,7 @@
   "workspace.command.steps": "Show the step limit (/steps <number|unlimited|default> sets it)",
   "workspace.modelRetrying": "The model call failed; retrying ({{attempt}} of {{max}}).",
   "workspace.retryNothing": "There is no message here to send again.",
-  "workspace.steps.default": "Each run here takes up to {{steps}} model steps (the default), or the agent’s own limit when that is higher.",
+  "workspace.steps.default": "Each run here takes up to {{steps}} model steps (the default).",
   "workspace.steps.fromNext": "It applies from your next message.",
   "workspace.steps.how": "Set it with /steps <number>, /steps unlimited or /steps default.",
   "workspace.steps.invalid": "A step limit is a whole number from 1 to {{max}}, unlimited or default.",
@@ -891,5 +891,9 @@
   "workspace.stepsChip.tooltip": "Model steps per run here. At the limit the agent asks whether to continue.",
   "workspace.stepsChip.unlimited": "∞ steps",
   "workspace.stepsChip.unlimitedItem": "Unlimited",
-  "workspace.turnError.retry": "Retry"
+  "workspace.turnError.retry": "Retry",
+  "workspace.retry.busy": "A turn is still running here. Try again once it ends.",
+  "workspace.retry.cannotSend": "Nothing can be sent here now. Pick an agent, or bring the thread back to this computer.",
+  "workspace.toolCallLimit.continue": "Continue",
+  "workspace.toolCallLimit.message": "The agent made the most tool calls one turn can save. Continue goes on in a new turn."
 }

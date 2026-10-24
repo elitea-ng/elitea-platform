@@ -73,6 +73,14 @@ describe('turnReducer', () => {
     expect(answered.items[3]).toEqual({ type: 'text', key: 't9', text: 'Whole answer.' });
   });
 
+  it('clears a retry once a sub-agent or the compaction moves on (their calls stream nothing to the turn)', () => {
+    const subagent: AgentEvent = { turn_id: T, seq: 2, kind: 'subagent_finished', payload: { agent_id: 'a1', status: 'completed' } as never };
+    const meter: AgentEvent = { turn_id: T, seq: 2, kind: 'context', payload: { phase: 'compacted' } as never };
+    for (const next of [subagent, meter]) expect(activeView(run([retry(1, 0), next])).retrying).toBeUndefined();
+    // Anything else keeps it up.
+    expect(activeView(run([retry(1, 0), approval(2, 'r1')])).retrying).toBeDefined();
+  });
+
   it('cuts a retried call\'s text off the end of a text row it extended', () => {
     const view = activeView(run([text(1, 'Kept. '), text(2, 'Lost'), retry(3, 4)]));
     expect(view.items).toEqual([{ type: 'text', key: 't1', text: 'Kept. ' }]);

@@ -47,9 +47,10 @@ export function withoutRetry<V extends RetryView>(view: V): V {
   return rest as V;
 }
 
-const ENDS_RETRY: ReadonlySet<AgentEvent['kind']> = new Set(['text_delta', 'thinking_delta', 'tool_call', 'usage', 'error', 'done']);
+// A sub-agent's or a compaction summary's call streams nothing to the turn: its events after a retry are theirs.
+const ENDS_RETRY: ReadonlySet<AgentEvent['kind']> = new Set(['text_delta', 'thinking_delta', 'tool_call', 'usage', 'context', 'subagent_event', 'subagent_finished', 'error', 'done']);
 
-/** The events that show the retried call answered, or that the turn moved on. */
+/** The events that show the retried call answered (the turn's own, a sub-agent's or a summary's), or that the turn moved on. */
 export function endsRetry(event: AgentEvent): boolean {
   if (event.kind === 'status') return event.payload.phase === 'done' || event.payload.phase === 'cancelled' || event.payload.phase === 'error';
   return ENDS_RETRY.has(event.kind);

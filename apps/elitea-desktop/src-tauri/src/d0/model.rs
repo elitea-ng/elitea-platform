@@ -223,6 +223,7 @@ impl Llm for GatewayModel {
         )?;
         let started = recorder::now();
         let mut retries = 0_u32;
+        let first_try = std::time::Instant::now();
         let (responses, completed, usage) = loop {
             let mut reader = StreamReader::new((!self.quiet).then_some(&*self.events));
             let failure = match self.call(&body, &mut reader).await {
@@ -232,16 +233,22 @@ impl Llm for GatewayModel {
                 },
                 Err(failure) => failure,
             };
+            // A failed call the gateway reported usage for was billed: it
+            // counts toward the turn's tokens like any other.
+            if let Some(usage) = reader.usage() {
+                self.events
+                    .model_usage(self.lane, &self.request.model_name, usage);
+            }
             let Some(code) = failure.retry else {
                 return Err(*failure.error);
             };
             let asked = failure.wait;
-            if retries >= MODEL_RETRIES {
+            if retries >= MODEL_RETRIES || first_try.elapsed() >= RETRY_WINDOW {
                 log::warn!(
-                    "model call of execution {} failed ({code}) after {MODEL_RETRIES} retries",
+                    "model call of execution {} failed ({code}) after {retries} retries",
                     self.execution_id
                 );
-                return Err(model_error(code, &gave_up()));
+                return Err(model_error(code, &gave_up(retries)));
             }
             retries += 1;
             // The gateway's `Retry-After` when it names a longer wait.
@@ -341,8 +348,10 @@ impl GatewayModel {
                 refusal_code(status, &body)
             };
             let error = model_error(code, refusal_message(code));
+            // A 409 is about this execution, not the moment: the same call
+            // meets it again.
             return Err(
-                if code != CONTEXT_LENGTH_EXCEEDED && retryable_status(status) {
+                if code != CONTEXT_LENGTH_EXCEEDED && status != 409 && retryable_status(status) {
                     CallFailure {
                         error: Box::new(error),
                         retry: Some(code),
@@ -384,8 +393,16 @@ impl GatewayModel {
 
 /// How many times one model call is made again after a failure another
 /// call may mend (the gateway unreachable, a cut or stalled stream, a 408,
-/// 409, 429 or 5xx), before the turn fails with a message naming `/retry`.
+/// 429 or 5xx), before the turn fails with a message naming `/retry`.
 pub const MODEL_RETRIES: u32 = 25;
+
+/// How long one model call keeps being made again, from its first try:
+/// past it the turn fails even before [`MODEL_RETRIES`] (a gateway that
+/// stalls each stream would hold the folder for hours).
+#[cfg(not(test))]
+const RETRY_WINDOW: Duration = Duration::from_secs(15 * 60);
+#[cfg(test)]
+const RETRY_WINDOW: Duration = Duration::from_secs(60);
 
 /// The first wait; it doubles with each retry up to [`MAX_RETRY_DELAY`].
 #[cfg(not(test))]
@@ -408,10 +425,10 @@ const UNAVAILABLE: &str = "model_gateway.unavailable";
 const INCOMPLETE_STREAM: &str = "model_gateway.incomplete_stream";
 const CUT_OFF: &str = "the model stream was cut off";
 
-/// The message of a call that failed [`MODEL_RETRIES`] more times: the
-/// person sends `/retry` to run the turn's message again.
-fn gave_up() -> String {
-    format!("the model call failed {MODEL_RETRIES} more times; send /retry to try again")
+/// The message of a call that failed `retries` more times: the person
+/// sends `/retry` (or presses Retry) to run the turn's message again.
+fn gave_up(retries: u32) -> String {
+    format!("the model call failed {retries} more times; send /retry to try again")
 }
 
 /// The longest `Retry-After` wait the host keeps.
@@ -979,6 +996,11 @@ impl<'a> StreamReader<'a> {
         self.finish.is_some()
     }
 
+    /// The call's usage, when the gateway reported it.
+    fn usage(&self) -> Option<CallUsage> {
+        self.usage
+    }
+
     fn text_units(&self) -> usize {
         self.text_units
     }
@@ -1098,8 +1120,20 @@ impl<'a> StreamReader<'a> {
         self.splitter
             .finish_into(&mut tail)
             .map_err(|_| CallFailure::fatal(Self::malformed()))?;
+        // The tail is what came after the last whole event: on a cut stream,
+        // half an event. It is not a malformed answer: after the finish
+        // reason it is dropped (the answer is whole), before it the call is
+        // cut off and made again.
         for event in tail {
-            self.event(&event.data).map_err(CallFailure::fatal)?;
+            if let Err(error) = self.event(&event.data) {
+                if self.finish.is_some() {
+                    break;
+                }
+                if self.done {
+                    return Err(CallFailure::fatal(error));
+                }
+                return Err(CallFailure::retry(INCOMPLETE_STREAM, CUT_OFF));
+            }
         }
         let Some(finish) = self.finish else {
             return Err(CallFailure::retry(
@@ -1198,7 +1232,7 @@ mod tests {
         let waits: Vec<u128> = (1..=5).map(|n| retry_delay(n).as_millis()).collect();
         assert_eq!(waits, [1, 2, 4, 4, 4]);
         assert_eq!(retry_delay(MODEL_RETRIES), MAX_RETRY_DELAY);
-        assert!(gave_up().contains("/retry"));
+        assert!(gave_up(25).contains("/retry"));
     }
 
     #[test]

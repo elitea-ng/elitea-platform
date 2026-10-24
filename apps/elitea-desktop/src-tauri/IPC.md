@@ -165,16 +165,16 @@ the admin directory's `commondir` and `gitdir` pointing back, the top
 repository passing the full check (`config.worktree` included). A
 repository's own linked worktrees are not accepted this way.
 
-**Your own worktrees.** A worktree you made with `git worktree add` (on
-another branch) works as a workspace of its own when you open its folder
-with `workspace_add`. Its repository does not need to be open. Host git
-accepts it when its folder or its repository's top is an open workspace,
-and then applies the same structural checks: `.git` points at
-`<top>/.git/worktrees/<name>`, `commondir` and `gitdir` point back, and the
-repository's `.git` passes the full check. It has its own session,
-checkpoints (git refs per session in the shared repository) and turn
-claim. So turns on two branches run at the same time. Two threads in ONE
-folder still do not: the second is refused `workspace_busy`. In a task
+**Your own worktrees.** Open a folder that you made with `git worktree
+add` to use it as a workspace. Its repository does not need to be open.
+Host git accepts the worktree when its folder or its repository is an
+open workspace. The same structural checks apply: `.git` points at
+`<top>/.git/worktrees/<name>`, and `commondir` and `gitdir` point back.
+The repository's `.git` must also pass the full check.
+
+Each worktree has its own session, checkpoints and turn claim. Thus turns
+on two branches run at the same time. Two threads in ONE folder do not:
+the second is refused with `workspace_busy`. In a task
 worktree, agent commands may write the worktree folder only: the shared
 objects, refs and the admin directory are read-only, and the parent's
 other task worktrees are not readable.
@@ -2098,7 +2098,7 @@ order. Kinds and payloads:
 | `tool_output_delta` | `{call_id, process_id, stream: "stdout" \| "pty", data, offset: number}` — its output while this turn runs: at most 20 per second per process, at most 16 KiB each, `offset` the byte offset of `data` in the process's output |
 | `process_exited` | `{process_id, call_id, status: "exited" \| "killed" \| "timed_out", exit_code?}` — it ended while this turn runs (the turn's end stops the ones it does not keep) |
 | `approval_closed` | `{request_id, reason: "timeout"}` — the host closed an open `approval_request` nobody answered within its wait (today: an MCP sign-in, 10 minutes); the card goes, the turn's `hitl_exchanges` record it with `decision: "timeout"`, and an `approval_respond` for it answers `approval_closed` |
-| `model_retry` | `{attempt, max_attempts, code, message, delay_ms, text_units, thinking_units}` — a model call failed in a way another call may mend and is made again after `delay_ms` (**Model retries**): `attempt` counts from 1 to `max_attempts` (25); `text_units` and `thinking_units` are what the failed call streamed as `text_delta` and `thinking_delta`, in UTF-16 code units, which the transcript drops from its end (never past a tool row). The transcript shows the retry until the model streams again or the turn ends |
+| `model_retry` | `{attempt, max_attempts, code, message, delay_ms, text_units, thinking_units}` — a failed model call is made again after `delay_ms` (**Model retries**). `attempt` counts from 1 to `max_attempts` (25). `text_units` and `thinking_units` are what the failed call streamed, in UTF-16 code units. The transcript drops them from its end, never past a tool row. It shows the retry until the model, a sub-agent or the compaction moves on |
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
@@ -2279,32 +2279,44 @@ token that takes longer than 2 s is logged as a warning, and each turn
 logs one line with all of them (`local turn timings: resolving=…ms …`):
 what to compare before and after a change.
 
-**Model retries.** The host makes a failed model call again, at most 25
-times, when another call may mend it: the gateway did not answer
-(`model_gateway.unavailable`), the stream was cut off, stalled for 5
-minutes or ended before its finish reason
-(`model_gateway.incomplete_stream`), or the gateway answered 408, 409, 429
-or 5xx. It waits 1 s, then twice as long each time, at most 30 s, or the
-refusal's `Retry-After` (whole seconds, at most 120 s) when that is
-longer, and sends `model_retry` before each wait. A summary or sub-agent
-call sends it too, with nothing to drop. A stream that already sent its
-finish reason and then loses its last bytes or `[DONE]` is kept, not
-retried. A refusal no call can mend (401, 402, 403,
-400, a too-long request, a malformed stream) is not retried. After the
-25th retry the turn fails with the last failure's code and a message that
-names `/retry`: the composer's `/retry` sends the person's last message
-again (its "@" references, skills and custom command; not its images).
-The model call has no whole-call timeout: its response head must come
-within 90 s, then each chunk within 5 minutes of the one before.
+**Model retries.** The host makes a failed model call again when another
+call may mend it. These failures are retried: the gateway does not answer
+(`model_gateway.unavailable`), and the gateway answers 408, 429 or 5xx.
+A stream that is cut off, stalls for 5 minutes or ends before its finish
+reason is retried too (`model_gateway.incomplete_stream`).
+
+The host makes at most 25 retries, for at most 15 minutes from the first
+try. It waits 1 s, then twice as long each time, to a maximum of 30 s. A
+longer `Retry-After` (whole seconds, at most 120 s) replaces that wait.
+Before each wait the host sends `model_retry`. Summary and sub-agent calls
+send it too, with nothing to drop.
+
+These failures are not retried: 400, 401, 402, 403, 409, a too-long
+request and a malformed stream. A stream that sent its finish reason and
+then lost its last bytes is kept. Usage that a failed call reported counts
+toward the turn's tokens.
+
+When the host gives up, the turn fails with the last code. Its message
+names `/retry`. The composer's `/retry` and the error's Retry button send
+the last message again. They keep its "@" references, skills and custom
+command, but not its images.
+
+The model call has no whole-call timeout. Its response head must come
+within 90 s. Then each chunk must come within 5 minutes of the one before.
 
 **Step limit.** Each run of the agent takes at most its step limit of
-model steps: the workspace's own setting (`workspace_agent_settings_set`,
-or `/steps <number|unlimited|default>` in the composer) when the person set
-one, else 1024, or the agent's `meta.step_limit` when that is higher; never
-more than 1 000 000, or no limit for `"unlimited"`. An agent's value never
-lowers the default: it is often the platform's cloud default (an agent
-created without one is stamped 25), far too few for a local coding turn.
-The commit's cap of 512 tool calls (`tool_call_limit_reached`) still ends a turn.
+model steps. The workspace's own setting sets it
+(`workspace_agent_settings_set`, `/steps`, or the composer's step-limit
+chip). Without a setting, the limit is 1024. A number is at most
+1 000 000, and `"unlimited"` sets no limit.
+
+The host does not read the agent's `meta.step_limit`. The cloud stamps 25
+on every agent. A remote definition must not set how long a local run
+goes unattended.
+
+A turn also stops at 512 tool calls, the most that one commit can carry
+(`note: "tool_call_limit_reached"`). The transcript then offers Continue:
+it starts a new turn from the host's prompt, with a new budget.
 When a run ends because it used them (adk's own end of the run, not a
 count), the host asks `approval_request {kind: "continue", title: "The agent
 used its N steps", detail: <the start of the agent's last text>, steps: N,

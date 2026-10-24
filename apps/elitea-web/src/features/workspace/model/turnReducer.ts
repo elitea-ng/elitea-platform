@@ -39,6 +39,8 @@ interface TurnDone {
 export interface TurnView {
   phase: TurnPhase | null;
   message?: string;
+  /** Why an ended turn stopped (`status` `done`'s `note`): `step_limit_reached`, `tool_call_limit_reached`. */
+  note?: string;
   items: TranscriptItem[];
   /** Approvals still waiting for an answer, oldest first. */
   approvals: ApprovalRequestPayload[];
@@ -130,6 +132,7 @@ function onStatus(view: TurnView, event: EventOf<'status'>): TurnView {
   else delete next.message;
   if (event.payload.project_instructions !== undefined) next.projectInstructions = event.payload.project_instructions;
   if (event.payload.model !== undefined) next.model = event.payload.model;
+  if (event.payload.note !== undefined) next.note = event.payload.note;
   if (isTerminalPhase(event.payload.phase)) return withoutProposal({ ...next, approvals: [] });
   return next;
 }

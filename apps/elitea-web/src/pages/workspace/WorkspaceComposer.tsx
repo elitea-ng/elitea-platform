@@ -160,7 +160,8 @@ function slashItem(entry: SlashEntry): SuggestionItem {
 }
 
 /** What the start request names for the skill a message invokes: a version skill by name, a project skill by id. */
-function skillPicks(skill: ComposerSkill | null): TurnStartRequest['skills'] {
+/** The start request's `skills` for the skill a message invokes. */
+export function skillPicks(skill: ComposerSkill | null): TurnStartRequest['skills'] {
   if (skill === null) return [];
   return [skill.project === true ? { source: 'project', id: skill.id } : skill.name];
 }

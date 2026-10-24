@@ -17,6 +17,13 @@ export const DEFAULT_STEP_LIMIT = 1024;
 /** The most steps a number may set (the host's `STEP_LIMIT_RANGE`). */
 export const MAX_STEP_LIMIT = 1_000_000;
 
+/** A whole number of steps from 1 to [`MAX_STEP_LIMIT`] (blanks around it allowed), else null. */
+export function parseStepCount(text: string): number | null {
+  const trimmed = text.trim();
+  const steps = /^\d+$/u.test(trimmed) ? Number(trimmed) : Number.NaN;
+  return Number.isSafeInteger(steps) && steps >= 1 && steps <= MAX_STEP_LIMIT ? steps : null;
+}
+
 type AgentSettings = Record<string, unknown> & { step_limit?: StepLimit | null };
 
 function host(): NonNullable<ReturnType<typeof tauriInvoke>> {

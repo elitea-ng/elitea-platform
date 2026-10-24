@@ -33,7 +33,7 @@ import { lazy, Suspense, useMemo, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 
 import { composer, replayView, type WorkspaceTurn } from '@/features/workspace';
-import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import type { CustomCommand, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
 import { AgentChip, RunLocationChip } from './ComposerControls';
@@ -49,7 +49,7 @@ import type { ThreadSession } from './useThreadSession';
 import { useRetryAndSteps, type SentMessage } from './useRetryAndSteps';
 import type { SessionCommands } from './useSessionCommands';
 import { useTurnModel, type TurnModelControl } from './useTurnModel';
-import { WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
+import { skillPicks, WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
 
 const ContextMeter = lazy(() => import('./ContextMeter'));
 const UsageChip = lazy(() => import('./UsageChip'));
@@ -108,11 +108,16 @@ function latestMeter(turn: WorkspaceTurn) {
 
 type Usage = WorkspaceTurn['view']['usage'];
 
-/** The thread's last recorded prompt (thread history), for `/retry` before anything was sent here. */
-function recordedPrompt(history: ThreadSession['history']): SentMessage | null {
+/**
+ * The thread's last recorded message (thread history), for `/retry` before anything was sent here. The history keeps
+ * the prompt as typed: its skill or custom command is read from it again, as a send does.
+ */
+export function recordedPrompt(history: ThreadSession['history'], commands: readonly CustomCommand[], skills: readonly ComposerSkill[]): SentMessage | null {
   if (history.kind !== 'local') return null;
   const stored = history.turns[history.turns.length - 1];
-  return stored === undefined ? null : { prompt: stored.prompt, mentions: stored.mentions, skills: [] };
+  if (stored === undefined) return null;
+  const { command, skill } = composer.invokedPick(stored.prompt, commands, skills);
+  return { prompt: stored.prompt, mentions: stored.mentions, skills: skillPicks(skill), command: command ?? undefined };
 }
 
 /** Each recorded turn's usage (thread history), replayed once per history, not per render. */
@@ -194,8 +199,8 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     onStop: () => void turn.cancel(),
   };
   const bound = sendBinding(cloudMode, cloud, composerPipeline, here);
-  const lastRecorded = useMemo(() => recordedPrompt(session.history), [session.history]);
-  const controls = useRetryAndSteps(workspaceId, commands, session.run, bound.onSend, bound.busy, lastRecorded);
+  const lastRecorded = useMemo(() => recordedPrompt(session.history, customCommands, offered), [session.history, customCommands, offered]);
+  const controls = useRetryAndSteps(workspaceId, commands, session.run, { send: bound.onSend, busy: bound.busy, canSend: bound.canSend }, lastRecorded);
   const openInChat = conversationId === '' ? undefined : () => void navigate({ to: '/chat/$conversationId', params: { conversationId } });
   const meter = cloudMode ? undefined : latestMeter(turn);
   const recorded = useMemo(() => recordedUsages(session.history), [session.history]);
@@ -216,7 +221,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} disabledHint={agentHint} />}
         {...modelBinding(model, !local, commands.modelRef)}
         runLocation={<RunLocationChip handoff={handoff} onOpenInChat={openInChat} />}
-        contextMeter={<ComposerMeters meter={meter} usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} onStepsError={commands.showSteps} />}
+        contextMeter={<ComposerMeters meter={meter} usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} onStepsError={commands.showText} />}
         onPlanModeChange={commands.setPlanMode}
         skills={offered}
         customCommands={customCommands}

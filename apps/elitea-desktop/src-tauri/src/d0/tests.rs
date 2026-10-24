@@ -1226,6 +1226,62 @@ async fn a_rate_limit_waits_as_long_as_the_gateway_asks() {
     assert!(of_kind(&events, "error").is_empty());
 }
 
+/// A stream cut halfway through an event: before the finish reason the call
+/// is made again (not a malformed answer); after it the answer is kept.
+#[tokio::test]
+async fn a_half_event_at_the_cut_is_a_cut_stream_not_a_malformed_one() {
+    let half = |before: &str| Res {
+        status: 200,
+        headers: vec![("Content-Type", "text/event-stream".into())],
+        body: format!("{before}data: {{\"choices\": [{{\"delta\": {{\"content\": \"Hal"),
+        raw: Vec::new(),
+    };
+    let finished = format!(
+        "data: {}\n\n",
+        json!({"choices": [{"delta": {"content": "Kept."}, "finish_reason": "stop"}]})
+    );
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => half(""),
+                _ => half(&finished),
+            };
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let retries = of_kind(&events, "model_retry");
+    assert_eq!(retries.len(), 1, "{:?}", h.emitter.kinds());
+    assert_eq!(retries[0]["code"], "model_gateway.incomplete_stream");
+    assert!(of_kind(&events, "error").is_empty());
+    assert_eq!(llm_bodies(&h.server).len(), 2);
+    let commits = commit_bodies(&h.server);
+    assert_eq!(commits[0]["assistant_message"]["content"], "Kept.");
+}
+
+/// A 409 is about this execution: another identical call meets it again.
+#[tokio::test]
+async fn a_conflict_is_not_retried() {
+    let inner = platform(agent_details(), &[]);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return Res::json(409, &json!({"error": {"message": "conflict"}}));
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    assert!(of_kind(&events, "model_retry").is_empty());
+    assert_eq!(llm_bodies(&h.server).len(), 1);
+}
+
 /// After 25 retries the turn fails, and its error names `/retry`.
 #[tokio::test]
 async fn a_model_call_gives_up_after_25_retries() {
@@ -4523,7 +4579,7 @@ async fn a_second_turn_is_refused_before_it_can_wipe_a_running_seed() {
     );
 }
 
-/// An agent whose `meta.step_limit` is two: below the default, so the
+/// An agent whose `meta.step_limit` is two: not read locally, so the
 /// default applies unless the workspace sets its own.
 fn two_step_details() -> Value {
     let mut details = agent_details();
