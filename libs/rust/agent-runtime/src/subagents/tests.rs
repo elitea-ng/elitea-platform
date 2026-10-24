@@ -196,10 +196,18 @@ struct TestHost {
     started: Mutex<Vec<ChildIdentity>>,
     finished: Mutex<Vec<ChildReport>>,
     instructions: Mutex<Vec<String>>,
+    /// Gives children a checkout of their own (#1235).
+    isolating: bool,
+    /// How many checkouts it made.
+    checkouts: AtomicUsize,
 }
 
 impl TestHost {
     fn new() -> Arc<Self> {
+        Self::with_isolation(false)
+    }
+
+    fn with_isolation(isolating: bool) -> Arc<Self> {
         Arc::new(Self {
             model: Arc::new(ChildModel::default()),
             write: Arc::new(WriteFile::default()),
@@ -207,6 +215,8 @@ impl TestHost {
             started: Mutex::new(Vec::new()),
             finished: Mutex::new(Vec::new()),
             instructions: Mutex::new(Vec::new()),
+            isolating,
+            checkouts: AtomicUsize::new(0),
         })
     }
 }
@@ -232,6 +242,18 @@ impl SubAgentHost for TestHost {
         ))];
         toolsets.extend(self.extra.lock().unwrap().iter().cloned());
         Ok(toolsets)
+    }
+
+    fn supports_worktree_isolation(&self) -> bool {
+        self.isolating
+    }
+
+    async fn isolated_toolsets(
+        &self,
+        child: &ChildIdentity,
+    ) -> Result<Vec<Arc<dyn Toolset>>, HostError> {
+        self.checkouts.fetch_add(1, Ordering::SeqCst);
+        self.toolsets(child).await
     }
 
     fn started(&self, child: &ChildIdentity) {
@@ -781,4 +803,79 @@ impl adk_core::ReadonlyContext for NoContext {
         static CONTENT: std::sync::OnceLock<Content> = std::sync::OnceLock::new();
         CONTENT.get_or_init(|| Content::new("user"))
     }
+}
+
+/// The spawn tool's schema, as the parent model is offered it.
+async fn spawn_schema_of(children: &SubAgents) -> Value {
+    let ctx: Arc<dyn adk_core::ReadonlyContext> = Arc::new(NoContext);
+    children
+        .toolset()
+        .tools(ctx)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|tool| tool.name() == SPAWN_AGENT)
+        .and_then(|tool| tool.parameters_schema())
+        .unwrap()
+}
+
+/// #1235: a child with a checkout of its own (`isolation: "worktree"`) gets
+/// the host's isolated tools, writing ones included, and its own preamble.
+#[tokio::test]
+async fn an_isolated_child_may_write_in_its_own_checkout() {
+    let host = TestHost::with_isolation(true);
+    let children = subagents(&host);
+    assert!(spawn_schema_of(&children).await["properties"]["isolation"].is_object());
+    let script: Box<Script> = Box::new(move |n, request| match n {
+        0 => vec![call(
+            "spawn-0",
+            SPAWN_AGENT,
+            json!({"task": "write", "isolation": "worktree"}),
+        )],
+        1 => vec![call(
+            "wait-1",
+            WAIT_AGENT,
+            json!({"agent_ids": agent_ids(request)}),
+        )],
+        _ => vec![text("done")],
+    });
+    let responses = run_parent("parent", &children, script).await;
+    assert_eq!(wait_results(&responses)[0]["status"], "completed");
+    assert_eq!(host.checkouts.load(Ordering::SeqCst), 1);
+    assert_eq!(host.write.0.load(Ordering::SeqCst), 1, "the child wrote");
+    let instruction = host.instructions.lock().unwrap()[0].clone();
+    assert!(instruction.starts_with(super::ISOLATED_CHILD_PREAMBLE));
+    // Still no sub-agent tools for a child.
+    for offered in host.model.offered.lock().unwrap().iter() {
+        assert_eq!(offered, &["look".to_owned(), "write_file".to_owned()]);
+    }
+}
+
+/// A host with no checkouts (the cloud worker) keeps `isolation` out of the
+/// schema and refuses it.
+#[tokio::test]
+async fn isolation_is_refused_where_the_host_gives_no_checkout() {
+    let host = TestHost::new();
+    let children = subagents(&host);
+    assert!(
+        spawn_schema_of(&children).await["properties"]
+            .get("isolation")
+            .is_none()
+    );
+    let script: Box<Script> = Box::new(move |n, _| match n {
+        0 => vec![call(
+            "spawn-0",
+            SPAWN_AGENT,
+            json!({"task": "write", "isolation": "worktree"}),
+        )],
+        _ => vec![text("done")],
+    });
+    let responses = run_parent("parent", &children, script).await;
+    let (_, spawned) = responses
+        .iter()
+        .find(|(name, _)| name == SPAWN_AGENT)
+        .unwrap();
+    assert_eq!(spawned["code"], "subagent_isolation_unsupported");
+    assert!(host.started.lock().unwrap().is_empty());
+    assert_eq!(host.write.0.load(Ordering::SeqCst), 0);
 }

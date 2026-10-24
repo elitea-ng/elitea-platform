@@ -835,10 +835,29 @@ pub struct AgentHost {
     failed_commits: Mutex<HashMap<String, FailedCommit>>,
     /// The images attached and not yet sent (#1229), in memory.
     attachments: Attachments,
+    /// The task worktrees (#1235, src/worktrees.rs), set once at start-up
+    /// (weak: they hold this host): a sub-agent's `isolation: "worktree"`
+    /// gets one. Unset, sub-agents only read.
+    worktrees: std::sync::OnceLock<std::sync::Weak<crate::worktrees::WorktreeHost>>,
     /// Extra toolsets every turn offers (tests: tools that record when they
     /// run).
     #[cfg(test)]
     test_toolsets: Mutex<Vec<Arc<dyn Toolset>>>,
+}
+
+/// What an isolated sub-agent's session holds while the child lives: its
+/// task worktree's claim (no turn, undo or removal runs there meanwhile) and
+/// its prompt's binding to the parent turn (its approvals are asked in the
+/// parent's turn). Dropping it releases both.
+pub(crate) struct ChildHold {
+    _claim: WorkspaceClaim,
+    prompt: Arc<UiPrompt>,
+}
+
+impl Drop for ChildHold {
+    fn drop(&mut self) {
+        self.prompt.bind(None);
+    }
 }
 
 /// The tag one AGENTS.md file is framed in.
@@ -1012,9 +1031,42 @@ impl AgentHost {
             commits: CommitQueues::default(),
             failed_commits: Mutex::new(HashMap::new()),
             attachments: Attachments::default(),
+            worktrees: std::sync::OnceLock::new(),
             #[cfg(test)]
             test_toolsets: Mutex::new(Vec::new()),
         })
+    }
+
+    /// Give sub-agents task worktrees (#1235): `isolation: "worktree"`.
+    pub fn set_worktrees(&self, worktrees: &Arc<crate::worktrees::WorktreeHost>) {
+        let _ = self.worktrees.set(Arc::downgrade(worktrees));
+    }
+
+    /// The session an isolated sub-agent runs in: `workspace_id`'s (a task
+    /// worktree just made for it), under its claim, its prompt bound to the
+    /// parent turn's `binding`, with the build profile (the child writes).
+    ///
+    /// # Errors
+    ///
+    /// `workspace_busy`, `local_work_disabled`, `workspace_unavailable`.
+    pub(crate) fn child_session(
+        &self,
+        workspace_id: &str,
+        root: PathBuf,
+        binding: TurnBinding,
+    ) -> Result<(Arc<LocalSession>, ChildHold), TurnError> {
+        let claim = WorkspaceClaim::take(&self.busy, workspace_id, TURN_RUNNING)?;
+        let policy = self.policy()?;
+        let workspace = self.session(workspace_id, root, &policy)?;
+        workspace.prompt.bind(Some(binding));
+        workspace.session.set_profile(PermissionProfile::Build);
+        Ok((
+            workspace.session.clone(),
+            ChildHold {
+                _claim: claim,
+                prompt: workspace.prompt.clone(),
+            },
+        ))
     }
 
     /// How many attached images the host holds (tests).
@@ -1092,6 +1144,21 @@ impl AgentHost {
         let choices = JsonFileChoices::open(data_dir.join("choices.json"))
             .map_err(|e| TurnError::new("storage", e.message().to_owned()))?;
         let prompt = Arc::new(UiPrompt::new(self.broker.clone()));
+        // A task worktree's session (#1235) is denied every task worktree of
+        // its workspace by name, as well as through the app's data: its own
+        // folder (its root) is opened again by the session, never a
+        // sibling's.
+        let mut deny_read = self.deps.sandbox_deny.clone();
+        if let Ok(Some(Workspace {
+            parent_id: Some(parent),
+            ..
+        })) = self.deps.workspaces.get(workspace_id)
+        {
+            deny_read.push(crate::worktrees::worktrees_dir(
+                &self.deps.workspaces,
+                &parent,
+            ));
+        }
         let session = LocalSession::open(SessionConfig {
             root,
             session_id: workspace_id.to_owned(),
@@ -1101,7 +1168,7 @@ impl AgentHost {
             prompt: prompt.clone(),
             data_dir,
             shell: None,
-            deny_read: self.deps.sandbox_deny.clone(),
+            deny_read,
             app_id: self.deps.app_id.clone(),
             budgets: elitea_local_tools::budget::Budgets::default(),
             documents: crate::documents::bundled(),
@@ -3049,24 +3116,45 @@ impl AgentHost {
             &system_instruction("", &environment::preamble(&child_facts), project, &nonce),
             &environment::current(&child_facts),
         );
+        // A child that asks for a checkout of its own (#1235) gets a task
+        // worktree of this folder's repository, when the folder is one's top
+        // (never from inside a task worktree: one level).
+        let checkouts = self
+            .worktrees
+            .get()
+            .and_then(std::sync::Weak::upgrade)
+            .filter(|worktrees| worktrees.can_isolate(&request.workspace_id))
+            .map(|worktrees| {
+                Arc::new(crate::worktrees::WorktreeCheckouts::new(
+                    worktrees,
+                    &request.workspace_id,
+                    TurnBinding {
+                        events: events.clone(),
+                        recorder: recorder.clone(),
+                    },
+                )) as Arc<dyn super::subagents::ChildCheckouts>
+            });
         let children = SubAgents::new(
-            Arc::new(DesktopSubAgents::new(
-                GatewayTransport {
-                    lane: UsageLane::SubAgent,
-                    tail: None,
-                    ..transport.clone()
-                },
-                child_model,
-                toolsets
-                    .iter()
-                    .filter(|toolset| {
-                        toolset.name() != REMOTE_TOOLSET && toolset.name() != MCP_TOOLSET
-                    })
-                    .cloned()
-                    .collect(),
-                events.clone(),
-                recorder.clone(),
-            )),
+            Arc::new(
+                DesktopSubAgents::new(
+                    GatewayTransport {
+                        lane: UsageLane::SubAgent,
+                        tail: None,
+                        ..transport.clone()
+                    },
+                    child_model,
+                    toolsets
+                        .iter()
+                        .filter(|toolset| {
+                            toolset.name() != REMOTE_TOOLSET && toolset.name() != MCP_TOOLSET
+                        })
+                        .cloned()
+                        .collect(),
+                    events.clone(),
+                    recorder.clone(),
+                )
+                .with_checkouts(checkouts),
+            ),
             // A child only reads, and never gets near the parent's processes
             // (`process_output`, `process_list` and `process_wait` read, but
             // what they read is the parent's terminal, #1223).
@@ -3467,9 +3555,23 @@ impl AgentHost {
     ///
     /// # Errors
     ///
-    /// `workspace_busy` while a turn (or an undo) runs in it, or the
+    /// `workspace_busy` while a turn (or an undo) runs in it,
+    /// `workspace_has_worktrees` while it has task worktrees, or the
     /// workspace list cannot be written.
     pub async fn remove_workspace(&self, workspace_id: &str) -> Result<(), TurnError> {
+        // Its task worktrees (#1235) live in its data and hold work of their
+        // own: they are removed (or merged) first, one by one.
+        if self
+            .deps
+            .workspaces
+            .worktrees_of(workspace_id)
+            .is_ok_and(|worktrees| !worktrees.is_empty())
+        {
+            return Err(TurnError::new(
+                "workspace_has_worktrees",
+                "Remove this folder's task worktrees first (Parallel agents).",
+            ));
+        }
         // Held across the removal: no turn starts on the folder meanwhile.
         let _claim = WorkspaceClaim::take(
             &self.busy,
@@ -4098,6 +4200,10 @@ impl crate::doctor::DoctorHooks for AgentHost {
                 .map_err(|error| error.message),
             None => Err("the local index is not available".into()),
         }
+    }
+
+    fn git_deny(&self) -> Arc<elitea_local_tools::deny::DenyList> {
+        self.host_deny()
     }
 }
 

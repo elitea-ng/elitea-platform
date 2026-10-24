@@ -123,6 +123,8 @@ type Workspace = {
   name: string;             // the folder's name
   project_id: number | null; // the project local turns run in; a turn needs one
   is_git: boolean;          // inside a git work tree (computed when listed)
+  parent_id?: string;       // a task worktree's workspace: the folder it was made from (#1235)
+  thread_uuid?: string;     // a task worktree's workspace: the thread it was made for
 };
 ```
 
@@ -130,7 +132,7 @@ type Workspace = {
 | --- | --- | --- |
 | `workspace_open` | — | `Workspace \| null` — the native folder dialog; `null` when cancelled. Opening a folder that is already a workspace returns that workspace. |
 | `workspace_list` | — | `Workspace[]` |
-| `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, its approval rules, copy checkpoints, its local index), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it. |
+| `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, its approval rules, copy checkpoints, its local index), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it, `workspace_has_worktrees` while it has task worktrees (remove them first). A task worktree's workspace is removed with `worktree_remove`. |
 | `workspace_bind_project` | `{id, project_id}` | `Workspace` — rejects with `workspace_busy` while a turn (or an undo) runs in it, `workspace_unknown` for an id it does not know. |
 | `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null, allow_model_override: boolean \| null}` — the workspace's agent settings: `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100); `allow_model_override: false` runs every turn on the agent's own model (the composer hides its model chip; `null`/`true`: a model may be chosen per turn, issue 1228). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
 | `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null, allow_model_override?: boolean \| null}}` | the stored settings — they apply from the next turn. Rejects `invalid_request` for a step limit outside 10 to 200, `storage` for an id it does not know. |
@@ -139,6 +141,80 @@ type Workspace = {
 
 Workspaces are stored in the app data directory (`workspaces.json`), never
 inside the folder.
+
+## Parallel agents: task worktrees (`src/worktrees.rs`, `src/worktree_commands.rs`, `libs/rust/local-tools/src/{worktree,apply}.rs`, #1235)
+
+A task worktree is a linked git worktree of a workspace's repository that
+the host makes in the workspace's own data,
+`<app data>/workspaces/<id>/worktrees/<32 hex of the thread>`, on a new
+branch `elitea/<first 8 hex of the thread>` (no checkout runs a filter or
+hook: files are written by `checkout-index` after the attributes check).
+Only a workspace whose folder is its repository's top has them. Each is a
+workspace of its own (`Workspace.parent_id`, listed by `workspace_list`):
+its own session, checkpoints and turn claim, so turns run in several task
+worktrees, and in the folder, at the same time. Its project is the
+parent's. The `worktree_*` commands take the PARENT's `workspace_id`;
+`agent_turn_start`, `checkpoint_*` and the rest take the worktree's.
+
+The host records each in `worktrees.json` in the parent's data (owner-only,
+never through a symlink; a file another user owns or others may read is
+refused) and registers it with host git at creation and at launch. Host
+git accepts a linked worktree only as that record names it: its `.git`
+file a regular file you own holding exactly `gitdir: <top>/.git/worktrees/<name>`,
+the admin directory's `commondir` and `gitdir` pointing back, the top
+repository passing the full check (`config.worktree` included). A
+repository's own linked worktrees are not accepted this way. In a task
+worktree, agent commands may write the worktree folder only: the shared
+objects, refs and the admin directory are read-only, and the parent's
+other task worktrees are not readable.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `worktree_create` | `{workspace_id, thread_uuid, base?: "head" \| "checkpoint:<n>"}` | `WorktreeEntry` — `base` is `HEAD` (default) or the folder as its checkpoint `n` holds it. Rejects `workspace_unknown`, `not_a_git_repository` (no repository, or the folder is not its top), `unsafe_repository`, `worktree_exists` (the thread has one, or the branch exists), `invalid_request`. |
+| `worktree_list` | `{workspace_id}` | `WorktreeEntry[]`, newest first. |
+| `worktree_diff` | `{workspace_id, thread_uuid}` | `{diff: string, truncated: boolean}` — the worktree as it is now (uncommitted work included) against `base_sha`; denied paths left out. Rejects `worktree_unknown`, `workspace_busy` while a turn runs in it. |
+| `worktree_remove` | `{workspace_id, thread_uuid, force?: boolean}` | `null` — its workspace (session, turns, history, data), folder and admin directory; its branch is kept when commits are on it. Rejects `worktree_dirty` when it has uncommitted work and `force` is not `true`, `workspace_busy`. |
+| `worktree_merge_preflight` | `{workspace_id, thread_uuid}` | `MergePreflight` — what merging the worktree (as it is now) into the folder would do, by `git merge-tree` from `base_sha`; writes nothing. Held 15 minutes. |
+| `worktree_merge_apply` | `{preflight_id}` | `MergeApplied` — checkpoints the folder first, then writes each path through the confined writer (path rules apply; what they refuse is in `skipped_paths`). The result lands as uncommitted changes; nothing is committed. Rejects `preflight_expired`, `merge_conflicts` (a `conflicts` preview: nothing is applied, the work stays on the branch), `folder_changed_since_preflight` (preview again), `workspace_busy`. |
+| `worktree_merge_undo` | `{checkpoint_id}` | `{restored: string[]}` — restores the checkpoint the merge took. |
+
+```ts
+type WorktreeEntry = {
+  workspace_id: string;        // the worktree's own workspace (turns run here)
+  thread_uuid: string;
+  path: string;
+  branch: string;              // "elitea/<first 8 hex of the thread>"
+  base_sha: string;
+  created_at: number;          // unix seconds
+  ahead: number;               // commits on the branch since base_sha
+  dirty: number;               // changed paths not committed
+  last_turn_at: number | null; // its newest checkpoint (the last turn that wrote)
+  missing: boolean;            // the folder is gone (the Doctor prunes it)
+};
+type MergePreflight = {
+  preflight_id: string;
+  mode: "fast_forward" | "merge" | "conflicts" | "nothing";
+  applied_paths: string[];
+  conflict_paths: string[];
+  skipped_paths: string[];     // never written: denied paths, symlinks, submodules
+  branch: string;
+};
+type MergeApplied = {
+  written: string[];
+  deleted: string[];
+  skipped_paths: string[];
+  checkpoint_id: string | null; // for worktree_merge_undo
+};
+```
+
+A sub-agent may run in a task worktree of its own: `spawn_agent` takes
+`isolation: "worktree"` in a turn of a workspace that has task worktrees
+(its schema offers `isolation` only there). The host makes the worktree
+before the child starts; the child keeps its writing tools there, its
+approvals asked in the parent turn, and the worktree stays for the person
+to review and merge (Parallel agents panel). The Doctor's `worktrees`
+check finds task worktrees whose folder is gone and admin directories the
+app made that no record names; `worktrees.prune` (confirmed) removes them.
 
 ## Approval rules (`src/rules.rs`, `libs/rust/local-tools/src/execpolicy.rs`)
 

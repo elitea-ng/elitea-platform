@@ -244,6 +244,7 @@ const DESKTOP_ONLY_PREFIXES = [
   'src/features/workspace-index/',
   'src/features/workspace-mcp/',
   'src/features/workspace-rules/',
+  'src/features/workspace-worktrees/',
   'src/pages/workspace/',
   'src/shared/desktop/',
   'src/widgets/desktop-shell/',

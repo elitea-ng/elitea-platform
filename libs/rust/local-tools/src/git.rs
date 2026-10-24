@@ -23,8 +23,9 @@
 //!    process): `.git` must be a plain directory (not a symlink, not a
 //!    `gitdir:` file, except a linked worktree exactly as `git worktree
 //!    add` registers it in a repository the host trusts, see
-//!    [`trust_worktree_parent`]; its repository's `.git` is then checked
-//!    as below) at the work tree's top, with no `commondir`, no
+//!    [`trust_worktree_parent`], or a task worktree the host created and
+//!    recorded itself, see [`register_worktree`]; its repository's `.git`
+//!    is then checked as below) at the work tree's top, with no `commondir`, no
 //!    `modules/`, no alternates, and a local config (and `config.worktree`)
 //!    that this module parses itself and git's own reader lists (reading
 //!    config runs no code; includes are not followed): both must agree on
@@ -44,7 +45,9 @@
 //!    system config or system attributes, no attributes file, no submodule
 //!    recursion; per command `--no-ext-diff --no-textconv`,
 //!    `--ignore-submodules=all`, `--no-show-signature`, `--no-gpg-sign`;
-//!    `GIT_DIR` and `GIT_WORK_TREE` pinned, the parent's `GIT_*` dropped.
+//!    `GIT_DIR` and `GIT_WORK_TREE` pinned (a linked worktree's
+//!    `GIT_COMMON_DIR` too, so git never reads the `commondir` file), the
+//!    parent's `GIT_*` dropped.
 //! 3. **Sandbox every git process** (Seatbelt on macOS, bubblewrap or the
 //!    Landlock helper on Linux): no network, and writes only where the call
 //!    needs them (the temporary index, `objects/`, `refs/elitea/`; the
@@ -533,6 +536,161 @@ fn trusted_worktree_parent(top: &Path) -> bool {
     check.is_some_and(|check| check(top))
 }
 
+/// A task worktree the host created (`git worktree add` under its own
+/// data, ADR-0029 decision 4) and recorded in its own registry: the
+/// repository never declares one. Host git accepts a linked worktree of
+/// this shape only when the caller names it ([`Repo::open_registered_worktree`])
+/// or the host registered it ([`register_worktree`]).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegisteredWorktree {
+    /// The worktree's folder.
+    pub worktree: PathBuf,
+    /// The top of the repository it was created in.
+    pub top: PathBuf,
+    /// Its admin directory's name: `<top>/.git/worktrees/<name>`.
+    pub name: String,
+}
+
+impl RegisteredWorktree {
+    /// The same entry with both paths canonical (as given when one does not
+    /// resolve: the check then refuses it).
+    #[must_use]
+    pub fn canonical(&self) -> Self {
+        let resolve =
+            |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        Self {
+            worktree: resolve(&self.worktree),
+            top: resolve(&self.top),
+            name: self.name.clone(),
+        }
+    }
+}
+
+/// The task worktrees the host registered, by canonical folder.
+static REGISTERED_WORKTREES: Mutex<BTreeMap<PathBuf, RegisteredWorktree>> =
+    Mutex::new(BTreeMap::new());
+
+/// Record a task worktree the host created (at creation, and at start-up
+/// from the host's registry file). Kept until [`unregister_worktree`].
+pub fn register_worktree(entry: &RegisteredWorktree) {
+    let entry = entry.canonical();
+    if let Ok(mut registered) = REGISTERED_WORKTREES.lock() {
+        registered.insert(entry.worktree.clone(), entry);
+    }
+}
+
+/// Forget a task worktree (it was removed).
+pub fn unregister_worktree(worktree: &Path) {
+    let canonical = std::fs::canonicalize(worktree).unwrap_or_else(|_| worktree.to_path_buf());
+    if let Ok(mut registered) = REGISTERED_WORKTREES.lock() {
+        registered.remove(&canonical);
+        registered.remove(worktree);
+    }
+}
+
+/// The registered task worktree whose folder is `worktree`, if any.
+#[must_use]
+pub fn registered_worktree(worktree: &Path) -> Option<RegisteredWorktree> {
+    let canonical = std::fs::canonicalize(worktree).unwrap_or_else(|_| worktree.to_path_buf());
+    REGISTERED_WORKTREES
+        .lock()
+        .ok()
+        .and_then(|registered| registered.get(&canonical).cloned())
+}
+
+/// A worktree admin directory name the host gives (`[A-Za-z0-9._-]`, not
+/// `.` or `..`, at most 64 bytes).
+#[must_use]
+pub fn valid_worktree_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name != "."
+        && name != ".."
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+/// The narrow exception to "`.git` is a directory" for a registered task
+/// worktree: its `.git` is a regular file (not a symlink) the person owns,
+/// whose one line is `gitdir: <absolute path>`; that path is, canonically,
+/// exactly `<top>/.git/worktrees/<name>` of the registered top; the admin
+/// directory's `commondir` leads to `<top>/.git` and its `gitdir` back to
+/// this `.git`. `(admin dir, <top>/.git)`, both canonical; every other
+/// check of [`Repo::check`] then runs on `<top>/.git`. A `.git` file the
+/// repository wrote, a pointer anywhere else, a `commondir` elsewhere and a
+/// submodule's git directory are all refused.
+fn registered_linked_worktree(entry: &RegisteredWorktree) -> ToolResult<(PathBuf, PathBuf)> {
+    use std::os::unix::fs::MetadataExt as _;
+    let refuse = |why: &str| {
+        unsafe_repo(format!(
+            "the worktree's .git is not the one the host created ({why})"
+        ))
+    };
+    if !valid_worktree_name(&entry.name) {
+        return Err(refuse("not a worktree name the host gives"));
+    }
+    let dot_git = entry.worktree.join(".git");
+    let meta = std::fs::symlink_metadata(&dot_git).map_err(|_| refuse("it is missing"))?;
+    if !meta.file_type().is_file() {
+        return Err(refuse("not a regular file"));
+    }
+    if meta.uid() != rustix::process::geteuid().as_raw() {
+        return Err(refuse("another user owns it"));
+    }
+    if meta.len() > 4096 {
+        return Err(refuse("too large"));
+    }
+    let text = std::fs::read_to_string(&dot_git).map_err(|_| refuse("unreadable"))?;
+    let line = text.strip_suffix('\n').unwrap_or(&text);
+    let target = line
+        .strip_prefix("gitdir: ")
+        .filter(|target| !target.is_empty() && !target.contains(['\n', '\r']))
+        .ok_or_else(|| refuse("not a single gitdir line"))?;
+    let target = Path::new(target);
+    if !target.is_absolute() {
+        return Err(refuse("a relative gitdir"));
+    }
+    let top = std::fs::canonicalize(&entry.top).map_err(|_| refuse("its repository is gone"))?;
+    let common = top.join(".git");
+    if !std::fs::symlink_metadata(&common).is_ok_and(|meta| meta.file_type().is_dir()) {
+        return Err(refuse("its repository's .git is not a directory"));
+    }
+    let expected = common.join("worktrees").join(&entry.name);
+    // No component of the expected path may be a symlink: the canonical
+    // spelling must be the literal one.
+    if std::fs::canonicalize(&expected).ok().as_deref() != Some(expected.as_path()) {
+        return Err(refuse("its admin directory is not in its repository"));
+    }
+    if std::fs::canonicalize(target).ok().as_deref() != Some(expected.as_path()) {
+        return Err(refuse(
+            "its gitdir points outside its repository's worktrees",
+        ));
+    }
+    let commondir =
+        small_text(&expected.join("commondir")).ok_or_else(|| refuse("no commondir"))?;
+    let commondir = Path::new(&commondir);
+    let commondir = if commondir.is_absolute() {
+        commondir.to_path_buf()
+    } else {
+        expected.join(commondir)
+    };
+    if std::fs::canonicalize(commondir).ok().as_deref() != Some(common.as_path()) {
+        return Err(refuse("its commondir leads elsewhere"));
+    }
+    let back = small_text(&expected.join("gitdir")).ok_or_else(|| refuse("no gitdir"))?;
+    let back = Path::new(&back);
+    let back = if back.is_absolute() {
+        back.to_path_buf()
+    } else {
+        expected.join(back)
+    };
+    if std::fs::canonicalize(back).ok() != std::fs::canonicalize(&dot_git).ok() {
+        return Err(refuse("its repository registered another worktree there"));
+    }
+    Ok((expected, common))
+}
+
 /// A small file's text, trimmed (`None`: missing, not a plain file, or
 /// larger than 4 KiB).
 fn small_text(path: &Path) -> Option<String> {
@@ -650,6 +808,10 @@ pub struct Repo {
     /// Where objects, refs and the config live: `git_dir` itself, or for a
     /// linked worktree ([`linked_worktree`]) its repository's `.git`.
     common_dir: PathBuf,
+    /// A task worktree the host registered: checked by
+    /// [`registered_linked_worktree`] on every call instead of the trust of
+    /// its repository.
+    registered: Option<RegisteredWorktree>,
     sandbox: SandboxConfig,
     /// What host git may not read or write: the session's deny list.
     deny: Arc<DenyList>,
@@ -687,9 +849,17 @@ impl Repo {
             return Ok(None);
         };
         let dot_git = top.join(".git");
+        let mut registered = None;
         let (git_dir, common_dir) =
             if std::fs::symlink_metadata(&dot_git).is_ok_and(|meta| meta.file_type().is_file()) {
-                linked_worktree(top)?
+                match registered_worktree(top) {
+                    Some(entry) => {
+                        let dirs = registered_linked_worktree(&entry)?;
+                        registered = Some(entry);
+                        dirs
+                    }
+                    None => linked_worktree(top)?,
+                }
             } else {
                 (dot_git.clone(), dot_git)
             };
@@ -697,6 +867,7 @@ impl Repo {
             top: top.to_path_buf(),
             git_dir,
             common_dir,
+            registered,
             sandbox: sandbox.clone(),
             deny,
             global_config: None,
@@ -727,6 +898,7 @@ impl Repo {
             top: work_tree.to_path_buf(),
             git_dir: git_dir.to_path_buf(),
             common_dir: git_dir.to_path_buf(),
+            registered: None,
             sandbox: sandbox.clone(),
             deny,
             global_config: None,
@@ -736,6 +908,60 @@ impl Repo {
         };
         repo.check()?;
         Ok(repo)
+    }
+
+    /// The task worktree `entry` names (its folder, its repository's top,
+    /// its admin directory's name: all from the host's own registry, never
+    /// discovered), checked as [`registered_linked_worktree`] describes and
+    /// then as every repository is.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::UnsafeRepository`] when the worktree is not exactly the
+    /// one the host created, or its repository is unsafe.
+    pub fn open_registered_worktree(
+        entry: &RegisteredWorktree,
+        sandbox: &SandboxConfig,
+        deny: Arc<DenyList>,
+    ) -> ToolResult<Self> {
+        let entry = entry.canonical();
+        let (git_dir, common_dir) = registered_linked_worktree(&entry)?;
+        let repo = Self {
+            top: entry.worktree.clone(),
+            git_dir,
+            common_dir,
+            registered: Some(entry),
+            sandbox: sandbox.clone(),
+            deny,
+            global_config: None,
+            verified: Arc::default(),
+            attributes_checked: Arc::default(),
+            attribute_scans: Arc::default(),
+        };
+        repo.check()?;
+        Ok(repo)
+    }
+
+    /// A task worktree of this repository (`entry.top` must be its top),
+    /// opened as [`Self::open_registered_worktree`] opens one, with this
+    /// repository's sandbox settings, deny list and global config.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::open_registered_worktree`].
+    pub fn registered_worktree_repo(&self, entry: &RegisteredWorktree) -> ToolResult<Self> {
+        let mut repo = Self::open_registered_worktree(entry, &self.sandbox, self.deny.clone())?;
+        if repo.registered.as_ref().map(|entry| &entry.top) != Some(&self.top) {
+            return Err(unsafe_repo("the worktree belongs to another repository"));
+        }
+        repo.global_config.clone_from(&self.global_config);
+        Ok(repo)
+    }
+
+    /// The host's record of this task worktree, when it is one.
+    #[must_use]
+    pub fn registered(&self) -> Option<&RegisteredWorktree> {
+        self.registered.as_ref()
     }
 
     /// Tests: read this file as the global config.
@@ -779,7 +1005,10 @@ impl Repo {
         if self.is_linked_worktree() {
             // The pointer is read again on every call: a worktree whose
             // `.git` now points elsewhere is not the one that was trusted.
-            let (admin, common) = linked_worktree(&self.top)?;
+            let (admin, common) = match &self.registered {
+                Some(entry) => registered_linked_worktree(entry)?,
+                None => linked_worktree(&self.top)?,
+            };
             if admin != self.git_dir || common != self.common_dir {
                 return Err(unsafe_repo(
                     "the worktree's .git now points at another git directory",
@@ -1150,6 +1379,7 @@ impl Repo {
             timeout: READ_TIMEOUT,
             literal: true,
             worktree: false,
+            exit_one_ok: false,
         }
     }
 }
@@ -1201,9 +1431,19 @@ pub(crate) struct Git<'a> {
     timeout: Duration,
     literal: bool,
     worktree: bool,
+    /// Exit status 1 is an answer, not a failure (`merge-tree`'s
+    /// "conflicts").
+    exit_one_ok: bool,
 }
 
 impl<'a> Git<'a> {
+    /// Take exit status 1 as success (`merge-tree --write-tree` reports
+    /// conflicts so).
+    pub(crate) fn exit_one_ok(mut self) -> Self {
+        self.exit_one_ok = true;
+        self
+    }
+
     /// Keep `paths` read-only inside the writable ones.
     pub(crate) fn protect(mut self, paths: &[PathBuf]) -> Self {
         self.protected.extend(paths.iter().cloned());
@@ -1265,6 +1505,14 @@ impl<'a> Git<'a> {
             writable_roots: self.writable.clone(),
             protected: self.protected.clone(),
             deny_paths: self.repo.deny.paths().to_vec(),
+            // A task worktree lives in the host's data, which the deny list
+            // covers: its own folder is readable again (never a sibling's).
+            readable_roots: self
+                .repo
+                .registered
+                .as_ref()
+                .map(|entry| vec![entry.worktree.clone()])
+                .unwrap_or_default(),
             ..SandboxRequest::new(
                 if self.writable.is_empty() {
                     SandboxMode::ReadOnly
@@ -1313,13 +1561,19 @@ impl<'a> Git<'a> {
             .env("GIT_OPTIONAL_LOCKS", "0")
             .env("GIT_NO_REPLACE_OBJECTS", "1")
             .env("GIT_PROTOCOL_FROM_USER", "0");
+        if self.repo.is_linked_worktree() {
+            // git reads `commondir` only when this is unset: the shared
+            // directory is the one the check resolved, never what the
+            // file says now.
+            command.env("GIT_COMMON_DIR", &self.repo.common_dir);
+        }
         if let Some(global) = &self.repo.global_config {
             command.env("GIT_CONFIG_GLOBAL", global);
         }
         for (name, value) in &self.env {
             command.env(name, value);
         }
-        run_bounded(command, self.stdin, self.timeout, what)
+        run_bounded(command, self.stdin, self.timeout, what, self.exit_one_ok)
     }
 
     /// Run and return trimmed UTF-8 text.
@@ -1355,6 +1609,7 @@ fn run_bounded(
     stdin: Option<&[u8]>,
     timeout: Duration,
     what: &str,
+    exit_one_ok: bool,
 ) -> ToolResult<Vec<u8>> {
     use std::os::unix::process::CommandExt as _;
     command
@@ -1414,7 +1669,7 @@ fn run_bounded(
     };
     let out = collect(stdout);
     let err = collect(stderr);
-    if status.success() {
+    if status.success() || (exit_one_ok && status.code() == Some(1)) {
         Ok(out)
     } else {
         let stderr = String::from_utf8_lossy(&err);

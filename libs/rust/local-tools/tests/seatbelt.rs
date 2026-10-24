@@ -730,3 +730,142 @@ printf '{"ok":false,"error":"unsupported","message":"no"}'"#,
     );
     assert_eq!(refused, Err(ExtractFailure::Unsupported));
 }
+
+/// Task worktrees A and B of one repository, where the desktop puts them
+/// (under its denied data), and commands confined to A as A's session runs
+/// them: `(fixture rooted at A, the repository's top, B)`.
+fn worktree_fixture() -> (Fixture, PathBuf, PathBuf) {
+    use elitea_local_tools::git::Repo;
+    let dir = tempfile::tempdir().expect("dir");
+    let base = std::fs::canonicalize(dir.path()).expect("canonical");
+    let home = base.join("home");
+    let repo_top = base.join("repo");
+    std::fs::create_dir_all(&repo_top).expect("repo");
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .current_dir(&repo_top)
+            .args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo_top.join("a.txt"), "a\n").expect("a");
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "init"]);
+    let data = home.join("Library/Application Support/ai.elitea.desktop/workspaces/w1");
+    let worktrees = data.join("worktrees");
+    std::fs::create_dir_all(&worktrees).expect("worktrees");
+    let main = Repo::discover(
+        &repo_top,
+        &elitea_local_tools::sandbox::SandboxConfig::default(),
+        std::sync::Arc::new(elitea_local_tools::deny::DenyList::new([])),
+    )
+    .expect("discover")
+    .expect("repo");
+    let mut made = Vec::new();
+    for name in ["aaaa1111", "bbbb2222"] {
+        let created = elitea_local_tools::worktree::create(
+            &main,
+            &worktrees.join(name),
+            name,
+            &format!("elitea/{name}"),
+            "HEAD",
+        )
+        .expect("create");
+        made.push(created.entry.worktree);
+    }
+    let sibling = made.pop().expect("b");
+    let own = made.pop().expect("a");
+    let workspace = Workspace::open(&own, &[]).expect("open");
+    let mut config = ShellConfig::new(data.join("tmp/session"));
+    config.deny_read.push(data.clone());
+    // What the desktop adds for a worktree session: every task worktree of
+    // the workspace (its own is the writable root, opened again).
+    config.deny_read.push(worktrees);
+    config.home = Some(home.clone());
+    config.app_id = Some(APP_ID.to_owned());
+    (
+        Fixture {
+            outside: base.join("outside"),
+            home,
+            _dir: dir,
+            workspace,
+            config,
+        },
+        repo_top,
+        sibling,
+    )
+}
+
+/// #1235: a command in a task worktree writes its own folder, never the
+/// repository's shared objects, refs or worktree admin directories.
+#[tokio::test]
+async fn worktree_command_cannot_write_shared_refs() {
+    if !available() {
+        return;
+    }
+    let (fixture, top, _) = worktree_fixture();
+    let own = sh(
+        &fixture,
+        "echo mine > mine.txt && cat mine.txt a.txt",
+        SandboxMode::WorkspaceWrite,
+        false,
+    )
+    .await;
+    assert_eq!(own.exit_code, Some(0), "{}", own.stderr);
+    assert_eq!(own.stdout, "mine\na\n");
+    let common = top.join(".git");
+    for probe in [
+        "git update-ref refs/heads/forged HEAD".to_owned(),
+        "echo x | git hash-object -w --stdin".to_owned(),
+        format!("touch {}", quoted(&common.join("refs/heads/forged"))),
+        format!("touch {}", quoted(&common.join("objects/forged"))),
+        format!(
+            "touch {}",
+            quoted(&common.join("worktrees/aaaa1111/forged"))
+        ),
+        format!(
+            "echo x > {}",
+            quoted(&common.join("worktrees/aaaa1111/HEAD"))
+        ),
+        "echo x > .git".to_owned(),
+    ] {
+        let output = sh(&fixture, &probe, SandboxMode::WorkspaceWrite, false).await;
+        assert_ne!(output.exit_code, Some(0), "`{probe}` succeeded");
+    }
+    assert!(!common.join("refs/heads/forged").exists());
+    assert!(!common.join("objects/forged").exists());
+    assert!(!common.join("worktrees/aaaa1111/forged").exists());
+}
+
+/// #1235: a command in task worktree A cannot read worktree B, which lives
+/// beside it in the host's data.
+#[tokio::test]
+async fn worktree_command_cannot_read_sibling_worktree() {
+    if !available() {
+        return;
+    }
+    let (fixture, _, sibling) = worktree_fixture();
+    plant(&sibling.join("secret.txt"), "SIBLING-SECRET-9");
+    assert_refused(
+        &fixture,
+        &format!("cat {}", quoted(&sibling.join("secret.txt"))),
+        "SIBLING-SECRET-9",
+    )
+    .await;
+    let output = sh(
+        &fixture,
+        &format!("echo x > {}", quoted(&sibling.join("a.txt"))),
+        SandboxMode::WorkspaceWrite,
+        false,
+    )
+    .await;
+    assert_ne!(output.exit_code, Some(0), "wrote the sibling worktree");
+    assert_eq!(
+        std::fs::read_to_string(sibling.join("a.txt")).expect("a"),
+        "a\n"
+    );
+}

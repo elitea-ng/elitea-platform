@@ -116,6 +116,10 @@ pub struct SandboxRequest {
     pub deny_globs: Vec<String>,
     /// The canonical workspace root the globs are relative to.
     pub deny_root: Option<PathBuf>,
+    /// Canonical directories inside a denied one whose contents stay
+    /// readable (not writable unless also a writable root): host git's view
+    /// of a task worktree, which lives in the host's data directory.
+    pub readable_roots: Vec<PathBuf>,
     /// With the network on: may the command listen for connections.
     pub allow_listen: bool,
     /// May the command listen on and connect to the loopback addresses
@@ -853,6 +857,14 @@ pub mod seatbelt {
             })
             .map(|(index, _)| index)
             .collect();
+        for (index, root) in request.readable_roots.iter().enumerate() {
+            let name = format!("READABLE_ROOT_{index}");
+            let _ = writeln!(
+                text,
+                "(allow file-read* file-read-data (subpath (param \"{name}\")))"
+            );
+            params.push((name, root.display().to_string()));
+        }
         for index in reopened {
             let _ = writeln!(
                 text,
@@ -1288,6 +1300,16 @@ pub mod bubblewrap {
             out.extend(["--ro-bind", "/dev/null"].map(str::to_owned));
             out.push(file.display().to_string());
         }
+        // A readable root inside a hidden directory (a task worktree, for
+        // host git) is bound again over the mask, read-only.
+        if request.mode != SandboxMode::FullAccess {
+            for readable in &request.readable_roots {
+                // (A writable root bound again below wins over this.)
+                if masks.hide_dirs.iter().any(|dir| readable.starts_with(dir)) {
+                    push(&mut out, &["--ro-bind"], readable);
+                }
+            }
+        }
         // A writable root inside a hidden directory (the session's
         // temporary directory) is bound again over the mask.
         if request.mode != SandboxMode::FullAccess {
@@ -1554,6 +1576,41 @@ mod tests {
             protected: vec![PathBuf::from("/work/space/vendor")],
             ..SandboxRequest::new(mode, network)
         }
+    }
+
+    /// A task worktree in the host's denied data is readable again for host
+    /// git (read-only: no write rule), in both sandboxes; nothing else
+    /// under the denied directory is.
+    #[test]
+    fn readable_roots_are_opened_again_read_only() {
+        let request = SandboxRequest {
+            deny_paths: vec![PathBuf::from("/data")],
+            readable_roots: vec![PathBuf::from("/data/worktrees/a")],
+            writable_roots: vec![PathBuf::from("/tmp/index")],
+            ..SandboxRequest::new(SandboxMode::WorkspaceWrite, false)
+        };
+        let (text, params) = seatbelt::profile(&request);
+        assert!(
+            text.contains(
+                "(allow file-read* file-read-data (subpath (param \"READABLE_ROOT_0\")))"
+            )
+        );
+        assert!(!text.contains("(allow file-write* (subpath (param \"READABLE_ROOT_0\")))"));
+        assert!(params.contains(&("READABLE_ROOT_0".to_owned(), "/data/worktrees/a".to_owned())));
+        let masks = bubblewrap::Masks {
+            hide_dirs: vec![PathBuf::from("/data")],
+            ..bubblewrap::Masks::default()
+        };
+        let args = bubblewrap::args(&request, &masks, &[]);
+        let tmpfs = args
+            .windows(2)
+            .position(|pair| pair == ["--tmpfs", "/data"])
+            .expect("hidden");
+        let rebound = args
+            .windows(3)
+            .position(|triple| triple == ["--ro-bind", "/data/worktrees/a", "/data/worktrees/a"])
+            .expect("bound again");
+        assert!(rebound > tmpfs, "bound over the mask");
     }
 
     #[test]

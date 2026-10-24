@@ -8,8 +8,11 @@
  * The cloud badges of the visible thread rows (every open folder's shown
  * threads that have a known UUID) come from ONE batched
  * `handoff_status_many` read for the whole section.
+ *
+ * An open git folder also lists its parallel tasks (task worktrees) under its
+ * threads; that panel is loaded on first use.
  */
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -30,6 +33,7 @@ import Tooltip from '@mui/material/Tooltip';
 import type { Project } from '@/entities/project';
 import { readThreadUuids, useHandoffIpc, useHandoffLiveEvents, useHandoffStatusMany } from '@/features/workspace-handoff';
 import { readThreads, threadsQueryKey, useWorkspaceIpc } from '@/features/workspace';
+import { WorktreesPanel } from '@/features/workspace-worktrees';
 import type { HandoffStatus } from '@/shared/desktop/handoffIpc';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
@@ -364,6 +368,11 @@ export function LocalWorkSection({ location, run, projects }: SectionProps): Rea
                   onToggleAll={() => toggleIn(setExpandedAll, workspace.id)}
                   statuses={statuses}
                 />
+              )}
+              {open && workspace.is_git && (
+                <Suspense fallback={null}>
+                  <WorktreesPanel workspaceId={workspace.id} workspaceName={workspace.name} />
+                </Suspense>
               )}
             </li>
           );

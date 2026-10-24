@@ -386,6 +386,28 @@ impl Checkpoints {
         }
     }
 
+    /// A commit of the folder as a checkpoint would take it now (`HEAD` its
+    /// parent), stored as objects only: no ref names it, and the folder,
+    /// the index and `HEAD` are untouched (the merge-back's preview, which
+    /// writes nothing anyone sees). Git checkpoints only.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Unsupported`] for copy checkpoints; git failures, or too
+    /// many untracked bytes.
+    pub fn snapshot_commit(&self) -> ToolResult<String> {
+        match self {
+            Self::Git(git) => {
+                let (tree, _) = git.snapshot_tree()?;
+                git.commit_tree(&tree, "elitea snapshot")
+            }
+            Self::Copy(_) => Err(ToolError::new(
+                ErrorCode::Unsupported,
+                "the folder is not in a git repository the host can use",
+            )),
+        }
+    }
+
     /// Take a checkpoint now.
     ///
     /// # Errors
@@ -683,6 +705,25 @@ impl GitCheckpoints {
         }
     }
 
+    /// A commit of `tree` with `HEAD` as parent, objects only.
+    fn commit_tree(&self, tree: &str, message: &str) -> ToolResult<String> {
+        let mut args = vec!["commit-tree", "--no-gpg-sign", tree, "-m", message];
+        let head = self.head();
+        if let Some(head) = &head {
+            args.extend(["-p", head.as_str()]);
+        }
+        let identity = OsStr::new("Elitea checkpoints");
+        let email = OsStr::new("checkpoints@elitea.invalid");
+        self.repo
+            .git(self.top())
+            .env("GIT_AUTHOR_NAME", identity)
+            .env("GIT_AUTHOR_EMAIL", email)
+            .env("GIT_COMMITTER_NAME", identity)
+            .env("GIT_COMMITTER_EMAIL", email)
+            .writes(&[self.objects()])
+            .text(&args)
+    }
+
     fn ref_name(&self, seq: u64) -> String {
         format!("{REF_PREFIX}/{}/{seq}", self.session)
     }
@@ -697,28 +738,7 @@ impl GitCheckpoints {
                 .map_err(|_| ToolError::new(ErrorCode::Io, "cannot encode the checkpoint"))?;
             message = format!("{message}\n\n{SKIPPED_TRAILER}{list}");
         }
-        let mut args = vec![
-            "commit-tree",
-            "--no-gpg-sign",
-            tree.as_str(),
-            "-m",
-            message.as_str(),
-        ];
-        let head = self.head();
-        if let Some(head) = &head {
-            args.extend(["-p", head.as_str()]);
-        }
-        let identity = OsStr::new("Elitea checkpoints");
-        let email = OsStr::new("checkpoints@elitea.invalid");
-        let commit = self
-            .repo
-            .git(self.top())
-            .env("GIT_AUTHOR_NAME", identity)
-            .env("GIT_AUTHOR_EMAIL", email)
-            .env("GIT_COMMITTER_NAME", identity)
-            .env("GIT_COMMITTER_EMAIL", email)
-            .writes(&[self.objects()])
-            .text(&args)?;
+        let commit = self.commit_tree(&tree, &message)?;
         std::fs::create_dir_all(self.refs())
             .map_err(|error| ToolError::io("cannot store the checkpoint", &error))?;
         self.repo.git(self.top()).writes(&[self.refs()]).run(&[
@@ -1804,5 +1824,74 @@ mod tests {
             .filter_map(|objects| std::fs::read_dir(objects).ok())
             .map(Iterator::count)
             .sum()
+    }
+
+    /// A task worktree (#1235): its checkpoints live in the repository's
+    /// shared object store and refs, under the worktree session's own
+    /// namespace, through a temporary index: neither the repository's
+    /// index nor the worktree's own is touched.
+    #[test]
+    fn checkpoint_in_worktree_uses_shared_objects_and_own_index() {
+        let dir = repo();
+        let root = std::fs::canonicalize(dir.path()).expect("canonical");
+        let data = tempfile::tempdir().expect("data");
+        let data_root = std::fs::canonicalize(data.path()).expect("canonical");
+        let main = crate::git::Repo::discover(
+            &root,
+            &crate::sandbox::SandboxConfig::default(),
+            std::sync::Arc::new(crate::deny::DenyList::new([])),
+        )
+        .expect("discover")
+        .expect("repo");
+        std::fs::create_dir_all(data_root.join("worktrees")).expect("dir");
+        let created = crate::worktree::create(
+            &main,
+            &data_root.join("worktrees/0123abcd"),
+            "0123abcd",
+            "elitea/0123abcd",
+            "HEAD",
+        )
+        .expect("create");
+        let tree = created.entry.worktree.clone();
+        let main_index = std::fs::read(root.join(".git/index")).expect("main index");
+        let own_index = root.join(".git/worktrees/0123abcd/index");
+        let own_before = std::fs::read(&own_index).expect("own index");
+        std::fs::write(tree.join("tracked.txt"), "worktree edit\n").expect("edit");
+
+        let workspace = Workspace::open(&tree, &[]).expect("workspace");
+        let checkpoints = Checkpoints::open(&workspace, "wt1", &data_root).expect("open");
+        assert_eq!(checkpoints.kind(), "git");
+        let repo = checkpoints.repo().expect("repo");
+        assert!(repo.is_linked_worktree());
+        assert_eq!(repo.common_dir(), root.join(".git").as_path());
+        let info = checkpoints.create("turn").expect("checkpoint");
+        // The ref is the session's, in the repository's refs; the commit is
+        // in the shared object store.
+        assert_eq!(
+            git(
+                &root,
+                &["rev-parse", &format!("{REF_PREFIX}/wt1/{}", info.seq)]
+            ),
+            info.id
+        );
+        assert_eq!(git(&root, &["cat-file", "-t", &info.id]), "commit");
+        assert_eq!(
+            std::fs::read(root.join(".git/index")).expect("main"),
+            main_index
+        );
+        assert_eq!(std::fs::read(&own_index).expect("own"), own_before);
+        assert_eq!(git(&tree, &["branch", "--show-current"]), "elitea/0123abcd");
+
+        std::fs::write(tree.join("tracked.txt"), "turn wrote this\n").expect("turn");
+        checkpoints.restore(info.seq).expect("restore");
+        assert_eq!(
+            read(&tree, "tracked.txt").as_deref(),
+            Some("worktree edit\n")
+        );
+        // The person's folder never moved.
+        assert_eq!(read(&root, "tracked.txt").as_deref(), Some("v1\n"));
+        crate::worktree::remove(&main, &created.entry, false).expect("remove");
+        assert!(!tree.exists());
+        assert!(!root.join(".git/worktrees/0123abcd").exists());
     }
 }

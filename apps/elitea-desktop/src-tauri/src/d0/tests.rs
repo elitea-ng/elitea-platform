@@ -8234,3 +8234,168 @@ async fn the_desktop_answers_the_shared_memory_fixture() {
         assert_eq!(&committed_output(&h.server, id), expected, "{tool} ({id})");
     }
 }
+
+/// The harness's folder as a git repository with one commit, and a
+/// worktree host over it (#1235).
+fn worktree_host(h: &Harness) -> Arc<crate::worktrees::WorktreeHost> {
+    git_in(h.folder.path(), &["init", "-q"]);
+    std::fs::write(h.folder.path().join("a.txt"), "one\n").unwrap();
+    git_in(h.folder.path(), &["add", "."]);
+    git_in(h.folder.path(), &["commit", "-qm", "init"]);
+    let host = Arc::new(crate::worktrees::WorktreeHost::new(
+        h.host.clone(),
+        h.workspaces.clone(),
+    ));
+    h.host.set_worktrees(&host);
+    host
+}
+
+const TWIN_UUID: &str = "99999999-2222-4333-8444-666666666666";
+const TWIN_EXECUTION: &str = "fedcba9876543210fedcba9876543210";
+
+/// [`stalling_platform`] that also answers conversation 43 (its own UUID
+/// and execution), so two turns run in two conversations at once.
+async fn twin_platform(slow: Arc<AtomicBool>) -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    let first = "99999999-2222-4333-8444-555555555555";
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            tokio::task::block_in_place(|| {
+                for _ in 0..250 {
+                    if !slow.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            });
+            return inner(req);
+        }
+        let twin = req.path.ends_with("/prompt_lib/1/43")
+            || req.path.contains(TWIN_UUID)
+            || req.path.contains(TWIN_EXECUTION);
+        if !twin {
+            return inner(req);
+        }
+        let mut mapped = req.clone();
+        mapped.path = req
+            .path
+            .replace("/prompt_lib/1/43", "/prompt_lib/1/42")
+            .replace(TWIN_UUID, first)
+            .replace(TWIN_EXECUTION, EXECUTION);
+        let mut res = inner(&mapped);
+        res.body = res
+            .body
+            .replace(first, TWIN_UUID)
+            .replace(EXECUTION, TWIN_EXECUTION);
+        res
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_worktree_turns_run_concurrently() {
+    let slow = Arc::new(AtomicBool::new(true));
+    let h = harness(
+        twin_platform(slow.clone()).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    let worktrees = worktree_host(&h);
+    let one = worktrees
+        .create(
+            &h.workspace_id,
+            "11111111-1111-4111-8111-111111111111",
+            None,
+        )
+        .await
+        .unwrap();
+    let two = worktrees
+        .create(
+            &h.workspace_id,
+            "22222222-2222-4222-8222-222222222222",
+            None,
+        )
+        .await
+        .unwrap();
+    assert_ne!(one.workspace_id, two.workspace_id);
+    assert_ne!(one.branch, two.branch);
+    assert!(std::path::Path::new(&one.path).join("a.txt").is_file());
+
+    let first = h.host.start(request(&one.workspace_id)).await.unwrap();
+    let mut other = request(&two.workspace_id);
+    other.conversation_id = json!(43);
+    let second = h.host.start(other).await.unwrap();
+    // Both reach the model while the other is still running: neither
+    // worktree's claim, nor the parent's, holds the other back.
+    let mut both = false;
+    for _ in 0..SETTLE_POLLS {
+        if seen(&h.server, "/llm/v1/chat/completions").len() >= 2 {
+            both = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(both, "both turns reach the model: {:?}", h.emitter.kinds());
+    assert!(h.host.status(&first.turn_id).unwrap().done.is_none());
+    assert!(h.host.status(&second.turn_id).unwrap().done.is_none());
+
+    h.host.cancel(&first.turn_id).unwrap();
+    h.host.cancel(&second.turn_id).unwrap();
+    slow.store(false, Ordering::SeqCst);
+    until_done_of(&h, &first.turn_id).await;
+    until_done_of(&h, &second.turn_id).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worktree_remove_refuses_dirty_without_force() {
+    let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let worktrees = worktree_host(&h);
+    let thread = "33333333-3333-4333-8333-333333333333";
+    let entry = worktrees
+        .create(&h.workspace_id, thread, None)
+        .await
+        .unwrap();
+    std::fs::write(std::path::Path::new(&entry.path).join("a.txt"), "two\n").unwrap();
+
+    let listed = worktrees.list(&h.workspace_id).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].dirty, 1);
+
+    let refused = worktrees
+        .remove(&h.workspace_id, thread, false)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, "worktree_dirty");
+    assert!(std::path::Path::new(&entry.path).join("a.txt").is_file());
+    // The parent cannot be removed while it has task worktrees.
+    assert_eq!(
+        h.host
+            .remove_workspace(&h.workspace_id)
+            .await
+            .unwrap_err()
+            .code,
+        "workspace_has_worktrees"
+    );
+
+    worktrees
+        .remove(&h.workspace_id, thread, true)
+        .await
+        .unwrap();
+    assert!(!std::path::Path::new(&entry.path).exists());
+    assert!(worktrees.list(&h.workspace_id).await.unwrap().is_empty());
+    assert!(h.workspaces.get(&entry.workspace_id).unwrap().is_none());
+    assert!(
+        !h.folder
+            .path()
+            .join(".git/worktrees")
+            .join(thread.replace('-', ""))
+            .exists(),
+        "its admin directory goes with it"
+    );
+    // The folder itself is untouched.
+    assert_eq!(
+        std::fs::read_to_string(h.folder.path().join("a.txt")).unwrap(),
+        "one\n"
+    );
+}

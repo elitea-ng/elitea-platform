@@ -89,6 +89,10 @@ impl crate::doctor::DoctorHooks for AppDoctorHooks {
     fn refresh_index(&self, workspace_id: &str) -> Result<(), String> {
         crate::doctor::DoctorHooks::refresh_index(self.agents.as_ref(), workspace_id)
     }
+
+    fn git_deny(&self) -> Arc<elitea_local_tools::deny::DenyList> {
+        crate::doctor::DoctorHooks::git_deny(self.agents.as_ref())
+    }
 }
 
 /// A local-work command's failure as the webview receives it.

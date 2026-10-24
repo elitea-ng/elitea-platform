@@ -22,6 +22,11 @@
 //! slip through). The resolved spelling canonicalises the longest existing
 //! ancestor and keeps the rest as written; it is computed once, on first
 //! use. An entry whose last component ends in `*` is a name prefix.
+//!
+//! A directory the host opened again ([`DenyList::reopening`]: a task
+//! worktree, which lives in the host's data) is not covered by an entry it
+//! lies inside, as the sandboxes open a writable root inside a denied
+//! directory again; an entry inside it still covers what it names.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -104,6 +109,8 @@ struct Spelling {
 pub struct DenyList {
     literals: Vec<PathBuf>,
     resolved: OnceLock<(Vec<PathBuf>, Vec<Spelling>)>,
+    /// Directories opened again inside an entry, folded, canonical.
+    reopened: Vec<String>,
 }
 
 impl DenyList {
@@ -119,7 +126,27 @@ impl DenyList {
         Self {
             literals,
             resolved: OnceLock::new(),
+            reopened: Vec::new(),
         }
+    }
+
+    /// Open `dirs` (canonical directories) again inside the entries that
+    /// contain them; entries inside them still apply.
+    #[must_use]
+    pub fn reopening(mut self, dirs: impl IntoIterator<Item = PathBuf>) -> Self {
+        for dir in dirs {
+            let text = fold(dir.to_string_lossy().trim_end_matches('/'));
+            if !text.is_empty() && !self.reopened.contains(&text) {
+                self.reopened.push(text);
+            }
+        }
+        self
+    }
+
+    /// The directories opened again ([`Self::reopening`]).
+    #[must_use]
+    pub fn reopened(&self) -> &[String] {
+        &self.reopened
     }
 
     /// A session's list: `extra` (the host's own directories, the session's
@@ -202,13 +229,27 @@ impl DenyList {
     #[must_use]
     pub fn covers(&self, path: &Path) -> bool {
         let text = fold(&path.to_string_lossy());
+        let under = |text: &str, dir: &str| {
+            text.strip_prefix(dir)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        };
         self.resolved().1.iter().any(|spelling| {
-            if spelling.prefix {
+            let covered = if spelling.prefix {
                 text.starts_with(&spelling.text)
             } else {
-                text.strip_prefix(&spelling.text)
-                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
-            }
+                under(&text, &spelling.text)
+            };
+            // Opened again: the path is in a reopened directory that lies
+            // inside this entry.
+            covered
+                && !self.reopened.iter().any(|dir| {
+                    under(&text, dir)
+                        && if spelling.prefix {
+                            dir.starts_with(&spelling.text)
+                        } else {
+                            under(dir, &spelling.text)
+                        }
+                })
         })
     }
 }
@@ -295,5 +336,25 @@ mod tests {
             list.covers(Path::new("/nonexistent-h/.SSH/id")),
             crate::workspace::CASE_INSENSITIVE_FS
         );
+    }
+
+    /// A task worktree in the host's data is opened again for its own
+    /// session; its siblings and entries inside it stay denied.
+    #[test]
+    fn a_reopened_directory_is_not_covered_but_its_siblings_are() {
+        let list = DenyList::new([
+            PathBuf::from("/data"),
+            PathBuf::from("/data/w/worktrees"),
+            PathBuf::from("/data/w/worktrees/a/.env"),
+            PathBuf::from("/home/.aws"),
+        ])
+        .reopening([PathBuf::from("/data/w/worktrees/a")]);
+        assert!(!list.covers(Path::new("/data/w/worktrees/a")));
+        assert!(!list.covers(Path::new("/data/w/worktrees/a/src/main.rs")));
+        assert!(list.covers(Path::new("/data/w/worktrees/a/.env")));
+        assert!(list.covers(Path::new("/data/w/worktrees/b/src/main.rs")));
+        assert!(list.covers(Path::new("/data/w/worktrees/ab")));
+        assert!(list.covers(Path::new("/data/credentials.json")));
+        assert!(list.covers(Path::new("/home/.aws/credentials")));
     }
 }
