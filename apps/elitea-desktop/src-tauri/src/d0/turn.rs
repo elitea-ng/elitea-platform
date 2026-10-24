@@ -173,6 +173,9 @@ pub struct TurnRequest {
     pub version_id: i64,
     pub prompt: String,
     pub plan_mode: bool,
+    /// Bypass mode: every local tool call that would be asked runs without
+    /// the question (`PermissionProfile::Bypass`); never with `plan_mode`.
+    pub bypass: bool,
     /// Workspace-relative paths the person referenced with "@" (checked,
     /// then listed under the prompt; contents are never inlined).
     pub mentions: Vec<String>,
@@ -1054,7 +1057,8 @@ impl AgentHost {
 
     /// The session an isolated sub-agent runs in: `workspace_id`'s (a task
     /// worktree just made for it), under its claim, its prompt bound to the
-    /// parent turn's `binding`, with the build profile (the child writes).
+    /// parent turn's `binding`, with the build profile (the child writes),
+    /// or the bypass profile for a parent turn in bypass mode.
     ///
     /// # Errors
     ///
@@ -1064,12 +1068,17 @@ impl AgentHost {
         workspace_id: &str,
         root: PathBuf,
         binding: TurnBinding,
+        bypass: bool,
     ) -> Result<(Arc<LocalSession>, ChildHold), TurnError> {
         let claim = WorkspaceClaim::take(&self.busy, workspace_id, TURN_RUNNING)?;
         let policy = self.policy()?;
         let workspace = self.session(workspace_id, root, &policy)?;
         workspace.prompt.bind(Some(binding));
-        workspace.session.set_profile(PermissionProfile::Build);
+        workspace.session.set_profile(if bypass {
+            PermissionProfile::Bypass
+        } else {
+            PermissionProfile::Build
+        });
         Ok((
             workspace.session.clone(),
             ChildHold {
@@ -1571,7 +1580,8 @@ impl AgentHost {
             .cloned();
         if let Some(existing) = existing {
             existing.refresh_rules(&self.rules, workspace_id);
-            return Ok(existing.session.rules().decide(&call));
+            // The rules as they are, not the last turn's bypass mode.
+            return Ok(existing.session.rules().decide_by_layers(&call));
         }
         let unavailable = |e: elitea_local_tools::error::ToolError| {
             TurnError::new("workspace_unavailable", e.message().to_owned())
@@ -1908,6 +1918,7 @@ impl AgentHost {
             version_id: request.version_id,
             prompt: String::new(),
             plan_mode: false,
+            bypass: false,
             mentions: Vec::new(),
             skills: Vec::new(),
             compact: false,
@@ -2383,9 +2394,11 @@ impl AgentHost {
         let session = workspace.session.clone();
         // The turn's permission profile (#1225): plan mode until the person
         // accepts the plan (`exit_plan_mode`), which switches it to Build
-        // within this run.
+        // within this run; bypass mode for the whole run.
         session.set_profile(if request.plan_mode {
             PermissionProfile::Plan
+        } else if request.bypass {
+            PermissionProfile::Bypass
         } else {
             PermissionProfile::Build
         });
@@ -3206,6 +3219,7 @@ impl AgentHost {
                         events: events.clone(),
                         recorder: recorder.clone(),
                     },
+                    request.bypass,
                 )) as Arc<dyn super::subagents::ChildCheckouts>
             });
         let children = SubAgents::new(

@@ -922,7 +922,7 @@ describe('WorkspaceSessionPage', () => {
       });
       let sent = false;
       await act(async () => {
-        sent = await result.current.send('fix the build', false, []);
+        sent = await result.current.send('fix the build', 'act', []);
       });
       return { sent, picks };
     }
@@ -962,7 +962,7 @@ describe('WorkspaceSessionPage', () => {
       let outcomes: boolean[] = [];
       await act(async () => {
         const { send } = result.current.prompt;
-        outcomes = await Promise.all([send('fix the build', false, []), send('fix the build', false, [])]);
+        outcomes = await Promise.all([send('fix the build', 'act', []), send('fix the build', 'act', [])]);
       });
       expect(outcomes).toEqual([true, false]);
       expect(created).toBe(1);
@@ -1201,6 +1201,28 @@ describe('WorkspaceSessionPage', () => {
       await user.keyboard('{Enter}');
       await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
       expect(ipc.calls.started[0]?.mentions).toEqual([]);
+    });
+
+    it('turns bypass mode on after the warning, keeps it for the folder and sends it with the turn', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      await user.click(await screen.findByRole('radio', { name: 'Bypass mode (no approvals)' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Run without approvals?' });
+      await user.click(within(dialog).getByRole('button', { name: 'Turn on bypass mode' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull());
+      expect(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' })).toBeChecked();
+      expect(screen.getByTestId('workspace-bypass-notice')).toBeInTheDocument();
+      const input = screen.getByTestId('chat-message-input');
+      await user.type(input, 'go{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.bypass_approvals).toBe(true);
+      expect(ipc.calls.started[0]?.plan_mode).toBe(false);
+      // Off from the notice; on again without the warning (the folder confirmed it).
+      await user.click(within(screen.getByTestId('workspace-bypass-notice')).getByRole('button', { name: 'Turn off' }));
+      expect(screen.getByRole('radio', { name: 'Act' })).toBeChecked();
+      await user.click(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' }));
+      expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull();
+      expect(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' })).toBeChecked();
     });
 
     it('asks the host to read ahead for the selected agent when the composer gets focus', async () => {

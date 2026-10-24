@@ -169,6 +169,11 @@ pub enum PermissionProfile {
     /// Read-only tools and `exit_plan_mode` only, until the person accepts
     /// the plan.
     Plan,
+    /// Build, but every call that would be asked runs without the
+    /// question ([`Source::Bypass`]): the person chose to run unattended.
+    /// The policy ceiling and every deny (a forbidden rule's included) stay
+    /// final, and a `PreToolUse` hook's ask is still asked.
+    Bypass,
 }
 
 /// The local tools, as the rules name them.
@@ -422,6 +427,8 @@ pub enum Source {
     Default,
     /// A `PreToolUse` hook asked ([`HOOK_ASK_PAYLOAD_KEY`]).
     Hook,
+    /// [`PermissionProfile::Bypass`] allowed a call another layer asked.
+    Bypass,
 }
 
 impl From<RuleScope> for Source {
@@ -673,6 +680,8 @@ pub struct RulesEngine {
     choices: Arc<dyn ChoiceStore>,
     /// The [`PermissionProfile`]: `true` is [`PermissionProfile::Plan`].
     plan: AtomicBool,
+    /// `true` is [`PermissionProfile::Bypass`].
+    bypass: AtomicBool,
     /// Whether every command runs in an enforced sandbox (off when the
     /// host lets commands run unenforced): routine commands are allowed
     /// only then.
@@ -779,6 +788,7 @@ impl RulesEngine {
             sink: RwLock::new(None),
             choices,
             plan: AtomicBool::new(false),
+            bypass: AtomicBool::new(false),
             host_intel_session: AtomicBool::new(false),
             confined: true,
         })
@@ -843,12 +853,16 @@ impl RulesEngine {
     pub fn set_profile(&self, profile: PermissionProfile) {
         self.plan
             .store(profile == PermissionProfile::Plan, Ordering::SeqCst);
+        self.bypass
+            .store(profile == PermissionProfile::Bypass, Ordering::SeqCst);
     }
 
     #[must_use]
     pub fn profile(&self) -> PermissionProfile {
         if self.plan.load(Ordering::SeqCst) {
             PermissionProfile::Plan
+        } else if self.bypass.load(Ordering::SeqCst) {
+            PermissionProfile::Bypass
         } else {
             PermissionProfile::Build
         }
@@ -891,9 +905,31 @@ impl RulesEngine {
         }
     }
 
-    /// Decide one call.
+    /// Decide one call. In [`PermissionProfile::Bypass`] an ask is an
+    /// allow; a deny stays a deny.
     #[must_use]
     pub fn decide(&self, call: &ToolCall) -> Decision {
+        let decision = self.decide_by_layers(call);
+        if decision.verdict == Verdict::Ask && self.profile() == PermissionProfile::Bypass {
+            return Decision {
+                rule: decision.rule,
+                ..Decision::new(
+                    Verdict::Allow,
+                    Source::Bypass,
+                    format!(
+                        "bypass mode allows what would be asked ({})",
+                        decision.reason
+                    ),
+                )
+            };
+        }
+        decision
+    }
+
+    /// Decide one call by its layers, without [`PermissionProfile::Bypass`]
+    /// (what the rules say: a rules panel's explanation).
+    #[must_use]
+    pub fn decide_by_layers(&self, call: &ToolCall) -> Decision {
         if let Some(decision) = self.policy_ceiling(call) {
             return decision;
         }
@@ -3335,6 +3371,47 @@ mod tests {
     }
 
     const NONE: &str = r#"{"version":1}"#;
+
+    /// Bypass turns an ask into an allow and keeps every deny: the policy
+    /// ceiling's, a forbidden rule's and plan mode's.
+    #[test]
+    fn bypass_allows_what_would_be_asked_and_keeps_every_deny() {
+        let (_dir, engine) = engine_with_rules(
+            policy(),
+            r#"{"version":1,"rules":[
+              {"pattern":["npm","publish"],"decision":"forbidden"},
+              {"pattern":["git","reset"],"decision":"prompt"}]}"#,
+            NONE,
+        );
+        assert_eq!(verdict(&engine, &shell("git reset --hard")).0, Verdict::Ask);
+        engine.set_profile(PermissionProfile::Bypass);
+        assert_eq!(engine.profile(), PermissionProfile::Bypass);
+        assert!(!engine.plan_mode());
+        let bypassed = engine.decide(&shell("git reset --hard"));
+        assert_eq!(
+            (bypassed.verdict, bypassed.source),
+            (Verdict::Allow, Source::Bypass)
+        );
+        assert!(bypassed.rule.is_some(), "the rule that asked is kept");
+        assert_eq!(
+            verdict(&engine, &shell("npm publish")),
+            (Verdict::Deny, Source::Workspace)
+        );
+        assert_eq!(
+            verdict(&engine, &shell("rm -rf build")),
+            (Verdict::Deny, Source::Policy)
+        );
+        assert_eq!(
+            verdict(&engine, &ToolCall::new(ToolKind::ExitPlanMode)),
+            (Verdict::Deny, Source::PlanMode)
+        );
+        assert_eq!(
+            verdict(&engine, &file(ToolKind::WriteFile, "a")),
+            (Verdict::Allow, Source::Default)
+        );
+        engine.set_profile(PermissionProfile::Build);
+        assert_eq!(verdict(&engine, &shell("git reset --hard")).0, Verdict::Ask);
+    }
 
     #[test]
     fn user_and_workspace_prefix_rules_decide_with_their_justification() {

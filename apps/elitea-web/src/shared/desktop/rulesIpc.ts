@@ -83,7 +83,7 @@ export interface RulePutOutcome {
 
 export interface RuleExplanation {
   verdict: 'allow' | 'ask' | 'deny';
-  source: 'policy' | 'plan_mode' | 'workspace' | 'user' | 'remembered' | 'default';
+  source: 'policy' | 'plan_mode' | 'workspace' | 'user' | 'remembered' | 'default' | 'hook' | 'bypass';
   reason: string;
   rule: { scope: RuleScope | 'legacy'; index: number; decision: RuleDecision; pattern: string; justification?: string; origin?: 'repository' } | null;
   justification: string | null;

@@ -6,6 +6,9 @@
  */
 import type { TurnModelChoice } from './turnModel';
 
+/** How a turn's tool calls are approved: as the rules say (Act), read-only until the plan is accepted (Plan), or without questions (Bypass). */
+export type TurnMode = 'act' | 'plan' | 'bypass';
+
 export interface TurnStartRequest {
   workspace_id: string;
   project_id: number;
@@ -14,6 +17,8 @@ export interface TurnStartRequest {
   version_id: number;
   prompt: string;
   plan_mode: boolean;
+  /** Bypass mode (IPC.md "Bypass mode"): every local tool call that would be asked runs without the question. Never with `plan_mode`. */
+  bypass_approvals?: boolean;
   /** Workspace-relative paths the person referenced with "@" (a folder ends with `/`); the host checks them and lists them under the prompt. */
   mentions: string[];
   /**

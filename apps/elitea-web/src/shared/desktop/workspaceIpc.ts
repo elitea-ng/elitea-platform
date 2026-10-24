@@ -18,7 +18,7 @@ import { threadForkCommands, type ThreadForkCommands } from './threadForkIpc';
 import type { UsagePayload, UsageTotalPayload } from './turnUsage';
 
 export type { ContextMeter } from './contextMeter';
-export type { AttachedImage, CustomCommand, TurnCommand, TurnImagePick, TurnStartRequest } from './turnStart';
+export type { AttachedImage, CustomCommand, TurnCommand, TurnImagePick, TurnMode, TurnStartRequest } from './turnStart';
 export type { ThreadForkRequest } from './threadForkIpc';
 
 export interface Workspace {

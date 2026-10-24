@@ -72,14 +72,18 @@ export interface WorkspaceComposerProps {
   readOnly?: boolean;
   busy: boolean;
   planMode: boolean;
+  /** Bypass mode is on (`useBypassMode`): the mode switch shows Bypass. */
+  bypass?: boolean;
+  /** Offers Bypass in the mode switch (a local thread only): `true` when it is picked, `false` when Act or Plan is. */
+  onBypassChange?: ((on: boolean) => void) | undefined;
   /** The footer's agent·version picker and run-location chip (`ComposerControls`). */
   agentPicker?: ReactNode;
   /** A thread in the cloud: the placeholder says who the message goes to. */
   placeholder?: string | undefined;
-  /** Act | Plan: off for a cloud thread, whose turns have no plan mode. */
+  /** Act | Plan | Bypass: off for a cloud thread, whose turns have no plan mode. */
   showMode?: boolean;
   runLocation?: ReactNode;
-  /** The context meter (`ContextMeter`), after the run location. */
+  /** The meters (the language-server and usage chips), after the run location. */
   contextMeter?: ReactNode;
   /** The model chip (`ModelChip`), after the agent picker. */
   modelPicker?: ReactNode;
@@ -171,6 +175,8 @@ const sameToken = (a: Token, b: Token): boolean => a?.kind === b?.kind && a?.sta
 interface FooterControlsProps {
   planMode: boolean;
   onPlanModeChange: (planMode: boolean) => void;
+  bypass: boolean;
+  onBypassChange: ((on: boolean) => void) | undefined;
   showMode: boolean;
   agentPicker: ReactNode;
   modelPicker: ReactNode;
@@ -178,20 +184,33 @@ interface FooterControlsProps {
   contextMeter: ReactNode;
 }
 
-/** The footer's left side: Act | Plan, the agent·version picker, the model, where the thread runs, the context meter. */
-function FooterControls({ planMode, onPlanModeChange, showMode, agentPicker, modelPicker, runLocation, contextMeter }: FooterControlsProps): React.JSX.Element {
+type ModeValue = 'act' | 'plan' | 'bypass';
+
+const modeValue = (planMode: boolean, bypass: boolean): ModeValue => {
+  if (planMode) return 'plan';
+  return bypass ? 'bypass' : 'act';
+};
+
+/** The footer's left side: Act | Plan (| Bypass, for a local thread), the agent·version picker, the model, where the thread runs, the meters. */
+function FooterControls({ planMode, onPlanModeChange, bypass, onBypassChange, showMode, agentPicker, modelPicker, runLocation, contextMeter }: FooterControlsProps): React.JSX.Element {
+  const options: { value: ModeValue; label: string; ariaLabel?: string }[] = [
+    { value: 'act', label: t('workspace.mode.act', 'Act') },
+    { value: 'plan', label: t('workspace.mode.plan', 'Plan'), ariaLabel: t('workspace.planMode', 'Plan mode (no changes)') },
+  ];
+  if (onBypassChange !== undefined) options.push({ value: 'bypass', label: t('workspace.mode.bypass', 'Bypass'), ariaLabel: t('workspace.bypassMode', 'Bypass mode (no approvals)') });
+  const change = (next: ModeValue): void => {
+    onPlanModeChange(next === 'plan');
+    onBypassChange?.(next === 'bypass');
+  };
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
       {showMode && (
         <Segmented
           ariaLabel={t('workspace.mode', 'Mode')}
-          value={planMode ? 'plan' : 'act'}
-          onChange={(next) => onPlanModeChange(next === 'plan')}
+          value={modeValue(planMode, bypass)}
+          onChange={change}
           testId="mode-segmented"
-          options={[
-            { value: 'act', label: t('workspace.mode.act', 'Act') },
-            { value: 'plan', label: t('workspace.mode.plan', 'Plan'), ariaLabel: t('workspace.planMode', 'Plan mode (no changes)') },
-          ]}
+          options={options}
         />
       )}
       {agentPicker}
@@ -353,7 +372,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
         agentEditor={NO_AGENT_EDITOR}
         slots={{
           modelSelector: null,
-          attachmentButton: <FooterControls planMode={planMode} onPlanModeChange={onPlanModeChange} showMode={props.showMode !== false} agentPicker={props.agentPicker} modelPicker={props.modelPicker} runLocation={props.runLocation} contextMeter={props.contextMeter} />,
+          attachmentButton: <FooterControls planMode={planMode} onPlanModeChange={onPlanModeChange} bypass={props.bypass === true} onBypassChange={props.onBypassChange} showMode={props.showMode !== false} agentPicker={props.agentPicker} modelPicker={props.modelPicker} runLocation={props.runLocation} contextMeter={props.contextMeter} />,
           sendControl: ({ disabledSend, question, onSend: submit }) => (
             <IconButton
               data-testid="workspace-send-button"

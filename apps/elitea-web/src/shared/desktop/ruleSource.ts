@@ -23,6 +23,7 @@ export function ruleSourceLabel(source: string | undefined, rule?: string | null
     user: () => t('workspace.rules.sourceUser', 'one of your rules'),
     remembered: () => t('workspace.rules.sourceRemembered', 'an earlier “always allow”'),
     default: () => t('workspace.rules.sourceDefault', 'the defaults'),
+    bypass: () => t('workspace.rules.sourceBypass', 'bypass mode'),
   };
   return source === undefined ? undefined : layers[source]?.();
 }

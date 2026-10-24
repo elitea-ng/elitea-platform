@@ -20,6 +20,12 @@ const meter = (over: Partial<Meter> = {}): Meter => ({
   ...over,
 });
 
+/** A meter from a host that reports neither the parts nor the trigger. */
+const bare = (over: Partial<Meter> = {}): Meter => {
+  const { parts: _parts, compact_at_tokens: _at, ...rest } = meter(over);
+  return rest;
+};
+
 describe('contextBreakdown', () => {
   it('splits the window into the parts, the compaction buffer and the free space', () => {
     const breakdown = contextBreakdown(meter());
@@ -31,13 +37,13 @@ describe('contextBreakdown', () => {
   });
 
   it('shows one In use row for a host that reports no parts, and no buffer without a trigger', () => {
-    const breakdown = contextBreakdown(meter({ parts: undefined, compact_at_tokens: undefined }));
+    const breakdown = contextBreakdown(bare());
     expect(breakdown.rows.map((row) => row.key)).toEqual(['used', 'free']);
     expect(breakdown.rows[1]?.tokens).toBe(117_500);
   });
 
   it('never shows negative free space past the trigger', () => {
-    const breakdown = contextBreakdown(meter({ used_tokens: 190_000, parts: undefined }));
+    const breakdown = contextBreakdown({ ...bare({ used_tokens: 190_000 }), compact_at_tokens: 184_000 });
     expect(breakdown.rows.find((row) => row.key === 'free')?.tokens).toBe(0);
     expect(breakdown.rows.find((row) => row.key === 'buffer')?.tokens).toBe(10_000);
   });

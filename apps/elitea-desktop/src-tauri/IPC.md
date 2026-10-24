@@ -261,7 +261,7 @@ type RuleMatch = { scope: "workspace" | "user" | "legacy"; index: number; decisi
 | --- | --- | --- |
 | `rules_get` | `{workspace_id}` | `{scopes: ScopeState[], proposed: Proposal \| null}` — the workspace's then the person's rules, each with the error that keeps it from loading; `proposed` is what the folder's `.elitea/rules.json` proposes (read confined to the folder, `path_deny` honoured), never loaded until imported. Rejects `local_work_disabled`, `workspace_unknown`. |
 | `rules_put` | `{workspace_id, scope: "workspace" \| "user", file: RuleFile, version}` | `PutOutcome` — validated before anything is written: an unknown field, an empty pattern or a disagreeing example gives `{saved: false, error}` and the file is left as it was. `version` is the `ScopeState.version` the edit was made from; a file changed since gives `{saved: false, conflict: true}` (the panel reloads and says so). |
-| `rules_explain` | `{workspace_id, command}` | `{verdict: "allow" \| "ask" \| "deny", source: "policy" \| "plan_mode" \| "workspace" \| "user" \| "remembered" \| "default", reason, rule: RuleMatch \| null, justification: string \| null}` — how the layers would decide `command` now, as a confined `workspace-write` call without the network (an open session answers with its own engine). Rejects `invalid_request` for an empty command. |
+| `rules_explain` | `{workspace_id, command}` | `{verdict: "allow" \| "ask" \| "deny", source: "policy" \| "plan_mode" \| "workspace" \| "user" \| "remembered" \| "default" \| "bypass", reason, rule: RuleMatch \| null, justification: string \| null}` — how the layers would decide `command` now, as a confined `workspace-write` call without the network (an open session answers with its own engine). Rejects `invalid_request` for an empty command. |
 | `rules_import_proposed` | `{workspace_id, digest}` | `PutOutcome` — copies the folder's proposed rules, exactly as `rules_get` listed them (`digest`: a proposal changed since gives `{saved: false, conflict: true}`), into the workspace's rules file: the person's explicit import. A repository can never grant itself permissions without it, and an import is bounded: `host_executables` pins are never imported (a pin widens what an allow matches), an `allow` is narrowed to `workspace-write` without the network, a rule whose examples need the dropped pins is left out (each listed in `warnings`), and every rule is marked `origin: "repository"`. |
 
 Matching: tokens compare in order as an argv prefix. An `allow` covers only
@@ -302,7 +302,7 @@ names instead of retrying. A rule imported from a repository leaves the
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "none" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}, images?: {source: "clipboard" \| "file", token: string}[]}` | `{turn_id, execution_id}` |
+| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "none" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}, images?: {source: "clipboard" \| "file", token: string}[], bypass_approvals?: boolean}` | `{turn_id, execution_id}` |
 | `attachment_add` | `{workspace_id, path}` | `{token, name, mime, bytes, width, height, thumbnail}` — attaches the image file at the **absolute** `path` (a `files_dropped` path, or a picked file) to the workspace's next turn ("Image input", below). Blocking work runs off the async workers. Rejects `path_denied`, `not_found`, `image_too_large`, `invalid_request` (not PNG/JPEG/WebP/GIF, a relative path, a link, not a regular file), `workspace_unknown`, `local_work_disabled`, `not_signed_in`. |
 | `attachment_add_bytes` | `{workspace_id, mime, data, name?}` | The same answer for a pasted image: `data` is base64, at most 10 MiB decoded; `mime` is what the clipboard said and is ignored (the type is sniffed from the bytes); `name` defaults to `pasted-image`. Rejects `image_too_large`, `invalid_request`, `workspace_unknown`, `local_work_disabled`. |
 | `attachment_remove` | `{workspace_id, token}` | `null`. Forgets an image the person took off the composer (an unknown token is not an error). |
@@ -444,6 +444,18 @@ stays in plan mode and the tool answers `{accepted: false, feedback?,
 message}`; the model revises the plan. The turn's `hitl_exchanges` record
 it as `kind: "plan_approval"`, `decision: "accept" | "decline"`, `value`
 the feedback. The next turn starts in the profile its own `plan_mode` says.
+
+**Bypass mode.** `bypass_approvals: true` starts the turn in the `bypass`
+profile: the `build` tools, but a local tool call that a layer would ask
+runs without the question. The rules engine answers it `allow` with
+`source: "bypass"` and keeps the reason and rule of the layer that asked.
+These still apply: the policy ceiling, every deny (a `forbidden` rule
+included), a `PreToolUse` hook's ask, a remote toolkit's confirmation, an
+MCP server's sign-in and the step limit's "Continue?". `plan_mode` and
+`bypass_approvals` together are refused with `invalid_request`. A
+sub-agent of the turn in a task worktree runs in bypass mode too.
+`rules_explain` explains the rules without the mode. The UI
+keeps the choice per folder and asks the person to confirm it once.
 
 **Sub-agents** (#1226). Every workspace turn, plan mode included, is
 offered the runtime's sub-agent tools (`elitea-agent-runtime`
