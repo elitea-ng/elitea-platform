@@ -2294,6 +2294,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// the inbound execution id, so the edge keeps it only for a live
 			// execution of the caller.
 			ExecutionVerifier: dbrepos.NewExecutionAttributionVerifier(pool).WithLocalWorkPolicy(nativePolicy),
+			// One audit row per metered tool call (#1238): the worker cannot
+			// write the trail itself.
+			Audit: auditRecorder,
 		})
 		if gwErr != nil {
 			return fmt.Errorf("compose llm gateway proxy: %w", gwErr)

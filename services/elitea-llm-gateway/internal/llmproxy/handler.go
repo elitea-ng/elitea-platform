@@ -38,6 +38,13 @@ type Handler struct {
 	// secret disables verification (the mTLS transport still authenticates the
 	// hop) — matching the edge, which only signs when a secret is configured.
 	identitySecret []byte
+	// admissionKey signs a metered admission (metered.go). It is derived from
+	// identitySecret, so every replica verifies an admission any replica
+	// issued; with no secret it is random per process.
+	admissionKey []byte
+	// meteredPrices prices a metered tool operation (metered.go) when the
+	// budget plane's calculator does not. nil leaves only that calculator.
+	meteredPrices MeteredPricer
 	// models synthesises the per-project /llm/v1/models set from Postgres
 	// (design §4.2, §3.4). nil when the gateway is booted without a database:
 	// the /v1/models surface then reports an empty set rather than erroring.
@@ -408,6 +415,7 @@ func NewHandler(router LLMRouter, logger *slog.Logger, identitySecret []byte, op
 	for _, opt := range opts {
 		opt(h)
 	}
+	h.admissionKey = meteredAdmissionKey(identitySecret)
 	return h
 }
 

@@ -1166,3 +1166,39 @@ func TestUpdateUsage_OmitsTheUsageObjectWhenThereAreNoDimensions(t *testing.T) {
 		t.Fatalf("delta carries a usage key with no dimensions to report: %s", published[0])
 	}
 }
+
+// A metered tool row (#1238) carries operation, units and unit under the
+// scheduler's key names; a model row carries none of the three keys, so an
+// older scheduler reads exactly what it read before.
+func TestUpdateUsage_PublishesMeteredDimensionsOnlyForToolRows(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		dims failmode.UsageDimensions
+		want string
+	}{
+		{"tool", failmode.UsageDimensions{Provider: "tavily", Model: "web_search",
+			Operation: failmode.UsageOperationTool, Units: 0, Unit: "credit"}, `"operation":"tool","units":0,"unit":"credit"`},
+		{"llm", failmode.UsageDimensions{Provider: "openai", Model: "gpt-4o"}, ""},
+	} {
+		nc := newFakeNATS()
+		gs := newStore(nc, &fakeDB{rowErr: failmode.ErrNoBudgetRow})
+		dims := tc.dims
+		if err := gs.UpdateUsage(context.Background(), testProject, testScope, testScopeID,
+			"evt-"+tc.name, 0, testPeriod, testPeriodEnd, &dims); err != nil {
+			t.Fatalf("%s: UpdateUsage: %v", tc.name, err)
+		}
+		nc.mu.Lock()
+		published := string(nc.deltas[0])
+		nc.mu.Unlock()
+		if tc.want != "" && !strings.Contains(published, tc.want) {
+			t.Fatalf("%s: delta %s lacks %s", tc.name, published, tc.want)
+		}
+		if tc.want == "" {
+			for _, key := range []string{`"operation"`, `"units"`, `"unit"`} {
+				if strings.Contains(published, key) {
+					t.Fatalf("%s: a model row carries %s: %s", tc.name, key, published)
+				}
+			}
+		}
+	}
+}

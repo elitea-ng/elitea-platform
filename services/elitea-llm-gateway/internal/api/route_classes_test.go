@@ -36,8 +36,8 @@ func readRouteClasses(t *testing.T) map[string]string {
 			t.Fatalf("%s:%d: want <class> <METHOD> <pattern>, got %q", routeClassesFile, line, text)
 		}
 		class, key := fields[0], fields[1]+" "+fields[2]
-		if class != "inference" && class != "other" {
-			t.Fatalf("%s:%d: class %q is not inference or other", routeClassesFile, line, class)
+		if class != "inference" && class != "other" && class != "metered" {
+			t.Fatalf("%s:%d: class %q is not inference, other or metered", routeClassesFile, line, class)
 		}
 		if _, dup := classes[key]; dup {
 			t.Fatalf("%s:%d: %s is listed twice", routeClassesFile, line, key)

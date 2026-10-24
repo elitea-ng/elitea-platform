@@ -502,6 +502,18 @@ func main() {
 		},
 		budgetOpts...,
 	)
+	// The metered-call API (#1238) prices tool operations from
+	// gateway.metered_operation_prices. With governance wired it uses the
+	// budget plane's calculator; this one serves a gateway with a database and
+	// no NATS, whose metered calls are then admitted ungoverned, as its model
+	// calls are. With no database every metered operation is unpriced and
+	// refused.
+	if pool != nil {
+		handlerOpts = append(handlerOpts, llmproxy.WithMeteredPrices(cost.New(cost.Config{
+			DB:     cost.NewPoolQuerier(pool),
+			Logger: logger,
+		})))
+	}
 	logger.Info("stream disconnect billing configured",
 		"grace", cfg.StreamGrace, "drain_max_inflight", cfg.StreamDrainLimit)
 	logRealtimeMode(logger, cfg)

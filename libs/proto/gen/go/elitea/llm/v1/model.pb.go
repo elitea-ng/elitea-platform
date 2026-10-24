@@ -932,6 +932,218 @@ func (x *ImageEditResponse) GetBody() []byte {
 	return nil
 }
 
+// MeteredAdmitRequest is one metered admission.
+type MeteredAdmitRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Call  *ModelCall             `protobuf:"bytes,1,opt,name=call,proto3" json:"call,omitempty"`
+	// body is the admit JSON (the gateway's metered-call contract).
+	Body          []byte `protobuf:"bytes,2,opt,name=body,proto3" json:"body,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MeteredAdmitRequest) Reset() {
+	*x = MeteredAdmitRequest{}
+	mi := &file_elitea_llm_v1_model_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MeteredAdmitRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MeteredAdmitRequest) ProtoMessage() {}
+
+func (x *MeteredAdmitRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_llm_v1_model_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MeteredAdmitRequest.ProtoReflect.Descriptor instead.
+func (*MeteredAdmitRequest) Descriptor() ([]byte, []int) {
+	return file_elitea_llm_v1_model_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *MeteredAdmitRequest) GetCall() *ModelCall {
+	if x != nil {
+		return x.Call
+	}
+	return nil
+}
+
+func (x *MeteredAdmitRequest) GetBody() []byte {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
+type MeteredAdmitResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Head          *ResponseHead          `protobuf:"bytes,1,opt,name=head,proto3" json:"head,omitempty"`
+	Body          []byte                 `protobuf:"bytes,2,opt,name=body,proto3" json:"body,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MeteredAdmitResponse) Reset() {
+	*x = MeteredAdmitResponse{}
+	mi := &file_elitea_llm_v1_model_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MeteredAdmitResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MeteredAdmitResponse) ProtoMessage() {}
+
+func (x *MeteredAdmitResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_llm_v1_model_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MeteredAdmitResponse.ProtoReflect.Descriptor instead.
+func (*MeteredAdmitResponse) Descriptor() ([]byte, []int) {
+	return file_elitea_llm_v1_model_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *MeteredAdmitResponse) GetHead() *ResponseHead {
+	if x != nil {
+		return x.Head
+	}
+	return nil
+}
+
+func (x *MeteredAdmitResponse) GetBody() []byte {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
+// MeteredSettleRequest is one settlement of an admitted operation.
+type MeteredSettleRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Call  *ModelCall             `protobuf:"bytes,1,opt,name=call,proto3" json:"call,omitempty"`
+	// body is the settle JSON (the gateway's metered-call contract).
+	Body          []byte `protobuf:"bytes,2,opt,name=body,proto3" json:"body,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MeteredSettleRequest) Reset() {
+	*x = MeteredSettleRequest{}
+	mi := &file_elitea_llm_v1_model_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MeteredSettleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MeteredSettleRequest) ProtoMessage() {}
+
+func (x *MeteredSettleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_llm_v1_model_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MeteredSettleRequest.ProtoReflect.Descriptor instead.
+func (*MeteredSettleRequest) Descriptor() ([]byte, []int) {
+	return file_elitea_llm_v1_model_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *MeteredSettleRequest) GetCall() *ModelCall {
+	if x != nil {
+		return x.Call
+	}
+	return nil
+}
+
+func (x *MeteredSettleRequest) GetBody() []byte {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
+type MeteredSettleResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Head          *ResponseHead          `protobuf:"bytes,1,opt,name=head,proto3" json:"head,omitempty"`
+	Body          []byte                 `protobuf:"bytes,2,opt,name=body,proto3" json:"body,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MeteredSettleResponse) Reset() {
+	*x = MeteredSettleResponse{}
+	mi := &file_elitea_llm_v1_model_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MeteredSettleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MeteredSettleResponse) ProtoMessage() {}
+
+func (x *MeteredSettleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_llm_v1_model_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MeteredSettleResponse.ProtoReflect.Descriptor instead.
+func (*MeteredSettleResponse) Descriptor() ([]byte, []int) {
+	return file_elitea_llm_v1_model_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *MeteredSettleResponse) GetHead() *ResponseHead {
+	if x != nil {
+		return x.Head
+	}
+	return nil
+}
+
+func (x *MeteredSettleResponse) GetBody() []byte {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
 var File_elitea_llm_v1_model_proto protoreflect.FileDescriptor
 
 const file_elitea_llm_v1_model_proto_rawDesc = "" +
@@ -987,14 +1199,28 @@ const file_elitea_llm_v1_model_proto_rawDesc = "" +
 	"\x05frame\"X\n" +
 	"\x11ImageEditResponse\x12/\n" +
 	"\x04head\x18\x01 \x01(\v2\x1b.elitea.llm.v1.ResponseHeadR\x04head\x12\x12\n" +
-	"\x04body\x18\x02 \x01(\fR\x04body2\xc2\x03\n" +
+	"\x04body\x18\x02 \x01(\fR\x04body\"W\n" +
+	"\x13MeteredAdmitRequest\x12,\n" +
+	"\x04call\x18\x01 \x01(\v2\x18.elitea.llm.v1.ModelCallR\x04call\x12\x12\n" +
+	"\x04body\x18\x02 \x01(\fR\x04body\"[\n" +
+	"\x14MeteredAdmitResponse\x12/\n" +
+	"\x04head\x18\x01 \x01(\v2\x1b.elitea.llm.v1.ResponseHeadR\x04head\x12\x12\n" +
+	"\x04body\x18\x02 \x01(\fR\x04body\"X\n" +
+	"\x14MeteredSettleRequest\x12,\n" +
+	"\x04call\x18\x01 \x01(\v2\x18.elitea.llm.v1.ModelCallR\x04call\x12\x12\n" +
+	"\x04body\x18\x02 \x01(\fR\x04body\"\\\n" +
+	"\x15MeteredSettleResponse\x12/\n" +
+	"\x04head\x18\x01 \x01(\v2\x1b.elitea.llm.v1.ResponseHeadR\x04head\x12\x12\n" +
+	"\x04body\x18\x02 \x01(\fR\x04body2\xf7\x04\n" +
 	"\fModelService\x12b\n" +
 	"\x0fChatCompletions\x12%.elitea.llm.v1.ChatCompletionsRequest\x1a&.elitea.llm.v1.ChatCompletionsResponse0\x01\x12M\n" +
 	"\bMessages\x12\x1e.elitea.llm.v1.MessagesRequest\x1a\x1f.elitea.llm.v1.MessagesResponse0\x01\x12Q\n" +
 	"\n" +
 	"Embeddings\x12 .elitea.llm.v1.EmbeddingsRequest\x1a!.elitea.llm.v1.EmbeddingsResponse\x12Z\n" +
 	"\rImageGenerate\x12#.elitea.llm.v1.ImageGenerateRequest\x1a$.elitea.llm.v1.ImageGenerateResponse\x12P\n" +
-	"\tImageEdit\x12\x1f.elitea.llm.v1.ImageEditRequest\x1a .elitea.llm.v1.ImageEditResponse(\x01BLZJgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/llm/v1;llmv1b\x06proto3"
+	"\tImageEdit\x12\x1f.elitea.llm.v1.ImageEditRequest\x1a .elitea.llm.v1.ImageEditResponse(\x01\x12W\n" +
+	"\fMeteredAdmit\x12\".elitea.llm.v1.MeteredAdmitRequest\x1a#.elitea.llm.v1.MeteredAdmitResponse\x12Z\n" +
+	"\rMeteredSettle\x12#.elitea.llm.v1.MeteredSettleRequest\x1a$.elitea.llm.v1.MeteredSettleResponseBLZJgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/llm/v1;llmv1b\x06proto3"
 
 var (
 	file_elitea_llm_v1_model_proto_rawDescOnce sync.Once
@@ -1008,7 +1234,7 @@ func file_elitea_llm_v1_model_proto_rawDescGZIP() []byte {
 	return file_elitea_llm_v1_model_proto_rawDescData
 }
 
-var file_elitea_llm_v1_model_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_elitea_llm_v1_model_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_elitea_llm_v1_model_proto_goTypes = []any{
 	(*ModelCall)(nil),               // 0: elitea.llm.v1.ModelCall
 	(*ResponseHead)(nil),            // 1: elitea.llm.v1.ResponseHead
@@ -1024,6 +1250,10 @@ var file_elitea_llm_v1_model_proto_goTypes = []any{
 	(*ImageEditHead)(nil),           // 11: elitea.llm.v1.ImageEditHead
 	(*ImageEditRequest)(nil),        // 12: elitea.llm.v1.ImageEditRequest
 	(*ImageEditResponse)(nil),       // 13: elitea.llm.v1.ImageEditResponse
+	(*MeteredAdmitRequest)(nil),     // 14: elitea.llm.v1.MeteredAdmitRequest
+	(*MeteredAdmitResponse)(nil),    // 15: elitea.llm.v1.MeteredAdmitResponse
+	(*MeteredSettleRequest)(nil),    // 16: elitea.llm.v1.MeteredSettleRequest
+	(*MeteredSettleResponse)(nil),   // 17: elitea.llm.v1.MeteredSettleResponse
 }
 var file_elitea_llm_v1_model_proto_depIdxs = []int32{
 	0,  // 0: elitea.llm.v1.ChatCompletionsRequest.call:type_name -> elitea.llm.v1.ModelCall
@@ -1037,21 +1267,29 @@ var file_elitea_llm_v1_model_proto_depIdxs = []int32{
 	0,  // 8: elitea.llm.v1.ImageEditHead.call:type_name -> elitea.llm.v1.ModelCall
 	11, // 9: elitea.llm.v1.ImageEditRequest.head:type_name -> elitea.llm.v1.ImageEditHead
 	1,  // 10: elitea.llm.v1.ImageEditResponse.head:type_name -> elitea.llm.v1.ResponseHead
-	3,  // 11: elitea.llm.v1.ModelService.ChatCompletions:input_type -> elitea.llm.v1.ChatCompletionsRequest
-	5,  // 12: elitea.llm.v1.ModelService.Messages:input_type -> elitea.llm.v1.MessagesRequest
-	7,  // 13: elitea.llm.v1.ModelService.Embeddings:input_type -> elitea.llm.v1.EmbeddingsRequest
-	9,  // 14: elitea.llm.v1.ModelService.ImageGenerate:input_type -> elitea.llm.v1.ImageGenerateRequest
-	12, // 15: elitea.llm.v1.ModelService.ImageEdit:input_type -> elitea.llm.v1.ImageEditRequest
-	4,  // 16: elitea.llm.v1.ModelService.ChatCompletions:output_type -> elitea.llm.v1.ChatCompletionsResponse
-	6,  // 17: elitea.llm.v1.ModelService.Messages:output_type -> elitea.llm.v1.MessagesResponse
-	8,  // 18: elitea.llm.v1.ModelService.Embeddings:output_type -> elitea.llm.v1.EmbeddingsResponse
-	10, // 19: elitea.llm.v1.ModelService.ImageGenerate:output_type -> elitea.llm.v1.ImageGenerateResponse
-	13, // 20: elitea.llm.v1.ModelService.ImageEdit:output_type -> elitea.llm.v1.ImageEditResponse
-	16, // [16:21] is the sub-list for method output_type
-	11, // [11:16] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	0,  // 11: elitea.llm.v1.MeteredAdmitRequest.call:type_name -> elitea.llm.v1.ModelCall
+	1,  // 12: elitea.llm.v1.MeteredAdmitResponse.head:type_name -> elitea.llm.v1.ResponseHead
+	0,  // 13: elitea.llm.v1.MeteredSettleRequest.call:type_name -> elitea.llm.v1.ModelCall
+	1,  // 14: elitea.llm.v1.MeteredSettleResponse.head:type_name -> elitea.llm.v1.ResponseHead
+	3,  // 15: elitea.llm.v1.ModelService.ChatCompletions:input_type -> elitea.llm.v1.ChatCompletionsRequest
+	5,  // 16: elitea.llm.v1.ModelService.Messages:input_type -> elitea.llm.v1.MessagesRequest
+	7,  // 17: elitea.llm.v1.ModelService.Embeddings:input_type -> elitea.llm.v1.EmbeddingsRequest
+	9,  // 18: elitea.llm.v1.ModelService.ImageGenerate:input_type -> elitea.llm.v1.ImageGenerateRequest
+	12, // 19: elitea.llm.v1.ModelService.ImageEdit:input_type -> elitea.llm.v1.ImageEditRequest
+	14, // 20: elitea.llm.v1.ModelService.MeteredAdmit:input_type -> elitea.llm.v1.MeteredAdmitRequest
+	16, // 21: elitea.llm.v1.ModelService.MeteredSettle:input_type -> elitea.llm.v1.MeteredSettleRequest
+	4,  // 22: elitea.llm.v1.ModelService.ChatCompletions:output_type -> elitea.llm.v1.ChatCompletionsResponse
+	6,  // 23: elitea.llm.v1.ModelService.Messages:output_type -> elitea.llm.v1.MessagesResponse
+	8,  // 24: elitea.llm.v1.ModelService.Embeddings:output_type -> elitea.llm.v1.EmbeddingsResponse
+	10, // 25: elitea.llm.v1.ModelService.ImageGenerate:output_type -> elitea.llm.v1.ImageGenerateResponse
+	13, // 26: elitea.llm.v1.ModelService.ImageEdit:output_type -> elitea.llm.v1.ImageEditResponse
+	15, // 27: elitea.llm.v1.ModelService.MeteredAdmit:output_type -> elitea.llm.v1.MeteredAdmitResponse
+	17, // 28: elitea.llm.v1.ModelService.MeteredSettle:output_type -> elitea.llm.v1.MeteredSettleResponse
+	22, // [22:29] is the sub-list for method output_type
+	15, // [15:22] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_elitea_llm_v1_model_proto_init() }
@@ -1077,7 +1315,7 @@ func file_elitea_llm_v1_model_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_llm_v1_model_proto_rawDesc), len(file_elitea_llm_v1_model_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

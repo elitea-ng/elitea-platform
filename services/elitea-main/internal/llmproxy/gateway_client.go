@@ -615,6 +615,24 @@ func (c *GatewayClient) ListProviderModels(ctx context.Context, req *Request) (*
 	return unaryResponse(resp.GetResponse(), err)
 }
 
+func (c *GatewayClient) MeteredAdmit(ctx context.Context, req *Request) (*Response, error) {
+	in, err := c.httpRequest(req, http.MethodPost, meteredAdmitPath)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.client.MeteredAdmit(c.callContext(ctx, req.Identity), &gatewayv1.MeteredAdmitRequest{Request: in})
+	return unaryResponse(resp.GetResponse(), err)
+}
+
+func (c *GatewayClient) MeteredSettle(ctx context.Context, req *Request) (*Response, error) {
+	in, err := c.httpRequest(req, http.MethodPost, meteredSettlePath)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.client.MeteredSettle(c.callContext(ctx, req.Identity), &gatewayv1.MeteredSettleRequest{Request: in})
+	return unaryResponse(resp.GetResponse(), err)
+}
+
 func (c *GatewayClient) ListProviderVoices(ctx context.Context, req *Request) (*Response, error) {
 	in, err := c.httpRequest(req, http.MethodPost, "/llm/v1/list_provider_voices")
 	if err != nil {

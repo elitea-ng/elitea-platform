@@ -60,6 +60,36 @@ var usageEventSQL = fmt.Sprintf(`INSERT INTO gateway.llm_usage_events
 		to_timestamp($9), to_timestamp($10), to_timestamp($11), $12)
 	ON CONFLICT (event_id) DO NOTHING`, nanoUSDPerUSD)
 
+// meteredUsageEventSQL is usageEventSQL for a metered tool row (#1238): the
+// same row plus the operation, units and unit columns of shared migration
+// 0174. It is a separate statement, used only for a delta that carries an
+// operation, so a consumer that runs ahead of that migration keeps writing
+// every model row; only a tool row would meet the missing columns, and tool
+// rows exist only once a gateway that emits them is deployed with the
+// migration.
+var meteredUsageEventSQL = fmt.Sprintf(`INSERT INTO gateway.llm_usage_events
+		(event_id, project_id, user_id, provider, model,
+		 prompt_tokens, completion_tokens, cost_usd, period_start, period_end,
+		 occurred_at, execution_id, operation, units, unit)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric / %d,
+		to_timestamp($9), to_timestamp($10), to_timestamp($11), $12, $13, $14, $15)
+	ON CONFLICT (event_id) DO NOTHING`, nanoUSDPerUSD)
+
+// usageOperationTool is the only operation a delta names; a model row carries
+// none.
+const usageOperationTool = "tool"
+
+// usageUnitBytes is the width of the unit column (shared migration 0174).
+const usageUnitBytes = 16
+
+// nullableUnit renders an absent unit as SQL NULL, trimmed to its column.
+func nullableUnit(value string) any {
+	if value == "" {
+		return nil
+	}
+	return truncateUTF8(value, usageUnitBytes)
+}
+
 // nullableExecutionID renders an absent execution id as SQL NULL. "This request
 // came from no execution" and "it came from an execution whose id is the empty
 // string" are different claims, and the agent breakdown groups on this column —
@@ -232,14 +262,22 @@ func (s *Store) Apply(ctx context.Context, group []BudgetDelta) (applyOutcome, e
 		if d.Usage == nil {
 			continue
 		}
-		if _, err := tx.ExecAffected(ctx, usageEventSQL,
+		statement, args := usageEventSQL, []any{
 			d.EventID, d.ProjectID, d.Usage.UserID,
 			truncateUTF8(d.Usage.Provider, usageProviderBytes),
 			truncateUTF8(d.Usage.Model, usageModelBytes),
 			d.Usage.PromptTokens, d.Usage.CompletionTokens,
 			d.DeltaNanoUSD, d.PeriodStart, d.PeriodEnd, d.Usage.OccurredAtUnix,
 			nullableExecutionID(d.Usage.ExecutionID),
-		); err != nil {
+		}
+		// A metered tool row (#1238). Any other operation value is not one this
+		// consumer knows; it is written as a model row rather than refused, so
+		// the money's ledger row is never lost to a label.
+		if d.Usage.Operation == usageOperationTool {
+			statement = meteredUsageEventSQL
+			args = append(args, usageOperationTool, d.Usage.Units, nullableUnit(d.Usage.Unit))
+		}
+		if _, err := tx.ExecAffected(ctx, statement, args...); err != nil {
 			return outcomeApplied, err
 		}
 	}

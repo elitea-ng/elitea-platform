@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/hop"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/ssewriter"
 )
@@ -27,6 +28,10 @@ type Config struct {
 	// shape check only. Production composition always sets it: the analytics
 	// reads decide active users and run spend from this id.
 	ExecutionVerifier ExecutionVerifier
+
+	// Audit records one row per metered tool call (#1238, metered_audit.go).
+	// Nil records nothing.
+	Audit audit.Recorder
 }
 
 // Proxy is elitea-main's /llm surface: it resolves who the request is for and
@@ -37,6 +42,7 @@ type Proxy struct {
 	gateway  Gateway
 	logger   *slog.Logger
 	verifier ExecutionVerifier
+	audit    audit.Recorder
 	// audio caps the /llm/v1/audio requests one principal has in flight
 	// (audio_limits.go).
 	audio *audioInFlight
@@ -58,6 +64,7 @@ func New(cfg Config) (*Proxy, error) {
 		gateway:  cfg.Gateway,
 		logger:   logger,
 		verifier: cfg.ExecutionVerifier,
+		audit:    cfg.Audit,
 		audio:    newAudioInFlight(maxAudioInFlightPerPrincipal),
 	}, nil
 }
@@ -90,6 +97,28 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Body:     r.Body,
 		Identity: p.identity(r),
 	}
+	// A model call whose execution id does not verify keeps going without it
+	// (the id is dropped, the call is not attributed). A metered tool call
+	// may not: its spend exists only to land on a run, and a worker that
+	// names a run the edge does not admit is either misconfigured or forging
+	// attribution (#1238). So the id is required here, and must survive
+	// verification unchanged.
+	var meteredEntry *meteredAudit
+	started := time.Now()
+	if rpc.metered() {
+		if raw := executionIDFromHeader(r.Header); raw == "" || req.Identity.ExecutionID != raw {
+			writeExecutionNotAttributable(w)
+			return
+		}
+		body, entry, ok := readMeteredBody(r)
+		if !ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			_, _ = w.Write([]byte(`{"error":{"message":"the metered call body is too large","type":"invalid_request_error","code":"request_too_large"}}`))
+			return
+		}
+		req.Body, meteredEntry = meteredRequestBody(body), entry
+	}
 	if rpc == rpcRealtime {
 		p.serveRealtime(w, r, req)
 		return
@@ -100,6 +129,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if rpc.metered() {
+		p.recordMeteredAudit(r.Context(), rpc, req.Identity, meteredEntry, resp.StatusCode, started)
+	}
 	p.writeResponse(w, r, resp)
 }
 
@@ -165,6 +197,14 @@ func (p *Proxy) writeResponse(w http.ResponseWriter, r *http.Request, resp *Resp
 // isEventStream reports whether a Content-Type names an SSE body.
 func isEventStream(contentType string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "text/event-stream")
+}
+
+// writeExecutionNotAttributable refuses a metered call whose execution id is
+// absent or was not admitted by the execution verifier.
+func writeExecutionNotAttributable(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(`{"error":{"message":"the execution id does not name a run this caller may bill","type":"permission_error","code":"execution_not_attributable"}}`))
 }
 
 // writeHopError answers a request whose gateway call failed.

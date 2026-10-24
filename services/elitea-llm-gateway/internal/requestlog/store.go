@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -18,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // execer is the slice of *pgxpool.Pool this package uses, so the statements can
@@ -34,6 +36,10 @@ type Store struct {
 	// legacyUntil is the unix-nano time before which WriteBatch uses the
 	// pre-0139 column list. Zero means "use the full list". See WriteBatch.
 	legacyUntil atomic.Int64
+	// meteredUntil is the unix-nano time before which a batch holding a
+	// metered tool row is written WITHOUT the shared migration 0174 columns.
+	// Zero means "write them". See WriteBatch.
+	meteredUntil atomic.Int64
 }
 
 // NewStore returns a sink over the pool. A nil pool returns nil, which New()
@@ -58,6 +64,19 @@ const legacyInsertColumns = `(occurred_at, project_id, user_id, route, method, s
 	duration_ms, provider, model, streaming, error_code, prompt_tokens, completion_tokens,
 	execution_id)`
 
+// meteredColumns are the shared migration 0174 columns, appended to
+// insertColumns for a batch that holds a metered tool row (#1238).
+const meteredColumns = `operation, units, unit, cost_usd`
+
+// meteredColumnsPerRow is columnsPerRow plus the four meteredColumns.
+const meteredColumnsPerRow = columnsPerRow + 4
+
+// operationLLM and operationTool are the two values of the operation column.
+const (
+	operationLLM  = "llm"
+	operationTool = "tool"
+)
+
 // columnsPerRow MUST equal the number of columns in insertColumns, and
 // legacyColumnsPerRow the number in legacyInsertColumns. A mismatch would bind
 // each row's values into the wrong columns — which for this table means a
@@ -81,9 +100,23 @@ const legacyColumnsRetry = 5 * time.Minute
 // columns. So a 42703 latches the pre-0139 list for legacyColumnsRetry, and the
 // same batch is written again without the three new columns. This is the rule
 // internal/cost/schema_probe.go applies to the price catalog.
+//
+// A batch that holds a metered tool row (#1238) is written with the shared
+// migration 0174 columns too. A database without them refuses with 42703; that
+// latches a separate interval, and the batch takes the path above instead, so
+// the tool rows keep their provider, model and status and lose only the four
+// metered columns. A batch with no tool row never names those columns, so the
+// skew of 0174 costs model traffic nothing.
 func (s *Store) WriteBatch(ctx context.Context, records []Record) error {
 	if s == nil || len(records) == 0 {
 		return nil
+	}
+	if hasMetered(records) && !s.legacyColumns() && !s.latched(&s.meteredUntil) {
+		err := s.writeMeteredBatch(ctx, records)
+		if err == nil || !isUndefinedColumn(err) {
+			return err
+		}
+		s.meteredUntil.Store(s.now().Add(legacyColumnsRetry).UnixNano())
 	}
 	if !s.legacyColumns() {
 		err := s.writeBatch(ctx, records, false)
@@ -97,8 +130,60 @@ func (s *Store) WriteBatch(ctx context.Context, records []Record) error {
 
 // legacyColumns reports whether the pre-0139 column list is latched.
 func (s *Store) legacyColumns() bool {
-	until := s.legacyUntil.Load()
-	return until != 0 && s.now().UnixNano() < until
+	return s.latched(&s.legacyUntil)
+}
+
+// latched reports whether a latch is set and not yet expired.
+func (s *Store) latched(until *atomic.Int64) bool {
+	value := until.Load()
+	return value != 0 && s.now().UnixNano() < value
+}
+
+// hasMetered reports whether a batch holds a metered tool row.
+func hasMetered(records []Record) bool {
+	for _, record := range records {
+		if record.Metered != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// writeMeteredBatch writes every record with the full column list plus the
+// 0174 columns. A model row gets operation "llm" and NULL units, unit and
+// cost; the column default would say the same, but one statement binds one
+// shape.
+func (s *Store) writeMeteredBatch(ctx context.Context, records []Record) error {
+	placeholders := make([]string, 0, len(records))
+	args := make([]any, 0, len(records)*meteredColumnsPerRow)
+	for index, record := range records {
+		base := index * meteredColumnsPerRow
+		slots := make([]string, meteredColumnsPerRow)
+		for column := range slots {
+			slots[column] = "$" + strconv.Itoa(base+column+1)
+		}
+		placeholders = append(placeholders, "("+strings.Join(slots, ",")+")")
+		args = append(args, recordArgs(record, false)...)
+		if record.Metered == nil {
+			args = append(args, operationLLM, nil, nil, nil)
+			continue
+		}
+		args = append(args, operationTool, record.Metered.Units,
+			truncate(record.Metered.Unit, 16), nanoNumeric(record.Metered.CostNanoUSD))
+	}
+	columns := strings.TrimSuffix(insertColumns, ")") + ", " + meteredColumns + ")"
+	statement := fmt.Sprintf(`INSERT INTO gateway.llm_request_logs %s VALUES %s`,
+		columns, strings.Join(placeholders, ","))
+	if _, err := s.db.Exec(ctx, statement, args...); err != nil {
+		return fmt.Errorf("write request log batch: %w", err)
+	}
+	return nil
+}
+
+// nanoNumeric is a nano-USD amount as an exact NUMERIC in USD: the integer
+// with nine fractional digits, no float on the way.
+func nanoNumeric(nano int64) pgtype.Numeric {
+	return pgtype.Numeric{Int: big.NewInt(nano), Exp: -9, Valid: true}
 }
 
 // isUndefinedColumn reports Postgres 42703, the code a missing column raises.
@@ -123,33 +208,7 @@ func (s *Store) writeBatch(ctx context.Context, records []Record, legacy bool) e
 		}
 		placeholders = append(placeholders, "("+strings.Join(slots, ",")+")")
 
-		args = append(args,
-			record.OccurredAt,
-			nullableID(record.ProjectID),
-			nullableID(record.UserID),
-			truncate(record.Route, 128),
-			truncate(record.Method, 8),
-			record.Status,
-			record.Duration.Milliseconds(),
-			truncate(record.Provider, 64),
-			truncate(record.Model, 128),
-			record.Streaming,
-			truncate(record.ErrorCode, 64),
-			record.PromptToks,
-			record.OutputToks,
-			// NULL rather than '' for a request that came from no execution.
-			// The agent breakdown counts rows it can attribute, and an empty
-			// string is a value that groups — it would become a nameless agent
-			// carrying every un-attributed request in the project.
-			nullableExecutionID(record.ExecutionID),
-		)
-		if !legacy {
-			args = append(args,
-				truncate(record.CredentialOwner, 16),
-				nonNegative(record.CacheReadToks),
-				nonNegative(record.CacheWriteToks),
-			)
-		}
+		args = append(args, recordArgs(record, legacy)...)
 	}
 
 	statement := fmt.Sprintf(
@@ -243,4 +302,38 @@ func nonNegative(value int64) int64 {
 		return 0
 	}
 	return value
+}
+
+// recordArgs is one record's bind values for insertColumns, or for
+// legacyInsertColumns when legacy is set.
+func recordArgs(record Record, legacy bool) []any {
+	args := make([]any, 0, columnsPerRow)
+	args = append(args,
+		record.OccurredAt,
+		nullableID(record.ProjectID),
+		nullableID(record.UserID),
+		truncate(record.Route, 128),
+		truncate(record.Method, 8),
+		record.Status,
+		record.Duration.Milliseconds(),
+		truncate(record.Provider, 64),
+		truncate(record.Model, 128),
+		record.Streaming,
+		truncate(record.ErrorCode, 64),
+		record.PromptToks,
+		record.OutputToks,
+		// NULL rather than '' for a request that came from no execution.
+		// The agent breakdown counts rows it can attribute, and an empty
+		// string is a value that groups — it would become a nameless agent
+		// carrying every un-attributed request in the project.
+		nullableExecutionID(record.ExecutionID),
+	)
+	if !legacy {
+		args = append(args,
+			truncate(record.CredentialOwner, 16),
+			nonNegative(record.CacheReadToks),
+			nonNegative(record.CacheWriteToks),
+		)
+	}
+	return args
 }

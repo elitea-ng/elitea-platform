@@ -2283,6 +2283,182 @@ func (x *ListProviderVoicesResponse) GetResponse() *HttpResponse {
 	return nil
 }
 
+type MeteredAdmitRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Request       *HttpRequest           `protobuf:"bytes,1,opt,name=request,proto3" json:"request,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MeteredAdmitRequest) Reset() {
+	*x = MeteredAdmitRequest{}
+	mi := &file_elitea_gateway_v1_gateway_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MeteredAdmitRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MeteredAdmitRequest) ProtoMessage() {}
+
+func (x *MeteredAdmitRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_gateway_v1_gateway_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MeteredAdmitRequest.ProtoReflect.Descriptor instead.
+func (*MeteredAdmitRequest) Descriptor() ([]byte, []int) {
+	return file_elitea_gateway_v1_gateway_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *MeteredAdmitRequest) GetRequest() *HttpRequest {
+	if x != nil {
+		return x.Request
+	}
+	return nil
+}
+
+type MeteredAdmitResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Response      *HttpResponse          `protobuf:"bytes,1,opt,name=response,proto3" json:"response,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MeteredAdmitResponse) Reset() {
+	*x = MeteredAdmitResponse{}
+	mi := &file_elitea_gateway_v1_gateway_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MeteredAdmitResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MeteredAdmitResponse) ProtoMessage() {}
+
+func (x *MeteredAdmitResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_gateway_v1_gateway_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MeteredAdmitResponse.ProtoReflect.Descriptor instead.
+func (*MeteredAdmitResponse) Descriptor() ([]byte, []int) {
+	return file_elitea_gateway_v1_gateway_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *MeteredAdmitResponse) GetResponse() *HttpResponse {
+	if x != nil {
+		return x.Response
+	}
+	return nil
+}
+
+type MeteredSettleRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Request       *HttpRequest           `protobuf:"bytes,1,opt,name=request,proto3" json:"request,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MeteredSettleRequest) Reset() {
+	*x = MeteredSettleRequest{}
+	mi := &file_elitea_gateway_v1_gateway_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MeteredSettleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MeteredSettleRequest) ProtoMessage() {}
+
+func (x *MeteredSettleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_gateway_v1_gateway_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MeteredSettleRequest.ProtoReflect.Descriptor instead.
+func (*MeteredSettleRequest) Descriptor() ([]byte, []int) {
+	return file_elitea_gateway_v1_gateway_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *MeteredSettleRequest) GetRequest() *HttpRequest {
+	if x != nil {
+		return x.Request
+	}
+	return nil
+}
+
+type MeteredSettleResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Response      *HttpResponse          `protobuf:"bytes,1,opt,name=response,proto3" json:"response,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MeteredSettleResponse) Reset() {
+	*x = MeteredSettleResponse{}
+	mi := &file_elitea_gateway_v1_gateway_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MeteredSettleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MeteredSettleResponse) ProtoMessage() {}
+
+func (x *MeteredSettleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_gateway_v1_gateway_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MeteredSettleResponse.ProtoReflect.Descriptor instead.
+func (*MeteredSettleResponse) Descriptor() ([]byte, []int) {
+	return file_elitea_gateway_v1_gateway_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *MeteredSettleResponse) GetResponse() *HttpResponse {
+	if x != nil {
+		return x.Response
+	}
+	return nil
+}
+
 type GovernanceStatusRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -2291,7 +2467,7 @@ type GovernanceStatusRequest struct {
 
 func (x *GovernanceStatusRequest) Reset() {
 	*x = GovernanceStatusRequest{}
-	mi := &file_elitea_gateway_v1_gateway_proto_msgTypes[43]
+	mi := &file_elitea_gateway_v1_gateway_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2303,7 +2479,7 @@ func (x *GovernanceStatusRequest) String() string {
 func (*GovernanceStatusRequest) ProtoMessage() {}
 
 func (x *GovernanceStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_gateway_v1_gateway_proto_msgTypes[43]
+	mi := &file_elitea_gateway_v1_gateway_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2316,7 +2492,7 @@ func (x *GovernanceStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GovernanceStatusRequest.ProtoReflect.Descriptor instead.
 func (*GovernanceStatusRequest) Descriptor() ([]byte, []int) {
-	return file_elitea_gateway_v1_gateway_proto_rawDescGZIP(), []int{43}
+	return file_elitea_gateway_v1_gateway_proto_rawDescGZIP(), []int{47}
 }
 
 type GovernanceStatusResponse struct {
@@ -2328,7 +2504,7 @@ type GovernanceStatusResponse struct {
 
 func (x *GovernanceStatusResponse) Reset() {
 	*x = GovernanceStatusResponse{}
-	mi := &file_elitea_gateway_v1_gateway_proto_msgTypes[44]
+	mi := &file_elitea_gateway_v1_gateway_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2340,7 +2516,7 @@ func (x *GovernanceStatusResponse) String() string {
 func (*GovernanceStatusResponse) ProtoMessage() {}
 
 func (x *GovernanceStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_gateway_v1_gateway_proto_msgTypes[44]
+	mi := &file_elitea_gateway_v1_gateway_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2353,7 +2529,7 @@ func (x *GovernanceStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GovernanceStatusResponse.ProtoReflect.Descriptor instead.
 func (*GovernanceStatusResponse) Descriptor() ([]byte, []int) {
-	return file_elitea_gateway_v1_gateway_proto_rawDescGZIP(), []int{44}
+	return file_elitea_gateway_v1_gateway_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *GovernanceStatusResponse) GetResponse() *HttpResponse {
@@ -2477,10 +2653,18 @@ const file_elitea_gateway_v1_gateway_proto_rawDesc = "" +
 	"\x19ListProviderVoicesRequest\x128\n" +
 	"\arequest\x18\x01 \x01(\v2\x1e.elitea.gateway.v1.HttpRequestR\arequest\"Y\n" +
 	"\x1aListProviderVoicesResponse\x12;\n" +
+	"\bresponse\x18\x01 \x01(\v2\x1f.elitea.gateway.v1.HttpResponseR\bresponse\"O\n" +
+	"\x13MeteredAdmitRequest\x128\n" +
+	"\arequest\x18\x01 \x01(\v2\x1e.elitea.gateway.v1.HttpRequestR\arequest\"S\n" +
+	"\x14MeteredAdmitResponse\x12;\n" +
+	"\bresponse\x18\x01 \x01(\v2\x1f.elitea.gateway.v1.HttpResponseR\bresponse\"P\n" +
+	"\x14MeteredSettleRequest\x128\n" +
+	"\arequest\x18\x01 \x01(\v2\x1e.elitea.gateway.v1.HttpRequestR\arequest\"T\n" +
+	"\x15MeteredSettleResponse\x12;\n" +
 	"\bresponse\x18\x01 \x01(\v2\x1f.elitea.gateway.v1.HttpResponseR\bresponse\"\x19\n" +
 	"\x17GovernanceStatusRequest\"W\n" +
 	"\x18GovernanceStatusResponse\x12;\n" +
-	"\bresponse\x18\x01 \x01(\v2\x1f.elitea.gateway.v1.HttpResponseR\bresponse2\xf8\f\n" +
+	"\bresponse\x18\x01 \x01(\v2\x1f.elitea.gateway.v1.HttpResponseR\bresponse2\xbd\x0e\n" +
 	"\x0eGatewayService\x12j\n" +
 	"\x0fChatCompletions\x12).elitea.gateway.v1.ChatCompletionsRequest\x1a*.elitea.gateway.v1.ChatCompletionsResponse0\x01\x12^\n" +
 	"\vCompletions\x12%.elitea.gateway.v1.CompletionsRequest\x1a&.elitea.gateway.v1.CompletionsResponse0\x01\x12U\n" +
@@ -2500,7 +2684,9 @@ const file_elitea_gateway_v1_gateway_proto_rawDesc = "" +
 	"\bGetModel\x12\".elitea.gateway.v1.GetModelRequest\x1a#.elitea.gateway.v1.GetModelResponse\x12h\n" +
 	"\x0fCheckConnection\x12).elitea.gateway.v1.CheckConnectionRequest\x1a*.elitea.gateway.v1.CheckConnectionResponse\x12q\n" +
 	"\x12ListProviderModels\x12,.elitea.gateway.v1.ListProviderModelsRequest\x1a-.elitea.gateway.v1.ListProviderModelsResponse\x12q\n" +
-	"\x12ListProviderVoices\x12,.elitea.gateway.v1.ListProviderVoicesRequest\x1a-.elitea.gateway.v1.ListProviderVoicesResponse\x12k\n" +
+	"\x12ListProviderVoices\x12,.elitea.gateway.v1.ListProviderVoicesRequest\x1a-.elitea.gateway.v1.ListProviderVoicesResponse\x12_\n" +
+	"\fMeteredAdmit\x12&.elitea.gateway.v1.MeteredAdmitRequest\x1a'.elitea.gateway.v1.MeteredAdmitResponse\x12b\n" +
+	"\rMeteredSettle\x12'.elitea.gateway.v1.MeteredSettleRequest\x1a(.elitea.gateway.v1.MeteredSettleResponse\x12k\n" +
 	"\x10GovernanceStatus\x12*.elitea.gateway.v1.GovernanceStatusRequest\x1a+.elitea.gateway.v1.GovernanceStatusResponseBTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/gateway/v1;gatewayv1b\x06proto3"
 
 var (
@@ -2515,7 +2701,7 @@ func file_elitea_gateway_v1_gateway_proto_rawDescGZIP() []byte {
 	return file_elitea_gateway_v1_gateway_proto_rawDescData
 }
 
-var file_elitea_gateway_v1_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 45)
+var file_elitea_gateway_v1_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 49)
 var file_elitea_gateway_v1_gateway_proto_goTypes = []any{
 	(*HttpHeader)(nil),                 // 0: elitea.gateway.v1.HttpHeader
 	(*HttpRequestHead)(nil),            // 1: elitea.gateway.v1.HttpRequestHead
@@ -2560,8 +2746,12 @@ var file_elitea_gateway_v1_gateway_proto_goTypes = []any{
 	(*ListProviderModelsResponse)(nil), // 40: elitea.gateway.v1.ListProviderModelsResponse
 	(*ListProviderVoicesRequest)(nil),  // 41: elitea.gateway.v1.ListProviderVoicesRequest
 	(*ListProviderVoicesResponse)(nil), // 42: elitea.gateway.v1.ListProviderVoicesResponse
-	(*GovernanceStatusRequest)(nil),    // 43: elitea.gateway.v1.GovernanceStatusRequest
-	(*GovernanceStatusResponse)(nil),   // 44: elitea.gateway.v1.GovernanceStatusResponse
+	(*MeteredAdmitRequest)(nil),        // 43: elitea.gateway.v1.MeteredAdmitRequest
+	(*MeteredAdmitResponse)(nil),       // 44: elitea.gateway.v1.MeteredAdmitResponse
+	(*MeteredSettleRequest)(nil),       // 45: elitea.gateway.v1.MeteredSettleRequest
+	(*MeteredSettleResponse)(nil),      // 46: elitea.gateway.v1.MeteredSettleResponse
+	(*GovernanceStatusRequest)(nil),    // 47: elitea.gateway.v1.GovernanceStatusRequest
+	(*GovernanceStatusResponse)(nil),   // 48: elitea.gateway.v1.GovernanceStatusResponse
 }
 var file_elitea_gateway_v1_gateway_proto_depIdxs = []int32{
 	0,  // 0: elitea.gateway.v1.HttpRequestHead.headers:type_name -> elitea.gateway.v1.HttpHeader
@@ -2608,46 +2798,54 @@ var file_elitea_gateway_v1_gateway_proto_depIdxs = []int32{
 	4,  // 41: elitea.gateway.v1.ListProviderModelsResponse.response:type_name -> elitea.gateway.v1.HttpResponse
 	3,  // 42: elitea.gateway.v1.ListProviderVoicesRequest.request:type_name -> elitea.gateway.v1.HttpRequest
 	4,  // 43: elitea.gateway.v1.ListProviderVoicesResponse.response:type_name -> elitea.gateway.v1.HttpResponse
-	4,  // 44: elitea.gateway.v1.GovernanceStatusResponse.response:type_name -> elitea.gateway.v1.HttpResponse
-	7,  // 45: elitea.gateway.v1.GatewayService.ChatCompletions:input_type -> elitea.gateway.v1.ChatCompletionsRequest
-	9,  // 46: elitea.gateway.v1.GatewayService.Completions:input_type -> elitea.gateway.v1.CompletionsRequest
-	11, // 47: elitea.gateway.v1.GatewayService.Messages:input_type -> elitea.gateway.v1.MessagesRequest
-	13, // 48: elitea.gateway.v1.GatewayService.CountTokens:input_type -> elitea.gateway.v1.CountTokensRequest
-	15, // 49: elitea.gateway.v1.GatewayService.Responses:input_type -> elitea.gateway.v1.ResponsesRequest
-	17, // 50: elitea.gateway.v1.GatewayService.Embeddings:input_type -> elitea.gateway.v1.EmbeddingsRequest
-	19, // 51: elitea.gateway.v1.GatewayService.ImageGenerate:input_type -> elitea.gateway.v1.ImageGenerateRequest
-	21, // 52: elitea.gateway.v1.GatewayService.ImageEdit:input_type -> elitea.gateway.v1.ImageEditRequest
-	23, // 53: elitea.gateway.v1.GatewayService.Speech:input_type -> elitea.gateway.v1.SpeechRequest
-	25, // 54: elitea.gateway.v1.GatewayService.Transcribe:input_type -> elitea.gateway.v1.TranscribeRequest
-	31, // 55: elitea.gateway.v1.GatewayService.Realtime:input_type -> elitea.gateway.v1.RealtimeRequest
-	33, // 56: elitea.gateway.v1.GatewayService.ListModels:input_type -> elitea.gateway.v1.ListModelsRequest
-	35, // 57: elitea.gateway.v1.GatewayService.GetModel:input_type -> elitea.gateway.v1.GetModelRequest
-	37, // 58: elitea.gateway.v1.GatewayService.CheckConnection:input_type -> elitea.gateway.v1.CheckConnectionRequest
-	39, // 59: elitea.gateway.v1.GatewayService.ListProviderModels:input_type -> elitea.gateway.v1.ListProviderModelsRequest
-	41, // 60: elitea.gateway.v1.GatewayService.ListProviderVoices:input_type -> elitea.gateway.v1.ListProviderVoicesRequest
-	43, // 61: elitea.gateway.v1.GatewayService.GovernanceStatus:input_type -> elitea.gateway.v1.GovernanceStatusRequest
-	8,  // 62: elitea.gateway.v1.GatewayService.ChatCompletions:output_type -> elitea.gateway.v1.ChatCompletionsResponse
-	10, // 63: elitea.gateway.v1.GatewayService.Completions:output_type -> elitea.gateway.v1.CompletionsResponse
-	12, // 64: elitea.gateway.v1.GatewayService.Messages:output_type -> elitea.gateway.v1.MessagesResponse
-	14, // 65: elitea.gateway.v1.GatewayService.CountTokens:output_type -> elitea.gateway.v1.CountTokensResponse
-	16, // 66: elitea.gateway.v1.GatewayService.Responses:output_type -> elitea.gateway.v1.ResponsesResponse
-	18, // 67: elitea.gateway.v1.GatewayService.Embeddings:output_type -> elitea.gateway.v1.EmbeddingsResponse
-	20, // 68: elitea.gateway.v1.GatewayService.ImageGenerate:output_type -> elitea.gateway.v1.ImageGenerateResponse
-	22, // 69: elitea.gateway.v1.GatewayService.ImageEdit:output_type -> elitea.gateway.v1.ImageEditResponse
-	24, // 70: elitea.gateway.v1.GatewayService.Speech:output_type -> elitea.gateway.v1.SpeechResponse
-	26, // 71: elitea.gateway.v1.GatewayService.Transcribe:output_type -> elitea.gateway.v1.TranscribeResponse
-	32, // 72: elitea.gateway.v1.GatewayService.Realtime:output_type -> elitea.gateway.v1.RealtimeResponse
-	34, // 73: elitea.gateway.v1.GatewayService.ListModels:output_type -> elitea.gateway.v1.ListModelsResponse
-	36, // 74: elitea.gateway.v1.GatewayService.GetModel:output_type -> elitea.gateway.v1.GetModelResponse
-	38, // 75: elitea.gateway.v1.GatewayService.CheckConnection:output_type -> elitea.gateway.v1.CheckConnectionResponse
-	40, // 76: elitea.gateway.v1.GatewayService.ListProviderModels:output_type -> elitea.gateway.v1.ListProviderModelsResponse
-	42, // 77: elitea.gateway.v1.GatewayService.ListProviderVoices:output_type -> elitea.gateway.v1.ListProviderVoicesResponse
-	44, // 78: elitea.gateway.v1.GatewayService.GovernanceStatus:output_type -> elitea.gateway.v1.GovernanceStatusResponse
-	62, // [62:79] is the sub-list for method output_type
-	45, // [45:62] is the sub-list for method input_type
-	45, // [45:45] is the sub-list for extension type_name
-	45, // [45:45] is the sub-list for extension extendee
-	0,  // [0:45] is the sub-list for field type_name
+	3,  // 44: elitea.gateway.v1.MeteredAdmitRequest.request:type_name -> elitea.gateway.v1.HttpRequest
+	4,  // 45: elitea.gateway.v1.MeteredAdmitResponse.response:type_name -> elitea.gateway.v1.HttpResponse
+	3,  // 46: elitea.gateway.v1.MeteredSettleRequest.request:type_name -> elitea.gateway.v1.HttpRequest
+	4,  // 47: elitea.gateway.v1.MeteredSettleResponse.response:type_name -> elitea.gateway.v1.HttpResponse
+	4,  // 48: elitea.gateway.v1.GovernanceStatusResponse.response:type_name -> elitea.gateway.v1.HttpResponse
+	7,  // 49: elitea.gateway.v1.GatewayService.ChatCompletions:input_type -> elitea.gateway.v1.ChatCompletionsRequest
+	9,  // 50: elitea.gateway.v1.GatewayService.Completions:input_type -> elitea.gateway.v1.CompletionsRequest
+	11, // 51: elitea.gateway.v1.GatewayService.Messages:input_type -> elitea.gateway.v1.MessagesRequest
+	13, // 52: elitea.gateway.v1.GatewayService.CountTokens:input_type -> elitea.gateway.v1.CountTokensRequest
+	15, // 53: elitea.gateway.v1.GatewayService.Responses:input_type -> elitea.gateway.v1.ResponsesRequest
+	17, // 54: elitea.gateway.v1.GatewayService.Embeddings:input_type -> elitea.gateway.v1.EmbeddingsRequest
+	19, // 55: elitea.gateway.v1.GatewayService.ImageGenerate:input_type -> elitea.gateway.v1.ImageGenerateRequest
+	21, // 56: elitea.gateway.v1.GatewayService.ImageEdit:input_type -> elitea.gateway.v1.ImageEditRequest
+	23, // 57: elitea.gateway.v1.GatewayService.Speech:input_type -> elitea.gateway.v1.SpeechRequest
+	25, // 58: elitea.gateway.v1.GatewayService.Transcribe:input_type -> elitea.gateway.v1.TranscribeRequest
+	31, // 59: elitea.gateway.v1.GatewayService.Realtime:input_type -> elitea.gateway.v1.RealtimeRequest
+	33, // 60: elitea.gateway.v1.GatewayService.ListModels:input_type -> elitea.gateway.v1.ListModelsRequest
+	35, // 61: elitea.gateway.v1.GatewayService.GetModel:input_type -> elitea.gateway.v1.GetModelRequest
+	37, // 62: elitea.gateway.v1.GatewayService.CheckConnection:input_type -> elitea.gateway.v1.CheckConnectionRequest
+	39, // 63: elitea.gateway.v1.GatewayService.ListProviderModels:input_type -> elitea.gateway.v1.ListProviderModelsRequest
+	41, // 64: elitea.gateway.v1.GatewayService.ListProviderVoices:input_type -> elitea.gateway.v1.ListProviderVoicesRequest
+	43, // 65: elitea.gateway.v1.GatewayService.MeteredAdmit:input_type -> elitea.gateway.v1.MeteredAdmitRequest
+	45, // 66: elitea.gateway.v1.GatewayService.MeteredSettle:input_type -> elitea.gateway.v1.MeteredSettleRequest
+	47, // 67: elitea.gateway.v1.GatewayService.GovernanceStatus:input_type -> elitea.gateway.v1.GovernanceStatusRequest
+	8,  // 68: elitea.gateway.v1.GatewayService.ChatCompletions:output_type -> elitea.gateway.v1.ChatCompletionsResponse
+	10, // 69: elitea.gateway.v1.GatewayService.Completions:output_type -> elitea.gateway.v1.CompletionsResponse
+	12, // 70: elitea.gateway.v1.GatewayService.Messages:output_type -> elitea.gateway.v1.MessagesResponse
+	14, // 71: elitea.gateway.v1.GatewayService.CountTokens:output_type -> elitea.gateway.v1.CountTokensResponse
+	16, // 72: elitea.gateway.v1.GatewayService.Responses:output_type -> elitea.gateway.v1.ResponsesResponse
+	18, // 73: elitea.gateway.v1.GatewayService.Embeddings:output_type -> elitea.gateway.v1.EmbeddingsResponse
+	20, // 74: elitea.gateway.v1.GatewayService.ImageGenerate:output_type -> elitea.gateway.v1.ImageGenerateResponse
+	22, // 75: elitea.gateway.v1.GatewayService.ImageEdit:output_type -> elitea.gateway.v1.ImageEditResponse
+	24, // 76: elitea.gateway.v1.GatewayService.Speech:output_type -> elitea.gateway.v1.SpeechResponse
+	26, // 77: elitea.gateway.v1.GatewayService.Transcribe:output_type -> elitea.gateway.v1.TranscribeResponse
+	32, // 78: elitea.gateway.v1.GatewayService.Realtime:output_type -> elitea.gateway.v1.RealtimeResponse
+	34, // 79: elitea.gateway.v1.GatewayService.ListModels:output_type -> elitea.gateway.v1.ListModelsResponse
+	36, // 80: elitea.gateway.v1.GatewayService.GetModel:output_type -> elitea.gateway.v1.GetModelResponse
+	38, // 81: elitea.gateway.v1.GatewayService.CheckConnection:output_type -> elitea.gateway.v1.CheckConnectionResponse
+	40, // 82: elitea.gateway.v1.GatewayService.ListProviderModels:output_type -> elitea.gateway.v1.ListProviderModelsResponse
+	42, // 83: elitea.gateway.v1.GatewayService.ListProviderVoices:output_type -> elitea.gateway.v1.ListProviderVoicesResponse
+	44, // 84: elitea.gateway.v1.GatewayService.MeteredAdmit:output_type -> elitea.gateway.v1.MeteredAdmitResponse
+	46, // 85: elitea.gateway.v1.GatewayService.MeteredSettle:output_type -> elitea.gateway.v1.MeteredSettleResponse
+	48, // 86: elitea.gateway.v1.GatewayService.GovernanceStatus:output_type -> elitea.gateway.v1.GovernanceStatusResponse
+	68, // [68:87] is the sub-list for method output_type
+	49, // [49:68] is the sub-list for method input_type
+	49, // [49:49] is the sub-list for extension type_name
+	49, // [49:49] is the sub-list for extension extendee
+	0,  // [0:49] is the sub-list for field type_name
 }
 
 func init() { file_elitea_gateway_v1_gateway_proto_init() }
@@ -2682,7 +2880,7 @@ func file_elitea_gateway_v1_gateway_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_gateway_v1_gateway_proto_rawDesc), len(file_elitea_gateway_v1_gateway_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   45,
+			NumMessages:   49,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

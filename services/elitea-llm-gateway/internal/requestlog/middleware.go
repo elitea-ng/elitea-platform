@@ -86,6 +86,7 @@ type Enrichment struct {
 	cacheRead  int64
 	cacheWrite int64
 	owner      string
+	metered    *MeteredFields
 }
 
 // FromContext returns the enrichment handle for this request, or nil when the
@@ -106,6 +107,21 @@ func (e *Enrichment) SetModel(provider, model string) {
 		return
 	}
 	e.provider, e.model = provider, model
+}
+
+// SetMetered records a metered tool settlement (#1238): the units billed, their
+// unit and the cost in nano-USD. Provider and model are set with SetModel (the
+// vendor and the operation).
+func (e *Enrichment) SetMetered(units int64, unit string, costNanoUSD int64) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sealed {
+		return
+	}
+	e.metered = &MeteredFields{Units: units, Unit: unit, CostNanoUSD: costNanoUSD}
 }
 
 // SetStreaming marks the response as streamed.
@@ -193,6 +209,7 @@ type snapshot struct {
 	cacheRead  int64
 	cacheWrite int64
 	owner      string
+	metered    *MeteredFields
 }
 
 // seal takes the final values and closes the handle to further writes.
@@ -213,6 +230,7 @@ func (e *Enrichment) seal() snapshot {
 		cacheRead:  e.cacheRead,
 		cacheWrite: e.cacheWrite,
 		owner:      e.owner,
+		metered:    e.metered,
 	}
 }
 
@@ -350,6 +368,7 @@ func Middleware(recorder *Recorder) func(http.Handler) http.Handler {
 					CredentialOwner: final.owner,
 					CacheReadToks:   final.cacheRead,
 					CacheWriteToks:  final.cacheWrite,
+					Metered:         final.metered,
 				})
 			}()
 

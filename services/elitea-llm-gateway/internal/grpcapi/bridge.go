@@ -123,6 +123,8 @@ var (
 	routeCheckConnection    = route{methods: []string{http.MethodPost}, paths: []string{"/llm/v1/check_connection"}}
 	routeListProviderModels = route{methods: []string{http.MethodPost}, paths: []string{"/llm/v1/list_provider_models"}}
 	routeListProviderVoices = route{methods: []string{http.MethodPost}, paths: []string{"/llm/v1/list_provider_voices"}}
+	routeMeteredAdmit       = route{methods: []string{http.MethodPost}, paths: []string{"/llm/v1/metered/admit"}}
+	routeMeteredSettle      = route{methods: []string{http.MethodPost}, paths: []string{"/llm/v1/metered/settle"}}
 )
 
 // newRequest builds the handler's request from a call. body is the request

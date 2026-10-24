@@ -141,6 +141,21 @@ type UsageDimensions struct {
 	// column NULL, which is what "we do not know" already means there
 	// (shared migration 0101).
 	ExecutionID string `json:"execution_id,omitempty"`
+	// Operation, Units and Unit mark a METERED TOOL row (#1238): a web search,
+	// a page fetch or a host query billed through the same budget path as a
+	// model call. Operation is "tool" for such a row and absent for a model
+	// call, which the ledger then records as "llm" (its column default).
+	// Provider and Model hold the vendor and the operation ("tavily",
+	// "web_search"), so the per-(provider, model) Usage table lists tool spend
+	// beside model spend with no query change.
+	//
+	// Units is a pointer because zero is a real count for a tool row (a free
+	// count-only host search bills 0 credits) and absent is what a model row
+	// means. omitempty on all three: an older consumer ignores the keys and
+	// writes the row as an "llm" row with zero tokens and the right cost.
+	Operation string `json:"operation,omitempty"`
+	Units     *int64 `json:"units,omitempty"`
+	Unit      string `json:"unit,omitempty"`
 }
 
 // deltaKey is the coalescing / upsert key: one accumulator row per
