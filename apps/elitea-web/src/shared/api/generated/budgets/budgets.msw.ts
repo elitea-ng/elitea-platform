@@ -868,6 +868,15 @@ export const getGetProjectUsageResponseMock = (): UsageReport => ({
       ).map(() => ({
         provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
         model: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        operation: faker.helpers.arrayElement([
+          faker.helpers.arrayElement(["llm", "tool"] as const),
+          undefined,
+        ]),
+        units: faker.helpers.arrayElement([faker.number.int(), undefined]),
+        unit: faker.helpers.arrayElement([
+          faker.helpers.arrayElement(["request", "credit", "page"] as const),
+          undefined,
+        ]),
         spend: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             faker.number.float({ fractionDigits: 2 }),

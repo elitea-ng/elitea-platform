@@ -787,6 +787,7 @@ mod tests {
             sandbox_runtimes: Vec::new(),
             workspace_runs: None,
             public_base_url: None,
+            web_egress_allowlist: None,
             vector_target: None,
             index_egress_allowlist: None,
             extractor_socket: None,

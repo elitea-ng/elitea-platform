@@ -1837,6 +1837,7 @@ dependencies = [
  "bytes",
  "chrono",
  "elitea-connectors",
+ "elitea-egress-guard",
  "elitea-office-core",
  "elitea-platform-rpc",
  "fancy-regex 0.18.0",
@@ -1966,6 +1967,16 @@ dependencies = [
  "html-to-markdown-rs",
  "tokio",
  "xberg",
+]
+
+[[package]]
+name = "elitea-egress-guard"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

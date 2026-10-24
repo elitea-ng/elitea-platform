@@ -217,7 +217,8 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 		AdmittedAt:          timestamp(timing.AdmittedAt),
 		// The resolved toolkit (type and id from the project's elitea_tools
 		// row, never from the call's arguments) when it is a memory toolkit.
-		MemoryToolkitIds: memoryToolkits,
+		MemoryToolkitIds:       memoryToolkits,
+		AttributionExecutionID: admission.AttributionExecutionID,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		// A concurrent admission won the unique idempotency index. Its outcome

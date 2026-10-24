@@ -373,6 +373,8 @@ pub(crate) struct PipelineNativeAgentAssembler {
     /// A pipeline binds no chat model to a tool, so the Office tools that call
     /// a model refuse here with a sentence; the rest work.
     office_runtime: Option<Arc<crate::transport::office_host::OfficeRuntime>>,
+    /// The web families' runtime (#1238).
+    web_runtime: Option<Arc<crate::transport::metering::WebRuntime>>,
     /// Test seam: the continuation a fresh start takes, so a conversation an older worker
     /// paused can be produced by the very resolver that paused it.
     #[cfg(test)]
@@ -395,6 +397,16 @@ impl PipelineNativeAgentAssembler {
         office_runtime: Option<Arc<crate::transport::office_host::OfficeRuntime>>,
     ) -> Self {
         self.office_runtime = office_runtime;
+        self
+    }
+
+    /// Lend the web families' runtime (#1238).
+    #[must_use]
+    pub(crate) fn with_web_runtime(
+        mut self,
+        web_runtime: Option<Arc<crate::transport::metering::WebRuntime>>,
+    ) -> Self {
+        self.web_runtime = web_runtime;
         self
     }
 
@@ -427,6 +439,7 @@ impl PipelineNativeAgentAssembler {
             mcp_connector: Arc::new(AdkHttpMcpConnector::new()),
             index_runtime: None,
             office_runtime: None,
+            web_runtime: None,
             #[cfg(test)]
             fresh_start_continuation: ApplicationContinuation::Scoped,
         }
@@ -451,6 +464,7 @@ impl PipelineNativeAgentAssembler {
             mcp_connector: Arc::new(AdkHttpMcpConnector::new()),
             index_runtime: None,
             office_runtime: None,
+            web_runtime: None,
             #[cfg(test)]
             fresh_start_continuation: ApplicationContinuation::Scoped,
         }
@@ -526,7 +540,17 @@ impl PipelineNativeAgentAssembler {
         // credential, so its nodes need the redeemed context too (ADR-0032).
         let has_office = self.office_runtime.is_some()
             && super::ordinary::snapshot_carries_office_family(&toolsets);
-        let context = if has_llm_nodes || has_application_nodes || calls_index_tool || has_office {
+        // A web toolkit's node meters its provider calls under the claim's
+        // credential (#1238).
+        let has_web = self.web_runtime.is_some()
+            && self.model_facade.is_some()
+            && super::ordinary::snapshot_carries_web_family(&toolsets);
+        let context = if has_llm_nodes
+            || has_application_nodes
+            || calls_index_tool
+            || has_office
+            || has_web
+        {
             let platform = self
                 .platform
                 .as_ref()
@@ -606,6 +630,17 @@ impl PipelineNativeAgentAssembler {
                 _ => authority,
             }
         });
+        let artifacts = match (
+            artifacts,
+            self.web_runtime.as_ref(),
+            self.model_facade.as_ref(),
+            context.as_ref(),
+        ) {
+            (Some(authority), Some(web), Some(facade), Some(context)) if has_web => {
+                Some(authority.with_web(web.host(facade, context, None)))
+            }
+            (artifacts, ..) => artifacts,
+        };
         // The index tools (ADR-0030 I1) need the redeemed context for the
         // query embedding; the reason it is missing travels with the
         // materializer, so its warning names the real cause. No pipeline

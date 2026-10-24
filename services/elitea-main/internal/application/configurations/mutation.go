@@ -34,6 +34,10 @@ const (
 	// CurrentConfigurationMutationRetiredType refuses a create or update of a
 	// retired type (retired.go), stored rows included.
 	CurrentConfigurationMutationRetiredType CurrentConfigurationMutationErrorCode = "retired_type"
+	// CurrentConfigurationMutationSharedNotAllowed refuses shared=true on a
+	// type whose provider terms bar one account serving every project
+	// (SharedConfigurationAllowed).
+	CurrentConfigurationMutationSharedNotAllowed CurrentConfigurationMutationErrorCode = "shared_config_not_allowed"
 )
 
 // CurrentConfigurationMutationError is safe to return through the API. Field
@@ -290,6 +294,9 @@ func (s *CurrentConfigurationMutationService) Create(
 	entry, dataSchema, err := s.currentMutationContract(request.Type)
 	if err != nil {
 		return CurrentConfiguration{}, err
+	}
+	if request.Shared && !SharedConfigurationAllowed(request.Type) {
+		return CurrentConfiguration{}, currentMutationFieldError(CurrentConfigurationMutationSharedNotAllowed, "shared")
 	}
 	normalized, err := s.normalizeData(
 		ctx,
@@ -588,6 +595,10 @@ func (s *CurrentConfigurationMutationService) buildReplacement(
 	shared := existing.Shared
 	if request.Shared != nil {
 		shared = *request.Shared
+	}
+	if shared && !SharedConfigurationAllowed(existing.Type) {
+		return CurrentConfigurationReplace{}, nil, nil,
+			currentMutationFieldError(CurrentConfigurationMutationSharedNotAllowed, "shared")
 	}
 
 	data := cloneCurrentJSONObject(existing.Data)

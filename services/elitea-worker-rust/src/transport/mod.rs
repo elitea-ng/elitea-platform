@@ -14,6 +14,7 @@ pub mod input_content;
 #[cfg(test)]
 mod input_content_tests;
 pub(crate) mod keepalive;
+pub(crate) mod metering;
 pub(crate) mod model_facade;
 pub(crate) mod model_text;
 pub(crate) mod multipart;

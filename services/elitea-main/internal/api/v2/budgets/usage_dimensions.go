@@ -69,14 +69,21 @@ type usageDailyRow struct {
 }
 
 // usageModelRow is one model's total for the period.
+//
+// A metered tool operation (#1238) is a row here too: provider is the vendor
+// (`tavily`), model is the operation (`web_search`), operation is "tool", and
+// Units/Unit say what was consumed, since a tool row has no tokens.
 type usageModelRow struct {
 	Provider     string       `json:"provider"`
 	Model        string       `json:"model"`
+	Operation    string       `json:"operation"`
 	Spend        *json.Number `json:"spend"`
 	TotalTokens  int64        `json:"total_tokens"`
 	APIRequests  int64        `json:"api_requests"`
 	PromptTokens int64        `json:"prompt_tokens"`
 	Completion   int64        `json:"completion_tokens"`
+	Units        *int64       `json:"units,omitempty"`
+	Unit         string       `json:"unit,omitempty"`
 }
 
 // usageScopeFilter is the ledger predicate for a scope. The user scope adds
@@ -145,20 +152,25 @@ ORDER BY day`
 
 // usageModelsHead is the per-model table. It orders by spend so the models that
 // matter are first, then by name so the order is stable when two models cost
-// the same — an unstable order makes an export diff noise.
+// the same — an unstable order makes an export diff noise. Grouping on the
+// operation and unit too keeps a tool row from merging into a model that
+// happens to share its provider and name.
 const usageModelsHead = `SELECT
 	provider,
 	model,
+	operation,
 	SUM(cost_usd)::text,
 	COALESCE(SUM(prompt_tokens), 0),
 	COALESCE(SUM(completion_tokens), 0),
 	COALESCE(SUM(total_tokens), 0),
-	COALESCE(SUM(api_requests), 0)
+	COALESCE(SUM(api_requests), 0),
+	SUM(units),
+	COALESCE(unit, '')
 FROM gateway.llm_usage_events`
 
 const usageModelsTail = `
-GROUP BY provider, model
-ORDER BY SUM(cost_usd) DESC, provider, model`
+GROUP BY provider, model, operation, unit
+ORDER BY SUM(cost_usd) DESC, provider, model, operation`
 
 // readUsageDimensions assembles the dimensional block for one scope.
 //
@@ -250,8 +262,8 @@ func (h *Handler) readUsageModels(ctx context.Context, query string, args []any)
 			row   usageModelRow
 			spend *string
 		)
-		if err := rows.Scan(&row.Provider, &row.Model, &spend, &row.PromptTokens,
-			&row.Completion, &row.TotalTokens, &row.APIRequests); err != nil {
+		if err := rows.Scan(&row.Provider, &row.Model, &row.Operation, &spend, &row.PromptTokens,
+			&row.Completion, &row.TotalTokens, &row.APIRequests, &row.Units, &row.Unit); err != nil {
 			return nil, fmt.Errorf("budgets: scan usage model row: %w", err)
 		}
 		row.Spend = numeric(spend)

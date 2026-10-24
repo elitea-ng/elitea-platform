@@ -3121,8 +3121,16 @@ impl AgentHost {
             prompt: workspace.prompt.clone(),
             retry: self.deps.retry,
             authorization_wait: MCP_AUTHORIZATION_WAIT,
+            rules: Some(workspace.session.rules().clone()),
+            nonce: nonce.clone(),
         });
-        let remote_specs = admitted.remote_tools.clone();
+        // A web or host_intel toolkit only while the policy allows it (#1238).
+        let remote_specs: Vec<_> = admitted
+            .remote_tools
+            .iter()
+            .filter(|spec| super::remote_tools::offered(spec, &workspace.policy))
+            .cloned()
+            .collect();
         let mut provider = LocalToolProvider::new(workspace.session.clone());
         if let Some(index) = index {
             provider = provider.with(Arc::new(

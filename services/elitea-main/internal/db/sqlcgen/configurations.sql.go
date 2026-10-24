@@ -150,6 +150,51 @@ func (q *Queries) FindCurrentConfigurationByEliteaTitle(ctx context.Context, arg
 	return i, err
 }
 
+const findCurrentConfigurationByType = `-- name: FindCurrentConfigurationByType :one
+SELECT uuid::text AS configuration_uuid,
+       project_id,
+       type,
+       data,
+       shared
+FROM configuration
+WHERE project_id = $1::integer
+  AND type = $2::text
+  AND (NOT $3::boolean OR shared = true)
+ORDER BY id
+LIMIT 1
+`
+
+type FindCurrentConfigurationByTypeParams struct {
+	ProjectID  int32  `db:"project_id" json:"project_id"`
+	Type       string `db:"type" json:"type"`
+	SharedOnly bool   `db:"shared_only" json:"shared_only"`
+}
+
+type FindCurrentConfigurationByTypeRow struct {
+	ConfigurationUuid string `db:"configuration_uuid" json:"configuration_uuid"`
+	ProjectID         int32  `db:"project_id" json:"project_id"`
+	Type              string `db:"type" json:"type"`
+	Data              []byte `db:"data" json:"data"`
+	Shared            bool   `db:"shared" json:"shared"`
+}
+
+// The web search and host-intelligence toolkits (#1238) resolve a provider's
+// key by TYPE: the project's own row of that type, else a shared row in the
+// public project. The oldest row wins, so a second row of a type never
+// changes which key an existing toolkit uses.
+func (q *Queries) FindCurrentConfigurationByType(ctx context.Context, arg FindCurrentConfigurationByTypeParams) (FindCurrentConfigurationByTypeRow, error) {
+	row := q.db.QueryRow(ctx, findCurrentConfigurationByType, arg.ProjectID, arg.Type, arg.SharedOnly)
+	var i FindCurrentConfigurationByTypeRow
+	err := row.Scan(
+		&i.ConfigurationUuid,
+		&i.ProjectID,
+		&i.Type,
+		&i.Data,
+		&i.Shared,
+	)
+	return i, err
+}
+
 const findCurrentEmbeddingConfigurations = `-- name: FindCurrentEmbeddingConfigurations :many
 SELECT uuid::text AS configuration_uuid,
        project_id,

@@ -40,7 +40,7 @@ func TestPinnedCurrentToolkitSchemaSnapshotMatchesAdmittedSDKProjection(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.SDKRevision() != "b5113a129329b85d23c2d5c2bf55f18e307414ec" || snapshot.EntryCount() != 55 {
+	if snapshot.SDKRevision() != "b5113a129329b85d23c2d5c2bf55f18e307414ec" || snapshot.EntryCount() != 57 {
 		t.Fatalf("snapshot revision=%q entries=%d", snapshot.SDKRevision(), snapshot.EntryCount())
 	}
 
@@ -586,7 +586,7 @@ func TestPinnedSnapshotHoldsTheRustOnlyTypesWithTheirTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load plain: %v", err)
 	}
-	for toolkitType, want := range map[string]int{"docx": 13, "xlsx": 10} {
+	for toolkitType, want := range map[string]int{"docx": 13, "xlsx": 10, "web": 2, "host_intel": 2} {
 		schemas, found, err := snapshot.ToolkitArgumentSchemas(toolkitType)
 		if err != nil || !found || len(schemas) != want {
 			t.Fatalf("%s: found=%v err=%v tools=%d, want %d", toolkitType, found, err, len(schemas), want)

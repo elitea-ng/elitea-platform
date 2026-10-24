@@ -47,7 +47,7 @@
   {
     "slug": "admin/schedules-and-tasks",
     "title": "Schedules and tasks",
-    "description": "Manage cron schedules and see what background work is currently running."
+    "description": "Switch recurring platform routines on or off, change their schedules, and see what background work is currently running."
   },
   {
     "slug": "admin/secrets",
@@ -573,6 +573,11 @@
     "slug": "integrations/toolkits/testrail_toolkit",
     "title": "TestRail",
     "description": "Connect TestRail to Elitea: prerequisites, credential setup and the tools it exposes."
+  },
+  {
+    "slug": "integrations/toolkits/web_search_toolkit",
+    "title": "Web Search and Host Intelligence",
+    "description": "Let agents search the web, read pages and look up internet hosts: the providers, what each one costs and the terms that decide how it can be used."
   },
   {
     "slug": "integrations/toolkits/xray_toolkit",

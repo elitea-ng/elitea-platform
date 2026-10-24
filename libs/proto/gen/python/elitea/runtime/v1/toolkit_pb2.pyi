@@ -119,20 +119,22 @@ class ToolkitExecuteReadResultV1(_message.Message):
     def __init__(self, input_bundle_id: _Optional[str] = ..., input_bundle_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., request_entry_id: _Optional[str] = ..., request_entry_version: _Optional[str] = ..., request_content_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., result_json: _Optional[bytes] = ..., toolkit_type: _Optional[str] = ..., toolkit_name: _Optional[str] = ..., tool_name: _Optional[str] = ...) -> None: ...
 
 class ToolkitCallToolCommandV1(_message.Message):
-    __slots__ = ("toolkit_type", "settings_entry_id", "tool_name", "arguments_entry_id", "toolkit_id", "toolkit_version")
+    __slots__ = ("toolkit_type", "settings_entry_id", "tool_name", "arguments_entry_id", "toolkit_id", "toolkit_version", "attribution_execution_id")
     TOOLKIT_TYPE_FIELD_NUMBER: _ClassVar[int]
     SETTINGS_ENTRY_ID_FIELD_NUMBER: _ClassVar[int]
     TOOL_NAME_FIELD_NUMBER: _ClassVar[int]
     ARGUMENTS_ENTRY_ID_FIELD_NUMBER: _ClassVar[int]
     TOOLKIT_ID_FIELD_NUMBER: _ClassVar[int]
     TOOLKIT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    ATTRIBUTION_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
     toolkit_type: str
     settings_entry_id: str
     tool_name: str
     arguments_entry_id: str
     toolkit_id: str
     toolkit_version: str
-    def __init__(self, toolkit_type: _Optional[str] = ..., settings_entry_id: _Optional[str] = ..., tool_name: _Optional[str] = ..., arguments_entry_id: _Optional[str] = ..., toolkit_id: _Optional[str] = ..., toolkit_version: _Optional[str] = ...) -> None: ...
+    attribution_execution_id: str
+    def __init__(self, toolkit_type: _Optional[str] = ..., settings_entry_id: _Optional[str] = ..., tool_name: _Optional[str] = ..., arguments_entry_id: _Optional[str] = ..., toolkit_id: _Optional[str] = ..., toolkit_version: _Optional[str] = ..., attribution_execution_id: _Optional[str] = ...) -> None: ...
 
 class ToolkitCallToolArtifactReferenceV1(_message.Message):
     __slots__ = ("artifact_id", "immutable_version", "media_type", "byte_length", "digest", "classification")

@@ -90,6 +90,11 @@ type Gateway interface {
 	CheckConnection(ctx context.Context, req *Request) (*Response, error)
 	ListProviderModels(ctx context.Context, req *Request) (*Response, error)
 	ListProviderVoices(ctx context.Context, req *Request) (*Response, error)
+	// MeteredAdmit and MeteredSettle serve /llm/v1/metered/admit and
+	// /llm/v1/metered/settle (#1238): a metered tool operation is admitted by
+	// the gateway's budget gate before its provider is called, then billed.
+	MeteredAdmit(ctx context.Context, req *Request) (*Response, error)
+	MeteredSettle(ctx context.Context, req *Request) (*Response, error)
 	// GovernanceStatus reads the gateway's enforcement state. It carries no
 	// identity.
 	GovernanceStatus(ctx context.Context) (*Response, error)

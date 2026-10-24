@@ -209,6 +209,10 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
             // The memory tools are not workspace tools: the cloud host
             // offers them over its own `MemoryStore` (#1233).
             memory_write: false,
+            // The cloud executor attaches the web toolkits as ordinary
+            // toolkits; they are no workspace tools.
+            web: false,
+            host_intel: false,
         },
         settings: WorkspaceSettings::default(),
         choices: Arc::new(MemoryChoices::default()),

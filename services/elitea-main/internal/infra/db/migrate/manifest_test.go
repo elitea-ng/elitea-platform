@@ -736,7 +736,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 173: shared/0173_platform_routines.sql, elitea_runtime.platform_routines,
 	// the registry of the Go platform's recurring routines that the admin
 	// Schedules tab edits (#1369). A new table, no data, no permission.
-	require.EqualValues(t, 173, Head(shared))
+	//
+	// 174: shared/0174_gateway_metered_operations.sql, gateway.metered_operation_prices
+	// (seeded) and the operation, units and unit columns on llm_usage_events
+	// and llm_request_logs, plus cost_usd on the request log (#1238). No
+	// permission.
+	require.EqualValues(t, 174, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

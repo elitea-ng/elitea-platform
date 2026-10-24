@@ -25,6 +25,8 @@ type SubmitRequest struct {
 	Identity       executionapp.AdmissionIdentity
 	IdempotencyKey string
 	Inputs         AuthoritativeInputs
+	// AttributionExecutionID is RunRequest's, recorded on the job.
+	AttributionExecutionID string
 }
 
 // Admission is the atomic unit the store persists: input bytes, job and outbox
@@ -33,6 +35,9 @@ type Admission struct {
 	CodeParent *codeplatform.ParentEffect
 	Record     executiondomain.Admission
 	Binding    executiondomain.ToolkitCallToolBinding
+	// AttributionExecutionID is the desktop local turn the run is attributed
+	// to (shared 0174), or "".
+	AttributionExecutionID string
 }
 
 type AtomicAdmissionStore interface {
@@ -126,9 +131,10 @@ func (s *AdmissionService) Submit(ctx context.Context, request SubmitRequest) (A
 	}
 
 	outcome, err := s.store.AdmitToolkitCallTool(ctx, Admission{
-		Record:     record,
-		CodeParent: request.CodeParent,
-		Binding:    binding,
+		Record:                 record,
+		CodeParent:             request.CodeParent,
+		Binding:                binding,
+		AttributionExecutionID: request.AttributionExecutionID,
 	})
 	if err != nil {
 		return AdmittedRun{}, fmt.Errorf("admit tool run: %w", err)

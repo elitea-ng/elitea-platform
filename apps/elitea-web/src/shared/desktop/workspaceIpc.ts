@@ -126,6 +126,8 @@ export interface ApprovalRequestPayload {
   /** The rule's justification, shown in place of the classifier's reason. */
   justification?: string;
   can_remember: boolean;
+  /** `session`: "always" lasts until the app quits (host-intel tools, #1238). */
+  remember_scope?: 'session';
 }
 
 export type { SubAgentStatus } from './subAgentIpc';

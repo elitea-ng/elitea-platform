@@ -59,6 +59,8 @@ const (
 	ModelService_Embeddings_FullMethodName      = "/elitea.llm.v1.ModelService/Embeddings"
 	ModelService_ImageGenerate_FullMethodName   = "/elitea.llm.v1.ModelService/ImageGenerate"
 	ModelService_ImageEdit_FullMethodName       = "/elitea.llm.v1.ModelService/ImageEdit"
+	ModelService_MeteredAdmit_FullMethodName    = "/elitea.llm.v1.ModelService/MeteredAdmit"
+	ModelService_MeteredSettle_FullMethodName   = "/elitea.llm.v1.ModelService/MeteredSettle"
 )
 
 // ModelServiceClient is the client API for ModelService service.
@@ -78,6 +80,15 @@ type ModelServiceClient interface {
 	// ImageEdit is POST /llm/v1/images/edits. The multipart body streams: the
 	// head first, then body chunks.
 	ImageEdit(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ImageEditRequest, ImageEditResponse], error)
+	// MeteredAdmit is POST /llm/v1/metered/admit (#1238): a metered tool
+	// operation asks the budget gate before its provider is called. Unlike the
+	// model RPCs, the execution id is REQUIRED and must verify: an id that would
+	// be dropped is refused (403 execution_not_attributable), because tool spend
+	// with no execution has no run to land on.
+	MeteredAdmit(ctx context.Context, in *MeteredAdmitRequest, opts ...grpc.CallOption) (*MeteredAdmitResponse, error)
+	// MeteredSettle is POST /llm/v1/metered/settle: bills the units of an
+	// admitted operation, under the same execution-id rule.
+	MeteredSettle(ctx context.Context, in *MeteredSettleRequest, opts ...grpc.CallOption) (*MeteredSettleResponse, error)
 }
 
 type modelServiceClient struct {
@@ -159,6 +170,26 @@ func (c *modelServiceClient) ImageEdit(ctx context.Context, opts ...grpc.CallOpt
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ModelService_ImageEditClient = grpc.ClientStreamingClient[ImageEditRequest, ImageEditResponse]
 
+func (c *modelServiceClient) MeteredAdmit(ctx context.Context, in *MeteredAdmitRequest, opts ...grpc.CallOption) (*MeteredAdmitResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MeteredAdmitResponse)
+	err := c.cc.Invoke(ctx, ModelService_MeteredAdmit_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *modelServiceClient) MeteredSettle(ctx context.Context, in *MeteredSettleRequest, opts ...grpc.CallOption) (*MeteredSettleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MeteredSettleResponse)
+	err := c.cc.Invoke(ctx, ModelService_MeteredSettle_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ModelServiceServer is the server API for ModelService service.
 // All implementations must embed UnimplementedModelServiceServer
 // for forward compatibility.
@@ -176,6 +207,15 @@ type ModelServiceServer interface {
 	// ImageEdit is POST /llm/v1/images/edits. The multipart body streams: the
 	// head first, then body chunks.
 	ImageEdit(grpc.ClientStreamingServer[ImageEditRequest, ImageEditResponse]) error
+	// MeteredAdmit is POST /llm/v1/metered/admit (#1238): a metered tool
+	// operation asks the budget gate before its provider is called. Unlike the
+	// model RPCs, the execution id is REQUIRED and must verify: an id that would
+	// be dropped is refused (403 execution_not_attributable), because tool spend
+	// with no execution has no run to land on.
+	MeteredAdmit(context.Context, *MeteredAdmitRequest) (*MeteredAdmitResponse, error)
+	// MeteredSettle is POST /llm/v1/metered/settle: bills the units of an
+	// admitted operation, under the same execution-id rule.
+	MeteredSettle(context.Context, *MeteredSettleRequest) (*MeteredSettleResponse, error)
 	mustEmbedUnimplementedModelServiceServer()
 }
 
@@ -200,6 +240,12 @@ func (UnimplementedModelServiceServer) ImageGenerate(context.Context, *ImageGene
 }
 func (UnimplementedModelServiceServer) ImageEdit(grpc.ClientStreamingServer[ImageEditRequest, ImageEditResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method ImageEdit not implemented")
+}
+func (UnimplementedModelServiceServer) MeteredAdmit(context.Context, *MeteredAdmitRequest) (*MeteredAdmitResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MeteredAdmit not implemented")
+}
+func (UnimplementedModelServiceServer) MeteredSettle(context.Context, *MeteredSettleRequest) (*MeteredSettleResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MeteredSettle not implemented")
 }
 func (UnimplementedModelServiceServer) mustEmbedUnimplementedModelServiceServer() {}
 func (UnimplementedModelServiceServer) testEmbeddedByValue()                      {}
@@ -287,6 +333,42 @@ func _ModelService_ImageEdit_Handler(srv interface{}, stream grpc.ServerStream) 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ModelService_ImageEditServer = grpc.ClientStreamingServer[ImageEditRequest, ImageEditResponse]
 
+func _ModelService_MeteredAdmit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MeteredAdmitRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ModelServiceServer).MeteredAdmit(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ModelService_MeteredAdmit_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ModelServiceServer).MeteredAdmit(ctx, req.(*MeteredAdmitRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ModelService_MeteredSettle_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MeteredSettleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ModelServiceServer).MeteredSettle(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ModelService_MeteredSettle_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ModelServiceServer).MeteredSettle(ctx, req.(*MeteredSettleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ModelService_ServiceDesc is the grpc.ServiceDesc for ModelService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -301,6 +383,14 @@ var ModelService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ImageGenerate",
 			Handler:    _ModelService_ImageGenerate_Handler,
+		},
+		{
+			MethodName: "MeteredAdmit",
+			Handler:    _ModelService_MeteredAdmit_Handler,
+		},
+		{
+			MethodName: "MeteredSettle",
+			Handler:    _ModelService_MeteredSettle_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

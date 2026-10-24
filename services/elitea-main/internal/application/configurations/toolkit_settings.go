@@ -151,6 +151,9 @@ type CurrentToolkitSettingsResolver struct {
 	configurations CurrentConfigurationExpander
 	models         CurrentModelVisibility
 	unsecreter     CurrentExpansionUnsecreter
+	// webProviders resolves the `web` and `host_intel` toolkits' providers
+	// (WithWebProviders); nil freezes them with none.
+	webProviders CurrentWebProviderSource
 }
 
 func NewCurrentToolkitSettingsResolver(
@@ -194,7 +197,7 @@ func (r *CurrentToolkitSettingsResolver) Resolve(
 		request:  request,
 		active:   make(map[int32]struct{}),
 	}
-	settings, err := walker.cloneObject(ctx, request.Settings, 0)
+	settings, err := walker.cloneObject(ctx, withoutWebServerAuthoredSettings(request.ToolkitType, request.Settings), 0)
 	if err != nil {
 		return nil, err
 	}
@@ -305,6 +308,9 @@ func (w *currentToolkitSettingsWalker) resolveToolkitSettings(
 				}
 			}
 		}
+	}
+	if err := w.resolveWebProviders(ctx, toolkitType, settings, depth); err != nil {
+		return nil, err
 	}
 	return settings, nil
 }

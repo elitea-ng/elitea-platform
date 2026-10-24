@@ -112,7 +112,15 @@ message ToolkitCallToolCommandV1 {
   // and the settlement reader agree on WHICH toolkit ran.
   string toolkit_id = 5;
   string toolkit_version = 6;
+  // attribution_execution_id is the local (desktop) turn a remote toolkit call
+  // was made for (#1238). The worker sends it as the execution id of the
+  // call's metered web operations, so their spend lands on the turn rather
+  // than on this separate call execution. Main records it on the call's
+  // execution and its edge accepts it only for the claim of that execution;
+  // empty for every other call. Field 16: 7 to 15 stay reserved, so a
+  // number a released schema reserved is never reused.
   reserved 7 to 15;
+  string attribution_execution_id = 16;
 }
 
 // ToolkitCallToolArtifactReferenceV1 identifies an immutable canonical JSON

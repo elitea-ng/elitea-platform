@@ -41,7 +41,7 @@ INSERT INTO elitea_runtime.execution_jobs (
     projection_project_id, actor_id, principal_ref, capability_id,
     capability_version, input_bundle_id, request_digest,
     idempotency_scope, idempotency_key, state, desired_state, admitted_at,
-    memory_toolkit_ids
+    memory_toolkit_ids, attribution_execution_id
 ) VALUES (
     sqlc.arg(execution_id)::text,
     sqlc.arg(generation)::bigint,
@@ -63,7 +63,10 @@ INSERT INTO elitea_runtime.execution_jobs (
     -- shared/0166: the resolved toolkit itself when it is a memory toolkit
     -- (its type and id come from the project's elitea_tools row, never from
     -- the call's arguments). Never NULL.
-    COALESCE(sqlc.arg(memory_toolkit_ids)::bigint[], '{}')
+    COALESCE(sqlc.arg(memory_toolkit_ids)::bigint[], '{}'),
+    -- shared/0174: the desktop local turn a remote call was admitted for,
+    -- verified live by the route; NULL for every other run.
+    NULLIF(sqlc.arg(attribution_execution_id)::text, '')
 )
 ON CONFLICT (idempotency_scope, idempotency_key) DO NOTHING
 RETURNING execution_id;

@@ -31,6 +31,15 @@ const (
 	rpcListProviderModels
 	rpcListProviderVoices
 	rpcRealtime
+	rpcMeteredAdmit
+	rpcMeteredSettle
+)
+
+// The metered-call routes (#1238). A metered call must carry an execution id
+// that verifies; see Proxy.ServeHTTP.
+const (
+	meteredAdmitPath  = "/llm/v1/metered/admit"
+	meteredSettlePath = "/llm/v1/metered/settle"
 )
 
 const modelsPrefix = "/llm/v1/models/"
@@ -51,6 +60,13 @@ var postRoutes = map[string]gatewayRPC{
 	"/llm/v1/check_connection":      rpcCheckConnection,
 	"/llm/v1/list_provider_models":  rpcListProviderModels,
 	"/llm/v1/list_provider_voices":  rpcListProviderVoices,
+	meteredAdmitPath:                rpcMeteredAdmit,
+	meteredSettlePath:               rpcMeteredSettle,
+}
+
+// metered reports whether rpc is a metered-call route.
+func (rpc gatewayRPC) metered() bool {
+	return rpc == rpcMeteredAdmit || rpc == rpcMeteredSettle
 }
 
 // routeOf returns the method that serves (method, path), or rpcNone.
@@ -105,6 +121,10 @@ func (rpc gatewayRPC) call(g Gateway) func(context.Context, *Request) (*Response
 		return g.ListProviderModels
 	case rpcListProviderVoices:
 		return g.ListProviderVoices
+	case rpcMeteredAdmit:
+		return g.MeteredAdmit
+	case rpcMeteredSettle:
+		return g.MeteredSettle
 	}
 	return nil
 }

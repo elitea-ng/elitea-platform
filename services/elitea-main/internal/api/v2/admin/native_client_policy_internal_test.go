@@ -94,14 +94,14 @@ func TestNativeClientPolicySectionIsLiveAndShared(t *testing.T) {
 		"local_work_command_allow", "local_work_command_deny", "local_work_path_deny",
 		"local_work_local_mcp", "local_work_local_index", "local_work_cloud_sync", "local_work_memory_write",
 		"local_work_cloud_handoff", "local_work_index_local_embeddings", "local_work_index_remote_embeddings",
-		"local_work_index_model_mirror_url"} {
+		"local_work_index_model_mirror_url", "local_work_web", "local_work_host_intel"} {
 		if !keys[key] {
 			t.Errorf("field %q missing", key)
 		}
 	}
-	if len(keys) != 28 {
-		t.Errorf("section declares %d fields, want the ADR's 7, contract 1.3's 6, contract 1.5's 11, ADR-0034's 1 "+
-			"and contract 1.9's 3", len(keys))
+	if len(keys) != 30 {
+		t.Errorf("section declares %d fields, want the ADR's 7, contract 1.3's 6, contract 1.5's 11, ADR-0034's 1, "+
+			"contract 1.9's 3 and #1238's 2", len(keys))
 	}
 	for _, field := range section.fields {
 		if field["key"] == "notification_preview" {

@@ -329,6 +329,26 @@ func localWorkFields(section string, defaults platformconfig.LocalWorkPolicy) []
 			"default":      defaults.IndexModelMirrorURL,
 			"visible_when": visible,
 		},
+		{
+			"key":   platformconfig.KeyNativeLocalWorkWeb,
+			"type":  "boolean",
+			"title": "Allow Web Search and Fetch",
+			"description": "Whether a local turn may use the Web Search toolkit, which sends the turn's queries " +
+				"and URLs to the search providers enabled under Web search. The server refuses those calls while it is off.",
+			"section":      section,
+			"default":      defaults.Web,
+			"visible_when": visible,
+		},
+		{
+			"key":   platformconfig.KeyNativeLocalWorkHostIntel,
+			"type":  "boolean",
+			"title": "Allow Internet Host Intelligence",
+			"description": "Whether a local turn may use the Host Intelligence toolkit (Shodan host search and " +
+				"lookup). The server refuses those calls while it is off.",
+			"section":      section,
+			"default":      defaults.HostIntel,
+			"visible_when": visible,
+		},
 	}
 }
 

@@ -82,6 +82,7 @@ import { LlmProxyPriceDialog } from './LlmProxyPriceDialog';
 import { LlmProxyLogsPanel } from './LlmProxyLogsPanel';
 import { LlmProxyProvidersPanel } from './LlmProxyProvidersPanel';
 import { LlmProxyStatusPanel } from './LlmProxyStatusPanel';
+import { LlmProxyToolPricesPanel } from './LlmProxyToolPricesPanel';
 import { LlmProxyUsagePanel } from './LlmProxyUsagePanel';
 import { configFailureReason } from './api/adminConfigurationApi';
 import {
@@ -94,7 +95,7 @@ import {
   type UsageWindow,
 } from './api/adminLlmProxyApi';
 
-type TabId = 'status' | 'providers' | 'models' | 'usage' | 'logs' | 'alerts';
+type TabId = 'status' | 'providers' | 'models' | 'tools' | 'usage' | 'logs' | 'alerts';
 
 /** What the price dialog is currently open on, if anything. */
 interface PriceEditorState {
@@ -366,6 +367,7 @@ export function AdminLlmProxyEditor() {
           label={t('pages.admin.llmProxy.tab.providers', 'Providers & models')}
         />
         <Tab value="models" label={t('pages.admin.llmProxy.tab.models', 'Models & pricing')} />
+        <Tab value="tools" label={t('pages.admin.llmProxy.tab.tools', 'Tools')} />
         <Tab value="usage" label={t('pages.admin.llmProxy.tab.usage', 'Usage')} />
         <Tab value="logs" label={t('pages.admin.llmProxy.tab.logs', 'Logs')} />
         <Tab value="alerts" label={t('pages.admin.llmProxy.tab.alerts', 'Budget alerts')} />
@@ -374,6 +376,7 @@ export function AdminLlmProxyEditor() {
       {tab === 'status' ? <LlmProxyStatusPanel /> : null}
       {tab === 'providers' ? <LlmProxyProvidersPanel /> : null}
       {tab === 'models' ? <ModelsTab /> : null}
+      {tab === 'tools' ? <LlmProxyToolPricesPanel /> : null}
       {tab === 'usage' ? <LlmProxyUsagePanel /> : null}
       {tab === 'logs' ? <LlmProxyLogsPanel /> : null}
       {tab === 'alerts' ? <LlmProxyAlertsPanel /> : null}

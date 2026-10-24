@@ -1,0 +1,15 @@
+{
+ "status": 200,
+ "content_type": "application/json",
+ "body": {
+  "type": "search",
+  "query": {
+   "original": "zzqx",
+   "more_results_available": false
+  },
+  "web": {
+   "type": "search",
+   "results": []
+  }
+ }
+}

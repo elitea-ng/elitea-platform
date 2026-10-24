@@ -548,6 +548,9 @@ func writeCurrentConfigurationMutationServiceError(w http.ResponseWriter, err er
 			writeCurrentConfigurationMutationError(w, http.StatusBadRequest, "Configuration field is immutable", field)
 		case configurationapp.CurrentConfigurationMutationPlatformOnly:
 			writeCurrentConfigurationMutationError(w, http.StatusBadRequest, keylessCredentialPlatformOnlyMessage, field)
+		case configurationapp.CurrentConfigurationMutationSharedNotAllowed:
+			writeCurrentConfigurationMutationError(w, http.StatusBadRequest,
+				"shared_config_not_allowed: this configuration type can only be used by its own project", field)
 		default:
 			writeCurrentConfigurationMutationError(w, http.StatusInternalServerError, "Unexpected error", "unknown")
 		}

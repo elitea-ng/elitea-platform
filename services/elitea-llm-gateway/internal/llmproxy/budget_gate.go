@@ -887,7 +887,7 @@ func (h *Handler) updateUsageUnits(
 		ExecutionID: identityExecutionFromCtx(ctx),
 	}
 
-	if h.spawnBillingGoroutine(bp, pid, userIDStr, periodStart, periodEnd, actualCost.TotalNanoUSD, dims, unpin) {
+	if h.spawnBillingGoroutine(bp, pid, userIDStr, periodStart, periodEnd, actualCost.TotalNanoUSD, dims, unpin, "") {
 		handed = true
 		return billBilled
 	}
@@ -957,7 +957,7 @@ func (h *Handler) updateUsageDirect(
 		ExecutionID:    identityExecutionFromCtx(ctx),
 	}
 
-	if h.spawnBillingGoroutine(bp, pid, userIDStr, periodStart, periodEnd, costNano, dims, unpin) {
+	if h.spawnBillingGoroutine(bp, pid, userIDStr, periodStart, periodEnd, costNano, dims, unpin, "") {
 		handed = true
 		return billBilled
 	}
@@ -1007,9 +1007,10 @@ func (h *Handler) spawnBillingGoroutine(
 	costNano int64,
 	dims *failmode.UsageDimensions,
 	unpin func(),
+	callerEventID string,
 ) bool {
 	scopeID := strconv.Itoa(pid)
-	eventID := uuid.NewString()
+	eventID, memberEventID := billingEventIDs(callerEventID)
 	uid := parseUserID(userIDStr)
 
 	// Fix round-3 #2: guard against Add-after-Wait (billingClosing already set
@@ -1093,7 +1094,6 @@ func (h *Handler) spawnBillingGoroutine(
 		// the defect #321 exists about, one layer down.
 		memberBilled := false
 		if uid > 0 {
-			memberEventID := uuid.NewString()
 			memberCtx, memberCancel := context.WithTimeout(context.Background(), billingCtxTimeout)
 			err := bp.gate.UpdateUsage(memberCtx, pid, budgetScopeUser,
 				memberScopeID, memberEventID,
@@ -1143,6 +1143,33 @@ func (h *Handler) spawnBillingGoroutine(
 		}
 	}()
 	return true
+}
+
+// meteredMemberNamespace derives the member-scope event id of a settlement
+// whose project-scope id the caller supplied (#1238).
+const meteredMemberNamespace = "member"
+
+// billingEventIDs returns the project-scope and member-scope event ids of one
+// bill.
+//
+// A model call has no id of its own, so both are random, as they always were.
+// A metered settlement (metered.go) supplies the project id itself, so a
+// retried settle re-sends the SAME id and every dedup layer — the NATS
+// Nats-Msg-Id window, gateway.processed_event_ids, llm_usage_events.event_id —
+// collapses the retry. The member id must be equally stable and must differ
+// from the project id (processed_event_ids would read a shared id as a
+// redelivery and the member accumulator would never move), so it is a UUIDv5
+// of the caller's id. A caller id that is not a UUID gets a random member id:
+// metered.go refuses such an id before billing, so that path is only a guard.
+func billingEventIDs(callerEventID string) (project, member string) {
+	if callerEventID == "" {
+		return uuid.NewString(), uuid.NewString()
+	}
+	parsed, err := uuid.Parse(callerEventID)
+	if err != nil {
+		return callerEventID, uuid.NewString()
+	}
+	return parsed.String(), uuid.NewSHA1(parsed, []byte(meteredMemberNamespace)).String()
 }
 
 // trySoftAlert fires the 80% soft-alert ONLY when the running counter has

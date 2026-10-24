@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.21",
+  "client_contract": "1.22",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -8557,6 +8557,13 @@
                       "model": {
                         "type": "string"
                       },
+                      "operation": {
+                        "type": "string",
+                        "enum": [
+                          "llm",
+                          "tool"
+                        ]
+                      },
                       "prompt_tokens": {
                         "type": "integer",
                         "format": "int64"
@@ -8569,6 +8576,18 @@
                         "nullable": true
                       },
                       "total_tokens": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "unit": {
+                        "type": "string",
+                        "enum": [
+                          "credit",
+                          "page",
+                          "request"
+                        ]
+                      },
+                      "units": {
                         "type": "integer",
                         "format": "int64"
                       }
@@ -11796,6 +11815,9 @@
                             "type": "string"
                           }
                         },
+                        "host_intel": {
+                          "type": "boolean"
+                        },
                         "index_local_embeddings": {
                           "type": "boolean"
                         },
@@ -11827,6 +11849,9 @@
                           }
                         },
                         "shell": {
+                          "type": "boolean"
+                        },
+                        "web": {
                           "type": "boolean"
                         }
                       }

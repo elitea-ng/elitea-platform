@@ -1032,7 +1032,8 @@ report lists each call among its `commands` as `mcp <server> <tool>` with
 The person's own commands around a local turn: `PreToolUse` and
 `PostToolUse` around each local tool call (the `local` toolset's tools and
 the local MCP servers' `mcp__<server>__<tool>` tools; not the memory,
-index or remote tools, which are the runtime's), `UserPromptSubmit` before
+index or remote tools, which are the runtime's, the `web` and `host_intel`
+toolkits included), `UserPromptSubmit` before
 the person's message goes to the model, `Stop` when a turn that ran ends
 (not a cancelled turn, nor one a `UserPromptSubmit` hook refused). **Local-only**: the cloud
 executor runs none, and the handoff note says so when the workspace has
@@ -2053,7 +2054,7 @@ order. Kinds and payloads:
 | `usage` | `{model: string, step: number, prompt_tokens: number, completion_tokens: number, total_tokens: number, cached_tokens?: number, cache_write_tokens?: number, reasoning_tokens?: number, context?: ContextMeter}` — one of the turn's own model calls as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage); `step` counts the turn's calls from 1. `prompt_tokens` is what that call sent, its cached reads (`prompt_tokens_details.cached_tokens`) and cache writes (`…cache_write_tokens`, Anthropic) included; `reasoning_tokens` are part of `completion_tokens` (`completion_tokens_details.reasoning_tokens`); each optional count only when non-zero. A step retried after a context overflow (below) sends the dropped call's usage too: both calls were billed. `context` (below) is that call's request occupancy as the host measured it before sending: the composer's context meter. A summary call's and a sub-agent's calls send none; they count in `usage_total` |
 | `usage_total` | `{prompt: number, completion: number, cached: number, cache_write: number, reasoning: number, calls: number, subagents?: {same fields}}` — once the run ended, before `status` `done`/`error`/`cancelled`: every model call made on the turn's execution id (the agent's steps, compaction summaries and sub-agents together: what the gateway's request log holds for it); `subagents` is the sub-agents' share, when any ran. The thread history keeps it past its event cap; a thread's total is the sum of its turns' |
 | `context` | `ContextMeter` (below) — the request occupancy when its `phase` changes: `compacting` as a summary call starts (the meter says "Summarizing…" while it runs), `compacted` once the step's request is the compacted one, `measured` again at the next call (or when a summary failed and the request went out uncompacted). A turn starts `measured`; calls that stay `measured` send none, their occupancy rides on `usage` |
-| `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, loopback?: true, keep_alive?: true, can_remember: boolean}` — `loopback` and `keep_alive` mark a background command that may serve on localhost or that lives until the session ends (**Background processes**); `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
+| `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, loopback?: true, keep_alive?: true, can_remember: boolean, remember_scope?: "session"}` — `remember_scope: "session"` (a host-intel call, **Web toolkits**) makes "always" last until the app quits, and the card says "Allow for this session"; `loopback` and `keep_alive` mark a background command that may serve on localhost or that lives until the session ends (**Background processes**); `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
 | `plan_updated` | `{plan: {title, explanation?, status: "in_progress" \| "completed", steps: [{n, step, status: "pending" \| "in_progress" \| "completed" \| "cancelled"}]} \| null}` — the agent's checklist changed (the runtime planner's `update_plan`, `start_step`, `complete_step`, `delete_plan`, or the host copying an accepted plan in): the whole plan, `null` once deleted. The latest one is the plan; the thread history stores it like every event, so the todo pane replays after a restart. The plan itself lives in the session (`elitea.plan.v1:` state), so the next turn's planner reads it back |
 | `plan_proposed` | `{request_id, call_id, plan}` — the agent's `exit_plan_mode`: the plan (Markdown, model-written) as a card with Accept / Decline; answered with `approval_respond` `accept` or `decline` (+ `feedback`). See **Plan mode** |
 | `plan_accepted` | `{call_id}` — the person accepted the plan: the session left plan mode and the same turn goes on with every tool; the composer's plan switch turns off |
@@ -2285,3 +2286,35 @@ storing the choice still fail (the scope the person picked does not match,
 or the store cannot be written), the call is approved once and a warning
 logged — an approval is never turned into an error. Remote toolkit
 confirmations (`confirmation_required`) never remember.
+
+## Web toolkits (#1238)
+
+A `remote_toolkit` of type `web` (`web_search`, `web_fetch`) or
+`host_intel` (`internet_host_search`, `internet_host_lookup`) runs on a
+cloud worker through `executeRemoteToolkitTool`, like any remote toolkit:
+no provider key and no fetch reaches the device. The desktop adds three
+things.
+
+- **Policy.** The turn offers a `web` toolkit only while
+  `local_work.web` is true, and a `host_intel` toolkit only while
+  `local_work.host_intel` is true. Absent is off. The server refuses a call
+  while the policy is off (403 `local_work_policy_refused`).
+- **Approvals.** Each call goes through the session's rules before it is
+  sent. `web_search` and `web_fetch` are allowed, and the transcript shows
+  the query or URL. A host-intel call raises an `approval_request` with
+  `tool_confirmation`'s fields, `detail` set to the query or IP,
+  `can_remember: true` and `remember_scope: "session"`. `allow_always`
+  then approves every host-intel call until the app quits; nothing is
+  written to the workspace's rules. Plan mode keeps all four tools.
+- **Framing.** The tool result is one `<web_result nonce="…"
+  toolkit="…">` block under the thread's nonce, so fetched text is data
+  and cannot close the block.
+
+These calls go through the remote toolkit path, not the session's tool
+dispatch, so the person's `PreToolUse` and `PostToolUse` hooks do not run
+around them, and a hook `match` naming one never fires.
+
+A budget refusal arrives inside the framed result as `error.code`
+(`model_gateway.project_budget_exhausted`, …) and `error.public_code`
+(`PROJECT_BUDGET_EXHAUSTED`, …), the codes a model refusal carries. The
+provider was not called.

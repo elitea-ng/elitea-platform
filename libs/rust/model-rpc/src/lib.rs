@@ -55,6 +55,10 @@ pub enum Route {
     Embeddings,
     ImageGenerate,
     ImageEdit,
+    /// A metered tool operation's admission (`/metered/admit`, #1238).
+    MeteredAdmit,
+    /// A metered tool operation's settlement (`/metered/settle`).
+    MeteredSettle,
 }
 
 impl Route {
@@ -67,6 +71,8 @@ impl Route {
             Self::Embeddings => "/embeddings",
             Self::ImageGenerate => "/images/generations",
             Self::ImageEdit => "/images/edits",
+            Self::MeteredAdmit => "/metered/admit",
+            Self::MeteredSettle => "/metered/settle",
         }
     }
 
@@ -82,6 +88,8 @@ impl Route {
             Self::Embeddings,
             Self::ImageGenerate,
             Self::ImageEdit,
+            Self::MeteredAdmit,
+            Self::MeteredSettle,
         ]
         .into_iter()
         .find(|route| path.ends_with(route.path()))
@@ -394,6 +402,40 @@ async fn streamed<M: Framed + Send + 'static>(
     Ok(success(Some(&head), Box::pin(body)))
 }
 
+/// A metered tool operation's admit or settle: one JSON body each way.
+async fn metered(
+    client: &mut ModelServiceClient<Channel>,
+    route: Route,
+    request: &ModelRequest,
+    call: pb::ModelCall,
+) -> Result<ModelResponse, CallError> {
+    let answer = if route == Route::MeteredAdmit {
+        let message = request.tonic_request(pb::MeteredAdmitRequest {
+            call: Some(call),
+            body: request.body.clone(),
+        })?;
+        client
+            .metered_admit(message)
+            .await
+            .map(tonic::Response::into_inner)
+            .map(|answer| (answer.head, answer.body))
+    } else {
+        let message = request.tonic_request(pb::MeteredSettleRequest {
+            call: Some(call),
+            body: request.body.clone(),
+        })?;
+        client
+            .metered_settle(message)
+            .await
+            .map(tonic::Response::into_inner)
+            .map(|answer| (answer.head, answer.body))
+    };
+    match answer {
+        Ok((head, body)) => Ok(success(head.as_ref(), once(body))),
+        Err(status) => refused_or_hop(status),
+    }
+}
+
 /// Make one call on `client`.
 ///
 /// # Errors
@@ -437,6 +479,7 @@ pub async fn call(
                 Err(status) => refused_or_hop(status),
             }
         }
+        Route::MeteredAdmit | Route::MeteredSettle => metered(client, route, &request, call).await,
         Route::ImageGenerate => {
             let message = request.tonic_request(pb::ImageGenerateRequest {
                 call: Some(call),
@@ -501,6 +544,10 @@ mod tests {
         assert_eq!(
             Route::from_path("/llm/v1/images/edits"),
             Some(Route::ImageEdit)
+        );
+        assert_eq!(
+            Route::from_path("/llm/v1/metered/settle"),
+            Some(Route::MeteredSettle)
         );
         assert_eq!(Route::from_path("/llm/v1/models"), None);
     }

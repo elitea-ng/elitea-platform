@@ -96,6 +96,12 @@ pub struct RuntimeDeployConfig {
     /// root-relative when it is absent.
     #[serde(default)]
     pub public_base_url: Option<String>,
+    /// The egress allowlist the web families' provider calls are held to
+    /// (#1238), in the egresslib grammar (`api.tavily.com:443`, ...). Absent,
+    /// every provider origin the registry declares. A malformed entry fails
+    /// startup.
+    #[serde(default)]
+    pub web_egress_allowlist: Option<Vec<String>>,
     /// `host:port` of elitea-vector (ADR-0031), reached with this worker's
     /// mTLS identity. Absent, the worker refuses `index.ingest.v1` as
     /// unsupported; an agent-only or validate-only deployment needs none.

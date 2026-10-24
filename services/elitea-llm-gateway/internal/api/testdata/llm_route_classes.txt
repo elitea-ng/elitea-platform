@@ -4,6 +4,9 @@
 #   inference  a model call. It can incur provider cost, so the analytics
 #              pages count it as an LLM call.
 #   other      not a model call: a listing, a token count, a credential check.
+#   metered    a metered tool operation (#1238): it can incur vendor cost, but
+#              it is not a model call, so the analytics pages do not count it
+#              as one. Its cost is on its own request-log row (cost_usd).
 #
 # Two tests read this file:
 #   - internal/api/route_classes_test.go (this module) walks the chi router.
@@ -35,3 +38,5 @@ other     GET  /llm/v1/models/*
 other     POST /llm/v1/check_connection
 other     POST /llm/v1/list_provider_models
 other     POST /llm/v1/list_provider_voices
+metered   POST /llm/v1/metered/admit
+metered   POST /llm/v1/metered/settle

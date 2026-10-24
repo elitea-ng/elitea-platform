@@ -62,6 +62,8 @@
 //! | `search_memory` ([`ToolKind::SearchMemory`], #1233) | allowed (it only reads; kept in plan mode) |
 //! | `save_memory` ([`ToolKind::SaveMemory`]) | allowed (the transcript shows the saved text; the person deletes it in Settings → Memory); denied in plan mode |
 //! | `delete_memory` ([`ToolKind::DeleteMemory`]) | asked every time (it removes data the person may have saved on the web); never remembered; denied in plan mode |
+//! | `web_search`, `web_fetch` of a remote `web` toolkit ([`ToolKind::WebRead`], #1238) | allowed (read-only; kept in plan mode); the transcript shows the query or URL |
+//! | `internet_host_search`, `internet_host_lookup` of a remote `host_intel` toolkit ([`ToolKind::HostIntel`]) | asked; "approve for this session" ([`RulesEngine::remember_for_session`]) answers the rest of the app session, never a workspace rule; kept in plan mode |
 //! | one of the person's hooks running ([`crate::hooks`], #1237) | not asked (the person wrote it in host data); sandboxed as configured, capped by the policy; never run when the policy turns the shell off, or where its sandbox cannot hide what the session denies |
 //! | a repository-proposed hook (`.elitea/hooks.json`, `.claude/settings.json`) | never runs until the person trusts it (copied into host data for that file's digest); a changed file asks again |
 //! | a `PreToolUse` hook's `deny` | the call is refused (`hook_denied`) after layers 1–2, before layer 3 |
@@ -73,6 +75,11 @@
 //! every start and every call is denied. `path_deny` cannot be enforced
 //! inside a server's own reads beyond the sandbox, which already masks the
 //! `path_deny` paths.
+//!
+//! The web rows' ceilings are `web` and `host_intel`: off (or absent),
+//! every call is denied and the host does not offer the tools. They run on
+//! a cloud worker through `remote_toolkit_call`; the server refuses them
+//! too while the policy is off.
 //!
 //! The memory rows' ceiling is `memory_write`: off (or absent), a save or a
 //! delete is denied (the host does not offer them either); a search needs
@@ -135,6 +142,10 @@ pub const APPROVE_ALWAYS: &str = "approve_always";
 /// reason}`, the reason the hook's own text, for the person), beside
 /// [`PAYLOAD_KEY`]: [`RuleApprovals`] asks a call the rules would allow.
 pub const HOOK_ASK_PAYLOAD_KEY: &str = "hook_ask";
+
+/// Approve, and remember the choice until the app quits (the host-intel
+/// tools: [`RulesEngine::remember_for_session`]).
+pub const APPROVE_SESSION: &str = "approve_session";
 
 /// The payload key the plan an `exit_plan_mode` call proposes travels under
 /// (`{plan}`, Markdown), beside [`PAYLOAD_KEY`].
@@ -209,6 +220,11 @@ pub enum ToolKind {
     /// `diagnostics` (#1236): what the session's language servers report
     /// for a file, or for the files the session changed.
     Diagnostics,
+    /// `web_search` / `web_fetch` of a remote `web` toolkit (#1238).
+    WebRead,
+    /// `internet_host_search` / `internet_host_lookup` of a remote
+    /// `host_intel` toolkit.
+    HostIntel,
 }
 
 impl ToolKind {
@@ -227,7 +243,25 @@ impl ToolKind {
                 | Self::ProcessRead
                 | Self::SearchMemory
                 | Self::Diagnostics
+                | Self::WebRead
+                | Self::HostIntel
         )
+    }
+
+    /// Whether it is a remote web or host-intel tool.
+    #[must_use]
+    pub const fn is_web(self) -> bool {
+        matches!(self, Self::WebRead | Self::HostIntel)
+    }
+
+    /// The web kind of a remote toolkit's `type`, if it is one.
+    #[must_use]
+    pub fn web_toolkit(toolkit_type: &str) -> Option<Self> {
+        match toolkit_type {
+            "web" => Some(Self::WebRead),
+            "host_intel" => Some(Self::HostIntel),
+            _ => None,
+        }
     }
 
     /// Whether the tool works on the session's background processes (offered
@@ -642,6 +676,8 @@ pub struct RulesEngine {
     /// host lets commands run unenforced): routine commands are allowed
     /// only then.
     confined: bool,
+    /// The person approved the host-intel tools for this app session.
+    host_intel_session: AtomicBool,
 }
 
 fn path_glob(glob: &str) -> Option<GlobMatcher> {
@@ -742,6 +778,7 @@ impl RulesEngine {
             sink: RwLock::new(None),
             choices,
             plan: AtomicBool::new(false),
+            host_intel_session: AtomicBool::new(false),
             confined: true,
         })
     }
@@ -862,8 +899,8 @@ impl RulesEngine {
         if call.tool.is_mcp() {
             return self.decide_mcp(call);
         }
-        if call.tool.is_memory() {
-            return self.decide_memory(call);
+        if let Some(decision) = self.decide_service(call) {
+            return decision;
         }
         if call.tool == ToolKind::ExitPlanMode {
             // The person's every time: no workspace rule and no remembered
@@ -1032,6 +1069,9 @@ impl RulesEngine {
             if let Some(error) = denied {
                 return deny(error.message().to_owned());
             }
+        }
+        if call.tool.is_web() {
+            return self.web_ceiling(call);
         }
         if call.tool.is_memory() {
             if call.tool != ToolKind::SearchMemory && !self.policy.memory_write {
@@ -1551,6 +1591,12 @@ impl RulesEngine {
     /// compound command, or a command that would run unconfined. The one precondition [`Self::can_remember`] and
     /// [`Self::remember`] share.
     fn never_remembered(&self, call: &ToolCall) -> Option<ToolError> {
+        if call.tool.is_web() {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "the web tools follow the defaults; host intelligence is approved for a session",
+            ));
+        }
         if call.tool.is_memory() {
             return Some(ToolError::new(
                 ErrorCode::Denied,
@@ -1633,6 +1679,75 @@ fn mcp_choice_key(target: &McpTarget) -> Option<Vec<String>> {
 impl RulesEngine {
     /// The memory rows of the default table, under the policy ceiling
     /// (checked by [`Self::decide`] first).
+    /// The rows of the tools that are not workspace tools (memory, web):
+    /// only their defaults apply.
+    fn decide_service(&self, call: &ToolCall) -> Option<Decision> {
+        if call.tool.is_memory() {
+            Some(self.decide_memory(call))
+        } else if call.tool.is_web() {
+            Some(self.decide_web(call))
+        } else {
+            None
+        }
+    }
+
+    /// The web rows' policy ceiling: `web` and `host_intel`, off when absent.
+    fn web_ceiling(&self, call: &ToolCall) -> Option<Decision> {
+        let (on, what) = if call.tool == ToolKind::WebRead {
+            (self.policy.web, "the web tools")
+        } else {
+            (self.policy.host_intel, "the host intelligence tools")
+        };
+        (!on).then(|| {
+            Decision::new(
+                Verdict::Deny,
+                Source::Policy,
+                format!("{what} are disabled by policy"),
+            )
+        })
+    }
+
+    /// The web rows of the default table (#1238), under the policy ceiling.
+    /// Both kinds only read, so plan mode keeps them.
+    fn decide_web(&self, call: &ToolCall) -> Decision {
+        if call.tool == ToolKind::WebRead {
+            return Decision::new(
+                Verdict::Allow,
+                Source::Default,
+                "web search and fetch only read; the transcript shows the query or URL",
+            );
+        }
+        if self.host_intel_session.load(Ordering::SeqCst) {
+            return Decision::new(
+                Verdict::Allow,
+                Source::Remembered,
+                "you approved the host intelligence tools for this session",
+            );
+        }
+        Decision::new(
+            Verdict::Ask,
+            Source::Default,
+            "a host intelligence lookup sends the query or address to a third party",
+        )
+    }
+
+    /// "Approve for this session": only the host-intel tools, and only until
+    /// the app quits (nothing is written).
+    ///
+    /// # Errors
+    ///
+    /// Any other tool: it is remembered with [`Self::remember`] or not at all.
+    pub fn remember_for_session(&self, call: &ToolCall) -> ToolResult<()> {
+        if call.tool != ToolKind::HostIntel {
+            return Err(ToolError::new(
+                ErrorCode::Denied,
+                "only the host intelligence tools are approved for a session",
+            ));
+        }
+        self.host_intel_session.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
     fn decide_memory(&self, call: &ToolCall) -> Decision {
         if call.tool == ToolKind::SearchMemory {
             return Decision::new(
@@ -1923,6 +2038,8 @@ mod tests {
             index_model_mirror_url: String::new(),
             local_mcp: true,
             memory_write: true,
+            web: true,
+            host_intel: true,
         }
     }
 
@@ -4038,6 +4155,54 @@ mod tests {
             verdict(&engine, &ToolCall::new(ToolKind::SearchMemory)),
             (Verdict::Allow, Source::Default)
         );
+    }
+
+    #[test]
+    fn web_rows_follow_policy_defaults_and_plan_mode() {
+        let off = LocalWorkPolicy {
+            web: false,
+            host_intel: false,
+            ..policy()
+        };
+        let (_dir, engine) = engine_with(off, Vec::new());
+        for tool in [ToolKind::WebRead, ToolKind::HostIntel] {
+            assert_eq!(
+                verdict(&engine, &ToolCall::new(tool)),
+                (Verdict::Deny, Source::Policy)
+            );
+        }
+        let on = LocalWorkPolicy {
+            web: true,
+            host_intel: true,
+            ..policy()
+        };
+        let (_dir, engine) = engine_with(on, Vec::new());
+        engine.set_profile(PermissionProfile::Plan);
+        assert_eq!(
+            verdict(&engine, &ToolCall::new(ToolKind::WebRead)),
+            (Verdict::Allow, Source::Default)
+        );
+        let host = ToolCall::new(ToolKind::HostIntel);
+        assert_eq!(verdict(&engine, &host), (Verdict::Ask, Source::Default));
+        assert!(
+            engine.remember(&host, None).is_err(),
+            "never a workspace choice"
+        );
+        assert!(
+            engine
+                .remember_for_session(&ToolCall::new(ToolKind::WebRead))
+                .is_err()
+        );
+        engine.remember_for_session(&host).unwrap();
+        assert_eq!(
+            verdict(&engine, &host),
+            (Verdict::Allow, Source::Remembered)
+        );
+        assert_eq!(
+            ToolKind::web_toolkit("host_intel"),
+            Some(ToolKind::HostIntel)
+        );
+        assert_eq!(ToolKind::web_toolkit("github"), None);
     }
 
     #[tokio::test]

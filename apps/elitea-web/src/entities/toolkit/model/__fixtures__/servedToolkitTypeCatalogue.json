@@ -653,6 +653,22 @@
       "unavailable_reason": "This deployment's agent worker does not support the vectorstore toolkit."
     }
   },
+  "web": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "extra_categories": [
+        "web",
+        "search",
+        "fetch",
+        "browse",
+        "documentation"
+      ],
+      "icon_url": null,
+      "label": "Web Search"
+    }
+  },
   "xlsx": {
     "metadata": {
       "categories": [

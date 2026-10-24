@@ -1,0 +1,31 @@
+{
+ "status": 200,
+ "content_type": "application/json",
+ "body": {
+  "query": "tokio 1.53 changelog",
+  "answer": null,
+  "images": [],
+  "results": [
+   {
+    "title": "tokio 1.53.0 - Changelog",
+    "url": "https://github.com/tokio-rs/tokio/releases/tag/tokio-1.53.0",
+    "content": "Fixed a race in the multi-thread scheduler; added JoinSet::try_join_next.",
+    "score": 0.83,
+    "published_date": "2026-09-30T00:00:00Z",
+    "raw_content": null
+   },
+   {
+    "title": "tokio - docs.rs",
+    "url": "https://docs.rs/tokio/latest/tokio/",
+    "content": "A runtime for writing reliable network applications.",
+    "score": 0.61,
+    "raw_content": null
+   }
+  ],
+  "response_time": "1.21",
+  "usage": {
+   "credits": 1
+  },
+  "request_id": "00000000-0000-0000-0000-000000000000"
+ }
+}

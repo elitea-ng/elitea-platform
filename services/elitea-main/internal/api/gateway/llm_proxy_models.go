@@ -279,6 +279,8 @@ func (h *LLMProxyHandler) Register(r chi.Router) {
 	r.Get("/logs", h.Logs)
 	r.Put("/models", h.UpsertModel)
 	r.Delete("/models/{id}", h.ClearModelOverride)
+	r.Get("/metered-prices", h.ListMeteredPrices)
+	r.Put("/metered-prices", h.UpsertMeteredPrice)
 }
 
 // Routes returns a standalone router mounting the same endpoints — used in tests.

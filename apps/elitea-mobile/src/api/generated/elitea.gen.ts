@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.21
+ * client contract:    1.22
  * operations sha256:  9aa8e0d468a4b50aa5d93f6330dcfaf36da2781a999b574d8226adc3853174ab
  */
 export interface paths {
@@ -2799,6 +2799,8 @@ export interface components {
             command_allow: string[];
             /** @description Command patterns that never run. A deny wins over an allow. Same bounds. */
             command_deny: string[];
+            /** @description Client contract 1.22. Local turns may use the host_intel toolkit (internet host search and lookup through Shodan). Absent or false is off (the default); the server refuses a remote host_intel call while it is false. */
+            host_intel?: boolean;
             /** @description Client contract 1.9. The user may add vectors to a local index with an embedding model that runs on the device (nothing leaves it). Default true. Embeddings stay off per workspace until the user turns them on and picks a model. */
             index_local_embeddings: boolean;
             /** @description Client contract 1.9. Where the app downloads the on-device embedding models from instead of Hugging Face: an https base URL laid out as the Hugging Face CDN (<base>/<repo>/resolve/<revision>/<file>). Empty (the default) is Hugging Face. Every file is checked against the SHA-256 the app pins. */
@@ -2819,6 +2821,8 @@ export interface components {
             path_deny: string[];
             /** @description Local turns may run shell commands. Default true. */
             shell: boolean;
+            /** @description Client contract 1.22. Local turns may use the web toolkit (web_search, web_fetch), which sends the turn's queries and URLs to third-party providers. Absent or false is off (the default); the server also refuses a remote web call of a turn while it is false (403 local_work_policy_refused). */
+            web?: boolean;
         };
         /** @description Client contract 1.12. The body of markConversationRead. An absent body, or an absent `message_id`, reads the conversation up to now. */
         MarkConversationReadRequest: {
@@ -3499,14 +3503,32 @@ export interface components {
             api_requests: number;
             /** Format: int64 */
             completion_tokens: number;
+            /** @description The model, or for a tool row the operation (`web_search`). */
             model: string;
+            /**
+             * @description `tool` for a metered tool operation, which bills per unit and has
+             *     no tokens; `llm` for a model call.
+             * @enum {string}
+             */
+            operation?: "llm" | "tool";
             /** Format: int64 */
             prompt_tokens: number;
+            /** @description The model provider, or for a tool row the vendor (`tavily`). */
             provider: string;
             /** @description USD for the model. REMOVED for a caller who may not see amounts. */
             spend?: number | null;
             /** Format: int64 */
             total_tokens: number;
+            /**
+             * @description What `units` counts. Absent on an llm row.
+             * @enum {string}
+             */
+            unit?: "request" | "credit" | "page";
+            /**
+             * Format: int64
+             * @description Units a tool row consumed. Absent on an llm row.
+             */
+            units?: number;
         };
         UsageReport: {
             /**
