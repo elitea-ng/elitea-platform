@@ -52,6 +52,7 @@
 //! | `run_command` with `background` or `tty` (#1223) | as `run_command` (the classifier, the sandbox mode, the network) |
 //! | `run_command` with `loopback` ([`ToolCall::loopback`]) | asked; "always allow" is remembered in the choice store for that program and argv prefix in this workspace (with the loopback, within its sandbox and network), never written as a prefix rule; a workspace or user allow rule does not cover the loopback; where the sandbox cannot keep it to loopback (Landlock alone) it is unconfined: asked every time |
 //! | `run_command` with `keep_alive: "session"` ([`ToolCall::keep_alive`]) | asked, once per process: never remembered |
+//! | `diagnostics` ([`ToolKind::Diagnostics`], #1236) | allowed (read-only; kept in plan mode). The language servers behind it start without a question: always read-only, without the network, only where the sandbox is fully enforced, and only while the policy allows commands ([`crate::lsp`]) |
 //! | `process_output`, `process_wait`, `process_list` ([`ToolKind::ProcessRead`]) | allowed (read-only; kept in plan mode) |
 //! | `process_write` ([`ToolKind::ProcessWrite`]) | allowed into the session's own processes (each was allowed when it started, and keeps its sandbox); the text is classified like a command line, line by line (a destructive line, e.g. `rm -rf` typed into a shell, is asked; a `command_deny` match is denied); never remembered |
 //! | `process_kill` ([`ToolKind::ProcessKill`]) | allowed (the session's own processes only) |
@@ -205,6 +206,9 @@ pub enum ToolKind {
     SaveMemory,
     /// `delete_memory`: deleting one of the person's memories.
     DeleteMemory,
+    /// `diagnostics` (#1236): what the session's language servers report
+    /// for a file, or for the files the session changed.
+    Diagnostics,
 }
 
 impl ToolKind {
@@ -222,6 +226,7 @@ impl ToolKind {
                 | Self::GitRead
                 | Self::ProcessRead
                 | Self::SearchMemory
+                | Self::Diagnostics
         )
     }
 
@@ -2079,6 +2084,7 @@ mod tests {
             ToolKind::FindFiles,
             ToolKind::ReadOutput,
             ToolKind::ReadDocument,
+            ToolKind::Diagnostics,
             ToolKind::GitRead,
             ToolKind::WriteFile,
             ToolKind::EditFile,
@@ -2601,6 +2607,7 @@ mod tests {
             ToolKind::FindFiles,
             ToolKind::ReadOutput,
             ToolKind::ReadDocument,
+            ToolKind::Diagnostics,
             ToolKind::GitRead,
         ] {
             assert!(kind.plan_allows());

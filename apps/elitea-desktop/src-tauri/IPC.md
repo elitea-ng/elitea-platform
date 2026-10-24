@@ -134,8 +134,8 @@ type Workspace = {
 | `workspace_list` | — | `Workspace[]` |
 | `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, its approval rules, copy checkpoints, its local index), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it, `workspace_has_worktrees` while it has task worktrees (remove them first). A task worktree's workspace is removed with `worktree_remove`. |
 | `workspace_bind_project` | `{id, project_id}` | `Workspace` — rejects with `workspace_busy` while a turn (or an undo) runs in it, `workspace_unknown` for an id it does not know. |
-| `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null, allow_model_override: boolean \| null}` — the workspace's agent settings: `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100); `allow_model_override: false` runs every turn on the agent's own model (the composer hides its model chip; `null`/`true`: a model may be chosen per turn, issue 1228). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
-| `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null, allow_model_override?: boolean \| null}}` | the stored settings — they apply from the next turn. Rejects `invalid_request` for a step limit outside 10 to 200, `storage` for an id it does not know. |
+| `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null, allow_model_override: boolean \| null, diagnostics: boolean \| null, diagnostics_wait_ms: {rust, typescript, python, go: number \| null}}` — the workspace's agent settings: `diagnostics: false` turns edit diagnostics and the `diagnostics` tool off for the workspace (`null`/`true`: on; servers start only when found on `PATH`, see **Language servers**), and `diagnostics_wait_ms` sets how long an edit waits for a language's diagnostics (`null`: 1.5 s, the first answer after a server's start 4 s for Rust, 3 s for the others); `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100); `allow_model_override: false` runs every turn on the agent's own model (the composer hides its model chip; `null`/`true`: a model may be chosen per turn, issue 1228). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
+| `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null, allow_model_override?: boolean \| null, diagnostics?: boolean \| null, diagnostics_wait_ms?: {rust?, typescript?, python?, go?: number \| null}}}` | the stored settings — they apply from the next turn (turning diagnostics off stops the workspace's language servers then). Rejects `invalid_request` for a step limit outside 10 to 200 or a diagnostics wait outside 100 to 30 000 ms, `storage` for an id it does not know. |
 | `workspace_files` | `{workspace_id, query?: string, limit?: number}` | `{path, kind: "file" \| "dir"}[]` — the "@" picker. Workspace-relative paths (no trailing `/`) matching `query` case-insensitively: the name starting with it, then containing it, then the path containing it, then its characters in order; shallower and shorter first. `.gitignore` is honoured, `.git` and `path_deny` matches are left out, symlinks are neither listed nor followed. At most `limit` (default 50, at most 200); a folder past 20 000 entries answers from its first part. Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 | `commands_list` | `{workspace_id}` | `{name, description: string \| null, argument_hint: string \| null, source: "workspace" \| "user", path, ignored: string[]}[]` — the "/" menu's custom commands, by name (see **Custom commands** below): the workspace's `.elitea/commands/` then `.claude/commands/`, then the person's own `<app config dir>/commands/` (created `0700` when missing); the first of a name wins, so a workspace command shadows the person's, even one that cannot be read (too large, not UTF-8, denied, a symlink): that one is not listed, and no other file of its name is offered or run in its place. `path` is workspace-relative, or relative to the person's folder. `ignored` names what the file asks for that the host ignores (front matter keys such as `allowed-tools` and `model`, `! shell lines`, `@ file includes`). Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 
@@ -1944,13 +1944,55 @@ Notifications and the dock badge are the host's own, from the
 `agent://event` stream (README, "Native features"); the UI does nothing
 for them.
 
+## Language servers (`src/d0/lsp.rs`, `libs/rust/local-tools/src/lsp/`, #1236)
+
+Edits (`write_file`, `edit_file`, `multi_edit`, `apply_patch`) in a local
+turn report the errors they introduced, from language servers found on the
+person's `PATH` (rust-analyzer, typescript-language-server,
+pyright-langserver, gopls; never downloaded) for the languages whose marker
+is at the workspace root (`Cargo.toml`, `package.json`/`tsconfig.json`/
+`jsconfig.json`, `pyproject.toml`/`setup.py`/`setup.cfg`, `go.mod`). The
+tool result gains an additive `diagnostics` field, `{status: "ok" |
+"timeout" | "unavailable", new_errors: {path, line, col, severity, code?,
+message}[], total_errors_in_file: number, truncated?: true, message?:
+string}` (at most 20 entries in 4 KiB; a missing server is reported once,
+as `unavailable` with its `message`), and the turn is offered the
+local-only `diagnostics` tool (read-only, allowed by default). The edit
+never fails because of diagnostics.
+
+A server starts on the first edit of one of its files, under the OS sandbox
+with the workspace **read-only**, the network (loopback too) **off**, the
+session's deny list and `path_deny` hidden, in its own process group with
+the scrubbed command environment; it writes only its cache under the
+session's temporary directory. It never starts where that sandbox is
+`partial` or `none`, nor while the policy turns commands off (`shell`). It
+stops after 10 minutes unused, when the workspace's session ends (policy
+change, sign-out, quit) and when diagnostics are turned off; at most two
+run per workspace. Settings: `diagnostics` and `diagnostics_wait_ms` in
+`workspace_agent_settings_*` (host data, never the folder).
+
+`lsp://event`, one per change of a server's state:
+
+```ts
+type LspEvent = {
+  workspace_id: string;
+  seq: number; // per workspace session, from 0
+  kind: "lsp_status";
+  payload: {
+    language: "rust" | "typescript" | "python" | "go";
+    state: "starting" | "ready" | "unavailable" | "crashed" | "stopped";
+    message?: string; // why it is unavailable or stopped
+  };
+};
+```
+
 ## Events
 
-Seven event names, all emitted to the `main` window only: `app://command`
+Eight event names, all emitted to the `main` window only: `app://command`
 (above), `app://context-menu` (`{request_id, id}`, the outcome of `context_menu_show`),
 `agent://event`, `index://event`, `handoff://event` (Cloud handoff, above),
-`process://event` (Background processes, above) and `mcp://event` (Local MCP
-servers, above). The webview may listen
+`process://event` (Background processes, above), `mcp://event` (Local MCP
+servers, above) and `lsp://event` (Language servers, above). The webview may listen
 (`core:event:allow-listen` / `allow-unlisten`), never emit.
 
 `index://event`:

@@ -2030,7 +2030,7 @@ fn refuse_blocked(snap: &Snapshot) -> Result<(), HandoffError> {
 /// The handoff note: what is sent and left behind (the server adds it to
 /// the event message; it carries no file contents). The person's local MCP
 /// servers (#1230) and hooks (#1237) are among what stays: the cloud runs
-/// none of them.
+/// none of them, nor any language server (`diagnostics`, #1236).
 fn handoff_note(snap: &Snapshot, mcp_servers: bool, hooks: bool) -> String {
     let mut note = format!(
         "{} files sent, {} left on the laptop.",
@@ -2052,6 +2052,8 @@ fn handoff_note(snap: &Snapshot, mcp_servers: bool, hooks: bool) -> String {
     if hooks {
         note.push_str(" Your hooks stay on the laptop: the cloud runs none of them.");
     }
+    // The cloud runs no language server (#1236).
+    note.push_str(" The diagnostics tool (language servers) is not available in the cloud.");
     snapshot::clean_note(&note)
 }
 

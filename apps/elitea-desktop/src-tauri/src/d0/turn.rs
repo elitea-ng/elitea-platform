@@ -452,8 +452,10 @@ impl McpFramer for McpFrame {
 }
 
 /// Stop a session's background processes without waiting for them: from
-/// a lock or a synchronous caller (the session is being replaced).
+/// a lock or a synchronous caller (the session is being replaced). Its
+/// language servers (#1236) stop with them.
 fn stop_processes_soon(session: &Arc<LocalSession>) {
+    session.lsp().stop_all();
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         let session = session.clone();
         handle.spawn(async move { session.stop_processes().await });
@@ -1199,6 +1201,12 @@ impl AgentHost {
             self.deps.emitter.clone(),
         ));
         session.set_process_events(Some(processes.clone()));
+        session
+            .lsp()
+            .set_events(Some(Arc::new(super::lsp::LspSink::new(
+                workspace_id,
+                self.deps.emitter.clone(),
+            ))));
         let entry = Arc::new(WorkspaceSession {
             session,
             prompt,
@@ -1247,6 +1255,18 @@ impl AgentHost {
             .workspaces
             .agent_settings(workspace_id)
             .map_or(true, |settings| settings.model_override_allowed())
+    }
+
+    /// The language-server settings of the workspace's agent settings
+    /// (unreadable settings: the defaults, diagnostics on).
+    fn lsp_settings(&self, workspace_id: &str) -> elitea_local_tools::lsp::LspSettings {
+        super::lsp::settings_for(
+            &self
+                .deps
+                .workspaces
+                .agent_settings(workspace_id)
+                .unwrap_or_default(),
+        )
     }
 
     /// The step limit the workspace's settings set, if any (unreadable
@@ -2377,6 +2397,11 @@ impl AgentHost {
         session.begin_turn(&checkpoint_label(&request.prompt));
         // The processes this turn starts show on its tool cards until it ends.
         workspace.processes.bind_turn(Some(events.clone()));
+        // Edit diagnostics as the workspace's settings say (#1236); a
+        // change stops the servers it affects.
+        session
+            .lsp()
+            .configure(self.lsp_settings(&request.workspace_id));
         events.running(&project.paths(), &turn_model(&admitted));
 
         let sink = Arc::new(TurnSink::with_events(events.clone()));
@@ -3564,6 +3589,8 @@ impl AgentHost {
         // (a later session's processes then go straight to `SIGKILL`).
         let deadline = std::time::Instant::now() + grace;
         for session in &sessions {
+            // Language servers get `SIGTERM` now (#1236).
+            session.lsp().stop_all();
             session.stop_processes_blocking(
                 deadline.saturating_duration_since(std::time::Instant::now()),
             );

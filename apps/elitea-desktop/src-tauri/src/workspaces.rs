@@ -13,6 +13,8 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
+use elitea_local_tools::lsp::Language;
+
 use crate::error::HostError;
 
 const FILE: &str = "workspaces.json";
@@ -41,6 +43,10 @@ pub struct Workspace {
 /// The step limits a workspace may set for its turns (inclusive).
 pub const STEP_LIMIT_RANGE: std::ops::RangeInclusive<u32> = 10..=200;
 
+/// The diagnostics waits a person may set per language, in milliseconds
+/// (#1236).
+pub const DIAGNOSTICS_WAIT_RANGE: std::ops::RangeInclusive<u32> = 100..=30_000;
+
 /// The file in a workspace's host data that holds its [`AgentSettings`].
 const AGENT_SETTINGS_FILE: &str = "agent_settings.json";
 
@@ -58,9 +64,68 @@ pub struct AgentSettings {
     /// turn of this workspace (#1228). `None`: allowed (the default).
     #[serde(default)]
     pub allow_model_override: Option<bool>,
+    /// Whether edits report the language servers' diagnostics (#1236).
+    /// `None`: on (servers start only when found on `PATH`).
+    #[serde(default)]
+    pub diagnostics: Option<bool>,
+    /// How long an edit waits for each language's diagnostics, within
+    /// [`DIAGNOSTICS_WAIT_RANGE`]; `None`: the language's default.
+    #[serde(default)]
+    pub diagnostics_wait_ms: DiagnosticsWaits,
+}
+
+/// Per-language diagnostics waits in milliseconds (`None`: the default,
+/// 1.5 s, longer on a server's first answer).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiagnosticsWaits {
+    #[serde(default)]
+    pub rust: Option<u32>,
+    #[serde(default)]
+    pub typescript: Option<u32>,
+    #[serde(default)]
+    pub python: Option<u32>,
+    #[serde(default)]
+    pub go: Option<u32>,
+}
+
+impl DiagnosticsWaits {
+    /// Each set wait with its language.
+    #[must_use]
+    pub fn entries(&self) -> [(Language, Option<u32>); 4] {
+        [
+            (Language::Rust, self.rust),
+            (Language::Typescript, self.typescript),
+            (Language::Python, self.python),
+            (Language::Go, self.go),
+        ]
+    }
+
+    /// Whether every set wait is within [`DIAGNOSTICS_WAIT_RANGE`].
+    #[must_use]
+    pub fn valid(&self) -> bool {
+        self.entries()
+            .iter()
+            .all(|(_, wait)| wait.is_none_or(|ms| DIAGNOSTICS_WAIT_RANGE.contains(&ms)))
+    }
+
+    fn within_range(self) -> Self {
+        let keep = |wait: Option<u32>| wait.filter(|ms| DIAGNOSTICS_WAIT_RANGE.contains(ms));
+        Self {
+            rust: keep(self.rust),
+            typescript: keep(self.typescript),
+            python: keep(self.python),
+            go: keep(self.go),
+        }
+    }
 }
 
 impl AgentSettings {
+    /// Edits report diagnostics (the default).
+    #[must_use]
+    pub fn diagnostics_enabled(&self) -> bool {
+        self.diagnostics != Some(false)
+    }
+
     /// A model other than the agent's may be chosen for a turn.
     #[must_use]
     pub fn model_override_allowed(&self) -> bool {
@@ -316,6 +381,8 @@ impl WorkspaceStore {
                     .step_limit
                     .filter(|limit| STEP_LIMIT_RANGE.contains(limit)),
                 allow_model_override: settings.allow_model_override,
+                diagnostics: settings.diagnostics,
+                diagnostics_wait_ms: settings.diagnostics_wait_ms.within_range(),
             })
         })
     }
@@ -339,6 +406,13 @@ impl WorkspaceStore {
                 "the step limit must be {} to {}",
                 STEP_LIMIT_RANGE.start(),
                 STEP_LIMIT_RANGE.end()
+            )));
+        }
+        if !settings.diagnostics_wait_ms.valid() {
+            return Err(HostError::Unsupported(format!(
+                "a diagnostics wait must be {} to {} ms",
+                DIAGNOSTICS_WAIT_RANGE.start(),
+                DIAGNOSTICS_WAIT_RANGE.end()
             )));
         }
         self.with(|| {
@@ -432,12 +506,22 @@ mod tests {
                 AgentSettings {
                     step_limit: Some(150),
                     allow_model_override: Some(false),
+                    diagnostics: Some(false),
+                    diagnostics_wait_ms: DiagnosticsWaits {
+                        rust: Some(8_000),
+                        ..DiagnosticsWaits::default()
+                    },
                 },
             )
             .unwrap();
         assert_eq!(saved.step_limit, Some(150));
         assert_eq!(store.agent_settings(&id).unwrap().step_limit, Some(150));
         assert!(!store.agent_settings(&id).unwrap().model_override_allowed());
+        assert!(!store.agent_settings(&id).unwrap().diagnostics_enabled());
+        assert_eq!(
+            store.agent_settings(&id).unwrap().diagnostics_wait_ms.rust,
+            Some(8_000)
+        );
         let file = store.data_dir(&id).join(AGENT_SETTINGS_FILE);
         #[cfg(unix)]
         {
@@ -464,10 +548,26 @@ mod tests {
                     .is_err()
             );
         }
+        // A diagnostics wait outside 100..=30000 ms is refused too.
+        assert!(
+            store
+                .set_agent_settings(
+                    &id,
+                    AgentSettings {
+                        diagnostics_wait_ms: DiagnosticsWaits {
+                            go: Some(50),
+                            ..DiagnosticsWaits::default()
+                        },
+                        ..AgentSettings::default()
+                    }
+                )
+                .is_err()
+        );
         store
             .set_agent_settings(&id, AgentSettings::default())
             .unwrap();
         assert_eq!(store.agent_settings(&id).unwrap().step_limit, None);
+        assert!(store.agent_settings(&id).unwrap().diagnostics_enabled());
         assert!(!folder.path().join(AGENT_SETTINGS_FILE).exists());
         assert!(store.agent_settings("nope").is_err());
         assert!(

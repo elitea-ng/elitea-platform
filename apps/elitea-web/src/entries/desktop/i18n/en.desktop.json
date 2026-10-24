@@ -852,5 +852,16 @@
   "workspace.hooks.save": "Save",
   "workspace.hooks.scopeUser": "Every workspace",
   "workspace.hooks.scopeWorkspace": "This workspace",
-  "workspace.hooks.toggle": "Run {{id}}"
+  "workspace.hooks.toggle": "Run {{id}}",
+  "workspace.lsp.aria": "Language servers: {{label}}",
+  "workspace.lsp.language.go": "Go",
+  "workspace.lsp.language.python": "Python",
+  "workspace.lsp.language.rust": "Rust",
+  "workspace.lsp.language.typescript": "TypeScript",
+  "workspace.lsp.state.crashed": "crashed",
+  "workspace.lsp.state.ready": "ready",
+  "workspace.lsp.state.starting": "starting",
+  "workspace.lsp.state.stopped": "stopped",
+  "workspace.lsp.state.unavailable": "off",
+  "workspace.lsp.tooltip": "Diagnostics after edits, from language servers on this computer:"
 }
