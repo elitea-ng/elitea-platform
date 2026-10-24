@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.21
+ * client contract:    1.22
  * operations sha256:  9aa8e0d468a4b50aa5d93f6330dcfaf36da2781a999b574d8226adc3853174ab
  */
 export interface paths {
@@ -2799,7 +2799,7 @@ export interface components {
             command_allow: string[];
             /** @description Command patterns that never run. A deny wins over an allow. Same bounds. */
             command_deny: string[];
-            /** @description Local turns may use the host_intel toolkit (internet host search and lookup through Shodan). Absent or false is off (the default); the server refuses a remote host_intel call while it is false. */
+            /** @description Client contract 1.22. Local turns may use the host_intel toolkit (internet host search and lookup through Shodan). Absent or false is off (the default); the server refuses a remote host_intel call while it is false. */
             host_intel?: boolean;
             /** @description Client contract 1.9. The user may add vectors to a local index with an embedding model that runs on the device (nothing leaves it). Default true. Embeddings stay off per workspace until the user turns them on and picks a model. */
             index_local_embeddings: boolean;
@@ -2821,7 +2821,7 @@ export interface components {
             path_deny: string[];
             /** @description Local turns may run shell commands. Default true. */
             shell: boolean;
-            /** @description Local turns may use the web toolkit (web_search, web_fetch), which sends the turn's queries and URLs to third-party providers. Absent or false is off (the default); the server also refuses a remote web call of a turn while it is false (403 local_work_policy_refused). */
+            /** @description Client contract 1.22. Local turns may use the web toolkit (web_search, web_fetch), which sends the turn's queries and URLs to third-party providers. Absent or false is off (the default); the server also refuses a remote web call of a turn while it is false (403 local_work_policy_refused). */
             web?: boolean;
         };
         /** @description Client contract 1.12. The body of markConversationRead. An absent body, or an absent `message_id`, reads the conversation up to now. */

@@ -173,7 +173,7 @@ impl FakeMeter {
 
 #[async_trait]
 impl Meter for FakeMeter {
-    fn attribution_execution_id(&self) -> &str {
+    fn attribution_execution_id(&self) -> &'static str {
         "execution-1"
     }
 

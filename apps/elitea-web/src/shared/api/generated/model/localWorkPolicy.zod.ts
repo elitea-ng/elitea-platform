@@ -117,13 +117,13 @@ export const LocalWorkPolicy = zod
       .boolean()
       .optional()
       .describe(
-        "Local turns may use the web toolkit (web_search, web_fetch), which sends the turn's queries and URLs to third-party providers. Absent or false is off (the default); the server also refuses a remote web call of a turn while it is false (403 local_work_policy_refused).",
+        "Client contract 1.22. Local turns may use the web toolkit (web_search, web_fetch), which sends the turn's queries and URLs to third-party providers. Absent or false is off (the default); the server also refuses a remote web call of a turn while it is false (403 local_work_policy_refused).",
       ),
     host_intel: zod
       .boolean()
       .optional()
       .describe(
-        "Local turns may use the host_intel toolkit (internet host search and lookup through Shodan). Absent or false is off (the default); the server refuses a remote host_intel call while it is false.",
+        "Client contract 1.22. Local turns may use the host_intel toolkit (internet host search and lookup through Shodan). Absent or false is off (the default); the server refuses a remote host_intel call while it is false.",
       ),
   })
   .describe(

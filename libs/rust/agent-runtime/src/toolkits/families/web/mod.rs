@@ -13,7 +13,8 @@
 
 pub(crate) mod adapters;
 pub(crate) mod capability;
-#[cfg(test)]
+// Only the Office catalogue test (`toolkit-office`) reads it.
+#[cfg(all(test, feature = "toolkit-office"))]
 pub(crate) mod catalogue;
 pub(crate) mod config;
 pub(crate) mod direct;

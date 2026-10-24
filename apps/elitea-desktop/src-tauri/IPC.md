@@ -1032,7 +1032,8 @@ report lists each call among its `commands` as `mcp <server> <tool>` with
 The person's own commands around a local turn: `PreToolUse` and
 `PostToolUse` around each local tool call (the `local` toolset's tools and
 the local MCP servers' `mcp__<server>__<tool>` tools; not the memory,
-index or remote tools, which are the runtime's), `UserPromptSubmit` before
+index or remote tools, which are the runtime's, the `web` and `host_intel`
+toolkits included), `UserPromptSubmit` before
 the person's message goes to the model, `Stop` when a turn that ran ends
 (not a cancelled turn, nor one a `UserPromptSubmit` hook refused). **Local-only**: the cloud
 executor runs none, and the handoff note says so when the workspace has
@@ -2308,6 +2309,10 @@ things.
 - **Framing.** The tool result is one `<web_result nonce="…"
   toolkit="…">` block under the thread's nonce, so fetched text is data
   and cannot close the block.
+
+These calls go through the remote toolkit path, not the session's tool
+dispatch, so the person's `PreToolUse` and `PostToolUse` hooks do not run
+around them, and a hook `match` naming one never fires.
 
 A budget refusal arrives inside the framed result as `error.code`
 (`model_gateway.project_budget_exhausted`, …) and `error.public_code`

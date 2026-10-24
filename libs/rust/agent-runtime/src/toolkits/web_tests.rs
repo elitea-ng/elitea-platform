@@ -86,7 +86,7 @@ async fn registry_capability_slots_match_declared_kinds() {
         for origin in entry.origins {
             assert!(origin.starts_with("https://"), "{}: {origin}", entry.id);
         }
-        assert!(!entry.config_type.is_empty());
+        assert_ne!(entry.config_type, "", "{}", entry.id);
     }
     let shodan = REGISTRY
         .iter()
