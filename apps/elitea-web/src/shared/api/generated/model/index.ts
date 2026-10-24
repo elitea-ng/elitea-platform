@@ -204,6 +204,7 @@ export * from "./createBucketRequest.zod";
 export * from "./createConversationBody.zod";
 export * from "./createConversationHeaders.zod";
 export * from "./createFeedbackResponse.zod";
+export * from "./createMemoryHeaders.zod";
 export * from "./createSupportConversationBody.zod";
 export * from "./createTransferGrantRequest.zod";
 export * from "./createdConversation.zod";

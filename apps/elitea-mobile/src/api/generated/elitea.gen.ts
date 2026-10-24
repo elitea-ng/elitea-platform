@@ -4,8 +4,8 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.19
- * operations sha256:  a3030f8415c02eae93cf271dec7ea12bb87198aaac3192ca70ea9ff3f6678270
+ * client contract:    1.20
+ * operations sha256:  9aa8e0d468a4b50aa5d93f6330dcfaf36da2781a999b574d8226adc3853174ab
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -815,7 +815,15 @@ export interface paths {
          */
         get: operations["listMemories"];
         put?: never;
-        post?: never;
+        /**
+         * Save a new persistent, cross-conversation memory
+         * @description internal/api/v2/memories/handler.go's Create (#870). Used both by
+         *     Settings > Memory's "Add memory" control and by the chat message
+         *     "Remember this" action (which additionally sends
+         *     `source_conversation_id`). Client contract 1.20: the desktop's
+         *     `save_memory` tool (#1233) writes through it.
+         */
+        post: operations["createMemory"];
         /**
          * Delete every one of the caller's own memories in this project
          * @description internal/api/v2/memories/handler.go's ClearAll (#870). Settings >
@@ -2810,6 +2818,14 @@ export interface components {
         MemoryEntryList: {
             items: components["schemas"]["MemoryEntry"][];
             total: number;
+        };
+        /** @description The body for both `createMemory` and `updateMemory`. `updateMemory` is a FULL-RECORD replace (matches the settings panel's edit dialog and its per-row enable/disable Switch, which both send the whole record), so `content` is required on both. */
+        MemoryEntryWriteRequest: {
+            content: string;
+            /** @description Defaults to `true` when omitted on create; on update it is a full-record field like the rest. */
+            enabled?: boolean;
+            source_conversation_id?: string;
+            tags?: string[];
         };
         /** @description The user's default summarization settings, stored in centry.social_users.default_summarization (jsonb) and edited by Settings > Memory. The legacy runtime's SummarizationModel, field for field. Three of these flatten into a conversation's `context_strategy.summary_llm_settings` when one is resolved: summary_model_name -> model_name, summary_model_project_id -> model_project_id, target_summary_tokens -> max_tokens. */
         MemorySummarization: {
@@ -4832,6 +4848,49 @@ export interface operations {
                 };
             };
             400: components["responses"]["InvalidClientVersion"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    createMemory: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryEntryWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description The created memory. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryEntry"];
+                };
+            };
+            /** @description content was blank or exceeded the length limit, or tags exceeded their limits. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             401: components["responses"]["401"];
             403: components["responses"]["403"];
             426: components["responses"]["ClientUpgradeRequired"];

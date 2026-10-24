@@ -16244,6 +16244,11 @@ export type createMemoryResponse403 = {
   status: 403;
 };
 
+export type createMemoryResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type createMemoryResponse500 = {
   data: N500Response;
   status: 500;
@@ -16256,6 +16261,7 @@ export type createMemoryResponseError = (
   | createMemoryResponse400
   | createMemoryResponse401
   | createMemoryResponse403
+  | createMemoryResponse426
   | createMemoryResponse500
 ) & {
   headers: Headers;
@@ -16272,7 +16278,8 @@ export const getCreateMemoryUrl = (projectId: string) => {
  * internal/api/v2/memories/handler.go's Create (#870). Used both by
  * Settings > Memory's "Add memory" control and by the chat message
  * "Remember this" action (which additionally sends
- * `source_conversation_id`).
+ * `source_conversation_id`). Client contract 1.20: the desktop's
+ * `save_memory` tool (#1233) writes through it.
  * @summary Save a new persistent, cross-conversation memory
  */
 export const createMemory = async (
@@ -16325,7 +16332,12 @@ export const getCreateMemoryQueryKey = (
 
 export const getCreateMemoryQueryOptions = <
   TData = Awaited<ReturnType<typeof createMemory>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   memoryEntryWriteRequest: MemoryEntryWriteRequest,
@@ -16366,11 +16378,20 @@ export type CreateMemoryQueryResult = NonNullable<
   Awaited<ReturnType<typeof createMemory>>
 >;
 export type CreateMemoryQueryError =
-  ErrorResponse | N401Response | N403Response | N500Response;
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useCreateMemory<
   TData = Awaited<ReturnType<typeof createMemory>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   memoryEntryWriteRequest: MemoryEntryWriteRequest,
@@ -16394,7 +16415,12 @@ export function useCreateMemory<
 };
 export function useCreateMemory<
   TData = Awaited<ReturnType<typeof createMemory>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   memoryEntryWriteRequest: MemoryEntryWriteRequest,
@@ -16418,7 +16444,12 @@ export function useCreateMemory<
 };
 export function useCreateMemory<
   TData = Awaited<ReturnType<typeof createMemory>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   memoryEntryWriteRequest: MemoryEntryWriteRequest,
@@ -16438,7 +16469,12 @@ export function useCreateMemory<
 
 export function useCreateMemory<
   TData = Awaited<ReturnType<typeof createMemory>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   memoryEntryWriteRequest: MemoryEntryWriteRequest,
