@@ -199,6 +199,17 @@ function CommitFailed({ failed, onRetry }: { failed: NonNullable<TurnView['commi
   );
 }
 
+/** A failed model call is made again (`model_retry`): until the model streams again or the turn ends. */
+function RetryNotice({ view }: { view: TurnView }): React.JSX.Element | null {
+  if (view.retrying === undefined || view.error !== undefined) return null;
+  const { attempt, max_attempts: max } = view.retrying;
+  return (
+    <Alert severity="warning" data-testid="turn-retrying">
+      {t('workspace.modelRetrying', 'The model call failed; retrying ({{attempt}} of {{max}}).', { attempt: String(attempt), max: String(max) })}
+    </Alert>
+  );
+}
+
 export function TurnTranscript({ view, busy, onCancel, onRetryCommit, onTextContextMenu }: TurnTranscriptProps): React.JSX.Element {
   const showStatus = view.phase !== null;
   return (
@@ -223,6 +234,7 @@ export function TurnTranscript({ view, busy, onCancel, onRetryCommit, onTextCont
       {view.error !== undefined && (
         <Alert severity="error">{view.error.message}</Alert>
       )}
+      <RetryNotice view={view} />
       {view.commitFailed !== undefined && <CommitFailed key={view.commitFailed.seq} failed={view.commitFailed} {...(onRetryCommit === undefined ? {} : { onRetry: onRetryCommit })} />}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
         {view.projectInstructions !== undefined && view.projectInstructions.length > 0 && (

@@ -1146,6 +1146,103 @@ async fn a_model_refusal_is_committed_as_a_failed_turn() {
     assert_eq!(body["assistant_message"]["content"], "");
 }
 
+/// A model stream cut off before its finish reason: what the model said so
+/// far, then the connection closes.
+fn cut_off(text: &str) -> Res {
+    let chunk = json!({"choices": [{"delta": {"content": text}}]});
+    Res {
+        status: 200,
+        headers: vec![("Content-Type", "text/event-stream".into())],
+        body: format!("data: {chunk}\n\n"),
+        raw: Vec::new(),
+    }
+}
+
+/// A cut stream and a 503 are retried: the turn answers from the third
+/// call, the webview is told to drop what the cut call streamed, and the
+/// commit holds the answer once.
+#[tokio::test]
+async fn a_cut_model_stream_is_retried() {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => cut_off("Half an ansé"),
+                1 => Res::json(503, &json!({"error": {"message": "busy"}})),
+                _ => say("Whole answer."),
+            };
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let retries = of_kind(&events, "model_retry");
+    assert_eq!(retries.len(), 2, "{:?}", h.emitter.kinds());
+    assert_eq!(retries[0]["attempt"], 1);
+    assert_eq!(retries[0]["max_attempts"], 25);
+    assert_eq!(retries[0]["code"], "model_gateway.incomplete_stream");
+    // UTF-16 code units, as the webview counts them.
+    assert_eq!(
+        retries[0]["text_units"],
+        "Half an ansé".encode_utf16().count()
+    );
+    assert_eq!(retries[1]["code"], "model_gateway.unavailable");
+    assert_eq!(retries[1]["text_units"], 0);
+    assert!(of_kind(&events, "error").is_empty());
+    assert_eq!(llm_bodies(&h.server).len(), 3);
+    let commits = commit_bodies(&h.server);
+    assert_eq!(commits[0]["assistant_message"]["content"], "Whole answer.");
+}
+
+/// After 25 retries the turn fails, and its error names `/retry`.
+#[tokio::test]
+async fn a_model_call_gives_up_after_25_retries() {
+    let inner = platform(agent_details(), &[]);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return cut_off("never");
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    assert_eq!(of_kind(&events, "model_retry").len(), 25);
+    assert_eq!(llm_bodies(&h.server).len(), 26);
+    let error = &of_kind(&events, "error")[0];
+    assert_eq!(error["code"], "model_gateway.incomplete_stream");
+    assert!(
+        error["message"].as_str().unwrap().contains("/retry"),
+        "{error}"
+    );
+}
+
+/// A refusal no other call can mend is not retried.
+#[tokio::test]
+async fn a_final_model_refusal_is_not_retried() {
+    let inner = platform(agent_details(), &[]);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return Res::json(403, &json!({"error": {"message": "no"}}));
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    assert!(of_kind(&events, "model_retry").is_empty());
+    assert_eq!(llm_bodies(&h.server).len(), 1);
+    assert_eq!(
+        of_kind(&events, "error")[0]["code"],
+        "model_gateway.forbidden"
+    );
+}
+
 #[tokio::test]
 async fn a_remote_retry_reuses_its_idempotency_key() {
     let attempts = Arc::new(AtomicUsize::new(0));
@@ -4397,11 +4494,25 @@ async fn a_second_turn_is_refused_before_it_can_wipe_a_running_seed() {
     );
 }
 
-/// The agent of the step-limit tests: two model steps per run.
+/// An agent whose `meta.step_limit` is two: below the default, so the
+/// default applies unless the workspace sets its own.
 fn two_step_details() -> Value {
     let mut details = agent_details();
     details["meta"] = json!({"step_limit": 2});
     details
+}
+
+/// The step-limit tests' workspace: two model steps per run.
+fn two_steps(h: &Harness) {
+    h.workspaces
+        .set_agent_settings(
+            &h.workspace_id,
+            crate::workspaces::AgentSettings {
+                step_limit: Some(crate::workspaces::StepLimit::Steps(2)),
+                ..crate::workspaces::AgentSettings::default()
+            },
+        )
+        .unwrap();
 }
 
 /// The platform of [`platform`] with a model that calls `list_tree` for its
@@ -4448,6 +4559,7 @@ async fn step_limit_asks_to_continue_and_continues_same_session() {
         UiDecision::AllowOnce,
     )
     .await;
+    two_steps(&h);
     h.host.start(request(&h.workspace_id)).await.unwrap();
     let events = until_done(&h).await;
 
@@ -4535,6 +4647,7 @@ async fn continue_is_capped() {
         UiDecision::AllowOnce,
     )
     .await;
+    two_steps(&h);
     h.host.start(request(&h.workspace_id)).await.unwrap();
     let events = until_done(&h).await;
     // Asked three times, each time anew; a fourth limit is not asked.
@@ -4560,6 +4673,7 @@ async fn continue_is_capped() {
 #[tokio::test]
 async fn stop_here_commits_the_turn_at_its_limit() {
     let h = harness(looping_platform(None).await, allowed(), UiDecision::Deny).await;
+    two_steps(&h);
     h.host.start(request(&h.workspace_id)).await.unwrap();
     let events = until_done(&h).await;
     assert_eq!(of_kind(&events, "approval_request").len(), 1);
@@ -4622,7 +4736,8 @@ async fn a_turn_stops_at_the_tool_calls_a_commit_may_carry() {
     assert!(of_kind(&events, "commit_failed").is_empty());
 }
 
-/// The workspace's own step limit wins over the agent's `meta.step_limit`.
+/// The workspace's own step limit wins over the default and the agent's
+/// `meta.step_limit`.
 #[tokio::test]
 async fn the_workspace_step_limit_wins_over_the_agents() {
     let inner = platform(two_step_details(), &[]);
@@ -4638,7 +4753,7 @@ async fn the_workspace_step_limit_wins_over_the_agents() {
         .set_agent_settings(
             &h.workspace_id,
             crate::workspaces::AgentSettings {
-                step_limit: Some(10),
+                step_limit: Some(crate::workspaces::StepLimit::Steps(10)),
                 ..crate::workspaces::AgentSettings::default()
             },
         )

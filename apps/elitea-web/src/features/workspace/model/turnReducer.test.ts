@@ -52,7 +52,32 @@ const result = (seq: number, id: string): AgentEvent => ({
 const thinking = (seq: number, value: string): AgentEvent => ({ turn_id: T, seq, kind: 'thinking_delta', payload: { text: value } });
 const thought = (seq: number, chars: number): AgentEvent => ({ turn_id: T, seq, kind: 'thinking_end', payload: { chars } });
 
+const retry = (seq: number, textUnits: number, thinkingUnits = 0): AgentEvent => ({
+  turn_id: T,
+  seq,
+  kind: 'model_retry',
+  payload: { attempt: 1, max_attempts: 25, code: 'model_gateway.incomplete_stream', message: 'retrying', delay_ms: 1000, text_units: textUnits, thinking_units: thinkingUnits },
+});
+
 describe('turnReducer', () => {
+  it('drops what a retried model call streamed, and shows the retry until the model streams again', () => {
+    // A finished step (thinking, text, a tool), then a call cut off after some reasoning and half an answer.
+    const cut = run([thinking(1, 'Plan'), thought(2, 4), text(3, 'First.'), call(4, 'c1'), result(5, 'c1'), thinking(6, 'Hmm'), text(7, 'Half an ansé')]);
+    const retried = activeView(run([retry(8, 'Half an ansé'.length, 'Hmm'.length)], cut));
+    expect(retried.items.map((i) => i.type)).toEqual(['thinking', 'text', 'tool']);
+    expect(retried.retrying).toEqual({ attempt: 1, max_attempts: 25, message: 'retrying' });
+    // Never past a tool row, even if the counts say more.
+    expect(activeView(run([retry(8, 999, 999)], cut)).items.map((i) => i.type)).toEqual(['thinking', 'text', 'tool']);
+    const answered = activeView(run([retry(8, 'Half an ansé'.length, 'Hmm'.length), text(9, 'Whole answer.')], cut));
+    expect(answered.retrying).toBeUndefined();
+    expect(answered.items[3]).toEqual({ type: 'text', key: 't9', text: 'Whole answer.' });
+  });
+
+  it('cuts a retried call\'s text off the end of a text row it extended', () => {
+    const view = activeView(run([text(1, 'Kept. '), text(2, 'Lost'), retry(3, 4)]));
+    expect(view.items).toEqual([{ type: 'text', key: 't1', text: 'Kept. ' }]);
+  });
+
   it('folds each step\'s reasoning into its own Thinking block, closed by thinking_end', () => {
     const view = activeView(run([thinking(1, 'Look'), thinking(2, 'ing'), thought(3, 7), text(4, 'Answer'), thinking(5, 'Again'), call(6, 'c1')]));
     expect(view.items.map((i) => i.type)).toEqual(['thinking', 'text', 'thinking', 'tool']);

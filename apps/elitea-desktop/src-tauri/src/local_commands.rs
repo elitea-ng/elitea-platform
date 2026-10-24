@@ -510,7 +510,7 @@ pub async fn workspace_remove(state: State<'_, LocalState>, id: String) -> Resul
 }
 
 /// The workspace's agent settings (`step_limit`: its turns' steps per run,
-/// over the agent's own; `null` for the agent's value, else the default).
+/// a number or `"unlimited"`; `null` for the default, 1024).
 #[tauri::command(rename_all = "snake_case")]
 pub fn workspace_agent_settings_get(
     state: State<'_, LocalState>,
@@ -520,21 +520,19 @@ pub fn workspace_agent_settings_get(
 }
 
 /// Store the workspace's agent settings; they apply from the next turn.
-/// `invalid_request` for a step limit outside 10 to 200.
+/// `invalid_request` for a step limit outside 1 to 1000000 (and not
+/// `"unlimited"`).
 #[tauri::command(rename_all = "snake_case")]
 pub fn workspace_agent_settings_set(
     state: State<'_, LocalState>,
     id: String,
     settings: AgentSettings,
 ) -> Result<AgentSettings, IpcError> {
-    if settings
-        .step_limit
-        .is_some_and(|limit| !STEP_LIMIT_RANGE.contains(&limit))
-    {
+    if settings.step_limit.is_some_and(|limit| !limit.valid()) {
         return Err(IpcError::new(
             "invalid_request",
             format!(
-                "The step limit must be {} to {}.",
+                "The step limit must be {} to {}, or unlimited.",
                 STEP_LIMIT_RANGE.start(),
                 STEP_LIMIT_RANGE.end()
             ),

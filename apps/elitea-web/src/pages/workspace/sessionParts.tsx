@@ -379,6 +379,11 @@ export function SessionNotices({ error, commands, customCommands, skills }: Sess
           {t('workspace.undoNothing', 'The last turn here changed no files.')}
         </Alert>
       )}
+      {(commands.notice === 'steps' || commands.notice === 'nothingToRetry') && (
+        <Alert severity="info" onClose={commands.closeNotice} data-testid={`workspace-notice-${commands.notice}`}>
+          {commands.notice === 'steps' ? commands.stepsText : t('workspace.retryNothing', 'There is no message here to send again.')}
+        </Alert>
+      )}
       {commands.notice === 'modelFixed' && (
         <Alert severity="info" onClose={commands.closeNotice} data-testid="workspace-model-fixed">
           {t('workspace.model.fixed', 'This agent runs on its own model here: it pins its model, or this folder’s settings keep it.')}

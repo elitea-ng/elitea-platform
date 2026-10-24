@@ -155,6 +155,17 @@ export interface TurnStatus {
   done: TurnDonePayload | null;
 }
 
+/** `model_retry`: the retry (from 1) of `max_attempts`, and what the failed call streamed. */
+export interface ModelRetryPayload {
+  attempt: number;
+  max_attempts: number;
+  code: string;
+  message: string;
+  delay_ms: number;
+  text_units: number;
+  thinking_units: number;
+}
+
 export type AgentEvent =
   | (EventBase & {
       kind: 'status';
@@ -199,6 +210,12 @@ export type AgentEvent =
   | (EventBase & { kind: 'subagent_finished'; payload: SubAgentFinishedPayload })
   /** A background process its `run_command` call started, its output and its end, while this turn runs (#1223). */
   | (EventBase & ProcessTurnEvent)
+  /**
+   * A model call failed in a way another call may mend (a cut or stalled stream, the gateway unreachable, a 408,
+   * 409, 429 or 5xx) and is made again after `delay_ms`. `text_units` and `thinking_units` are what the failed call
+   * streamed (UTF-16 code units): they come off the end of the transcript.
+   */
+  | (EventBase & { kind: 'model_retry'; payload: ModelRetryPayload })
   | (EventBase & { kind: 'error'; payload: { code: string; message: string } })
   | (EventBase & { kind: 'done'; payload: TurnDonePayload })
   /** After `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again. */

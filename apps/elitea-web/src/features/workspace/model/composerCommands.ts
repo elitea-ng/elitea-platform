@@ -14,12 +14,13 @@
  * message would run the command). A message runs the longest name it
  * starts with (`invokedPick`).
  */
+import { MAX_STEP_LIMIT, type StepLimit } from '@/shared/desktop/stepLimit';
 import type { CustomCommand, TurnCommand } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
 import { invokedSkill, matchingSkills, type ComposerSkill } from './composerSkills';
 
-export type WorkspaceCommandId = 'new' | 'plan' | 'undo' | 'agent' | 'model' | 'clear' | 'compact' | 'help';
+export type WorkspaceCommandId = 'new' | 'plan' | 'undo' | 'retry' | 'agent' | 'model' | 'steps' | 'clear' | 'compact' | 'help';
 
 export interface WorkspaceCommand {
   id: WorkspaceCommandId;
@@ -34,8 +35,10 @@ function workspaceCommands(): WorkspaceCommand[] {
     { id: 'new', name: '/new', description: t('workspace.command.new', 'Start a new conversation') },
     { id: 'plan', name: '/plan', description: t('workspace.command.plan', 'Turn plan mode on or off') },
     { id: 'undo', name: '/undo', description: t('workspace.command.undo', 'Undo the files the last turn changed') },
+    { id: 'retry', name: '/retry', description: t('workspace.command.retry', 'Send your last message again') },
     { id: 'agent', name: '/agent', description: t('workspace.command.agent', 'Choose the agent') },
     { id: 'model', name: '/model', description: t('workspace.command.model', 'Choose the model (/model <name> sets it)') },
+    { id: 'steps', name: '/steps', description: t('workspace.command.steps', 'Show the step limit (/steps <number|unlimited|default> sets it)') },
     { id: 'clear', name: '/clear', description: t('workspace.command.clear', 'Clear the transcript on this screen') },
     { id: 'compact', name: '/compact', description: t('workspace.command.compact', 'Summarize the conversation so far at the next message') },
     { id: 'help', name: '/help', description: t('workspace.command.help', 'List these commands') },
@@ -57,11 +60,30 @@ export function modelCommandName(text: string): string | null {
   return match?.[1] ?? null;
 }
 
+/** What `/steps <value>` asks for: a limit, `null` (back to the default), or a value it cannot be. */
+export type StepsCommand = { limit: StepLimit | null } | { invalid: string };
+
+const UNLIMITED_WORDS = new Set(['unlimited', 'infinite', 'infinity', 'inf', 'none', '∞']);
+
+/**
+ * `/steps <value>` as the whole message: a whole number from 1 to 1000000, `unlimited` (or `infinite`, `∞`, …) or
+ * `default`; else null (not this command).
+ */
+export function stepsCommand(text: string): StepsCommand | null {
+  const match = /^\/steps\s+(\S+)\s*$/iu.exec(text.trim());
+  const value = match?.[1]?.toLowerCase();
+  if (value === undefined) return null;
+  if (UNLIMITED_WORDS.has(value)) return { limit: 'unlimited' };
+  if (value === 'default' || value === 'reset') return { limit: null };
+  const steps = /^\d+$/u.test(value) ? Number(value) : Number.NaN;
+  return Number.isSafeInteger(steps) && steps >= 1 && steps <= MAX_STEP_LIMIT ? { limit: steps } : { invalid: value };
+}
+
 /** How many custom commands the menu lists at most. */
 const CUSTOM_LIMIT = 50;
 
 /** The host commands' names (without "/"): a custom command of one of them is not offered. */
-const HOST_NAMES = new Set<string>(['new', 'plan', 'undo', 'agent', 'model', 'clear', 'compact', 'help'] satisfies WorkspaceCommandId[]);
+const HOST_NAMES = new Set<string>(['new', 'plan', 'undo', 'retry', 'agent', 'model', 'steps', 'clear', 'compact', 'help'] satisfies WorkspaceCommandId[]);
 
 /** The custom commands the menu offers: none under a host command's name. */
 function offered(commands: readonly CustomCommand[]): CustomCommand[] {

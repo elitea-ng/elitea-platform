@@ -36,7 +36,7 @@ describe('referencedPaths', () => {
 
 describe('matchingCommands', () => {
   it('filters by prefix, case-insensitively', () => {
-    expect(matchingCommands('').map((c) => c.name)).toEqual(['/new', '/plan', '/undo', '/agent', '/model', '/clear', '/compact', '/help']);
+    expect(matchingCommands('').map((c) => c.name)).toEqual(['/new', '/plan', '/undo', '/retry', '/agent', '/model', '/steps', '/clear', '/compact', '/help']);
     expect(matchingCommands('P').map((c) => c.id)).toEqual(['plan']);
     expect(matchingCommands('zzz')).toEqual([]);
   });

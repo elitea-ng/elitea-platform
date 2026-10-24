@@ -7,7 +7,7 @@
  */
 import { lazy } from 'react';
 
-import { customCommandDetail, customCommandSource, customCommandToken, invokedPick, modelCommandName, slashMenu } from './model/composerCommands';
+import { customCommandDetail, customCommandSource, customCommandToken, invokedPick, modelCommandName, slashMenu, stepsCommand } from './model/composerCommands';
 import { matchingSkills, skillToken } from './model/composerSkills';
 import { activeToken, mentionText, referencedPaths } from './model/composerTokens';
 import { readLastLocation, writeLastLocation } from './model/threads';
@@ -31,7 +31,7 @@ export { readThreads, recordThread, threadsQueryKey } from './model/threads';
 export type { WorkspaceTurn } from './model/useWorkspaceTurn';
 export { SuggestionMenu } from './ui/SuggestionMenu';
 export type { SuggestionItem } from './ui/SuggestionMenu';
-export type { WorkspaceCommandId } from './model/composerCommands';
+export type { StepsCommand, WorkspaceCommandId } from './model/composerCommands';
 
 /** The composer's text rules ("@"/"/" tokens, referenced paths), its "/" menu (local commands, the custom commands, the agent's skills), its model chip, its image strip (also under a sent prompt) and its usage sum (a thread's tokens), as one bundle. */
 export const composer = {
@@ -40,6 +40,7 @@ export const composer = {
   referencedPaths,
   slashMenu,
   modelCommandName,
+  stepsCommand,
   customCommandToken,
   customCommandSource,
   customCommandDetail,

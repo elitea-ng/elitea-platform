@@ -15,6 +15,8 @@
  * catalogue's price, #1227); `/compact` marks the next send. Beside them the
  * language-server chip (`LspChip`, lazy, #1236): the servers behind the
  * edits' diagnostics.
+ * `/retry` sends the last message again and `/steps` shows or sets the
+ * folder's step limit (`useRetryAndSteps`).
  * And the model chip (`ModelChip`, `useTurnModel`): the model the next turn
  * runs on, unless the agent pins it or the folder's settings keep it
  * (`/model` opens it, `/model <name>` sets a listed one; an unknown name or
@@ -43,6 +45,7 @@ import { useCustomCommands } from './useCustomCommands';
 import { pipelineComposerBinding, useComposerPipeline, type ComposerPipeline } from './useRunInCloud';
 import type { ThreadHandoff } from './useThreadHandoff';
 import type { ThreadSession } from './useThreadSession';
+import { useRetryAndSteps, type SentMessage } from './useRetryAndSteps';
 import type { SessionCommands } from './useSessionCommands';
 import { useTurnModel, type TurnModelControl } from './useTurnModel';
 import { WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
@@ -102,6 +105,13 @@ function latestMeter(turn: WorkspaceTurn) {
 }
 
 type Usage = WorkspaceTurn['view']['usage'];
+
+/** The thread's last recorded prompt (thread history), for `/retry` before anything was sent here. */
+function recordedPrompt(history: ThreadSession['history']): SentMessage | null {
+  if (history.kind !== 'local') return null;
+  const stored = history.turns[history.turns.length - 1];
+  return stored === undefined ? null : { prompt: stored.prompt, mentions: stored.mentions, skills: [] };
+}
 
 /** Each recorded turn's usage (thread history), replayed once per history, not per render. */
 function recordedUsages(history: ThreadSession['history']): { turnId: string; usage: Usage }[] {
@@ -178,6 +188,9 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     },
     onStop: () => void turn.cancel(),
   };
+  const bound = sendBinding(cloudMode, cloud, composerPipeline, here);
+  const lastRecorded = useMemo(() => recordedPrompt(session.history), [session.history]);
+  const controls = useRetryAndSteps(workspaceId, commands, session.run, bound.onSend, bound.busy, lastRecorded);
   const openInChat = conversationId === '' ? undefined : () => void navigate({ to: '/chat/$conversationId', params: { conversationId } });
   const meter = cloudMode ? undefined : latestMeter(turn);
   const recorded = useMemo(() => recordedUsages(session.history), [session.history]);
@@ -202,9 +215,11 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         onPlanModeChange={commands.setPlanMode}
         skills={offered}
         customCommands={customCommands}
-        onCommand={session.run}
+        onCommand={controls.onCommand}
+        onStepsCommand={controls.onStepsCommand}
         onFocus={onFocus}
-        {...sendBinding(cloudMode, cloud, composerPipeline, here)}
+        {...bound}
+        onSend={controls.remembering(bound.onSend)}
       />
     </>
   );

@@ -40,8 +40,57 @@ pub struct Workspace {
     pub thread_uuid: Option<String>,
 }
 
-/// The step limits a workspace may set for its turns (inclusive).
-pub const STEP_LIMIT_RANGE: std::ops::RangeInclusive<u32> = 10..=200;
+/// The step limits a workspace may set for its turns (inclusive), beside
+/// [`StepLimit::Unlimited`].
+pub const STEP_LIMIT_RANGE: std::ops::RangeInclusive<u32> = 1..=1_000_000;
+
+/// A workspace's step limit: so many model steps per run, or none
+/// (`"unlimited"` in JSON; a number otherwise).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepLimit {
+    Steps(u32),
+    Unlimited,
+}
+
+impl StepLimit {
+    /// The JSON spelling of [`StepLimit::Unlimited`].
+    pub const UNLIMITED: &'static str = "unlimited";
+
+    /// Whether a workspace may set it: a number in [`STEP_LIMIT_RANGE`],
+    /// or unlimited.
+    #[must_use]
+    pub fn valid(self) -> bool {
+        match self {
+            Self::Steps(steps) => STEP_LIMIT_RANGE.contains(&steps),
+            Self::Unlimited => true,
+        }
+    }
+}
+
+impl Serialize for StepLimit {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Steps(steps) => serializer.serialize_u32(*steps),
+            Self::Unlimited => serializer.serialize_str(Self::UNLIMITED),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for StepLimit {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match serde_json::Value::deserialize(deserializer)? {
+            serde_json::Value::String(text) if text == Self::UNLIMITED => Ok(Self::Unlimited),
+            serde_json::Value::Number(number) => number
+                .as_u64()
+                .and_then(|steps| u32::try_from(steps).ok())
+                .map(Self::Steps)
+                .ok_or_else(|| serde::de::Error::custom("a step limit is a whole number")),
+            _ => Err(serde::de::Error::custom(
+                "a step limit is a number or \"unlimited\"",
+            )),
+        }
+    }
+}
 
 /// The diagnostics waits a person may set per language, in milliseconds
 /// (#1236).
@@ -55,11 +104,10 @@ const AGENT_SETTINGS_FILE: &str = "agent_settings.json";
 /// remembered choices, never in the folder.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSettings {
-    /// Model steps per run of this workspace's turns, within
-    /// [`STEP_LIMIT_RANGE`]; it wins over the agent's `meta.step_limit`.
-    /// `None`: the agent's value, else the default (100).
+    /// Model steps per run of this workspace's turns: a number within
+    /// [`STEP_LIMIT_RANGE`], or unlimited. `None`: the default (1024).
     #[serde(default)]
-    pub step_limit: Option<u32>,
+    pub step_limit: Option<StepLimit>,
     /// Whether the person may choose another model than the agent's for a
     /// turn of this workspace (#1228). `None`: allowed (the default).
     #[serde(default)]
@@ -377,9 +425,7 @@ impl WorkspaceStore {
                 HostError::Storage("the workspace's agent settings are unreadable".into())
             })?;
             Ok(AgentSettings {
-                step_limit: settings
-                    .step_limit
-                    .filter(|limit| STEP_LIMIT_RANGE.contains(limit)),
+                step_limit: settings.step_limit.filter(|limit| limit.valid()),
                 allow_model_override: settings.allow_model_override,
                 diagnostics: settings.diagnostics,
                 diagnostics_wait_ms: settings.diagnostics_wait_ms.within_range(),
@@ -388,7 +434,7 @@ impl WorkspaceStore {
     }
 
     /// Store a workspace's agent settings; a step limit outside
-    /// [`STEP_LIMIT_RANGE`] is refused.
+    /// [`STEP_LIMIT_RANGE`] (and not unlimited) is refused.
     ///
     /// # Errors
     ///
@@ -398,12 +444,9 @@ impl WorkspaceStore {
         id: &str,
         settings: AgentSettings,
     ) -> Result<AgentSettings, HostError> {
-        if settings
-            .step_limit
-            .is_some_and(|limit| !STEP_LIMIT_RANGE.contains(&limit))
-        {
+        if settings.step_limit.is_some_and(|limit| !limit.valid()) {
             return Err(HostError::Unsupported(format!(
-                "the step limit must be {} to {}",
+                "the step limit must be {} to {}, or unlimited",
                 STEP_LIMIT_RANGE.start(),
                 STEP_LIMIT_RANGE.end()
             )));
@@ -494,6 +537,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_step_limit_is_a_number_or_unlimited_in_json() {
+        let read = |text: &str| serde_json::from_str::<AgentSettings>(text);
+        assert_eq!(
+            read(r#"{"step_limit": 1024}"#).unwrap().step_limit,
+            Some(StepLimit::Steps(1024))
+        );
+        assert_eq!(
+            read(r#"{"step_limit": "unlimited"}"#).unwrap().step_limit,
+            Some(StepLimit::Unlimited)
+        );
+        assert_eq!(read(r#"{"step_limit": null}"#).unwrap().step_limit, None);
+        assert!(read(r#"{"step_limit": "many"}"#).is_err());
+        assert!(read(r#"{"step_limit": -1}"#).is_err());
+        let settings = AgentSettings {
+            step_limit: Some(StepLimit::Unlimited),
+            ..AgentSettings::default()
+        };
+        assert_eq!(
+            serde_json::to_value(settings).unwrap()["step_limit"],
+            "unlimited"
+        );
+    }
+
+    #[test]
     fn agent_settings_are_kept_private_in_the_workspaces_data() {
         let app = tempfile::tempdir().unwrap();
         let folder = tempfile::tempdir().unwrap();
@@ -504,7 +571,7 @@ mod tests {
             .set_agent_settings(
                 &id,
                 AgentSettings {
-                    step_limit: Some(150),
+                    step_limit: Some(StepLimit::Steps(150)),
                     allow_model_override: Some(false),
                     diagnostics: Some(false),
                     diagnostics_wait_ms: DiagnosticsWaits {
@@ -514,8 +581,11 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(saved.step_limit, Some(150));
-        assert_eq!(store.agent_settings(&id).unwrap().step_limit, Some(150));
+        assert_eq!(saved.step_limit, Some(StepLimit::Steps(150)));
+        assert_eq!(
+            store.agent_settings(&id).unwrap().step_limit,
+            Some(StepLimit::Steps(150))
+        );
         assert!(!store.agent_settings(&id).unwrap().model_override_allowed());
         assert!(!store.agent_settings(&id).unwrap().diagnostics_enabled());
         assert_eq!(
@@ -534,14 +604,24 @@ mod tests {
             assert!(store.agent_settings(&id).is_err());
             fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
         }
-        // Outside 10..=200 is refused; `None` goes back to the default.
-        for wrong in [9, 201] {
+        // Unlimited is kept as it is.
+        let unlimited = AgentSettings {
+            step_limit: Some(StepLimit::Unlimited),
+            ..AgentSettings::default()
+        };
+        store.set_agent_settings(&id, unlimited).unwrap();
+        assert_eq!(
+            store.agent_settings(&id).unwrap().step_limit,
+            Some(StepLimit::Unlimited)
+        );
+        // Outside 1..=1000000 is refused; `None` goes back to the default.
+        for wrong in [0, 1_000_001] {
             assert!(
                 store
                     .set_agent_settings(
                         &id,
                         AgentSettings {
-                            step_limit: Some(wrong),
+                            step_limit: Some(StepLimit::Steps(wrong)),
                             ..AgentSettings::default()
                         }
                     )

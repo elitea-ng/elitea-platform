@@ -15,6 +15,8 @@
  *   expands itself) or with that skill (`skills`, applied to the turn).
  *   `/model <name>` sent as the whole message sets the turn model instead
  *   (`onModelCommand`); `/model` alone opens the model chip's menu.
+ *   `/steps <number|unlimited|default>` sets the folder's step limit
+ *   (`onStepsCommand`); `/steps` alone shows it.
  *
  * Both menus are driven from the keyboard without leaving the textarea:
  * ↑/↓ move, Enter or Tab pick, Esc closes until the token changes.
@@ -39,7 +41,7 @@ import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import { NewChatInput } from '@/features/chat-input';
-import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
+import { composer, SuggestionMenu, type StepsCommand, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
 
 import type { ComposerSkill } from './useAgentSkills';
 import { useImageAttachments } from './useImageAttachments';
@@ -99,6 +101,8 @@ export interface WorkspaceComposerProps {
   onCommand: (command: WorkspaceCommandId) => void;
   /** `/model <name>` was sent as the whole message: the page sets the model (nothing goes to the agent). */
   onModelCommand?: ((name: string) => void) | undefined;
+  /** `/steps <value>` was sent as the whole message: the page sets the folder's step limit (nothing goes to the agent). */
+  onStepsCommand?: ((command: StepsCommand) => void) | undefined;
   /** The composer got focus: the page lets the host read ahead for the send (#1213). */
   onFocus?: () => void;
 }
@@ -305,6 +309,12 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   };
 
   const send = (question: string): void => {
+    const steps = props.onStepsCommand === undefined ? null : composer.stepsCommand(question);
+    if (steps !== null) {
+      props.onStepsCommand?.(steps);
+      clearInput();
+      return;
+    }
     const named = props.onModelCommand === undefined ? null : composer.modelCommandName(question);
     if (named !== null) {
       props.onModelCommand?.(named);

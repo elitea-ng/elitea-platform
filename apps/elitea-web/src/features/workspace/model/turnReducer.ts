@@ -21,6 +21,7 @@ import type { PlanProposalPayload, PlanView } from '@/shared/desktop/planIpc';
 import type { TurnModel } from '@/shared/desktop/turnModel';
 import type { AgentEvent, ApprovalRequestPayload, ContextMeter, TurnPhase } from '@/shared/desktop/workspaceIpc';
 
+import { endsRetry, withoutRetry, type RetryingView } from './modelRetry';
 import { applySubAgentEvent, isSubAgentEvent, type SubAgentLane } from './subAgentEvents';
 import type { TranscriptItem } from './transcriptItem';
 import { applySideEvent, isSideEvent } from './turnSideEvents';
@@ -61,6 +62,8 @@ export interface TurnView {
   model?: TurnModel;
   /** The turn's read-only sub-agents, in start order: each shown under its `spawn_agent` row. */
   subAgents?: SubAgentLane[];
+  /** A model call is made again (`model_retry`): shown until the model streams again or the turn ends. */
+  retrying?: RetryingView;
 }
 
 /** A stored event; a merged text run covers the seqs `seq..last`, each seen. */
@@ -202,7 +205,7 @@ function applyPlanEvent(view: TurnView, event: PlanEvent, resolved: readonly str
 
 type AsideEvent = PlanEvent | Parameters<typeof applySideEvent>[1] | Parameters<typeof applySubAgentEvent>[1];
 
-/** The events beside the transcript's main line: the plan, the meter, reasoning, sub-agents. */
+/** The events beside the transcript's main line: the plan, the meter, reasoning, a model call's retry, sub-agents. */
 function isAsideEvent(event: AgentEvent): event is AsideEvent {
   return isPlanEvent(event) || isSideEvent(event) || isSubAgentEvent(event);
 }
@@ -213,7 +216,8 @@ function applyAsideEvent(view: TurnView, event: AsideEvent, resolved: readonly s
   return applySubAgentEvent(view, event);
 }
 
-function applyEvent(view: TurnView, event: AgentEvent, resolved: readonly string[]): TurnView {
+function applyEvent(before: TurnView, event: AgentEvent, resolved: readonly string[]): TurnView {
+  const view = endsRetry(event) ? withoutRetry(before) : before;
   if (isAsideEvent(event)) return applyAsideEvent(view, event, resolved);
   switch (event.kind) {
     case 'status':
