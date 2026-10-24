@@ -8505,7 +8505,6 @@ async fn worktree_merge_undo_takes_only_its_merges_checkpoint() {
     );
 }
 
-
 /// The person's hooks in a turn (#1237): a `UserPromptSubmit` hook's
 /// context reaches the model framed under the thread's nonce, a `Stop`
 /// hook's text reaches the person as a status note, and a refused message

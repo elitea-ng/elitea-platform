@@ -916,7 +916,6 @@ async fn denied_files_inside_an_opened_worktree_stay_unreadable() {
     assert!(!String::from_utf8_lossy(&denied.stdout).contains("LISTED-SECRET-4"));
 }
 
-
 /// A hook (#1237) runs under the same sandbox as a command: it cannot read
 /// the credentials under the home or the session's data, whatever its
 /// sandbox mode, and its environment is built from nothing.
