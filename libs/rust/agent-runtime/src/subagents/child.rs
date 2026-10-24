@@ -399,6 +399,24 @@ pub(super) struct Start {
     pub isolated: bool,
 }
 
+/// The tools the host gives the child: those of a checkout of its own when
+/// it is isolated, the read-only set otherwise.
+async fn child_toolsets(
+    host: &dyn SubAgentHost,
+    identity: &ChildIdentity,
+    isolated: bool,
+) -> Result<Vec<Arc<dyn Toolset>>, &'static str> {
+    if isolated {
+        host.isolated_toolsets(identity)
+            .await
+            .map_err(|_| "subagent_checkout_unavailable")
+    } else {
+        host.toolsets(identity)
+            .await
+            .map_err(|_| "subagent_tools_unavailable")
+    }
+}
+
 /// Build the child and start its first run on a task of its own.
 ///
 /// # Errors
@@ -420,15 +438,7 @@ pub(super) async fn start(start: Start) -> Result<Child, &'static str> {
     let model = host
         .bind_model(&identity, &instruction)
         .map_err(|_| "subagent_model_unavailable")?;
-    let toolsets = if isolated {
-        host.isolated_toolsets(&identity)
-            .await
-            .map_err(|_| "subagent_checkout_unavailable")?
-    } else {
-        host.toolsets(&identity)
-            .await
-            .map_err(|_| "subagent_tools_unavailable")?
-    };
+    let toolsets = child_toolsets(host.as_ref(), &identity, isolated).await?;
     let name = identity.agent_name();
     let mut builder = LlmAgentBuilder::new(&name)
         .description(if isolated {

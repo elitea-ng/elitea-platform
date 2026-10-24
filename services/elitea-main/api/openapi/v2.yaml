@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.20"
+  x-elitea-client-contract: "1.21"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for

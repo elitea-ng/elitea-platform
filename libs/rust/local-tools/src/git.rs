@@ -46,8 +46,9 @@
 //!    recursion; per command `--no-ext-diff --no-textconv`,
 //!    `--ignore-submodules=all`, `--no-show-signature`, `--no-gpg-sign`;
 //!    `GIT_DIR` and `GIT_WORK_TREE` pinned (a linked worktree's
-//!    `GIT_COMMON_DIR` too, so git never reads the `commondir` file), the
-//!    parent's `GIT_*` dropped.
+//!    `GIT_COMMON_DIR` too, so git never reads the `commondir` file), and
+//!    nothing else of the parent's environment but `PATH`, `HOME`,
+//!    `XDG_CONFIG_HOME` (the trusted global config) and `LANG=C`.
 //! 3. **Sandbox every git process** (Seatbelt on macOS, bubblewrap or the
 //!    Landlock helper on Linux): no network, and writes only where the call
 //!    needs them (the temporary index, `objects/`, `refs/elitea/`; the
@@ -139,9 +140,6 @@ pub const HARDENING: &[&str] = &[
     "--no-pager",
     "--no-optional-locks",
 ];
-
-/// Environment variables removed besides every `GIT_*`.
-const REMOVED_ENV: &[&str] = &["SSH_ASKPASS", "SSH_AUTH_SOCK", "EDITOR", "VISUAL", "PAGER"];
 
 fn unsafe_repo(message: impl Into<String>) -> ToolError {
     ToolError::new(ErrorCode::UnsafeRepository, message)
@@ -785,6 +783,8 @@ fn git_binary() -> ToolResult<PathBuf> {
         if cfg!(target_os = "macos") && found == Path::new("/usr/bin/git") {
             let resolved = Command::new("/usr/bin/xcrun")
                 .args(["--find", "git"])
+                .env_clear()
+                .envs(host_git_environment())
                 .stdin(Stdio::null())
                 .stderr(Stdio::null())
                 .output()
@@ -912,8 +912,10 @@ impl Repo {
 
     /// The task worktree `entry` names (its folder, its repository's top,
     /// its admin directory's name: all from the host's own registry, never
-    /// discovered), checked as [`registered_linked_worktree`] describes and
-    /// then as every repository is.
+    /// discovered), checked as a registered worktree must be (a regular
+    /// `.git` file the person owns naming exactly
+    /// `<top>/.git/worktrees/<name>`, whose `commondir` and `gitdir` lead
+    /// back) and then as every repository is.
     ///
     /// # Errors
     ///
@@ -1542,15 +1544,11 @@ impl<'a> Git<'a> {
         };
         let prepared = prepare(&request, &words, &config)?;
         let mut command = Command::new(&prepared.program);
-        command.current_dir(self.cwd).args(&prepared.args);
-        for (name, _) in std::env::vars_os() {
-            if name.to_string_lossy().starts_with("GIT_") {
-                command.env_remove(name);
-            }
-        }
-        for name in REMOVED_ENV {
-            command.env_remove(name);
-        }
+        command
+            .current_dir(self.cwd)
+            .args(&prepared.args)
+            .env_clear()
+            .envs(host_git_environment());
         command
             .env("GIT_DIR", &self.repo.git_dir)
             .env("GIT_WORK_TREE", &self.repo.top)
@@ -1582,6 +1580,26 @@ impl<'a> Git<'a> {
             .trim_end()
             .to_owned())
     }
+}
+
+/// What the host's git inherits: nothing of the parent environment but an
+/// allowlist. `PATH` with its absolute entries only; `HOME` and
+/// `XDG_CONFIG_HOME` because the person's global config (identity,
+/// `core.excludesFile`, the drivers [`Repo::check`] vetted) is found
+/// through them and is trusted; `LANG=C`. Everything else (`GIT_*`,
+/// `SSH_*`, `EDITOR`, `PAGER`, a proxy, a custom variable) stays behind,
+/// and [`Git::spawn`] pins the git variables it needs after this.
+fn host_git_environment() -> Vec<(&'static str, std::ffi::OsString)> {
+    let mut env = vec![("LANG", "C".into())];
+    if let Ok(path) = std::env::join_paths(crate::command::search_path()) {
+        env.push(("PATH", path));
+    }
+    for name in ["HOME", "XDG_CONFIG_HOME"] {
+        if let Some(value) = std::env::var_os(name).filter(|value| !value.is_empty()) {
+            env.push((name, value));
+        }
+    }
+    env
 }
 
 /// Read a pipe to the end, keeping at most `cap` bytes.
@@ -2135,6 +2153,52 @@ mod tests {
             .expect_err("timeout");
         assert_eq!(error.code(), ErrorCode::Timeout);
         assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    /// The host's git starts from an empty environment: a variable the
+    /// parent holds (an ssh command, a custom one) never reaches it. The
+    /// test runs itself again as a child process with the variables set,
+    /// rather than setting them in this process under the other tests.
+    #[test]
+    fn host_git_inherits_nothing_of_the_parent_environment() {
+        const PROBE: &str = "ELITEA_GIT_ENV_PROBE";
+        if std::env::var_os(PROBE).is_none() {
+            let output = Command::new(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    "git::tests::host_git_inherits_nothing_of_the_parent_environment",
+                    "--nocapture",
+                ])
+                .env(PROBE, "1")
+                .env("GIT_SSH_COMMAND", "leaked-ssh")
+                .env("FOO", "leaked-foo")
+                .output()
+                .expect("child test");
+            assert!(
+                output.status.success(),
+                "child: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            return;
+        }
+        assert_eq!(std::env::var("FOO").as_deref(), Ok("leaked-foo"));
+        let (_dir, _base, repo) = repo();
+        let env = repo
+            .git(repo.top())
+            .run(&["-c", "alias.dumpenv=!env", "dumpenv"])
+            .expect("env");
+        let env = String::from_utf8_lossy(&env);
+        let names: Vec<&str> = env
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(name, _)| name))
+            .collect();
+        assert!(names.contains(&"PATH"), "{env}");
+        assert!(names.contains(&"GIT_DIR"), "{env}");
+        for leaked in ["FOO", "GIT_SSH_COMMAND", PROBE] {
+            assert!(!names.contains(&leaked), "{leaked} leaked: {env}");
+        }
     }
 
     /// Layer 1 for attributes: a driver the person's own config defines

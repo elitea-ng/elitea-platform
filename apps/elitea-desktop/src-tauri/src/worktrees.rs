@@ -466,7 +466,7 @@ impl WorktreeHost {
                     }
                 })
                 .collect();
-            out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            out.sort_by_key(|record| std::cmp::Reverse(record.created_at));
             Ok(out)
         })
         .await

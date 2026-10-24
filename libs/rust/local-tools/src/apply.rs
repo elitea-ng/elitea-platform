@@ -24,7 +24,8 @@
 //! **Apply** ([`apply`]) snapshots the folder again and refuses with
 //! [`FOLDER_CHANGED`] ([`ErrorCode::StaleRead`]) when it moved since the
 //! preview, takes a checkpoint (restoring it undoes the merge), then writes
-//! the result's files through the session's confined [`Workspace`] writer.
+//! the result's files through the session's confined
+//! [`Workspace`](crate::workspace::Workspace) writer.
 //! `HEAD`, the index and every branch of the folder stay as they were.
 //!
 //! merge-tree runs under [`crate::git`]'s four layers, with attributes read
@@ -457,7 +458,7 @@ mod tests {
         let preview = preflight(&main, &theirs, &f.base).expect("preflight");
         assert_eq!(preview.mode, Mode::Conflicts);
         assert_eq!(preview.conflict_paths, ["a.txt"]);
-        assert!(preview.applied_paths.is_empty());
+        assert!(preview.applied_paths.is_empty(), "{preview:?}");
         // Nothing the person sees moved: the folder, HEAD, the index, refs.
         assert_eq!(
             read(&f.root, "a.txt").as_deref(),
@@ -476,7 +477,7 @@ mod tests {
         let preview = preflight(&main, &theirs, &f.base).expect("preflight");
         assert_eq!(preview.mode, Mode::Merge);
         assert_eq!(preview.applied_paths, ["a.txt", "b.txt"]);
-        assert!(preview.conflict_paths.is_empty());
+        assert!(preview.conflict_paths.is_empty(), "{preview:?}");
         assert_eq!(
             read(&f.root, "a.txt").as_deref(),
             Some("1\n2\n3\n4\n5\n6\nSEVEN\n")

@@ -69,6 +69,23 @@ fn bounded_text(args: &Value, key: &str) -> Result<String, Value> {
     Ok(text.to_owned())
 }
 
+/// `spawn_agent`'s `max_steps` (the default when absent), or the refusal.
+fn max_steps(args: &Value, default: u32) -> Result<u32, Value> {
+    match args.get("max_steps") {
+        None | Some(Value::Null) => Ok(default),
+        Some(value) => value
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|n| (1..=MAX_CHILD_STEPS).contains(n))
+            .ok_or_else(|| {
+                refused(
+                    "invalid_arguments",
+                    format!("`max_steps` must be an integer from 1 to {MAX_CHILD_STEPS}."),
+                )
+            }),
+    }
+}
+
 /// `spawn_agent`'s arguments (without `isolation`).
 fn spawn_schema() -> Value {
     json!({
@@ -124,6 +141,26 @@ impl SubAgentTool {
         )
     }
 
+    /// `spawn_agent`'s `isolation`: whether the child gets a checkout of
+    /// its own, or the refusal.
+    fn isolation(&self, args: &Value) -> Result<bool, Value> {
+        match args.get("isolation").filter(|value| !value.is_null()) {
+            None => Ok(false),
+            Some(value) => match value.as_str() {
+                Some("none") => Ok(false),
+                Some("worktree") if self.registry.host.supports_worktree_isolation() => Ok(true),
+                Some("worktree") => Err(refused(
+                    "subagent_isolation_unsupported",
+                    "Sub-agents here cannot get a checkout of their own; spawn a read-only one.",
+                )),
+                _ => Err(refused(
+                    "invalid_arguments",
+                    "`isolation` must be \"none\" or \"worktree\".",
+                )),
+            },
+        }
+    }
+
     async fn spawn(&self, ctx: &dyn ToolContext, args: &Value) -> Value {
         let task = match bounded_text(args, "task") {
             Ok(task) => task,
@@ -135,44 +172,14 @@ impl SubAgentTool {
             .map(str::trim)
             .filter(|label| !label.is_empty())
             .map(|label| label.chars().take(MAX_LABEL_CHARS).collect::<String>());
-        let isolated = match args.get("isolation").and_then(|value| {
-            if value.is_null() {
-                None
-            } else {
-                Some(value.as_str())
-            }
-        }) {
-            None | Some(Some("none")) => false,
-            Some(Some("worktree")) if self.registry.host.supports_worktree_isolation() => true,
-            Some(Some("worktree")) => {
-                return refused(
-                    "subagent_isolation_unsupported",
-                    "Sub-agents here cannot get a checkout of their own; spawn a read-only one.",
-                );
-            }
-            Some(_) => {
-                return refused(
-                    "invalid_arguments",
-                    "`isolation` must be \"none\" or \"worktree\".",
-                );
-            }
+        let isolated = match self.isolation(args) {
+            Ok(isolated) => isolated,
+            Err(refusal) => return refusal,
         };
         let limits = self.registry.limits;
-        let steps = match args.get("max_steps") {
-            None | Some(Value::Null) => limits.default_steps,
-            Some(value) => match value
-                .as_u64()
-                .and_then(|n| u32::try_from(n).ok())
-                .filter(|n| (1..=MAX_CHILD_STEPS).contains(n))
-            {
-                Some(steps) => steps,
-                None => {
-                    return refused(
-                        "invalid_arguments",
-                        format!("`max_steps` must be an integer from 1 to {MAX_CHILD_STEPS}."),
-                    );
-                }
-            },
+        let steps = match max_steps(args, limits.default_steps) {
+            Ok(steps) => steps,
+            Err(refusal) => return refusal,
         };
         let children = self.children();
         if children.len() >= limits.max_per_turn {
