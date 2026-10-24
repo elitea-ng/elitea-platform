@@ -201,6 +201,96 @@ fn redact_secret_values(input: &str) -> String {
     out
 }
 
+/// The ACP agent's log file (src/acp), beside the app's own: the two
+/// processes run at once, and stdout is the protocol there.
+pub const ACP_LOG_FILE_NAME: &str = "elitea-acp.log";
+
+/// Logging for `--acp`: the app's format, level and scrubbing, into
+/// [`ACP_LOG_FILE_NAME`] in `dir` (created `0700`, the file `0600`), rotated
+/// once past [`MAX_FILE_BYTES`] at start. Without a directory, nothing is
+/// logged; never to stdout.
+pub fn init_acp(dir: Option<&std::path::Path>) {
+    let Some(dir) = dir else {
+        return;
+    };
+    let Some(file) = open_acp_log(dir) else {
+        return;
+    };
+    let logger: &'static AcpLogger = Box::leak(Box::new(AcpLogger {
+        file: std::sync::Mutex::new(file),
+    }));
+    if log::set_logger(logger).is_ok() {
+        log::set_max_level(level());
+    }
+}
+
+fn open_acp_log(dir: &std::path::Path) -> Option<std::fs::File> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir).ok()?;
+    let path = dir.join(ACP_LOG_FILE_NAME);
+    if std::fs::symlink_metadata(&path)
+        .is_ok_and(|meta| meta.is_file() && u128::from(meta.len()) > MAX_FILE_BYTES)
+    {
+        let _ = std::fs::rename(&path, dir.join(format!("{ACP_LOG_FILE_NAME}.1")));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
+    }
+    options.open(path).ok()
+}
+
+struct AcpLogger {
+    file: std::sync::Mutex<std::fs::File>,
+}
+
+impl log::Log for AcpLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        let quiet = QUIET_MODULES.iter().any(|module| {
+            metadata.target() == *module
+                || metadata
+                    .target()
+                    .strip_prefix(module)
+                    .is_some_and(|rest| rest.starts_with("::"))
+        });
+        metadata.level()
+            <= if quiet {
+                log::Level::Warn
+            } else {
+                log::Level::Trace
+            }
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let line = format!(
+            "{} {:<5} [{}] {}\n",
+            chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z"),
+            record.level(),
+            record.target(),
+            scrub(&record.args().to_string())
+        );
+        if let Ok(mut file) = self.file.lock() {
+            let _ = std::io::Write::write_all(&mut *file, line.as_bytes());
+        }
+    }
+
+    fn flush(&self) {
+        if let Ok(mut file) = self.file.lock() {
+            let _ = std::io::Write::flush(&mut *file);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::scrub;

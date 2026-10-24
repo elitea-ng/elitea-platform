@@ -44,6 +44,10 @@ pub struct CredentialsFile {
     dir: PathBuf,
     /// `None` until the first access reads the file.
     cache: Mutex<Option<Slots>>,
+    /// Read the file at every access, never from `cache`: the ACP agent
+    /// (src/acp) runs beside the app, which may rotate the refresh token
+    /// at any time.
+    reread: bool,
 }
 
 fn refuse(path: &Path, why: &str) -> HostError {
@@ -64,6 +68,17 @@ impl CredentialsFile {
         Arc::new(Self {
             dir,
             cache: Mutex::new(None),
+            reread: false,
+        })
+    }
+
+    /// The file read again at every access (a second process beside the app).
+    #[must_use]
+    pub fn rereading(dir: PathBuf) -> Arc<Self> {
+        Arc::new(Self {
+            dir,
+            cache: Mutex::new(None),
+            reread: true,
         })
     }
 
@@ -152,8 +167,8 @@ impl CredentialsFile {
             .lock()
             .map_err(|_| HostError::Internal("credentials lock poisoned".into()))?;
         let mut slots = match cache.as_ref() {
-            Some(slots) => slots.clone(),
-            None => self.read()?,
+            Some(slots) if !self.reread => slots.clone(),
+            _ => self.read()?,
         };
         let (value, changed) = change(&mut slots);
         if changed {
@@ -486,6 +501,39 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&target).unwrap(),
             r#"{"device-session":"planted"}"#
+        );
+    }
+
+    #[test]
+    fn a_rereading_file_sees_another_process_rotate_the_session() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("ai.elitea.desktop");
+        let app = CredentialsFile::new(dir.clone());
+        let acp = CredentialsFile::rereading(dir.clone());
+        app.slot("device-session").save("first").unwrap();
+        assert_eq!(
+            acp.slot("device-session").load().unwrap().as_deref(),
+            Some("first")
+        );
+        // The app rotates the token; a cached copy would still say "first".
+        CredentialsFile::new(dir)
+            .slot("device-session")
+            .save("second")
+            .unwrap();
+        assert_eq!(
+            acp.slot("device-session").load().unwrap().as_deref(),
+            Some("second")
+        );
+        // A write merges into what the file holds now, not into a stale copy.
+        acp.slot("pending-revoke").save("queued").unwrap();
+        let fresh = CredentialsFile::new(root.path().join("ai.elitea.desktop"));
+        assert_eq!(
+            fresh.slot("device-session").load().unwrap().as_deref(),
+            Some("second")
+        );
+        assert_eq!(
+            fresh.slot("pending-revoke").load().unwrap().as_deref(),
+            Some("queued")
         );
     }
 }

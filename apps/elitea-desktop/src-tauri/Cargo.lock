@@ -1697,6 +1697,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "chrono",
+ "dirs",
  "elitea-agent-runtime",
  "elitea-llm-wire",
  "elitea-local-embed",
