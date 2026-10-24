@@ -197,6 +197,7 @@ export const getUploadObjectResponseMock = (): UploadObjectResponse => ({
   media_type: "text/plain",
   etag: "dd7998b55ad2d8c4cca66901e7499ecf",
   created_at: "2026-07-20T00:00:00Z",
+  updated_at: "2026-07-20T00:00:00Z",
 });
 
 export const getBatchDeleteObjectsResponseMock = (
@@ -264,6 +265,7 @@ export const getCommitTransferGrantResponseMock = (
   media_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
   etag: faker.string.alpha({ length: { min: 10, max: 20 } }),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
 });
 
@@ -284,6 +286,7 @@ export const getCompleteMultipartUploadResponseMock = (
   media_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
   etag: faker.string.alpha({ length: { min: 10, max: 20 } }),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
 });
 

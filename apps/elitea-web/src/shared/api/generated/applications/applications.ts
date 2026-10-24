@@ -10069,8 +10069,13 @@ export function useValidateApplicationVersion<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
-export type exportApplicationResponse200 = {
+export type exportApplicationResponse200ApplicationJson = {
   data: ApplicationExportResponse;
+  status: 200;
+};
+
+export type exportApplicationResponse200TextMarkdown = {
+  data: string;
   status: 200;
 };
 
@@ -10089,7 +10094,10 @@ export type exportApplicationResponse404 = {
   status: 404;
 };
 
-export type exportApplicationResponseSuccess = exportApplicationResponse200 & {
+export type exportApplicationResponseSuccess = (
+  | exportApplicationResponse200ApplicationJson
+  | exportApplicationResponse200TextMarkdown
+) & {
   headers: Headers;
 };
 export type exportApplicationResponseError = (

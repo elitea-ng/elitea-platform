@@ -2,10 +2,12 @@
  * MSW handlers for unit S6's markdown-export transport (spec §5.7 row 4).
  *
  * The route is GET /api/v2/elitea_core/export_import/prompt_lib/{projectId}/
- * {applicationId}?format=md (exportApplication). v2.yaml documents only the
- * JSON export document for it, not the markdown body `?format=md` answers
- * (internal/api/v2/eliteacore/export_markdown.go), so the body is a typed
- * constant here (R-M2) rather than a contract example.
+ * {applicationId}?format=md (exportApplication). v2.yaml documents the
+ * markdown body as a `text/markdown` 200 with an example, but the same 200
+ * also has the JSON export document, and orval's generated mock folds the two
+ * media types into one random `faker.helpers.arrayElement([...])`. A test
+ * cannot pick the markdown one through it, so the body is a typed constant
+ * here (R-M2), equal to the spec's example.
  */
 import { http, HttpResponse } from 'msw';
 import type { RequestHandler } from 'msw';

@@ -9494,13 +9494,19 @@ components:
 
     UploadObjectResponse:
       type: object
-      required: [key, size_bytes, media_type, etag, created_at]
+      required: [key, size_bytes, media_type, etag, created_at, updated_at]
       properties:
         key: { type: string }
         size_bytes: { type: integer, format: int64 }
         media_type: { type: string }
         etag: { type: string }
         created_at: { type: string, format: date-time }
+        updated_at:
+          type: string
+          format: date-time
+          description: >
+            This write's time (artifacts/objects.go UploadObject); differs
+            from created_at when overwrite=true replaced an existing object.
 
     BatchDeleteObjectsRequest:
       type: object
@@ -23130,11 +23136,28 @@ paths:
             (apps/elitea-ui/src/api/applications.js:592).
       responses:
         '200':
-          description: Export document
+          description: >
+            Export document. JSON by default; with ?format=md the same
+            document rendered as markdown (eliteacore/export_markdown.go
+            writeMarkdownExport), served as an attachment. An application
+            with more than one version answers application/zip instead,
+            one markdown file per version.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApplicationExportResponse'
+            text/markdown:
+              schema: { type: string }
+              example: |-
+                ---
+                name: Exported Agent
+                description: A synthetic agent used by the export probe.
+                model: gpt-4o
+                temperature: 0.7
+                agent_type: react
+                ---
+
+                Answer the user's question.
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
@@ -25045,6 +25068,7 @@ paths:
                 media_type: text/plain
                 etag: "dd7998b55ad2d8c4cca66901e7499ecf"
                 created_at: "2026-07-20T00:00:00Z"
+                updated_at: "2026-07-20T00:00:00Z"
         '400':
           description: Invalid request
           content:
