@@ -865,3 +865,61 @@ async fn drift_past_the_threshold_asks_for_a_full_rebuild() {
     assert_eq!(service.store().drift_files().unwrap(), 0);
     assert!(!service.wants_full_rebuild());
 }
+
+#[test]
+fn repo_map_listed_in_names() {
+    assert!(NAMES.contains(&"repo_map"));
+    let spec = LOCAL_TOOLS
+        .iter()
+        .find(|spec| spec.name == "repo_map")
+        .unwrap();
+    let schema = (spec.parameters)();
+    assert_eq!(schema["additionalProperties"], false);
+    assert_eq!(schema["properties"]["max_tokens"]["default"], 2048);
+    assert_eq!(schema["properties"]["focus_symbols"]["maxItems"], 20);
+}
+
+/// #1240: the map ranks the focus symbol's file first, cites its lines
+/// read from the folder, and never names a `path_deny` file, even one the
+/// focus names.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repo_map_omits_denied_paths() {
+    let folder = tempfile::tempdir().unwrap();
+    fixture(folder.path());
+    write(
+        folder.path(),
+        "secret/keys.py",
+        "from pkg.store import Store\n\n\ndef load_keys():\n    return Store().save('k')\n",
+    );
+    let data = tempfile::tempdir().unwrap();
+    let deny = vec!["secret".to_owned()];
+    let service = IndexService::open(
+        "ws1",
+        folder.path(),
+        &deny,
+        &data.path().join("index"),
+        Arc::new(NoEvents),
+    )
+    .unwrap();
+    service.refresh(false).await.unwrap();
+    let answer = call(
+        &service,
+        "repo_map",
+        json!({"focus_symbols": ["Store", "load_keys"], "focus_paths": ["secret/keys.py"], "max_tokens": 512}),
+    )
+    .await;
+    assert_eq!(answer["status"], "ok", "{answer}");
+    let map = text(&answer);
+    assert!(map.starts_with("Repository map:"), "{map}");
+    assert!(
+        !map.contains("secret") && !map.contains("load_keys"),
+        "{map}"
+    );
+    let first = map.lines().nth(2).unwrap();
+    assert_eq!(first, "pkg/store.py", "{map}");
+    assert!(map.contains(": class Store:"), "{map}");
+    assert!(map.len() <= 512 * 4, "{}", map.len());
+
+    let invalid = call(&service, "repo_map", json!({"focus_paths": "pkg"})).await;
+    assert_eq!(invalid["status"], "error", "{invalid}");
+}

@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.19"
+  x-elitea-client-contract: "1.20"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -4223,6 +4223,23 @@ components:
           type: array
           maxItems: 2000
           items: { type: string }
+        memories_saved:
+          type: array
+          maxItems: 500
+          description: >-
+            Client contract 1.20. The ids of the memories the turn's
+            save_memory calls created, in call order; absent when none. Stored
+            on `local_work` (at most 200, with `memories_saved_total`) and
+            counted in the commit's audit entry.
+          items: { type: integer, format: int64, minimum: 1 }
+        memories_deleted:
+          type: array
+          maxItems: 500
+          description: >-
+            Client contract 1.20. The ids of the memories the turn's
+            delete_memory calls removed, in call order; absent when none.
+            Stored and audited as `memories_saved` is.
+          items: { type: integer, format: int64, minimum: 1 }
     LocalTurnCommitRequest:
       type: object
       description: >-
@@ -21661,8 +21678,11 @@ paths:
         internal/api/v2/memories/handler.go's Create (#870). Used both by
         Settings > Memory's "Add memory" control and by the chat message
         "Remember this" action (which additionally sends
-        `source_conversation_id`).
-      tags: [chat]
+        `source_conversation_id`). Client contract 1.20: the desktop's
+        `save_memory` tool (#1233) writes through it.
+      tags: [chat, client]
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
       requestBody:
         required: true
         content:
@@ -21670,6 +21690,8 @@ paths:
             schema:
               $ref: '#/components/schemas/MemoryEntryWriteRequest'
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         '201':
           description: The created memory.
           content:

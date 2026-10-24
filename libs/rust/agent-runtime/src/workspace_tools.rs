@@ -9,7 +9,13 @@
 //! are equal, name for name and schema for schema, so a change to either
 //! fails the build until the other follows. `exit_plan_mode` (#1225) is
 //! local-only: the desktop's plan mode offers it outside `TOOLS`, and the
-//! cloud executor has no plan mode, so it is in neither table.
+//! cloud executor has no plan mode, so it is in neither table. The memory
+//! tools (#1233) are in neither table either: they are not workspace tools,
+//! and both hosts offer them from [`crate::memory_tools`] over their own
+//! [`MemoryStore`](crate::host::MemoryStore). The desktop's `workspace_index`
+//! tools (`elitea-local-index`: `search_workspace`, `repo_map` (#1240) and the
+//! Inventory-named ones) are local-only too: they answer from the desktop's
+//! own index, which the executor does not have, and are not in `TOOLS` either.
 //!
 //! [`WorkspaceToolProvider`] is a [`ToolProvider`]: one toolset, named like
 //! the local one, whose every call is sent to a [`WorkspaceRunner`] (the

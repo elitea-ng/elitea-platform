@@ -19,7 +19,11 @@
 //!
 //! `search_workspace` is local only (no cloud tool has its name): one ranked
 //! list of file locations from the chunks' full-text index, the graph and
-//! (when turned on) the vectors ([`crate::search`]).
+//! (when turned on) the vectors ([`crate::search`]). So is `repo_map`
+//! (#1240): the files and symbols most relevant to a focus, ranked by
+//! personalized `PageRank` over the code graph and cut to a token budget
+//! ([`elitea_inventory_core::repo_map`]), each symbol's line read through the
+//! confined read. The cloud executor offers neither (it has no index).
 //!
 //! Every tool only reads, so each runs without an approval, in plan mode
 //! too, and calls may run concurrently.
@@ -30,11 +34,12 @@ use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
 use elitea_agent_runtime::host::{HostError, ToolProvider, ToolsetRequest};
 use elitea_engine_core::pystr;
+use elitea_inventory_core::repo_map::{self, Focus};
 use elitea_inventory_core::retrieval::query::{SearchFilters, citations_of, ids_named, search};
 use elitea_inventory_core::retrieval::view::GraphView;
 use elitea_inventory_core::retrieval::{Call, dispatch};
 use elitea_local_tools::files::MAX_FILE_BYTES;
-use elitea_local_tools::workspace::{Workspace, WsPath};
+use elitea_local_tools::workspace::{Intent, Workspace, WsPath};
 use serde_json::{Map, Value, json};
 use std::fmt::Write as _;
 use std::path::Path;
@@ -200,17 +205,45 @@ fn search_workspace() -> Value {
     })
 }
 
+/// The most entries `repo_map` takes in each focus list.
+const MAX_FOCUS: usize = 20;
+/// The tokens `repo_map` holds back for its closing line.
+const LEFT_OUT_TOKENS: usize = 24;
+/// `repo_map`'s token budget: default and bounds.
+const REPO_MAP_TOKENS: (u64, u64, u64) = (2048, 256, 8192);
+
+fn repo_map_params() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "focus_paths": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_FOCUS, "description": "Files or directories the task is about (workspace-relative)"},
+            "focus_symbols": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_FOCUS, "description": "Identifiers the task names (functions, types, …)"},
+            "max_tokens": {"type": "integer", "minimum": REPO_MAP_TOKENS.1, "maximum": REPO_MAP_TOKENS.2, "default": REPO_MAP_TOKENS.0, "description": "The map's size budget, in estimated tokens"}
+        },
+        "additionalProperties": false
+    })
+}
+
 /// The tools only the local index has (no cloud tool takes these names).
-pub static LOCAL_TOOLS: [IndexToolSpec; 1] = [IndexToolSpec {
-    name: "search_workspace",
-    family: "local",
-    description: "Search the workspace's files for a question or identifiers and get the best places to read: path, line range, a snippet, a score and which signals matched (words, the code graph, its neighbours, meaning). Start here before reading files; pass entity_ref to get_entity_details for an entity's relations.",
-    parameters: search_workspace,
-}];
+pub static LOCAL_TOOLS: [IndexToolSpec; 2] = [
+    IndexToolSpec {
+        name: "search_workspace",
+        family: "local",
+        description: "Search the workspace's files for a question or identifiers and get the best places to read: path, line range, a snippet, a score and which signals matched (words, the code graph, its neighbours, meaning). Start here before reading files; pass entity_ref to get_entity_details for an entity's relations.",
+        parameters: search_workspace,
+    },
+    IndexToolSpec {
+        name: "repo_map",
+        family: "local",
+        description: "A ranked overview of the repository: the most relevant files and their key symbols for the current task. Use it before exploring with list_tree or search_files.",
+        parameters: repo_map_params,
+    },
+];
 
 /// The index tools' names: the names a remote toolkit's tool must not take.
-pub const NAMES: [&str; 8] = [
+pub const NAMES: [&str; 9] = [
     "search_workspace",
+    "repo_map",
     "search_knowledge_graph",
     "get_entity_details",
     "get_related_entities",
@@ -233,7 +266,9 @@ fn answer(
     notice: Option<&str>,
 ) -> Value {
     let params = args.as_object().cloned().unwrap_or_default();
-    let text = if spec.name == "get_entity_content"
+    let text = if spec.name == "repo_map" {
+        repo_map_text(view, workspace, &params)
+    } else if spec.name == "get_entity_content"
         && let Some(content) = entity_content(view, workspace, &params)
     {
         Ok(content)
@@ -264,6 +299,88 @@ fn answer(
         }
         Err(message) => failure("index.failed", message),
     }
+}
+
+/// A workspace-relative path the index cites, if the workspace may read it
+/// (not `path_deny`, not the session's deny list).
+fn readable(workspace: &Workspace, path: &str) -> Option<WsPath> {
+    let path = WsPath::from_relative(Path::new(path)).ok()?;
+    workspace.check(&path, Intent::Read).ok().map(|()| path)
+}
+
+/// A list of strings argument (at most [`MAX_FOCUS`] kept).
+fn strings(params: &Map<String, Value>, key: &str) -> Result<Vec<String>, String> {
+    match params.get(key) {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .take(MAX_FOCUS)
+            .map(|item| {
+                item.as_str()
+                    .map(|text| text.trim().to_owned())
+                    .ok_or_else(|| format!("{key} must be a list of strings"))
+            })
+            .filter(|item| !matches!(item, Ok(text) if text.is_empty()))
+            .collect(),
+        Some(_) => Err(format!("{key} must be a list of strings")),
+    }
+}
+
+/// `repo_map`: the ranked map of the view's graph for the focus, cut to
+/// `max_tokens`. A file the workspace may not read is never ranked nor read
+/// (the index holds none by construction: this checks it again).
+fn repo_map_text(
+    view: &GraphView,
+    workspace: &Workspace,
+    params: &Map<String, Value>,
+) -> Result<String, String> {
+    let (default, low, high) = REPO_MAP_TOKENS;
+    let max_tokens = match params.get("max_tokens") {
+        None | Some(Value::Null) => default,
+        Some(value) => value
+            .as_u64()
+            .ok_or("max_tokens must be a positive integer")?,
+    }
+    .clamp(low, high);
+    // A focus path as the model wrote it (absolute, `./src`): the
+    // workspace's own form, or dropped when it is outside or denied.
+    let paths: Vec<String> = strings(params, "focus_paths")?
+        .iter()
+        .filter_map(|path| workspace.resolve(path, Intent::Read).ok())
+        .map(|path| path.display_string())
+        .filter(|path| !path.is_empty() && path != ".")
+        .collect();
+    let symbols = strings(params, "focus_symbols")?;
+    let focus = Focus {
+        paths: &paths,
+        symbols: &symbols,
+    };
+    let ranking = repo_map::rank(&view.graph, &focus, |path| {
+        readable(workspace, path).is_some()
+    });
+    if ranking.entries.is_empty() {
+        return Ok("The workspace index holds no files to map yet.".to_owned());
+    }
+    let heading = "Repository map: the files most relevant to the task first, each with its key symbols (line: first source line).\n\n";
+    let mut read = |path: &str| {
+        let file = readable(workspace, path)?;
+        let read = workspace.read(&file, MAX_FILE_BYTES).ok()?;
+        elitea_doc_extract::decode_text(&read.bytes).ok()
+    };
+    // The closing line naming what was left out fits in what is held back.
+    let budget = usize::try_from(max_tokens)
+        .unwrap_or(usize::MAX)
+        .saturating_sub(LEFT_OUT_TOKENS);
+    let map = repo_map::render(&ranking, heading, budget, &mut read);
+    let mut text = map.text;
+    let left = ranking.entries.len() - map.entries;
+    if left > 0 {
+        let _ = write!(
+            text,
+            "\n({left} more ranked entries left out to fit {max_tokens} tokens)"
+        );
+    }
+    Ok(text)
 }
 
 /// The entity the cloud's `get_entity_content` resolves `entity_name` to
@@ -361,7 +478,7 @@ impl IndexTool {
     /// Run the tool without the agent runtime (the host's tests, a UI
     /// preview).
     pub async fn call(&self, args: Value) -> Value {
-        if self.spec.family == "local" {
+        if self.spec.name == "search_workspace" {
             return self.call_local(args).await;
         }
         if self.service.is_closed() {
@@ -382,7 +499,8 @@ impl IndexTool {
         };
         let spec = self.spec;
         let workspace = Arc::clone(self.service.workspace());
-        // The handlers walk the whole graph: off the runtime's threads.
+        // The handlers (and the repo map) walk the whole graph: off the
+        // runtime's threads.
         tokio::task::spawn_blocking(move || {
             answer(spec, &view, &workspace, &args, notice.as_deref())
         })

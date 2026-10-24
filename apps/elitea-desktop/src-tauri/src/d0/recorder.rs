@@ -126,6 +126,9 @@ struct State {
     before: BTreeMap<String, Option<Vec<u8>>>,
     /// `(from, to)` of renames a patch made.
     renames: Vec<(String, String)>,
+    /// The memories this turn saved and deleted (#1233), in call order.
+    memories_saved: Vec<u64>,
+    memories_deleted: Vec<u64>,
     /// What each changed file held when the turn ended ([`Recorder::seal`]);
     /// a file that could not be read then is missing.
     after: BTreeMap<String, PostState>,
@@ -431,7 +434,18 @@ impl Recorder {
         .unwrap_or_default()
     }
 
-    /// The commit's `local_work` report.
+    /// A memory this turn saved (`save_memory`).
+    pub fn memory_saved(&self, id: u64) {
+        self.with(|state| state.memories_saved.push(id));
+    }
+
+    /// A memory this turn deleted (`delete_memory`).
+    pub fn memory_deleted(&self, id: u64) {
+        self.with(|state| state.memories_deleted.push(id));
+    }
+
+    /// The commit's `local_work` report: `memories_saved` and
+    /// `memories_deleted` only when the turn saved or deleted one.
     #[must_use]
     pub fn work_report(&self, sandbox_mode: &str) -> Value {
         self.with(|state| {
@@ -445,6 +459,12 @@ impl Recorder {
             }
             if let Some(note) = &state.enforcement_note {
                 report["enforcement_note"] = json!(note);
+            }
+            if !state.memories_saved.is_empty() {
+                report["memories_saved"] = json!(state.memories_saved);
+            }
+            if !state.memories_deleted.is_empty() {
+                report["memories_deleted"] = json!(state.memories_deleted);
             }
             report
         })

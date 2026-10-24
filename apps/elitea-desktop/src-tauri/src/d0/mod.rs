@@ -22,6 +22,8 @@
 //! * [`model`] — `ModelTransport` over `/llm` (llm-wire + reqwest);
 //! * [`remote_tools`] — `RemoteToolkit` tools (decision 3);
 //! * [`approvals`] — the person's prompt, bridged to the UI over IPC;
+//! * [`memory`] — the person's memories as the runtime's `MemoryStore`
+//!   (#1233), over the public memory routes;
 //! * [`tools`] — the per-tool events, steps and before-images;
 //! * [`subagents`] — the runtime's sub-agents on a workspace turn (#1226);
 //! * [`processes`] — a workspace's background processes on the turn's
@@ -52,6 +54,7 @@ pub mod definition;
 pub mod environment;
 pub mod events;
 pub mod framing;
+pub mod memory;
 pub mod mentions;
 pub mod model;
 pub mod processes;

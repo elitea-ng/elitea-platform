@@ -35,6 +35,31 @@ func TestBoundReportCutsAndCounts(t *testing.T) {
 	if len([]rune(action)) > 512 || !strings.Contains(action, "60 commands") || !strings.Contains(action, "210 paths") {
 		t.Fatalf("audit action = %q", action)
 	}
+	if strings.Contains(action, "memories") || got.MemoriesSaved == nil || got.MemoriesDeleted == nil {
+		t.Fatalf("a report without memory ids: action %q, saved %v, deleted %v", action, got.MemoriesSaved, got.MemoriesDeleted)
+	}
+}
+
+func TestBoundReportKeepsMemoryIDs(t *testing.T) {
+	report := LocalWorkReport{MemoriesSaved: []int64{7, 0, -3, 9}, MemoriesDeleted: make([]int64, 0, MaxReportedMemoryIDs+5)}
+	for i := int64(1); i <= MaxReportedMemoryIDs+5; i++ {
+		report.MemoriesDeleted = append(report.MemoriesDeleted, i)
+	}
+	got := boundReport(report)
+	if !reflect.DeepEqual(got.MemoriesSaved, []int64{7, 9}) || got.MemoriesSavedTotal != 4 {
+		t.Fatalf("saved = %v (total %d)", got.MemoriesSaved, got.MemoriesSavedTotal)
+	}
+	if len(got.MemoriesDeleted) != MaxReportedMemoryIDs || got.MemoriesDeletedTotal != MaxReportedMemoryIDs+5 {
+		t.Fatalf("deleted = %d (total %d)", len(got.MemoriesDeleted), got.MemoriesDeletedTotal)
+	}
+	if action := commitAuditAction(got); !strings.Contains(action, "memories 4 saved 205 deleted") {
+		t.Fatalf("audit action = %q", action)
+	}
+	// A report without memory ids digests as it did before the fields existed.
+	encoded, err := json.Marshal(LocalWorkReport{Commands: []CommandRecord{}, Paths: []string{}})
+	if err != nil || strings.Contains(string(encoded), "memories") {
+		t.Fatalf("report JSON = %s (%v)", encoded, err)
+	}
 }
 
 func TestValidCommitRules(t *testing.T) {

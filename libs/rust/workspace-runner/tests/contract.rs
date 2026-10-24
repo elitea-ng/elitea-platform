@@ -154,3 +154,19 @@ async fn local_mcp_tools_are_local_only() {
     assert!(!session.rules().policy().local_mcp);
     assert_eq!(session.start_mcp_servers("cloud").await.len(), 0);
 }
+
+/// #1233: the memory tools are not workspace tools. Both hosts get the same
+/// three from the runtime's own `memory` toolset over their `MemoryStore`
+/// (`elitea_agent_runtime::memory_tools`), so neither table names them and
+/// no workspace tool takes their names.
+#[test]
+fn memory_tools_are_the_runtimes_not_the_workspaces() {
+    use elitea_agent_runtime::memory_tools::TOOL_NAMES;
+    for name in TOOL_NAMES {
+        assert!(TOOLS.iter().all(|tool| tool.name != name), "{name}");
+        assert!(
+            WORKSPACE_TOOLS.iter().all(|tool| tool.name != name),
+            "{name}"
+        );
+    }
+}

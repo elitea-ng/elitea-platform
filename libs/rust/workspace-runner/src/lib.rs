@@ -206,6 +206,9 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
             // Stdio MCP servers are the person's, on their device: never in
             // the cloud executor (#1230).
             local_mcp: false,
+            // The memory tools are not workspace tools: the cloud host
+            // offers them over its own `MemoryStore` (#1233).
+            memory_write: false,
         },
         settings: WorkspaceSettings::default(),
         choices: Arc::new(MemoryChoices::default()),

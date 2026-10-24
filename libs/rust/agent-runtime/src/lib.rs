@@ -14,6 +14,8 @@
 //! * [`planner`], [`lazy_tools`], [`subagents`] — the `planner`,
 //!   `lazy_tools_mode` (Smart Tools Selection) and `subagents` internal
 //!   tools;
+//! * [`memory_tools`] — `save_memory`, `search_memory` and `delete_memory`
+//!   over the host's [`host::MemoryStore`] (decision 8, gate 7b);
 //! * [`tool_namespacing`] — the provider-alias notice for renamed tools;
 //! * [`context`] — shrinking older tool results in a long turn's model
 //!   requests (host opt-in);
@@ -65,6 +67,7 @@ pub mod host;
 pub mod image_result;
 pub mod instruction_authority;
 pub mod lazy_tools;
+pub mod memory_tools;
 pub mod planner;
 pub mod platform;
 pub mod request;

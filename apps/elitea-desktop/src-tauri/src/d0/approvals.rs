@@ -375,6 +375,16 @@ fn cut(text: &str, max: usize) -> String {
     elitea_agent_runtime::text::clip_bytes(text, max).to_owned()
 }
 
+/// [`cut`], with an ellipsis when it cut something.
+fn clipped(text: &str, max: usize) -> String {
+    let kept = elitea_agent_runtime::text::clip_bytes(text, max);
+    if kept.len() < text.len() {
+        format!("{kept}…")
+    } else {
+        kept.to_owned()
+    }
+}
+
 /// The `approval_request` payload (without `request_id`).
 fn describe(request: &ApprovalRequest) -> Value {
     let reason = request
@@ -392,10 +402,27 @@ fn describe(request: &ApprovalRequest) -> Value {
             .ok()
             .and_then(|v| v.as_str().map(str::to_owned))
             .unwrap_or_default();
-        let detail = call
+        let mut detail = call
             .command
             .clone()
             .unwrap_or_else(|| call.paths.join(", "));
+        // A runtime memory call (#1233): the text it saves or searches for,
+        // or the memory it deletes and what that memory says (the runtime
+        // looked it up before asking).
+        if let Some(memory) = request
+            .payload
+            .get(elitea_agent_runtime::memory_tools::APPROVAL_PAYLOAD_KEY)
+        {
+            detail = match (
+                memory.get("content").and_then(Value::as_str),
+                memory.get("id"),
+            ) {
+                (Some(text), Some(id)) => format!("memory {id}: {}", clipped(text, 1024)),
+                (Some(text), None) => cut(text, 4096),
+                (None, Some(id)) => format!("memory {id}"),
+                (None, None) => detail,
+            };
+        }
         let mut payload = json!({
             "tool": tool,
             "title": capitalised(&request.message),
