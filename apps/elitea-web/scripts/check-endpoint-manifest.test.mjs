@@ -775,7 +775,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // readLocalChildTurn, the cloud child turns of a desktop local turn. Only
 // the desktop host calls them (over its own HTTP client), so the manifest
 // count is unchanged.
-const GENERATED_OPERATION_COUNT = 346;
+// 346 -> 347 (client contract 1.24): generateConversationName, a chat's
+// title from its first exchange. The manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 347;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
