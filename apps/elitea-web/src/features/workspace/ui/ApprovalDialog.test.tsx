@@ -93,6 +93,12 @@ describe('ApprovalDialog', () => {
     expect(screen.queryByRole('button', { name: 'Always allow' })).toBeNull();
   });
 
+  it('says "Allow for this session" when the choice lasts the session', () => {
+    renderWithTheme(<ApprovalDialog request={{ ...REQUEST, remember_scope: 'session' }} queued={0} onRespond={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Allow for this session' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Always allow' })).toBeNull();
+  });
+
   it('focuses Deny, and Escape denies', async () => {
     const onRespond = vi.fn();
     const user = userEvent.setup();

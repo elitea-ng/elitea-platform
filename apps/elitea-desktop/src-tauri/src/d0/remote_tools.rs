@@ -20,6 +20,14 @@
 //! talks to the MCP server and never holds what the browser signs in with:
 //! of the 409 it keeps the toolkit's name and the server's address (scheme,
 //! host and path), nothing else.
+//!
+//! A `web` or `host_intel` toolkit (#1238) is offered only while the
+//! `local_work` policy's `web` / `host_intel` is on ([`offered`]), and each
+//! call passes the session's approval rules first: web reads are allowed,
+//! host-intel calls are asked ("approve for this session" answers the rest
+//! of the app session). Its result is framed as untrusted data under the
+//! thread's nonce. The search and fetch run on the cloud worker; no key and
+//! no fetch happens on the device.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,6 +39,9 @@ use elitea_agent_runtime::host::{
     ApprovalChannel, ApprovalOutcome, ApprovalRequest, HostError, ToolProvider, ToolsetRequest,
 };
 use serde_json::{Value, json};
+
+use elitea_local_tools::approvals::{APPROVE_SESSION, RulesEngine, ToolCall, ToolKind, Verdict};
+use elitea_local_tools::policy::LocalWorkPolicy;
 
 use super::api::PlatformApi;
 use super::approvals::{
@@ -71,6 +82,106 @@ pub struct RemoteContext {
     pub retry: RetryPolicy,
     /// How long an MCP sign-in waits ([`MCP_AUTHORIZATION_WAIT`]).
     pub authorization_wait: Duration,
+    /// The session's approval rules, for the web toolkits' calls; `None`
+    /// refuses them.
+    pub rules: Option<Arc<RulesEngine>>,
+    /// The thread's nonce, which frames a web toolkit's result.
+    pub nonce: String,
+}
+
+/// The tag a web toolkit's result is framed in.
+const WEB_RESULT_TAG: &str = "web_result";
+
+/// Whether the turn offers `spec`: a `web` or `host_intel` toolkit only
+/// while the policy allows it, every other toolkit as before.
+#[must_use]
+pub fn offered(spec: &RemoteToolSpec, policy: &LocalWorkPolicy) -> bool {
+    match ToolKind::web_toolkit(&spec.toolkit_type) {
+        Some(ToolKind::WebRead) => policy.web,
+        Some(_) => policy.host_intel,
+        None => true,
+    }
+}
+
+/// What the approval card shows of a web call: the query, URL or address.
+fn web_target(arguments: &Value) -> String {
+    ["query", "url", "ip"]
+        .iter()
+        .find_map(|key| arguments.get(*key).and_then(Value::as_str))
+        .map(|text| cut(text, 512))
+        .unwrap_or_default()
+}
+
+/// The approval rules' answer to a web call. `Err` is the result to return.
+async fn web_gate(
+    context: &RemoteContext,
+    spec: &RemoteToolSpec,
+    call_id: &str,
+    tool_name: &str,
+    arguments: &Value,
+    kind: ToolKind,
+) -> Result<(), Value> {
+    let refused = |reason: &str| error_result("local_work_policy_refused", reason);
+    let Some(rules) = context.rules.as_ref() else {
+        return Err(refused("the web tools are disabled by policy"));
+    };
+    let call = ToolCall::new(kind);
+    let decision = rules.decide(&call);
+    match decision.verdict {
+        Verdict::Allow => Ok(()),
+        Verdict::Deny => Err(refused(&decision.reason)),
+        Verdict::Ask => {
+            let title = format!("Run {tool_name} on {}", spec.toolkit_name);
+            let request = ApprovalRequest {
+                subject: call_id.to_owned(),
+                message: title.clone(),
+                available_actions: vec![
+                    "approve".to_owned(),
+                    APPROVE_SESSION.to_owned(),
+                    "reject".to_owned(),
+                ],
+                payload: json!({ REMOTE_PAYLOAD_KEY: {
+                    "tool": tool_name,
+                    "toolkit": spec.toolkit_name,
+                    "title": title,
+                    "detail": web_target(arguments),
+                    "reason": decision.reason,
+                }}),
+            };
+            match context.prompt.request(request).await {
+                Ok(ApprovalOutcome::Decided { action, .. }) if action == "approve" => Ok(()),
+                Ok(ApprovalOutcome::Decided { action, .. }) if action == APPROVE_SESSION => {
+                    // Only a host-intel call can be remembered for a session.
+                    let _ = rules.remember_for_session(&call);
+                    Ok(())
+                }
+                Ok(ApprovalOutcome::Decided { value, .. }) => {
+                    let mut result = error_result("rejected", "the person rejected this call");
+                    if let Value::Object(fields) = &mut result {
+                        fields.extend(elitea_local_tools::session::declined_details(
+                            elitea_local_tools::session::feedback_of(&value).as_deref(),
+                        ));
+                    }
+                    Err(result)
+                }
+                _ => Err(error_result("rejected", "the person rejected this call")),
+            }
+        }
+    }
+}
+
+/// A web toolkit's result as untrusted data: one block under the thread's
+/// nonce, which the fetched text cannot close.
+fn framed_web_result(nonce: &str, spec: &RemoteToolSpec, result: &Value) -> Value {
+    let text = match result {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    json!(format!(
+        "{}\n{}",
+        super::framing::ends_only_at(WEB_RESULT_TAG, nonce),
+        super::framing::block(WEB_RESULT_TAG, nonce, "toolkit", &spec.toolkit_name, &text)
+    ))
 }
 
 pub struct RemoteToolkitTool {
@@ -194,6 +305,12 @@ pub async fn call(
     tool_name: &str,
     arguments: Value,
 ) -> Value {
+    let web = ToolKind::web_toolkit(&spec.toolkit_type);
+    if let Some(kind) = web
+        && let Err(result) = web_gate(context, spec, call_id, tool_name, &arguments, kind).await
+    {
+        return result;
+    }
     let mut key = uuid::Uuid::new_v4().to_string();
     let mut confirmation: Option<Value> = None;
     let mut authorization_reference: Option<String> = None;
@@ -255,9 +372,13 @@ pub async fn call(
         match (answer.status, code.as_str()) {
             (200, _) => {
                 let ok = answer.body.get("ok") == Some(&Value::Bool(true));
+                let mut payload = answer.body.get("result").cloned().unwrap_or(Value::Null);
+                if web.is_some() && !payload.is_null() {
+                    payload = framed_web_result(&context.nonce, spec, &payload);
+                }
                 let mut result = json!({
                     "status": if ok { "ok" } else { "error" },
-                    "result": answer.body.get("result").cloned().unwrap_or(Value::Null),
+                    "result": payload,
                 });
                 if answer.body.get("truncated") == Some(&Value::Bool(true)) {
                     result["truncated"] = json!(true);

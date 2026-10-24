@@ -92,6 +92,14 @@ pub struct LocalWorkPolicy {
     /// `delete_memory`). Recall and `search_memory` never depend on it. Off
     /// when absent: the tools are not offered and their calls are denied.
     pub memory_write: bool,
+    /// `local_work_web` (#1238): local turns may call a remote `web` toolkit
+    /// (`web_search`, `web_fetch`), which sends queries and URLs to
+    /// third-party providers. Off when absent: the tools are not offered and
+    /// the server refuses the calls.
+    pub web: bool,
+    /// `local_work_host_intel` (#1238): local turns may call a remote
+    /// `host_intel` toolkit (Shodan). Off when absent.
+    pub host_intel: bool,
 }
 
 impl Default for LocalWorkPolicy {
@@ -111,6 +119,8 @@ impl Default for LocalWorkPolicy {
             index_model_mirror_url: String::new(),
             local_mcp: false,
             memory_write: false,
+            web: false,
+            host_intel: false,
         }
     }
 }
@@ -169,6 +179,19 @@ mod tests {
         assert!(mcp.local_mcp);
         assert!(SandboxMode::ReadOnly < SandboxMode::WorkspaceWrite);
         assert!(SandboxMode::WorkspaceWrite < SandboxMode::FullAccess);
+    }
+
+    #[test]
+    fn web_and_host_intel_absent_are_off() {
+        let absent: LocalWorkPolicy =
+            serde_json::from_value(serde_json::json!({"allowed": true})).unwrap();
+        assert!(!absent.web && !absent.host_intel);
+        assert!(!LocalWorkPolicy::default().web);
+        let on: LocalWorkPolicy = serde_json::from_value(
+            serde_json::json!({"allowed": true, "web": true, "host_intel": true}),
+        )
+        .unwrap();
+        assert!(on.web && on.host_intel);
     }
 
     #[test]

@@ -24,6 +24,7 @@
   "workspace.approval.deny": "Deny",
   "workspace.approval.allowOnce": "Allow once",
   "workspace.approval.allowAlways": "Always allow",
+  "workspace.approval.allowSession": "Allow for this session",
   "workspace.approval.declineWhy": "Decline and tell the agent why",
   "workspace.approval.feedback": "Tell the agent why (and what to do instead)",
   "workspace.approval.sendDecline": "Decline and send",

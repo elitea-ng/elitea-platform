@@ -1245,7 +1245,9 @@ impl LocalSession {
             | ToolKind::McpCall
             | ToolKind::SearchMemory
             | ToolKind::SaveMemory
-            | ToolKind::DeleteMemory => Err(ToolError::new(
+            | ToolKind::DeleteMemory
+            | ToolKind::WebRead
+            | ToolKind::HostIntel => Err(ToolError::new(
                 ErrorCode::Denied,
                 format!("`{tool}` is not available"),
             )),

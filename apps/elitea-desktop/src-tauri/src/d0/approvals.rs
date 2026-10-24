@@ -24,7 +24,7 @@ use elitea_agent_runtime::host::{
 };
 use elitea_agent_runtime::step_limit::{CONTINUE_KIND, CONTINUE_PAYLOAD_KEY};
 use elitea_local_tools::approvals::{
-    ACCEPT, APPROVE_ALWAYS, DECLINE, PAYLOAD_KEY, PLAN_PAYLOAD_KEY, ToolCall,
+    ACCEPT, APPROVE_ALWAYS, APPROVE_SESSION, DECLINE, PAYLOAD_KEY, PLAN_PAYLOAD_KEY, ToolCall,
 };
 use elitea_local_tools::session::{BY_PERSON, DECIDED_BY};
 use serde_json::{Value, json};
@@ -203,6 +203,16 @@ impl ApprovalChannel for UiPrompt {
         }
         let described = describe(&request);
         let can_remember = described["can_remember"] == Value::Bool(true);
+        // A host-intel question (#1238) remembers for the app session only.
+        let remember_action = if request
+            .available_actions
+            .iter()
+            .any(|a| a == APPROVE_SESSION)
+        {
+            APPROVE_SESSION
+        } else {
+            APPROVE_ALWAYS
+        };
         let (request_id, answer) = self.broker.register(binding.events.turn_id());
         let mut payload = described;
         payload["request_id"] = Value::String(request_id.clone());
@@ -268,7 +278,7 @@ impl ApprovalChannel for UiPrompt {
         binding.recorder.hitl_exchange(exchange);
         Ok(match decision {
             UiDecision::AllowAlways if can_remember => ApprovalOutcome::Decided {
-                action: APPROVE_ALWAYS.to_owned(),
+                action: remember_action.to_owned(),
                 value: json!({}),
             },
             UiDecision::AllowOnce | UiDecision::AllowAlways => ApprovalOutcome::Decided {
@@ -504,13 +514,21 @@ fn describe(request: &ApprovalRequest) -> Value {
     }
     if let Some(remote) = request.payload.get(REMOTE_PAYLOAD_KEY) {
         let text = |key: &str| remote.get(key).and_then(Value::as_str).unwrap_or_default();
-        return json!({
+        let session = request
+            .available_actions
+            .iter()
+            .any(|a| a == APPROVE_SESSION);
+        let mut payload = json!({
             "tool": text("tool"),
             "title": text("title"),
             "detail": text("detail"),
             "reason": text("reason"),
-            "can_remember": false,
+            "can_remember": session,
         });
+        if session {
+            payload["remember_scope"] = json!("session");
+        }
+        return payload;
     }
     json!({
         "tool": request.subject,

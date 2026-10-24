@@ -1184,6 +1184,8 @@ async fn a_remote_retry_reuses_its_idempotency_key() {
             delay: Duration::from_millis(5),
         },
         authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
+        rules: None,
+        nonce: "0123456789abcdef0123456789abcdef".into(),
     };
     let spec = jira_spec();
     let result = remote_tools::call(&context, &spec, "c1", "search", json!({"q": 1})).await;
@@ -1208,6 +1210,79 @@ fn jira_spec() -> RemoteToolSpec {
         tool_name: None,
         tools: Vec::new(),
     }
+}
+
+fn typed_spec(toolkit_type: &str) -> RemoteToolSpec {
+    RemoteToolSpec {
+        toolkit_type: toolkit_type.into(),
+        ..jira_spec()
+    }
+}
+
+#[test]
+fn web_tools_absent_when_policy_off() {
+    use elitea_local_tools::policy::LocalWorkPolicy;
+    let off = LocalWorkPolicy {
+        allowed: true,
+        ..LocalWorkPolicy::default()
+    };
+    assert!(!remote_tools::offered(&typed_spec("web"), &off));
+    assert!(remote_tools::offered(&typed_spec("jira"), &off));
+    let on = LocalWorkPolicy { web: true, ..off };
+    assert!(remote_tools::offered(&typed_spec("web"), &on));
+    assert!(!remote_tools::offered(&typed_spec("host_intel"), &on));
+}
+
+#[test]
+fn host_intel_tools_absent_when_policy_off() {
+    use elitea_local_tools::policy::LocalWorkPolicy;
+    let web_only = LocalWorkPolicy {
+        allowed: true,
+        web: true,
+        ..LocalWorkPolicy::default()
+    };
+    assert!(!remote_tools::offered(&typed_spec("host_intel"), &web_only));
+    let on = LocalWorkPolicy {
+        host_intel: true,
+        ..web_only
+    };
+    assert!(remote_tools::offered(&typed_spec("host_intel"), &on));
+}
+
+/// A web toolkit's call with no approval rules is refused before any
+/// request: the server is never asked.
+#[tokio::test]
+async fn web_call_without_rules_is_refused_locally() {
+    let context = RemoteContext {
+        api: Arc::new(
+            PlatformApi::new(
+                Arc::new(StaticCredentials::new("http://127.0.0.1:9".into())),
+                "0.1.0",
+            )
+            .unwrap(),
+        ),
+        project_id: 1,
+        execution_id: EXECUTION.into(),
+        application_id: 5,
+        version_id: 9,
+        prompt: Arc::new(super::approvals::UiPrompt::new(Arc::default())),
+        retry: RetryPolicy {
+            attempts: 1,
+            delay: Duration::from_millis(1),
+        },
+        authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
+        rules: None,
+        nonce: "0123456789abcdef0123456789abcdef".into(),
+    };
+    let result = remote_tools::call(
+        &context,
+        &typed_spec("web"),
+        "c1",
+        "web_search",
+        json!({"query": "tokio"}),
+    )
+    .await;
+    assert_eq!(result["code"], "local_work_policy_refused");
 }
 
 /// A token-shaped value the 409 carries in every field a careless host
@@ -1291,6 +1366,8 @@ async fn remote_context(
             delay: Duration::from_millis(5),
         },
         authorization_wait,
+        rules: None,
+        nonce: "0123456789abcdef0123456789abcdef".into(),
     }
 }
 
@@ -1462,6 +1539,8 @@ fn a_platform_servers_generic_tool_names_its_tools() {
         prompt: Arc::new(super::approvals::UiPrompt::new(Arc::default())),
         retry: RetryPolicy::default(),
         authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
+        rules: None,
+        nonce: "0123456789abcdef0123456789abcdef".into(),
     });
     let tool = remote_tools::RemoteToolkitTool::new(spec, context);
     assert!(
@@ -1498,6 +1577,8 @@ fn a_platform_servers_generic_tool_names_its_tools() {
             prompt: Arc::new(super::approvals::UiPrompt::new(Arc::default())),
             retry: RetryPolicy::default(),
             authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
+            rules: None,
+            nonce: "0123456789abcdef0123456789abcdef".into(),
         }),
     );
     assert!(
