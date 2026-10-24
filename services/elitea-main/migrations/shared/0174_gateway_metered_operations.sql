@@ -147,8 +147,20 @@ COMMENT ON COLUMN gateway.llm_request_logs.cost_usd IS
 -- not a ledger table, the column is new and NULL in every row, so the index
 -- holds no entry; its build is one read of execution_jobs, inside the same
 -- transaction as the ALTER that already locks it.
-ALTER TABLE elitea_runtime.execution_jobs ADD COLUMN IF NOT EXISTS attribution_execution_id TEXT;
-
-CREATE INDEX IF NOT EXISTS idx_execution_jobs_attribution_execution_id
-    ON elitea_runtime.execution_jobs (attribution_execution_id)
-    WHERE attribution_execution_id IS NOT NULL;
+--
+-- It is guarded on the table existing because this file is ALSO part of
+-- infradb.GatewayMigrationSQL(): the gateway-only schema the dev bootstrap
+-- and the gateway's Postgres test suites build, which carries the ledger
+-- tables above but no elitea_runtime schema. Every ledgered deploy has
+-- elitea_runtime.execution_jobs long before 0174, so there it always runs.
+DO $$
+BEGIN
+    IF to_regclass('elitea_runtime.execution_jobs') IS NOT NULL THEN
+        ALTER TABLE elitea_runtime.execution_jobs
+            ADD COLUMN IF NOT EXISTS attribution_execution_id TEXT;
+        CREATE INDEX IF NOT EXISTS idx_execution_jobs_attribution_execution_id
+            ON elitea_runtime.execution_jobs (attribution_execution_id)
+            WHERE attribution_execution_id IS NOT NULL;
+    END IF;
+END
+$$;
