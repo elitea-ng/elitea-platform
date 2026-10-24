@@ -86,6 +86,7 @@ import (
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
 // mcpConversationSource marks the conversations this file creates.
@@ -616,28 +617,24 @@ RETURNING id, uuid::text`, schema),
 	return conversationUUID, agentParticipantID, nil
 }
 
-// discardRunConversation removes a conversation whose turn was never admitted.
-//
-// The DELETE is guarded on `source` and on the conversation having NO message
-// group. Both matter: the source predicate means a bug in the caller cannot
-// reach a person's own chat, and the emptiness predicate means a conversation
-// that somehow did receive a turn is never removed under it. Nothing here
-// depends on the delete succeeding — the caller is already answering an error.
+// discardRunConversation removes a conversation whose turn was never admitted,
+// through [repos.DiscardUnadmittedConversation]: guarded on `source` (a bug
+// here cannot reach a person's own chat) and on the conversation holding no
+// message group (one that somehow received a turn is never removed under it),
+// and its participant mappings go first in the same transaction, because
+// chat_participant_mapping's key does not cascade (#1429). The caller is
+// already answering an error, so a failure is logged rather than returned.
 func (h *Handler) discardRunConversation(ctx context.Context, schema, conversationUUID string) {
 	if h.pool == nil || conversationUUID == "" {
 		return
 	}
 	// The request context may already be dead (the client hung up on the very
 	// error being reported). Cleanup belongs to the row, not to the request.
-	ctx = context.WithoutCancel(ctx)
-	_, _ = h.pool.Exec(ctx, fmt.Sprintf(`
-DELETE FROM %[1]s.chat_conversations AS conversation
-WHERE conversation.uuid = $1::uuid
-  AND conversation.source = $2
-  AND NOT EXISTS (
-      SELECT 1 FROM %[1]s.chat_message_group AS existing
-      WHERE existing.conversation_id = conversation.id
-  )`, schema), conversationUUID, mcpConversationSource)
+	if _, err := repos.DiscardUnadmittedConversation(context.WithoutCancel(ctx), h.pool, schema,
+		conversationUUID, mcpConversationSource); err != nil {
+		slog.Default().WarnContext(ctx, "mcp: discard run conversation failed",
+			"event", "mcp.agent.discard_failed", "conversation_uuid", conversationUUID, "err", err)
+	}
 }
 
 // findOrCreateParticipant is find-then-create, the order

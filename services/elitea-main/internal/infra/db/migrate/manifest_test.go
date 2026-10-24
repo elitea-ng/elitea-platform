@@ -741,7 +741,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// (seeded) and the operation, units and unit columns on llm_usage_events
 	// and llm_request_logs, plus cost_usd on the request log (#1238). No
 	// permission.
-	require.EqualValues(t, 174, Head(shared))
+	//
+	// 175: shared/0175_platform_routine_leases.sql, the lease_token,
+	// lease_holder and lease_expires_at columns on
+	// elitea_runtime.platform_routines: a routine pass holds a fenced lease on
+	// its row for as long as it runs (#1414). No data, no permission.
+	require.EqualValues(t, 175, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -966,7 +971,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// cloud child turn's poll (child/parent execution id) and its start's
 	// replay lookup (parent execution id, idempotency key) (#1239). Indexes,
 	// no permission.
-	require.EqualValues(t, 156, Head(tenant))
+	// 157: tenant/0157_chat_participant_mapping_conversation_cascade.sql,
+	// chat_participant_mapping.conversation_id's key to chat_conversations
+	// becomes ON DELETE CASCADE, the shape the dev bootstrap always had
+	// (#1429). No data, no permission.
+	require.EqualValues(t, 157, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

@@ -241,23 +241,108 @@ RETURNING `+rowColumns,
 	return updated, err
 }
 
-// Claim moves a routine's `next_run_at` from expected to next, but only if it
-// is still enabled and nobody else moved it first. The replica that wins runs
-// the pass, which is what keeps several scheduler replicas from running the
-// same sweep at once.
-func (s *Store) Claim(ctx context.Context, id string, expected *time.Time, next time.Time) (bool, error) {
-	tag, err := s.db.Exec(ctx, `
-UPDATE elitea_runtime.platform_routines
-SET next_run_at = $3
-WHERE id = $1 AND enabled AND next_run_at IS NOT DISTINCT FROM $2::timestamptz`,
-		id, expected, next)
-	if err != nil {
-		return false, err
-	}
-	return tag.RowsAffected() == 1, nil
+// Lease is a replica's hold on a routine for the length of one pass (#1414).
+// Token is the fencing token: every acquisition increments it, so a holder
+// whose lease ran out and was taken over can no longer renew or release.
+type Lease struct {
+	Token  int64
+	Holder string
 }
 
-// RecordRun stores the outcome of a pass.
+// Completion is what a released pass leaves on the row.
+type Completion struct {
+	// RanAt and Outcome become last_run_at and last_outcome.
+	RanAt   time.Time
+	Outcome string
+	// Held is the slot the acquisition moved next_run_at to; Next replaces it
+	// when next_run_at still holds it and Next is later. A zero Next leaves
+	// next_run_at alone.
+	Held time.Time
+	Next time.Time
+}
+
+// ErrLeaseLost reports a renewal or release under a token the row no longer
+// holds: the lease ran out and another replica took the routine over.
+var ErrLeaseLost = errors.New("platform routine lease lost")
+
+// Acquire claims a due slot and the lease to run it, in one statement. It
+// moves `next_run_at` from expected to held, but only if the routine is still
+// enabled, nobody moved the slot first, and no other pass holds a live lease.
+// The last guard is what keeps a pass that outlasts its interval from starting
+// again on another replica; the lease's expiry is what lets a replica take a
+// crashed holder's routine over. Times are the database's clock.
+func (s *Store) Acquire(
+	ctx context.Context, id string, expected *time.Time, held time.Time, holder string, ttl time.Duration,
+) (Lease, bool, error) {
+	var token int64
+	err := s.db.QueryRow(ctx, `
+UPDATE elitea_runtime.platform_routines
+SET next_run_at = $3,
+    lease_token = lease_token + 1,
+    lease_holder = $4,
+    lease_expires_at = clock_timestamp() + $5::bigint * interval '1 millisecond'
+WHERE id = $1 AND enabled
+  AND next_run_at IS NOT DISTINCT FROM $2::timestamptz
+  AND (lease_expires_at IS NULL OR lease_expires_at <= clock_timestamp())
+RETURNING lease_token`,
+		id, expected, held, holder, ttl.Milliseconds()).Scan(&token)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Lease{}, false, nil
+	}
+	if err != nil {
+		return Lease{}, false, err
+	}
+	return Lease{Token: token, Holder: holder}, true, nil
+}
+
+// Renew extends a held lease by ttl from now. It answers [ErrLeaseLost] when
+// the row's token is no longer the lease's, or when the lease has already run
+// out: expiry is final, even if nobody has taken the routine over yet, because
+// another replica may be acquiring it at this moment.
+func (s *Store) Renew(ctx context.Context, id string, lease Lease, ttl time.Duration) error {
+	tag, err := s.db.Exec(ctx, `
+UPDATE elitea_runtime.platform_routines
+SET lease_expires_at = clock_timestamp() + $3::bigint * interval '1 millisecond'
+WHERE id = $1 AND lease_token = $2 AND lease_expires_at > clock_timestamp()`, id, lease.Token, ttl.Milliseconds())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+// Release ends a pass: it records the outcome, plans the next slot and drops
+// the lease, all under the lease's token. It answers [ErrLeaseLost], and
+// writes nothing, when another replica has taken the routine over.
+func (s *Store) Release(ctx context.Context, id string, lease Lease, done Completion) error {
+	var next *time.Time
+	if !done.Next.IsZero() {
+		next = &done.Next
+	}
+	tag, err := s.db.Exec(ctx, `
+UPDATE elitea_runtime.platform_routines
+SET last_run_at = $3,
+    last_outcome = $4,
+    next_run_at = CASE
+        WHEN $6::timestamptz IS NOT NULL AND next_run_at = $5::timestamptz AND $6::timestamptz > $5::timestamptz
+        THEN $6::timestamptz ELSE next_run_at END,
+    lease_expires_at = NULL
+WHERE id = $1 AND lease_token = $2`,
+		id, lease.Token, done.RanAt, done.Outcome, done.Held, next)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+// RecordRun stores the outcome of a run of a routine that holds no lease (a
+// job on elitea-main's platform scheduler). A [Loop] records through
+// [Store.Release] instead, under its lease's token.
 func (s *Store) RecordRun(ctx context.Context, id string, at time.Time, outcome string) error {
 	_, err := s.db.Exec(ctx, `
 UPDATE elitea_runtime.platform_routines
