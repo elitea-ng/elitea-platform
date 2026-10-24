@@ -9,8 +9,10 @@
 //!   directory ([`shadow`]) for a folder that is not a repository.
 //! * [`exclude`]: what never leaves the laptop; [`scan`]: the secret scan;
 //!   [`caps`]: the size caps.
-//! * [`apply`]: take-back (Phase 1): preflight with no side effects, then
-//!   the fast path, a worktree, or discard.
+//! * [`apply`]: take-back: preflight with no side effects (optionally up
+//!   to turn `k`), then the fast path or a clean merge, conflict markers, a
+//!   worktree, or discard, through the shared apply engine
+//!   ([`crate::apply`]).
 //!
 //! Every git process goes through [`crate::git`]'s hardening (unsafe
 //! repositories refused, overrides, sandboxed, timeouts). Objects are read

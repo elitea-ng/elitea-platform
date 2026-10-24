@@ -1,53 +1,64 @@
-//! Take-back, Phase 1 (ADR-0034 decision 13): a preflight with no side
-//! effects, then the fast path, a worktree, or discard.
+//! Take-back (ADR-0034 decision 13): a preflight with no side effects,
+//! then apply (the fast path or a clean merge), apply with conflict
+//! markers, a worktree, or discard. The merge itself is the shared apply
+//! engine ([`crate::apply`]), the one the worktree merge-back uses.
 //!
-//! **Preflight** ([`preflight`]):
+//! **Preflight** ([`preflight`], [`preflight_up_to`]):
 //!
 //! 1. the fetched segment is verified into a quarantine of its own
 //!    (content address, pack, connectivity from every ref; the refs must be
 //!    the plan's), before anything else is read from it;
 //! 2. the cloud chain `H_1..C` is read (first parents from `C` back to the
-//!    `H_1` this desktop sent; anything else is refused);
+//!    `H_1` this desktop sent; anything else is refused); the person may
+//!    take back only up to turn `k` (`C_k`; the latest by default);
 //! 3. the folder is snapshotted as `L` with the send's exclusions, in a
 //!    temporary index (objects only: the folder, `HEAD`, the index and every
 //!    ref stay byte-identical);
-//! 4. the outcome: `fast_path` when `HEAD` is the `HEAD` of the send and
-//!    `tree(L) == tree(H'_1)`; otherwise `conflicts` (Phase 1 offers a
-//!    worktree or discard), with the paths both sides changed.
+//! 4. the engine merges `(tree(H_1), L, tree(C_k))` in a scratch object
+//!    directory over the repository and the quarantine: `fast_path` when
+//!    `L` is the sent tree, `clean_merge` when both sides changed other
+//!    lines or files, `conflicts` otherwise (with the conflicting paths).
+//!    Everything is tree-based: a `HEAD` that moved since the send (the
+//!    person committed) is the same algorithm.
 //!
-//! **Apply** ([`apply`]) first takes `L` again and refuses with
-//! `folder_changed_since_preflight` ([`ErrorCode::StaleRead`]) if it moved.
-//! Then, by mode:
+//! **Apply** ([`apply`]) first takes `L` (and `HEAD`) again and refuses
+//! with `folder_changed_since_preflight` ([`ErrorCode::StaleRead`]) if it
+//! moved. Then, by mode:
 //!
-//! * `apply` (fast path only): a checkpoint of the folder (so restoring it
-//!   undoes the take-back), the segment's objects imported into the
-//!   repository (`index-pack`), the cloud commits replayed onto `H'_1` and
-//!   kept on `elitea/cloud/<thread>`, and the changed paths written through
-//!   the confined workspace writer. `HEAD` and the index are untouched: the
-//!   cloud's work lands as uncommitted changes.
+//! * `apply` (`fast_path`, `clean_merge`) and `apply_with_markers`
+//!   (`conflicts`): a checkpoint of the folder (so restoring it undoes the
+//!   take-back), the segment's objects imported into the repository
+//!   (`index-pack`), the cloud commits up to `C_k` replayed onto `H'_1` and
+//!   kept on `elitea/cloud/<thread>`, and the merge's result written
+//!   through the confined workspace writer: with markers, conflicted text
+//!   files carry `merge-tree`'s conflict markers, and a binary conflict
+//!   keeps the folder's file (`binary_conflict`). `HEAD` and the index are
+//!   untouched: the cloud's work lands as uncommitted changes.
 //! * `worktree`: the same branch, registered as a worktree beside the folder
 //!   (`worktree add --no-checkout`, its index read from the branch, its
 //!   files written by the confined writer: no checkout filter runs); the
 //!   folder is untouched. A folder without a repository gets a plain copy.
 //! * `discard`: nothing is written.
 //!
-//! Excluded paths are never written or deleted, nor are symlinks, submodule
-//! entries or anything under a `.git` (reported as skipped).
+//! Excluded paths (the send's `excluded[]`, the exclusion rules,
+//! `path_deny`) are never written or deleted, nor are symlinks, submodule
+//! entries or anything under a `.git`: all reported in `skipped_paths`
+//! with their reason.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use elitea_workspace_store::bundle::{self as segment, Expect, Limits, VerifiedBundle};
-use elitea_workspace_store::objects::{
-    self as store_objects, Change, ChangeKind, FileEntry, ObjectDb,
-};
+use elitea_workspace_store::objects::{self as store_objects, ChangeKind, FileEntry, ObjectDb};
 use elitea_workspace_store::refs as store_refs;
 use serde::{Deserialize, Serialize};
 
 use super::exclude::{Exclusions, Reason, Rules};
 use super::snapshot::{Source, TreeLine, list_tree, snapshot_tree};
 use super::{SendRecord, TempDir, check_conversation, short_thread};
+use crate::apply::{self as engine, Entry, Objects, Plan, Trees};
+pub use crate::apply::{ApplyOutcome, Change, ChangedPath, Outcome, SkipReason, SkippedPath};
 use crate::checkpoint::Checkpoints;
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::workspace::{Workspace, WsPath, is_protected_name};
@@ -58,20 +69,14 @@ pub const MAX_CLOUD_TURNS: usize = 1000;
 /// The machine code of a folder that changed after its preflight.
 pub const FOLDER_CHANGED: &str = "folder_changed_since_preflight";
 
-/// What a preflight found.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Outcome {
-    FastPath,
-    Conflicts,
-    Error,
-}
-
 /// How a take-back is applied.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
+    /// Write the result into the folder (`fast_path`, `clean_merge`).
     Apply,
+    /// Write the result with conflict markers (`conflicts`).
+    ApplyWithMarkers,
     Worktree,
     Discard,
 }
@@ -96,34 +101,36 @@ pub struct FileDiff {
 
 /// A preflight, held until the person picks a mode.
 pub struct Preflight {
-    pub outcome: Outcome,
-    /// Paths the cloud changed that take-back writes.
-    pub changed_paths: Vec<String>,
-    /// Paths both the cloud and the folder changed since the send.
-    pub conflict_paths: Vec<String>,
-    /// Paths the cloud changed that take-back leaves alone.
-    pub skipped_paths: Vec<String>,
+    /// The engine's outcome (`applied` false): what applying writes, what
+    /// conflicts, what is left alone and why. `base` is `H'_1`.
+    pub report: ApplyOutcome,
+    /// Every cloud commit, oldest first (the person may take back fewer).
     pub chain: Vec<CloudCommit>,
+    /// `k`: the turns taken back (`chain[..k]`; `chain.len()` by default).
+    pub up_to_turn: usize,
     /// `C`, the cloud tip (`H_1` when no cloud turn changed anything).
     pub cloud_tip: String,
+    /// `C_k`, the commit whose tree is taken back.
+    pub target: String,
     /// `L` and `HEAD` as the preflight saw them.
     local_tree: String,
     head: Option<String>,
-    changes: Vec<Change>,
+    plan: Plan,
+    objects: Objects,
     bundle: VerifiedBundle,
     pack: Vec<u8>,
     record: SendRecord,
+    _scratch: TempDir,
     _quarantine: TempDir,
 }
 
 impl std::fmt::Debug for Preflight {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Preflight")
-            .field("outcome", &self.outcome)
-            .field("changed_paths", &self.changed_paths)
-            .field("conflict_paths", &self.conflict_paths)
-            .field("skipped_paths", &self.skipped_paths)
+            .field("report", &self.report)
+            .field("up_to_turn", &self.up_to_turn)
             .field("cloud_tip", &self.cloud_tip)
+            .field("target", &self.target)
             .finish_non_exhaustive()
     }
 }
@@ -135,39 +142,58 @@ impl Preflight {
         self.chain.len()
     }
 
-    /// What take-back writes, file by file: the sent and the cloud content
-    /// of every changed path (`None` where a side has no file, or the file
-    /// is larger than `max_file_bytes`, then `too_large` is set).
+    /// The modes [`apply`] accepts for this preflight: `apply` for
+    /// `fast_path` and `clean_merge`, `apply_with_markers` for `conflicts`;
+    /// `worktree` and `discard` always.
+    #[must_use]
+    pub fn modes(&self) -> Vec<Mode> {
+        match self.report.outcome {
+            Outcome::FastPath | Outcome::CleanMerge => {
+                vec![Mode::Apply, Mode::Worktree, Mode::Discard]
+            }
+            Outcome::Conflicts => vec![Mode::ApplyWithMarkers, Mode::Worktree, Mode::Discard],
+            Outcome::Error => vec![Mode::Discard],
+        }
+    }
+
+    /// What take-back writes, file by file: the folder's and the result's
+    /// content of every path written or deleted (`None` where a side has no
+    /// file, or the file is larger than `max_file_bytes`, then `too_large`
+    /// is set). For `conflicts`, the result is what applying with markers
+    /// writes.
     ///
     /// # Errors
     ///
     /// An unreadable object.
     pub fn changed_files(&self, max_file_bytes: u64) -> ToolResult<Vec<(FileDiff, bool)>> {
-        let db = &self.bundle.db;
-        let read =
-            |entry: Option<&FileEntry>, too_large: &mut bool| -> ToolResult<Option<Vec<u8>>> {
-                let Some(entry) = entry.filter(|entry| !entry.is_gitlink()) else {
-                    return Ok(None);
-                };
-                let bytes = db.blob(&entry.oid).map_err(|e| super::store_error(&e))?;
-                if bytes.len() as u64 > max_file_bytes {
-                    *too_large = true;
-                    return Ok(None);
-                }
-                Ok(Some(bytes))
-            };
+        let oids: Vec<&str> = self
+            .plan
+            .writes
+            .iter()
+            .flat_map(|write| write.old.iter().chain(write.new.iter()))
+            .map(|entry| entry.oid.as_str())
+            .collect();
+        let blobs = engine::read_blobs(&self.objects, &oids, max_file_bytes)?;
         let mut out = Vec::new();
-        for change in &self.changes {
-            if !self.changed_paths.contains(&change.path) {
-                continue;
-            }
+        for write in &self.plan.writes {
             let mut too_large = false;
-            let before = read(change.old.as_ref(), &mut too_large)?;
-            let after = read(change.new.as_ref(), &mut too_large)?;
+            let mut read = |entry: Option<&Entry>| {
+                let entry = entry?;
+                let found = blobs.get(&entry.oid).cloned();
+                too_large |= found.is_none();
+                found
+            };
+            let before = read(write.old.as_ref());
+            let after = read(write.new.as_ref());
+            let kind = match (&write.old, &write.new) {
+                (None, _) => ChangeKind::Added,
+                (_, None) => ChangeKind::Deleted,
+                _ => ChangeKind::Modified,
+            };
             out.push((
                 FileDiff {
-                    path: change.path.clone(),
-                    kind: change.kind,
+                    path: write.path.clone(),
+                    kind,
                     before,
                     after,
                 },
@@ -214,8 +240,11 @@ impl Preflight {
 }
 
 /// What [`apply`] did.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Applied {
+    /// The preflight's outcome, `applied` set when the folder (or the
+    /// worktree) was written.
+    pub report: ApplyOutcome,
     /// Files were written to the folder (or the worktree).
     pub applied: bool,
     /// The checkpoint taken before the folder was written (`apply` only).
@@ -231,15 +260,26 @@ pub struct Applied {
     pub copied: Vec<String>,
 }
 
+impl Applied {
+    fn nothing(report: &ApplyOutcome) -> Self {
+        Self {
+            report: report.clone(),
+            applied: false,
+            checkpoint: None,
+            worktree_path: None,
+            branch: None,
+            replayed: Vec::new(),
+            written: Vec::new(),
+            deleted: Vec::new(),
+            copied: Vec::new(),
+        }
+    }
+}
+
 fn flatten_commit(db: &ObjectDb, sha: &str) -> ToolResult<BTreeMap<String, FileEntry>> {
     let id = store_objects::oid(sha).map_err(|e| super::store_error(&e))?;
     let commit = db.commit(&id).map_err(|e| super::store_error(&e))?;
     db.flatten(&commit.tree).map_err(|e| super::store_error(&e))
-}
-
-fn flatten_tree(db: &ObjectDb, tree: &str) -> ToolResult<BTreeMap<String, FileEntry>> {
-    let id = store_objects::oid(tree).map_err(|e| super::store_error(&e))?;
-    db.flatten(&id).map_err(|e| super::store_error(&e))
 }
 
 /// The send's exclusions again: the policy's and the folder's rules, and
@@ -297,6 +337,33 @@ fn writable(path: &str, entry: Option<&FileEntry>, added: bool, exclusions: &Exc
     }
 }
 
+/// The engine's verdict for one path the merge changes in the folder: the
+/// [`writable`] rules, as skip reasons.
+fn decide(
+    top: &Path,
+    exclusions: &Exclusions,
+    path: &str,
+    new: Option<&Entry>,
+    added: bool,
+) -> Result<String, SkipReason> {
+    match exclusions.reason(path) {
+        None => Ok(path.to_owned()),
+        Some(Reason::PathDeny) => Err(SkipReason::PathDeny),
+        Some(Reason::NotAFile) => Err(SkipReason::NotAFile),
+        // An excluded file the cloud created: only where none is local.
+        Some(_) if added && new.is_some() && !present(top, path) => Ok(path.to_owned()),
+        Some(_) => Err(SkipReason::Excluded),
+    }
+}
+
+fn skip_reason(reason: Reason) -> SkipReason {
+    match reason {
+        Reason::PathDeny => SkipReason::PathDeny,
+        Reason::NotAFile => SkipReason::NotAFile,
+        _ => SkipReason::Excluded,
+    }
+}
+
 /// Something (a file, a link, a directory) is at `path` under `top`.
 fn present(top: &Path, path: &str) -> bool {
     std::fs::symlink_metadata(top.join(path)).is_ok()
@@ -334,19 +401,82 @@ fn read_chain(
     Ok(chain)
 }
 
+/// `k` (1-based; `None`: the latest) and `C_k` (`H_1` when there is no
+/// cloud turn).
+fn pick_turn(
+    chain: &[CloudCommit],
+    up_to_turn: Option<usize>,
+    handoff: &str,
+) -> ToolResult<(usize, String)> {
+    let turns = chain.len();
+    let k = match up_to_turn {
+        None => turns,
+        Some(k) if k <= turns && (k >= 1 || turns == 0) => k,
+        Some(k) => {
+            return Err(ToolError::invalid(format!(
+                "turn_out_of_range: this thread has {turns} cloud turns; take back up to a turn from 1 to {turns}, not {k}"
+            )));
+        }
+    };
+    let target = match k.checked_sub(1) {
+        Some(last) => chain[last].sha.clone(),
+        None => handoff.to_owned(),
+    };
+    Ok((k, target))
+}
+
+/// What the send left on the laptop is never written or deleted here:
+/// listed with the skipped paths (one entry per path, the merge's reason
+/// first).
+fn add_record_exclusions(report: &mut ApplyOutcome, record: &SendRecord) {
+    let mut skipped: BTreeMap<String, SkipReason> = report
+        .skipped_paths
+        .iter()
+        .map(|skip| (skip.path.clone(), skip.reason))
+        .collect();
+    for excluded in &record.excluded {
+        skipped
+            .entry(excluded.path.clone())
+            .or_insert_with(|| skip_reason(excluded.reason));
+    }
+    report.skipped_paths = skipped
+        .into_iter()
+        .map(|(path, reason)| SkippedPath { path, reason })
+        .collect();
+}
+
 /// Verify a fetched segment, read the cloud chain, snapshot the folder,
-/// and decide. Writes nothing to the folder, `HEAD`, the index or any ref.
+/// and merge, taking back every cloud turn. Writes nothing to the folder,
+/// `HEAD`, the index or any ref.
 ///
 /// # Errors
 ///
-/// A segment that fails verification, a cloud tip that does not descend
-/// from the `H_1` this desktop sent, git failures.
+/// As [`preflight_up_to`].
 pub fn preflight(
     source: &Source,
     record: &SendRecord,
     bytes: &[u8],
     plan_refs: &BTreeMap<String, String>,
     path_deny: &[String],
+) -> ToolResult<Preflight> {
+    preflight_up_to(source, record, bytes, plan_refs, path_deny, None)
+}
+
+/// [`preflight`] taking back the cloud turns up to `up_to_turn` (1-based;
+/// `None`: all of them).
+///
+/// # Errors
+///
+/// A segment that fails verification, a cloud tip that does not descend
+/// from the `H_1` this desktop sent, [`ErrorCode::InvalidArgument`]
+/// (`turn_out_of_range`) for a turn the chain does not have, git failures.
+pub fn preflight_up_to(
+    source: &Source,
+    record: &SendRecord,
+    bytes: &[u8],
+    plan_refs: &BTreeMap<String, String>,
+    path_deny: &[String],
+    up_to_turn: Option<usize>,
 ) -> ToolResult<Preflight> {
     check_conversation(&record.conversation_uuid)?;
     let quarantine = TempDir::new("quarantine")?;
@@ -375,7 +505,7 @@ pub fn preflight(
     // No cloud turn published: the tip is H_1 itself.
     let tip = bundle.ref_id(store_refs::CLOUD).unwrap_or(handoff);
     let chain = read_chain(&bundle, &tip, &handoff)?;
-    let sent_files = flatten_commit(&bundle.db, &record.handoff)?;
+    let (up_to_turn, target) = pick_turn(&chain, up_to_turn, &record.handoff)?;
     let sent_tree = bundle
         .db
         .commit(&handoff)
@@ -388,58 +518,48 @@ pub fn preflight(
             "the handoff in the cloud copy has another tree than was sent",
         ));
     }
-    let cloud_files = flatten_commit(&bundle.db, &tip.to_string())?;
-    let changes = store_objects::diff(&sent_files, &cloud_files);
+    let target_tree = bundle
+        .db
+        .commit(&store_objects::oid(&target).map_err(|e| super::store_error(&e))?)
+        .map_err(|e| super::store_error(&e))?
+        .tree
+        .to_string();
     let exclusions = exclusions_of(source, record, path_deny)?;
     let local = local_tree(source, &exclusions)?;
     let head = source.head();
-    let fast = head == record.head && local == record.tree;
-    let mut changed_paths = Vec::new();
-    let mut skipped_paths = Vec::new();
-    for change in &changes {
-        let added = change.kind == ChangeKind::Added;
-        match writable(&change.path, change.new.as_ref(), added, &exclusions) {
-            Write::Always => changed_paths.push(change.path.clone()),
-            Write::IfAbsent if !present(source.top(), &change.path) => {
-                changed_paths.push(change.path.clone());
-            }
-            Write::IfAbsent | Write::Never => skipped_paths.push(change.path.clone()),
-        }
-    }
-    let conflict_paths = if fast {
-        Vec::new()
-    } else {
-        let db = source.object_db()?;
-        let local_files = flatten_tree(&db, &local)?;
-        let twin_files = flatten_tree(&db, &record.tree)?;
-        let local_changed: BTreeSet<String> = store_objects::diff(&twin_files, &local_files)
-            .into_iter()
-            .map(|change| change.path)
-            .collect();
-        changes
-            .iter()
-            .filter(|change| local_changed.contains(&change.path))
-            .map(|change| change.path.clone())
-            .collect()
+    // The merge's objects go to a scratch directory, never the repository.
+    let scratch = TempDir::new("merge")?;
+    let objects = Objects::scratch(&source.repo, scratch.path(), &[git_dir.join("objects")]);
+    let top = source.top();
+    let verdict = |path: &str, new: Option<&Entry>, old: Option<&Entry>| {
+        decide(top, &exclusions, path, new, old.is_none())
     };
+    let mut plan = engine::plan(
+        &objects,
+        Trees {
+            base: &record.tree,
+            ours: &local,
+            theirs: &target_tree,
+        },
+        &record.twin,
+        &verdict,
+    )?;
+    add_record_exclusions(&mut plan.outcome, record);
     let pack = bytes[bundle.pack_offset..].to_vec();
     Ok(Preflight {
-        outcome: if fast {
-            Outcome::FastPath
-        } else {
-            Outcome::Conflicts
-        },
-        changed_paths,
-        conflict_paths,
-        skipped_paths,
+        report: plan.outcome.clone(),
         chain,
+        up_to_turn,
         cloud_tip: tip.to_string(),
+        target,
         local_tree: local,
         head,
-        changes,
+        plan,
+        objects,
         bundle,
         pack,
         record: record.clone(),
+        _scratch: scratch,
         _quarantine: quarantine,
     })
 }
@@ -569,7 +689,7 @@ fn import_and_replay(
         }
     }
     let mut replayed = Vec::new();
-    for commit in &preflight.chain {
+    for commit in &preflight.chain[..preflight.up_to_turn] {
         let tree = source
             .repo
             .git(source.top())
@@ -680,7 +800,8 @@ fn worktree_path(top: &Path, short: &str) -> ToolResult<PathBuf> {
 ///
 /// [`ErrorCode::StaleRead`] (`folder_changed_since_preflight`) when the
 /// folder or `HEAD` moved since the preflight; [`ErrorCode::InvalidArgument`]
-/// for `apply` without the fast path; git or I/O failures.
+/// for a mode the outcome does not offer ([`Preflight::modes`]: `apply`
+/// with conflicts, `apply_with_markers` without); git or I/O failures.
 pub fn apply(
     source: &Source,
     preflight: &Preflight,
@@ -697,25 +818,30 @@ pub fn apply(
             ),
         ));
     }
+    if !preflight.modes().contains(&mode) {
+        return Err(ToolError::invalid(match mode {
+            Mode::Apply => {
+                "merge_conflicts: the cloud and the folder changed the same lines; open the cloud work as a worktree, apply it with conflict markers, or discard it"
+            }
+            _ => "nothing conflicts: apply the take-back without conflict markers",
+        }));
+    }
     match mode {
-        Mode::Discard => Ok(Applied::default()),
-        Mode::Apply => apply_fast(source, preflight, &exclusions, checkpoints),
+        Mode::Discard => Ok(Applied::nothing(&preflight.report)),
+        Mode::Apply | Mode::ApplyWithMarkers => {
+            apply_folder(source, preflight, &exclusions, checkpoints)
+        }
         Mode::Worktree => apply_worktree(source, preflight, &exclusions),
     }
 }
 
-/// `apply`: the fast path into the folder.
-fn apply_fast(
+/// `apply`, `apply_with_markers`: the merge's result into the folder.
+fn apply_folder(
     source: &Source,
     preflight: &Preflight,
     exclusions: &Exclusions,
     checkpoints: Option<&Checkpoints>,
 ) -> ToolResult<Applied> {
-    if preflight.outcome != Outcome::FastPath {
-        return Err(ToolError::invalid(
-            "the folder changed since it was sent: open the cloud work as a worktree or discard it",
-        ));
-    }
     let checkpoint = match checkpoints {
         Some(checkpoints) => Some(
             checkpoints
@@ -726,38 +852,20 @@ fn apply_fast(
     };
     let (branch, replayed) = import_and_replay(source, preflight, exclusions)?;
     let workspace = Workspace::open(source.top(), &[])?;
-    let mut applied = Applied {
+    let done = engine::write_plan(&preflight.objects, &workspace, &preflight.plan)?;
+    Ok(Applied {
+        report: ApplyOutcome {
+            applied: true,
+            ..preflight.report.clone()
+        },
         applied: true,
         checkpoint,
         branch: Some(branch),
         replayed,
-        ..Applied::default()
-    };
-    let cloud = flatten_commit(&preflight.bundle.db, &preflight.cloud_tip)?;
-    let added_or_modified = preflight.changes.iter().filter_map(|change| {
-        let entry = change.new.as_ref()?;
-        cloud
-            .get_key_value(&change.path)
-            .map(|(path, _)| (path, entry, change.kind == ChangeKind::Added))
-    });
-    write_files(
-        &workspace,
-        &preflight.bundle.db,
-        added_or_modified,
-        exclusions,
-        &mut applied,
-    )?;
-    for change in &preflight.changes {
-        if change.kind == ChangeKind::Deleted
-            && writable(&change.path, None, false, exclusions) == Write::Always
-        {
-            let path = WsPath::from_relative(Path::new(&change.path))?;
-            if workspace.remove_file(&path)? {
-                applied.deleted.push(change.path.clone());
-            }
-        }
-    }
-    Ok(applied)
+        written: done.written,
+        deleted: done.deleted,
+        ..Applied::nothing(&preflight.report)
+    })
 }
 
 /// `worktree`: the cloud tip beside the folder.
@@ -801,16 +909,20 @@ fn apply_worktree(
     }
     let workspace = Workspace::open(&path, &[])?;
     let mut applied = Applied {
+        report: ApplyOutcome {
+            applied: true,
+            ..preflight.report.clone()
+        },
         applied: true,
         worktree_path: Some(path),
         branch: Some(branch),
         replayed,
-        ..Applied::default()
+        ..Applied::nothing(&preflight.report)
     };
     // The person's own excluded files first (local → local), so the
     // worktree builds like the folder; a cloud file never overwrites one.
     applied.copied = copy_local_excluded(source, &workspace, exclusions)?;
-    let cloud = flatten_commit(&preflight.bundle.db, &preflight.cloud_tip)?;
+    let cloud = flatten_commit(&preflight.bundle.db, &preflight.target)?;
     let sent = flatten_commit(&preflight.bundle.db, &preflight.record.handoff)?;
     write_files(
         &workspace,
