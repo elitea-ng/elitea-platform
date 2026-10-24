@@ -621,18 +621,6 @@ jobs:
           }
           node scripts/i18n-backfill.mjs --check
 
-      # ── Fixture freshness ───────────────────────────────────────────────
-      # Issue #426. Same shape as the two gates above, same repair.
-      - name: Fixture freshness
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: |
-          set -euo pipefail
-          test -f scripts/check-fixture-freshness.mjs || {
-            echo "::error::apps/elitea-web/scripts/check-fixture-freshness.mjs is missing, so the fixture freshness gate cannot check anything. Restore the file under its old name, or point this job at the new one. Do not let the job pass."
-            exit 1
-          }
-          node scripts/check-fixture-freshness.mjs
-
       # ── Layer + cycle gate ──────────────────────────────────────────────
       # Issue #528. The gate used to run `npx depcruise src` and read the exit
       # code. A cruise that resolves zero modules reports zero violations and

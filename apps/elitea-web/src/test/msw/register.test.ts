@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { registerValidatedHandlers, type ValidatedHandlerEntry } from './register';
 
 /**
- * R-M3/R-M4 unit coverage for the registration-time validation wrapper.
+ * R-M3 and fixture-metadata unit coverage for the registration-time validation wrapper.
  * The RED/GREEN fixture pair for these rules is driven by
  * scripts/check-gates-selftest.mjs; this suite pins the wrapper's behaviour
  * table so M1 can build on it.
@@ -39,13 +39,13 @@ describe('registerValidatedHandlers', () => {
     expect(() => registerValidatedHandlers([bad])).toThrow(/R-M3: handler "users\.get"/);
   });
 
-  it('throws R-M4 when a fixture has no recordedAt', () => {
+  it('throws fixture-metadata when a fixture has no recordedAt', () => {
     const bad = entry({ fixture: { recordedAt: '', body: { id: 1, name: 'Ada' } } });
-    expect(() => registerValidatedHandlers([bad])).toThrow(/R-M4: handler "users\.get"/);
+    expect(() => registerValidatedHandlers([bad])).toThrow(/fixture-metadata: handler "users\.get"/);
   });
 
-  it('throws R-M4 when recordedAt is not a parseable date', () => {
+  it('throws fixture-metadata when recordedAt is not a parseable date', () => {
     const bad = entry({ fixture: { recordedAt: 'yesterday-ish', body: { id: 1, name: 'Ada' } } });
-    expect(() => registerValidatedHandlers([bad])).toThrow(/R-M4/);
+    expect(() => registerValidatedHandlers([bad])).toThrow(/fixture-metadata/);
   });
 });

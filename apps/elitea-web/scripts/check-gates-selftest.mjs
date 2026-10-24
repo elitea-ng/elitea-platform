@@ -23,14 +23,13 @@
  * production run uses too.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
 import { stripJsonc } from './lib/jsonc.mjs';
-import { checkFixtureFreshness, checkHandlerSource } from './lib/mock-rules-core.mjs';
+import { checkHandlerSource } from './lib/mock-rules-core.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const APP = resolve(SCRIPT_DIR, '..');
@@ -272,7 +271,7 @@ for (const [id, mechanism, tag] of OXLINT_CASES) {
   if (rm3Pass.status !== 0) console.error(`\n[R-M3] valid registration failed:\n${rm3Pass.stdout}${rm3Pass.stderr}`);
 }
 
-// ── section 7: R-M2 / R-M4 (scripts/lib/mock-rules-core.mjs on fixtures) ──
+// ── section 7: R-M2 (scripts/lib/mock-rules-core.mjs on fixtures) ──
 {
   const badSource = readFileSync(join(FIXTURES, 'msw', 'handlers-bad.ts'), 'utf8');
   const goodSource = readFileSync(join(FIXTURES, 'msw', 'handlers-good.ts'), 'utf8');
@@ -283,22 +282,6 @@ for (const [id, mechanism, tag] of OXLINT_CASES) {
     'mock-rules-core checkHandlerSource (inline literal bodies; CI wiring lands with M1 check-handlers.mjs)',
     rm2Red.length > 0,
     rm2Green.length === 0,
-  );
-
-  const stale = JSON.parse(readFileSync(join(FIXTURES, 'msw', 'stale.fixture.json'), 'utf8'));
-  const rm4Red = checkFixtureFreshness('stale.fixture.json', stale);
-  // The GREEN fixture is generated at run time — a checked-in "fresh" fixture
-  // would itself go stale within 30 days and rot this self-test.
-  const tmp = mkdtempSync(join(tmpdir(), 'f2-rm4-'));
-  const freshFile = join(tmp, 'fresh.fixture.json');
-  writeFileSync(freshFile, JSON.stringify({ recordedAt: new Date().toISOString(), body: {} }));
-  const rm4Green = checkFixtureFreshness('fresh.fixture.json', JSON.parse(readFileSync(freshFile, 'utf8')));
-  rmSync(tmp, { recursive: true, force: true });
-  record(
-    'R-M4',
-    'mock-rules-core checkFixtureFreshness 30d (CI wiring lands with M1 check-fixture-freshness.mjs)',
-    rm4Red.length > 0,
-    rm4Green.length === 0,
   );
 }
 

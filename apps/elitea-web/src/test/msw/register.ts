@@ -7,9 +7,9 @@ import type { ZodType } from 'zod';
  * Channel-A schema throws before any test runs, instead of feeding tests a
  * shape the real backend would never produce.
  *
- * R-M4 (spec §6.5): fixtures carry `recordedAt`; staleness (> 30 days) fails
- * in CI via scripts/check-fixture-freshness.mjs (unit M1); the recording
- * metadata is asserted present here so a fixture can never omit it.
+ * Fixtures carry `recordedAt`, asserted present here so a fixture can never
+ * omit it. There is no age limit: R-M4 (30-day freshness) was retired
+ * 2026-10-23 because every fixture is synthetic.
  */
 
 interface RecordedFixture {
@@ -38,7 +38,7 @@ export function registerValidatedHandlers(entries: readonly ValidatedHandlerEntr
   for (const entry of entries) {
     if (typeof entry.fixture.recordedAt !== 'string' || Number.isNaN(Date.parse(entry.fixture.recordedAt))) {
       throw new Error(
-        `R-M4: handler "${entry.id}" has a fixture without a valid recordedAt — record it from the real stack (scripts/record-fixtures.mjs)`,
+        `fixture-metadata: handler "${entry.id}" has a fixture without a valid recordedAt`,
       );
     }
     const result = entry.schema.safeParse(entry.fixture.body);

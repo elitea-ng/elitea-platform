@@ -25,7 +25,7 @@ const APP_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // Floor on the walk itself (issue #426). This gate printed the file count and
 // asserted nothing about it, so an empty src/ produced "OK — 0 files within
 // §3.5 budgets". Its sibling gates (check-handlers.mjs,
-// check-fixture-freshness.mjs, check-bundle-secrets.mjs) all refuse to pass on
+// check-bundle-secrets.mjs) all refuse to pass on
 // a count of zero.
 //
 // The floor is derived from the tree under test, not hardcoded to one number:

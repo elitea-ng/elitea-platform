@@ -92,17 +92,14 @@ import { getToolkitsMock } from '../../../shared/api/generated/toolkits/toolkits
  *    `zod.safeParse` at registration would at best re-prove something the
  *    type system already guarantees and at worst pass silently on an `any`
  *    escape hatch the type check would have caught. More importantly,
- *    `registerValidatedHandlers` also asserts R-M4's `fixture.recordedAt`
+ *    `registerValidatedHandlers` also asserts the `fixture.recordedAt`
  *    precondition — generated handlers have no `fixture` file and no
  *    Channel-B recording at all (`useExamples: false` in orval.config.ts's
  *    mock output; they are synthetic Channel-A data by construction), so
  *    the only way to route them through that function would be to invent a
  *    fabricated `recordedAt` timestamp with no real recording behind it —
  *    exactly the "fake fixture with a fabricated recordedAt" this unit was
- *    told not to do. R-M4 (fixture freshness) therefore also does not apply
- *    to generated handlers: `scripts/check-fixture-freshness.mjs` walks
- *    `src/test/msw/fixtures/**\/*.json` only, which by construction never
- *    contains generated-handler output.
+ *    told not to do.
  *
  * R-M2 (every handler lives in `src/test/msw/handlers/` and either derives
  * from a fixture or is orval-generated) is satisfied for this file's own

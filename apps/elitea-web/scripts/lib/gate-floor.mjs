@@ -6,8 +6,8 @@
  * correctness: nobody can tell "the gate looked at 3164 modules and liked them
  * all" apart from "the gate looked at nothing". Both print the same tick.
  *
- * Eight gate scripts had that hole. Nine others already state a count and fail
- * below it — `check-handlers.mjs`, `check-fixture-freshness.mjs`,
+ * Eight gate scripts had that hole. Eight others already state a count and fail
+ * below it — `check-handlers.mjs`,
  * `check-budgets.mjs`, `theme-gate.mjs`, `check-bundle-secrets.mjs`,
  * `check-partition.mjs`, `check-ci-dormancy.mjs`, `check-bundle-budget.mjs`
  * and `check-mutator-coverage.mjs`. This module is that same line, written

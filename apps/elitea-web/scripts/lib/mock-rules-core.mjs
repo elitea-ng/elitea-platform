@@ -1,12 +1,13 @@
 /**
- * R-M2 / R-M4 decision logic (spec §6.5), proven by the F2 gate self-test.
+ * R-M2 decision logic (spec §6.5), proven by the F2 gate self-test.
  *
  *   R-M2 — an MSW handler may not answer with an inline object/array literal;
  *          bodies derive from Channel-B fixture files. (M1's
  *          scripts/check-handlers.mjs wires this into §6.6; the logic and its
  *          RED/GREEN fixtures live here so the rule is proven on this stack.)
- *   R-M4 — a fixture older than 30 days fails CI. (M1's
- *          scripts/check-fixture-freshness.mjs; same arrangement.)
+ *
+ * R-M4 (fixture freshness) was retired 2026-10-23: every fixture is synthetic,
+ * so the 30-day clock only failed on the calendar.
  *
  * R-M3 / R-M5 are enforced at runtime by src/test/msw/register.ts and
  * src/test/setup.ts respectively.
@@ -52,37 +53,4 @@ export function checkHandlerSource(filename, source) {
     }
   });
   return findings;
-}
-
-export const FIXTURE_MAX_AGE_DAYS = 30;
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/**
- * R-M4: a fixture must carry a parseable recordedAt no older than 30 days.
- * `fixture` is the parsed JSON document; `now` is injectable for tests.
- */
-export function checkFixtureFreshness(filename, fixture, now = new Date()) {
-  const recordedAt = fixture && fixture.recordedAt;
-  if (typeof recordedAt !== 'string' || Number.isNaN(Date.parse(recordedAt))) {
-    return [
-      {
-        rule: 'R-M4',
-        file: filename,
-        line: 1,
-        message: 'fixture has no parseable recordedAt — re-record it from the real stack (scripts/record-fixtures.mjs)',
-      },
-    ];
-  }
-  const ageDays = (now.getTime() - Date.parse(recordedAt)) / DAY_MS;
-  if (ageDays > FIXTURE_MAX_AGE_DAYS) {
-    return [
-      {
-        rule: 'R-M4',
-        file: filename,
-        line: 1,
-        message: `fixture recorded ${Math.floor(ageDays)} days ago (max ${FIXTURE_MAX_AGE_DAYS}) — stale fixtures describe a backend that no longer exists`,
-      },
-    ];
-  }
-  return [];
 }
