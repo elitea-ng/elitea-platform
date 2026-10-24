@@ -16,6 +16,8 @@
 //! tools (`elitea-local-index`: `search_workspace`, `repo_map` (#1240) and the
 //! Inventory-named ones) are local-only too: they answer from the desktop's
 //! own index, which the executor does not have, and are not in `TOOLS` either.
+//! So is `diagnostics` (#1236): it reads the desktop's language servers,
+//! which the executor does not run.
 //!
 //! [`WorkspaceToolProvider`] is a [`ToolProvider`]: one toolset, named like
 //! the local one, whose every call is sent to a [`WorkspaceRunner`] (the

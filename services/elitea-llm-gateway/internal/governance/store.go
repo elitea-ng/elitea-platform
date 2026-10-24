@@ -364,6 +364,12 @@ type usageDimsPayload struct {
 	// ship before the scheduler that reads it without changing what any
 	// existing delta means.
 	ExecutionID string `json:"execution_id,omitempty"`
+	// Operation, Units and Unit mark a metered tool row (#1238); all three are
+	// absent for a model call, so an older consumer reads exactly what it read
+	// before. Units is a pointer because 0 is a real count for a tool row.
+	Operation string `json:"operation,omitempty"`
+	Units     *int64 `json:"units,omitempty"`
+	Unit      string `json:"unit,omitempty"`
 }
 
 // usageDimsFor converts the internal dimensions to the wire form, preserving
@@ -372,7 +378,7 @@ func usageDimsFor(dims *failmode.UsageDimensions) *usageDimsPayload {
 	if dims == nil {
 		return nil
 	}
-	return &usageDimsPayload{
+	payload := &usageDimsPayload{
 		UserID:           dims.UserID,
 		Provider:         dims.Provider,
 		Model:            dims.Model,
@@ -381,6 +387,11 @@ func usageDimsFor(dims *failmode.UsageDimensions) *usageDimsPayload {
 		OccurredAtUnix:   dims.OccurredAtUnix,
 		ExecutionID:      dims.ExecutionID,
 	}
+	if dims.Operation == failmode.UsageOperationTool {
+		units := dims.Units
+		payload.Operation, payload.Units, payload.Unit = dims.Operation, &units, dims.Unit
+	}
+	return payload
 }
 
 // UpdateUsage records a billed increment onto the authoritative NATS counter and

@@ -65,6 +65,9 @@ func TestGatewayMigrationTables(t *testing.T) {
 		// From 0084 — the per-request usage ledger the billing path writes.
 		// It pins the middle term of GatewayMigrationSQL's concatenation.
 		"gateway.llm_usage_events",
+		// From 0174 — the metered tool price catalog. It pins the last term,
+		// whose ledger columns the Usage and analytics reads select.
+		"gateway.metered_operation_prices",
 	} {
 		if !strings.Contains(sql, "CREATE TABLE IF NOT EXISTS "+tbl) {
 			t.Errorf("gateway migration missing idempotent create for %q", tbl)

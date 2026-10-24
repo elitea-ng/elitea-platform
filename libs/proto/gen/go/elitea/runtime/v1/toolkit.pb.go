@@ -631,10 +631,11 @@ type ToolkitCallToolCommandV1 struct {
 	// from, and toolkit_version the immutable version of that row where the
 	// deployment records one. They are identity, not content: they let the worker
 	// and the settlement reader agree on WHICH toolkit ran.
-	ToolkitId      string `protobuf:"bytes,5,opt,name=toolkit_id,json=toolkitId,proto3" json:"toolkit_id,omitempty"`
-	ToolkitVersion string `protobuf:"bytes,6,opt,name=toolkit_version,json=toolkitVersion,proto3" json:"toolkit_version,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	ToolkitId              string `protobuf:"bytes,5,opt,name=toolkit_id,json=toolkitId,proto3" json:"toolkit_id,omitempty"`
+	ToolkitVersion         string `protobuf:"bytes,6,opt,name=toolkit_version,json=toolkitVersion,proto3" json:"toolkit_version,omitempty"`
+	AttributionExecutionId string `protobuf:"bytes,16,opt,name=attribution_execution_id,json=attributionExecutionId,proto3" json:"attribution_execution_id,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *ToolkitCallToolCommandV1) Reset() {
@@ -705,6 +706,13 @@ func (x *ToolkitCallToolCommandV1) GetToolkitId() string {
 func (x *ToolkitCallToolCommandV1) GetToolkitVersion() string {
 	if x != nil {
 		return x.ToolkitVersion
+	}
+	return ""
+}
+
+func (x *ToolkitCallToolCommandV1) GetAttributionExecutionId() string {
+	if x != nil {
+		return x.AttributionExecutionId
 	}
 	return ""
 }
@@ -1154,7 +1162,7 @@ const file_elitea_runtime_v1_toolkit_proto_rawDesc = "" +
 	"\ftoolkit_type\x18\a \x01(\tR\vtoolkitType\x12!\n" +
 	"\ftoolkit_name\x18\b \x01(\tR\vtoolkitName\x12\x1b\n" +
 	"\ttool_name\x18\t \x01(\tR\btoolNameJ\x04\b\n" +
-	"\x10\x10\"\x82\x02\n" +
+	"\x10\x10\"\xbc\x02\n" +
 	"\x18ToolkitCallToolCommandV1\x12!\n" +
 	"\ftoolkit_type\x18\x01 \x01(\tR\vtoolkitType\x12*\n" +
 	"\x11settings_entry_id\x18\x02 \x01(\tR\x0fsettingsEntryId\x12\x1b\n" +
@@ -1162,7 +1170,8 @@ const file_elitea_runtime_v1_toolkit_proto_rawDesc = "" +
 	"\x12arguments_entry_id\x18\x04 \x01(\tR\x10argumentsEntryId\x12\x1d\n" +
 	"\n" +
 	"toolkit_id\x18\x05 \x01(\tR\ttoolkitId\x12'\n" +
-	"\x0ftoolkit_version\x18\x06 \x01(\tR\x0etoolkitVersionJ\x04\b\a\x10\x10\"\x95\x02\n" +
+	"\x0ftoolkit_version\x18\x06 \x01(\tR\x0etoolkitVersion\x128\n" +
+	"\x18attribution_execution_id\x18\x10 \x01(\tR\x16attributionExecutionIdJ\x04\b\a\x10\x10\"\x95\x02\n" +
 	"\"ToolkitCallToolArtifactReferenceV1\x12\x1f\n" +
 	"\vartifact_id\x18\x01 \x01(\tR\n" +
 	"artifactId\x12+\n" +

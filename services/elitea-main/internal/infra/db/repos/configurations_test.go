@@ -457,6 +457,18 @@ type currentConfigurationQueriesStub struct {
 	listCurrentCalls   int
 	listSharedCalls    int
 	typesCalls         int
+
+	byTypeRow    sqlcgen.FindCurrentConfigurationByTypeRow
+	byTypeErr    error
+	byTypeParams sqlcgen.FindCurrentConfigurationByTypeParams
+}
+
+func (s *currentConfigurationQueriesStub) FindCurrentConfigurationByType(
+	_ context.Context,
+	params sqlcgen.FindCurrentConfigurationByTypeParams,
+) (sqlcgen.FindCurrentConfigurationByTypeRow, error) {
+	s.byTypeParams = params
+	return s.byTypeRow, s.byTypeErr
 }
 
 func (s *currentConfigurationQueriesStub) FindCurrentConfigurationByEliteaTitle(

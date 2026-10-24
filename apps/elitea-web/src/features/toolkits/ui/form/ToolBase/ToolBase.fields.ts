@@ -1,4 +1,4 @@
-import type { ToolFieldValue, ToolPropertySchema, ToolSchema } from './types';
+import type { ToolPropertySchema, ToolSchema } from './types';
 
 /**
  * Pure list-building helpers extracted from `ToolBase.tsx`'s four
@@ -58,17 +58,6 @@ export function isMainPassField(
   return true;
 }
 
-/** `k === 'google_cse_id'`/`'google_api_key'` are required exactly when `selected_tools` includes `'google'` — a schema-independent special case the baseline hard-codes at every one of its four `required` computations (`ToolBase.jsx:270-273` etc). */
-export function isGoogleCredentialField(key: string): boolean {
-  return key === 'google_cse_id' || key === 'google_api_key';
-}
-
-export function resolveRequired(
-  key: string,
-  schemaRequired: readonly string[] | undefined,
-  selectedTools: ToolFieldValue,
-): boolean {
-  if (schemaRequired?.includes(key)) return true;
-  if (isGoogleCredentialField(key) && Array.isArray(selectedTools) && selectedTools.includes('google')) return true;
-  return false;
+export function resolveRequired(key: string, schemaRequired: readonly string[] | undefined): boolean {
+  return schemaRequired?.includes(key) ?? false;
 }

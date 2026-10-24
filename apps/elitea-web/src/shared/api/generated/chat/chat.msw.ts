@@ -370,6 +370,18 @@ export const getForkConversationResponseMock = (
         faker.string.uuid(),
         undefined,
       ]),
+      mode: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      cut_message_uuid: faker.helpers.arrayElement([
+        faker.string.uuid(),
+        undefined,
+      ]),
+      branch_summary: faker.helpers.arrayElement([
+        { version: faker.number.int() },
+        undefined,
+      ]),
       name: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
@@ -495,6 +507,18 @@ export const getListConversationsResponseMock = (
         message_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
         message_uuid: faker.helpers.arrayElement([
           faker.string.uuid(),
+          undefined,
+        ]),
+        mode: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        cut_message_uuid: faker.helpers.arrayElement([
+          faker.string.uuid(),
+          undefined,
+        ]),
+        branch_summary: faker.helpers.arrayElement([
+          { version: faker.number.int() },
           undefined,
         ]),
         name: faker.helpers.arrayElement([
@@ -685,6 +709,18 @@ export const getGetConversationResponseMock = (
       message_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
       message_uuid: faker.helpers.arrayElement([
         faker.string.uuid(),
+        undefined,
+      ]),
+      mode: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      cut_message_uuid: faker.helpers.arrayElement([
+        faker.string.uuid(),
+        undefined,
+      ]),
+      branch_summary: faker.helpers.arrayElement([
+        { version: faker.number.int() },
         undefined,
       ]),
       name: faker.helpers.arrayElement([

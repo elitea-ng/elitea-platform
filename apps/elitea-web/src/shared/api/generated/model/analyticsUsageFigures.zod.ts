@@ -64,7 +64,24 @@ export const AnalyticsUsageFigures = zod
         "Prompt tokens at each call's catalogue rate, an exact decimal. ABSENT when no call in the scope is priced.\n",
       ),
     output_cost: zod.number().optional(),
-    total_cost: zod.number().optional(),
+    total_cost: zod
+      .number()
+      .optional()
+      .describe(
+        "The model estimate plus tool_cost. Present when a call is priced or a metered tool operation was billed.\n",
+      ),
+    tool_calls: zod
+      .int()
+      .optional()
+      .describe(
+        "Metered tool operations (web search, web fetch, host lookups) settled in the scope. They are not model calls and carry no tokens.\n",
+      ),
+    tool_cost: zod
+      .number()
+      .optional()
+      .describe(
+        "What the gateway billed for tool_calls, an exact decimal. Billed, not estimated. ABSENT when there was no tool call.\n",
+      ),
   })
   .describe(
     "One scope's model calls, tokens and estimated cost, from gateway.llm_request_logs. Source internal/domain/analytics/runs.go.\n",

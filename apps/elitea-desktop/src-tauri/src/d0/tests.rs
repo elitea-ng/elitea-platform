@@ -1184,6 +1184,8 @@ async fn a_remote_retry_reuses_its_idempotency_key() {
             delay: Duration::from_millis(5),
         },
         authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
+        rules: None,
+        nonce: "0123456789abcdef0123456789abcdef".into(),
     };
     let spec = jira_spec();
     let result = remote_tools::call(&context, &spec, "c1", "search", json!({"q": 1})).await;
@@ -1208,6 +1210,79 @@ fn jira_spec() -> RemoteToolSpec {
         tool_name: None,
         tools: Vec::new(),
     }
+}
+
+fn typed_spec(toolkit_type: &str) -> RemoteToolSpec {
+    RemoteToolSpec {
+        toolkit_type: toolkit_type.into(),
+        ..jira_spec()
+    }
+}
+
+#[test]
+fn web_tools_absent_when_policy_off() {
+    use elitea_local_tools::policy::LocalWorkPolicy;
+    let off = LocalWorkPolicy {
+        allowed: true,
+        ..LocalWorkPolicy::default()
+    };
+    assert!(!remote_tools::offered(&typed_spec("web"), &off));
+    assert!(remote_tools::offered(&typed_spec("jira"), &off));
+    let on = LocalWorkPolicy { web: true, ..off };
+    assert!(remote_tools::offered(&typed_spec("web"), &on));
+    assert!(!remote_tools::offered(&typed_spec("host_intel"), &on));
+}
+
+#[test]
+fn host_intel_tools_absent_when_policy_off() {
+    use elitea_local_tools::policy::LocalWorkPolicy;
+    let web_only = LocalWorkPolicy {
+        allowed: true,
+        web: true,
+        ..LocalWorkPolicy::default()
+    };
+    assert!(!remote_tools::offered(&typed_spec("host_intel"), &web_only));
+    let on = LocalWorkPolicy {
+        host_intel: true,
+        ..web_only
+    };
+    assert!(remote_tools::offered(&typed_spec("host_intel"), &on));
+}
+
+/// A web toolkit's call with no approval rules is refused before any
+/// request: the server is never asked.
+#[tokio::test]
+async fn web_call_without_rules_is_refused_locally() {
+    let context = RemoteContext {
+        api: Arc::new(
+            PlatformApi::new(
+                Arc::new(StaticCredentials::new("http://127.0.0.1:9".into())),
+                "0.1.0",
+            )
+            .unwrap(),
+        ),
+        project_id: 1,
+        execution_id: EXECUTION.into(),
+        application_id: 5,
+        version_id: 9,
+        prompt: Arc::new(super::approvals::UiPrompt::new(Arc::default())),
+        retry: RetryPolicy {
+            attempts: 1,
+            delay: Duration::from_millis(1),
+        },
+        authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
+        rules: None,
+        nonce: "0123456789abcdef0123456789abcdef".into(),
+    };
+    let result = remote_tools::call(
+        &context,
+        &typed_spec("web"),
+        "c1",
+        "web_search",
+        json!({"query": "tokio"}),
+    )
+    .await;
+    assert_eq!(result["code"], "local_work_policy_refused");
 }
 
 /// A token-shaped value the 409 carries in every field a careless host
@@ -1291,6 +1366,8 @@ async fn remote_context(
             delay: Duration::from_millis(5),
         },
         authorization_wait,
+        rules: None,
+        nonce: "0123456789abcdef0123456789abcdef".into(),
     }
 }
 
@@ -1462,6 +1539,8 @@ fn a_platform_servers_generic_tool_names_its_tools() {
         prompt: Arc::new(super::approvals::UiPrompt::new(Arc::default())),
         retry: RetryPolicy::default(),
         authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
+        rules: None,
+        nonce: "0123456789abcdef0123456789abcdef".into(),
     });
     let tool = remote_tools::RemoteToolkitTool::new(spec, context);
     assert!(
@@ -1498,6 +1577,8 @@ fn a_platform_servers_generic_tool_names_its_tools() {
             prompt: Arc::new(super::approvals::UiPrompt::new(Arc::default())),
             retry: RetryPolicy::default(),
             authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
+            rules: None,
+            nonce: "0123456789abcdef0123456789abcdef".into(),
         }),
     );
     assert!(
@@ -2906,6 +2987,38 @@ async fn undo_is_for_the_newest_turn_and_an_older_one_restores_the_folder_only_w
             "already_undone"
         );
     }
+}
+
+#[tokio::test]
+async fn fork_restore_point_is_the_next_writing_turn_and_restores_only_when_confirmed() {
+    let h = harness(writing_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let first = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h, &first.turn_id).await;
+    let second = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h, &second.turn_id).await;
+    let folder = h.folder.path();
+    // The folder as the first turn left it is the second turn's checkpoint.
+    assert_eq!(
+        h.host
+            .restore_point_after(&first.turn_id)
+            .unwrap()
+            .as_deref(),
+        Some(second.turn_id.as_str())
+    );
+    // Nothing changed the folder after the newest turn.
+    assert_eq!(h.host.restore_point_after(&second.turn_id).unwrap(), None);
+    assert_eq!(
+        h.host.restore_point_after("nope").unwrap_err().code,
+        "turn_unknown"
+    );
+    // A fork's restore is the older turn's: previewed, then confirmed.
+    let preview = h.host.restore_preview(&second.turn_id).unwrap();
+    assert_eq!(preview.deleted, ["turn1.txt"]);
+    assert_eq!(files_in(folder), ["turn0.txt", "turn1.txt"]);
+    h.host.restore(&second.turn_id, None, true).unwrap();
+    assert_eq!(files_in(folder), ["turn0.txt"]);
+    // An undone turn is no restore point any more.
+    assert_eq!(h.host.restore_point_after(&first.turn_id).unwrap(), None);
 }
 
 #[tokio::test]
@@ -8201,4 +8314,331 @@ async fn the_desktop_answers_the_shared_memory_fixture() {
     for (id, tool, _, expected) in &calls {
         assert_eq!(&committed_output(&h.server, id), expected, "{tool} ({id})");
     }
+}
+
+/// The harness's folder as a git repository with one commit, and a
+/// worktree host over it (#1235).
+fn worktree_host(h: &Harness) -> Arc<crate::worktrees::WorktreeHost> {
+    git_in(h.folder.path(), &["init", "-q"]);
+    std::fs::write(h.folder.path().join("a.txt"), "one\n").unwrap();
+    git_in(h.folder.path(), &["add", "."]);
+    git_in(h.folder.path(), &["commit", "-qm", "init"]);
+    let host = Arc::new(crate::worktrees::WorktreeHost::new(
+        h.host.clone(),
+        h.workspaces.clone(),
+    ));
+    h.host.set_worktrees(&host);
+    host
+}
+
+const TWIN_UUID: &str = "99999999-2222-4333-8444-666666666666";
+const TWIN_EXECUTION: &str = "fedcba9876543210fedcba9876543210";
+
+/// [`stalling_platform`] that also answers conversation 43 (its own UUID
+/// and execution), so two turns run in two conversations at once.
+async fn twin_platform(slow: Arc<AtomicBool>) -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    let first = "99999999-2222-4333-8444-555555555555";
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            tokio::task::block_in_place(|| {
+                for _ in 0..250 {
+                    if !slow.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            });
+            return inner(req);
+        }
+        let twin = req.path.ends_with("/prompt_lib/1/43")
+            || req.path.contains(TWIN_UUID)
+            || req.path.contains(TWIN_EXECUTION);
+        if !twin {
+            return inner(req);
+        }
+        let mut mapped = req.clone();
+        mapped.path = req
+            .path
+            .replace("/prompt_lib/1/43", "/prompt_lib/1/42")
+            .replace(TWIN_UUID, first)
+            .replace(TWIN_EXECUTION, EXECUTION);
+        let mut res = inner(&mapped);
+        res.body = res
+            .body
+            .replace(first, TWIN_UUID)
+            .replace(EXECUTION, TWIN_EXECUTION);
+        res
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_worktree_turns_run_concurrently() {
+    let slow = Arc::new(AtomicBool::new(true));
+    let h = harness(
+        twin_platform(slow.clone()).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    let worktrees = worktree_host(&h);
+    let one = worktrees
+        .create(
+            &h.workspace_id,
+            "11111111-1111-4111-8111-111111111111",
+            None,
+        )
+        .await
+        .unwrap();
+    let two = worktrees
+        .create(
+            &h.workspace_id,
+            "22222222-2222-4222-8222-222222222222",
+            None,
+        )
+        .await
+        .unwrap();
+    assert_ne!(one.workspace_id, two.workspace_id);
+    assert_ne!(one.branch, two.branch);
+    assert!(std::path::Path::new(&one.path).join("a.txt").is_file());
+
+    let first = h.host.start(request(&one.workspace_id)).await.unwrap();
+    let mut other = request(&two.workspace_id);
+    other.conversation_id = json!(43);
+    let second = h.host.start(other).await.unwrap();
+    // Both reach the model while the other is still running: neither
+    // worktree's claim, nor the parent's, holds the other back.
+    let mut both = false;
+    for _ in 0..SETTLE_POLLS {
+        if seen(&h.server, "/llm/v1/chat/completions").len() >= 2 {
+            both = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(both, "both turns reach the model: {:?}", h.emitter.kinds());
+    assert!(h.host.status(&first.turn_id).unwrap().done.is_none());
+    assert!(h.host.status(&second.turn_id).unwrap().done.is_none());
+
+    h.host.cancel(&first.turn_id).unwrap();
+    h.host.cancel(&second.turn_id).unwrap();
+    slow.store(false, Ordering::SeqCst);
+    until_done_of(&h, &first.turn_id).await;
+    until_done_of(&h, &second.turn_id).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worktree_remove_refuses_dirty_without_force() {
+    let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let worktrees = worktree_host(&h);
+    let thread = "33333333-3333-4333-8333-333333333333";
+    let entry = worktrees
+        .create(&h.workspace_id, thread, None)
+        .await
+        .unwrap();
+    std::fs::write(std::path::Path::new(&entry.path).join("a.txt"), "two\n").unwrap();
+
+    let listed = worktrees.list(&h.workspace_id).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].dirty, 1);
+
+    let refused = worktrees
+        .remove(&h.workspace_id, thread, false)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, "worktree_dirty");
+    assert!(std::path::Path::new(&entry.path).join("a.txt").is_file());
+    // The parent cannot be removed while it has task worktrees.
+    assert_eq!(
+        h.host
+            .remove_workspace(&h.workspace_id)
+            .await
+            .unwrap_err()
+            .code,
+        "workspace_has_worktrees"
+    );
+
+    worktrees
+        .remove(&h.workspace_id, thread, true)
+        .await
+        .unwrap();
+    assert!(!std::path::Path::new(&entry.path).exists());
+    assert!(worktrees.list(&h.workspace_id).await.unwrap().is_empty());
+    assert!(h.workspaces.get(&entry.workspace_id).unwrap().is_none());
+    assert!(
+        !h.folder
+            .path()
+            .join(".git/worktrees")
+            .join(thread.replace('-', ""))
+            .exists(),
+        "its admin directory goes with it"
+    );
+    // The folder itself is untouched.
+    assert_eq!(
+        std::fs::read_to_string(h.folder.path().join("a.txt")).unwrap(),
+        "one\n"
+    );
+}
+
+/// The `elitea/…` branches of `dir`'s repository.
+fn elitea_branches(dir: &std::path::Path) -> String {
+    let output = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(["branch", "--list", "elitea/*"])
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// #1420: a worktree whose folder is gone cannot tell whether commits are
+/// on its branch, so removing it keeps the branch; and a remove whose
+/// workspace an earlier attempt already removed still finishes.
+#[tokio::test(flavor = "multi_thread")]
+async fn worktree_remove_keeps_the_branch_of_a_worktree_it_cannot_open() {
+    let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let worktrees = worktree_host(&h);
+    let thread = "44444444-4444-4444-8444-444444444444";
+    let entry = worktrees
+        .create(&h.workspace_id, thread, None)
+        .await
+        .unwrap();
+    let path = std::path::Path::new(&entry.path);
+    std::fs::write(path.join("b.txt"), "work\n").unwrap();
+    git_in(path, &["add", "b.txt"]);
+    git_in(path, &["commit", "-qm", "work"]);
+    std::fs::remove_dir_all(path).unwrap();
+    h.host.remove_workspace(&entry.workspace_id).await.unwrap();
+
+    worktrees
+        .remove(&h.workspace_id, thread, false)
+        .await
+        .unwrap();
+    assert!(worktrees.list(&h.workspace_id).await.unwrap().is_empty());
+    assert!(
+        elitea_branches(h.folder.path()).contains(&entry.branch),
+        "the branch and its commit are kept"
+    );
+}
+
+/// #1420: `worktree_merge_undo` restores only the checkpoint a merge took,
+/// once, and asks for `confirm_older` when the folder was checkpointed
+/// since.
+#[tokio::test(flavor = "multi_thread")]
+async fn worktree_merge_undo_takes_only_its_merges_checkpoint() {
+    let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let worktrees = worktree_host(&h);
+    let thread = "55555555-5555-4555-8555-555555555555";
+    let entry = worktrees
+        .create(&h.workspace_id, thread, None)
+        .await
+        .unwrap();
+    std::fs::write(std::path::Path::new(&entry.path).join("b.txt"), "merged\n").unwrap();
+    let preflight = worktrees
+        .merge_preflight(&h.workspace_id, thread)
+        .await
+        .unwrap();
+    let applied = worktrees
+        .merge_apply(&preflight.preflight_id)
+        .await
+        .unwrap();
+    let checkpoint = applied.checkpoint_id.expect("a checkpoint");
+    assert!(h.folder.path().join("b.txt").is_file());
+
+    let (_, seq) = checkpoint.split_once(':').unwrap();
+    let seq: u64 = seq.parse().unwrap();
+    let other = format!("{}:{}", h.workspace_id, seq + 7);
+    assert_eq!(
+        worktrees.merge_undo(&other, true).await.unwrap_err().code,
+        "invalid_request",
+        "not a checkpoint a merge took"
+    );
+
+    // A later checkpoint of the folder (a turn's): the undo would revert
+    // it too, so it is asked for.
+    h.host
+        .local_session(&h.workspace_id, h.folder.path().to_path_buf())
+        .unwrap()
+        .checkpoints()
+        .create("a later turn")
+        .unwrap();
+    assert_eq!(
+        worktrees
+            .merge_undo(&checkpoint, false)
+            .await
+            .unwrap_err()
+            .code,
+        "undo_not_latest"
+    );
+    let restored = worktrees.merge_undo(&checkpoint, true).await.unwrap();
+    assert!(restored.iter().any(|path| path == "b.txt"), "{restored:?}");
+    assert!(!h.folder.path().join("b.txt").exists());
+    assert_eq!(
+        worktrees
+            .merge_undo(&checkpoint, true)
+            .await
+            .unwrap_err()
+            .code,
+        "invalid_request",
+        "undone once"
+    );
+}
+
+/// The person's hooks in a turn (#1237): a `UserPromptSubmit` hook's
+/// context reaches the model framed under the thread's nonce, a `Stop`
+/// hook's text reaches the person as a status note, and a refused message
+/// ends the turn with `hook_denied` before any model call. macOS only: the
+/// hooks run under Seatbelt, and a Linux runner without a sandbox that
+/// hides the deny list runs none.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn hooks_frame_prompt_context_and_report_stop() {
+    use elitea_local_tools::hooks::config::{Hook, HookEvent, Scope};
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let sh = |line: &str| vec!["/bin/sh".to_owned(), "-c".to_owned(), line.to_owned()];
+    h.host
+        .hook_files()
+        .save_hooks(
+            Scope::User,
+            None,
+            vec![
+                Hook::new(
+                    "ctx",
+                    HookEvent::UserPromptSubmit,
+                    sh("if grep -q forbidden; then echo nope >&2; exit 2; fi; echo ticket-ABC"),
+                ),
+                Hook::new("bye", HookEvent::Stop, sh("cat >/dev/null; echo all-done")),
+            ],
+        )
+        .unwrap();
+    run_turn(&h, "hello").await;
+    let first = llm_bodies(&h.server)[0].to_string();
+    assert!(first.contains("ticket-ABC"), "{first}");
+    assert!(first.contains("hook_output nonce="), "{first}");
+    let events = h.emitter.all();
+    assert!(
+        events.iter().any(|e| e.kind == "status"
+            && e.payload["note"] == "hook_stop"
+            && e.payload["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("all-done"))),
+        "{:?}",
+        h.emitter.kinds()
+    );
+    let before = llm_bodies(&h.server).len();
+    run_turn(&h, "forbidden words").await;
+    assert_eq!(
+        llm_bodies(&h.server).len(),
+        before,
+        "a refused message never reaches the model"
+    );
+    assert!(
+        h.emitter
+            .all()
+            .iter()
+            .any(|e| e.kind == "error" && e.payload["code"] == "hook_denied")
+    );
 }

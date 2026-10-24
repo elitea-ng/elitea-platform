@@ -14,7 +14,7 @@ import type { PlanProposalPayload, PlanView } from './planIpc';
 import type { ProcessTurnEvent } from './processTypes';
 import type { SubAgentFinishedPayload, SubAgentInnerEvent, SubAgentStartedPayload } from './subAgentIpc';
 import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel } from './turnModel';
-import type { ThreadForkRequest } from './threadForkIpc';
+import { threadForkCommands, type ThreadForkCommands } from './threadForkIpc';
 import type { UsagePayload, UsageTotalPayload } from './turnUsage';
 
 export type { ContextMeter } from './contextMeter';
@@ -126,6 +126,8 @@ export interface ApprovalRequestPayload {
   /** The rule's justification, shown in place of the classifier's reason. */
   justification?: string;
   can_remember: boolean;
+  /** `session`: "always" lasts until the app quits (host-intel tools, #1238). */
+  remember_scope?: 'session';
 }
 
 export type { SubAgentStatus } from './subAgentIpc';
@@ -254,7 +256,7 @@ export function toWorkspaceIpcError(error: unknown): WorkspaceIpcError {
   return new WorkspaceIpcError('unknown', error instanceof Error ? error.message : 'Something went wrong.');
 }
 
-export interface WorkspaceIpc {
+export interface WorkspaceIpc extends ThreadForkCommands {
   open(): Promise<Workspace | null>;
   list(): Promise<Workspace[]>;
   remove(id: string): Promise<void>;
@@ -288,12 +290,6 @@ export interface WorkspaceIpc {
   threadHistory(workspaceId: string, conversationId: string): Promise<StoredTurn[]>;
   /** Forget a thread's recorded turns (the conversation itself stays); resolves with how many. */
   deleteThreadHistory(workspaceId: string, conversationId: string): Promise<number>;
-  /**
-   * The local half of a fork (`thread_history_fork`): copy a thread's recorded turns, up to and including
-   * `upToTurnId` (all when absent), into the conversation the server fork made, in the same folder.
-   * Resolves with how many turns were copied (0 when this machine recorded none).
-   */
-  forkThreadHistory(request: ThreadForkRequest): Promise<number>;
   /** Subscribe to `agent://event`; resolves once the subscription is live, with its unsubscribe. */
   onEvent(handler: AgentEventHandler): Promise<() => void>;
 }
@@ -346,17 +342,7 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
       (await invoke<{ turns: StoredTurn[] }>('thread_history', { workspace_id: workspaceId, conversation_id: conversationId })).turns,
     deleteThreadHistory: async (workspaceId, conversationId) =>
       (await invoke<{ deleted: number }>('thread_history_delete', { workspace_id: workspaceId, conversation_id: conversationId })).deleted,
-    forkThreadHistory: async (request) =>
-      (
-        await invoke<{ copied: number }>('thread_history_fork', {
-          workspace_id: request.workspaceId,
-          source_conversation_id: request.sourceConversationId,
-          target_conversation_id: request.targetConversationId,
-          target_conversation_uuid: request.targetConversationUuid,
-          ...(request.upToTurnId === undefined ? {} : { up_to_turn_id: request.upToTurnId }),
-          ...(request.messageIds === undefined ? {} : { message_ids: request.messageIds }),
-        })
-      ).copied,
+    ...threadForkCommands(invoke),
     onEvent: (handler) => listen(AGENT_EVENT_CHANNEL, (payload) => handler(payload as AgentEvent)),
   };
 }

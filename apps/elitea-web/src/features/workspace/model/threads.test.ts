@@ -22,6 +22,31 @@ describe('folder threads', () => {
     expect(readThreads('w1')).toEqual([]);
   });
 
+  it('puts a rewound thread in its source\'s place and lists the source under it as the earlier attempt', () => {
+    recordThread('w1', { id: 'a', title: 'a', updatedAt: 1 });
+    recordThread('w1', { id: 'src', title: 'try', updatedAt: 2 });
+    recordThread('w1', { id: 'b', title: 'b', updatedAt: 3 });
+    recordThread('w1', { id: 'r1', title: 'try (fork)', updatedAt: 4 }, 'src');
+    expect(readThreads('w1').map((t) => [t.id, t.earlierAttemptOf])).toEqual([
+      ['b', undefined],
+      ['r1', undefined],
+      ['src', 'r1'],
+      ['a', undefined],
+    ]);
+    // Rewound again: both earlier attempts move under the newest thread.
+    recordThread('w1', { id: 'r2', title: 'try again', updatedAt: 5 }, 'r1');
+    expect(readThreads('w1').map((t) => [t.id, t.earlierAttemptOf])).toEqual([
+      ['b', undefined],
+      ['r2', undefined],
+      ['r1', 'r2'],
+      ['src', 'r2'],
+      ['a', undefined],
+    ]);
+    // A source this machine does not list: the rewound thread goes first.
+    recordThread('w2', { id: 'r', title: 'r', updatedAt: 1 }, 'gone');
+    expect(readThreads('w2').map((t) => t.id)).toEqual(['r']);
+  });
+
   it('reads corrupt storage as no threads, and lives under the logout-swept namespace', () => {
     createStorage('local').set('desktop.workspace.w1.threads', '{not json');
     expect(readThreads('w1')).toEqual([]);

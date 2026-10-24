@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.20"
+  x-elitea-client-contract: "1.22"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -1232,8 +1232,24 @@ components:
       properties:
         provider:
           type: string
+          description: The model provider, or for a tool row the vendor (`tavily`).
         model:
           type: string
+          description: The model, or for a tool row the operation (`web_search`).
+        operation:
+          type: string
+          enum: [llm, tool]
+          description: |
+            `tool` for a metered tool operation, which bills per unit and has
+            no tokens; `llm` for a model call.
+        units:
+          type: integer
+          format: int64
+          description: Units a tool row consumed. Absent on an llm row.
+        unit:
+          type: string
+          enum: [request, credit, page]
+          description: What `units` counts. Absent on an llm row.
         spend:
           type: number
           nullable: true
@@ -1548,6 +1564,21 @@ components:
           type: number
         total_cost:
           type: number
+          description: >
+            The model estimate plus tool_cost. Present when a call is priced
+            or a metered tool operation was billed.
+        tool_calls:
+          type: integer
+          format: int64
+          description: >
+            Metered tool operations (web search, web fetch, host lookups)
+            settled in the scope. They are not model calls and carry no
+            tokens.
+        tool_cost:
+          type: number
+          description: >
+            What the gateway billed for tool_calls, an exact decimal. Billed,
+            not estimated. ABSENT when there was no tool call.
       description: >
         One scope's model calls, tokens and estimated cost, from
         gateway.llm_request_logs. Source internal/domain/analytics/runs.go.
@@ -1589,6 +1620,21 @@ components:
           type: number
         total_cost:
           type: number
+          description: >
+            The model estimate plus tool_cost. Present when a call is priced
+            or a metered tool operation was billed.
+        tool_calls:
+          type: integer
+          format: int64
+          description: >
+            Metered tool operations (web search, web fetch, host lookups)
+            settled in the scope. They are not model calls and carry no
+            tokens.
+        tool_cost:
+          type: number
+          description: >
+            What the gateway billed for tool_calls, an exact decimal. Billed,
+            not estimated. ABSENT when there was no tool call.
       description: One (provider, model) inside a run.
 
     AnalyticsRunUser:
@@ -1631,6 +1677,21 @@ components:
           type: number
         total_cost:
           type: number
+          description: >
+            The model estimate plus tool_cost. Present when a call is priced
+            or a metered tool operation was billed.
+        tool_calls:
+          type: integer
+          format: int64
+          description: >
+            Metered tool operations (web search, web fetch, host lookups)
+            settled in the scope. They are not model calls and carry no
+            tokens.
+        tool_cost:
+          type: number
+          description: >
+            What the gateway billed for tool_calls, an exact decimal. Billed,
+            not estimated. ABSENT when there was no tool call.
       description: One caller inside a run.
 
     AnalyticsAutomatedActivity:
@@ -1683,6 +1744,21 @@ components:
           type: number
         total_cost:
           type: number
+          description: >
+            The model estimate plus tool_cost. Present when a call is priced
+            or a metered tool operation was billed.
+        tool_calls:
+          type: integer
+          format: int64
+          description: >
+            Metered tool operations (web search, web fetch, host lookups)
+            settled in the scope. They are not model calls and carry no
+            tokens.
+        tool_cost:
+          type: number
+          description: >
+            What the gateway billed for tool_calls, an exact decimal. Billed,
+            not estimated. ABSENT when there was no tool call.
       description: >
         One unattended trigger origin's calls in the window (legacy issues
         6802 and 6881). These calls are excluded from every active-user figure
@@ -2349,6 +2425,39 @@ components:
           type: string
           format: uuid
           description: The UUID of the fork point message group, when there is one.
+        mode:
+          type: string
+          description: >
+            `fork` or `rewind` (forkConversation's `mode`). A fork made before
+            rewinds existed reads `fork`. A client lists the source of a
+            rewind under it as the earlier attempt.
+        cut_message_uuid:
+          type: string
+          format: uuid
+          description: >
+            The UUID of this conversation's copy of the fork point message
+            group, when there is one: the turns up to it are the copied
+            history. A desktop places a rewind's branch summary after it when
+            it rebuilds its session from the server.
+        branch_summary:
+          type: object
+          required: [version]
+          additionalProperties: true
+          description: >
+            getConversation of a rewind only. What the abandoned turns after
+            the fork point tried, in the runtime's shared v1 context summary
+            record (`version` 1, at most 32 KiB): the request's
+            `branch_summary`, or one the server built from those turns' text.
+          properties:
+            version:
+              type: integer
+              description: Always 1.
+          x-elitea-passthrough: >-
+            NOTE(W2): the runtime's v1 context summary record, stored as
+            `meta.forked_from.branch_summary` and served after the same shape
+            and size check the request passes
+            (internal/api/v2/conversations/fork_rewind.go:272
+            `annotateBranchSummary`).
         name:
           type: string
           description: >
@@ -2375,6 +2484,41 @@ components:
             " (fork)" added ("New conversation (fork)" when the source name is
             blank). Trimmed; blank, longer than 256 characters or with a
             control character answers 400.
+        mode:
+          type: string
+          description: >
+            `fork` (the default) or `rewind`. A rewind is a fork that also
+            records the abandoned turns after the fork point as
+            `forked_from.branch_summary`; it needs `message_id`. Any other
+            value answers 400.
+        branch_summary:
+          type: object
+          required: [version]
+          additionalProperties: true
+          description: >
+            A rewind's summary of the abandoned turns, in the runtime's shared
+            v1 context summary record (`version` 1, exactly its keys, at most
+            24 entries per array, 2048 bytes per string and 32 KiB in all).
+            Absent: the server builds one from those turns' text. With
+            another mode, or not a valid record, it answers 400.
+          properties:
+            version:
+              type: integer
+              description: Always 1.
+          x-elitea-passthrough: >-
+            NOTE(W2): the runtime's v1 context summary record, read from the
+            body map and checked for its keys, version and bounds
+            (internal/api/v2/conversations/fork_rewind.go:122
+            `validBranchSummary`) before it is stored.
+        fork_id:
+          type: string
+          format: uuid
+          description: >
+            An idempotency key. A request whose `fork_id` already made a fork
+            of the caller answers that fork (201, its row now, with an empty
+            `forked_messages`) and copies nothing; one that made a fork of
+            another source, fork point or mode answers 409
+            `fork_id_conflict`.
 
     ConversationListing:
       type: object
@@ -12714,6 +12858,21 @@ components:
             the Hugging Face CDN (<base>/<repo>/resolve/<revision>/<file>).
             Empty (the default) is Hugging Face. Every file is checked against
             the SHA-256 the app pins.
+        web:
+          type: boolean
+          description: >-
+            Client contract 1.22. Local turns may use the web toolkit
+            (web_search, web_fetch), which sends the turn's queries and URLs to
+            third-party providers. Absent or false is off (the default); the
+            server also refuses a remote web call of a turn while it is false
+            (403 local_work_policy_refused).
+        host_intel:
+          type: boolean
+          description: >-
+            Client contract 1.22. Local turns may use the host_intel toolkit
+            (internet host search and lookup through Shodan). Absent or false
+            is off (the default); the server refuses a remote host_intel call
+            while it is false.
     InvalidQueryParameterError:
       type: object
       description: >-
@@ -17775,6 +17934,20 @@ paths:
         reply of the copy that is; without
         `message_id`, the newest message is the fork point. An editor Test
         conversation answers 409 `fork_not_supported`.
+
+        A rewind (`mode: rewind`, issue 1234) is a fork at an answer that
+        also records what the turns after it tried: `forked_from` names the
+        mode and the copy's fork point (`cut_message_uuid`), and
+        getConversation's `forked_from.branch_summary` is the request's
+        `branch_summary` or, without one, a summary the server builds from
+        the text of the turns it did not copy. The source is not changed: a
+        client lists it under the rewound conversation as the earlier
+        attempt. A Local work thread the cloud executor owns (ADR-0034)
+        answers 409 `thread_executor_is_cloud`; a fork of more than 1000
+        message groups answers 413 `fork_too_large`. Nothing is created
+        when the fork is refused. With `fork_id`, a retry answers the fork
+        the first request made. The audit trail records
+        `conversation.fork` or `conversation.rewind`.
       tags:
         - chat
         - client
@@ -17800,8 +17973,10 @@ paths:
           description: >
             A body that is not a JSON object, an invalid `name` (blank, longer
             than 256 characters or with a control character), a `message_id`
-            that is not a string, or a native client version that does not
-            parse (invalid_client_version).
+            that is not a string, an unknown `mode`, a rewind without
+            `message_id`, an invalid `branch_summary` (or one on a plain
+            fork), a `fork_id` that is not a UUID, or a native client version
+            that does not parse (invalid_client_version).
           content:
             application/json:
               schema:
@@ -17816,6 +17991,14 @@ paths:
           $ref: "#/components/responses/404"
         "409":
           $ref: "#/components/responses/409"
+        "413":
+          description: >
+            `fork_too_large`: the fork would copy more than 1000 message
+            groups. Fork from an earlier message.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "426":
           $ref: "#/components/responses/ClientUpgradeRequired"
         "500":

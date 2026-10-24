@@ -1,0 +1,21 @@
+[package]
+name = "elitea-egress-guard"
+description = "The Rust twin of the platform's Go egress guard (#1238): address classification, the egresslib allowlist grammar, and a reqwest resolver that hands the connector only the addresses it checked."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Only for the `reqwest::dns::Resolve` trait the guarded resolver implements;
+# the caller builds its own client. The same 0.12 line agent-runtime links.
+reqwest = { version = "0.12.28", default-features = false }
+tokio = { version = "1.53.1", features = ["net", "time"] }
+
+[dev-dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["macros", "net", "rt", "time"] }
+
+[lints]
+workspace = true

@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.20
+ * client contract:    1.22
  * operations sha256:  9aa8e0d468a4b50aa5d93f6330dcfaf36da2781a999b574d8226adc3853174ab
  */
 export interface paths {
@@ -645,6 +645,20 @@ export interface paths {
          *     reply of the copy that is; without
          *     `message_id`, the newest message is the fork point. An editor Test
          *     conversation answers 409 `fork_not_supported`.
+         *
+         *     A rewind (`mode: rewind`, issue 1234) is a fork at an answer that
+         *     also records what the turns after it tried: `forked_from` names the
+         *     mode and the copy's fork point (`cut_message_uuid`), and
+         *     getConversation's `forked_from.branch_summary` is the request's
+         *     `branch_summary` or, without one, a summary the server builds from
+         *     the text of the turns it did not copy. The source is not changed: a
+         *     client lists it under the rewound conversation as the earlier
+         *     attempt. A Local work thread the cloud executor owns (ADR-0034)
+         *     answers 409 `thread_executor_is_cloud`; a fork of more than 1000
+         *     message groups answers 413 `fork_too_large`. Nothing is created
+         *     when the fork is refused. With `fork_id`, a retry answers the fork
+         *     the first request made. The audit trail records
+         *     `conversation.fork` or `conversation.rewind`.
          */
         post: operations["forkConversation"];
         delete?: never;
@@ -2405,6 +2419,13 @@ export interface components {
         };
         /** @description Client contract 1.11. The conversation this conversation was forked from (forkConversation), and the fork point. Absent when the conversation is not a fork. The source can be deleted, or become invisible to the reader, later; then the ids stay and `name` is absent. */
         ConversationForkedFrom: {
+            /** @description getConversation of a rewind only. What the abandoned turns after the fork point tried, in the runtime's shared v1 context summary record (`version` 1, at most 32 KiB): the request's `branch_summary`, or one the server built from those turns' text. */
+            branch_summary?: {
+                /** @description Always 1. */
+                version: number;
+            } & {
+                [key: string]: unknown;
+            };
             /** @description The source conversation's numeric id. */
             conversation_id: number;
             /**
@@ -2412,6 +2433,11 @@ export interface components {
              * @description The source conversation's UUID.
              */
             conversation_uuid?: string;
+            /**
+             * Format: uuid
+             * @description The UUID of this conversation's copy of the fork point message group, when there is one: the turns up to it are the copied history. A desktop places a rewind's branch summary after it when it rebuilds its session from the server.
+             */
+            cut_message_uuid?: string;
             /** @description The numeric id of the fork point message group. Absent when the whole conversation was forked. */
             message_id?: number;
             /**
@@ -2419,6 +2445,8 @@ export interface components {
              * @description The UUID of the fork point message group, when there is one.
              */
             message_uuid?: string;
+            /** @description `fork` or `rewind` (forkConversation's `mode`). A fork made before rewinds existed reads `fork`. A client lists the source of a rewind under it as the earlier attempt. */
+            mode?: string;
             /** @description getConversation only. The source conversation's current name. Present only when the source still exists and the reader can see it; a client shows the "Forked from" link only then. */
             name?: string;
         };
@@ -2715,8 +2743,22 @@ export interface components {
         };
         /** @description Client contract 1.11. The body of forkConversation. An absent body forks the whole conversation with the default name. */
         ForkConversationRequest: {
+            /** @description A rewind's summary of the abandoned turns, in the runtime's shared v1 context summary record (`version` 1, exactly its keys, at most 24 entries per array, 2048 bytes per string and 32 KiB in all). Absent: the server builds one from those turns' text. With another mode, or not a valid record, it answers 400. */
+            branch_summary?: {
+                /** @description Always 1. */
+                version: number;
+            } & {
+                [key: string]: unknown;
+            };
+            /**
+             * Format: uuid
+             * @description An idempotency key. A request whose `fork_id` already made a fork of the caller answers that fork (201, its row now, with an empty `forked_messages`) and copies nothing; one that made a fork of another source, fork point or mode answers 409 `fork_id_conflict`.
+             */
+            fork_id?: string;
             /** @description The fork point: the numeric id or the UUID of a message group of the source conversation, a user message or an assistant message. Absent: the whole conversation. */
             message_id?: string;
+            /** @description `fork` (the default) or `rewind`. A rewind is a fork that also records the abandoned turns after the fork point as `forked_from.branch_summary`; it needs `message_id`. Any other value answers 400. */
+            mode?: string;
             /** @description The new conversation's name. Absent: the source name with " (fork)" added ("New conversation (fork)" when the source name is blank). Trimmed; blank, longer than 256 characters or with a control character answers 400. */
             name?: string;
         };
@@ -2757,6 +2799,8 @@ export interface components {
             command_allow: string[];
             /** @description Command patterns that never run. A deny wins over an allow. Same bounds. */
             command_deny: string[];
+            /** @description Client contract 1.22. Local turns may use the host_intel toolkit (internet host search and lookup through Shodan). Absent or false is off (the default); the server refuses a remote host_intel call while it is false. */
+            host_intel?: boolean;
             /** @description Client contract 1.9. The user may add vectors to a local index with an embedding model that runs on the device (nothing leaves it). Default true. Embeddings stay off per workspace until the user turns them on and picks a model. */
             index_local_embeddings: boolean;
             /** @description Client contract 1.9. Where the app downloads the on-device embedding models from instead of Hugging Face: an https base URL laid out as the Hugging Face CDN (<base>/<repo>/resolve/<revision>/<file>). Empty (the default) is Hugging Face. Every file is checked against the SHA-256 the app pins. */
@@ -2777,6 +2821,8 @@ export interface components {
             path_deny: string[];
             /** @description Local turns may run shell commands. Default true. */
             shell: boolean;
+            /** @description Client contract 1.22. Local turns may use the web toolkit (web_search, web_fetch), which sends the turn's queries and URLs to third-party providers. Absent or false is off (the default); the server also refuses a remote web call of a turn while it is false (403 local_work_policy_refused). */
+            web?: boolean;
         };
         /** @description Client contract 1.12. The body of markConversationRead. An absent body, or an absent `message_id`, reads the conversation up to now. */
         MarkConversationReadRequest: {
@@ -3457,14 +3503,32 @@ export interface components {
             api_requests: number;
             /** Format: int64 */
             completion_tokens: number;
+            /** @description The model, or for a tool row the operation (`web_search`). */
             model: string;
+            /**
+             * @description `tool` for a metered tool operation, which bills per unit and has
+             *     no tokens; `llm` for a model call.
+             * @enum {string}
+             */
+            operation?: "llm" | "tool";
             /** Format: int64 */
             prompt_tokens: number;
+            /** @description The model provider, or for a tool row the vendor (`tavily`). */
             provider: string;
             /** @description USD for the model. REMOVED for a caller who may not see amounts. */
             spend?: number | null;
             /** Format: int64 */
             total_tokens: number;
+            /**
+             * @description What `units` counts. Absent on an llm row.
+             * @enum {string}
+             */
+            unit?: "request" | "credit" | "page";
+            /**
+             * Format: int64
+             * @description Units a tool row consumed. Absent on an llm row.
+             */
+            units?: number;
         };
         UsageReport: {
             /**
@@ -4543,7 +4607,7 @@ export interface operations {
                     "application/json": components["schemas"]["ConversationSummary"];
                 };
             };
-            /** @description A body that is not a JSON object, an invalid `name` (blank, longer than 256 characters or with a control character), a `message_id` that is not a string, or a native client version that does not parse (invalid_client_version). */
+            /** @description A body that is not a JSON object, an invalid `name` (blank, longer than 256 characters or with a control character), a `message_id` that is not a string, an unknown `mode`, a rewind without `message_id`, an invalid `branch_summary` (or one on a plain fork), a `fork_id` that is not a UUID, or a native client version that does not parse (invalid_client_version). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -4556,6 +4620,15 @@ export interface operations {
             403: components["responses"]["403"];
             404: components["responses"]["404"];
             409: components["responses"]["409"];
+            /** @description `fork_too_large`: the fork would copy more than 1000 message groups. Fork from an earlier message. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };

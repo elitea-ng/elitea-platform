@@ -123,6 +123,8 @@ type Workspace = {
   name: string;             // the folder's name
   project_id: number | null; // the project local turns run in; a turn needs one
   is_git: boolean;          // inside a git work tree (computed when listed)
+  parent_id?: string;       // a task worktree's workspace: the folder it was made from (#1235)
+  thread_uuid?: string;     // a task worktree's workspace: the thread it was made for
 };
 ```
 
@@ -130,15 +132,89 @@ type Workspace = {
 | --- | --- | --- |
 | `workspace_open` | — | `Workspace \| null` — the native folder dialog; `null` when cancelled. Opening a folder that is already a workspace returns that workspace. |
 | `workspace_list` | — | `Workspace[]` |
-| `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, its approval rules, copy checkpoints, its local index), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it. |
+| `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, its approval rules, copy checkpoints, its local index), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it, `workspace_has_worktrees` while it has task worktrees (remove them first). A task worktree's workspace is removed with `worktree_remove`. |
 | `workspace_bind_project` | `{id, project_id}` | `Workspace` — rejects with `workspace_busy` while a turn (or an undo) runs in it, `workspace_unknown` for an id it does not know. |
-| `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null, allow_model_override: boolean \| null}` — the workspace's agent settings: `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100); `allow_model_override: false` runs every turn on the agent's own model (the composer hides its model chip; `null`/`true`: a model may be chosen per turn, issue 1228). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
-| `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null, allow_model_override?: boolean \| null}}` | the stored settings — they apply from the next turn. Rejects `invalid_request` for a step limit outside 10 to 200, `storage` for an id it does not know. |
+| `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null, allow_model_override: boolean \| null, diagnostics: boolean \| null, diagnostics_wait_ms: {rust, typescript, python, go: number \| null}}` — the workspace's agent settings: `diagnostics: false` turns edit diagnostics and the `diagnostics` tool off for the workspace (`null`/`true`: on; servers start only when found on `PATH`, see **Language servers**), and `diagnostics_wait_ms` sets how long an edit waits for a language's diagnostics (`null`: 1.5 s, the first answer after a server's start 4 s for Rust, 3 s for the others); `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100); `allow_model_override: false` runs every turn on the agent's own model (the composer hides its model chip; `null`/`true`: a model may be chosen per turn, issue 1228). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
+| `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null, allow_model_override?: boolean \| null, diagnostics?: boolean \| null, diagnostics_wait_ms?: {rust?, typescript?, python?, go?: number \| null}}}` | the stored settings — they apply from the next turn (turning diagnostics off stops the workspace's language servers then). Rejects `invalid_request` for a step limit outside 10 to 200 or a diagnostics wait outside 100 to 30 000 ms, `storage` for an id it does not know. |
 | `workspace_files` | `{workspace_id, query?: string, limit?: number}` | `{path, kind: "file" \| "dir"}[]` — the "@" picker. Workspace-relative paths (no trailing `/`) matching `query` case-insensitively: the name starting with it, then containing it, then the path containing it, then its characters in order; shallower and shorter first. `.gitignore` is honoured, `.git` and `path_deny` matches are left out, symlinks are neither listed nor followed. At most `limit` (default 50, at most 200); a folder past 20 000 entries answers from its first part. Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 | `commands_list` | `{workspace_id}` | `{name, description: string \| null, argument_hint: string \| null, source: "workspace" \| "user", path, ignored: string[]}[]` — the "/" menu's custom commands, by name (see **Custom commands** below): the workspace's `.elitea/commands/` then `.claude/commands/`, then the person's own `<app config dir>/commands/` (created `0700` when missing); the first of a name wins, so a workspace command shadows the person's, even one that cannot be read (too large, not UTF-8, denied, a symlink): that one is not listed, and no other file of its name is offered or run in its place. `path` is workspace-relative, or relative to the person's folder. `ignored` names what the file asks for that the host ignores (front matter keys such as `allowed-tools` and `model`, `! shell lines`, `@ file includes`). Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 
 Workspaces are stored in the app data directory (`workspaces.json`), never
 inside the folder.
+
+## Parallel agents: task worktrees (`src/worktrees.rs`, `src/worktree_commands.rs`, `libs/rust/local-tools/src/{worktree,apply}.rs`, #1235)
+
+A task worktree is a linked git worktree of a workspace's repository that
+the host makes in the workspace's own data,
+`<app data>/workspaces/<id>/worktrees/<32 hex of the thread>`, on a new
+branch `elitea/<first 12 hex of the thread>[-<n>]` (no checkout runs a filter or
+hook: files are written by `checkout-index` after the attributes check).
+Only a workspace whose folder is its repository's top has them. Each is a
+workspace of its own (`Workspace.parent_id`, listed by `workspace_list`):
+its own session, checkpoints and turn claim, so turns run in several task
+worktrees, and in the folder, at the same time. Its project is the
+parent's. The `worktree_*` commands take the PARENT's `workspace_id`;
+`agent_turn_start`, `checkpoint_*` and the rest take the worktree's.
+
+The host records each in `worktrees.json` in the parent's data (owner-only,
+never through a symlink; a file another user owns or others may read is
+refused) and registers it with host git at creation and at launch. Host
+git accepts a linked worktree only as that record names it: its `.git`
+file a regular file you own holding exactly `gitdir: <top>/.git/worktrees/<name>`,
+the admin directory's `commondir` and `gitdir` pointing back, the top
+repository passing the full check (`config.worktree` included). A
+repository's own linked worktrees are not accepted this way. In a task
+worktree, agent commands may write the worktree folder only: the shared
+objects, refs and the admin directory are read-only, and the parent's
+other task worktrees are not readable.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `worktree_create` | `{workspace_id, thread_uuid, base?: "head" \| "checkpoint:<n>"}` | `WorktreeEntry` — `base` is `HEAD` (default) or the folder as its checkpoint `n` holds it. Rejects `workspace_unknown`, `not_a_git_repository` (no repository, or the folder is not its top), `unsafe_repository`, `worktree_exists` (the thread has one, or the branch exists), `invalid_request`. |
+| `worktree_list` | `{workspace_id}` | `WorktreeEntry[]`, newest first. |
+| `worktree_diff` | `{workspace_id, thread_uuid}` | `{diff: string, truncated: boolean}` — the worktree as it is now (uncommitted work included) against `base_sha`; denied paths left out. Rejects `worktree_unknown`, `workspace_busy` while a turn runs in it. |
+| `worktree_remove` | `{workspace_id, thread_uuid, force?: boolean}` | `null` — its workspace (session, turns, history, data), folder and admin directory; its branch is kept when commits are on it, or when the worktree cannot be opened to tell (missing, refused). Rejects `worktree_dirty` when it has uncommitted work and `force` is not `true`, `workspace_busy`. |
+| `worktree_merge_preflight` | `{workspace_id, thread_uuid}` | `MergePreflight` — what merging the worktree (as it is now) into the folder would do, by `git merge-tree` from `base_sha`; writes nothing. Held 15 minutes. |
+| `worktree_merge_apply` | `{preflight_id}` | `MergeApplied` — checkpoints the folder first, then writes each path through the confined writer (path rules apply; what they refuse is in `skipped_paths`). The result lands as uncommitted changes; nothing is committed. Rejects `preflight_expired`, `merge_conflicts` (a `conflicts` preview: nothing is applied, the work stays on the branch), `folder_changed_since_preflight` (preview again), `workspace_busy`. |
+| `worktree_merge_undo` | `{checkpoint_id, confirm_older?: boolean}` | `{restored: string[]}` — restores the checkpoint the merge took (only an id `worktree_merge_apply` returned; once). Rejects `invalid_request` for any other checkpoint, `undo_not_latest` when the folder was checkpointed since (a later turn or merge, whose changes the restore reverts too) and `confirm_older` is not `true`, `workspace_busy`. |
+
+```ts
+type WorktreeEntry = {
+  workspace_id: string;        // the worktree's own workspace (turns run here)
+  thread_uuid: string;
+  path: string;
+  branch: string;              // "elitea/<first 12 hex of the thread>[-<n>]"
+  base_sha: string;
+  created_at: number;          // unix seconds
+  ahead: number;               // commits on the branch since base_sha
+  dirty: number;               // changed paths not committed
+  last_turn_at: number | null; // its newest checkpoint (the last turn that wrote)
+  missing: boolean;            // the folder is gone (the Doctor prunes it)
+};
+type MergePreflight = {
+  preflight_id: string;
+  mode: "fast_forward" | "merge" | "conflicts" | "nothing";
+  applied_paths: string[];
+  conflict_paths: string[];
+  skipped_paths: string[];     // never written: denied paths, symlinks, submodules
+  branch: string;
+};
+type MergeApplied = {
+  written: string[];
+  deleted: string[];
+  skipped_paths: string[];
+  checkpoint_id: string | null; // for worktree_merge_undo
+};
+```
+
+A sub-agent may run in a task worktree of its own: `spawn_agent` takes
+`isolation: "worktree"` in a turn of a workspace that has task worktrees
+(its schema offers `isolation` only there). The host makes the worktree
+before the child starts; the child keeps its writing tools there, its
+approvals asked in the parent turn, and the worktree stays for the person
+to review and merge (Parallel agents panel). The Doctor's `worktrees`
+check finds task worktrees whose folder is gone and admin directories the
+app made that no record names; `worktrees.prune` (confirmed) removes them.
 
 ## Approval rules (`src/rules.rs`, `libs/rust/local-tools/src/execpolicy.rs`)
 
@@ -237,6 +313,7 @@ names instead of retrying. A rule imported from a repository leaves the
 | `turn_changes` | `{turn_id}` | `{files: FileChange[], latest: boolean, undone: boolean}` |
 | `checkpoint_preview` | `{turn_id}` | `{restored: string[], deleted: string[]}` — a dry run of restoring the folder to before the turn |
 | `checkpoint_restore` | `{turn_id, path?: string, confirm_older?: boolean}` | `{restored: string[]}` |
+| `checkpoint_after` | `{turn_id}` | `{turn_id: string \| null}` — the turn whose checkpoint is the folder as `turn_id` left it: the first later turn of the same workspace (any thread) that changed files and was not undone. `null` when no later turn changed the folder (it is already as that turn left it, the person's own edits aside). A fork from a turn offers "Restore files to this point" with it: `checkpoint_preview` of the answered turn, then `checkpoint_restore` with `confirm_older` (Thread history, "Fork point"). Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep. Changes nothing. |
 | `turn_commit_retry` | `{execution_id}` | `null` once the turn's failed commit (`commit_failed`) is saved: sent again with the same execution id and body, in its conversation's order. Rejects `commit_unknown` when the host keeps no failed commit of that execution (it was saved, the app restarted, or the session signed out), or with the commit's refusal, which is also sent as another `commit_failed`. |
 
 **One round trip before the first token.** The host keeps, for the app's
@@ -950,6 +1027,107 @@ The `approval_request` card carries `mcp: {server, tool?, read_only}`
 report lists each call among its `commands` as `mcp <server> <tool>` with
 `mcp: {server, tool, read_only}`, never its arguments.
 
+## Hooks (`src/hooks.rs`, `src/hooks_commands.rs`, `libs/rust/local-tools/src/hooks/`, #1237)
+
+The person's own commands around a local turn: `PreToolUse` and
+`PostToolUse` around each local tool call (the `local` toolset's tools and
+the local MCP servers' `mcp__<server>__<tool>` tools; not the memory,
+index or remote tools, which are the runtime's, the `web` and `host_intel`
+toolkits included), `UserPromptSubmit` before
+the person's message goes to the model, `Stop` when a turn that ran ends
+(not a cancelled turn, nor one a `UserPromptSubmit` hook refused). **Local-only**: the cloud
+executor runs none, and the handoff note says so when the workspace has
+any. They run only while the policy has local work and the shell on.
+
+**Settings.** Two files in host data, never in the workspace folder:
+`<app config dir>/hooks.json` (every workspace) and
+`<app data>/workspaces/<id>/hooks.json` (one workspace; a hook of the same
+`id` replaces the user one there, unless it was accepted from a
+repository proposal: those never replace a user hook). The same file rules as `mcp.json`
+(`0600` in `0700`, no symlink, owner only, schema-checked; a refused file
+adds no hook and the turn says so in a `status` message). Every turn takes
+both files as they are at its start.
+
+```ts
+type HooksFile = { version: 1; hooks: Hook[]; answered_proposals?: string[] };
+type Hook = {                     // unknown keys are refused; at most 32 per file
+  id: string;                     // [A-Za-z0-9_-]{1,64}, unique in the file
+  event: "PreToolUse" | "PostToolUse" | "Stop" | "UserPromptSubmit";
+  match?: { tools?: string[]; paths?: string[] }; // tool events only; tools: local names, "mcp__<server>__<tool>", "mcp__<server>__*", or "*"/none for every tool (MCP too); paths: globs over workspace-relative paths, matched against the typed path and where an in-workspace symlink leads
+  command: string[];              // argv: a bare program (found on PATH) or an absolute path, outside the workspace; no shell unless ["sh","-c",…]; an item exactly "{path}" / "{tool}" is replaced by the matching paths / the tool name
+  timeout_ms?: number;            // 1..30000, default 10000; one call's hooks share 30 s
+  sandbox?: "read-only" | "workspace-write"; // default read-only; capped by the policy's max_sandbox_mode
+  network?: boolean;              // default false; on only when the policy allows the network too
+  fail_closed?: boolean;          // a failure or timeout refuses (PreToolUse, UserPromptSubmit)
+  enabled?: boolean;              // default true
+  source?: string;                // "user", or "proposal:<sha256>" for a trusted proposal
+};
+type HookRun = {
+  id: string; event: Hook["event"];
+  result: "ok" | "deny" | "ask" | "modified" | "annotated" | "failed" | "timed_out";
+  duration_ms: number; at_ms: number;
+  message?: string;               // for the person: why it failed, or what it wrote
+};
+type ProposedHook = Hook & { problem?: string };
+type HooksProposal = { file: string; file_sha256: string; hooks: ProposedHook[] };
+```
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `hooks_list` | `{workspace_id?}` | `{allowed: boolean, user?: {path, hooks: Hook[], error?}, workspace?: {path, hooks: Hook[], error?}, last_runs: HookRun[], proposals: HooksProposal[]}` — both files, each hook's last run in the workspace's session (`[]` before its first turn) and the folder's unanswered proposals. Rejects `workspace_unknown` |
+| `hooks_save` | `{scope: "user" \| "workspace", hooks: Hook[], workspace_id?}` | `null` — replaces the file's hooks (its answered proposals kept; a file that does not parse is replaced whole, which repairs it); the next turn runs them. Rejects `invalid_request` (naming the hook), `hooks_settings_refused`, `workspace_unknown` |
+| `hooks_set_enabled` | `{scope, id, enabled, workspace_id?}` | `boolean` — whether the hook was there. Rejects as `hooks_save` |
+| `hooks_proposal_answer` | `{workspace_id, file_sha256, accept: string[]}` | `{accepted: string[]}` — copies the named hooks (none: declined) of the proposal whose file hashes to `file_sha256` into the workspace's file with `source: "proposal:<sha256>"`; the proposal is not shown again until the file changes. Rejects `conflict` (the file changed since it was shown), `invalid_request` (a hook that cannot be accepted, or whose id the workspace's file or the person's own file already has: a proposal never replaces a user hook, and its card's `problem` says so) |
+
+**Proposals.** When a workspace is opened the host reads
+`.elitea/hooks.json` (this format) and the `hooks` of
+`.claude/settings.json` through the confined reads, and sends each file it
+has not seen answered on `hooks://event` as `{kind: "hooks_proposal",
+workspace_id, file, file_sha256, hooks: ProposedHook[]}`. Nothing runs from
+a proposal. A Claude hook becomes `["/bin/sh", "-c", command]` in the
+read-only sandbox, its matcher mapped to the local tools (`Bash` →
+`run_command`, `run_tests`; `Edit` → `edit_file`, `multi_edit`,
+`apply_patch`; `MultiEdit` → `multi_edit`, `apply_patch`; `Write` →
+`write_file`; …).
+
+**Running.** Each hook is its own process group under the same sandbox as
+`run_command` (the session's deny list and `path_deny`), in the workspace
+root, with an environment built from nothing (`PATH` without relative
+entries, `HOME`, `USER`, the locale, the toolchain homes `CARGO_HOME`,
+`RUSTUP_HOME`, `GOPATH`, `GOROOT`, its own `TMPDIR`, `ELITEA_HOOK_ID`,
+`ELITEA_HOOK_EVENT`). A machine whose sandbox cannot hide the deny list
+runs no hook (a hook is never asked about). Stdin is one JSON line:
+`{event, session_id, conversation_uuid, tool?, input?, cwd: ".",
+workspace_name, output?, prompt?}` (`output` cut at 64 KiB; never an
+absolute workspace path). Exit 0 with optional stdout `{decision:
+"allow"|"deny"|"ask", reason?, modified_input?, annotation?}` (text that is
+not JSON is an annotation); exit 2 denies with stderr as the reason; any
+other exit, a timeout or a start failure is a failure, which proceeds
+unless `fail_closed`. Stdout is kept up to 64 KiB, stderr 16 KiB.
+
+**What a verdict does.** `PreToolUse` runs after the policy ceiling and
+plan mode: `deny` refuses the call (`{status: "error", code:
+"local_tools.denied", error: "hook_denied", hook, reason}`); `ask` makes
+the approval request carry `hook_ask: {hook, reason}` with `source:
+"hook"`, so a call the rules allow is asked (never "always"); `allow`
+changes nothing; `modified_input` is checked against the tool's schema and
+then decided by every rule like the model's own input. A tool result
+records the runs (`hooks: [{id, result, duration_ms}]`) and what a hook
+changed in the input (`hook_modified_input: {changed: {key: value |
+{bytes, sha256}}, removed?: string[]}`, a value over 1 KiB by its size and
+digest). `PostToolUse` annotations are added to the result
+(`hook_annotations`). When a `PostToolUse` hook that can write (its
+sandbox `workspace-write`) changed a file the edit just wrote (a
+formatter), the read guard records the new content, so the next edit is
+not refused as stale, and the result lists it (`hook_changed_files`) and
+marks its `diagnostics` as of the text before the hook (`before_hooks:
+true`). `UserPromptSubmit` annotations are added to
+the turn's context; its `deny` ends the turn with the `error` event
+`hook_denied`. `Stop` text, and any failure outside a tool call, are
+`status` events with `note: "hook_stop"` / `"hook_failed"`, for the person.
+Everything a hook writes that reaches the model is framed as untrusted
+text (`<hook_output nonce="…" hook="id">`).
+
 ## Memory tools (`src/d0/memory.rs`, `libs/rust/agent-runtime/src/memory_tools.rs`, #1233)
 
 No command or event of its own. Every workspace turn is offered the
@@ -983,6 +1161,26 @@ answer). "Fork from here" on a turn forks the server conversation at the
 turn's answer and copies the turns up to that turn (`up_to_turn_id`). A
 thread the host has no record of (it ran on the web or another machine)
 forks on the server only, and copies nothing here.
+
+The files in the folder are not changed by a fork. When the fork point is
+a turn the host still keeps, the new thread offers "Restore files to this
+point": `checkpoint_after` names the later turn whose checkpoint is the
+folder as the fork point left it, and the UI shows its `checkpoint_preview`
+and restores only after the person confirms (`checkpoint_restore` with
+`confirm_older`). Checkpoints belong to the workspace, so the fork shares
+them and none is copied.
+
+**Rewind** ("Rewind to here", issue 1234) is the same fork with
+`mode: "rewind"`: the server stores a summary of the abandoned turns
+after the fork point on the new conversation (`forked_from.branch_summary`,
+the shared `context_summary` v1 record, built by the server from those
+turns' text) and the copy's fork point (`forked_from.cut_message_uuid`).
+The source is not changed; the UI opens the rewound thread in its place and
+lists the source under it as the earlier attempt. The new thread's session
+is seeded from the server (`src/seed.rs`): after the fork point's turn it
+gets one host note, "This conversation was rewound to this point …",
+followed by the summary as JSON data. A session rebuilt later (deleted, or
+on another device) gets the same note, and never the abandoned turns.
 
 ```ts
 type StoredTurn = {
@@ -1759,13 +1957,63 @@ Notifications and the dock badge are the host's own, from the
 `agent://event` stream (README, "Native features"); the UI does nothing
 for them.
 
+## Language servers (`src/d0/lsp.rs`, `libs/rust/local-tools/src/lsp/`, #1236)
+
+Edits (`write_file`, `edit_file`, `multi_edit`, `apply_patch`) in a local
+turn report the errors they introduced, from language servers found on the
+person's `PATH` (rust-analyzer, typescript-language-server,
+pyright-langserver, gopls; never downloaded) for the languages whose marker
+is at the workspace root (`Cargo.toml`, `package.json`/`tsconfig.json`/
+`jsconfig.json`, `pyproject.toml`/`setup.py`/`setup.cfg`, `go.mod`). The
+tool result gains an additive `diagnostics` field, `{status: "ok" |
+"timeout" | "unavailable", new_errors: {path, line, col, severity, code?,
+message}[], total_errors_in_file: number, truncated?: true, message?:
+string}` (at most 20 entries in 4 KiB; a missing server is reported once,
+as `unavailable` with its `message`), and the turn is offered the
+local-only `diagnostics` tool (read-only, allowed by default). The edit
+never fails because of diagnostics.
+
+A server starts on the first edit of one of its files, under the OS sandbox
+with the workspace **read-only**, the network (loopback too) **off**, the
+session's deny list and `path_deny` hidden, in its own process group with
+the scrubbed command environment; it writes only its cache under the
+session's temporary directory. It never starts where that sandbox is
+`partial` or `none`, nor while the policy turns commands off (`shell`). It
+stops after 10 minutes unused, when the workspace's session ends (policy
+change, sign-out, quit) and when diagnostics are turned off; at most two
+run per workspace. Settings: `diagnostics` and `diagnostics_wait_ms` in
+`workspace_agent_settings_*` (host data, never the folder).
+
+A language found unavailable (its server missing) is tried again by a
+turn that starts at least a minute later, or at once when the settings
+change; a `PATH` lookup that found nothing is done again at each turn.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `lsp_status` | `{workspace_id}` | `{seq: number, statuses: {language, state, message?}[]}` — the servers of the workspace's session now (`[]` before its first turn), reflecting every `lsp://event` with a smaller `seq`: the chip seeds itself from it when it mounts. Rejects `workspace_unknown` |
+
+`lsp://event`, one per change of a server's state:
+
+```ts
+type LspEvent = {
+  workspace_id: string;
+  seq: number; // grows across the app's lifetime (every workspace, every session): an event with a smaller seq than the chip shows is older
+  kind: "lsp_status";
+  payload: {
+    language: "rust" | "typescript" | "python" | "go";
+    state: "starting" | "ready" | "unavailable" | "crashed" | "stopped";
+    message?: string; // why it is unavailable or stopped
+  };
+};
+```
+
 ## Events
 
-Seven event names, all emitted to the `main` window only: `app://command`
+Eight event names, all emitted to the `main` window only: `app://command`
 (above), `app://context-menu` (`{request_id, id}`, the outcome of `context_menu_show`),
 `agent://event`, `index://event`, `handoff://event` (Cloud handoff, above),
-`process://event` (Background processes, above) and `mcp://event` (Local MCP
-servers, above). The webview may listen
+`process://event` (Background processes, above), `mcp://event` (Local MCP
+servers, above) and `lsp://event` (Language servers, above). The webview may listen
 (`core:event:allow-listen` / `allow-unlisten`), never emit.
 
 `index://event`:
@@ -1806,7 +2054,7 @@ order. Kinds and payloads:
 | `usage` | `{model: string, step: number, prompt_tokens: number, completion_tokens: number, total_tokens: number, cached_tokens?: number, cache_write_tokens?: number, reasoning_tokens?: number, context?: ContextMeter}` — one of the turn's own model calls as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage); `step` counts the turn's calls from 1. `prompt_tokens` is what that call sent, its cached reads (`prompt_tokens_details.cached_tokens`) and cache writes (`…cache_write_tokens`, Anthropic) included; `reasoning_tokens` are part of `completion_tokens` (`completion_tokens_details.reasoning_tokens`); each optional count only when non-zero. A step retried after a context overflow (below) sends the dropped call's usage too: both calls were billed. `context` (below) is that call's request occupancy as the host measured it before sending: the composer's context meter. A summary call's and a sub-agent's calls send none; they count in `usage_total` |
 | `usage_total` | `{prompt: number, completion: number, cached: number, cache_write: number, reasoning: number, calls: number, subagents?: {same fields}}` — once the run ended, before `status` `done`/`error`/`cancelled`: every model call made on the turn's execution id (the agent's steps, compaction summaries and sub-agents together: what the gateway's request log holds for it); `subagents` is the sub-agents' share, when any ran. The thread history keeps it past its event cap; a thread's total is the sum of its turns' |
 | `context` | `ContextMeter` (below) — the request occupancy when its `phase` changes: `compacting` as a summary call starts (the meter says "Summarizing…" while it runs), `compacted` once the step's request is the compacted one, `measured` again at the next call (or when a summary failed and the request went out uncompacted). A turn starts `measured`; calls that stay `measured` send none, their occupancy rides on `usage` |
-| `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, loopback?: true, keep_alive?: true, can_remember: boolean}` — `loopback` and `keep_alive` mark a background command that may serve on localhost or that lives until the session ends (**Background processes**); `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
+| `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, loopback?: true, keep_alive?: true, can_remember: boolean, remember_scope?: "session"}` — `remember_scope: "session"` (a host-intel call, **Web toolkits**) makes "always" last until the app quits, and the card says "Allow for this session"; `loopback` and `keep_alive` mark a background command that may serve on localhost or that lives until the session ends (**Background processes**); `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
 | `plan_updated` | `{plan: {title, explanation?, status: "in_progress" \| "completed", steps: [{n, step, status: "pending" \| "in_progress" \| "completed" \| "cancelled"}]} \| null}` — the agent's checklist changed (the runtime planner's `update_plan`, `start_step`, `complete_step`, `delete_plan`, or the host copying an accepted plan in): the whole plan, `null` once deleted. The latest one is the plan; the thread history stores it like every event, so the todo pane replays after a restart. The plan itself lives in the session (`elitea.plan.v1:` state), so the next turn's planner reads it back |
 | `plan_proposed` | `{request_id, call_id, plan}` — the agent's `exit_plan_mode`: the plan (Markdown, model-written) as a card with Accept / Decline; answered with `approval_respond` `accept` or `decline` (+ `feedback`). See **Plan mode** |
 | `plan_accepted` | `{call_id}` — the person accepted the plan: the session left plan mode and the same turn goes on with every tool; the composer's plan switch turns off |
@@ -2038,3 +2286,35 @@ storing the choice still fail (the scope the person picked does not match,
 or the store cannot be written), the call is approved once and a warning
 logged — an approval is never turned into an error. Remote toolkit
 confirmations (`confirmation_required`) never remember.
+
+## Web toolkits (#1238)
+
+A `remote_toolkit` of type `web` (`web_search`, `web_fetch`) or
+`host_intel` (`internet_host_search`, `internet_host_lookup`) runs on a
+cloud worker through `executeRemoteToolkitTool`, like any remote toolkit:
+no provider key and no fetch reaches the device. The desktop adds three
+things.
+
+- **Policy.** The turn offers a `web` toolkit only while
+  `local_work.web` is true, and a `host_intel` toolkit only while
+  `local_work.host_intel` is true. Absent is off. The server refuses a call
+  while the policy is off (403 `local_work_policy_refused`).
+- **Approvals.** Each call goes through the session's rules before it is
+  sent. `web_search` and `web_fetch` are allowed, and the transcript shows
+  the query or URL. A host-intel call raises an `approval_request` with
+  `tool_confirmation`'s fields, `detail` set to the query or IP,
+  `can_remember: true` and `remember_scope: "session"`. `allow_always`
+  then approves every host-intel call until the app quits; nothing is
+  written to the workspace's rules. Plan mode keeps all four tools.
+- **Framing.** The tool result is one `<web_result nonce="…"
+  toolkit="…">` block under the thread's nonce, so fetched text is data
+  and cannot close the block.
+
+These calls go through the remote toolkit path, not the session's tool
+dispatch, so the person's `PreToolUse` and `PostToolUse` hooks do not run
+around them, and a hook `match` naming one never fires.
+
+A budget refusal arrives inside the framed result as `error.code`
+(`model_gateway.project_budget_exhausted`, …) and `error.public_code`
+(`PROJECT_BUDGET_EXHAUSTED`, …), the codes a model refusal carries. The
+provider was not called.

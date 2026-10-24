@@ -319,6 +319,9 @@ type Calculator struct {
 
 	mu    sync.RWMutex
 	cache map[string]cacheEntry
+	// metered caches the metered operation prices (metered.go) under the same
+	// TTL as the model prices.
+	metered map[string]meteredEntry
 
 	// schemaBehindUntil is the unix-nano time before which the widened price
 	// statement must not be attempted again, because the database answered

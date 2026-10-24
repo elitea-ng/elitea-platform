@@ -730,3 +730,237 @@ printf '{"ok":false,"error":"unsupported","message":"no"}'"#,
     );
     assert_eq!(refused, Err(ExtractFailure::Unsupported));
 }
+
+/// Task worktrees A and B of one repository, where the desktop puts them
+/// (under its denied data), and commands confined to A as A's session runs
+/// them: `(fixture rooted at A, the repository's top, B)`.
+fn worktree_fixture() -> (Fixture, PathBuf, PathBuf) {
+    use elitea_local_tools::git::Repo;
+    let dir = tempfile::tempdir().expect("dir");
+    let base = std::fs::canonicalize(dir.path()).expect("canonical");
+    let home = base.join("home");
+    let repo_top = base.join("repo");
+    std::fs::create_dir_all(&repo_top).expect("repo");
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .current_dir(&repo_top)
+            .args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo_top.join("a.txt"), "a\n").expect("a");
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "init"]);
+    let data = home.join("Library/Application Support/ai.elitea.desktop/workspaces/w1");
+    let worktrees = data.join("worktrees");
+    std::fs::create_dir_all(&worktrees).expect("worktrees");
+    let main = Repo::discover(
+        &repo_top,
+        &elitea_local_tools::sandbox::SandboxConfig::default(),
+        std::sync::Arc::new(elitea_local_tools::deny::DenyList::new([])),
+    )
+    .expect("discover")
+    .expect("repo");
+    let mut made = Vec::new();
+    for name in ["aaaa1111", "bbbb2222"] {
+        let created = elitea_local_tools::worktree::create(
+            &main,
+            &worktrees.join(name),
+            name,
+            &format!("elitea/{name}"),
+            "HEAD",
+        )
+        .expect("create");
+        made.push(created.entry.worktree);
+    }
+    let sibling = made.pop().expect("b");
+    let own = made.pop().expect("a");
+    let workspace = Workspace::open(&own, &[]).expect("open");
+    let mut config = ShellConfig::new(data.join("tmp/session"));
+    config.deny_read.push(data.clone());
+    // What the desktop adds for a worktree session: every task worktree of
+    // the workspace (its own is the writable root, opened again).
+    config.deny_read.push(worktrees);
+    config.home = Some(home.clone());
+    config.app_id = Some(APP_ID.to_owned());
+    (
+        Fixture {
+            outside: base.join("outside"),
+            home,
+            _dir: dir,
+            workspace,
+            config,
+        },
+        repo_top,
+        sibling,
+    )
+}
+
+/// #1235: a command in a task worktree writes its own folder, never the
+/// repository's shared objects, refs or worktree admin directories.
+#[tokio::test]
+async fn worktree_command_cannot_write_shared_refs() {
+    if !available() {
+        return;
+    }
+    let (fixture, top, _) = worktree_fixture();
+    let own = sh(
+        &fixture,
+        "echo mine > mine.txt && cat mine.txt a.txt",
+        SandboxMode::WorkspaceWrite,
+        false,
+    )
+    .await;
+    assert_eq!(own.exit_code, Some(0), "{}", own.stderr);
+    assert_eq!(own.stdout, "mine\na\n");
+    let common = top.join(".git");
+    for probe in [
+        "git update-ref refs/heads/forged HEAD".to_owned(),
+        "echo x | git hash-object -w --stdin".to_owned(),
+        format!("touch {}", quoted(&common.join("refs/heads/forged"))),
+        format!("touch {}", quoted(&common.join("objects/forged"))),
+        format!(
+            "touch {}",
+            quoted(&common.join("worktrees/aaaa1111/forged"))
+        ),
+        format!(
+            "echo x > {}",
+            quoted(&common.join("worktrees/aaaa1111/HEAD"))
+        ),
+        "echo x > .git".to_owned(),
+    ] {
+        let output = sh(&fixture, &probe, SandboxMode::WorkspaceWrite, false).await;
+        assert_ne!(output.exit_code, Some(0), "`{probe}` succeeded");
+    }
+    assert!(!common.join("refs/heads/forged").exists());
+    assert!(!common.join("objects/forged").exists());
+    assert!(!common.join("worktrees/aaaa1111/forged").exists());
+}
+
+/// #1235: a command in task worktree A cannot read worktree B, which lives
+/// beside it in the host's data.
+#[tokio::test]
+async fn worktree_command_cannot_read_sibling_worktree() {
+    if !available() {
+        return;
+    }
+    let (fixture, _, sibling) = worktree_fixture();
+    plant(&sibling.join("secret.txt"), "SIBLING-SECRET-9");
+    assert_refused(
+        &fixture,
+        &format!("cat {}", quoted(&sibling.join("secret.txt"))),
+        "SIBLING-SECRET-9",
+    )
+    .await;
+    let output = sh(
+        &fixture,
+        &format!("echo x > {}", quoted(&sibling.join("a.txt"))),
+        SandboxMode::WorkspaceWrite,
+        false,
+    )
+    .await;
+    assert_ne!(output.exit_code, Some(0), "wrote the sibling worktree");
+    assert_eq!(
+        std::fs::read_to_string(sibling.join("a.txt")).expect("a"),
+        "a\n"
+    );
+}
+
+/// #1420: what is denied inside a task worktree (a `path_deny` match, a
+/// deny-list file) stays unreadable although the worktree, which lives in
+/// the denied data, is opened again: for the worktree's own commands (its
+/// writable root) and for host git (a readable root).
+#[tokio::test]
+async fn denied_files_inside_an_opened_worktree_stay_unreadable() {
+    if !available() {
+        return;
+    }
+    let (mut fixture, _, _) = worktree_fixture();
+    let own = fixture.workspace.root().to_path_buf();
+    fixture.workspace = Workspace::open(&own, &[".env".to_owned()]).expect("open");
+    fixture.config.deny_read.push(own.join("secret.txt"));
+    plant(&own.join(".env"), "ENV-SECRET-3");
+    plant(&own.join("secret.txt"), "LISTED-SECRET-4");
+    let readable = sh(&fixture, "cat a.txt", SandboxMode::WorkspaceWrite, false).await;
+    assert_eq!(readable.exit_code, Some(0), "{}", readable.stderr);
+    assert_refused(&fixture, "cat .env", "ENV-SECRET-3").await;
+    assert_refused(&fixture, "cat secret.txt", "LISTED-SECRET-4").await;
+
+    // Host git's view: the worktree a readable root inside the denied data.
+    let data = own.parent().and_then(Path::parent).expect("data");
+    let request = elitea_local_tools::sandbox::SandboxRequest {
+        deny_paths: vec![data.to_path_buf(), own.join("secret.txt")],
+        readable_roots: vec![own.clone()],
+        ..elitea_local_tools::sandbox::SandboxRequest::new(SandboxMode::ReadOnly, false)
+    };
+    let cat = |file: &str| {
+        let prepared = elitea_local_tools::sandbox::prepare(
+            &request,
+            &["/bin/cat".to_owned(), own.join(file).display().to_string()],
+            &elitea_local_tools::sandbox::SandboxConfig::default(),
+        )
+        .expect("prepare");
+        std::process::Command::new(&prepared.program)
+            .args(&prepared.args)
+            .output()
+            .expect("run")
+    };
+    let opened = cat("a.txt");
+    assert!(opened.status.success(), "{opened:?}");
+    let denied = cat("secret.txt");
+    assert!(!denied.status.success(), "read the denied file");
+    assert!(!String::from_utf8_lossy(&denied.stdout).contains("LISTED-SECRET-4"));
+}
+
+/// A hook (#1237) runs under the same sandbox as a command: it cannot read
+/// the credentials under the home or the session's data, whatever its
+/// sandbox mode, and its environment is built from nothing.
+#[tokio::test]
+async fn hook_process_cannot_read_credentials() {
+    use elitea_local_tools::hooks::{
+        Hook, HookCall, HookEnv, HookEvent, HookSet, RunResult, Scope,
+    };
+    use elitea_local_tools::policy::LocalWorkPolicy;
+
+    if !available() {
+        return;
+    }
+    let fixture = fixture();
+    plant(&fixture.home.join(".ssh/id_ed25519"), "hook-secret-key");
+    let probe = format!(
+        "cat {}/.ssh/id_ed25519; echo exit=$?; env",
+        quoted(&fixture.home)
+    );
+    let mut hook = Hook::new(
+        "probe",
+        HookEvent::Stop,
+        vec!["/bin/sh".to_owned(), "-c".to_owned(), probe],
+    );
+    hook.sandbox = SandboxMode::WorkspaceWrite;
+    let hooks = HookSet::new();
+    hooks.configure(vec![(Scope::User, hook)]);
+    let policy = LocalWorkPolicy {
+        allowed: true,
+        shell: true,
+        max_sandbox_mode: SandboxMode::WorkspaceWrite,
+        ..LocalWorkPolicy::default()
+    };
+    let env = HookEnv {
+        workspace: &fixture.workspace,
+        shell: &fixture.config,
+        policy: &policy,
+        session_id: "s1",
+        conversation: None,
+    };
+    let outcome = hooks.run(&env, HookCall::event(HookEvent::Stop)).await;
+    assert_eq!(outcome.runs[0].result, RunResult::Annotated, "{outcome:?}");
+    let text = &outcome.annotations[0].1;
+    assert!(!text.contains("hook-secret-key"), "{text}");
+    assert!(!text.contains("exit=0"), "{text}");
+    assert!(text.contains("ELITEA_HOOK_ID=probe"), "{text}");
+    assert!(!text.contains("CARGO_MANIFEST_DIR"), "{text}");
+}

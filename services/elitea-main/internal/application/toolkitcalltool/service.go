@@ -74,6 +74,11 @@ type RunRequest struct {
 	// neither key reaches the runtime context (RuntimeContext.SensitiveGate).
 	EnforceSensitiveGate bool
 	SensitiveApproval    *SensitiveActionApproval
+	// AttributionExecutionID is the live desktop local turn a remote toolkit
+	// call is made for (#1238), set by that route only after it verified the
+	// turn. It is recorded on the run's job and sent on the command, so the
+	// run's metered web spend is attributed to the turn.
+	AttributionExecutionID string
 }
 
 func (r RunRequest) Validate() error {
@@ -447,9 +452,10 @@ func (s *RunService) runTool(ctx context.Context, request RunRequest, exactRevis
 			ProjectionProjectID: projectID,
 			ActorID:             strconv.FormatInt(request.ActorUserID, 10),
 		},
-		IdempotencyKey: idempotencyKey,
-		Inputs:         inputs,
-		CodeParent:     parent,
+		IdempotencyKey:         idempotencyKey,
+		Inputs:                 inputs,
+		CodeParent:             parent,
+		AttributionExecutionID: request.AttributionExecutionID,
 	})
 	if err != nil {
 		return RunOutcome{}, err
@@ -457,33 +463,34 @@ func (s *RunService) runTool(ctx context.Context, request RunRequest, exactRevis
 
 	if admitted.Outcome.Created {
 		if err := s.dispatcher.Dispatch(ctx, Dispatch{
-			OutboxID:              admitted.OutboxID,
-			CommandID:             admitted.Outcome.CommandID,
-			ExecutionID:           admitted.Outcome.ExecutionID,
-			Generation:            1,
-			DispatchOrdinal:       1,
-			TenantID:              projectID,
-			ResourceProjectID:     projectID,
-			ProjectionProjectID:   projectID,
-			PrincipalRef:          strconv.FormatInt(request.ActorUserID, 10),
-			InputBundleID:         admitted.InputBundle.ID,
-			InputBundleVersion:    admitted.InputBundle.Version,
-			InputBundleMediaType:  admitted.InputBundle.MediaType,
-			InputBundleByteLength: uint64(len(admitted.InputBundle.Manifest)),
-			InputBundleDigest:     admitted.InputBundle.Digest,
-			CapabilityID:          executiondomain.ToolkitCallToolCapability,
-			CapabilityVersion:     s.policy.CapabilityVersion,
-			ResourceClass:         s.policy.ResourceClass,
-			IsolationClass:        s.policy.IsolationClass,
-			Priority:              s.policy.Priority,
-			Deadline:              admitted.Outcome.Deadline,
-			LimitsRevision:        s.policy.LimitsRevision,
-			ToolkitType:           admitted.Binding.ToolkitType,
-			ToolName:              admitted.Binding.ToolName,
-			ToolkitID:             strconv.FormatInt(admitted.Binding.ToolkitID, 10),
-			ToolkitVersion:        admitted.Binding.ToolkitVersion,
-			SettingsEntryID:       admitted.Binding.SettingsEntryID,
-			ArgumentsEntryID:      admitted.Binding.ArgumentsEntryID,
+			OutboxID:               admitted.OutboxID,
+			CommandID:              admitted.Outcome.CommandID,
+			ExecutionID:            admitted.Outcome.ExecutionID,
+			Generation:             1,
+			DispatchOrdinal:        1,
+			TenantID:               projectID,
+			ResourceProjectID:      projectID,
+			ProjectionProjectID:    projectID,
+			PrincipalRef:           strconv.FormatInt(request.ActorUserID, 10),
+			InputBundleID:          admitted.InputBundle.ID,
+			InputBundleVersion:     admitted.InputBundle.Version,
+			InputBundleMediaType:   admitted.InputBundle.MediaType,
+			InputBundleByteLength:  uint64(len(admitted.InputBundle.Manifest)),
+			InputBundleDigest:      admitted.InputBundle.Digest,
+			CapabilityID:           executiondomain.ToolkitCallToolCapability,
+			CapabilityVersion:      s.policy.CapabilityVersion,
+			ResourceClass:          s.policy.ResourceClass,
+			IsolationClass:         s.policy.IsolationClass,
+			Priority:               s.policy.Priority,
+			Deadline:               admitted.Outcome.Deadline,
+			LimitsRevision:         s.policy.LimitsRevision,
+			ToolkitType:            admitted.Binding.ToolkitType,
+			ToolName:               admitted.Binding.ToolName,
+			ToolkitID:              strconv.FormatInt(admitted.Binding.ToolkitID, 10),
+			ToolkitVersion:         admitted.Binding.ToolkitVersion,
+			SettingsEntryID:        admitted.Binding.SettingsEntryID,
+			ArgumentsEntryID:       admitted.Binding.ArgumentsEntryID,
+			AttributionExecutionID: request.AttributionExecutionID,
 		}); err != nil {
 			return RunOutcome{}, fmt.Errorf("dispatch tool run: %w", err)
 		}

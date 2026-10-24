@@ -28,6 +28,8 @@
 //! * [`subagents`] — the runtime's sub-agents on a workspace turn (#1226);
 //! * [`processes`] — a workspace's background processes on the turn's
 //!   stream and the `process://event` channel (#1223);
+//! * [`lsp`] — a workspace's language servers (#1236): their settings and
+//!   the `lsp://event` channel;
 //! * [`recorder`] — what the commit and the changed-files card report;
 //! * [`events`] — the `agent://event` stream;
 //! * [`mentions`] — the "@" file picker and a turn's referenced paths;
@@ -54,6 +56,7 @@ pub mod definition;
 pub mod environment;
 pub mod events;
 pub mod framing;
+pub mod lsp;
 pub mod memory;
 pub mod mentions;
 pub mod model;

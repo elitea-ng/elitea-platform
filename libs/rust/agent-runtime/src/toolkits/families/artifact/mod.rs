@@ -36,6 +36,7 @@ use std::sync::Arc;
 use crate::host::PlatformWriter;
 
 use super::office_host::SharedOfficeToolHost;
+use super::web::WebToolHost;
 
 /// The platform-write authority the artifact family acts under, shared for
 /// one run.
@@ -49,6 +50,7 @@ use super::office_host::SharedOfficeToolHost;
 pub struct ArtifactToolAuthority {
     writer: Arc<dyn PlatformWriter>,
     office: Option<SharedOfficeToolHost>,
+    web: Option<WebToolHost>,
 }
 
 impl ArtifactToolAuthority {
@@ -57,7 +59,23 @@ impl ArtifactToolAuthority {
         Self {
             writer,
             office: None,
+            web: None,
         }
+    }
+
+    /// This authority with the web capability (#1238): the claim's meter and
+    /// the deployment's egress policy. Without it a `web` or `host_intel`
+    /// toolkit is built but refuses every call (`metering_unavailable`).
+    #[must_use]
+    pub fn with_web(mut self, web: WebToolHost) -> Self {
+        self.web = Some(web);
+        self
+    }
+
+    /// The web capability, when the host lends one.
+    #[must_use]
+    pub fn web(&self) -> Option<&WebToolHost> {
+        self.web.as_ref()
     }
 
     /// This authority with the Office capability (ADR-0032): binary objects

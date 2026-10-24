@@ -25,6 +25,7 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
 import { approval, plan, readThreads, threadsQueryKey, useWorkspaceIpc } from '@/features/workspace';
+import { HooksProposals } from '@/features/workspace-hooks';
 import { useHasIndexHost } from '@/features/workspace-index';
 import { McpProposals } from '@/features/workspace-mcp';
 import type { Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
@@ -34,7 +35,8 @@ import { useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 import { NoAgents } from './AgentPickers';
 import { CloudTranscript } from './CloudTranscript';
 import { HandoffDialogs } from './HandoffControls';
-import { COLUMN, EarlierTurns, Exchanges, ForkNotices, ThreadIntro } from './sessionParts';
+import { ForkNotices } from './forkNotices';
+import { COLUMN, EarlierTurns, Exchanges, ThreadIntro } from './sessionParts';
 import { SessionInspector } from './SessionPanel';
 import { ThreadComposer } from './ThreadComposer';
 import { ThreadToolbar } from './ThreadToolbar';
@@ -127,8 +129,9 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
                   title={readThreads(workspace.id).find((x) => x.id === conversationId)?.title}
                 />
               )}
-              <ForkNotices fork={forking} />
+              <ForkNotices fork={forking} ipc={ipc} />
               <McpProposals workspaceId={workspace.id} />
+              <HooksProposals workspaceId={workspace.id} />
               <EarlierTurns history={session.history} shown={session.shown} onFork={forking.onFork} />
               <Exchanges turn={turn} prompts={session.prompts} promptImages={session.promptImages} onFork={forking.onFork} />
               <approval.Dialog request={continueRequest} queued={0} onRespond={session.answer} />

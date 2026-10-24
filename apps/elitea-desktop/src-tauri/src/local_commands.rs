@@ -89,6 +89,10 @@ impl crate::doctor::DoctorHooks for AppDoctorHooks {
     fn refresh_index(&self, workspace_id: &str) -> Result<(), String> {
         crate::doctor::DoctorHooks::refresh_index(self.agents.as_ref(), workspace_id)
     }
+
+    fn git_deny(&self) -> Arc<elitea_local_tools::deny::DenyList> {
+        crate::doctor::DoctorHooks::git_deny(self.agents.as_ref())
+    }
 }
 
 /// A local-work command's failure as the webview receives it.
@@ -215,6 +219,12 @@ impl EventEmitter for MainWindowEvents {
             log::warn!("could not deliver a process event: {error}");
         }
     }
+
+    fn emit_lsp(&self, event: crate::d0::lsp::LspEvent) {
+        if let Err(error) = self.0.emit_to("main", crate::d0::lsp::EVENT_NAME, &event) {
+            log::warn!("could not deliver a language server event: {error}");
+        }
+    }
 }
 
 /// The native folder dialog; `None` when the person cancelled (or the
@@ -239,11 +249,13 @@ pub async fn workspace_open(
         return Ok(None);
     };
     let workspace = state.workspaces.add(&path)?;
-    // The folder's MCP files are proposals only (#1230): shown, never run.
+    // The folder's MCP and hooks files are proposals only (#1230, #1237):
+    // shown, never run.
     let agents = state.agents.clone();
     let id = workspace.id.clone();
     tauri::async_runtime::spawn_blocking(move || {
         crate::mcp_commands::propose_on_open(&app, &agents, &id);
+        crate::hooks_commands::propose_on_open(&app, &agents, &id);
     });
     Ok(Some(workspace))
 }
@@ -525,6 +537,16 @@ pub fn workspace_agent_settings_set(
                 "The step limit must be {} to {}.",
                 STEP_LIMIT_RANGE.start(),
                 STEP_LIMIT_RANGE.end()
+            ),
+        ));
+    }
+    if !settings.diagnostics_wait_ms.valid() {
+        return Err(IpcError::new(
+            "invalid_request",
+            format!(
+                "A diagnostics wait must be {} to {} ms.",
+                crate::workspaces::DIAGNOSTICS_WAIT_RANGE.start(),
+                crate::workspaces::DIAGNOSTICS_WAIT_RANGE.end()
             ),
         ));
     }
@@ -1000,6 +1022,24 @@ pub async fn checkpoint_restore(
     .await
     .map_err(|e| IpcError::new("internal", e.to_string()))??;
     Ok(Restored { restored })
+}
+
+#[derive(Serialize)]
+pub struct RestorePoint {
+    turn_id: Option<String>,
+}
+
+/// The turn whose checkpoint is the folder as `turn_id` left it (the
+/// first later turn of its workspace that changed files and stands), or
+/// `null` when no later turn changed the folder.
+#[tauri::command(rename_all = "snake_case")]
+pub fn checkpoint_after(
+    state: State<'_, LocalState>,
+    turn_id: String,
+) -> Result<RestorePoint, IpcError> {
+    Ok(RestorePoint {
+        turn_id: state.agents.restore_point_after(&turn_id)?,
+    })
 }
 
 /// What restoring the folder to before a turn would write back and

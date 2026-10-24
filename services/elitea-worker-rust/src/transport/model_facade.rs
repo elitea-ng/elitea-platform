@@ -72,6 +72,15 @@ impl ModelFacade {
         super::images_facade::ImagesClient::from_gateway(&self.gateway)
     }
 
+    /// The web families' meter of one claim, on the same channel (#1238).
+    pub(crate) fn meter(
+        &self,
+        context: &super::runtime_context::ClaimScopedEliteaContext,
+        attribution: Option<&str>,
+    ) -> super::metering::GatewayMeter {
+        super::metering::GatewayMeter::new(&self.gateway, context, attribution)
+    }
+
     /// Consume the claim credential into the selected native ADK adapter.
     pub(crate) fn bind(
         &self,

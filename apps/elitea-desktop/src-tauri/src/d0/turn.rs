@@ -452,8 +452,10 @@ impl McpFramer for McpFrame {
 }
 
 /// Stop a session's background processes without waiting for them: from
-/// a lock or a synchronous caller (the session is being replaced).
+/// a lock or a synchronous caller (the session is being replaced). Its
+/// language servers (#1236) stop with them.
 fn stop_processes_soon(session: &Arc<LocalSession>) {
+    session.lsp().stop_all();
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         let session = session.clone();
         handle.spawn(async move { session.stop_processes().await });
@@ -764,6 +766,26 @@ impl TurnTable {
         }
     }
 
+    /// The first turn after `turn_id` in its workspace that changed files
+    /// and was not undone: restoring the folder to before it puts the
+    /// folder back as `turn_id` left it. `None`: no later turn changed it.
+    fn first_writer_after(&self, turn_id: &str) -> Result<Option<String>, TurnError> {
+        let workspace_id = self.get(turn_id)?.workspace_id.clone();
+        Ok(self
+            .order
+            .iter()
+            .skip_while(|id| *id != turn_id)
+            .skip(1)
+            .find(|id| {
+                self.entries.get(*id).is_some_and(|entry| {
+                    entry.workspace_id == workspace_id
+                        && entry.changed_files()
+                        && !entry.is_undone()
+                })
+            })
+            .cloned())
+    }
+
     /// Forget every turn of a removed workspace.
     fn forget_workspace(&mut self, workspace_id: &str) {
         self.entries
@@ -806,6 +828,8 @@ pub struct AgentHost {
     rules: Arc<RuleFiles>,
     /// The person's local MCP servers' settings (`src/mcp.rs`, #1230).
     mcp: Arc<crate::mcp::McpFiles>,
+    /// The person's hooks (`src/hooks.rs`, #1237).
+    hooks: Arc<crate::hooks::HookFiles>,
     /// The agent versions and answering participants read this session.
     caches: TurnCaches,
     /// The commits after `done`, one lane per conversation.
@@ -815,10 +839,29 @@ pub struct AgentHost {
     failed_commits: Mutex<HashMap<String, FailedCommit>>,
     /// The images attached and not yet sent (#1229), in memory.
     attachments: Attachments,
+    /// The task worktrees (#1235, src/worktrees.rs), set once at start-up
+    /// (weak: they hold this host): a sub-agent's `isolation: "worktree"`
+    /// gets one. Unset, sub-agents only read.
+    worktrees: std::sync::OnceLock<std::sync::Weak<crate::worktrees::WorktreeHost>>,
     /// Extra toolsets every turn offers (tests: tools that record when they
     /// run).
     #[cfg(test)]
     test_toolsets: Mutex<Vec<Arc<dyn Toolset>>>,
+}
+
+/// What an isolated sub-agent's session holds while the child lives: its
+/// task worktree's claim (no turn, undo or removal runs there meanwhile) and
+/// its prompt's binding to the parent turn (its approvals are asked in the
+/// parent's turn). Dropping it releases both.
+pub(crate) struct ChildHold {
+    _claim: WorkspaceClaim,
+    prompt: Arc<UiPrompt>,
+}
+
+impl Drop for ChildHold {
+    fn drop(&mut self) {
+        self.prompt.bind(None);
+    }
 }
 
 /// The tag one AGENTS.md file is framed in.
@@ -978,11 +1021,16 @@ impl AgentHost {
             deps.user_rules_dir.clone(),
             deps.workspaces.clone(),
         ));
+        let hooks = Arc::new(crate::hooks::HookFiles::new(
+            deps.user_rules_dir.clone(),
+            deps.workspaces.clone(),
+        ));
         Ok(Self {
             deps,
             api,
             rules,
             mcp,
+            hooks,
             broker: Arc::new(ApprovalBroker::default()),
             sessions: Mutex::new(HashMap::new()),
             busy: BusySet::default(),
@@ -992,9 +1040,42 @@ impl AgentHost {
             commits: CommitQueues::default(),
             failed_commits: Mutex::new(HashMap::new()),
             attachments: Attachments::default(),
+            worktrees: std::sync::OnceLock::new(),
             #[cfg(test)]
             test_toolsets: Mutex::new(Vec::new()),
         })
+    }
+
+    /// Give sub-agents task worktrees (#1235): `isolation: "worktree"`.
+    pub fn set_worktrees(&self, worktrees: &Arc<crate::worktrees::WorktreeHost>) {
+        let _ = self.worktrees.set(Arc::downgrade(worktrees));
+    }
+
+    /// The session an isolated sub-agent runs in: `workspace_id`'s (a task
+    /// worktree just made for it), under its claim, its prompt bound to the
+    /// parent turn's `binding`, with the build profile (the child writes).
+    ///
+    /// # Errors
+    ///
+    /// `workspace_busy`, `local_work_disabled`, `workspace_unavailable`.
+    pub(crate) fn child_session(
+        &self,
+        workspace_id: &str,
+        root: PathBuf,
+        binding: TurnBinding,
+    ) -> Result<(Arc<LocalSession>, ChildHold), TurnError> {
+        let claim = WorkspaceClaim::take(&self.busy, workspace_id, TURN_RUNNING)?;
+        let policy = self.policy()?;
+        let workspace = self.session(workspace_id, root, &policy)?;
+        workspace.prompt.bind(Some(binding));
+        workspace.session.set_profile(PermissionProfile::Build);
+        Ok((
+            workspace.session.clone(),
+            ChildHold {
+                _claim: claim,
+                prompt: workspace.prompt.clone(),
+            },
+        ))
     }
 
     /// How many attached images the host holds (tests).
@@ -1072,6 +1153,21 @@ impl AgentHost {
         let choices = JsonFileChoices::open(data_dir.join("choices.json"))
             .map_err(|e| TurnError::new("storage", e.message().to_owned()))?;
         let prompt = Arc::new(UiPrompt::new(self.broker.clone()));
+        // A task worktree's session (#1235) is denied every task worktree of
+        // its workspace by name, as well as through the app's data: its own
+        // folder (its root) is opened again by the session, never a
+        // sibling's.
+        let mut deny_read = self.deps.sandbox_deny.clone();
+        if let Ok(Some(Workspace {
+            parent_id: Some(parent),
+            ..
+        })) = self.deps.workspaces.get(workspace_id)
+        {
+            deny_read.push(crate::worktrees::worktrees_dir(
+                &self.deps.workspaces,
+                &parent,
+            ));
+        }
         let session = LocalSession::open(SessionConfig {
             root,
             session_id: workspace_id.to_owned(),
@@ -1081,7 +1177,7 @@ impl AgentHost {
             prompt: prompt.clone(),
             data_dir,
             shell: None,
-            deny_read: self.deps.sandbox_deny.clone(),
+            deny_read,
             app_id: self.deps.app_id.clone(),
             budgets: elitea_local_tools::budget::Budgets::default(),
             documents: crate::documents::bundled(),
@@ -1105,6 +1201,12 @@ impl AgentHost {
             self.deps.emitter.clone(),
         ));
         session.set_process_events(Some(processes.clone()));
+        session
+            .lsp()
+            .set_events(Some(Arc::new(super::lsp::LspSink::new(
+                workspace_id,
+                self.deps.emitter.clone(),
+            ))));
         let entry = Arc::new(WorkspaceSession {
             session,
             prompt,
@@ -1153,6 +1255,18 @@ impl AgentHost {
             .workspaces
             .agent_settings(workspace_id)
             .map_or(true, |settings| settings.model_override_allowed())
+    }
+
+    /// The language-server settings of the workspace's agent settings
+    /// (unreadable settings: the defaults, diagnostics on).
+    fn lsp_settings(&self, workspace_id: &str) -> elitea_local_tools::lsp::LspSettings {
+        super::lsp::settings_for(
+            &self
+                .deps
+                .workspaces
+                .agent_settings(workspace_id)
+                .unwrap_or_default(),
+        )
     }
 
     /// The step limit the workspace's settings set, if any (unreadable
@@ -2283,6 +2397,11 @@ impl AgentHost {
         session.begin_turn(&checkpoint_label(&request.prompt));
         // The processes this turn starts show on its tool cards until it ends.
         workspace.processes.bind_turn(Some(events.clone()));
+        // Edit diagnostics as the workspace's settings say (#1236); a
+        // change stops the servers it affects.
+        session
+            .lsp()
+            .configure(self.lsp_settings(&request.workspace_id));
         events.running(&project.paths(), &turn_model(&admitted));
 
         let sink = Arc::new(TurnSink::with_events(events.clone()));
@@ -2375,6 +2494,13 @@ impl AgentHost {
             }) => (text, step_limit_reached, tool_call_limit_reached, None),
             Err(error) => (sink.last_text(), false, false, Some(error)),
         };
+        // The person's `Stop` hooks (#1237), only for a turn whose message
+        // went to the model (not one a `UserPromptSubmit` hook refused, nor
+        // a cancelled one, which released its claim above without them):
+        // what they write is for the person, before `done`.
+        if turn_context.ran() {
+            crate::hooks::after_turn(&session, &events).await;
+        }
         // A turn that stopped at a limit is committed as it is, with what
         // the agent last said (or that it stopped there).
         let answer = if stopped_at_calls && answer.trim().is_empty() {
@@ -2873,6 +2999,19 @@ impl AgentHost {
                 )
             },
         );
+        // The person's hooks (#1237), from both files as they are now: the
+        // session runs the tool ones; `UserPromptSubmit` may refuse the
+        // message or add context (framed, after the volatile context).
+        let hook_context = crate::hooks::before_turn(
+            &self.hooks,
+            &request.workspace_id,
+            &workspace.session,
+            events,
+            &nonce,
+            &message,
+        )
+        .await?;
+        turn_context.mark_ran();
         // What changes every turn goes in a host message before the
         // person's (`TurnTail`): the system prompt stays the thread's.
         let tail = Arc::new(TurnTail {
@@ -2881,7 +3020,7 @@ impl AgentHost {
                 invoked,
                 &started.memory_recall.text,
                 &nonce,
-            ),
+            ) + &hook_context,
             anchor: message.clone(),
         });
         // ModelTransport: /llm with the native token and the execution id.
@@ -2982,8 +3121,16 @@ impl AgentHost {
             prompt: workspace.prompt.clone(),
             retry: self.deps.retry,
             authorization_wait: MCP_AUTHORIZATION_WAIT,
+            rules: Some(workspace.session.rules().clone()),
+            nonce: nonce.clone(),
         });
-        let remote_specs = admitted.remote_tools.clone();
+        // A web or host_intel toolkit only while the policy allows it (#1238).
+        let remote_specs: Vec<_> = admitted
+            .remote_tools
+            .iter()
+            .filter(|spec| super::remote_tools::offered(spec, &workspace.policy))
+            .cloned()
+            .collect();
         let mut provider = LocalToolProvider::new(workspace.session.clone());
         if let Some(index) = index {
             provider = provider.with(Arc::new(
@@ -3029,24 +3176,45 @@ impl AgentHost {
             &system_instruction("", &environment::preamble(&child_facts), project, &nonce),
             &environment::current(&child_facts),
         );
+        // A child that asks for a checkout of its own (#1235) gets a task
+        // worktree of this folder's repository, when the folder is one's top
+        // (never from inside a task worktree: one level).
+        let checkouts = self
+            .worktrees
+            .get()
+            .and_then(std::sync::Weak::upgrade)
+            .filter(|worktrees| worktrees.can_isolate(&request.workspace_id))
+            .map(|worktrees| {
+                Arc::new(crate::worktrees::WorktreeCheckouts::new(
+                    worktrees,
+                    &request.workspace_id,
+                    TurnBinding {
+                        events: events.clone(),
+                        recorder: recorder.clone(),
+                    },
+                )) as Arc<dyn super::subagents::ChildCheckouts>
+            });
         let children = SubAgents::new(
-            Arc::new(DesktopSubAgents::new(
-                GatewayTransport {
-                    lane: UsageLane::SubAgent,
-                    tail: None,
-                    ..transport.clone()
-                },
-                child_model,
-                toolsets
-                    .iter()
-                    .filter(|toolset| {
-                        toolset.name() != REMOTE_TOOLSET && toolset.name() != MCP_TOOLSET
-                    })
-                    .cloned()
-                    .collect(),
-                events.clone(),
-                recorder.clone(),
-            )),
+            Arc::new(
+                DesktopSubAgents::new(
+                    GatewayTransport {
+                        lane: UsageLane::SubAgent,
+                        tail: None,
+                        ..transport.clone()
+                    },
+                    child_model,
+                    toolsets
+                        .iter()
+                        .filter(|toolset| {
+                            toolset.name() != REMOTE_TOOLSET && toolset.name() != MCP_TOOLSET
+                        })
+                        .cloned()
+                        .collect(),
+                    events.clone(),
+                    recorder.clone(),
+                )
+                .with_checkouts(checkouts),
+            ),
             // A child only reads, and never gets near the parent's processes
             // (`process_output`, `process_list` and `process_wait` read, but
             // what they read is the parent's terminal, #1223).
@@ -3359,6 +3527,19 @@ impl AgentHost {
         &self.mcp
     }
 
+    /// The hooks files (IPC `hooks_*`, #1237).
+    #[must_use]
+    pub fn hook_files(&self) -> &Arc<crate::hooks::HookFiles> {
+        &self.hooks
+    }
+
+    /// Whether the policy lets hooks run now (local work and the shell on).
+    #[must_use]
+    pub fn hooks_allowed(&self) -> bool {
+        self.policy()
+            .is_ok_and(|policy| policy.allowed && policy.shell)
+    }
+
     /// The settings changed: every open session (or `workspace_id`'s only)
     /// takes them now, stopping a server whose entry changed or went; a new
     /// or changed one starts with the next turn.
@@ -3421,6 +3602,8 @@ impl AgentHost {
         // (a later session's processes then go straight to `SIGKILL`).
         let deadline = std::time::Instant::now() + grace;
         for session in &sessions {
+            // Language servers get `SIGTERM` now (#1236).
+            session.lsp().stop_all();
             session.stop_processes_blocking(
                 deadline.saturating_duration_since(std::time::Instant::now()),
             );
@@ -3447,9 +3630,23 @@ impl AgentHost {
     ///
     /// # Errors
     ///
-    /// `workspace_busy` while a turn (or an undo) runs in it, or the
+    /// `workspace_busy` while a turn (or an undo) runs in it,
+    /// `workspace_has_worktrees` while it has task worktrees, or the
     /// workspace list cannot be written.
     pub async fn remove_workspace(&self, workspace_id: &str) -> Result<(), TurnError> {
+        // Its task worktrees (#1235) live in its data and hold work of their
+        // own: they are removed (or merged) first, one by one.
+        if self
+            .deps
+            .workspaces
+            .worktrees_of(workspace_id)
+            .is_ok_and(|worktrees| !worktrees.is_empty())
+        {
+            return Err(TurnError::new(
+                "workspace_has_worktrees",
+                "Remove this folder's task worktrees first (Parallel agents).",
+            ));
+        }
         // Held across the removal: no turn starts on the folder meanwhile.
         let _claim = WorkspaceClaim::take(
             &self.busy,
@@ -3900,6 +4097,23 @@ impl AgentHost {
             == Some(turn_id)
     }
 
+    /// `checkpoint_after`: the turn whose checkpoint is the folder as
+    /// `turn_id` left it, the first later turn of the workspace (any
+    /// thread) that changed files and was not undone; `None` when none did.
+    /// A fork at `turn_id` offers to restore the folder to before it
+    /// (`checkpoint_preview`, then `checkpoint_restore` with
+    /// `confirm_older`).
+    ///
+    /// # Errors
+    ///
+    /// `turn_unknown` / `turn_expired` for a turn the host does not keep.
+    pub fn restore_point_after(&self, turn_id: &str) -> Result<Option<String>, TurnError> {
+        self.turns
+            .lock()
+            .map_err(|_| TurnError::new("internal", "turn table poisoned"))?
+            .first_writer_after(turn_id)
+    }
+
     /// `checkpoint_preview`: what restoring the folder to before the turn
     /// would write back and delete now — later turns' changes and the
     /// person's own edits included. Changes nothing.
@@ -4061,6 +4275,10 @@ impl crate::doctor::DoctorHooks for AgentHost {
                 .map_err(|error| error.message),
             None => Err("the local index is not available".into()),
         }
+    }
+
+    fn git_deny(&self) -> Arc<elitea_local_tools::deny::DenyList> {
+        self.host_deny()
     }
 }
 

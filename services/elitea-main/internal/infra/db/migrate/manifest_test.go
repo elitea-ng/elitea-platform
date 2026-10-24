@@ -736,7 +736,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 173: shared/0173_platform_routines.sql, elitea_runtime.platform_routines,
 	// the registry of the Go platform's recurring routines that the admin
 	// Schedules tab edits (#1369). A new table, no data, no permission.
-	require.EqualValues(t, 173, Head(shared))
+	//
+	// 174: shared/0174_gateway_metered_operations.sql, gateway.metered_operation_prices
+	// (seeded) and the operation, units and unit columns on llm_usage_events
+	// and llm_request_logs, plus cost_usd on the request log (#1238). No
+	// permission.
+	require.EqualValues(t, 174, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -953,7 +958,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 154: tenant/0154_strip_toolkit_pgvector_configuration.sql, removes the
 	// retired `pgvector_configuration` key from elitea_tools.settings (#1359).
 	// Data only, no permission, so no shared sibling.
-	require.EqualValues(t, 154, Head(tenant))
+	// 155: tenant/0155_chat_conversation_fork_id_index.sql, a partial index on
+	// chat_conversations (author_id, meta->'forked_from'->>'fork_id') for the
+	// fork's fork_id replay lookup (#1420). An index, no permission.
+	require.EqualValues(t, 155, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

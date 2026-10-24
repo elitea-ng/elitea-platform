@@ -24,12 +24,13 @@
  */
 import { createFileRoute } from '@tanstack/react-router';
 
-import { McpEntry, RulesEntry, TroubleshootEntry } from '@/pages/workspace/desktopEntry';
+import { HooksEntry, McpEntry, RulesEntry, TroubleshootEntry } from '@/pages/workspace/desktopEntry';
 
 /**
- * Three exceptions, desktop build only: `troubleshoot` is the Doctor (README of
+ * Four exceptions, desktop build only: `troubleshoot` is the Doctor (README of
  * apps/elitea-desktop, "Diagnostics"), `approval-rules` the approval rules
- * panel (#1216), `mcp-servers` the local MCP servers (#1230). They ride on
+ * panel (#1216), `mcp-servers` the local MCP servers (#1230), `hooks` the
+ * person's hooks (#1237). They ride on
  * this catch-all instead of route files of their own so the web build's
  * route tree does not grow; each entry renders nothing outside `desktop`.
  */
@@ -37,6 +38,7 @@ function SettingsTab(): React.JSX.Element | null {
   const { tab } = Route.useParams();
   if (tab === 'troubleshoot') return <TroubleshootEntry />;
   if (tab === 'mcp-servers') return <McpEntry />;
+  if (tab === 'hooks') return <HooksEntry />;
   return tab === 'approval-rules' ? <RulesEntry /> : null;
 }
 

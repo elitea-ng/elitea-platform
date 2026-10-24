@@ -110,6 +110,14 @@ export const getExchangeNativeTokenResponseMock = (
           index_model_mirror_url: faker.string.alpha({
             length: { min: 10, max: 20 },
           }),
+          web: faker.helpers.arrayElement([
+            faker.datatype.boolean(),
+            undefined,
+          ]),
+          host_intel: faker.helpers.arrayElement([
+            faker.datatype.boolean(),
+            undefined,
+          ]),
         },
       },
     },

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  isGoogleCredentialField,
   isMainPassField,
   isSectionOrToolsField,
   pickSchemaFields,
@@ -79,31 +78,16 @@ describe('isMainPassField', () => {
   });
 });
 
-describe('isGoogleCredentialField', () => {
-  it('is true for google_cse_id and google_api_key', () => {
-    expect(isGoogleCredentialField('google_cse_id')).toBe(true);
-    expect(isGoogleCredentialField('google_api_key')).toBe(true);
-  });
-
-  it('is false for any other key', () => {
-    expect(isGoogleCredentialField('label')).toBe(false);
-  });
-});
-
 describe('resolveRequired', () => {
   it('is true when the key is in schema.required', () => {
-    expect(resolveRequired('label', ['label'], undefined)).toBe(true);
+    expect(resolveRequired('label', ['label'])).toBe(true);
   });
 
-  it('is true for a google credential field when selected_tools includes google', () => {
-    expect(resolveRequired('google_api_key', [], ['google'])).toBe(true);
-  });
-
-  it('is false for a google credential field when selected_tools does not include google', () => {
-    expect(resolveRequired('google_api_key', [], ['bing'])).toBe(false);
+  it('has no google credential special case (the browser toolkit is gone)', () => {
+    expect(resolveRequired('google_api_key', [])).toBe(false);
   });
 
   it('is false for an ordinary, non-required field', () => {
-    expect(resolveRequired('label', [], undefined)).toBe(false);
+    expect(resolveRequired('label', [])).toBe(false);
   });
 });

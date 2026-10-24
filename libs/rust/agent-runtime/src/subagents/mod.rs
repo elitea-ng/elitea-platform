@@ -30,8 +30,15 @@
 //! `is_read_only()` is false, the four sub-agent tools themselves (one level
 //! deep: a child never spawns children) and `exit_plan_mode`. A static list
 //! with a writing tool in it is refused at construction
-//! ([`ChildTools::new`]). Writes stay with the parent until worktree-parallel
-//! agents give each writer its own checkout (#1235).
+//! ([`ChildTools::new`]).
+//!
+//! A host that can give a child a checkout of its own
+//! ([`SubAgentHost::supports_worktree_isolation`]: the desktop, a linked git
+//! worktree of the folder, #1235) offers `spawn_agent`'s `isolation:
+//! "worktree"`. Such a child gets the host's [`SubAgentHost::isolated_toolsets`]
+//! (the same filter without the read-only rule: it may write, in its own
+//! checkout only) and [`ISOLATED_CHILD_PREAMBLE`]. Elsewhere the argument is
+//! not in the schema and is refused.
 //!
 //! # What the host supplies
 //!
@@ -125,6 +132,15 @@ You see only the task below, not that agent's conversation. Use your tools to in
 (you cannot change files, run commands or start other agents), then answer with a concise, \
 self-contained report of what you found: the facts, the file paths and symbols that matter, \
 and anything you could not determine. The other agent reads only your final answer.";
+
+/// What a child with a checkout of its own is told before the host's
+/// sections.
+pub const ISOLATED_CHILD_PREAMBLE: &str = "You are a sub-agent working for another agent, in a \
+separate checkout of the repository (a git worktree of its own): what you change there does not \
+touch the other agent's files. You see only the task below, not that agent's conversation. Do \
+the task with your tools, then answer with a concise, self-contained report: what you changed \
+(the files and why), how you checked it, and anything left undone. The other agent reads only \
+your final answer; the person reviews your checkout's changes and merges them.";
 
 /// The limits one parent run's children are held to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -282,6 +298,29 @@ pub trait SubAgentHost: Send + Sync {
     /// When the tools cannot be prepared: the spawn is refused.
     async fn toolsets(&self, child: &ChildIdentity) -> Result<Vec<Arc<dyn Toolset>>, HostError>;
 
+    /// Whether a child may ask for a checkout of its own (`isolation:
+    /// "worktree"`); `false` keeps the argument out of `spawn_agent`.
+    fn supports_worktree_isolation(&self) -> bool {
+        false
+    }
+
+    /// The tools offered to a child with a checkout of its own (made by the
+    /// host for it), before the runtime's filter, which keeps writing tools
+    /// for it. Only called when [`Self::supports_worktree_isolation`].
+    ///
+    /// # Errors
+    ///
+    /// When no checkout can be made: the spawn is refused.
+    async fn isolated_toolsets(
+        &self,
+        _child: &ChildIdentity,
+    ) -> Result<Vec<Arc<dyn Toolset>>, HostError> {
+        Err(HostError::new(
+            crate::host::HostErrorCode::InvalidConfiguration,
+            "this host gives sub-agents no checkout of their own",
+        ))
+    }
+
     /// The generation config a child's requests carry, for a model that
     /// admits only the config it was bound with; `None` leaves the default.
     fn generation_config(&self) -> Option<adk_core::GenerateContentConfig> {
@@ -333,12 +372,12 @@ impl SubAgentConfig {
         self
     }
 
-    /// A child's whole system instruction.
-    fn system_instruction(&self) -> String {
+    /// A child's whole system instruction, after `preamble`.
+    fn system_instruction(&self, preamble: &str) -> String {
         if self.instruction.trim().is_empty() {
-            CHILD_PREAMBLE.to_owned()
+            preamble.to_owned()
         } else {
-            format!("{CHILD_PREAMBLE}\n\n{}", self.instruction)
+            format!("{preamble}\n\n{}", self.instruction)
         }
     }
 }
@@ -353,6 +392,9 @@ pub struct SubAgents {
 pub(crate) struct Registry {
     host: Arc<dyn SubAgentHost>,
     instruction: String,
+    /// A child with a checkout of its own: [`ISOLATED_CHILD_PREAMBLE`] and
+    /// the host's sections.
+    isolated_instruction: String,
     limits: SubAgentLimits,
     excluded: BTreeSet<String>,
     children: Mutex<Vec<child::Child>>,
@@ -361,11 +403,13 @@ pub(crate) struct Registry {
 impl SubAgents {
     #[must_use]
     pub fn new(host: Arc<dyn SubAgentHost>, config: SubAgentConfig) -> Self {
-        let instruction = config.system_instruction();
+        let instruction = config.system_instruction(CHILD_PREAMBLE);
+        let isolated_instruction = config.system_instruction(ISOLATED_CHILD_PREAMBLE);
         Self {
             inner: Arc::new(Registry {
                 host,
                 instruction,
+                isolated_instruction,
                 limits: config.limits.capped(),
                 excluded: config.excluded_tools,
                 children: Mutex::new(Vec::new()),

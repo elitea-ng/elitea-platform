@@ -69,6 +69,8 @@ const (
 	GatewayService_CheckConnection_FullMethodName    = "/elitea.gateway.v1.GatewayService/CheckConnection"
 	GatewayService_ListProviderModels_FullMethodName = "/elitea.gateway.v1.GatewayService/ListProviderModels"
 	GatewayService_ListProviderVoices_FullMethodName = "/elitea.gateway.v1.GatewayService/ListProviderVoices"
+	GatewayService_MeteredAdmit_FullMethodName       = "/elitea.gateway.v1.GatewayService/MeteredAdmit"
+	GatewayService_MeteredSettle_FullMethodName      = "/elitea.gateway.v1.GatewayService/MeteredSettle"
 	GatewayService_GovernanceStatus_FullMethodName   = "/elitea.gateway.v1.GatewayService/GovernanceStatus"
 )
 
@@ -112,6 +114,14 @@ type GatewayServiceClient interface {
 	ListProviderModels(ctx context.Context, in *ListProviderModelsRequest, opts ...grpc.CallOption) (*ListProviderModelsResponse, error)
 	// ListProviderVoices serves POST /llm/v1/list_provider_voices.
 	ListProviderVoices(ctx context.Context, in *ListProviderVoicesRequest, opts ...grpc.CallOption) (*ListProviderVoicesResponse, error)
+	// MeteredAdmit serves POST /llm/v1/metered/admit (#1238): one metered tool
+	// operation (a web search, a page fetch, a host query) asks the budget gate
+	// before the worker calls the provider. The answer is a signed admission.
+	MeteredAdmit(ctx context.Context, in *MeteredAdmitRequest, opts ...grpc.CallOption) (*MeteredAdmitResponse, error)
+	// MeteredSettle serves POST /llm/v1/metered/settle: the units the provider
+	// reported for an admitted operation are priced and billed, idempotently by
+	// the caller's event id.
+	MeteredSettle(ctx context.Context, in *MeteredSettleRequest, opts ...grpc.CallOption) (*MeteredSettleResponse, error)
 	// GovernanceStatus reports the gateway's enforcement state (the admin LLM
 	// Proxy section). It carries no identity.
 	GovernanceStatus(ctx context.Context, in *GovernanceStatusRequest, opts ...grpc.CallOption) (*GovernanceStatusResponse, error)
@@ -339,6 +349,26 @@ func (c *gatewayServiceClient) ListProviderVoices(ctx context.Context, in *ListP
 	return out, nil
 }
 
+func (c *gatewayServiceClient) MeteredAdmit(ctx context.Context, in *MeteredAdmitRequest, opts ...grpc.CallOption) (*MeteredAdmitResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MeteredAdmitResponse)
+	err := c.cc.Invoke(ctx, GatewayService_MeteredAdmit_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) MeteredSettle(ctx context.Context, in *MeteredSettleRequest, opts ...grpc.CallOption) (*MeteredSettleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MeteredSettleResponse)
+	err := c.cc.Invoke(ctx, GatewayService_MeteredSettle_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *gatewayServiceClient) GovernanceStatus(ctx context.Context, in *GovernanceStatusRequest, opts ...grpc.CallOption) (*GovernanceStatusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GovernanceStatusResponse)
@@ -389,6 +419,14 @@ type GatewayServiceServer interface {
 	ListProviderModels(context.Context, *ListProviderModelsRequest) (*ListProviderModelsResponse, error)
 	// ListProviderVoices serves POST /llm/v1/list_provider_voices.
 	ListProviderVoices(context.Context, *ListProviderVoicesRequest) (*ListProviderVoicesResponse, error)
+	// MeteredAdmit serves POST /llm/v1/metered/admit (#1238): one metered tool
+	// operation (a web search, a page fetch, a host query) asks the budget gate
+	// before the worker calls the provider. The answer is a signed admission.
+	MeteredAdmit(context.Context, *MeteredAdmitRequest) (*MeteredAdmitResponse, error)
+	// MeteredSettle serves POST /llm/v1/metered/settle: the units the provider
+	// reported for an admitted operation are priced and billed, idempotently by
+	// the caller's event id.
+	MeteredSettle(context.Context, *MeteredSettleRequest) (*MeteredSettleResponse, error)
 	// GovernanceStatus reports the gateway's enforcement state (the admin LLM
 	// Proxy section). It carries no identity.
 	GovernanceStatus(context.Context, *GovernanceStatusRequest) (*GovernanceStatusResponse, error)
@@ -449,6 +487,12 @@ func (UnimplementedGatewayServiceServer) ListProviderModels(context.Context, *Li
 }
 func (UnimplementedGatewayServiceServer) ListProviderVoices(context.Context, *ListProviderVoicesRequest) (*ListProviderVoicesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListProviderVoices not implemented")
+}
+func (UnimplementedGatewayServiceServer) MeteredAdmit(context.Context, *MeteredAdmitRequest) (*MeteredAdmitResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MeteredAdmit not implemented")
+}
+func (UnimplementedGatewayServiceServer) MeteredSettle(context.Context, *MeteredSettleRequest) (*MeteredSettleResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MeteredSettle not implemented")
 }
 func (UnimplementedGatewayServiceServer) GovernanceStatus(context.Context, *GovernanceStatusRequest) (*GovernanceStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GovernanceStatus not implemented")
@@ -694,6 +738,42 @@ func _GatewayService_ListProviderVoices_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_MeteredAdmit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MeteredAdmitRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).MeteredAdmit(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_MeteredAdmit_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).MeteredAdmit(ctx, req.(*MeteredAdmitRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_MeteredSettle_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MeteredSettleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).MeteredSettle(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_MeteredSettle_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).MeteredSettle(ctx, req.(*MeteredSettleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GatewayService_GovernanceStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GovernanceStatusRequest)
 	if err := dec(in); err != nil {
@@ -750,6 +830,14 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListProviderVoices",
 			Handler:    _GatewayService_ListProviderVoices_Handler,
+		},
+		{
+			MethodName: "MeteredAdmit",
+			Handler:    _GatewayService_MeteredAdmit_Handler,
+		},
+		{
+			MethodName: "MeteredSettle",
+			Handler:    _GatewayService_MeteredSettle_Handler,
 		},
 		{
 			MethodName: "GovernanceStatus",

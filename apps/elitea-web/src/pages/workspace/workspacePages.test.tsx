@@ -11,7 +11,7 @@ import { http, HttpResponse } from 'msw';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
-import { WorkspaceIpcProvider, type WorkspaceTurn } from '@/features/workspace';
+import { readThreads, recordThread, WorkspaceIpcProvider, type WorkspaceTurn } from '@/features/workspace';
 import { IndexIpcProvider } from '@/features/workspace-index';
 import type { Application } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
@@ -473,6 +473,8 @@ describe('WorkspaceSessionPage', () => {
 
   describe('fork', () => {
     const FORK_UUID = '00000000-0000-4000-8000-000000000088';
+    /** Every fork request carries an idempotency key, the same one when the same fork is asked for again. */
+    const ANY_FORK_ID: unknown = expect.any(String);
     const forkBodies: unknown[] = [];
     const forkOfForkBodies: unknown[] = [];
     function serveFork(status = 201): void {
@@ -529,9 +531,9 @@ describe('WorkspaceSessionPage', () => {
       appIpc.chooseFromContextMenu('fork');
       fireEvent.contextMenu(prompts[0] as HTMLElement);
 
-      await waitFor(() => expect(forkBodies).toEqual([{ message_id: 'a1' }]));
+      await waitFor(() => expect(forkBodies).toEqual([{ message_id: 'a1', fork_id: ANY_FORK_ID }]));
       const labels = (appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'));
-      expect(labels).toEqual(['Copy', '-', 'Fork from Here']);
+      expect(labels).toEqual(['Copy', '-', 'Fork from Here', 'Rewind to Here']);
       await waitFor(() =>
         expect(ipc.calls.forks).toEqual([
           {
@@ -556,7 +558,67 @@ describe('WorkspaceSessionPage', () => {
       // A fork of the fork, at the copied turn, names the copy's answer: a message of the new conversation.
       appIpc.chooseFromContextMenu('fork');
       fireEvent.contextMenu((await screen.findAllByTestId('your-prompt'))[0] as HTMLElement);
-      await waitFor(() => expect(forkOfForkBodies).toEqual([{ message_id: 'a1-copy' }]));
+      await waitFor(() => expect(forkOfForkBodies).toEqual([{ message_id: 'a1-copy', fork_id: ANY_FORK_ID }]));
+    });
+
+    it('rewinds to a recorded turn: a rewind on the server, the source listed under it, and the files restored only when confirmed', async () => {
+      serveProject();
+      serveFork();
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      ipc.setHistory('w1', '77', [answered('t1', 'q1', 'a1'), answered('t2', 'q2', 'a2')]);
+      // The folder as t1 left it is t2's checkpoint.
+      ipc.setRestorePoint('t1', 't2');
+      ipc.setPreview('t2', { restored: ['src/app.ts'], deleted: ['notes.md'] });
+      recordThread('w1', { id: '77', title: 'Fix the build', updatedAt: 1 });
+      const appIpc = createFakeAppIpc();
+      const user = userEvent.setup();
+      mount(ipc, '/workspaces/w1?conversation=77', undefined, appIpc);
+
+      const prompts = await screen.findAllByTestId('your-prompt');
+      appIpc.chooseFromContextMenu('rewind');
+      fireEvent.contextMenu(prompts[0] as HTMLElement);
+
+      await waitFor(() => expect(forkBodies).toEqual([{ message_id: 'a1', mode: 'rewind', fork_id: ANY_FORK_ID }]));
+      await waitFor(() => expect(ipc.calls.forks.map((fork) => fork.upToTurnId)).toEqual(['t1']));
+      expect(await screen.findByTestId('fork-notice')).toHaveTextContent('the earlier attempt is listed under it');
+      // The rewound thread takes the source's place; the source is its earlier attempt.
+      expect(readThreads('w1').map((thread) => [thread.id, thread.earlierAttemptOf])).toEqual([
+        ['88', undefined],
+        ['77', '88'],
+      ]);
+      expect(await ipc.threadHistory('w1', '77')).toHaveLength(2);
+
+      // Nothing is restored until the person confirms the dry run.
+      await user.click(await screen.findByRole('button', { name: 'Restore files' }));
+      const preview = await screen.findByTestId('fork-restore-preview');
+      expect(preview).toHaveTextContent('src/app.ts is written back');
+      expect(preview).toHaveTextContent('notes.md is deleted');
+      expect(ipc.calls.restores).toEqual([]);
+      await user.click(screen.getByRole('button', { name: 'Restore folder' }));
+      await waitFor(() => expect(ipc.calls.restores).toEqual([{ turnId: 't2', confirmOlder: true }]));
+      expect(await screen.findByTestId('fork-restored')).toBeInTheDocument();
+    });
+
+    it('offers no file restore when no later turn changed the folder, and says why a thread in the cloud is not forked', async () => {
+      serveProject();
+      serveFork();
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      ipc.setHistory('w1', '77', [answered('t1', 'q1', 'a1')]);
+      const appIpc = createFakeAppIpc();
+      mount(ipc, '/workspaces/w1?conversation=77', undefined, appIpc);
+
+      appIpc.chooseFromContextMenu('fork');
+      fireEvent.contextMenu(await screen.findByTestId('your-prompt'));
+      expect(await screen.findByTestId('fork-notice')).toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByText('Prompt of t1')).toBeInTheDocument());
+      expect(screen.queryByTestId('fork-restore')).toBeNull();
+
+      server.use(
+        http.post(`${BASE}/elitea_core/conversation_fork/prompt_lib/42/88`, () => HttpResponse.json({ error: 'thread_executor_is_cloud' }, { status: 409 })),
+      );
+      appIpc.chooseFromContextMenu('rewind');
+      fireEvent.contextMenu((await screen.findAllByTestId('your-prompt'))[0] as HTMLElement);
+      expect(await screen.findByTestId('fork-error')).toHaveTextContent('This thread is running in the cloud.');
     });
 
     it('forks the whole thread from the ⋯ menu, and still opens it when the local copy fails', async () => {
@@ -572,7 +634,7 @@ describe('WorkspaceSessionPage', () => {
       await user.click(screen.getByRole('button', { name: 'More' }));
       await user.click(await screen.findByRole('menuitem', { name: 'Fork Thread' }));
 
-      await waitFor(() => expect(forkBodies).toEqual([{}]));
+      await waitFor(() => expect(forkBodies).toEqual([{ fork_id: ANY_FORK_ID }]));
       expect(ipc.calls.forks[0]).toEqual({
         workspaceId: 'w1',
         sourceConversationId: '77',
@@ -599,6 +661,18 @@ describe('WorkspaceSessionPage', () => {
       expect(await screen.findByTestId('fork-error')).toHaveTextContent('a turn is still running or waits for an approval');
       expect(ipc.calls.forks).toEqual([]);
       expect(screen.getByText('Prompt of t1')).toBeInTheDocument();
+
+      // Asked again (the first answer may have been lost): the same fork_id, so the server makes one fork at most.
+      appIpc.chooseFromContextMenu('fork');
+      fireEvent.contextMenu(prompt);
+      await waitFor(() => expect(forkBodies).toHaveLength(2));
+      const [first, again] = forkBodies as { fork_id: string }[];
+      expect(again?.fork_id).toBe(first?.fork_id);
+      // Another fork (a rewind at the same point) is another key.
+      appIpc.chooseFromContextMenu('rewind');
+      fireEvent.contextMenu(prompt);
+      await waitFor(() => expect(forkBodies).toHaveLength(3));
+      expect((forkBodies[2] as { fork_id: string }).fork_id).not.toBe(first?.fork_id);
     });
 
     it('offers no fork point on a turn whose answer is not known', async () => {

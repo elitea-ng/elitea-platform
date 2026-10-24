@@ -104,7 +104,11 @@ const ToolkitCheckAllowlistEnv = "ELITEA_TOOLKIT_CHECK_ALLOWLIST"
 // covers a Jira/Confluence Cloud tenant and `*.aha.io` an Aha! one, which are
 // direct subdomains by construction. A self-hosted Langfuse, like a
 // self-hosted GitLab, has to be named.
-const defaultToolkitCheckAllowlist = "api.github.com, github.com, gitlab.com, api.bitbucket.org, bitbucket.org, *.atlassian.net, *.aha.io, api.figma.com, cloud.langfuse.com"
+//
+// The web and host-intelligence providers (#1238) are listed too: their
+// credentials are API keys for one fixed vendor host each.
+const defaultToolkitCheckAllowlist = "api.github.com, github.com, gitlab.com, api.bitbucket.org, bitbucket.org, *.atlassian.net, *.aha.io, api.figma.com, cloud.langfuse.com, " +
+	"api.tavily.com, api.firecrawl.dev, api.search.brave.com, api.duckduckgo.com, api.shodan.io"
 
 // toolkitCheckTimeout bounds ONE probe. It is short on purpose: the credential
 // card checks a whole project's rows at once through the batch route, whose own
@@ -289,6 +293,54 @@ var toolkitCheckProbes = map[string]toolkitProbe{
 		defaultBaseURL: "",
 		path:           func(map[string]any) string { return "/api/public/projects" },
 		authorize:      authorizeBasicPair("public_key", "secret_key"),
+	},
+	// The web search and host-intelligence providers (#1238). Each has ONE
+	// vendor host, so no base URL field is read: a stored credential cannot
+	// point its probe anywhere else. Each probe is the cheapest authenticated
+	// read the vendor documents.
+	//
+	// tavily: the account usage read, which spends no credit.
+	"tavily": {
+		defaultBaseURL: "https://api.tavily.com",
+		path:           func(map[string]any) string { return "/usage" },
+		authorize:      authorizeBearer("api_key"),
+	},
+	// firecrawl: the team's credit balance, which spends no credit.
+	"firecrawl": {
+		defaultBaseURL: "https://api.firecrawl.dev",
+		path:           func(map[string]any) string { return "/v2/team/credit-usage" },
+		authorize:      authorizeBearer("api_key"),
+	},
+	// brave_search: Brave has no free identity read, so the probe is one
+	// one-result search (one billed request).
+	"brave_search": {
+		defaultBaseURL: "https://api.search.brave.com",
+		path:           func(map[string]any) string { return "/res/v1/web/search?q=elitea&count=1" },
+		authorize:      authorizeHeaderToken("X-Subscription-Token", "api_key"),
+	},
+	// duckduckgo_instant has no key: the probe is one instant-answer read,
+	// which says whether the API is reachable from this deployment.
+	"duckduckgo_instant": {
+		defaultBaseURL: "https://api.duckduckgo.com",
+		path: func(map[string]any) string {
+			return "/?q=elitea&format=json&no_html=1&skip_disambig=1&t=elitea"
+		},
+		authorize: func(http.Header, map[string]any) authorizeOutcome { return authorizedRequest() },
+	},
+	// shodan: /api-info reports the plan and spends no credit. Shodan takes
+	// the key ONLY as a query parameter, so it rides in the URL; this file
+	// never logs or returns a URL (see CheckToolkit).
+	"shodan": {
+		defaultBaseURL: "https://api.shodan.io",
+		path: func(data map[string]any) string {
+			return "/api-info?key=" + url.QueryEscape(strVal(data, "api_key"))
+		},
+		authorize: func(_ http.Header, data map[string]any) authorizeOutcome {
+			if strVal(data, "api_key") == "" {
+				return unsupportedAuth()
+			}
+			return authorizedRequest()
+		},
 	},
 }
 

@@ -1,0 +1,36 @@
+{
+ "status": 200,
+ "content_type": "application/x-javascript",
+ "body": {
+  "Heading": "Tokio (software)",
+  "AbstractText": "Tokio is a software library for the Rust programming language.",
+  "AbstractURL": "https://en.wikipedia.org/wiki/Tokio_(software)",
+  "AbstractSource": "Wikipedia",
+  "Answer": "",
+  "AnswerType": "",
+  "Definition": "",
+  "DefinitionURL": "",
+  "Results": [
+   {
+    "FirstURL": "https://tokio.rs/",
+    "Text": "Official site"
+   }
+  ],
+  "RelatedTopics": [
+   {
+    "FirstURL": "https://duckduckgo.com/c/Rust_libraries",
+    "Text": "Rust libraries"
+   },
+   {
+    "Name": "See also",
+    "Topics": [
+     {
+      "FirstURL": "https://duckduckgo.com/c/Asynchronous_IO",
+      "Text": "Asynchronous I/O"
+     }
+    ]
+   }
+  ],
+  "Type": "A"
+ }
+}

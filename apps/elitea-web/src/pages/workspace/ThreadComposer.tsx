@@ -12,7 +12,9 @@
  * A local thread's footer also shows the context meter (`ContextMeter`, lazy)
  * once a model call reported its occupancy, and the usage chip (`UsageChip`,
  * lazy: the latest turn's tokens, the thread's, a cost only from the
- * catalogue's price, #1227); `/compact` marks the next send.
+ * catalogue's price, #1227); `/compact` marks the next send. Beside them the
+ * language-server chip (`LspChip`, lazy, #1236): the servers behind the
+ * edits' diagnostics.
  * And the model chip (`ModelChip`, `useTurnModel`): the model the next turn
  * runs on, unless the agent pins it or the folder's settings keep it
  * (`/model` opens it, `/model <name>` sets a listed one; an unknown name or
@@ -40,6 +42,7 @@ import { WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceCompo
 
 const ContextMeter = lazy(() => import('./ContextMeter'));
 const UsageChip = lazy(() => import('./UsageChip'));
+const LspChip = lazy(() => import('./LspChip'));
 
 export interface ThreadComposerProps {
   ipc: WorkspaceIpc;
@@ -97,11 +100,21 @@ function turnUsages(turn: WorkspaceTurn, recorded: readonly { turnId: string; us
 
 const NO_USAGE: NonNullable<Usage>[] = [];
 
-/** The footer's context meter and usage chip (both lazy), once a model call reported either. */
-function ComposerMeters({ meter, usages, projectId }: { meter: ReturnType<typeof latestMeter>; usages: NonNullable<Usage>[]; projectId: number }): React.JSX.Element | null {
-  if (meter === undefined && usages.length === 0) return null;
+interface ComposerMetersProps {
+  meter: ReturnType<typeof latestMeter>;
+  usages: NonNullable<Usage>[];
+  projectId: number;
+  workspaceId: string;
+  /** A local thread: the folder's language-server chip shows (not for the cloud copy). */
+  local: boolean;
+}
+
+/** The footer's language-server chip, context meter and usage chip (all lazy); the meters once a model call reported either. */
+function ComposerMeters({ meter, usages, projectId, workspaceId, local }: ComposerMetersProps): React.JSX.Element | null {
+  if (meter === undefined && usages.length === 0 && !local) return null;
   return (
     <Suspense fallback={null}>
+      {local ? <LspChip workspaceId={workspaceId} /> : null}
       {meter === undefined ? null : <ContextMeter meter={meter} />}
       {usages.length === 0 ? null : <UsageChip turns={usages} projectId={projectId} />}
     </Suspense>
@@ -161,7 +174,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} disabledHint={agentHint} />}
         {...modelBinding(model, cloudMode, commands.modelRef)}
         runLocation={<RunLocationChip handoff={handoff} onOpenInChat={openInChat} />}
-        contextMeter={<ComposerMeters meter={meter} usages={usages} projectId={projectId} />}
+        contextMeter={<ComposerMeters meter={meter} usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} />}
         onPlanModeChange={commands.setPlanMode}
         skills={offered}
         customCommands={customCommands}

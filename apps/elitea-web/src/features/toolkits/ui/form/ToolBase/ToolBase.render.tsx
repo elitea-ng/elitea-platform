@@ -88,7 +88,7 @@ function renderPropertyList(entries: ReturnType<typeof schemaEntries>, passParam
   return entries.map(({ key, schema: propertySchema }) => (
     <ToolBaseProperty
       key={key}
-      {...propertyPassProps(passParams, key, propertySchema, resolveRequired(key, schema.required, passParams.settings['selected_tools'] as never), noAccordionWrapper)}
+      {...propertyPassProps(passParams, key, propertySchema, resolveRequired(key, schema.required), noAccordionWrapper)}
     />
   ));
 }

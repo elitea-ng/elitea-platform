@@ -143,6 +143,11 @@ func newCurrentToolkitSettingsGraphWith(
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	webProviders, err := newCurrentWebProviderSource(pool, configurations)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	settings.WithWebProviders(webProviders)
 	return settings, names, prebuilt, nil
 }
 

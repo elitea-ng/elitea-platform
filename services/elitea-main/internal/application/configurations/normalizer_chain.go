@@ -38,6 +38,9 @@ func NewCurrentConfigurationDataNormalizer(
 		if currentArtifactsConfigurationType(entry.Type) {
 			owners++
 		}
+		if currentWebProviderConfigurationType(entry.Type) {
+			owners++
+		}
 		if owners != 1 {
 			return nil, fmt.Errorf("current configuration type %q has %d create normalizer owners", entry.Type, owners)
 		}
@@ -48,5 +51,6 @@ func NewCurrentConfigurationDataNormalizer(
 	fallback = NewCurrentLiteLLMDataNormalizer(fallback)
 	fallback = NewCurrentGatewayCredentialDataNormalizer(fallback)
 	fallback = NewCurrentArtifactsDataNormalizer(fallback)
+	fallback = NewCurrentWebProviderDataNormalizer(fallback)
 	return NewCurrentSDKDataNormalizer(catalog, expander, validator, fallback)
 }

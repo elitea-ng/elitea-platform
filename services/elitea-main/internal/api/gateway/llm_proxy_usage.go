@@ -114,7 +114,20 @@ type UsageSlice struct {
 	CompletionTokens int64   `json:"completion_tokens"`
 	TotalTokens      int64   `json:"total_tokens"`
 	CostUSD          float64 `json:"cost_usd"`
+	// Operation, Units and Unit are set on a model slice only. A metered tool
+	// operation (#1238) is a "model" row whose provider is the vendor and
+	// whose model is the operation; it has no tokens, so the table shows its
+	// units instead.
+	Operation string `json:"operation,omitempty"`
+	Units     *int64 `json:"units,omitempty"`
+	Unit      string `json:"unit,omitempty"`
 }
+
+// The two values of the ledger's operation column (shared migration 0174).
+const (
+	usageOperationLLM  = "llm"
+	usageOperationTool = "tool"
+)
 
 // usageTotalsSQL — the window's whole, in one scan.
 const usageTotalsSQL = `
@@ -156,10 +169,13 @@ const usageModelsSQL = `
 	       COALESCE(SUM(prompt_tokens), 0),
 	       COALESCE(SUM(completion_tokens), 0),
 	       COALESCE(SUM(total_tokens), 0),
-	       COALESCE(SUM(cost_usd), 0)
+	       COALESCE(SUM(cost_usd), 0),
+	       operation,
+	       COALESCE(SUM(units), 0),
+	       COALESCE(unit, '')
 	  FROM gateway.llm_usage_events
 	 WHERE occurred_at >= now() - $1::interval
-	 GROUP BY provider, model
+	 GROUP BY provider, model, operation, unit
 	 ORDER BY 7 DESC, 3 DESC
 	 LIMIT $2`
 
@@ -370,13 +386,23 @@ func (h *LLMProxyHandler) queryUsageSlices(
 type usageScanner func(scan func(...any) error) (UsageSlice, error)
 
 func scanUsageModel(scan func(...any) error) (UsageSlice, error) {
-	var provider, model string
+	var provider, model, operation, unit string
+	var units int64
 	var slice UsageSlice
 	if err := scan(&provider, &model, &slice.Requests, &slice.PromptTokens,
-		&slice.CompletionTokens, &slice.TotalTokens, &slice.CostUSD); err != nil {
+		&slice.CompletionTokens, &slice.TotalTokens, &slice.CostUSD,
+		&operation, &units, &unit); err != nil {
 		return UsageSlice{}, err
 	}
+	slice.Operation = operation
+	if operation == usageOperationTool {
+		slice.Units = &units
+		slice.Unit = unit
+	}
 	slice.Key = provider + "/" + model
+	if operation != "" && operation != usageOperationLLM {
+		slice.Key += "#" + operation
+	}
 	slice.Label = model
 	slice.Detail = provider
 	return slice, nil

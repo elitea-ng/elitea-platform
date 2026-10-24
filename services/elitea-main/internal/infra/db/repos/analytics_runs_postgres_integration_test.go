@@ -203,6 +203,42 @@ func TestExecutionAnalyticsSumsTheRunsOwnCalls(t *testing.T) {
 	require.True(t, errors.Is(err, analytics.ErrBadID), "a derived id names no execution: %v", err)
 }
 
+// TestRunFiguresSplitLLMAndToolCost is #1238: a run's metered tool
+// settlements (shared 0174) count as tool calls at the cost the gateway
+// billed, stay out of the model figures, and add into the total.
+func TestRunFiguresSplitLLMAndToolCost(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repo := NewAnalyticsRepo(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	plantModelPrice(t, pool, "openai", "gpt-4o", "2.00000000", "10.00000000")
+	seedOriginExecution(t, pool, 1, "exec_tool", "manual", now.Add(-time.Minute))
+	plantRunCall(t, pool, 1, 7, "exec_tool", now, "gpt-4o", 200, 150, 10)
+	for _, provider := range []string{"tavily", "brave"} {
+		_, err := pool.Exec(ctx, `
+INSERT INTO gateway.llm_request_logs
+    (occurred_at, project_id, user_id, route, method, status, duration_ms,
+     provider, model, prompt_tokens, completion_tokens, execution_id,
+     operation, units, unit, cost_usd)
+VALUES ($1, 1, 7, '/llm/v1/metered/settle', 'POST', 200, 40,
+        $2, 'web_search', 0, 0, 'exec_tool', 'tool', 1, 'credit', 0.008)`, now, provider)
+		require.NoError(t, err, "plant metered settlement")
+	}
+
+	result, err := repo.GetExecutionAnalytics(ctx, "1", "exec_tool")
+	require.NoError(t, err)
+	require.True(t, result.Available)
+	totals := *result.Totals
+	require.EqualValues(t, 1, totals.LLMCalls, "a tool settlement is not a model call")
+	require.EqualValues(t, 160, totals.TotalTokens)
+	require.EqualValues(t, 2, totals.ToolCalls)
+	require.Equal(t, "0.016000000000", numberString(t, totals.ToolCost))
+	// (150*2 + 10*10) / 1e6 + 2 * 0.008.
+	require.Equal(t, "0.016400000000", numberString(t, totals.TotalCost))
+	require.Len(t, result.ByModel, 3, "gpt-4o, tavily web_search, brave web_search")
+}
+
 // A run admitted before shared 0100 has no attributed call. It reports
 // UNAVAILABLE with no figures, never zero totals.
 func TestExecutionAnalyticsBeforeAttributionIsUnavailable(t *testing.T) {
