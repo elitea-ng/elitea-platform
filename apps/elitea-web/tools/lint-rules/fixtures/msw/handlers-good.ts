@@ -1,8 +1,13 @@
 import { http, HttpResponse } from 'msw';
 
-import usersFixture from './users.list.200.json';
+interface User {
+  id: number;
+  name: string;
+}
 
-// R-M2 GREEN: body derives from a Channel-B fixture file.
+// R-M2 GREEN: the body is a typed module constant.
+const USERS: User[] = [{ id: 1, name: 'Ada' }];
+
 export const handlers = [
-  http.get('/api/v2/users', () => HttpResponse.json(usersFixture.body)),
+  http.get('/api/v2/users', () => HttpResponse.json(USERS)),
 ];

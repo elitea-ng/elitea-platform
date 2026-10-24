@@ -1,7 +1,8 @@
 /**
- * MSW handlers for `shared/api/artifacts.ts`. Same R-M2/R-M3/R-M4 discipline
- * as transport.ts (unit F4): every response body derives from a fixture
- * file, validated at registration time.
+ * MSW handlers for `shared/api/artifacts.ts`. R-M2 (spec §6.5): a JSON body
+ * is the operation's example in v2.yaml, served through orval's generated
+ * `get<Op>ResponseMock()`; what the contract has no example for (raw object
+ * bytes, error bodies) is a typed constant here.
  *
  * Routing note: every artifact route is mounted UNDER `/api/v2/artifacts`
  * by `mountArtifactRoutes` (router.go:255-311). These patterns previously
@@ -11,26 +12,18 @@
  */
 import { http, HttpResponse } from 'msw';
 import type { RequestHandler } from 'msw';
-import { z } from 'zod';
-import type { ZodType } from 'zod';
 
-import { registerValidatedHandlers } from '../register';
-import artifactContent200 from '../fixtures/artifacts/artifact-content.200.json';
-import artifactList200 from '../fixtures/artifacts/artifact-list.200.json';
-import bucketList200 from '../fixtures/artifacts/bucket-list.200.json';
-import notFound404 from '../fixtures/artifacts/error.404.json';
-import objectUpload201 from '../fixtures/artifacts/object-upload.201.json';
+import {
+  getListBucketsResponseMock,
+  getListObjectsResponseMock,
+  getUploadObjectResponseMock,
+} from '../../../shared/api/generated/artifacts/artifacts.msw';
+import type { Error as ArtifactError } from '../../../shared/api/generated/model';
 
-const objectUploadBody = z.object({ key: z.string(), size_bytes: z.number(), etag: z.string() });
-const bucketListBody = z.object({
-  buckets: z.array(z.object({ name: z.string(), is_pinned: z.boolean(), created_at: z.string() })),
-});
-const artifactListBody = z.object({
-  objects: z.array(z.object({ key: z.string(), size_bytes: z.number(), modified_at: z.string() })),
-  common_prefixes: z.array(z.string()),
-});
-const contentBody = z.string();
-const errorBody = z.object({ error: z.string() });
+/** Object bytes for a download — the route answers application/octet-stream. */
+const ARTIFACT_CONTENT = 'hello artifact content';
+/** The artifact API's error envelope (artifacts/handler.go writeError). */
+const NOT_FOUND: ArtifactError = { error: { code: 'NotFound', message: 'not found' } };
 
 /** Request facts captured for assertions (headers/credentials, §5.7 probes). */
 export interface CapturedArtifactsRequest {
@@ -55,13 +48,6 @@ async function capture(request: Request, sink?: CapturedArtifactsRequest[]): Pro
   });
 }
 
-/** R-M3 seam: validate one entry through F2's registration wrapper. */
-function validated(id: string, schema: ZodType, fixture: { recordedAt: string; body: unknown }, handler: RequestHandler): RequestHandler {
-  const [first] = registerValidatedHandlers([{ id, handler, schema, fixture }]);
-  if (first === undefined) throw new Error(`artifacts handlers: registration returned nothing for ${id}`);
-  return first;
-}
-
 /* ── upload: POST /api/v2/artifacts/objects/{projectID}/{bucket} ─────────── */
 
 /**
@@ -74,16 +60,14 @@ const OBJECT_ITEM = '*/api/v2/artifacts/objects/:projectId/:bucket/*';
 const BUCKETS_COLLECTION = '*/api/v2/artifacts/buckets/:projectId';
 
 export function objectUploadOk(sink?: CapturedArtifactsRequest[]): RequestHandler {
-  return validated('artifacts.object.upload.ok', objectUploadBody, objectUpload201, http.post(OBJECTS_COLLECTION, async ({ request }) => {
+  return http.post(OBJECTS_COLLECTION, async ({ request }) => {
     await capture(request, sink);
-    return HttpResponse.json(objectUpload201.body, { status: 201 });
-  }));
+    return HttpResponse.json(getUploadObjectResponseMock(), { status: 201 });
+  });
 }
 
 export function objectUploadNotFound(): RequestHandler {
-  return validated('artifacts.object.upload.notFound', errorBody, notFound404, http.post(OBJECTS_COLLECTION, () =>
-    HttpResponse.json(notFound404.body, { status: 404 }),
-  ));
+  return http.post(OBJECTS_COLLECTION, () => HttpResponse.json(NOT_FOUND, { status: 404 }));
 }
 
 export function objectUploadNetworkError(): RequestHandler {
@@ -93,10 +77,10 @@ export function objectUploadNetworkError(): RequestHandler {
 /* ── bucket / object list ─────────────────────────────────────────────────── */
 
 export function bucketListOk(sink?: CapturedArtifactsRequest[]): RequestHandler {
-  return validated('artifacts.bucketList.ok', bucketListBody, bucketList200, http.get(BUCKETS_COLLECTION, async ({ request }) => {
+  return http.get(BUCKETS_COLLECTION, async ({ request }) => {
     await capture(request, sink);
-    return HttpResponse.json(bucketList200.body);
-  }));
+    return HttpResponse.json(getListBucketsResponseMock());
+  });
 }
 
 export function bucketListNetworkError(): RequestHandler {
@@ -104,9 +88,7 @@ export function bucketListNetworkError(): RequestHandler {
 }
 
 export function bucketListNotFound(): RequestHandler {
-  return validated('artifacts.bucketList.notFound', errorBody, notFound404, http.get(BUCKETS_COLLECTION, () =>
-    HttpResponse.json(notFound404.body, { status: 404 }),
-  ));
+  return http.get(BUCKETS_COLLECTION, () => HttpResponse.json(NOT_FOUND, { status: 404 }));
 }
 
 /** 200 with a non-JSON body — exercises parseJsonBody's catch (raw-text) branch. */
@@ -115,10 +97,10 @@ export function bucketListLyingJson(): RequestHandler {
 }
 
 export function artifactListOk(sink?: CapturedArtifactsRequest[]): RequestHandler {
-  return validated('artifacts.artifactList.ok', artifactListBody, artifactList200, http.get(OBJECTS_COLLECTION, async ({ request }) => {
+  return http.get(OBJECTS_COLLECTION, async ({ request }) => {
     await capture(request, sink);
-    return HttpResponse.json(artifactList200.body);
-  }));
+    return HttpResponse.json(getListObjectsResponseMock());
+  });
 }
 
 export function artifactListNetworkError(): RequestHandler {
@@ -128,16 +110,14 @@ export function artifactListNetworkError(): RequestHandler {
 /* ── object download ──────────────────────────────────────────────────────── */
 
 export function artifactContentOk(sink?: CapturedArtifactsRequest[]): RequestHandler {
-  return validated('artifacts.content.ok', contentBody, artifactContent200, http.get(OBJECT_ITEM, async ({ request }) => {
+  return http.get(OBJECT_ITEM, async ({ request }) => {
     await capture(request, sink);
-    return HttpResponse.text(artifactContent200.body);
-  }));
+    return HttpResponse.text(ARTIFACT_CONTENT);
+  });
 }
 
 export function artifactContentNotFound(): RequestHandler {
-  return validated('artifacts.content.notFound', errorBody, notFound404, http.get(OBJECT_ITEM, () =>
-    HttpResponse.json(notFound404.body, { status: 404 }),
-  ));
+  return http.get(OBJECT_ITEM, () => HttpResponse.json(NOT_FOUND, { status: 404 }));
 }
 
 export function artifactContentNetworkError(): RequestHandler {

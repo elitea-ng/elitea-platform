@@ -501,6 +501,15 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: node scripts/check-generated-client.mjs
 
+      # ── Contract examples satisfy their schemas ─────────────────────────
+      # orval generates the test mocks with useExamples: true, so a response
+      # example in v2.yaml is the body a test receives. Neither generator
+      # checks an example against its schema; this does (Ajv, OpenAPI 3.0
+      # nullable/exclusive bounds translated). RED/GREEN: check-gates-selftest.
+      - name: Contract examples satisfy their schemas
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/check-spec-examples.mjs
+
       # ── Route-wiring map matches the routes ─────────────────────────────
       # parity/route-wiring-map.json is generated: its mechanical fields are
       # re-derived from src/routes/** on every run. `--check` fails when the

@@ -1,6 +1,13 @@
 /**
- * MSW handlers for unit S6's chunked-upload transport (spec §5.7 row 2).
- * Same R-M2/R-M3/R-M4 discipline as transport.ts. These probes exercise the
+ * MSW handlers for unit S6's chunked-upload transport (spec §5.7 row 2),
+ * POST /api/v2/elitea_core/attachments/prompt_lib/{projectId}/{conversationId}
+ * (uploadConversationAttachment). The bodies are typed constants (R-M2), not
+ * contract examples: the operation has TWO success responses (201 assembled
+ * file, 202 chunk received), and orval's generated mock folds them into one
+ * `faker.helpers.arrayElement([...])`, so it cannot serve a chosen one. The
+ * constants are typed with the generated response types instead.
+ *
+ * These probes exercise the
  * ONE sanctioned XMLHttpRequest (R-A4) — msw/node's XMLHttpRequestInterceptor
  * patches XMLHttpRequest directly (no Service Worker involved, unlike the
  * browser integration), so it intercepts these XHR calls exactly like fetch,
@@ -25,33 +32,35 @@
  */
 import { http, HttpResponse } from 'msw';
 import type { RequestHandler } from 'msw';
-import { z } from 'zod';
-import type { ZodType } from 'zod';
-
-import { registerValidatedHandlers } from '../register';
-import chunkComplete201 from '../fixtures/upload/chunk-complete.201.json';
-import chunkInProgress202 from '../fixtures/upload/chunk-in-progress.202.json';
-import error500 from '../fixtures/upload/error.500.json';
-import smallFile201 from '../fixtures/upload/small-file.201.json';
+import type {
+  ConversationAttachmentChunkReceived,
+  ConversationAttachmentUploaded,
+  ErrorResponse,
+} from '../../../shared/api/generated/model';
 
 /*
- * These two schemas are the GO handler's contract, not the legacy Python one
- * they used to describe (services/elitea-main/internal/api/v2/conversations/
- * attachments.go:348 and :461). The statuses are the real ones too — 202 for a
+ * The statuses are the Go handler's (conversations/attachments.go): 202 for a
  * chunk the server has taken but not assembled, 201 for the assembled file —
- * which is what makes `upload.ts:161`'s `status >= 200 && status < 300` a
- * tested claim rather than an untested one: every previous fixture answered
- * 200, so nothing here ever exercised a 2xx that was not 200.
+ * which is what makes `upload.ts`'s `status >= 200 && status < 300` a tested
+ * claim: a 2xx that is not 200.
  */
-const inProgressBody = z.object({
-  status: z.literal('chunk_received'),
-  file_id: z.string(),
-  chunk_index: z.number(),
-  total_chunks: z.number(),
-  message: z.string(),
-});
-const chunkAckArrayBody = z.array(z.object({ filepath: z.string(), file_size: z.number() }));
-const errorBody = z.object({ error: z.string() });
+const CHUNK_IN_PROGRESS: ConversationAttachmentChunkReceived = {
+  status: 'chunk_received',
+  file_id: '6f1f0f6a-6d3a-4a1a-9f2f-2a1b3c4d5e6f',
+  chunk_index: 0,
+  total_chunks: 2,
+  message: 'Chunk 1/2 received',
+};
+/** The final chunk's answer: the assembled file (upload.ts reads `parsed[0]`). */
+export const CHUNKED_FILE_UPLOADED: ConversationAttachmentUploaded[] = [
+  { filepath: '/chat-attachments/3f7c1e8a-9b2d-4c5e-8a1f-0d6b7c8e9f10/demo.bin', file_size: 5242881 },
+];
+/** A single-request (file.size <= CHUNK_SIZE) upload's answer. */
+export const SMALL_FILE_UPLOADED: ConversationAttachmentUploaded[] = [
+  { filepath: '/chat-attachments/3f7c1e8a-9b2d-4c5e-8a1f-0d6b7c8e9f10/small.txt', file_size: 42 },
+];
+/** apierr.Write's flat shape. */
+const SERVER_ERROR: ErrorResponse = { error: 'internal error' };
 
 const UPLOAD_PATH = '*/elitea_core/attachments/prompt_lib/*';
 
@@ -77,40 +86,31 @@ function capture(request: Request, sink?: CapturedUploadRequest[]): void {
   });
 }
 
-/** R-M3 seam: validate one entry through F2's registration wrapper. */
-function validated(id: string, schema: ZodType, fixture: { recordedAt: string; body: unknown }, handler: RequestHandler): RequestHandler {
-  const [first] = registerValidatedHandlers([{ id, handler, schema, fixture }]);
-  if (first === undefined) throw new Error(`upload handlers: registration returned nothing for ${id}`);
-  return first;
-}
-
 /** Always responds with the in-progress ack — pair with chunkAckComplete() via sequential server.use() calls to model a real chunk sequence. */
 export function chunkAckInProgress(sink?: CapturedUploadRequest[]): RequestHandler {
-  return validated('upload.chunk.inProgress', inProgressBody, chunkInProgress202, http.post(UPLOAD_PATH, ({ request }) => {
+  return http.post(UPLOAD_PATH, ({ request }) => {
     capture(request, sink);
-    return HttpResponse.json(chunkInProgress202.body, { status: 202 });
-  }));
+    return HttpResponse.json(CHUNK_IN_PROGRESS, { status: 202 });
+  });
 }
 
 /** Always responds with the final-chunk ack. */
 export function chunkAckComplete(sink?: CapturedUploadRequest[]): RequestHandler {
-  return validated('upload.chunk.complete', chunkAckArrayBody, chunkComplete201, http.post(UPLOAD_PATH, ({ request }) => {
+  return http.post(UPLOAD_PATH, ({ request }) => {
     capture(request, sink);
-    return HttpResponse.json(chunkComplete201.body, { status: 201 });
-  }));
+    return HttpResponse.json(CHUNKED_FILE_UPLOADED, { status: 201 });
+  });
 }
 
 export function smallFileOk(sink?: CapturedUploadRequest[]): RequestHandler {
-  return validated('upload.small.ok', chunkAckArrayBody, smallFile201, http.post(UPLOAD_PATH, ({ request }) => {
+  return http.post(UPLOAD_PATH, ({ request }) => {
     capture(request, sink);
-    return HttpResponse.json(smallFile201.body, { status: 201 });
-  }));
+    return HttpResponse.json(SMALL_FILE_UPLOADED, { status: 201 });
+  });
 }
 
 export function uploadServerError(): RequestHandler {
-  return validated('upload.error.500', errorBody, error500, http.post(UPLOAD_PATH, () =>
-    HttpResponse.json(error500.body, { status: 500 }),
-  ));
+  return http.post(UPLOAD_PATH, () => HttpResponse.json(SERVER_ERROR, { status: 500 }));
 }
 
 export function uploadNetworkError(): RequestHandler {
@@ -130,7 +130,7 @@ export function chunkAckSequence(finalCallNumber: number, sink?: CapturedUploadR
     callCount += 1;
     capture(request, sink);
     return callCount === finalCallNumber
-      ? HttpResponse.json(chunkComplete201.body, { status: 201 })
-      : HttpResponse.json(chunkInProgress202.body, { status: 202 });
+      ? HttpResponse.json(CHUNKED_FILE_UPLOADED, { status: 201 })
+      : HttpResponse.json(CHUNK_IN_PROGRESS, { status: 202 });
   });
 }

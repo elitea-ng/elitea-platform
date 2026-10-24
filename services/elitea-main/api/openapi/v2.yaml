@@ -24786,6 +24786,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BucketListResponse'
+              # Served by the generated web test mock (orval useExamples) and
+              # validated against the schema by check-spec-examples.mjs.
+              example:
+                buckets:
+                  - name: demo-bucket
+                    type: local
+                    is_pinned: false
+                    tags: {}
+                    retention_days: null
+                    expires_at: null
+                    size_bytes: 128
+                    object_count: 1
+                    created_at: "2026-07-20T00:00:00Z"
+                    updated_at: "2026-07-20T00:00:00Z"
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
 
@@ -24946,6 +24960,44 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListObjectsResponse'
+              # A DeepWiki bucket: one wiki manifest and the five pages it
+              # names, under the wiki's own prefix. Served by the generated
+              # web test mock (orval useExamples) and validated against the
+              # schema by check-spec-examples.mjs.
+              example:
+                common_prefixes:
+                  - acme--notes-service--main/
+                objects:
+                  - key: acme--notes-service--main/wiki_manifest_20260101T000000Z-0000000a.json
+                    size_bytes: 2048
+                    media_type: "application/json"
+                    etag: "5f3a1c7e9b2d4a6c8e0f2a4b6c8d0e2f"
+                    modified_at: "2026-01-01T00:00:00Z"
+                  - key: acme--notes-service--main/wiki_pages/overview/getting-started.md
+                    size_bytes: 1536
+                    media_type: "text/markdown; charset=utf-8"
+                    etag: "00b2c3d4e5f60718293a4b5c6d7e8f9"
+                    modified_at: "2026-01-01T00:00:00Z"
+                  - key: acme--notes-service--main/wiki_pages/overview/architecture-data-flow.md
+                    size_bytes: 2240
+                    media_type: "text/markdown; charset=utf-8"
+                    etag: "01b2c3d4e5f60718293a4b5c6d7e8f9"
+                    modified_at: "2026-01-01T00:00:00Z"
+                  - key: acme--notes-service--main/wiki_pages/components/note-storage.md
+                    size_bytes: 2240
+                    media_type: "text/markdown; charset=utf-8"
+                    etag: "02b2c3d4e5f60718293a4b5c6d7e8f9"
+                    modified_at: "2026-01-01T00:00:00Z"
+                  - key: acme--notes-service--main/wiki_pages/components/search-ranking.md
+                    size_bytes: 1792
+                    media_type: "text/markdown; charset=utf-8"
+                    etag: "03b2c3d4e5f60718293a4b5c6d7e8f9"
+                    modified_at: "2026-01-01T00:00:00Z"
+                  - key: acme--notes-service--main/wiki_pages/components/bearer-tokens.md
+                    size_bytes: 1408
+                    media_type: "text/markdown; charset=utf-8"
+                    etag: "04b2c3d4e5f60718293a4b5c6d7e8f9"
+                    modified_at: "2026-01-01T00:00:00Z"
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404':
@@ -24987,6 +25039,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UploadObjectResponse'
+              example:
+                key: a.txt
+                size_bytes: 10
+                media_type: text/plain
+                etag: "dd7998b55ad2d8c4cca66901e7499ecf"
+                created_at: "2026-07-20T00:00:00Z"
         '400':
           description: Invalid request
           content:
@@ -27535,6 +27593,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SocialAuthorProfile'
+              example:
+                id: "42"
+                name: Example User
+                email: example.user@example.test
+                avatar: ""
+                description: ""
+                personal_project_id: "1"
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '426': { $ref: '#/components/responses/ClientUpgradeRequired' }

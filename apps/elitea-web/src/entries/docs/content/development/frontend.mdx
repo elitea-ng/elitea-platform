@@ -42,6 +42,8 @@ CI runs each of these as its own step; run them locally before you push to catch
 <Accordion title="Generated API client">
 `services/elitea-main/api/openapi/v2.yaml` is the source of truth. `orval.config.ts` reads it (`input.target: '../../services/elitea-main/api/openapi/v2.yaml'`) and writes `src/shared/api/generated/**` — hooks, Zod schemas, and MSW mock handlers. `node scripts/check-generated-client.mjs` regenerates into an empty directory and diffs it against the committed tree; a stale client fails **open** (it keeps exporting operations the API no longer has), which is why the gate compares full file trees rather than a `git status` after an in-place regeneration.
 
+Test mocks come from the contract too. orval runs its MSW generator with `useExamples: true`, so an operation whose response carries an `example` in `v2.yaml` serves that example as its mock body; one without falls back to generated sample data. `node scripts/check-spec-examples.mjs` validates every `example`/`examples` value in `v2.yaml` against its schema, so a mock body can never drift from the shape it documents.
+
 **Regenerate:** `npx orval` (from `apps/elitea-web`), then commit the result.
 </Accordion>
 <Accordion title="Endpoint manifest">
@@ -50,7 +52,7 @@ CI runs each of these as its own step; run them locally before you push to catch
 **Fix:** add or correct the manifest entry by hand; it is not generated.
 </Accordion>
 <Accordion title="MSW handler hygiene and i18n backfill">
-`node scripts/check-handlers.mjs` walks `src/test/msw/handlers/**` (the hand-authored mock handlers, as opposed to orval's own generated `.msw.ts` files) and flags a handler that answers with an inline literal instead of importing a fixture.
+`node scripts/check-handlers.mjs` walks `src/test/msw/handlers/**` (the hand-authored mock handlers, as opposed to orval's own generated `.msw.ts` files) and requires every body to be either a generated contract mock (`get<Op>ResponseMock()`) or a typed module constant (typed with the generated model type where the contract has one). It flags an inline literal body, an untyped object/array constant and any JSON import. To give a handler a new realistic body for a real route, add a response `example` to that operation in `v2.yaml` and regenerate; keep a typed constant only for what the contract cannot describe (raw bytes, error bodies, transport probes).
 
 `node scripts/i18n-backfill.mjs --check` walks every `t(key, fallback)` call site and fails if `src/shared/i18n/en.json` is missing a key a call site introduced, or if a call site's fallback text has drifted from what's already shipped. Run it without `--check` to have it write the missing keys into `en.json` for you.
 </Accordion>
@@ -76,7 +78,8 @@ All five run as steps inside `ci-web.yml`'s `gates-static` job (single checkout,
 {/* source: apps/elitea-web/orval.config.ts:149-154 (input.target, output.target) */}
 {/* source: apps/elitea-web/scripts/check-generated-client.mjs:1-40 (regenerate-into-empty-dir mechanism, the four-dead-operations incident) */}
 {/* source: apps/elitea-web/scripts/check-endpoint-manifest.mjs:1-20 (R-A5, manifest fields, hard-fail rules) */}
-{/* source: apps/elitea-web/scripts/check-handlers.mjs:1-20 (R-M2, hand-authored vs. orval-generated scope) */}
+{/* source: apps/elitea-web/scripts/check-handlers.mjs:1-25 (R-M2, generated mock or typed constant) */}
+{/* source: apps/elitea-web/scripts/check-spec-examples.mjs:1-15 (contract examples vs their schemas) */}
 {/* source: apps/elitea-web/scripts/i18n-backfill.mjs:1-20 (default mode merges, --check mode gates) */}
 {/* source: apps/elitea-web/scripts/check-dead-code.mjs:1-20 (knip wrapper, project/entry glob floor) */}
 {/* source: apps/elitea-web/scripts/check-bundle-budget.mjs:1-22 (initial vs. route-chunk measurement) */}

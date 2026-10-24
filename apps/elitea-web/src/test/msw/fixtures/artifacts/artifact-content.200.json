@@ -1,6 +1,0 @@
-{
-  "recordedAt": "2026-10-06",
-  "synthetic": true,
-  "note": "This synthetic fixture matches Main source on 2026-10-06. Handler.DownloadObject streams object bytes through streamObject in internal/api/v2/artifacts/objects.go. The isolated TestDownloadObject_FullAndRange check passes. No live backend recording occurs.",
-  "body": "hello artifact content"
-}

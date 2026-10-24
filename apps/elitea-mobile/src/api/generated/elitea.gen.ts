@@ -6476,6 +6476,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
+                    /**
+                     * @example {
+                     *       "id": "42",
+                     *       "name": "Example User",
+                     *       "email": "example.user@example.test",
+                     *       "avatar": "",
+                     *       "description": "",
+                     *       "personal_project_id": "1"
+                     *     }
+                     */
                     "application/json": components["schemas"]["SocialAuthorProfile"];
                 };
             };

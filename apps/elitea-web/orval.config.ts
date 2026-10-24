@@ -17,12 +17,15 @@
  *     per-generator options into `generators: [...]` (orval's own v8
  *     migration guide documents exactly this rename). The verbatim spec
  *     snippet would be silently coerced to a no-op — kept here in the
- *     current schema so mock generation actually runs. It is enabled AS A
- *     BYPRODUCT — S4 does not consume it — because the spec's shown config
- *     asks for it; per spec §5.2 Channel B, unit M1 owns turning these
- *     skeletons into fixture-backed, zod-validated handlers (R-M2/R-M3).
- *     The output lands in `src/shared/api/generated/**\/*.msw.ts` — M1's
- *     input, not S4's.
+ *     current schema so mock generation actually runs. The generated
+ *     handlers are the web tests' default MSW registry
+ *     (src/test/msw/handlers/index.ts). `useExamples: true` (was `false`
+ *     until 2026-10-23): an operation whose response has an `example` in
+ *     v2.yaml serves that example instead of faker data, which is how the
+ *     hand-written JSON fixtures moved into the contract. Property-level
+ *     `example`s are used as well. scripts/check-spec-examples.mjs checks
+ *     every example against its schema. Note an example-backed
+ *     `get<Op>ResponseMock()` takes no override argument.
  *  3. `override.zod.generate` is NOT the spec's bare `true` — orval 8.23.0's
  *     `ZodOptions['generate']` (`@orval/core`'s `.d.mts`, read directly
  *     rather than assumed) is typed `{ param?, query?, header?, body?,
@@ -157,7 +160,7 @@ export default defineConfig({
       httpClient: 'fetch',
       baseUrl: '', // resolved at runtime by shared/api/http.ts via shared/config (§7.1)
       mock: {
-        generators: [{ type: 'msw', delay: 0, useExamples: false }],
+        generators: [{ type: 'msw', delay: 0, useExamples: true }],
       },
       override: {
         mutator: { path: path.join(OUT_DIR, 'mutator.ts'), name: 'eliteaFetch' },

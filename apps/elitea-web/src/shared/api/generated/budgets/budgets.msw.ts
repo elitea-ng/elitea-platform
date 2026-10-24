@@ -68,9 +68,9 @@ export const getGetProjectBudgetResponseMock = (): ProjectBudget => ({
   },
   ...{
     ...{
-      period: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_start: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_end: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      period: "202608",
+      period_start: "2026-08-01",
+      period_end: "2026-08-31",
       resets_at: faker.date.past().toISOString().slice(0, 19) + "Z",
     },
     ...{
@@ -138,9 +138,9 @@ export const getGetProjectBudgetAdminResponseMock = (): ProjectBudget => ({
   },
   ...{
     ...{
-      period: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_start: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_end: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      period: "202608",
+      period_start: "2026-08-01",
+      period_end: "2026-08-31",
       resets_at: faker.date.past().toISOString().slice(0, 19) + "Z",
     },
     ...{
@@ -208,9 +208,9 @@ export const getSetProjectBudgetResponseMock = (): ProjectBudget => ({
   },
   ...{
     ...{
-      period: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_start: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_end: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      period: "202608",
+      period_start: "2026-08-01",
+      period_end: "2026-08-31",
       resets_at: faker.date.past().toISOString().slice(0, 19) + "Z",
     },
     ...{
@@ -278,9 +278,9 @@ export const getClearProjectBudgetResponseMock = (): ProjectBudget => ({
   },
   ...{
     ...{
-      period: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_start: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_end: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      period: "202608",
+      period_start: "2026-08-01",
+      period_end: "2026-08-31",
       resets_at: faker.date.past().toISOString().slice(0, 19) + "Z",
     },
     ...{
@@ -350,9 +350,9 @@ export const getListProjectBudgetsResponseMock = (
     },
     ...{
       ...{
-        period: faker.string.alpha({ length: { min: 10, max: 20 } }),
-        period_start: faker.string.alpha({ length: { min: 10, max: 20 } }),
-        period_end: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        period: "202608",
+        period_start: "2026-08-01",
+        period_end: "2026-08-31",
         resets_at: faker.date.past().toISOString().slice(0, 19) + "Z",
       },
       ...{
@@ -419,9 +419,9 @@ export const getGetMemberBudgetResponseMock = (): MemberBudget => ({
   },
   ...{
     ...{
-      period: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_start: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_end: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      period: "202608",
+      period_start: "2026-08-01",
+      period_end: "2026-08-31",
       resets_at: faker.date.past().toISOString().slice(0, 19) + "Z",
     },
     ...{
@@ -482,9 +482,9 @@ export const getGetMemberBudgetAdminResponseMock = (): MemberBudget => ({
   },
   ...{
     ...{
-      period: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_start: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_end: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      period: "202608",
+      period_start: "2026-08-01",
+      period_end: "2026-08-31",
       resets_at: faker.date.past().toISOString().slice(0, 19) + "Z",
     },
     ...{
@@ -545,9 +545,9 @@ export const getSetMemberBudgetResponseMock = (): MemberBudget => ({
   },
   ...{
     ...{
-      period: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_start: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_end: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      period: "202608",
+      period_start: "2026-08-01",
+      period_end: "2026-08-31",
       resets_at: faker.date.past().toISOString().slice(0, 19) + "Z",
     },
     ...{
@@ -608,9 +608,9 @@ export const getClearMemberBudgetResponseMock = (): MemberBudget => ({
   },
   ...{
     ...{
-      period: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_start: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_end: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      period: "202608",
+      period_start: "2026-08-01",
+      period_end: "2026-08-31",
       resets_at: faker.date.past().toISOString().slice(0, 19) + "Z",
     },
     ...{
@@ -683,9 +683,9 @@ export const getListMemberBudgetsResponseMock = (
     },
     ...{
       ...{
-        period: faker.string.alpha({ length: { min: 10, max: 20 } }),
-        period_start: faker.string.alpha({ length: { min: 10, max: 20 } }),
-        period_end: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        period: "202608",
+        period_start: "2026-08-01",
+        period_end: "2026-08-31",
         resets_at: faker.date.past().toISOString().slice(0, 19) + "Z",
       },
       ...{
@@ -762,9 +762,9 @@ export const getListMemberBudgetsAdminResponseMock = (
     },
     ...{
       ...{
-        period: faker.string.alpha({ length: { min: 10, max: 20 } }),
-        period_start: faker.string.alpha({ length: { min: 10, max: 20 } }),
-        period_end: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        period: "202608",
+        period_start: "2026-08-01",
+        period_end: "2026-08-31",
         resets_at: faker.date.past().toISOString().slice(0, 19) + "Z",
       },
       ...{
@@ -885,9 +885,9 @@ export const getGetProjectUsageResponseMock = (): UsageReport => ({
   },
   ...{
     ...{
-      period: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_start: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      period_end: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      period: "202608",
+      period_start: "2026-08-01",
+      period_end: "2026-08-31",
       resets_at: faker.date.past().toISOString().slice(0, 19) + "Z",
     },
     ...{

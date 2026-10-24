@@ -40,13 +40,11 @@
  *
  * OpenAPI spec version: 2.0.0
  */
-import { faker } from "@faker-js/faker";
-
 import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
 export const getGetBrandingBootstrapResponseMock = (): string =>
-  faker.word.sample();
+  'window.elitea_brand = {"$schema":"https://elitea.ai/schemas/brand-pack/1.json","id":"default","version":"1.0.0"};';
 
 export const getGetBrandingBootstrapMockHandler = (
   overrideResponse?:

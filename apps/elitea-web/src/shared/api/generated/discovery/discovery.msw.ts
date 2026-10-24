@@ -50,8 +50,8 @@ import type { DiscoveryDocument } from "../model";
 export const getGetClientDiscoveryResponseMock = (
   overrideResponse: Partial<Extract<DiscoveryDocument, object>> = {},
 ): DiscoveryDocument => ({
-  server_version: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  client_contract: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  server_version: "1.62",
+  client_contract: "1.0",
   deployment_kind: faker.helpers.arrayElement(["saas", "self_hosted"] as const),
   display_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
   brand_pack_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
