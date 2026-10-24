@@ -16,7 +16,10 @@
 //!   the child conversation). A pause only the web chat answers ends the
 //!   call with the conversation to open.
 //! * Dropping the call (the turn is cancelled, or the tool times out) stops
-//!   the child through the chat's stop route.
+//!   the child through the chat's stop route. The start runs as its own
+//!   task, so a call dropped while its start is still in flight lets that
+//!   start finish (its retries included, under the same key) and stops the
+//!   child as soon as the platform names it: no child outlives its call.
 //! * The calls share the runtime's sub-agent limits (`MAX_TASK_CHARS`,
 //!   `MAX_CHILDREN_PER_TURN`, `MAX_RESULT_BYTES`) and report to the webview
 //!   as sub-agent lanes (`subagent_started`, `subagent_finished`).
@@ -117,6 +120,10 @@ fn error_result(code: &str, message: &str) -> Value {
 
 #[async_trait]
 impl Tool for CloudChildAgentTool {
+    #[expect(
+        clippy::misnamed_getters,
+        reason = "the tool's name is the exposed (unique, sanitized) one; `spec.name` is the agent's display name"
+    )]
     fn name(&self) -> &str {
         &self.spec.exposed_name
     }
@@ -216,17 +223,25 @@ pub async fn call(
             "label": spec.name,
         }),
     );
-    let started = match start(context, spec, task).await {
-        Ok(started) => started,
-        Err(result) => {
-            lane.finish("failed", &result, None);
-            return result;
-        }
-    };
+    let body = json!({
+        "application_id": spec.application_id,
+        "version_id": spec.version_id,
+        "input": task,
+        "idempotency_key": uuid::Uuid::new_v4().to_string(),
+    });
     let mut guard = CancelOnDrop {
         context: context.remote.clone(),
-        response_message_id: started.response_message_id.clone(),
+        child: Child::Starting(tokio::spawn(start(context.remote.clone(), body))),
         lane: Some(lane),
+    };
+    let started = match guard.started().await {
+        Ok(started) => started,
+        Err(result) => {
+            if let Some(lane) = guard.disarm() {
+                lane.finish("failed", &result, None);
+            }
+            return result;
+        }
     };
     let (status, result, usage) = follow(context, spec, call_id, &started).await;
     if let Some(lane) = guard.disarm() {
@@ -241,19 +256,9 @@ struct Started {
     conversation_uuid: String,
 }
 
-/// `startLocalChildTurn`, retried with one key.
-async fn start(
-    context: &ChildAgentContext,
-    spec: &ChildAgentSpec,
-    task: &str,
-) -> Result<Started, Value> {
-    let remote = &context.remote;
-    let body = json!({
-        "application_id": spec.application_id,
-        "version_id": spec.version_id,
-        "input": task,
-        "idempotency_key": uuid::Uuid::new_v4().to_string(),
-    });
+/// `startLocalChildTurn`, retried with the body's one key. Spawned as its
+/// own task (owned arguments), so a dropped call does not cut it short.
+async fn start(remote: Arc<RemoteContext>, body: Value) -> Result<Started, Value> {
     let mut attempts = 0;
     loop {
         attempts += 1;
@@ -544,17 +549,57 @@ async fn decide(
     }
 }
 
-/// Stops the child when its call is dropped before it settled.
+/// Where the call's child is: its start still running (as a task), or the
+/// child the platform named.
+enum Child {
+    Starting(tokio::task::JoinHandle<Result<Started, Value>>),
+    Started(String),
+    /// The start failed (nothing to stop), or the guard already acted.
+    None,
+}
+
+/// Stops the child when its call is dropped before it settled, also while
+/// its start is still in flight.
 struct CancelOnDrop {
     context: Arc<RemoteContext>,
-    response_message_id: String,
+    child: Child,
     lane: Option<Lane>,
 }
 
 impl CancelOnDrop {
+    /// Wait for the start; once it named the child, a drop stops that child.
+    async fn started(&mut self) -> Result<Started, Value> {
+        let Child::Starting(handle) = &mut self.child else {
+            return Err(error_result(
+                "invalid_state",
+                "the agent was already started",
+            ));
+        };
+        let outcome = handle.await.unwrap_or_else(|_| {
+            Err(error_result(
+                "child_agent_unavailable",
+                "the platform did not start the agent; try again later",
+            ))
+        });
+        self.child = match &outcome {
+            Ok(started) => Child::Started(started.response_message_id.clone()),
+            Err(_) => Child::None,
+        };
+        outcome
+    }
+
     fn disarm(&mut self) -> Option<Lane> {
+        self.child = Child::None;
         self.lane.take()
     }
+}
+
+/// `cancelChatExecution` of a child, best effort.
+async fn stop_child(context: &RemoteContext, response_message_id: &str) {
+    let _ = context
+        .api
+        .child_turn_cancel(context.project_id, response_message_id)
+        .await;
 }
 
 impl Drop for CancelOnDrop {
@@ -571,12 +616,19 @@ impl Drop for CancelOnDrop {
             return;
         };
         let context = self.context.clone();
-        let response = std::mem::take(&mut self.response_message_id);
-        runtime.spawn(async move {
-            let _ = context
-                .api
-                .child_turn_cancel(context.project_id, &response)
-                .await;
-        });
+        match std::mem::replace(&mut self.child, Child::None) {
+            Child::Started(response) => {
+                runtime.spawn(async move { stop_child(&context, &response).await });
+            }
+            // The start is in flight: let it answer, then stop what it started.
+            Child::Starting(handle) => {
+                runtime.spawn(async move {
+                    if let Ok(Ok(started)) = handle.await {
+                        stop_child(&context, &started.response_message_id).await;
+                    }
+                });
+            }
+            Child::None => {}
+        }
     }
 }

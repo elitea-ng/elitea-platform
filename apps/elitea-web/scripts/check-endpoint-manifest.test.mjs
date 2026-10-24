@@ -771,7 +771,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 342 -> 344 (issue 1369): listPlatformRoutines and updatePlatformRoutine,
 // the routine registry behind Admin › Schedules. Admin routes are not in
 // the manifest, so its count is unchanged.
-const GENERATED_OPERATION_COUNT = 344;
+// 344 -> 346 (client contract 1.23, issue 1239): startLocalChildTurn and
+// readLocalChildTurn, the cloud child turns of a desktop local turn. Only
+// the desktop host calls them (over its own HTTP client), so the manifest
+// count is unchanged.
+const GENERATED_OPERATION_COUNT = 346;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

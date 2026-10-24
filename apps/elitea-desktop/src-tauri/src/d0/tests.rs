@@ -8874,6 +8874,82 @@ async fn child_call_dropped_cancels_the_child() {
     assert_eq!(finished[0].payload["status"], "cancelled");
 }
 
+/// A call dropped while its start is still in flight (no child id known
+/// yet) still stops the child once the start answers, and never follows it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_call_dropped_during_start_cancels_the_child() {
+    let arrived = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let server = serve({
+        let (arrived, release) = (arrived.clone(), release.clone());
+        move |req: &Req| {
+            if req.path == CHILD_START {
+                arrived.store(true, Ordering::SeqCst);
+                // Hold the answer until the call was dropped.
+                for _ in 0..1000 {
+                    if release.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                return child_started();
+            }
+            if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+                return child_state("running");
+            }
+            if req.method == "DELETE" {
+                return Res::json(200, &json!({"ok": true}));
+            }
+            Res::json(404, &json!({"error": "not_found"}))
+        }
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: None,
+        asked: Mutex::default(),
+    });
+    let (context, emitter) = child_context(&server, prompt).await;
+    let context = Arc::new(context);
+    let call = tokio::spawn({
+        let context = context.clone();
+        async move { super::child_agent::call(&context, &child_spec(), "c1", "Run long").await }
+    });
+    for _ in 0..400 {
+        if arrived.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(arrived.load(Ordering::SeqCst), "the start was sent");
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+    let finished: Vec<AgentEvent> = emitter
+        .all()
+        .into_iter()
+        .filter(|e| e.kind == "subagent_finished")
+        .collect();
+    assert_eq!(finished.len(), 1, "the lane closes at once");
+    assert_eq!(finished[0].payload["status"], "cancelled");
+    release.store(true, Ordering::SeqCst);
+
+    let cancel = format!("/api/v2/elitea_core/task/prompt_lib/1/{CHILD_RESPONSE}");
+    let mut cancelled = Vec::new();
+    for _ in 0..400 {
+        cancelled = seen(&server, &cancel);
+        if !cancelled.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(cancelled.len(), 1, "the child the start named was stopped");
+    assert_eq!(cancelled[0].method, "DELETE");
+    assert_eq!(seen(&server, CHILD_START).len(), 1, "started once");
+    assert!(
+        seen(&server, &format!("{CHILD_START}/{CHILD_EXECUTION}")).is_empty(),
+        "a dropped call never follows its child"
+    );
+}
+
 /// A nested agent is offered as a tool outside plan mode and hidden in it,
 /// like every tool that acts in the cloud.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

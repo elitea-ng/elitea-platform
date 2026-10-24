@@ -20,8 +20,16 @@ import { LOCAL_WORK_SOURCE, localWorkMeta } from '@/shared/lib/localWork';
 
 const MAX_NAME = 80;
 
-export interface EnsureConversationInput {
+/** The agent (or pipeline) a conversation is created for. */
+export interface ConversationAgent {
   projectId: number;
+  applicationId: number;
+  applicationName: string;
+  versionId: number;
+  agentType: string;
+}
+
+export interface EnsureConversationInput extends ConversationAgent {
   /** An existing conversation to reuse; '' creates one. */
   conversationId: string;
   /**
@@ -37,19 +45,32 @@ export interface EnsureConversationInput {
    */
   onCreated?: (conversationId: string) => void;
   prompt: string;
-  applicationId: number;
-  applicationName: string;
-  versionId: number;
-  agentType: string;
   /** The workspace folder's display name, recorded on the conversation. */
   folderName: string;
+}
+
+/** The USER and APPLICATION participants a new conversation needs (the "Chat with agent" shape; a pipeline is an application with `agent_type: pipeline`). */
+export function agentParticipants(userId: string | number, agent: ConversationAgent) {
+  return [
+    { entity_name: 'user', entity_meta: { id: Number(userId) } },
+    {
+      entity_name: 'application',
+      entity_meta: { id: agent.applicationId, name: agent.applicationName, project_id: agent.projectId },
+      entity_settings: { version_id: agent.versionId, agent_type: agent.agentType, variables: [], icon_meta: {} },
+    },
+  ];
+}
+
+/** The signed-in user's author id (`undefined` until it is read). */
+export function useSignedInUserId(): string | number | undefined {
+  const author = useGetCurrentAuthor();
+  return (unwrapBody(author.data) as SocialAuthorProfile | undefined)?.id;
 }
 
 export function useEnsureConversation(): (input: EnsureConversationInput) => Promise<string> {
   const { mutateAsync: createConversation } = conversationApi.useCreate();
   const { mutateAsync: addParticipants } = useAddParticipantMutation();
-  const author = useGetCurrentAuthor();
-  const userId = (unwrapBody(author.data) as SocialAuthorProfile | undefined)?.id;
+  const userId = useSignedInUserId();
 
   return useCallback(
     async (input) => {
@@ -70,14 +91,7 @@ export function useEnsureConversation(): (input: EnsureConversationInput) => Pro
       await addParticipants({
         projectId: input.projectId,
         conversationId: id,
-        participants: [
-          { entity_name: 'user', entity_meta: { id: Number(userId) } },
-          {
-            entity_name: 'application',
-            entity_meta: { id: input.applicationId, name: input.applicationName, project_id: input.projectId },
-            entity_settings: { version_id: input.versionId, agent_type: input.agentType, variables: [], icon_meta: {} },
-          },
-        ],
+        participants: agentParticipants(userId, input),
       });
       return id;
     },

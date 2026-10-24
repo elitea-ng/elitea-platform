@@ -210,6 +210,14 @@ async fn start(dirs: AppDirs) -> Result<(), String> {
         })
         .map_err(|error| error.message)?,
     );
+    // Sub-agents get task worktrees (#1235) as in the app: held for the
+    // whole session (the host keeps only a weak reference).
+    let worktrees = Arc::new(crate::worktrees::WorktreeHost::new(
+        agents.clone(),
+        workspaces.clone(),
+    ));
+    agents.set_worktrees(&worktrees);
+    worktrees.register_all();
     let api = Arc::new(PlatformApi::shared(http, credentials, version));
     agent::serve(
         agent::AcpConfig {
@@ -225,6 +233,7 @@ async fn start(dirs: AppDirs) -> Result<(), String> {
         tokio::io::stdout(),
     )
     .await;
+    drop(worktrees);
     // As the app's exit does: the history's writer commits what it holds,
     // and the agent's background processes end with the process.
     let _ = tokio::task::spawn_blocking(move || {

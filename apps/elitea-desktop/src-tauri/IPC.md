@@ -488,10 +488,13 @@ child that is an approve/reject question is the turn's `approval_request`
 (the remote toolkit card); the answer resumes the child through
 `continueChatExecution`, and any other pause, a sign-in or the output limit
 ends the call with the child's conversation linked, to finish on the web.
-The turn's end or cancel stops the child (`cancelChatExecution`). At most
-12 start in one turn; plan mode does not offer them; a nested pipeline is
-still refused (`nested_agents_unsupported`), and so is an agent that is a
-pipeline (`pipeline_unsupported`).
+The turn's end or cancel stops the child (`cancelChatExecution`), also
+when it lands while the child's start is still in flight: the start runs to
+its answer and the child it names is stopped. At most 12 start in one turn;
+plan mode does not offer them; a nested pipeline is still refused
+(`nested_agents_unsupported`), and so is an agent that is a pipeline
+(`pipeline_unsupported`: the webview never sends one here, it offers "Run
+in cloud" instead and starts the pipeline as a cloud chat).
 
 **Decline with feedback** (#1225). A call the person denies (a local tool's
 approval or a remote toolkit's confirmation) answers the model with a typed
