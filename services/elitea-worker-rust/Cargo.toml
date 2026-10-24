@@ -83,15 +83,15 @@ elitea-vector-index = { path = "../../libs/rust/vector-index" }
 elitea-workspace-store = { path = "../../libs/rust/workspace-store" }
 # The turn's commit is written as loose objects into the quarantine the
 # store crate verified the segment into (src/workspace_run/gix_codec.rs).
-gix-hash = { version = "=0.27.0", features = ["sha1"] }
-gix-object = { version = "=0.65.0", features = ["sha1"] }
-gix-odb = { version = "=0.85.0", features = ["sha1"] }
+gix-hash = { version = "=0.28.1", features = ["sha1"] }
+gix-object = { version = "=0.66.1", features = ["sha1"] }
+gix-odb = { version = "=0.87.0", features = ["sha1"] }
 # The segment is verified from a file on disk: the pack is indexed from a
 # buffered stream (never one 200 MB buffer), and the turn's segment is written
 # to a file object by object (src/workspace_run/gix_codec.rs). Same versions
 # and features as the store crate's, already in the lock.
-gix-pack = { version = "=0.75.0", default-features = false, features = ["streaming-input", "sha1"] }
-gix-features = { version = "=0.50.0", default-features = false }
+gix-pack = { version = "=0.77.0", default-features = false, features = ["streaming-input", "sha1"] }
+gix-features = { version = "=0.50.0", default-features = false, features = ["progress"] }
 flate2 = "=1.1.10"
 # The end-of-turn scan for harvested env values in files (already locked).
 memchr = "=2.8.3"

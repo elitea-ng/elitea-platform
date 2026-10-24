@@ -237,7 +237,9 @@ fn transport_options(target: &CloneTarget, user_agent: &str) -> Result<http::Opt
 /// Answer every credential request with "none": never a prompt, never a
 /// helper program. The credential, if any, is already in the header.
 #[allow(clippy::unnecessary_wraps)]
-fn no_credentials(_action: gix::credentials::helper::Action) -> gix::credentials::protocol::Result {
+fn no_credentials(
+    _action: gix::credentials::helper::Action,
+) -> gix::Result<Option<gix::credentials::protocol::Outcome>> {
     Ok(None)
 }
 
@@ -616,7 +618,15 @@ fn fetch_and_checkout(
     .with_shallow(gix::remote::fetch::Shallow::DepthAtRemote(NonZeroU32::MIN))
     .with_ref_name(Some(target.branch()))
     .map_err(|_| branch_missing(target))?
-    .configure_remote(|remote| Ok(remote.with_fetch_tags(gix::remote::fetch::Tags::None)))
+    .configure_remote(|remote| {
+        // Since gix 0.90 a custom `configure_remote` turns the single-branch
+        // shortcut off and the clone falls back to the `refs/heads/*`
+        // wildcard, which would fetch every branch tip. Drop that default:
+        // the refspec for `with_ref_name` is added by the clone itself.
+        let mut remote = remote;
+        remote.replace_refspecs(std::iter::empty::<&str>(), gix::remote::Direction::Fetch)?;
+        Ok(remote.with_fetch_tags(gix::remote::fetch::Tags::None))
+    })
     .configure_connection(move |connection| {
         connection.set_credentials(no_credentials);
         connection.set_transport_options(Box::new(options.clone()));

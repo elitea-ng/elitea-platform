@@ -185,9 +185,28 @@ function main() {
         `${name}: initial bundle is ${initialKiB.toFixed(1)} KiB gzip, over the ${limits.initialKB} KiB budget`,
       );
     }
+    // A per-chunk limit is matched by file-name prefix (`elk-<hash>.js` for the
+    // key `elk`) and wins over the route-chunk budget. An entry that matches
+    // no emitted chunk fails: a renamed or dropped chunk would otherwise leave
+    // a stale allowance behind.
+    const chunkLimits = limits.chunkLimits ?? {};
+    for (const key of Object.keys(chunkLimits)) {
+      if (!emitted.some((file) => basename(file).startsWith(`${key}-`))) {
+        fail(
+          `target ${name}: chunkLimits entry "${key}" matches no emitted chunk. ` +
+            'Remove the entry or correct its name; a limit that guards nothing is not a limit.',
+        );
+      }
+    }
     for (const file of routeFiles) {
       const worker = /\.worker\b/.test(basename(file));
-      const limit = worker ? (limits.workerChunkKB ?? limits.routeChunkKB) : limits.routeChunkKB;
+      const key = Object.keys(chunkLimits).find((prefix) => basename(file).startsWith(`${prefix}-`));
+      const limit =
+        key !== undefined
+          ? chunkLimits[key].kb
+          : worker
+            ? (limits.workerChunkKB ?? limits.routeChunkKB)
+            : limits.routeChunkKB;
       if (limit === undefined) continue;
       const size = gzipKiB(join(root, file));
       if (size > limit) {

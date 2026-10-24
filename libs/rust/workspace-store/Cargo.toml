@@ -20,11 +20,11 @@ flate2 = "1.1.10"
 # Objects, packs and indexes through gix's crates, not the `gix` umbrella:
 # no repository config is read, no filter, hook or helper can run, and the
 # object database is opened at an `objects/` directory only.
-gix-features = { version = "0.50.0", default-features = false }
-gix-hash = { version = "0.27.0", features = ["sha1"] }
-gix-object = { version = "0.65.0", features = ["sha1"] }
-gix-odb = { version = "0.85.0", features = ["sha1"] }
-gix-pack = { version = "0.75.0", default-features = false, features = ["streaming-input", "sha1"] }
+gix-features = { version = "0.50.0", default-features = false, features = ["progress"] }
+gix-hash = { version = "0.28.1", features = ["sha1"] }
+gix-object = { version = "0.66.1", features = ["sha1"] }
+gix-odb = { version = "0.87.0", features = ["sha1"] }
+gix-pack = { version = "0.77.0", default-features = false, features = ["streaming-input", "sha1"] }
 reqwest = { version = "0.12.28", default-features = false, optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 # Default features only: the desktop host links this crate and must not

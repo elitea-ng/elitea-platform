@@ -26,7 +26,7 @@ elitea-platform-rpc = { path = "../platform-rpc" }
 # the blocking reqwest transport with rustls, checkout, SHA-1, and the
 # parallel pack resolution. The ssh and file transports compile in with
 # the blocking client but are unreachable: a CloneTarget holds only http(s).
-gix = { version = "0.88.0", default-features = false, features = ["blocking-http-transport-reqwest-rust-tls", "worktree-mutation", "sha1", "max-performance-safe"] }
+gix = { version = "0.90.0", default-features = false, features = ["blocking-http-transport-reqwest-rust-tls", "worktree-mutation", "sha1", "max-performance"] }
 regex = "1.13.1"
 serde_json = { version = "1.0.151", features = ["preserve_order", "float_roundtrip"] }
 tonic = { version = "0.14.6", default-features = false }
