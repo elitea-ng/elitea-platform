@@ -35,6 +35,7 @@ clients generated from it.
 | Regenerate an answer | shipped | shipped | shipped | |
 | File attachments | shipped | shipped | shipped | |
 | Rename, pin and delete chats | shipped | shipped | shipped | Mobile queues the actions offline. |
+| Chat names from the first exchange (contract 1.24) | shipped | shipped | shipped | The server's model names a chat that still has its automatic name. Desktop Local work threads can also be renamed. |
 | Archive and Archived chats (contract 1.10) | shipped | shipped | shipped | Mobile queues Archive and Unarchive offline; Archived chats is online only. |
 | Fork a conversation (contract 1.11) | shipped | shipped | shipped | Mobile forks online only (never queued). |
 | Activity status and read markers in chat lists (contract 1.12) | shipped | shipped | shipped | Mobile does not follow the project event stream: transitions arrive with the delta sync and the list's refetch on foreground, not live `conversation_activity` events. Mobile's "N needs you" counts only the rows it has paged in: its sections (Pinned, Today, ...) are drawn on the device from the flat `/conversations` listing, which carries no group counts, so it cannot use the server's whole-group `needs_you` the web and desktop folder/date groups show. |
@@ -49,6 +50,7 @@ clients generated from it.
 | Agent, pipeline, toolkit and MCP editors | shipped | shipped | n-a: authoring needs a large screen; the mobile app runs agents and does not edit them | |
 | Native right panel (inspector) | n-a: the browser layout keeps its in-page panels | shipped | n-a: the phone layout has no side panel | Desktop host UI. |
 | Local work (local agent over a folder) | n-a: the agent runs in the desktop host on the laptop | shipped | n-a: the agent runs in the desktop host on the laptop | Web and mobile list Local work threads. They are read-only while the laptop runs them. |
+| Context breakdown, idle compaction and bypass mode for Local work | n-a: the agent runs in the desktop host on the laptop | shipped | n-a: the agent runs in the desktop host on the laptop | The Context tab shows the parts of the context. Bypass mode allows what would be asked. |
 | Offline cache (encrypted copy on the device) | n-a: the browser keeps no copy of the workspace data | n-a: the desktop webview keeps no copy of the workspace data | shipped | Mobile delta sync (`changes_since`) and the offline outbox. |
 | Home screen widgets and Live Activities | n-a: no home screen surface in a browser | n-a: no widget surface in the desktop host | shipped | |
 | QR connect to a workspace | n-a: the browser opens the workspace URL | n-a: the connect screen takes the workspace URL | shipped | |

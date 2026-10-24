@@ -4,8 +4,8 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.23
- * operations sha256:  9aa8e0d468a4b50aa5d93f6330dcfaf36da2781a999b574d8226adc3853174ab
+ * client contract:    1.24
+ * operations sha256:  a753925f91525937cdcdec96aaae8881104e5c4a25c7f190ec08bd13581cf8ae
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -661,6 +661,44 @@ export interface paths {
          *     `conversation.fork` or `conversation.rewind`.
          */
         post: operations["forkConversation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/conversation_name/prompt_lib/{project_id}/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Name a conversation from its first exchange
+         * @description Client contract 1.24. Asks the project's default model for a short
+         *     title of the conversation, from its first question and first answer, and renames
+         *     the conversation to it. Needs `models.chat.conversation.update` and
+         *     access to the conversation, as a rename does. The call is billed to
+         *     the caller, like `predict_llm`.
+         *
+         *     `expected_name` is the name the client gave the conversation (a cut
+         *     of the first message). The route renames only while the stored name
+         *     is still that one, so it never overwrites a person's own rename: it
+         *     reads the name again after the model call. The answer is the name
+         *     the conversation has then, and whether this call set it. A
+         *     conversation without a question yet keeps its name. Other devices
+         *     get the new name through the `changes_since` delta, as with any
+         *     rename.
+         */
+        post: operations["generateConversationName"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2762,6 +2800,25 @@ export interface components {
             /** @description The new conversation's name. Absent: the source name with " (fork)" added ("New conversation (fork)" when the source name is blank). Trimmed; blank, longer than 256 characters or with a control character answers 400. */
             name?: string;
         };
+        GenerateConversationNameRequest: {
+            /**
+             * @description The name the client gave the conversation; the route renames only while the stored name is this one.
+             * @example how do I rotate the gateway's TLS
+             */
+            expected_name: string;
+        };
+        GeneratedConversationName: {
+            /**
+             * @description The conversation's name after the call (the generated title, or the name it kept).
+             * @example Gateway TLS certificate rotation
+             */
+            name: string;
+            /**
+             * @description This call set the name.
+             * @example true
+             */
+            renamed: boolean;
+        };
         /** @description The 400 answer to a native client whose `X-Client-Version` does not parse (ADR-0025 decision 5). NOTE(W2): internal/api/middleware/client_version.go:190 (`WriteInvalidClientVersion`). */
         InvalidClientVersionError: {
             /** @description Always invalid_client_version. */
@@ -4631,6 +4688,70 @@ export interface operations {
             };
             426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
+        };
+    };
+    generateConversationName: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GenerateConversationNameRequest"];
+            };
+        };
+        responses: {
+            /** @description The conversation's name now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratedConversationName"];
+                };
+            };
+            /** @description A body without `expected_name`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+            /** @description The model gave no title. The name is not changed. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No LLM gateway is configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     markConversationRead: {
