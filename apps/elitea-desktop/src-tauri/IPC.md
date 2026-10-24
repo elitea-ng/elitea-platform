@@ -123,6 +123,8 @@ type Workspace = {
   name: string;             // the folder's name
   project_id: number | null; // the project local turns run in; a turn needs one
   is_git: boolean;          // inside a git work tree (computed when listed)
+  parent_id?: string;       // a task worktree's workspace: the folder it was made from (#1235)
+  thread_uuid?: string;     // a task worktree's workspace: the thread it was made for
 };
 ```
 
@@ -130,7 +132,7 @@ type Workspace = {
 | --- | --- | --- |
 | `workspace_open` | — | `Workspace \| null` — the native folder dialog; `null` when cancelled. Opening a folder that is already a workspace returns that workspace. |
 | `workspace_list` | — | `Workspace[]` |
-| `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, its approval rules, copy checkpoints, its local index), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it. |
+| `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, its approval rules, copy checkpoints, its local index), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it, `workspace_has_worktrees` while it has task worktrees (remove them first). A task worktree's workspace is removed with `worktree_remove`. |
 | `workspace_bind_project` | `{id, project_id}` | `Workspace` — rejects with `workspace_busy` while a turn (or an undo) runs in it, `workspace_unknown` for an id it does not know. |
 | `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null, allow_model_override: boolean \| null}` — the workspace's agent settings: `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100); `allow_model_override: false` runs every turn on the agent's own model (the composer hides its model chip; `null`/`true`: a model may be chosen per turn, issue 1228). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
 | `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null, allow_model_override?: boolean \| null}}` | the stored settings — they apply from the next turn. Rejects `invalid_request` for a step limit outside 10 to 200, `storage` for an id it does not know. |
@@ -139,6 +141,80 @@ type Workspace = {
 
 Workspaces are stored in the app data directory (`workspaces.json`), never
 inside the folder.
+
+## Parallel agents: task worktrees (`src/worktrees.rs`, `src/worktree_commands.rs`, `libs/rust/local-tools/src/{worktree,apply}.rs`, #1235)
+
+A task worktree is a linked git worktree of a workspace's repository that
+the host makes in the workspace's own data,
+`<app data>/workspaces/<id>/worktrees/<32 hex of the thread>`, on a new
+branch `elitea/<first 12 hex of the thread>[-<n>]` (no checkout runs a filter or
+hook: files are written by `checkout-index` after the attributes check).
+Only a workspace whose folder is its repository's top has them. Each is a
+workspace of its own (`Workspace.parent_id`, listed by `workspace_list`):
+its own session, checkpoints and turn claim, so turns run in several task
+worktrees, and in the folder, at the same time. Its project is the
+parent's. The `worktree_*` commands take the PARENT's `workspace_id`;
+`agent_turn_start`, `checkpoint_*` and the rest take the worktree's.
+
+The host records each in `worktrees.json` in the parent's data (owner-only,
+never through a symlink; a file another user owns or others may read is
+refused) and registers it with host git at creation and at launch. Host
+git accepts a linked worktree only as that record names it: its `.git`
+file a regular file you own holding exactly `gitdir: <top>/.git/worktrees/<name>`,
+the admin directory's `commondir` and `gitdir` pointing back, the top
+repository passing the full check (`config.worktree` included). A
+repository's own linked worktrees are not accepted this way. In a task
+worktree, agent commands may write the worktree folder only: the shared
+objects, refs and the admin directory are read-only, and the parent's
+other task worktrees are not readable.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `worktree_create` | `{workspace_id, thread_uuid, base?: "head" \| "checkpoint:<n>"}` | `WorktreeEntry` — `base` is `HEAD` (default) or the folder as its checkpoint `n` holds it. Rejects `workspace_unknown`, `not_a_git_repository` (no repository, or the folder is not its top), `unsafe_repository`, `worktree_exists` (the thread has one, or the branch exists), `invalid_request`. |
+| `worktree_list` | `{workspace_id}` | `WorktreeEntry[]`, newest first. |
+| `worktree_diff` | `{workspace_id, thread_uuid}` | `{diff: string, truncated: boolean}` — the worktree as it is now (uncommitted work included) against `base_sha`; denied paths left out. Rejects `worktree_unknown`, `workspace_busy` while a turn runs in it. |
+| `worktree_remove` | `{workspace_id, thread_uuid, force?: boolean}` | `null` — its workspace (session, turns, history, data), folder and admin directory; its branch is kept when commits are on it, or when the worktree cannot be opened to tell (missing, refused). Rejects `worktree_dirty` when it has uncommitted work and `force` is not `true`, `workspace_busy`. |
+| `worktree_merge_preflight` | `{workspace_id, thread_uuid}` | `MergePreflight` — what merging the worktree (as it is now) into the folder would do, by `git merge-tree` from `base_sha`; writes nothing. Held 15 minutes. |
+| `worktree_merge_apply` | `{preflight_id}` | `MergeApplied` — checkpoints the folder first, then writes each path through the confined writer (path rules apply; what they refuse is in `skipped_paths`). The result lands as uncommitted changes; nothing is committed. Rejects `preflight_expired`, `merge_conflicts` (a `conflicts` preview: nothing is applied, the work stays on the branch), `folder_changed_since_preflight` (preview again), `workspace_busy`. |
+| `worktree_merge_undo` | `{checkpoint_id, confirm_older?: boolean}` | `{restored: string[]}` — restores the checkpoint the merge took (only an id `worktree_merge_apply` returned; once). Rejects `invalid_request` for any other checkpoint, `undo_not_latest` when the folder was checkpointed since (a later turn or merge, whose changes the restore reverts too) and `confirm_older` is not `true`, `workspace_busy`. |
+
+```ts
+type WorktreeEntry = {
+  workspace_id: string;        // the worktree's own workspace (turns run here)
+  thread_uuid: string;
+  path: string;
+  branch: string;              // "elitea/<first 12 hex of the thread>[-<n>]"
+  base_sha: string;
+  created_at: number;          // unix seconds
+  ahead: number;               // commits on the branch since base_sha
+  dirty: number;               // changed paths not committed
+  last_turn_at: number | null; // its newest checkpoint (the last turn that wrote)
+  missing: boolean;            // the folder is gone (the Doctor prunes it)
+};
+type MergePreflight = {
+  preflight_id: string;
+  mode: "fast_forward" | "merge" | "conflicts" | "nothing";
+  applied_paths: string[];
+  conflict_paths: string[];
+  skipped_paths: string[];     // never written: denied paths, symlinks, submodules
+  branch: string;
+};
+type MergeApplied = {
+  written: string[];
+  deleted: string[];
+  skipped_paths: string[];
+  checkpoint_id: string | null; // for worktree_merge_undo
+};
+```
+
+A sub-agent may run in a task worktree of its own: `spawn_agent` takes
+`isolation: "worktree"` in a turn of a workspace that has task worktrees
+(its schema offers `isolation` only there). The host makes the worktree
+before the child starts; the child keeps its writing tools there, its
+approvals asked in the parent turn, and the worktree stays for the person
+to review and merge (Parallel agents panel). The Doctor's `worktrees`
+check finds task worktrees whose folder is gone and admin directories the
+app made that no record names; `worktrees.prune` (confirmed) removes them.
 
 ## Approval rules (`src/rules.rs`, `libs/rust/local-tools/src/execpolicy.rs`)
 
@@ -237,6 +313,7 @@ names instead of retrying. A rule imported from a repository leaves the
 | `turn_changes` | `{turn_id}` | `{files: FileChange[], latest: boolean, undone: boolean}` |
 | `checkpoint_preview` | `{turn_id}` | `{restored: string[], deleted: string[]}` — a dry run of restoring the folder to before the turn |
 | `checkpoint_restore` | `{turn_id, path?: string, confirm_older?: boolean}` | `{restored: string[]}` |
+| `checkpoint_after` | `{turn_id}` | `{turn_id: string \| null}` — the turn whose checkpoint is the folder as `turn_id` left it: the first later turn of the same workspace (any thread) that changed files and was not undone. `null` when no later turn changed the folder (it is already as that turn left it, the person's own edits aside). A fork from a turn offers "Restore files to this point" with it: `checkpoint_preview` of the answered turn, then `checkpoint_restore` with `confirm_older` (Thread history, "Fork point"). Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep. Changes nothing. |
 | `turn_commit_retry` | `{execution_id}` | `null` once the turn's failed commit (`commit_failed`) is saved: sent again with the same execution id and body, in its conversation's order. Rejects `commit_unknown` when the host keeps no failed commit of that execution (it was saved, the app restarted, or the session signed out), or with the commit's refusal, which is also sent as another `commit_failed`. |
 
 **One round trip before the first token.** The host keeps, for the app's
@@ -983,6 +1060,26 @@ answer). "Fork from here" on a turn forks the server conversation at the
 turn's answer and copies the turns up to that turn (`up_to_turn_id`). A
 thread the host has no record of (it ran on the web or another machine)
 forks on the server only, and copies nothing here.
+
+The files in the folder are not changed by a fork. When the fork point is
+a turn the host still keeps, the new thread offers "Restore files to this
+point": `checkpoint_after` names the later turn whose checkpoint is the
+folder as the fork point left it, and the UI shows its `checkpoint_preview`
+and restores only after the person confirms (`checkpoint_restore` with
+`confirm_older`). Checkpoints belong to the workspace, so the fork shares
+them and none is copied.
+
+**Rewind** ("Rewind to here", issue 1234) is the same fork with
+`mode: "rewind"`: the server stores a summary of the abandoned turns
+after the fork point on the new conversation (`forked_from.branch_summary`,
+the shared `context_summary` v1 record, built by the server from those
+turns' text) and the copy's fork point (`forked_from.cut_message_uuid`).
+The source is not changed; the UI opens the rewound thread in its place and
+lists the source under it as the earlier attempt. The new thread's session
+is seeded from the server (`src/seed.rs`): after the fork point's turn it
+gets one host note, "This conversation was rewound to this point …",
+followed by the summary as JSON data. A session rebuilt later (deleted, or
+on another device) gets the same note, and never the abandoned turns.
 
 ```ts
 type StoredTurn = {

@@ -18,6 +18,12 @@
 //! prompt: an approval a child's read needs is the parent's prompt. They
 //! stop with the turn: the turn closes them when its run ends, and a cancel
 //! drops the run (and with it every child's task).
+//!
+//! A child spawned with `isolation: "worktree"` (#1235) gets a task worktree
+//! of the folder's repository ([`ChildCheckouts`], src/worktrees.rs) and the
+//! local tools of a session of its own there, writing ones included; its
+//! approvals are asked in the parent's turn. Its work stays in the worktree
+//! (the person reviews and merges it from the parallel agents panel).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -101,6 +107,18 @@ impl ChildLineage {
     }
 }
 
+/// Where an isolated child's checkout comes from (the turn's task
+/// worktrees, src/worktrees.rs).
+#[async_trait]
+pub trait ChildCheckouts: Send + Sync {
+    /// A new checkout for `child`, and its tools.
+    ///
+    /// # Errors
+    ///
+    /// When none can be made: the spawn is refused.
+    async fn toolsets(&self, child: &ChildIdentity) -> Result<Vec<Arc<dyn Toolset>>, HostError>;
+}
+
 /// The desktop's [`SubAgentHost`] for one turn.
 pub struct DesktopSubAgents {
     /// The turn's transport; children bind it quiet.
@@ -114,6 +132,8 @@ pub struct DesktopSubAgents {
     pub recorder: Arc<Recorder>,
     /// One per child, by id: its calls' lineage.
     lineages: std::sync::Mutex<Vec<Arc<ChildLineage>>>,
+    /// Checkouts for `isolation: "worktree"`; `None`: children only read.
+    checkouts: Option<Arc<dyn ChildCheckouts>>,
 }
 
 impl DesktopSubAgents {
@@ -132,7 +152,39 @@ impl DesktopSubAgents {
             events,
             recorder,
             lineages: std::sync::Mutex::new(Vec::new()),
+            checkouts: None,
         }
+    }
+
+    /// Offer `isolation: "worktree"` through `checkouts`.
+    #[must_use]
+    pub fn with_checkouts(mut self, checkouts: Option<Arc<dyn ChildCheckouts>>) -> Self {
+        self.checkouts = checkouts;
+        self
+    }
+
+    fn observed(
+        &self,
+        child: &ChildIdentity,
+        toolsets: &[Arc<dyn Toolset>],
+    ) -> Vec<Arc<dyn Toolset>> {
+        let observer = ToolObserver {
+            events: self.events.clone(),
+            recorder: self.recorder.clone(),
+            session: None,
+            planner: None,
+            child: Some(self.lineage(child)),
+        };
+        toolsets
+            .iter()
+            .map(|toolset| {
+                Arc::new(ObservedToolset::new(
+                    toolset.clone(),
+                    observer.clone(),
+                    false,
+                )) as Arc<dyn Toolset>
+            })
+            .collect()
     }
 
     fn lineage(&self, child: &ChildIdentity) -> Arc<ChildLineage> {
@@ -171,24 +223,25 @@ impl SubAgentHost for DesktopSubAgents {
     }
 
     async fn toolsets(&self, child: &ChildIdentity) -> Result<Vec<Arc<dyn Toolset>>, HostError> {
-        let observer = ToolObserver {
-            events: self.events.clone(),
-            recorder: self.recorder.clone(),
-            session: None,
-            planner: None,
-            child: Some(self.lineage(child)),
+        Ok(self.observed(child, &self.toolsets))
+    }
+
+    fn supports_worktree_isolation(&self) -> bool {
+        self.checkouts.is_some()
+    }
+
+    async fn isolated_toolsets(
+        &self,
+        child: &ChildIdentity,
+    ) -> Result<Vec<Arc<dyn Toolset>>, HostError> {
+        let Some(checkouts) = &self.checkouts else {
+            return Err(HostError::new(
+                elitea_agent_runtime::host::HostErrorCode::InvalidConfiguration,
+                "this folder gives sub-agents no checkout of their own",
+            ));
         };
-        Ok(self
-            .toolsets
-            .iter()
-            .map(|toolset| {
-                Arc::new(ObservedToolset::new(
-                    toolset.clone(),
-                    observer.clone(),
-                    false,
-                )) as Arc<dyn Toolset>
-            })
-            .collect())
+        let toolsets = checkouts.toolsets(child).await?;
+        Ok(self.observed(child, &toolsets))
     }
 
     fn started(&self, child: &ChildIdentity) {

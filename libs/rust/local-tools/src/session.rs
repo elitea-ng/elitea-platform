@@ -541,7 +541,7 @@ fn parse<T: for<'de> Deserialize<'de>>(args: Value) -> ToolResult<T> {
 /// Pathspecs that keep `path_deny` matches and `denied` (the credential
 /// list and the app's own directories, when the workspace holds them, as
 /// a dotfiles repository does) out of `git diff`, case-insensitively.
-fn diff_exclusions(workspace: &Workspace, denied: &[PathBuf]) -> Vec<String> {
+pub(crate) fn diff_exclusions(workspace: &Workspace, denied: &[PathBuf]) -> Vec<String> {
     let mut out = Vec::new();
     let mut exclude = |glob: String| {
         out.push(format!(":(exclude,icase,glob){glob}"));
@@ -715,6 +715,12 @@ impl LocalSession {
         }
         shell.deny_read.extend(config.deny_read);
         shell.deny_read.push(config.data_dir.clone());
+        // A task worktree the host registered lives in the host's data: its
+        // folder (and only its own) is opened again for the file tools, as
+        // the sandbox opens it again for commands (its writable root).
+        if let Some(entry) = crate::git::registered_worktree(&config.root) {
+            shell.reopened.push(entry.canonical().worktree);
+        }
         if shell.app_id.is_none() {
             shell.app_id = config.app_id;
         }

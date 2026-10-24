@@ -136,7 +136,7 @@ impl SessionPlan {
             None => (!empty_conversation, false),
         };
         let events = if needs_seed && !empty_conversation {
-            let (groups, steps) = api
+            let (groups, steps, forked_from) = api
                 .server_transcript(
                     project_id,
                     &answering.conversation_uuid,
@@ -145,7 +145,11 @@ impl SessionPlan {
                 )
                 .await
                 .map_err(SessionError::Api)?;
-            seed::fold(&groups, &steps, AGENT_AUTHOR, strip)
+            seed::with_branch_note(
+                seed::fold(&groups, &steps, AGENT_AUTHOR, strip),
+                forked_from.as_ref(),
+                AGENT_AUTHOR,
+            )
         } else {
             Vec::new()
         };

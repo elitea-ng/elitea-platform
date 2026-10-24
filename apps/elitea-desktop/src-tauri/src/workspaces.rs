@@ -28,6 +28,14 @@ pub struct Workspace {
     /// folder is inside a git work tree. `get` leaves it `false`.
     #[serde(default)]
     pub is_git: bool,
+    /// A task worktree's workspace (#1235, src/worktrees.rs): the workspace
+    /// whose repository it is a linked worktree of. Its folder is in that
+    /// workspace's host data; it is listed with it, never on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// The thread the task worktree was made for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_uuid: Option<String>,
 }
 
 /// The step limits a workspace may set for its turns (inclusive).
@@ -197,6 +205,8 @@ impl WorkspaceStore {
                 path: path.clone(),
                 project_id: None,
                 is_git: false,
+                parent_id: None,
+                thread_uuid: None,
             };
             all.push(workspace.clone());
             self.write(&all)?;
@@ -206,6 +216,59 @@ impl WorkspaceStore {
             is_git: in_git_tree(&canonical),
             ..workspace
         })
+    }
+
+    /// Add a task worktree's workspace (#1235): `folder` (canonical, in
+    /// `parent`'s host data), bound to `parent`'s project, named after
+    /// `branch`.
+    ///
+    /// # Errors
+    ///
+    /// No such parent, or the file cannot be written.
+    pub fn add_worktree(
+        &self,
+        parent_id: &str,
+        folder: &Path,
+        thread_uuid: &str,
+        branch: &str,
+    ) -> Result<Workspace, HostError> {
+        self.with(|| {
+            let mut all = self.read()?;
+            let parent = all
+                .iter()
+                .find(|w| w.id == parent_id && w.parent_id.is_none())
+                .cloned()
+                .ok_or_else(|| HostError::Storage("no such workspace".into()))?;
+            let path = folder.to_string_lossy().into_owned();
+            if let Some(existing) = all.iter().find(|w| w.path == path) {
+                return Ok(existing.clone());
+            }
+            let workspace = Workspace {
+                id: uuid::Uuid::new_v4().simple().to_string(),
+                name: format!("{} ({branch})", parent.name),
+                path,
+                project_id: parent.project_id,
+                is_git: false,
+                parent_id: Some(parent.id),
+                thread_uuid: Some(thread_uuid.to_owned()),
+            };
+            all.push(workspace.clone());
+            self.write(&all)?;
+            Ok(workspace)
+        })
+    }
+
+    /// The task worktrees' workspaces of `parent_id`.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be read.
+    pub fn worktrees_of(&self, parent_id: &str) -> Result<Vec<Workspace>, HostError> {
+        Ok(self
+            .all()?
+            .into_iter()
+            .filter(|w| w.parent_id.as_deref() == Some(parent_id))
+            .collect())
     }
 
     /// Forget a workspace (the folder itself is untouched) and its host data.

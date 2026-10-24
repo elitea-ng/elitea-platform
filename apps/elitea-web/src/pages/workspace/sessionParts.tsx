@@ -23,7 +23,7 @@ import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
 import { copyText, modKey, selectInspectorShown, useContextMenu, useDesktopLayout } from '@/widgets/desktop-shell';
 
-import type { ForkPoint, SessionFork } from './useForkThread';
+import type { ForkMode, ForkPoint } from './useForkThread';
 import type { ComposerSkill } from './useAgentSkills';
 import type { SessionCommands } from './useSessionCommands';
 import type { ServerMessage, ThreadHistory } from './useThreadHistory';
@@ -102,20 +102,35 @@ export function firstError(startError: string | null, sendError: string | null, 
   return rebindError === null || rebindError === undefined ? null : describeWorkspaceError(rebindError);
 }
 
+/** "Fork from Here" and "Rewind to Here" of one fork point. */
+interface ForkActions {
+  fork: () => void;
+  rewind: () => void;
+}
+
+/** The menu's fork items: `undefined` = not offered, `null` = offered, disabled. */
+type ForkItems = ForkActions | null | undefined;
+
 /**
- * The native context menu of a message: Copy, and "Fork from here" when the
- * message can be a fork point (`fork`; `undefined` = not offered, `null` = offered, disabled).
+ * The native context menu of a message: Copy, and "Fork from Here" / "Rewind to Here" when the
+ * message can be a fork point (`fork`).
  */
-export function useCopyMenu(): (text: string, event: React.MouseEvent, fork?: (() => void) | null) => void {
+export function useCopyMenu(): (text: string, event: React.MouseEvent, fork?: ForkItems) => void {
   const showMenu = useContextMenu();
   return (text, event, fork) =>
     showMenu(event, [
       { id: 'copy', label: t('workspace.copy', 'Copy'), run: () => copyText(text) },
       ...(fork === undefined
         ? []
-        : [{ separator: true } as const, { id: 'fork', label: t('workspace.fork.fromHere', 'Fork from Here'), enabled: fork !== null, run: () => fork?.() }]),
+        : [
+            { separator: true } as const,
+            { id: 'fork', label: t('workspace.fork.fromHere', 'Fork from Here'), enabled: fork !== null, run: () => fork?.fork() },
+            { id: 'rewind', label: t('workspace.fork.rewindHere', 'Rewind to Here'), enabled: fork !== null, run: () => fork?.rewind() },
+          ]),
     ]);
 }
+
+type OnFork = ((point: ForkPoint, mode: ForkMode) => void) | undefined;
 
 /** A turn's fork point: its answer, the last message its `done` event names. */
 function turnForkPoint(turnId: string, done: { messageIds: readonly string[] } | undefined): ForkPoint | null {
@@ -124,10 +139,10 @@ function turnForkPoint(turnId: string, done: { messageIds: readonly string[] } |
 }
 
 /** What a turn's context menu forks: `undefined` when the thread offers no fork, `null` when this turn cannot be one. */
-const forkAction = (onFork: ((point: ForkPoint) => void) | undefined, point: ForkPoint | null): (() => void) | null | undefined =>
-  onFork === undefined ? undefined : point === null ? null : () => onFork(point);
+const forkAction = (onFork: OnFork, point: ForkPoint | null): ForkItems =>
+  onFork === undefined ? undefined : point === null ? null : { fork: () => onFork(point, 'fork'), rewind: () => onFork(point, 'rewind') };
 
-export function YourPrompt({ text, fork, images }: { text: string; fork?: (() => void) | null | undefined; images?: readonly StripImage[] | undefined }): React.JSX.Element {
+export function YourPrompt({ text, fork, images }: { text: string; fork?: ForkItems; images?: readonly StripImage[] | undefined }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   return (
     <Box
@@ -226,7 +241,7 @@ export function ThreadIntro({
 const quietSx = (theme: Theme) => ({ color: theme.vars.palette.text.metrics });
 
 /** One recorded turn: its prompt, then its events replayed as the live transcript showed them. */
-function RecordedTurn({ stored, onFork }: { stored: StoredTurn; onFork: ((point: ForkPoint) => void) | undefined }): React.JSX.Element {
+function RecordedTurn({ stored, onFork }: { stored: StoredTurn; onFork: OnFork }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   const view = useMemo(() => replayView(stored.events), [stored.events]);
   const fork = forkAction(onFork, stored.state === 'running' ? null : turnForkPoint(stored.turn_id, view.done));
@@ -248,7 +263,7 @@ function RecordedTurn({ stored, onFork }: { stored: StoredTurn; onFork: ((point:
   );
 }
 
-function ServerTurn({ message, onFork }: { message: ServerMessage; onFork: ((point: ForkPoint) => void) | undefined }): React.JSX.Element {
+function ServerTurn({ message, onFork }: { message: ServerMessage; onFork: OnFork }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   // A thread this computer has no record of forks on the server only (no turn to copy).
   const fork = forkAction(onFork, { messageId: message.id });
@@ -272,7 +287,7 @@ export function EarlierTurns({
   history: ThreadHistory;
   shown: ReadonlySet<string>;
   /** "Fork from here" on each message; absent = not offered. */
-  onFork?: ((point: ForkPoint) => void) | undefined;
+  onFork?: OnFork;
 }): React.JSX.Element | null {
   switch (history.kind) {
     case 'loading':
@@ -317,7 +332,7 @@ export function Exchanges({
   /** The thumbnails of each prompt's images, by the same index. */
   promptImages: readonly (readonly StripImage[])[];
   /** "Fork from here" on each ended turn; absent = not offered. */
-  onFork?: ((point: ForkPoint) => void) | undefined;
+  onFork?: OnFork;
 }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   const exchanges = [
@@ -342,24 +357,6 @@ export function Exchanges({
         </Box>
         );
       })}
-    </>
-  );
-}
-
-/** What the fork that opened this thread copied, and why the last fork from here did not happen. */
-export function ForkNotices({ fork }: { fork: SessionFork }): React.JSX.Element {
-  return (
-    <>
-      {fork.notice !== null && (
-        <Alert severity={fork.notice.severity} onClose={fork.dismissNotice} data-testid="fork-notice">
-          {fork.notice.text}
-        </Alert>
-      )}
-      {fork.error !== null && (
-        <Alert severity="error" onClose={fork.clearError} data-testid="fork-error">
-          {fork.error}
-        </Alert>
-      )}
     </>
   );
 }

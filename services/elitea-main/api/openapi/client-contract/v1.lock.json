@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.20",
+  "client_contract": "1.21",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -4523,10 +4523,26 @@
                     "conversation_id"
                   ],
                   "properties": {
+                    "branch_summary": {
+                      "type": "object",
+                      "required": [
+                        "version"
+                      ],
+                      "properties": {
+                        "version": {
+                          "type": "integer"
+                        }
+                      },
+                      "open": true
+                    },
                     "conversation_id": {
                       "type": "integer"
                     },
                     "conversation_uuid": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "cut_message_uuid": {
                       "type": "string",
                       "format": "uuid"
                     },
@@ -4536,6 +4552,9 @@
                     "message_uuid": {
                       "type": "string",
                       "format": "uuid"
+                    },
+                    "mode": {
+                      "type": "string"
                     },
                     "name": {
                       "type": "string"
@@ -5166,10 +5185,26 @@
                           "conversation_id"
                         ],
                         "properties": {
+                          "branch_summary": {
+                            "type": "object",
+                            "required": [
+                              "version"
+                            ],
+                            "properties": {
+                              "version": {
+                                "type": "integer"
+                              }
+                            },
+                            "open": true
+                          },
                           "conversation_id": {
                             "type": "integer"
                           },
                           "conversation_uuid": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "cut_message_uuid": {
                             "type": "string",
                             "format": "uuid"
                           },
@@ -5179,6 +5214,9 @@
                           "message_uuid": {
                             "type": "string",
                             "format": "uuid"
+                          },
+                          "mode": {
+                            "type": "string"
                           },
                           "name": {
                             "type": "string"
@@ -12801,7 +12839,26 @@
           "application/json": {
             "type": "object",
             "properties": {
+              "branch_summary": {
+                "type": "object",
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer"
+                  }
+                },
+                "open": true
+              },
+              "fork_id": {
+                "type": "string",
+                "format": "uuid"
+              },
               "message_id": {
+                "type": "string"
+              },
+              "mode": {
                 "type": "string"
               },
               "name": {
@@ -12875,10 +12932,26 @@
                     "conversation_id"
                   ],
                   "properties": {
+                    "branch_summary": {
+                      "type": "object",
+                      "required": [
+                        "version"
+                      ],
+                      "properties": {
+                        "version": {
+                          "type": "integer"
+                        }
+                      },
+                      "open": true
+                    },
                     "conversation_id": {
                       "type": "integer"
                     },
                     "conversation_uuid": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "cut_message_uuid": {
                       "type": "string",
                       "format": "uuid"
                     },
@@ -12888,6 +12961,9 @@
                     "message_uuid": {
                       "type": "string",
                       "format": "uuid"
+                    },
+                    "mode": {
+                      "type": "string"
                     },
                     "name": {
                       "type": "string"
@@ -13022,6 +13098,21 @@
           }
         },
         "409": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "413": {
           "content": {
             "application/json": {
               "type": "object",

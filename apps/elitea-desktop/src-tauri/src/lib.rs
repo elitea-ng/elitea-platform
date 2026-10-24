@@ -41,6 +41,8 @@ mod store;
 mod tokens;
 mod window;
 mod workspaces;
+mod worktree_commands;
+mod worktrees;
 
 #[cfg(test)]
 mod testutil;
@@ -386,6 +388,13 @@ pub fn run() {
                 },
                 auth: auth.clone(),
             }));
+            let worktrees = Arc::new(worktrees::WorktreeHost::new(
+                agents.clone(),
+                workspaces.clone(),
+            ));
+            agents.set_worktrees(&worktrees);
+            worktrees.register_all();
+            app.manage(worktrees);
             app.manage(LocalState {
                 workspaces,
                 history,
@@ -418,6 +427,13 @@ pub fn run() {
             local_commands::workspace_open,
             local_commands::workspace_list,
             local_commands::workspace_remove,
+            worktree_commands::worktree_create,
+            worktree_commands::worktree_list,
+            worktree_commands::worktree_diff,
+            worktree_commands::worktree_remove,
+            worktree_commands::worktree_merge_preflight,
+            worktree_commands::worktree_merge_apply,
+            worktree_commands::worktree_merge_undo,
             local_commands::workspace_bind_project,
             local_commands::workspace_agent_settings_get,
             local_commands::workspace_agent_settings_set,
@@ -443,6 +459,7 @@ pub fn run() {
             local_commands::session_info,
             local_commands::checkpoint_restore,
             local_commands::checkpoint_preview,
+            local_commands::checkpoint_after,
             local_commands::reveal_path,
             local_commands::open_path,
             process_commands::process_list,

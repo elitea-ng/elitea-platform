@@ -89,6 +89,10 @@ pub struct ShellConfig {
     /// ([`crate::deny::app_paths`]). The host's resolved directories in
     /// [`Self::deny_read`] remain the authority.
     pub app_id: Option<String>,
+    /// Directories opened again inside the deny list for the in-process
+    /// tools ([`DenyList::reopening`]): a task worktree's folder, which lives
+    /// in the host's data (commands see it as their writable root).
+    pub reopened: Vec<PathBuf>,
     /// The session's deny list, once [`Self::freeze_deny_list`] built it.
     frozen: Option<Arc<DenyList>>,
     /// Let commands with the network on listen for connections (off by
@@ -127,6 +131,7 @@ impl ShellConfig {
             protect_credentials: true,
             home: None,
             app_id: None,
+            reopened: Vec::new(),
             frozen: None,
             allow_listen: false,
             allow_keychain: false,
@@ -180,6 +185,7 @@ impl ShellConfig {
             self.protect_credentials,
             self.deny_read.iter().cloned(),
         )
+        .reopening(self.reopened.iter().cloned())
     }
 }
 
@@ -526,6 +532,7 @@ pub fn sandbox_request(
         deny_paths,
         deny_globs: workspace.deny_patterns().to_vec(),
         deny_root: Some(workspace.root().to_path_buf()),
+        readable_roots: Vec::new(),
         allow_listen: config.allow_listen,
         loopback: false,
         allow_keychain: config.allow_keychain,

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-worktree-merge-preflight"
+description = "Enables the worktree_merge_preflight command without any pre-configured scope."
+commands.allow = ["worktree_merge_preflight"]
+
+[[permission]]
+identifier = "deny-worktree-merge-preflight"
+description = "Denies the worktree_merge_preflight command without any pre-configured scope."
+commands.deny = ["worktree_merge_preflight"]

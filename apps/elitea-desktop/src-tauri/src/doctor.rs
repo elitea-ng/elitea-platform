@@ -53,7 +53,7 @@ pub enum Status {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Check {
     /// Stable: `credentials`, `dir.config`, `dir.data`, `dir.logs`,
-    /// `history`, `workspaces`, `index.<workspace id>` (one per workspace
+    /// `history`, `workspaces`, `worktrees`, `index.<workspace id>` (one per workspace
     /// with a local index), `models`, `deployment`, `session`, `local_work`,
     /// `pending_revokes`.
     pub id: String,
@@ -106,6 +106,19 @@ pub trait DoctorHooks: Send + Sync {
     ///
     /// The index could not refresh (turned off, the policy turns it off, …).
     fn refresh_index(&self, workspace_id: &str) -> Result<(), String>;
+    /// What host git may not read when the Doctor looks at a repository
+    /// (its task worktrees): every session's deny list.
+    fn git_deny(&self) -> Arc<elitea_local_tools::deny::DenyList> {
+        Arc::new(elitea_local_tools::deny::DenyList::for_session(
+            std::env::var_os("HOME")
+                .filter(|home| !home.is_empty())
+                .map(PathBuf::from)
+                .as_deref(),
+            None,
+            true,
+            std::iter::empty(),
+        ))
+    }
 }
 
 /// An index turned on whose last build is older than this, while its
@@ -114,7 +127,11 @@ const INDEX_STALE_AFTER: chrono::TimeDelta = chrono::TimeDelta::hours(24);
 
 /// The repairs that delete what the app keeps: refused without `confirm`.
 /// A workspace's index repair is matched without its `:<workspace id>`.
-const CONFIRMED_FIXES: &[&str] = &["workspaces.drop_missing", "index.rebuild"];
+const CONFIRMED_FIXES: &[&str] = &[
+    "workspaces.drop_missing",
+    "index.rebuild",
+    "worktrees.prune",
+];
 
 impl Check {
     fn new(id: impl Into<String>, title: &'static str, status: Status, message: String) -> Self {
@@ -385,6 +402,7 @@ impl LocalDoctor {
         checks.push(self.history_check());
         checks.push(self.sessions_check());
         checks.push(self.workspaces_check());
+        checks.push(self.worktrees_check());
         checks.push(self.mcp_check());
         checks.extend(self.index_checks());
         checks.push(self.models_check());
@@ -732,6 +750,44 @@ impl LocalDoctor {
             ))
     }
 
+    /// Task worktrees (#1235) whose folder is gone, and admin directories
+    /// the app made that no workspace's registry names.
+    fn worktrees_check(&self) -> Check {
+        const ID: &str = "worktrees";
+        const TITLE: &str = "Task worktrees";
+        let stale = crate::worktrees::find_stale(&self.workspaces, &self.hooks.git_deny());
+        if stale.is_empty() {
+            return Check::new(ID, TITLE, Status::Ok, "No stale task worktrees.".into());
+        }
+        let mut names: Vec<String> = stale
+            .missing
+            .iter()
+            .map(|(_, record)| record.branch.clone())
+            .collect();
+        names.extend(
+            stale
+                .orphans
+                .iter()
+                .map(|(_, folder, _)| folder.display().to_string()),
+        );
+        Check::new(
+            ID,
+            TITLE,
+            Status::Warn,
+            format!(
+                "{} task worktree(s) are stale (their folder is gone, or the app no longer lists them): {}.",
+                names.len(),
+                names.join(", ")
+            ),
+        )
+        .fix("worktrees.prune", "Prune them")
+        .confirming(format!(
+            "Prune {}? Their folders, git admin directories and what Elitea keeps for them are \
+             deleted; branches with commits on them are kept.",
+            names.join(", ")
+        ))
+    }
+
     /// The workspaces whose folder is gone (see [`Reach::Missing`]).
     fn missing_workspaces(&self) -> Result<Vec<Workspace>, HostError> {
         Ok(self
@@ -802,6 +858,11 @@ impl LocalDoctor {
                 Ok("The session memory is now readable by you only.".into())
             }
             "sessions.move_aside" => self.move_sessions_aside(),
+            "worktrees.prune" => {
+                crate::worktrees::prune_stale(&self.workspaces, &self.hooks.git_deny(), &|id| {
+                    self.hooks.remove_workspace(id)
+                })
+            }
             "workspaces.drop_missing" => {
                 let (mut removed, mut kept) = (0, Vec::new());
                 for workspace in self.missing_workspaces()? {

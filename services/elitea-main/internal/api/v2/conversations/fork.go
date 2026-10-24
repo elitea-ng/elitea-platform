@@ -27,6 +27,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -34,7 +35,8 @@ import (
 
 // ForkedFromMetaKey is the server-owned `chat_conversations.meta` key that
 // names the source of a fork: {conversation_id, conversation_uuid,
-// message_id, message_uuid}. Create drops a client-supplied value and Update
+// message_id, message_uuid, mode, cut_message_uuid, fork_id,
+// branch_summary} (fork_rewind.go has the last four). Create drops a client-supplied value and Update
 // keeps the stored one (PreserveForkedFrom).
 const ForkedFromMetaKey = "forked_from"
 
@@ -79,6 +81,16 @@ type ForkRequest struct {
 	// begins; it runs again inside it only for an object the transaction's
 	// own plan names that the first one did not. Nil copies nothing.
 	CopyAttachments func(ctx context.Context, copies []AttachmentCopy) error
+	// Mode is ForkModeFork or ForkModeRewind (fork_rewind.go).
+	Mode string
+	// BranchSummary is a rewind's v1 record, already validated; nil on a
+	// rewind has the repository build one from the abandoned turns.
+	BranchSummary map[string]any
+	// ForkID is the client's idempotency key (a UUID), or empty. A request
+	// whose ForkID made a fork of this caller in this project before
+	// answers that fork (Replayed); one made for another source, fork point
+	// or mode is ErrForkIDReused.
+	ForkID string
 }
 
 // ForkResult names the new conversation. MessageUUIDs maps each copied
@@ -87,6 +99,9 @@ type ForkResult struct {
 	ID           int64
 	UUID         string
 	MessageUUIDs map[string]string
+	// Replayed: the ForkID made this fork before; nothing was copied now
+	// and MessageUUIDs is empty.
+	Replayed bool
 }
 
 // ConversationForker is the optional repository half of the fork. Optional
@@ -104,8 +119,9 @@ type ConversationForker interface {
 	ForkSourceName(ctx context.Context, projectID string, sourceID int64) (name string, found bool, err error)
 }
 
-// forkBodyLimit bounds the request body: two short strings.
-const forkBodyLimit = 64 << 10
+// forkBodyLimit bounds the request body: short strings and a branch
+// summary of at most 32 KiB, whose JSON escapes may take more.
+const forkBodyLimit = 128 << 10
 
 // Fork serves forkConversation.
 func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
@@ -151,19 +167,25 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, err)
 		return
 	}
+	if err := forkOptions(body, &request); err != nil {
+		apierr.Write(w, err)
+		return
+	}
 
 	var copied []AttachmentRef
 	request.CopyAttachments = func(ctx context.Context, copies []AttachmentCopy) error {
 		return h.copyForkAttachments(ctx, projectID, copies, &copied)
 	}
 	result, err := forker.ForkConversation(r.Context(), projectID, conversationID, request)
-	if err != nil {
+	if err != nil || result.Replayed {
 		if len(copied) > 0 {
 			// The fork was rolled back: its objects belong to nothing.
 			_ = h.deleteAttachmentObjects(context.WithoutCancel(r.Context()), projectID, copied)
 		}
-		writeForkError(w, err)
-		return
+		if err != nil {
+			writeForkError(w, err)
+			return
+		}
 	}
 
 	row, err := conversationRow(r.Context(), pool, s, projectID, result.ID)
@@ -171,7 +193,17 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, err)
 		return
 	}
-	if h.events != nil {
+	forkRowID := result.ID
+	action := "conversation.fork"
+	if request.Mode == ForkModeRewind {
+		action = "conversation.rewind"
+	}
+	// A replay made nothing: the request is in the trail as a plain API
+	// call, not as a second fork.
+	if !result.Replayed {
+		audit.Annotate(r.Context(), audit.Annotation{Action: action, EntityType: "conversation", EntityID: &forkRowID})
+	}
+	if h.events != nil && !result.Replayed {
 		payload := map[string]any{"conversation_id": strconv.FormatInt(result.ID, 10), "name": row["name"], "forked_from": row["forked_from"]}
 		if created, ok := row["source"].(string); ok && created == LocalWorkSource {
 			payload["source"] = LocalWorkSource
@@ -196,6 +228,24 @@ func writeForkError(w http.ResponseWriter, err error) {
 			"error":     "fork_point_unsettled",
 			"message":   "This message is still in progress. Wait for the reply to finish, then fork again.",
 			"retryable": true,
+		})
+	case errors.Is(err, ErrThreadExecutorIsCloud):
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":     "thread_executor_is_cloud",
+			"message":   "This thread is running in the cloud. Take it back to this computer, then fork it.",
+			"retryable": false,
+		})
+	case errors.Is(err, ErrForkTooLarge):
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
+			"error":     "fork_too_large",
+			"message":   "This conversation is too long to fork there. Fork from an earlier message.",
+			"retryable": false,
+		})
+	case errors.Is(err, ErrForkIDReused):
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":     "fork_id_conflict",
+			"message":   "This fork_id was used for another fork.",
+			"retryable": false,
 		})
 	case errors.Is(err, ErrForkNotSupported):
 		writeJSON(w, http.StatusConflict, map[string]any{
@@ -337,6 +387,7 @@ func forkedFrom(meta map[string]any) map[string]any {
 			out["message_uuid"] = text
 		}
 	}
+	forkMarkerOptions(value, out)
 	return out
 }
 

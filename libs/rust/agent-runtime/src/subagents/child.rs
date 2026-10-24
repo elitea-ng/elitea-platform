@@ -30,14 +30,19 @@ const EXIT_PLAN_MODE: &str = "exit_plan_mode";
 /// The error a budgeted model ends a child's run with.
 const BUDGET_EXHAUSTED: &str = "subagent_budget_exhausted";
 
-/// Whether a child may be offered `tool`: read-only, not a sub-agent tool,
-/// not `exit_plan_mode`, not excluded by the host.
-fn admissible(tool: &dyn Tool, excluded: &BTreeSet<String>) -> bool {
+/// Whether a child may be offered `tool`: read-only (unless the child has a
+/// checkout of its own, `writes`), not a sub-agent tool, not
+/// `exit_plan_mode`, not excluded by the host.
+fn admissible_for(tool: &dyn Tool, excluded: &BTreeSet<String>, writes: bool) -> bool {
     let name = tool.name();
-    tool.is_read_only()
+    (writes || tool.is_read_only())
         && !TOOL_NAMES.contains(&name)
         && name != EXIT_PLAN_MODE
         && !excluded.contains(name)
+}
+
+fn admissible(tool: &dyn Tool, excluded: &BTreeSet<String>) -> bool {
+    admissible_for(tool, excluded, false)
 }
 
 /// A tool a child cannot be given: it may change something.
@@ -94,12 +99,29 @@ impl ChildTools {
 pub struct ChildToolset {
     inner: Arc<dyn Toolset>,
     excluded: Arc<BTreeSet<String>>,
+    /// The child has a checkout of its own: writing tools are kept.
+    writes: bool,
 }
 
 impl ChildToolset {
     #[must_use]
     pub fn new(inner: Arc<dyn Toolset>, excluded: Arc<BTreeSet<String>>) -> Self {
-        Self { inner, excluded }
+        Self {
+            inner,
+            excluded,
+            writes: false,
+        }
+    }
+
+    /// The filter for a child with a checkout of its own: writing tools
+    /// stay, everything else a child never gets is still dropped.
+    #[must_use]
+    pub fn isolated(inner: Arc<dyn Toolset>, excluded: Arc<BTreeSet<String>>) -> Self {
+        Self {
+            inner,
+            excluded,
+            writes: true,
+        }
     }
 }
 
@@ -115,7 +137,7 @@ impl Toolset for ChildToolset {
             .tools(ctx)
             .await?
             .into_iter()
-            .filter(|tool| admissible(tool.as_ref(), &self.excluded))
+            .filter(|tool| admissible_for(tool.as_ref(), &self.excluded, self.writes))
             .collect())
     }
 }
@@ -373,6 +395,26 @@ pub(super) struct Start {
     pub instruction: String,
     pub excluded: Arc<BTreeSet<String>>,
     pub host: Arc<dyn SubAgentHost>,
+    /// `isolation: "worktree"`: the host's isolated toolsets, writes kept.
+    pub isolated: bool,
+}
+
+/// The tools the host gives the child: those of a checkout of its own when
+/// it is isolated, the read-only set otherwise.
+async fn child_toolsets(
+    host: &dyn SubAgentHost,
+    identity: &ChildIdentity,
+    isolated: bool,
+) -> Result<Vec<Arc<dyn Toolset>>, &'static str> {
+    if isolated {
+        host.isolated_toolsets(identity)
+            .await
+            .map_err(|_| "subagent_checkout_unavailable")
+    } else {
+        host.toolsets(identity)
+            .await
+            .map_err(|_| "subagent_tools_unavailable")
+    }
 }
 
 /// Build the child and start its first run on a task of its own.
@@ -390,18 +432,20 @@ pub(super) async fn start(start: Start) -> Result<Child, &'static str> {
         instruction,
         excluded,
         host,
+        isolated,
     } = start;
     let counters = Arc::new(Counters::default());
     let model = host
         .bind_model(&identity, &instruction)
         .map_err(|_| "subagent_model_unavailable")?;
-    let toolsets = host
-        .toolsets(&identity)
-        .await
-        .map_err(|_| "subagent_tools_unavailable")?;
+    let toolsets = child_toolsets(host.as_ref(), &identity, isolated).await?;
     let name = identity.agent_name();
     let mut builder = LlmAgentBuilder::new(&name)
-        .description("A read-only sub-agent")
+        .description(if isolated {
+            "A sub-agent in a checkout of its own"
+        } else {
+            "A read-only sub-agent"
+        })
         .model(Arc::new(BudgetedLlm {
             inner: model,
             counters: Arc::clone(&counters),
@@ -416,7 +460,12 @@ pub(super) async fn start(start: Start) -> Result<Child, &'static str> {
         builder = builder.generate_content_config(config);
     }
     for toolset in toolsets {
-        builder = builder.toolset(Arc::new(ChildToolset::new(toolset, Arc::clone(&excluded))));
+        let filtered = if isolated {
+            ChildToolset::isolated(toolset, Arc::clone(&excluded))
+        } else {
+            ChildToolset::new(toolset, Arc::clone(&excluded))
+        };
+        builder = builder.toolset(Arc::new(filtered));
     }
     let agent = builder.build().map_err(|_| "subagent_invalid")?;
     let sessions = Arc::new(InMemorySessionService::new());

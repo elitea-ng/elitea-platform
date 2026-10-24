@@ -8,8 +8,11 @@
  * The cloud badges of the visible thread rows (every open folder's shown
  * threads that have a known UUID) come from ONE batched
  * `handoff_status_many` read for the whole section.
+ *
+ * An open git folder also lists its parallel tasks (task worktrees) under its
+ * threads; that panel is loaded on first use.
  */
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -30,6 +33,7 @@ import Tooltip from '@mui/material/Tooltip';
 import type { Project } from '@/entities/project';
 import { readThreadUuids, useHandoffIpc, useHandoffLiveEvents, useHandoffStatusMany } from '@/features/workspace-handoff';
 import { readThreads, threadsQueryKey, useWorkspaceIpc } from '@/features/workspace';
+import { WorktreesPanel } from '@/features/workspace-worktrees';
 import type { HandoffStatus } from '@/shared/desktop/handoffIpc';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
@@ -65,6 +69,13 @@ type WorkspaceThread = ReturnType<typeof readThreads>[number];
 
 const shownThreads = (list: readonly WorkspaceThread[], all: boolean): readonly WorkspaceThread[] => (all ? list : list.slice(0, THREADS_SHOWN));
 
+/** Each thread, then the earlier attempts a rewind left under it; an attempt whose thread is gone stands alone. */
+function nestedThreads(list: readonly WorkspaceThread[]): WorkspaceThread[] {
+  const listed = new Set(list.map((thread) => thread.id));
+  const under = (id: string) => list.filter((thread) => thread.earlierAttemptOf === id);
+  return list.filter((thread) => thread.earlierAttemptOf === undefined || !listed.has(thread.earlierAttemptOf)).flatMap((thread) => [thread, ...under(thread.id)]);
+}
+
 interface FolderThreadsProps extends Omit<SectionProps, 'projects'> {
   workspace: Workspace;
   all: boolean;
@@ -92,7 +103,12 @@ interface ThreadRowProps {
   readonly status: HandoffStatus | undefined;
 }
 
-/** One thread: its title (bold while unread), its activity glyph, and its cloud badge. */
+function threadLabel(thread: WorkspaceThread): string {
+  const title = thread.title === '' ? t('desktop.shell.untitledThread', 'Untitled thread') : thread.title;
+  return thread.earlierAttemptOf === undefined ? title : t('desktop.shell.earlierAttempt', 'Earlier attempt: {{title}}', { title });
+}
+
+/** One thread: its title (bold while unread), its activity glyph, and its cloud badge. An earlier attempt sits under its rewound thread. */
 function ThreadRow({ workspace, thread, uuid, selected, run, status }: ThreadRowProps): React.JSX.Element {
   const showMenu = useContextMenu();
   const activity = useLocalThreadActivity(thread.id, uuid);
@@ -101,8 +117,8 @@ function ThreadRow({ workspace, thread, uuid, selected, run, status }: ThreadRow
     <ShellRow
       testId="shell-thread"
       onContextMenu={(event) => showMenu(event, threadActions(workspace, thread, run))}
-      indent={CHILD_INDENT}
-      label={thread.title === '' ? t('desktop.shell.untitledThread', 'Untitled thread') : thread.title}
+      indent={thread.earlierAttemptOf === undefined ? CHILD_INDENT : 2 * CHILD_INDENT}
+      label={threadLabel(thread)}
       selected={selected}
       bold={!selected && activityTitleBold(activity)}
       status={glyph}
@@ -116,7 +132,7 @@ function FolderThreads({ workspace, location, run, all, onToggleAll, statuses }:
   const threads = useQuery(threadsQuery(workspace.id));
   // The UUIDs the thread pages read (handoff is keyed by them), to badge a row without opening it.
   const uuids = readThreadUuids(workspace.id);
-  const list: WorkspaceThread[] = threads.data ?? [];
+  const list: WorkspaceThread[] = nestedThreads(threads.data ?? []);
   const shown = shownThreads(list, all);
   const here = location.workspaceId === workspace.id;
   return (
@@ -352,6 +368,11 @@ export function LocalWorkSection({ location, run, projects }: SectionProps): Rea
                   onToggleAll={() => toggleIn(setExpandedAll, workspace.id)}
                   statuses={statuses}
                 />
+              )}
+              {open && workspace.is_git && (
+                <Suspense fallback={null}>
+                  <WorktreesPanel workspaceId={workspace.id} workspaceName={workspace.name} />
+                </Suspense>
               )}
             </li>
           );

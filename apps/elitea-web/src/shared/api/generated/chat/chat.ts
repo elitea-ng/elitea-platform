@@ -3007,6 +3007,11 @@ export type forkConversationResponse409 = {
   status: 409;
 };
 
+export type forkConversationResponse413 = {
+  data: ErrorResponse;
+  status: 413;
+};
+
 export type forkConversationResponse426 = {
   data: ClientUpgradeRequiredResponse;
   status: 426;
@@ -3026,6 +3031,7 @@ export type forkConversationResponseError = (
   | forkConversationResponse403
   | forkConversationResponse404
   | forkConversationResponse409
+  | forkConversationResponse413
   | forkConversationResponse426
   | forkConversationResponse500
 ) & {
@@ -3082,6 +3088,20 @@ export const getForkConversationUrl = (
  * reply of the copy that is; without
  * `message_id`, the newest message is the fork point. An editor Test
  * conversation answers 409 `fork_not_supported`.
+ *
+ * A rewind (`mode: rewind`, issue 1234) is a fork at an answer that
+ * also records what the turns after it tried: `forked_from` names the
+ * mode and the copy's fork point (`cut_message_uuid`), and
+ * getConversation's `forked_from.branch_summary` is the request's
+ * `branch_summary` or, without one, a summary the server builds from
+ * the text of the turns it did not copy. The source is not changed: a
+ * client lists it under the rewound conversation as the earlier
+ * attempt. A Local work thread the cloud executor owns (ADR-0034)
+ * answers 409 `thread_executor_is_cloud`; a fork of more than 1000
+ * message groups answers 413 `fork_too_large`. Nothing is created
+ * when the fork is refused. With `fork_id`, a retry answers the fork
+ * the first request made. The audit trail records
+ * `conversation.fork` or `conversation.rewind`.
  * @summary Fork a conversation into a new conversation
  */
 export const forkConversation = async (

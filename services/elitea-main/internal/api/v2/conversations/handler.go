@@ -719,6 +719,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	// can still see it.
 	if ff := forkedFrom(conv.Meta); ff != nil {
 		h.annotateForkSource(r.Context(), projectID, ff)
+		annotateBranchSummary(conv.Meta, ff)
 		resp["forked_from"] = ff
 	}
 

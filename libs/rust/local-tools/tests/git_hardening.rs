@@ -12,10 +12,14 @@ use std::sync::Arc;
 
 use elitea_local_tools::approvals::{DeferringPrompt, MemoryChoices, WorkspaceSettings};
 use elitea_local_tools::checkpoint::Checkpoints;
+use elitea_local_tools::deny::DenyList;
 use elitea_local_tools::error::ErrorCode;
+use elitea_local_tools::git::{RegisteredWorktree, Repo};
 use elitea_local_tools::policy::LocalWorkPolicy;
+use elitea_local_tools::sandbox::SandboxConfig;
 use elitea_local_tools::session::{LocalSession, SessionConfig};
 use elitea_local_tools::workspace::Workspace;
+use elitea_local_tools::worktree;
 use serde_json::{Value, json};
 
 fn git(dir: &Path, args: &[&str]) {
@@ -90,13 +94,19 @@ fn append(path: &Path, text: &str) {
 /// Every host path that runs git: opening checkpoints, taking one,
 /// restoring one, and the git tools. None may run the payload.
 async fn exercise(planted: &Planted) -> (Checkpoints, Value) {
-    let workspace = Workspace::open(&planted.root, &[]).expect("workspace");
+    exercise_at(&planted.root, planted).await
+}
+
+/// [`exercise`] in the folder `root` (a task worktree of the planted
+/// repository).
+async fn exercise_at(root: &Path, planted: &Planted) -> (Checkpoints, Value) {
+    let workspace = Workspace::open(root, &[]).expect("workspace");
     let checkpoints = Checkpoints::open(&workspace, "s1", &planted.data).expect("open");
     if let Ok(info) = checkpoints.create("turn") {
         let _ = checkpoints.restore(info.seq);
     }
     let session = LocalSession::open(SessionConfig {
-        root: planted.root.clone(),
+        root: root.to_path_buf(),
         session_id: "s1".to_owned(),
         policy: LocalWorkPolicy {
             allowed: true,
@@ -272,4 +282,214 @@ async fn commondir_and_submodule_git_dirs_are_refused() {
     .expect("module config");
     let (checkpoints, results) = exercise(&planted).await;
     assert_refused(&checkpoints, &results);
+}
+
+/// A task worktree of the planted repository, created by the host under
+/// `<data>/worktrees/<name>` and registered.
+fn task_worktree(planted: &Planted, name: &str) -> RegisteredWorktree {
+    let repo = Repo::discover(
+        &planted.root,
+        &SandboxConfig::default(),
+        Arc::new(DenyList::new([])),
+    )
+    .expect("discover")
+    .expect("a repository");
+    let dir = planted.data.join("worktrees");
+    std::fs::create_dir_all(&dir).expect("worktrees dir");
+    let created = worktree::create(
+        &repo,
+        &dir.join(name),
+        name,
+        &worktree::branch_name(name),
+        "HEAD",
+    )
+    .expect("create");
+    created.entry
+}
+
+fn open(entry: &RegisteredWorktree) -> Result<Repo, elitea_local_tools::error::ToolError> {
+    Repo::open_registered_worktree(
+        entry,
+        &SandboxConfig::default(),
+        Arc::new(DenyList::new([])),
+    )
+}
+
+#[tokio::test]
+async fn registered_worktree_is_accepted() {
+    let planted = repository();
+    let entry = task_worktree(&planted, "a1b2c3d4");
+    let repo = Repo::discover(
+        &entry.worktree,
+        &SandboxConfig::default(),
+        Arc::new(DenyList::new([])),
+    )
+    .expect("accepted")
+    .expect("a repository");
+    assert!(repo.is_linked_worktree());
+    assert_eq!(repo.registered(), Some(&entry));
+    assert_eq!(
+        repo.git_dir(),
+        planted.root.join(".git/worktrees/a1b2c3d4").as_path()
+    );
+    // The base's files, not the folder's uncommitted change.
+    assert_eq!(
+        std::fs::read_to_string(entry.worktree.join("a.txt")).expect("a"),
+        "a\n"
+    );
+    let (checkpoints, results) = exercise_at(&entry.worktree, &planted).await;
+    assert_eq!(checkpoints.kind(), "git");
+    for result in results.as_array().expect("results") {
+        assert_eq!(result["status"], "ok", "{result}");
+    }
+}
+
+#[tokio::test]
+async fn unregistered_gitdir_file_is_refused() {
+    let planted = repository();
+    // A worktree git itself made: the repository declares it, the host
+    // never registered it.
+    let other = planted.outside.join("wt");
+    git(
+        &planted.root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            &other.to_string_lossy(),
+        ],
+    );
+    let refused = Repo::discover(
+        &other,
+        &SandboxConfig::default(),
+        Arc::new(DenyList::new([])),
+    )
+    .expect_err("refused");
+    assert_eq!(refused.code(), ErrorCode::UnsafeRepository);
+    let (checkpoints, results) = exercise_at(&other, &planted).await;
+    assert_refused(&checkpoints, &results);
+    // Naming it does not help either: it is not where the host puts one.
+    let named = RegisteredWorktree {
+        worktree: other.clone(),
+        top: planted.root.clone(),
+        name: "elsewhere".to_owned(),
+    };
+    assert_eq!(
+        open(&named).expect_err("refused").code(),
+        ErrorCode::UnsafeRepository
+    );
+}
+
+#[tokio::test]
+async fn gitdir_pointing_outside_top_repo_is_refused() {
+    let planted = repository();
+    let entry = task_worktree(&planted, "feedc0de");
+    let foreign = repository();
+    let foreign_wt = foreign.outside.join("wt");
+    git(
+        &foreign.root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            &foreign_wt.to_string_lossy(),
+        ],
+    );
+    let foreign_admin =
+        std::fs::canonicalize(foreign.root.join(".git/worktrees/wt")).expect("admin");
+    std::fs::write(
+        entry.worktree.join(".git"),
+        format!("gitdir: {}\n", foreign_admin.display()),
+    )
+    .expect("rewrite");
+    assert_eq!(
+        open(&entry).expect_err("refused").code(),
+        ErrorCode::UnsafeRepository
+    );
+    let (checkpoints, results) = exercise_at(&entry.worktree, &planted).await;
+    assert_refused(&checkpoints, &results);
+    // A relative pointer, even to the right place, is not what the host wrote.
+    std::fs::write(
+        entry.worktree.join(".git"),
+        "gitdir: ../../../repo/.git/worktrees/feedc0de\n",
+    )
+    .expect("rewrite");
+    assert_eq!(
+        open(&entry).expect_err("refused").code(),
+        ErrorCode::UnsafeRepository
+    );
+}
+
+#[tokio::test]
+async fn commondir_elsewhere_is_refused() {
+    let planted = repository();
+    let entry = task_worktree(&planted, "c0mm0nd1");
+    let foreign = repository();
+    let admin = planted.root.join(".git/worktrees/c0mm0nd1");
+    std::fs::write(
+        admin.join("commondir"),
+        format!("{}\n", foreign.root.join(".git").display()),
+    )
+    .expect("commondir");
+    assert_eq!(
+        open(&entry).expect_err("refused").code(),
+        ErrorCode::UnsafeRepository
+    );
+    let (checkpoints, results) = exercise_at(&entry.worktree, &planted).await;
+    assert_refused(&checkpoints, &results);
+}
+
+#[tokio::test]
+async fn worktree_config_with_dangerous_key_is_refused() {
+    let planted = repository();
+    let entry = task_worktree(&planted, "c0nf1g00");
+    std::fs::write(
+        planted.root.join(".git/worktrees/c0nf1g00/config.worktree"),
+        format!("[core]\n\tfsmonitor = {}\n", payload(&planted.marker)),
+    )
+    .expect("config.worktree");
+    assert_eq!(
+        open(&entry).expect_err("refused").code(),
+        ErrorCode::UnsafeRepository
+    );
+    let (checkpoints, results) = exercise_at(&entry.worktree, &planted).await;
+    assert_refused(&checkpoints, &results);
+}
+
+/// #1420: a branch a removed worktree kept (its commits) does not block a
+/// new worktree of the same thread: the new one gets the first free
+/// `-<n>` suffix, and 12 letters of the id name the branch.
+#[tokio::test]
+async fn a_kept_branch_gets_a_suffixed_successor() {
+    let planted = repository();
+    let name = "0123456789abcdef0123456789abcdef";
+    assert_eq!(worktree::branch_name(name), "elitea/0123456789ab");
+    let repo = Repo::discover(
+        &planted.root,
+        &SandboxConfig::default(),
+        Arc::new(DenyList::new([])),
+    )
+    .expect("discover")
+    .expect("a repository");
+    let dir = planted.data.join("worktrees");
+    std::fs::create_dir_all(&dir).expect("worktrees dir");
+    let branch = worktree::branch_name(name);
+    let first = worktree::create(&repo, &dir.join(name), name, &branch, "HEAD").expect("create");
+    assert_eq!(first.branch, branch);
+    worktree::remove(&repo, &first.entry, true).expect("remove, branch kept");
+    let second = worktree::create(&repo, &dir.join(name), name, &branch, "HEAD").expect("again");
+    assert_eq!(second.branch, format!("{branch}-2"));
+    let listed = String::from_utf8(
+        std::process::Command::new("git")
+            .current_dir(&planted.root)
+            .args(["branch", "--list", "elitea/*"])
+            .output()
+            .expect("git")
+            .stdout,
+    )
+    .expect("utf-8");
+    assert!(listed.contains("elitea/0123456789ab\n"), "{listed}");
+    assert!(listed.contains("elitea/0123456789ab-2"), "{listed}");
 }

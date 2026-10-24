@@ -69,6 +69,49 @@ fn bounded_text(args: &Value, key: &str) -> Result<String, Value> {
     Ok(text.to_owned())
 }
 
+/// `spawn_agent`'s `max_steps` (the default when absent), or the refusal.
+fn max_steps(args: &Value, default: u32) -> Result<u32, Value> {
+    match args.get("max_steps") {
+        None | Some(Value::Null) => Ok(default),
+        Some(value) => value
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|n| (1..=MAX_CHILD_STEPS).contains(n))
+            .ok_or_else(|| {
+                refused(
+                    "invalid_arguments",
+                    format!("`max_steps` must be an integer from 1 to {MAX_CHILD_STEPS}."),
+                )
+            }),
+    }
+}
+
+/// `spawn_agent`'s arguments (without `isolation`).
+fn spawn_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "task": {
+                "type": "string",
+                "maxLength": MAX_TASK_CHARS,
+                "description": "Self-contained instructions; the child sees nothing else from this conversation."
+            },
+            "label": {
+                "type": "string",
+                "maxLength": MAX_LABEL_CHARS,
+                "description": "A short name shown for the sub-agent"
+            },
+            "max_steps": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_CHILD_STEPS,
+                "description": "The most model steps it may take"
+            }
+        },
+        "required": ["task"]
+    })
+}
+
 impl SubAgentTool {
     fn children(&self) -> Vec<Child> {
         self.registry
@@ -98,6 +141,26 @@ impl SubAgentTool {
         )
     }
 
+    /// `spawn_agent`'s `isolation`: whether the child gets a checkout of
+    /// its own, or the refusal.
+    fn isolation(&self, args: &Value) -> Result<bool, Value> {
+        match args.get("isolation").filter(|value| !value.is_null()) {
+            None => Ok(false),
+            Some(value) => match value.as_str() {
+                Some("none") => Ok(false),
+                Some("worktree") if self.registry.host.supports_worktree_isolation() => Ok(true),
+                Some("worktree") => Err(refused(
+                    "subagent_isolation_unsupported",
+                    "Sub-agents here cannot get a checkout of their own; spawn a read-only one.",
+                )),
+                _ => Err(refused(
+                    "invalid_arguments",
+                    "`isolation` must be \"none\" or \"worktree\".",
+                )),
+            },
+        }
+    }
+
     async fn spawn(&self, ctx: &dyn ToolContext, args: &Value) -> Value {
         let task = match bounded_text(args, "task") {
             Ok(task) => task,
@@ -109,22 +172,14 @@ impl SubAgentTool {
             .map(str::trim)
             .filter(|label| !label.is_empty())
             .map(|label| label.chars().take(MAX_LABEL_CHARS).collect::<String>());
+        let isolated = match self.isolation(args) {
+            Ok(isolated) => isolated,
+            Err(refusal) => return refusal,
+        };
         let limits = self.registry.limits;
-        let steps = match args.get("max_steps") {
-            None | Some(Value::Null) => limits.default_steps,
-            Some(value) => match value
-                .as_u64()
-                .and_then(|n| u32::try_from(n).ok())
-                .filter(|n| (1..=MAX_CHILD_STEPS).contains(n))
-            {
-                Some(steps) => steps,
-                None => {
-                    return refused(
-                        "invalid_arguments",
-                        format!("`max_steps` must be an integer from 1 to {MAX_CHILD_STEPS}."),
-                    );
-                }
-            },
+        let steps = match max_steps(args, limits.default_steps) {
+            Ok(steps) => steps,
+            Err(refusal) => return refusal,
         };
         let children = self.children();
         if children.len() >= limits.max_per_turn {
@@ -168,9 +223,14 @@ impl SubAgentTool {
             task,
             steps,
             budget: limits.input_token_budget,
-            instruction: self.registry.instruction.clone(),
+            instruction: if isolated {
+                self.registry.isolated_instruction.clone()
+            } else {
+                self.registry.instruction.clone()
+            },
             excluded: Arc::new(self.registry.excluded.clone()),
             host: Arc::clone(&self.registry.host),
+            isolated,
         })
         .await;
         match started {
@@ -316,7 +376,11 @@ impl Tool for SubAgentTool {
     fn description(&self) -> &str {
         match self.action {
             Action::Spawn => {
-                "Start a read-only sub-agent on a self-contained task and return at once with its agent_id. It has its own fresh context (it sees nothing of this conversation but the task), can read and search but never change anything, and runs alongside other sub-agents. Use it for independent investigations that would fill your context; then wait_agent for the results."
+                if self.registry.host.supports_worktree_isolation() {
+                    "Start a sub-agent on a self-contained task and return at once with its agent_id. It has its own fresh context (it sees nothing of this conversation but the task) and runs alongside other sub-agents. By default it can read and search but never change anything: use it for independent investigations that would fill your context. With isolation \"worktree\" it works in a git checkout of its own and may change files there, never yours. Then wait_agent for the results."
+                } else {
+                    "Start a read-only sub-agent on a self-contained task and return at once with its agent_id. It has its own fresh context (it sees nothing of this conversation but the task), can read and search but never change anything, and runs alongside other sub-agents. Use it for independent investigations that would fill your context; then wait_agent for the results."
+                }
             }
             Action::Send => {
                 "Send another message to a sub-agent: it continues on its own context (queued if it is still running)."
@@ -330,28 +394,16 @@ impl Tool for SubAgentTool {
 
     fn parameters_schema(&self) -> Option<Value> {
         Some(match self.action {
-            Action::Spawn => json!({
-                "type": "object",
-                "properties": {
-                    "task": {
-                        "type": "string",
-                        "maxLength": MAX_TASK_CHARS,
-                        "description": "Self-contained instructions; the child sees nothing else from this conversation."
-                    },
-                    "label": {
-                        "type": "string",
-                        "maxLength": MAX_LABEL_CHARS,
-                        "description": "A short name shown for the sub-agent"
-                    },
-                    "max_steps": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": MAX_CHILD_STEPS,
-                        "description": "The most model steps it may take"
-                    }
-                },
-                "required": ["task"]
-            }),
+            Action::Spawn if self.registry.host.supports_worktree_isolation() => {
+                let mut schema = spawn_schema();
+                schema["properties"]["isolation"] = json!({
+                    "type": "string",
+                    "enum": ["none", "worktree"],
+                    "description": "\"worktree\": the sub-agent works in a git checkout of its own and may change files there (the person reviews and merges them); \"none\" (the default): it only reads"
+                });
+                schema
+            }
+            Action::Spawn => spawn_schema(),
             Action::Send => json!({
                 "type": "object",
                 "properties": {

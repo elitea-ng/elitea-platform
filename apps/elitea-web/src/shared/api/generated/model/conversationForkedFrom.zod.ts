@@ -61,6 +61,26 @@ export const ConversationForkedFrom = zod
       .uuid()
       .optional()
       .describe("The UUID of the fork point message group, when there is one."),
+    mode: zod
+      .string()
+      .optional()
+      .describe(
+        "`fork` or `rewind` (forkConversation's `mode`). A fork made before rewinds existed reads `fork`. A client lists the source of a rewind under it as the earlier attempt.\n",
+      ),
+    cut_message_uuid: zod
+      .uuid()
+      .optional()
+      .describe(
+        "The UUID of this conversation's copy of the fork point message group, when there is one: the turns up to it are the copied history. A desktop places a rewind's branch summary after it when it rebuilds its session from the server.\n",
+      ),
+    branch_summary: zod
+      .object({
+        version: zod.int().describe("Always 1."),
+      })
+      .optional()
+      .describe(
+        "getConversation of a rewind only. What the abandoned turns after the fork point tried, in the runtime's shared v1 context summary record (`version` 1, at most 32 KiB): the request's `branch_summary`, or one the server built from those turns' text.\n",
+      ),
     name: zod
       .string()
       .optional()

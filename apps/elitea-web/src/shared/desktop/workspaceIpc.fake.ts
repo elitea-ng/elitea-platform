@@ -40,6 +40,7 @@ type FailableCommand =
   | 'threadHistory'
   | 'deleteThreadHistory'
   | 'forkThreadHistory'
+  | 'restorePointAfter'
   | 'retryCommit';
 
 export interface FakeWorkspaceIpc extends WorkspaceIpc {
@@ -63,6 +64,8 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
   setChanges(turnId: string, changes: Pick<TurnChanges, 'files'> & Partial<TurnChanges>): void;
   /** What `checkpoint_preview` answers (default: every changed file restored). */
   setPreview(turnId: string, preview: RestorePreview): void;
+  /** What `checkpoint_after` answers for `turnId` (default: `null`, no later turn changed the folder). */
+  setRestorePoint(turnId: string, next: string | null): void;
   /** What `thread_history` answers for one thread (default: nothing recorded). */
   setHistory(workspaceId: string, conversationId: string, turns: StoredTurn[]): void;
   /** What `agent_turn_status` answers for `turnId` (default: running). */
@@ -97,6 +100,7 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
   const handlers = new Set<AgentEventHandler>();
   const changes = new Map<string, TurnChanges>();
   const previews = new Map<string, RestorePreview>();
+  const restorePoints = new Map<string, string | null>();
   const statuses = new Map<string, TurnStatus>();
   const history = new Map<string, StoredTurn[]>();
   const historyKey = (workspaceId: string, conversationId: string): string => `${workspaceId}\u0000${conversationId}`;
@@ -247,6 +251,9 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       if (copied.length > 0) history.set(historyKey(request.workspaceId, request.targetConversationId), copied);
       return Promise.resolve(copied.length);
     },
+    restorePointAfter(turnId) {
+      return failure('restorePointAfter') ?? Promise.resolve(restorePoints.get(turnId) ?? null);
+    },
     onEvent(handler) {
       handlers.add(handler);
       return Promise.resolve(() => {
@@ -262,6 +269,9 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
     },
     setPreview(turnId, preview) {
       previews.set(turnId, preview);
+    },
+    setRestorePoint(turnId, next) {
+      restorePoints.set(turnId, next);
     },
     setHistory(workspaceId, conversationId, turns) {
       history.set(historyKey(workspaceId, conversationId), turns);
