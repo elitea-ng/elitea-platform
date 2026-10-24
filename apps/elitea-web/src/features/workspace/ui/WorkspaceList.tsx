@@ -16,7 +16,7 @@ import Typography from '@mui/material/Typography';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
-export interface ProjectChoice {
+interface ProjectChoice {
   id: number;
   name: string;
 }

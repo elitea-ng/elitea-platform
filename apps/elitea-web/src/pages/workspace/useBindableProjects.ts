@@ -4,9 +4,14 @@
  */
 import { useMemo } from 'react';
 
-import type { ProjectChoice } from '@/features/workspace';
 import { getConfig } from '@/shared/config';
 import { useProjectOptions } from '@/widgets/sidebar';
+
+/** A project a folder can be bound to (the shape `WorkspaceList` takes). */
+export interface ProjectChoice {
+  id: number;
+  name: string;
+}
 
 export function useBindableProjects(): readonly ProjectChoice[] {
   const config = getConfig();

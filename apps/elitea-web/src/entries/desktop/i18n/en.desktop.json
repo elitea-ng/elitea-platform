@@ -895,5 +895,8 @@
   "workspace.mode.bypass": "Bypass",
   "workspace.panel.context": "Context",
   "workspace.panel.contextPercent": "{{title}} · {{percent}}%",
-  "workspace.rules.sourceBypass": "bypass mode"
+  "workspace.rules.sourceBypass": "bypass mode",
+  "workspace.thread.rename": "Rename Thread",
+  "workspace.thread.renameLabel": "Thread name",
+  "workspace.thread.renameMenu": "Rename…"
 }
