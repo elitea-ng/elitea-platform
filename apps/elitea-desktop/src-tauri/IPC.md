@@ -163,7 +163,18 @@ git accepts a linked worktree only as that record names it: its `.git`
 file a regular file you own holding exactly `gitdir: <top>/.git/worktrees/<name>`,
 the admin directory's `commondir` and `gitdir` pointing back, the top
 repository passing the full check (`config.worktree` included). A
-repository's own linked worktrees are not accepted this way. In a task
+repository's own linked worktrees are not accepted this way.
+
+**Your own worktrees.** A worktree you made with `git worktree add` (on
+another branch) works as a workspace of its own when you open its folder
+with `workspace_add`. Its repository does not need to be open. Host git
+accepts it when its folder or its repository's top is an open workspace,
+and then applies the same structural checks: `.git` points at
+`<top>/.git/worktrees/<name>`, `commondir` and `gitdir` point back, and the
+repository's `.git` passes the full check. It has its own session,
+checkpoints (git refs per session in the shared repository) and turn
+claim. So turns on two branches run at the same time. Two threads in ONE
+folder still do not: the second is refused `workspace_busy`. In a task
 worktree, agent commands may write the worktree folder only: the shared
 objects, refs and the admin directory are read-only, and the parent's
 other task worktrees are not readable.

@@ -14,7 +14,9 @@ use elitea_local_tools::approvals::{DeferringPrompt, MemoryChoices, WorkspaceSet
 use elitea_local_tools::checkpoint::Checkpoints;
 use elitea_local_tools::deny::DenyList;
 use elitea_local_tools::error::ErrorCode;
-use elitea_local_tools::git::{RegisteredWorktree, Repo};
+use elitea_local_tools::git::{
+    RegisteredWorktree, Repo, forget_worktree_parent, trust_worktree_parent,
+};
 use elitea_local_tools::policy::LocalWorkPolicy;
 use elitea_local_tools::sandbox::SandboxConfig;
 use elitea_local_tools::session::{LocalSession, SessionConfig};
@@ -379,6 +381,60 @@ async fn unregistered_gitdir_file_is_refused() {
         open(&named).expect_err("refused").code(),
         ErrorCode::UnsafeRepository
     );
+}
+
+/// A worktree the person made with `git worktree add` on another branch
+/// and opened on its own (its repository is not an open workspace): host
+/// git and git checkpoints work in it, so turns on two branches run in
+/// parallel. The repository's `.git` is still checked: a dangerous key in
+/// its config refuses the worktree as well.
+#[tokio::test]
+async fn an_opened_worktree_of_its_own_is_accepted() {
+    let planted = repository();
+    let own = planted.outside.join("feature");
+    git(
+        &planted.root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            &own.to_string_lossy(),
+        ],
+    );
+    let discover = || Repo::discover(&own, &SandboxConfig::default(), Arc::new(DenyList::new([])));
+    assert_eq!(
+        discover().expect_err("not open yet").code(),
+        ErrorCode::UnsafeRepository
+    );
+    trust_worktree_parent(&own);
+    let repo = discover().expect("accepted").expect("a repository");
+    assert!(repo.is_linked_worktree());
+    assert_eq!(
+        repo.common_dir(),
+        std::fs::canonicalize(planted.root.join(".git")).expect("common")
+    );
+    let workspace = Workspace::open(&own, &[]).expect("workspace");
+    let checkpoints = Checkpoints::open(&workspace, "own1", &planted.data).expect("open");
+    assert!(
+        checkpoints.git_refusal().is_none(),
+        "{:?}",
+        checkpoints.git_refusal()
+    );
+    assert_eq!(checkpoints.kind(), "git");
+    // The repository's own config is still read and checked.
+    append(
+        &planted.root.join(".git/config"),
+        &format!("[core]\n\tfsmonitor = {}\n", payload(&planted.marker)),
+    );
+    assert_eq!(
+        discover().expect_err("refused").code(),
+        ErrorCode::UnsafeRepository
+    );
+    let (checkpoints, results) = exercise_at(&own, &planted).await;
+    assert_refused(&checkpoints, &results);
+    forget_worktree_parent(&own);
 }
 
 #[tokio::test]
