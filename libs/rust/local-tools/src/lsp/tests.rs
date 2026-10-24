@@ -65,6 +65,17 @@ fn policy() -> LocalWorkPolicy {
 }
 
 fn fixture_with(policy: LocalWorkPolicy, files: &[(&str, &str)]) -> Fixture {
+    fixture_opts(policy, files, false)
+}
+
+/// With `unconfined_hooks`, the person's hooks may run without an OS
+/// sandbox where there is none (as in the hooks tests; the desktop never
+/// allows it). A language server still needs a full one.
+fn fixture_opts(
+    policy: LocalWorkPolicy,
+    files: &[(&str, &str)],
+    unconfined_hooks: bool,
+) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let base = std::fs::canonicalize(dir.path()).unwrap();
     let root = base.join("workspace");
@@ -78,6 +89,7 @@ fn fixture_with(policy: LocalWorkPolicy, files: &[(&str, &str)]) -> Fixture {
     std::fs::create_dir_all(&home).unwrap();
     let mut shell = ShellConfig::new(data.join("tmp").join("session"));
     shell.home = Some(home);
+    shell.sandbox.allow_unenforced = unconfined_hooks;
     let session = LocalSession::open(SessionConfig {
         root: root.clone(),
         session_id: "conv-1".to_owned(),
@@ -93,6 +105,7 @@ fn fixture_with(policy: LocalWorkPolicy, files: &[(&str, &str)]) -> Fixture {
         documents: crate::document::Documents::default(),
     })
     .unwrap();
+    session.hooks().allow_unconfined(unconfined_hooks);
     let heard = Arc::new(Heard::default());
     session.lsp().set_events(Some(heard.clone()));
     Fixture {
@@ -542,6 +555,118 @@ async fn an_idle_server_is_stopped() {
     assert_eq!(fixture.session.lsp().status(), Vec::<LspStatus>::new());
     let heard = fixture.heard.0.lock().unwrap().clone();
     assert_eq!(heard.last().unwrap().state, LspState::Stopped);
+}
+
+struct Frame;
+
+impl crate::hooks::HookFramer for Frame {
+    fn frame(&self, hook: &str, text: &str) -> String {
+        format!("[{hook}] {text}")
+    }
+}
+
+/// A `/bin/sh` hook script outside the workspace.
+fn hook_script(fixture: &Fixture, name: &str, body: &str) -> Vec<String> {
+    let bin = fixture.base.join("hooks");
+    std::fs::create_dir_all(&bin).unwrap();
+    let path = bin.join(name);
+    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    vec!["/bin/sh".to_owned(), path.display().to_string()]
+}
+
+/// Hooks and diagnostics together (#1236, #1237): a `PreToolUse` hook's
+/// modified input is what is written and what the language server is
+/// given, and the `PostToolUse` hooks see the result with its
+/// `diagnostics` (they run after the dispatch, which adds them).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hook_modified_write_gets_diagnostics_and_post_hooks_see_them() {
+    use crate::hooks::{Hook, HookEvent, HookMatch, Scope};
+    let fixture = fixture_opts(
+        policy(),
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+            ),
+            ("src/lib.rs", "fn a() {}\n"),
+        ],
+        !cfg!(target_os = "macos"),
+    );
+    enable(
+        &fixture,
+        Language::Rust,
+        fake_server(&fixture, &["normal"]),
+        Duration::from_secs(5),
+    );
+    let only_writes = HookMatch {
+        tools: vec!["write_file".to_owned()],
+        paths: Vec::new(),
+    };
+    let mut pre = Hook::new(
+        "inject",
+        HookEvent::PreToolUse,
+        hook_script(
+            &fixture,
+            "inject.sh",
+            r#"cat >/dev/null
+printf '%s\n' '{"modified_input":{"path":"src/lib.rs","content":"fn a() {\n    let x = 1;\n    UNDEFINED_NAME;\n}\n"}}'"#,
+        ),
+    );
+    pre.matcher = only_writes.clone();
+    let mut post = Hook::new(
+        "look",
+        HookEvent::PostToolUse,
+        hook_script(
+            &fixture,
+            "look.sh",
+            r#"input=$(cat)
+case "$input" in
+  *E0425*) echo "saw E0425" ;;
+  *'"diagnostics"'*) echo "saw diagnostics" ;;
+  *) echo "saw no diagnostics" ;;
+esac"#,
+        ),
+    );
+    post.matcher = only_writes;
+    fixture.session.hooks().set_framer(Some(Arc::new(Frame)));
+    fixture
+        .session
+        .hooks()
+        .configure(vec![(Scope::User, pre), (Scope::User, post)]);
+
+    let read = call(&fixture, "read_file", json!({ "path": "src/lib.rs" })).await;
+    assert_eq!(read["status"], "ok", "{read}");
+    let result = call(
+        &fixture,
+        "write_file",
+        json!({ "path": "src/lib.rs", "content": "fn a() {}\nfn b() {}\n" }),
+    )
+    .await;
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_eq!(result["hooks"][0]["result"], "modified", "{result}");
+    let written = std::fs::read_to_string(fixture.root.join("src/lib.rs")).unwrap();
+    assert!(
+        written.contains("UNDEFINED_NAME"),
+        "the hook's input was written: {written}"
+    );
+    if !sandboxed(&fixture) {
+        assert!(unavailable_here(&result), "{result}");
+        assert_eq!(
+            result["hook_annotations"][0], "[look] saw diagnostics",
+            "{result}"
+        );
+        return;
+    }
+    // The error is the modified content's, not the original call's.
+    assert_eq!(result["diagnostics"]["status"], "ok", "{result}");
+    assert_eq!(
+        result["diagnostics"]["new_errors"][0]["code"], "E0425",
+        "{result}"
+    );
+    assert_eq!(
+        result["hook_annotations"][0], "[look] saw E0425",
+        "{result}"
+    );
 }
 
 #[test]

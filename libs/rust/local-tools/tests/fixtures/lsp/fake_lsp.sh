@@ -33,7 +33,9 @@ while :; do
   done
   [ -z "$length" ] && exit 0
   body=$(dd bs=1 count="$length" 2>/dev/null)
-  id=$(printf '%s' "$body" | sed -n 's/^{"id":\([0-9][0-9]*\),.*/\1/p')
+  # Any key order: a workspace build with serde_json's preserve_order
+  # (feature unification) sends "jsonrpc" before "id".
+  id=$(printf '%s' "$body" | sed -n 's/^{.*"id":\([0-9][0-9]*\)[,}].*/\1/p')
   method=$(printf '%s' "$body" | sed -n 's/.*"method":"\([^"]*\)".*/\1/p')
   uri=$(printf '%s' "$body" | sed -n 's/.*"uri":"\([^"]*\)".*/\1/p')
   printf '%s %s\n' "$method" "$uri" >>"$log" 2>/dev/null
