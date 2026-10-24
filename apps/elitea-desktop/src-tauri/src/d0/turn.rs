@@ -1281,7 +1281,7 @@ impl AgentHost {
 
     /// The step limit the workspace's settings set, if any (unreadable
     /// settings are logged and ignored: the turn runs on the default).
-    fn workspace_step_limit(&self, workspace_id: &str) -> Option<u32> {
+    fn workspace_step_limit(&self, workspace_id: &str) -> Option<crate::workspaces::StepLimit> {
         match self.deps.workspaces.agent_settings(workspace_id) {
             Ok(settings) => settings.step_limit,
             Err(error) => {

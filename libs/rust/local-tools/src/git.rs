@@ -22,7 +22,8 @@
 //! 1. **Refuse unsafe repositories** ([`Repo::check`], before any git
 //!    process): `.git` must be a plain directory (not a symlink, not a
 //!    `gitdir:` file, except a linked worktree exactly as `git worktree
-//!    add` registers it in a repository the host trusts, see
+//!    add` registers it, when the host trusts its repository or the
+//!    worktree itself (a workspace the person opened), see
 //!    [`trust_worktree_parent`], or a task worktree the host created and
 //!    recorded itself, see [`register_worktree`]; its repository's `.git`
 //!    is then checked as below) at the work tree's top, with no `commondir`, no
@@ -488,14 +489,17 @@ fn read_config_file(path: &Path, name: &str) -> ToolResult<Option<String>> {
 
 type WorktreeTrust = Arc<dyn Fn(&Path) -> bool + Send + Sync>;
 
-/// Repositories whose linked worktrees host git may use: the tops the host
-/// registered ([`trust_worktree_parent`]) and its check
+/// The tops whose linked worktrees host git may use (a repository's) or
+/// that host git may use as a linked worktree (a worktree's own): the tops
+/// the host registered ([`trust_worktree_parent`]) and its check
 /// ([`set_worktree_trust`]).
 static WORKTREE_PARENTS: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
 static WORKTREE_TRUST: Mutex<Option<WorktreeTrust>> = Mutex::new(None);
 
-/// Trust the linked worktrees of the repository whose top is `top` (a
-/// workspace the person opened). Kept for the life of the process.
+/// Trust the linked worktrees of the repository whose top is `top`, or the
+/// linked worktree whose own top is `top` (a workspace the person opened:
+/// a worktree they made with `git worktree add` works on its own, without
+/// its repository open). Kept for the life of the process.
 pub fn trust_worktree_parent(top: &Path) {
     let top = std::fs::canonicalize(top).unwrap_or_else(|_| top.to_path_buf());
     if let Ok(mut parents) = WORKTREE_PARENTS.lock() {
@@ -514,9 +518,9 @@ pub fn forget_worktree_parent(top: &Path) {
     }
 }
 
-/// The host's own check of a worktree's repository top (the desktop: "a
-/// workspace the person opened"), consulted besides
-/// [`trust_worktree_parent`].
+/// The host's own check of a top (the desktop: "a workspace the person
+/// opened"), consulted besides [`trust_worktree_parent`] for a linked
+/// worktree's repository top and for the worktree's own top.
 pub fn set_worktree_trust(check: impl Fn(&Path) -> bool + Send + Sync + 'static) {
     if let Ok(mut trust) = WORKTREE_TRUST.lock() {
         *trust = Some(Arc::new(check));
@@ -702,10 +706,9 @@ fn small_text(path: &Path) -> Option<String> {
 }
 
 /// A linked worktree at `top` (its `.git` a `gitdir:` file), accepted only
-/// when it is exactly what `git worktree add` registers in a trusted
-/// repository: `.git` points (canonically) at `<P>/.git/worktrees/<name>`,
-/// `<P>/.git` is a plain directory, `<P>` is a trusted top
-/// ([`trust_worktree_parent`], [`set_worktree_trust`]), and the admin
+/// when it is exactly what `git worktree add` registers: `.git` points (canonically) at `<P>/.git/worktrees/<name>`,
+/// `<P>/.git` is a plain directory, `<P>` or the worktree's own top is a
+/// trusted top ([`trust_worktree_parent`], [`set_worktree_trust`]), and the admin
 /// directory's `commondir` leads back to `<P>/.git` and its `gitdir` back to
 /// this `.git`. `(admin dir, <P>/.git)`; every other check of
 /// [`Repo::check`] then runs on `<P>/.git`.
@@ -743,9 +746,13 @@ fn linked_worktree(top: &Path) -> ToolResult<(PathBuf, PathBuf)> {
     if !std::fs::symlink_metadata(common).is_ok_and(|meta| meta.file_type().is_dir()) {
         return Err(refuse("its repository's .git is not a directory"));
     }
-    if !trusted_worktree_parent(parent_top) {
+    // The person opened the repository, or this worktree itself (one they
+    // made with `git worktree add`, on another branch): every structural
+    // check here and of `<P>/.git` still applies either way.
+    let own_top = std::fs::canonicalize(top).unwrap_or_else(|_| top.to_path_buf());
+    if !trusted_worktree_parent(parent_top) && !trusted_worktree_parent(&own_top) {
         return Err(refuse(
-            "a worktree of a repository that is not an open workspace",
+            "a worktree that is not an open workspace, of a repository that is not one either",
         ));
     }
     let commondir = small_text(&admin.join("commondir")).ok_or_else(|| refuse("no commondir"))?;

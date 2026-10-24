@@ -16,7 +16,10 @@
  * (`ContextPanel`); `/compact` marks the next send, and so does a thread
  * left idle (`useIdleCompaction`). Beside them the
  * language-server chip (`LspChip`, lazy, #1236): the servers behind the
- * edits' diagnostics.
+ * edits' diagnostics, and the step-limit chip (`StepsChip`, lazy): the
+ * model steps each run here may take (`/steps` sets the same).
+ * `/retry` sends the last message again and `/steps` shows or sets the
+ * folder's step limit (`useRetryAndSteps`).
  * And the model chip (`ModelChip`, `useTurnModel`): the model the next turn
  * runs on, unless the agent pins it or the folder's settings keep it
  * (`/model` opens it, `/model <name>` sets a listed one; an unknown name or
@@ -32,7 +35,7 @@ import { lazy, Suspense, useMemo, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 
 import { composer, replayView, type WorkspaceTurn } from '@/features/workspace';
-import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import type { CustomCommand, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
 import { BypassControls } from './BypassControls';
@@ -46,13 +49,15 @@ import { useCustomCommands } from './useCustomCommands';
 import { pipelineComposerBinding, useComposerPipeline, type ComposerPipeline } from './useRunInCloud';
 import type { ThreadHandoff } from './useThreadHandoff';
 import type { ThreadSession } from './useThreadSession';
+import { useRetryAndSteps, type SentMessage } from './useRetryAndSteps';
 import type { SessionCommands } from './useSessionCommands';
 import { useComposerModes } from './useComposerModes';
 import { useTurnModel, type TurnModelControl } from './useTurnModel';
-import { WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
+import { skillPicks, WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
 
 const UsageChip = lazy(() => import('./UsageChip'));
 const LspChip = lazy(() => import('./LspChip'));
+const StepsChip = lazy(() => import('./StepsChip'));
 
 export interface ThreadComposerProps {
   ipc: WorkspaceIpc;
@@ -101,6 +106,18 @@ function modelBinding(model: TurnModelControl, cloudMode: boolean, chipRef: Sess
 
 type Usage = WorkspaceTurn['view']['usage'];
 
+/**
+ * The thread's last recorded message (thread history), for `/retry` before anything was sent here. The history keeps
+ * the prompt as typed: its skill or custom command is read from it again, as a send does.
+ */
+export function recordedPrompt(history: ThreadSession['history'], commands: readonly CustomCommand[], skills: readonly ComposerSkill[]): SentMessage | null {
+  if (history.kind !== 'local') return null;
+  const stored = history.turns[history.turns.length - 1];
+  if (stored === undefined) return null;
+  const { command, skill } = composer.invokedPick(stored.prompt, commands, skills);
+  return { prompt: stored.prompt, mentions: stored.mentions, skills: skillPicks(skill), command: command ?? undefined };
+}
+
 /** Each recorded turn's usage (thread history), replayed once per history, not per render. */
 function recordedUsages(history: ThreadSession['history']): { turnId: string; usage: Usage }[] {
   return history.kind === 'local' ? history.turns.map((stored) => ({ turnId: stored.turn_id, usage: replayView(stored.events).usage })) : [];
@@ -120,15 +137,18 @@ interface ComposerMetersProps {
   usages: NonNullable<Usage>[];
   projectId: number;
   workspaceId: string;
-  /** A local thread: the folder's language-server chip shows (not for the cloud copy). */
+  /** A local thread: the folder's language-server and step-limit chips show (not for the cloud copy). */
   local: boolean;
+  /** The step-limit chip could not store a choice: said above the composer. */
+  onStepsError: (message: string) => void;
 }
 
-/** The footer's language-server chip and usage chip (both lazy); the usage chip once a model call reported usage. */
-function ComposerMeters({ usages, projectId, workspaceId, local }: ComposerMetersProps): React.JSX.Element | null {
+/** The footer's step-limit and language-server chips and the usage chip (all lazy); the usage chip once a model call reported usage. */
+function ComposerMeters({ usages, projectId, workspaceId, local, onStepsError }: ComposerMetersProps): React.JSX.Element | null {
   if (usages.length === 0 && !local) return null;
   return (
     <Suspense fallback={null}>
+      {local ? <StepsChip workspaceId={workspaceId} onError={onStepsError} /> : null}
       {local ? <LspChip workspaceId={workspaceId} /> : null}
       {usages.length === 0 ? null : <UsageChip turns={usages} projectId={projectId} />}
     </Suspense>
@@ -175,6 +195,9 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     },
     onStop: () => void turn.cancel(),
   };
+  const bound = sendBinding(cloudMode, cloud, composerPipeline, here);
+  const lastRecorded = useMemo(() => recordedPrompt(session.history, customCommands, offered), [session.history, customCommands, offered]);
+  const controls = useRetryAndSteps(workspaceId, commands, session.run, { send: bound.onSend, busy: bound.busy, canSend: bound.canSend }, lastRecorded);
   const openInChat = conversationId === '' ? undefined : () => void navigate({ to: '/chat/$conversationId', params: { conversationId } });
   const recorded = useMemo(() => recordedUsages(session.history), [session.history]);
   const usages = cloudMode ? NO_USAGE : turnUsages(turn, recorded);
@@ -196,13 +219,15 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} disabledHint={agentHint} />}
         {...modelBinding(model, !local, commands.modelRef)}
         runLocation={<RunLocationChip handoff={handoff} onOpenInChat={openInChat} />}
-        contextMeter={<ComposerMeters usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} />}
+        contextMeter={<ComposerMeters usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} onStepsError={commands.showText} />}
         onPlanModeChange={commands.setPlanMode}
         skills={offered}
         customCommands={customCommands}
-        onCommand={session.run}
+        onCommand={controls.onCommand}
+        onStepsCommand={controls.onStepsCommand}
         onFocus={onFocus}
-        {...sendBinding(cloudMode, cloud, composerPipeline, here)}
+        {...bound}
+        onSend={controls.remembering(bound.onSend)}
       />
     </>
   );

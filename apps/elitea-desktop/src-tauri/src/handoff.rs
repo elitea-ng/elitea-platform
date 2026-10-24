@@ -2169,9 +2169,11 @@ fn cloud_turns(detail: &Value, from: u64, to: u64, preflight: &Preflight) -> Vec
     out
 }
 
-/// Host git uses a linked worktree (a take-back's, opened as a workspace)
-/// only when its repository is a workspace the person opened (ADR-0034
-/// decision 13; `elitea_local_tools::git::set_worktree_trust`).
+/// Host git uses a linked worktree only when its repository is a workspace
+/// the person opened (a take-back's, ADR-0034 decision 13), or the
+/// worktree folder itself is one (a worktree the person made with `git
+/// worktree add`, so turns on another branch run beside the folder's;
+/// `elitea_local_tools::git::set_worktree_trust`).
 pub fn trust_open_workspaces(workspaces: Arc<WorkspaceStore>) {
     elitea_local_tools::git::set_worktree_trust(move |top| {
         workspaces.list().is_ok_and(|all| {

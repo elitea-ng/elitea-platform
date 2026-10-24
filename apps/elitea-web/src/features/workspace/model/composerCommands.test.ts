@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { CustomCommand } from '@/shared/desktop/workspaceIpc';
 
-import { customCommandDetail, customCommandSource, invokedCustomCommand, invokedPick, matchingCustomCommands, slashMenu } from './composerCommands';
+import { customCommandDetail, customCommandSource, invokedCustomCommand, invokedPick, matchingCustomCommands, slashMenu, stepsCommand } from './composerCommands';
 import type { ComposerSkill } from './composerSkills';
 
 function command(name: string, source: CustomCommand['source'], extra: Partial<CustomCommand> = {}): CustomCommand {
@@ -45,8 +45,10 @@ describe('slashMenu', () => {
       'host /new',
       'host /plan',
       'host /undo',
+      'host /retry',
       'host /agent',
       'host /model',
+      'host /steps',
       'host /clear',
       'host /compact',
       'host /help',
@@ -63,9 +65,9 @@ describe('slashMenu', () => {
   });
 
   it('filters every section by the query, names starting with it first', () => {
-    expect(labels('re')).toEqual(['workspace /review', 'user /rebase']);
+    expect(labels('re')).toEqual(['host /retry', 'workspace /review', 'user /rebase']);
     expect(labels('lint')).toEqual(['workspace /frontend:lint']);
-    expect(labels('st')).toEqual(['user /standup', 'skill /style']);
+    expect(labels('st')).toEqual(['host /steps', 'user /standup', 'skill /style']);
     expect(labels('he')).toEqual(['host /help']);
   });
 
@@ -129,5 +131,24 @@ describe('invokedPick', () => {
     expect(invokedPick('/deploy it', COMMANDS, SKILLS)).toEqual({ command: null, skill: SKILLS[2] });
     expect(invokedPick('/Review it', [], SKILLS)).toEqual({ command: null, skill: SKILLS[1] });
     expect(invokedPick('hello', COMMANDS, SKILLS)).toEqual({ command: null, skill: null });
+  });
+});
+
+describe('stepsCommand', () => {
+  it('reads a number, unlimited or default, and nothing else', () => {
+    expect(stepsCommand('/steps 500')).toEqual({ limit: 500 });
+    expect(stepsCommand('  /STEPS 1024  ')).toEqual({ limit: 1024 });
+    expect(stepsCommand('/steps unlimited')).toEqual({ limit: 'unlimited' });
+    expect(stepsCommand('/steps ∞')).toEqual({ limit: 'unlimited' });
+    expect(stepsCommand('/steps infinite')).toEqual({ limit: 'unlimited' });
+    expect(stepsCommand('/steps default')).toEqual({ limit: null });
+    expect(stepsCommand('/steps 0')).toEqual({ invalid: '0' });
+    expect(stepsCommand('/steps 1000001')).toEqual({ invalid: '1000001' });
+    expect(stepsCommand('/steps 1.5')).toEqual({ invalid: '1.5' });
+    expect(stepsCommand('/steps many')).toEqual({ invalid: 'many' });
+    // Not this command: no value, two values, or another message.
+    expect(stepsCommand('/steps')).toBeNull();
+    expect(stepsCommand('/steps 5 more')).toBeNull();
+    expect(stepsCommand('how many /steps 5')).toBeNull();
   });
 });

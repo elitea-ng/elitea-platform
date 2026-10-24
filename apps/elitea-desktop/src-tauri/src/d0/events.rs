@@ -583,6 +583,29 @@ impl TurnEvents {
         self.send("usage_total", payload);
     }
 
+    /// `model_retry`: a model call failed in a way another call may mend
+    /// (the gateway unreachable, a cut or stalled stream, a 408, 409, 429
+    /// or 5xx) and is made again after `delay_ms`. `text_units` and
+    /// `thinking_units` are what the failed call streamed (UTF-16 code
+    /// units): the webview drops them from the end of the transcript.
+    pub fn model_retry(&self, retry: &super::model::ModelRetry) {
+        self.send(
+            "model_retry",
+            json!({
+                "attempt": retry.attempt,
+                "max_attempts": retry.max_attempts,
+                "code": retry.code,
+                "message": format!(
+                    "The model call failed; retrying ({} of {}).",
+                    retry.attempt, retry.max_attempts
+                ),
+                "delay_ms": u64::try_from(retry.delay.as_millis()).unwrap_or(u64::MAX),
+                "text_units": retry.text_units,
+                "thinking_units": retry.thinking_units,
+            }),
+        );
+    }
+
     pub fn error(&self, code: &str, message: &str) {
         self.send("error", json!({ "code": code, "message": message }));
     }

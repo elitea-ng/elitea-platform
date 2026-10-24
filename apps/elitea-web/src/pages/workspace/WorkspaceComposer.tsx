@@ -15,6 +15,8 @@
  *   expands itself) or with that skill (`skills`, applied to the turn).
  *   `/model <name>` sent as the whole message sets the turn model instead
  *   (`onModelCommand`); `/model` alone opens the model chip's menu.
+ *   `/steps <number|unlimited|default>` sets the folder's step limit
+ *   (`onStepsCommand`); `/steps` alone shows it.
  *
  * Both menus are driven from the keyboard without leaving the textarea:
  * ↑/↓ move, Enter or Tab pick, Esc closes until the token changes.
@@ -41,12 +43,12 @@ import Typography from '@mui/material/Typography';
 import { NewChatInput } from '@/features/chat-input';
 import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
 
+import { FooterControls } from './FooterControls';
 import type { ComposerSkill } from './useAgentSkills';
 import { useImageAttachments } from './useImageAttachments';
 import type { SentImages } from './useSendPrompt';
 import type { CustomCommand, TurnCommand, TurnStartRequest, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
-import { Segmented } from '@/widgets/desktop-shell';
 
 type ComposerHandle = ComponentRef<typeof NewChatInput>;
 type Token = ReturnType<typeof composer.activeToken>;
@@ -103,9 +105,14 @@ export interface WorkspaceComposerProps {
   onCommand: (command: WorkspaceCommandId) => void;
   /** `/model <name>` was sent as the whole message: the page sets the model (nothing goes to the agent). */
   onModelCommand?: ((name: string) => void) | undefined;
+  /** `/steps <value>` was sent as the whole message: the page sets the folder's step limit (nothing goes to the agent). */
+  onStepsCommand?: ((command: StepsCommand) => void) | undefined;
   /** The composer got focus: the page lets the host read ahead for the send (#1213). */
   onFocus?: () => void;
 }
+
+/** What `/steps <value>` asks for (`composer.stepsCommand`). */
+export type StepsCommand = NonNullable<ReturnType<typeof composer.stepsCommand>>;
 
 function sendButtonSx(theme: Theme) {
   return {
@@ -157,7 +164,8 @@ function slashItem(entry: SlashEntry): SuggestionItem {
 }
 
 /** What the start request names for the skill a message invokes: a version skill by name, a project skill by id. */
-function skillPicks(skill: ComposerSkill | null): TurnStartRequest['skills'] {
+/** The start request's `skills` for the skill a message invokes. */
+export function skillPicks(skill: ComposerSkill | null): TurnStartRequest['skills'] {
   if (skill === null) return [];
   return [skill.project === true ? { source: 'project', id: skill.id } : skill.name];
 }
@@ -171,55 +179,6 @@ function insertedToken(entry: Exclude<SlashEntry, { kind: 'host' }>): string {
 const takesImages = (accept: boolean | undefined, locked: boolean): boolean => accept !== false && !locked;
 
 const sameToken = (a: Token, b: Token): boolean => a?.kind === b?.kind && a?.start === b?.start && a?.query === b?.query;
-
-interface FooterControlsProps {
-  planMode: boolean;
-  onPlanModeChange: (planMode: boolean) => void;
-  bypass: boolean;
-  onBypassChange: ((on: boolean) => void) | undefined;
-  showMode: boolean;
-  agentPicker: ReactNode;
-  modelPicker: ReactNode;
-  runLocation: ReactNode;
-  contextMeter: ReactNode;
-}
-
-type ModeValue = 'act' | 'plan' | 'bypass';
-
-const modeValue = (planMode: boolean, bypass: boolean): ModeValue => {
-  if (planMode) return 'plan';
-  return bypass ? 'bypass' : 'act';
-};
-
-/** The footer's left side: Act | Plan (| Bypass, for a local thread), the agent·version picker, the model, where the thread runs, the meters. */
-function FooterControls({ planMode, onPlanModeChange, bypass, onBypassChange, showMode, agentPicker, modelPicker, runLocation, contextMeter }: FooterControlsProps): React.JSX.Element {
-  const options: { value: ModeValue; label: string; ariaLabel?: string }[] = [
-    { value: 'act', label: t('workspace.mode.act', 'Act') },
-    { value: 'plan', label: t('workspace.mode.plan', 'Plan'), ariaLabel: t('workspace.planMode', 'Plan mode (no changes)') },
-  ];
-  if (onBypassChange !== undefined) options.push({ value: 'bypass', label: t('workspace.mode.bypass', 'Bypass'), ariaLabel: t('workspace.bypassMode', 'Bypass mode (no approvals)') });
-  const change = (next: ModeValue): void => {
-    onPlanModeChange(next === 'plan');
-    onBypassChange?.(next === 'bypass');
-  };
-  return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
-      {showMode && (
-        <Segmented
-          ariaLabel={t('workspace.mode', 'Mode')}
-          value={modeValue(planMode, bypass)}
-          onChange={change}
-          testId="mode-segmented"
-          options={options}
-        />
-      )}
-      {agentPicker}
-      {modelPicker}
-      {runLocation}
-      {contextMeter}
-    </Box>
-  );
-}
 
 export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Element {
   const { ipc, workspaceId, canSend, busy, planMode, onPlanModeChange, skills, customCommands, onSend, onStop, onCommand } = props;
@@ -324,6 +283,12 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   };
 
   const send = (question: string): void => {
+    const steps = props.onStepsCommand === undefined ? null : composer.stepsCommand(question);
+    if (steps !== null) {
+      props.onStepsCommand?.(steps);
+      clearInput();
+      return;
+    }
     const named = props.onModelCommand === undefined ? null : composer.modelCommandName(question);
     if (named !== null) {
       props.onModelCommand?.(named);

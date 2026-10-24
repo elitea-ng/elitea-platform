@@ -322,18 +322,15 @@ export function EarlierTurns({
 }
 
 /** Each turn started here, under the prompt that started it; the last one is live. ("Open in chat" is in the header.) */
-export function Exchanges({
-  turn,
-  prompts,
-  promptImages,
-  onFork,
-}: {
+export function Exchanges({ turn, prompts, promptImages, onFork, live }: {
   turn: WorkspaceTurn;
   prompts: readonly string[];
   /** The thumbnails of each prompt's images, by the same index. */
   promptImages: readonly (readonly StripImage[])[];
   /** "Fork from here" on each ended turn; absent = not offered. */
   onFork?: OnFork;
+  /** The live turn's "Retry" (its error) and "Continue" (its tool-call stop). */
+  live?: { onRetryTurn: () => void; onContinue: () => void };
 }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   const exchanges = [
@@ -354,6 +351,7 @@ export function Exchanges({
             onCancel={() => void turn.cancel()}
             onRetryCommit={(executionId) => turn.retryCommit(exchange.key, executionId)}
             onTextContextMenu={(text, event) => copyMenu(text, event, fork)}
+            {...(exchange.live ? live : {})}
           />
         </Box>
         );
@@ -378,6 +376,11 @@ export function SessionNotices({ error, commands, customCommands, skills }: Sess
       {commands.notice === 'nothingToUndo' && (
         <Alert severity="info" onClose={commands.closeNotice}>
           {t('workspace.undoNothing', 'The last turn here changed no files.')}
+        </Alert>
+      )}
+      {commands.notice === 'text' && (
+        <Alert severity="info" onClose={commands.closeNotice} data-testid="workspace-notice-text">
+          {commands.noticeText}
         </Alert>
       )}
       {commands.notice === 'modelFixed' && (

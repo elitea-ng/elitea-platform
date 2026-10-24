@@ -7,7 +7,7 @@
  */
 import { lazy } from 'react';
 
-import { customCommandDetail, customCommandSource, customCommandToken, invokedPick, modelCommandName, slashMenu } from './model/composerCommands';
+import { customCommandDetail, customCommandSource, customCommandToken, invokedPick, modelCommandName, slashMenu, stepsCommand } from './model/composerCommands';
 import { matchingSkills, skillToken } from './model/composerSkills';
 import { activeToken, mentionText, referencedPaths } from './model/composerTokens';
 import { useRenameThread, useServerThreadName, useThreadNaming } from './model/threadNames';
@@ -41,6 +41,7 @@ export const composer = {
   referencedPaths,
   slashMenu,
   modelCommandName,
+  stepsCommand,
   customCommandToken,
   customCommandSource,
   customCommandDetail,

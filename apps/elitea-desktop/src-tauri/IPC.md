@@ -134,8 +134,8 @@ type Workspace = {
 | `workspace_list` | — | `Workspace[]` |
 | `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, its approval rules, copy checkpoints, its local index), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it, `workspace_has_worktrees` while it has task worktrees (remove them first). A task worktree's workspace is removed with `worktree_remove`. |
 | `workspace_bind_project` | `{id, project_id}` | `Workspace` — rejects with `workspace_busy` while a turn (or an undo) runs in it, `workspace_unknown` for an id it does not know. |
-| `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null, allow_model_override: boolean \| null, diagnostics: boolean \| null, diagnostics_wait_ms: {rust, typescript, python, go: number \| null}}` — the workspace's agent settings: `diagnostics: false` turns edit diagnostics and the `diagnostics` tool off for the workspace (`null`/`true`: on; servers start only when found on `PATH`, see **Language servers**), and `diagnostics_wait_ms` sets how long an edit waits for a language's diagnostics (`null`: 1.5 s, the first answer after a server's start 4 s for Rust, 3 s for the others); `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100); `allow_model_override: false` runs every turn on the agent's own model (the composer hides its model chip; `null`/`true`: a model may be chosen per turn, issue 1228). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
-| `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null, allow_model_override?: boolean \| null, diagnostics?: boolean \| null, diagnostics_wait_ms?: {rust?, typescript?, python?, go?: number \| null}}}` | the stored settings — they apply from the next turn (turning diagnostics off stops the workspace's language servers then). Rejects `invalid_request` for a step limit outside 10 to 200 or a diagnostics wait outside 100 to 30 000 ms, `storage` for an id it does not know. |
+| `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| "unlimited" \| null, allow_model_override: boolean \| null, diagnostics: boolean \| null, diagnostics_wait_ms: {rust, typescript, python, go: number \| null}}` — the workspace's agent settings: `diagnostics: false` turns edit diagnostics and the `diagnostics` tool off for the workspace (`null`/`true`: on; servers start only when found on `PATH`, see **Language servers**), and `diagnostics_wait_ms` sets how long an edit waits for a language's diagnostics (`null`: 1.5 s, the first answer after a server's start 4 s for Rust, 3 s for the others); `step_limit` is the model steps per run of its turns, a number or `"unlimited"`, and it wins over the default and the agent's `meta.step_limit` (`null`: the default, 1024, or the agent's value when that is higher; see **Step limit**); `allow_model_override: false` runs every turn on the agent's own model (the composer hides its model chip; `null`/`true`: a model may be chosen per turn, issue 1228). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
+| `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| "unlimited" \| null, allow_model_override?: boolean \| null, diagnostics?: boolean \| null, diagnostics_wait_ms?: {rust?, typescript?, python?, go?: number \| null}}}` | the stored settings — they apply from the next turn (turning diagnostics off stops the workspace's language servers then). Rejects `invalid_request` for a step limit outside 1 to 1 000 000 (and not `"unlimited"`) or a diagnostics wait outside 100 to 30 000 ms, `storage` for an id it does not know. |
 | `workspace_files` | `{workspace_id, query?: string, limit?: number}` | `{path, kind: "file" \| "dir"}[]` — the "@" picker. Workspace-relative paths (no trailing `/`) matching `query` case-insensitively: the name starting with it, then containing it, then the path containing it, then its characters in order; shallower and shorter first. `.gitignore` is honoured, `.git` and `path_deny` matches are left out, symlinks are neither listed nor followed. At most `limit` (default 50, at most 200); a folder past 20 000 entries answers from its first part. Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 | `commands_list` | `{workspace_id}` | `{name, description: string \| null, argument_hint: string \| null, source: "workspace" \| "user", path, ignored: string[]}[]` — the "/" menu's custom commands, by name (see **Custom commands** below): the workspace's `.elitea/commands/` then `.claude/commands/`, then the person's own `<app config dir>/commands/` (created `0700` when missing); the first of a name wins, so a workspace command shadows the person's, even one that cannot be read (too large, not UTF-8, denied, a symlink): that one is not listed, and no other file of its name is offered or run in its place. `path` is workspace-relative, or relative to the person's folder. `ignored` names what the file asks for that the host ignores (front matter keys such as `allowed-tools` and `model`, `! shell lines`, `@ file includes`). Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 
@@ -163,7 +163,18 @@ git accepts a linked worktree only as that record names it: its `.git`
 file a regular file you own holding exactly `gitdir: <top>/.git/worktrees/<name>`,
 the admin directory's `commondir` and `gitdir` pointing back, the top
 repository passing the full check (`config.worktree` included). A
-repository's own linked worktrees are not accepted this way. In a task
+repository's own linked worktrees are not accepted this way.
+
+**Your own worktrees.** Open a folder that you made with `git worktree
+add` to use it as a workspace. Its repository does not need to be open.
+Host git accepts the worktree when its folder or its repository is an
+open workspace. The same structural checks apply: `.git` points at
+`<top>/.git/worktrees/<name>`, and `commondir` and `gitdir` point back.
+The repository's `.git` must also pass the full check.
+
+Each worktree has its own session, checkpoints and turn claim. Thus turns
+on two branches run at the same time. Two threads in ONE folder do not:
+the second is refused with `workspace_busy`. In a task
 worktree, agent commands may write the worktree folder only: the shared
 objects, refs and the admin directory are read-only, and the parent's
 other task worktrees are not readable.
@@ -2099,12 +2110,13 @@ order. Kinds and payloads:
 | `tool_output_delta` | `{call_id, process_id, stream: "stdout" \| "pty", data, offset: number}` — its output while this turn runs: at most 20 per second per process, at most 16 KiB each, `offset` the byte offset of `data` in the process's output |
 | `process_exited` | `{process_id, call_id, status: "exited" \| "killed" \| "timed_out", exit_code?}` — it ended while this turn runs (the turn's end stops the ones it does not keep) |
 | `approval_closed` | `{request_id, reason: "timeout"}` — the host closed an open `approval_request` nobody answered within its wait (today: an MCP sign-in, 10 minutes); the card goes, the turn's `hitl_exchanges` record it with `decision: "timeout"`, and an `approval_respond` for it answers `approval_closed` |
+| `model_retry` | `{attempt, max_attempts, code, message, delay_ms, text_units, thinking_units}` — a failed model call is made again after `delay_ms` (**Model retries**). `attempt` counts from 1 to `max_attempts` (25). `text_units` and `thinking_units` are what the failed call streamed, in UTF-16 code units. The transcript drops them from its end, never past a tool row. It shows the retry until the model, a sub-agent or the compaction moves on |
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
-`running` → (`thinking_delta`, `thinking_end`, `text_delta`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`, `subagent_started`, `subagent_event`, `subagent_finished`, `process_started`, `tool_output_delta`, `process_exited`)* →
+`running` → (`thinking_delta`, `thinking_end`, `text_delta`, `model_retry`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`, `subagent_started`, `subagent_event`, `subagent_finished`, `process_started`, `tool_output_delta`, `process_exited`)* →
 `usage_total` → `status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
 ends `usage_total` → `status` `cancelled` → `done` with `commit: "none"`; nothing is
 committed and its execution expires on the server. A run that fails after
@@ -2229,8 +2241,9 @@ and under half the request's own `max_tokens`, so an agent with a small
 `max_tokens` that uses it is not an overflow) compacts and retries the
 step once; a second one, or a summary that fails on that retry, fails the
 turn with `context_overflow` ("… Start a new thread to continue."). An
-answer whose text already streamed (`text_delta`) is never retried, so the
-UI never shows a dropped answer before a new one. After a compaction the host appends
+answer whose text already streamed (`text_delta`) is never retried this
+way, so the UI never shows a dropped answer before a new one (a cut stream
+is retried by **Model retries**, whose `model_retry` drops what it streamed). After a compaction the host appends
 an adk `EventCompaction` marker to the turn's session after the last event
 it folds, so the next turn's history starts from the summary instead of
 summarising the thread again; the turn's commit carries the latest summary
@@ -2298,12 +2311,44 @@ token that takes longer than 2 s is logged as a warning, and each turn
 logs one line with all of them (`local turn timings: resolving=…ms …`):
 what to compare before and after a change.
 
+**Model retries.** The host makes a failed model call again when another
+call may mend it. These failures are retried: the gateway does not answer
+(`model_gateway.unavailable`), and the gateway answers 408, 429 or 5xx.
+A stream that is cut off, stalls for 5 minutes or ends before its finish
+reason is retried too (`model_gateway.incomplete_stream`).
+
+The host makes at most 25 retries, for at most 15 minutes from the first
+try. It waits 1 s, then twice as long each time, to a maximum of 30 s. A
+longer `Retry-After` (whole seconds, at most 120 s) replaces that wait.
+Before each wait the host sends `model_retry`. Summary and sub-agent calls
+send it too, with nothing to drop.
+
+These failures are not retried: 400, 401, 402, 403, 409, a too-long
+request and a malformed stream. A stream that sent its finish reason and
+then lost its last bytes is kept. Usage that a failed call reported counts
+toward the turn's tokens.
+
+When the host gives up, the turn fails with the last code. Its message
+names `/retry`. The composer's `/retry` and the error's Retry button send
+the last message again. They keep its "@" references, skills and custom
+command, but not its images.
+
+The model call has no whole-call timeout. Its response head must come
+within 90 s. Then each chunk must come within 5 minutes of the one before.
+
 **Step limit.** Each run of the agent takes at most its step limit of
-model steps: the workspace's own setting (`workspace_agent_settings_set`)
-when the person set one, else the agent's `meta.step_limit`, else 100; never
-more than 200. The workspace setting wins because it is the person's choice
-on this machine, while an agent's value is often the platform's default
-(an agent created without one is stamped 25).
+model steps. The workspace's own setting sets it
+(`workspace_agent_settings_set`, `/steps`, or the composer's step-limit
+chip). Without a setting, the limit is 1024. A number is at most
+1 000 000, and `"unlimited"` sets no limit.
+
+The host does not read the agent's `meta.step_limit`. The cloud stamps 25
+on every agent. A remote definition must not set how long a local run
+goes unattended.
+
+A turn also stops at 512 tool calls, the most that one commit can carry
+(`note: "tool_call_limit_reached"`). The transcript then offers Continue:
+it starts a new turn from the host's prompt, with a new budget.
 When a run ends because it used them (adk's own end of the run, not a
 count), the host asks `approval_request {kind: "continue", title: "The agent
 used its N steps", detail: <the start of the agent's last text>, steps: N,
