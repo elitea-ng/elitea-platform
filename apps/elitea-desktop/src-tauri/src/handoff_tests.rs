@@ -686,15 +686,50 @@ async fn send_take_back_import_and_undo() {
     let commit = cloud_turn(&h);
     // Preflight before reclaim is refused.
     assert_eq!(
-        h.host.preflight(CONVERSATION).await.unwrap_err().code,
+        h.host.preflight(CONVERSATION, None).await.unwrap_err().code,
         "handoff_not_reclaimed"
     );
     let reclaimed = h.host.reclaim(CONVERSATION).await.unwrap();
     assert_eq!(reclaimed["state"], "RECLAIMING");
     let before = std::fs::read_to_string(h.folder.join("README.md")).unwrap();
-    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
-    assert_eq!(preflight.outcome, Outcome::FastPath);
+    // A turn the cloud chain does not have.
+    assert_eq!(
+        h.host
+            .preflight(CONVERSATION, Some(2))
+            .await
+            .unwrap_err()
+            .code,
+        "invalid_request"
+    );
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
+    assert_eq!(preflight.report.outcome, Outcome::FastPath);
     assert_eq!(preflight.cloud_turns, 1);
+    assert_eq!(preflight.up_to_turn, 1);
+    // The client contract (#1187): the engine's outcome, flattened.
+    let wire = serde_json::to_value(&preflight).unwrap();
+    assert_eq!(wire["outcome"], "fast_path");
+    assert_eq!(wire["applied"], false);
+    assert!(wire["base"].is_string() && wire["result_tree"].is_string());
+    assert_eq!(
+        wire["modes"],
+        serde_json::json!(["apply", "worktree", "discard"])
+    );
+    assert!(
+        wire["changed_paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["path"] == "README.md" && c["change"] == "modified" && c["from"].is_null()),
+        "{wire}"
+    );
+    assert!(
+        wire["skipped_paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["path"] == ".env" && s["reason"] == "excluded"),
+        "{wire}"
+    );
     // Risk 7: per-file unified diffs of what the take-back writes.
     let readme = preflight
         .files
@@ -721,12 +756,22 @@ async fn send_take_back_import_and_undo() {
         "preflight wrote nothing"
     );
 
+    // Another turn than the preview's: refused, the preview kept.
+    assert_eq!(
+        h.host
+            .apply(&preflight.preflight_id, Mode::Apply, Some(2))
+            .await
+            .unwrap_err()
+            .code,
+        "invalid_request"
+    );
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Apply)
+        .apply(&preflight.preflight_id, Mode::Apply, Some(1))
         .await
         .unwrap();
     assert!(applied.applied && applied.released);
+    assert!(applied.report.applied);
     assert_eq!(applied.imported_turns, 1);
     assert_eq!(
         std::fs::read_to_string(h.folder.join("README.md")).unwrap(),
@@ -842,11 +887,11 @@ async fn a_lost_release_is_kept_and_sent_again_by_status() {
         .unwrap();
     cloud_turn(&h);
     h.host.reclaim(CONVERSATION).await.unwrap();
-    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
     h.platform.lock().unwrap().fail_release = true;
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Discard)
+        .apply(&preflight.preflight_id, Mode::Discard, None)
         .await
         .unwrap();
     assert!(!applied.released);
@@ -942,11 +987,11 @@ async fn a_retried_release_marks_the_session_for_reseeding() {
         .unwrap();
     cloud_turn(&h);
     h.host.reclaim(CONVERSATION).await.unwrap();
-    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
     h.platform.lock().unwrap().fail_release = true;
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Apply)
+        .apply(&preflight.preflight_id, Mode::Apply, None)
         .await
         .unwrap();
     assert!(!applied.released, "the release is refused once");
@@ -1024,11 +1069,14 @@ async fn a_take_back_worktree_opens_as_a_workspace_with_git_checkpoints() {
     git(&h.folder, &["add", "-A"]);
     git(&h.folder, &["commit", "-q", "-m", "moved on locally"]);
     h.host.reclaim(CONVERSATION).await.unwrap();
-    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
-    assert_eq!(preflight.outcome, Outcome::Conflicts);
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
+    // Tree-based: a commit that kept the folder's files is the fast path;
+    // the worktree is still on offer.
+    assert_eq!(preflight.report.outcome, Outcome::FastPath);
+    assert!(preflight.modes.contains(&Mode::Worktree));
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Worktree)
+        .apply(&preflight.preflight_id, Mode::Worktree, None)
         .await
         .unwrap();
     let path = std::path::PathBuf::from(applied.worktree_path.unwrap());
@@ -1531,11 +1579,11 @@ async fn a_release_refused_for_good_is_not_retried() {
         .unwrap();
     cloud_turn(&h);
     h.host.reclaim(CONVERSATION).await.unwrap();
-    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
     h.platform.lock().unwrap().erase_before_release = true;
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Apply)
+        .apply(&preflight.preflight_id, Mode::Apply, None)
         .await
         .unwrap();
     assert_eq!(applied.release_refused.as_deref(), Some("handoff_erased"));
@@ -1567,7 +1615,7 @@ async fn a_take_back_asked_during_a_cloud_turn_releases_with_the_later_epoch() {
     let pending = h.host.reclaim(CONVERSATION).await.unwrap();
     assert_eq!(pending["reclaim_pending"], true);
     assert_eq!(
-        h.host.preflight(CONVERSATION).await.unwrap_err().code,
+        h.host.preflight(CONVERSATION, None).await.unwrap_err().code,
         "handoff_not_reclaimed"
     );
     {
@@ -1577,10 +1625,10 @@ async fn a_take_back_asked_during_a_cloud_turn_releases_with_the_later_epoch() {
         p.state = "RECLAIMING".into();
         p.epoch += 1;
     }
-    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Apply)
+        .apply(&preflight.preflight_id, Mode::Apply, None)
         .await
         .unwrap();
     assert!(applied.released, "{applied:?}");
@@ -1782,10 +1830,10 @@ async fn a_take_back_makes_the_next_local_turn_see_the_cloud_turns() {
             "tool_inputs": {"path": "CHANGELOG.md"}, "tool_output": "{\"written\":true}", "is_error": false}));
     }
     h.host.reclaim(CONVERSATION).await.unwrap();
-    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Apply)
+        .apply(&preflight.preflight_id, Mode::Apply, None)
         .await
         .unwrap();
     assert!(applied.released);

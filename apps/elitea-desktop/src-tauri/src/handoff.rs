@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use elitea_local_tools::handoff::apply::{self as take_back, Mode, Outcome, Preflight};
+use elitea_local_tools::handoff::apply::{self as take_back, ApplyOutcome, Mode, Preflight};
 use elitea_local_tools::handoff::caps::{self, Caps};
 use elitea_local_tools::handoff::exclude::{Excluded, Patterns, Reason};
 use elitea_local_tools::handoff::scan::Finding;
@@ -380,12 +380,17 @@ pub struct Sent {
 #[derive(Clone, Debug, Serialize)]
 pub struct PreflightAnswer {
     pub preflight_id: String,
-    pub outcome: Outcome,
-    pub changed_paths: Vec<String>,
-    pub conflict_paths: Vec<String>,
-    pub skipped_paths: Vec<String>,
+    /// The shared apply engine's outcome (`outcome`, `applied`,
+    /// `changed_paths`, `conflict_paths`, `skipped_paths`, `base`,
+    /// `result_tree`), flattened into the answer.
+    #[serde(flatten)]
+    pub report: ApplyOutcome,
     pub cloud_turns: usize,
-    /// Phase 1: `apply` only on the fast path.
+    /// The turns this preflight takes back (`1..=cloud_turns`).
+    pub up_to_turn: usize,
+    /// What `handoff_apply` accepts: `apply` for `fast_path` and
+    /// `clean_merge`, `apply_with_markers` for `conflicts`; `worktree` and
+    /// `discard` always.
     pub modes: Vec<Mode>,
     /// What the take-back writes, per file, with its diff (bounded).
     pub files: Vec<FileChange>,
@@ -396,7 +401,12 @@ pub struct PreflightAnswer {
 #[derive(Clone, Debug, Serialize)]
 pub struct ApplyAnswer {
     pub applied: bool,
+    /// What was done: `applied`, `applied_with_markers`, `worktree`,
+    /// `discarded`.
     pub outcome: &'static str,
+    /// The engine's outcome of the apply (`applied` set when files were
+    /// written).
+    pub report: ApplyOutcome,
     /// `handoff_undo` restores it (`null` when the folder was not written).
     pub checkpoint_id: Option<String>,
     pub worktree_path: Option<String>,
@@ -1561,6 +1571,7 @@ impl HandoffHost {
     pub async fn preflight(
         &self,
         conversation_uuid: &str,
+        up_to_turn: Option<usize>,
     ) -> Result<PreflightAnswer, HandoffError> {
         let uuid = canonical_uuid(conversation_uuid)?;
         let mut record = self.record(&uuid)?;
@@ -1590,8 +1601,14 @@ impl HandoffHost {
         let path_deny = policy.path_deny.clone();
         let (preflight, files, diffs_truncated) = joined(
             tokio::task::spawn_blocking(move || {
-                let preflight =
-                    take_back::preflight(&source, &send, &bytes, &segment.refs, &path_deny)?;
+                let preflight = take_back::preflight_up_to(
+                    &source,
+                    &send,
+                    &bytes,
+                    &segment.refs,
+                    &path_deny,
+                    up_to_turn,
+                )?;
                 let (files, truncated) = preflight_files(&preflight)?;
                 Ok::<_, elitea_local_tools::error::ToolError>((preflight, files, truncated))
             })
@@ -1599,19 +1616,12 @@ impl HandoffHost {
         )?
         .map_err(|e| tool_error(&e))?;
         let id = uuid::Uuid::new_v4().to_string();
-        let modes = if preflight.outcome == Outcome::FastPath {
-            vec![Mode::Apply, Mode::Worktree, Mode::Discard]
-        } else {
-            vec![Mode::Worktree, Mode::Discard]
-        };
         let answer = PreflightAnswer {
             preflight_id: id.clone(),
-            outcome: preflight.outcome,
-            changed_paths: preflight.changed_paths.clone(),
-            conflict_paths: preflight.conflict_paths.clone(),
-            skipped_paths: preflight.skipped_paths.clone(),
+            report: preflight.report.clone(),
             cloud_turns: preflight.cloud_turns(),
-            modes,
+            up_to_turn: preflight.up_to_turn,
+            modes: preflight.modes(),
             files,
             diffs_truncated,
         };
@@ -1643,29 +1653,53 @@ impl HandoffHost {
             .unwrap_or_default()
     }
 
-    /// `handoff_apply`: apply a preflight (`apply`, `worktree`, `discard`),
-    /// release the thread, import its cloud turns.
+    /// `handoff_apply`: apply a preflight (`apply`, `apply_with_markers`,
+    /// `worktree`, `discard`), release the thread, import its cloud turns.
+    /// `up_to_turn`, when given, must be the preflight's.
     ///
     /// # Errors
     ///
     /// `preflight_unknown`, `folder_changed_since_preflight`,
-    /// `workspace_busy`, `invalid_request` (`apply` without the fast path),
-    /// git or I/O failures.
-    pub async fn apply(&self, preflight_id: &str, mode: Mode) -> Result<ApplyAnswer, HandoffError> {
-        let held = self
-            .preflights
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(preflight_id)
-            .ok_or_else(|| {
+    /// `workspace_busy`, `invalid_request` (a mode the outcome does not
+    /// offer, another turn than the preflight's), git or I/O failures.
+    pub async fn apply(
+        &self,
+        preflight_id: &str,
+        mode: Mode,
+        up_to_turn: Option<usize>,
+    ) -> Result<ApplyAnswer, HandoffError> {
+        let held = {
+            let mut preflights = self
+                .preflights
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let previewed = preflights
+                .get(preflight_id)
+                .ok_or_else(|| {
+                    HandoffError::new("preflight_unknown", "Preview the take-back again.")
+                })?
+                .preflight
+                .up_to_turn;
+            if let Some(turn) = up_to_turn
+                && turn != previewed
+            {
+                return Err(HandoffError::new(
+                    "invalid_request",
+                    format!(
+                        "this preview takes back up to turn {previewed}, not {turn}; preview turn {turn} first"
+                    ),
+                ));
+            }
+            preflights.remove(preflight_id).ok_or_else(|| {
                 HandoffError::new("preflight_unknown", "Preview the take-back again.")
-            })?;
+            })?
+        };
         let mut record = self.record(&held.conversation_uuid)?;
         let claim = self.deps.agents.claim_workspace(
             &held.workspace_id,
             "Wait for the running turn to end before taking the thread back.",
         )?;
-        let session = if mode == Mode::Apply {
+        let session = if matches!(mode, Mode::Apply | Mode::ApplyWithMarkers) {
             Some(
                 self.deps
                     .agents
@@ -1696,6 +1730,7 @@ impl HandoffHost {
         let applied = applied.map_err(|e| tool_error(&e))?;
         let outcome = match mode {
             Mode::Apply => "applied",
+            Mode::ApplyWithMarkers => "applied_with_markers",
             Mode::Worktree => "worktree",
             Mode::Discard => "discarded",
         };
@@ -1737,6 +1772,7 @@ impl HandoffHost {
         Ok(ApplyAnswer {
             applied: applied.applied,
             outcome,
+            report: applied.report,
             checkpoint_id: applied
                 .checkpoint
                 .map(|seq| format!("{workspace_id}:{seq}")),
@@ -2299,8 +2335,9 @@ pub async fn handoff_reclaim(
 pub async fn handoff_preflight(
     state: tauri::State<'_, HandoffState>,
     conversation_uuid: String,
+    up_to_turn: Option<usize>,
 ) -> Result<PreflightAnswer, HandoffError> {
-    state.0.preflight(&conversation_uuid).await
+    state.0.preflight(&conversation_uuid, up_to_turn).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -2308,8 +2345,9 @@ pub async fn handoff_apply(
     state: tauri::State<'_, HandoffState>,
     preflight_id: String,
     mode: Mode,
+    up_to_turn: Option<usize>,
 ) -> Result<ApplyAnswer, HandoffError> {
-    state.0.apply(&preflight_id, mode).await
+    state.0.apply(&preflight_id, mode, up_to_turn).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
