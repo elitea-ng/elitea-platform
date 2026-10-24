@@ -17,8 +17,12 @@ type memory struct {
 	registerErr error
 	getErr      error
 	renewErr    error
-	recorded    []string
-	clock       *clock
+	// renewHang, when set, makes Renew block until its context ends, after
+	// signalling renewStarted.
+	renewHang    bool
+	renewStarted chan struct{}
+	recorded     []string
+	clock        *clock
 
 	token   int64
 	holder  string
@@ -69,13 +73,22 @@ func (m *memory) Acquire(
 	return Lease{Token: m.token, Holder: holder}, true, nil
 }
 
-func (m *memory) Renew(_ context.Context, _ string, lease Lease, ttl time.Duration) error {
+func (m *memory) Renew(ctx context.Context, _ string, lease Lease, ttl time.Duration) error {
 	m.mu.Lock()
+	if m.renewHang {
+		m.mu.Unlock()
+		select {
+		case m.renewStarted <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	defer m.mu.Unlock()
 	if m.renewErr != nil {
 		return m.renewErr
 	}
-	if lease.Token != m.token {
+	if lease.Token != m.token || !m.clock.now().Before(m.expires) {
 		return ErrLeaseLost
 	}
 	m.expires = m.clock.now().Add(ttl)
@@ -327,7 +340,9 @@ func TestLoopAPassThatOutlastsItsIntervalDoesNotStartOnAnotherReplica(t *testing
 	m, c := &memory{renewed: make(chan struct{}, 1)}, &clock{t: noon}
 	a, _ := newLoop(m, c, "10m")
 	b, _ := newLoop(m, c, "10m")
-	a.LeaseTTL, b.LeaseTTL = 30*time.Millisecond, 30*time.Millisecond
+	// A 30-minute lease on the test clock, renewed every 10 ms of real time.
+	a.LeaseTTL, b.LeaseTTL = 30*time.Minute, 30*time.Minute
+	a.renewEvery = 10 * time.Millisecond
 	a.Holder, b.Holder = "a", "b"
 
 	var runsA, runsB atomic.Int32
@@ -346,7 +361,10 @@ func TestLoopAPassThatOutlastsItsIntervalDoesNotStartOnAnotherReplica(t *testing
 
 	// The pass is still running 25 minutes later: its slot (noon+10m) is due.
 	c.set(noon.Add(25 * time.Minute))
-	waitLive(t, m, c) // a renewal on the new clock: the lease is live now
+	waitLive(t, m, c, noon.Add(55*time.Minute)) // renewed on the new clock
+	// 50 minutes in: the first grant (noon+30m) has run out; only the
+	// renewals keep the lease live.
+	c.set(noon.Add(50 * time.Minute))
 	for range 3 {
 		b.Step(t.Context(), func(context.Context) (string, error) { runsB.Add(1); return OutcomeOK, nil })
 	}
@@ -361,7 +379,7 @@ func TestLoopAPassThatOutlastsItsIntervalDoesNotStartOnAnotherReplica(t *testing
 	if runsB.Load() != 0 {
 		t.Fatal("replica b ran before the slot planned from the end of a's pass")
 	}
-	c.set(noon.Add(35 * time.Minute))
+	c.set(noon.Add(60 * time.Minute))
 	b.Step(t.Context(), func(context.Context) (string, error) { runsB.Add(1); return OutcomeOK, nil })
 	if runsA.Load() != 1 || runsB.Load() != 1 {
 		t.Fatalf("runs a=%d b=%d, want 1 and 1", runsA.Load(), runsB.Load())
@@ -429,18 +447,27 @@ func TestLoopCancelsAPassWhoseLeaseWasTakenOver(t *testing.T) {
 	if got := m.runs(); len(got) != 0 {
 		t.Fatalf("recorded = %v: a holder that lost its lease must not write", got)
 	}
+	if a.seen.LastRunAt != nil {
+		t.Fatalf("seen.LastRunAt = %v: a run the fence refused must not count as this replica's run", a.seen.LastRunAt)
+	}
 }
 
-// Renewals that fail for a whole lease length stop the pass: the lease may
-// have run out, and another replica may already run the routine.
-func TestLoopStopsAPassWhoseLeaseCouldNotBeRenewed(t *testing.T) {
+// Renewals that keep failing stop the pass strictly BEFORE the lease can run
+// out (#1414 review): the holder gives up one renewal interval ahead of the
+// earliest expiry, counted from when the last successful statement was
+// issued, so another replica can never start while this pass still runs.
+func TestLoopStopsAPassBeforeAnUnrenewedLeaseCanRunOut(t *testing.T) {
 	m, c := &memory{renewErr: errors.New("connection refused")}, &clock{t: noon}
 	a, _ := newLoop(m, c, "10m")
-	a.LeaseTTL = 30 * time.Millisecond
+	const ttl = 300 * time.Millisecond
+	a.LeaseTTL = ttl
 	var cause error
+	var elapsed time.Duration
+	begun := time.Now()
 	a.Step(t.Context(), func(ctx context.Context) (string, error) {
 		select {
 		case <-ctx.Done():
+			elapsed = time.Since(begun)
 			cause = context.Cause(ctx)
 		case <-time.After(5 * time.Second):
 		}
@@ -449,22 +476,50 @@ func TestLoopStopsAPassWhoseLeaseCouldNotBeRenewed(t *testing.T) {
 	if !errors.Is(cause, ErrLeaseLost) {
 		t.Fatalf("pass context cause = %v, want ErrLeaseLost", cause)
 	}
+	if elapsed >= ttl {
+		t.Fatalf("the pass was stopped %s after the claim, not before the %s lease could run out", elapsed, ttl)
+	}
 }
 
-// waitLive waits for the running pass to renew its lease on the current
-// clock.
-func waitLive(t *testing.T, m *memory, c *clock) {
+// A renewal that hangs does not hold up the end of the pass: the renewer is
+// cancelled before it is waited for.
+func TestLoopEndsAPassWithoutWaitingForAHungRenewal(t *testing.T) {
+	m, c := &memory{renewHang: true, renewStarted: make(chan struct{}, 1)}, &clock{t: noon}
+	a, _ := newLoop(m, c, "10m")
+	a.LeaseTTL = time.Hour // a renewal's own deadline is nearly an hour away
+	a.renewEvery = 10 * time.Millisecond
+	stepped := make(chan struct{})
+	go func() {
+		defer close(stepped)
+		a.Step(t.Context(), func(context.Context) (string, error) {
+			<-m.renewStarted
+			return OutcomeOK, nil
+		})
+	}()
+	select {
+	case <-stepped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Step waited for a hung renewal after the pass had ended")
+	}
+	if got := m.runs(); len(got) != 1 || got[0] != OutcomeOK {
+		t.Fatalf("recorded = %v, want [ok]", got)
+	}
+}
+
+// waitLive waits for the running pass to renew its lease to at least until.
+func waitLive(t *testing.T, m *memory, c *clock, until time.Time) {
 	t.Helper()
 	deadline := time.After(5 * time.Second)
 	for {
 		m.mu.Lock()
-		live := m.expires.After(c.now())
+		live := !m.expires.Before(until) && m.expires.After(c.now())
 		m.mu.Unlock()
 		if live {
 			return
 		}
 		select {
 		case <-m.renewed:
+		case <-time.After(5 * time.Millisecond):
 		case <-deadline:
 			t.Fatal("the running pass never renewed its lease")
 		}

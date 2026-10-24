@@ -115,14 +115,20 @@ func TestPlatformRoutinesStorePostgres(t *testing.T) {
 
 // newRoutineForLeaseTest registers a fresh one-second routine and removes it
 // afterwards.
-func newRoutineForLeaseTest(t *testing.T, store *routines.Store, id string) routines.Definition {
+func newRoutineForLeaseTest(t *testing.T, pool *pgxpool.Pool, id string) routines.Definition {
 	t.Helper()
 	definition := routines.Definition{
 		ID: id, Owner: routines.OwnerScheduler, Description: "lease probe", DefaultSchedule: "1s",
 	}
-	if err := store.Register(context.Background(), definition); err != nil {
+	if err := routines.NewStore(pool).Register(context.Background(), definition); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(),
+			`DELETE FROM elitea_runtime.platform_routines WHERE id = $1`, id); err != nil {
+			t.Errorf("remove routine %s: %v", id, err)
+		}
+	})
 	return definition
 }
 
@@ -140,7 +146,7 @@ func TestPlatformRoutineLeaseHoldsAPassThatOutlastsItsIntervalPostgres(t *testin
 	}
 	t.Cleanup(other.Close)
 	const id = "scheduler.postgres.lease.outlast.v1"
-	definition := newRoutineForLeaseTest(t, routines.NewStore(pool), id)
+	definition := newRoutineForLeaseTest(t, pool, id)
 
 	const ttl = 300 * time.Millisecond
 	a := &routines.Loop{Backend: routines.NewStore(pool), Def: definition, Poll: 50 * time.Millisecond,
@@ -211,7 +217,7 @@ func TestPlatformRoutineLeaseExpiresForACrashedHolderPostgres(t *testing.T) {
 	ctx := context.Background()
 	store := routines.NewStore(pool)
 	const id = "scheduler.postgres.lease.crash.v1"
-	definition := newRoutineForLeaseTest(t, store, id)
+	definition := newRoutineForLeaseTest(t, pool, id)
 
 	crashed, ok, err := store.Acquire(ctx, id, nil, time.Now().Add(-time.Second), "crashed", 1500*time.Millisecond)
 	if err != nil || !ok {
@@ -263,6 +269,132 @@ func TestPlatformRoutineLeaseExpiresForACrashedHolderPostgres(t *testing.T) {
 	}
 	if expires != nil {
 		t.Fatalf("lease_expires_at = %v after the take-over's release, want NULL", expires)
+	}
+}
+
+// Expiry is final: a lease that ran out cannot be renewed even though nobody
+// has taken the routine over yet, because another replica may be acquiring it
+// at that moment.
+func TestPlatformRoutineLeaseCannotBeRenewedAfterItExpiresPostgres(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	store := routines.NewStore(pool)
+	const id = "scheduler.postgres.lease.expired-renew.v1"
+	newRoutineForLeaseTest(t, pool, id)
+
+	lease, ok, err := store.Acquire(ctx, id, nil, time.Now().Add(time.Hour), "a", 200*time.Millisecond)
+	if err != nil || !ok {
+		t.Fatalf("acquire: ok=%v err=%v", ok, err)
+	}
+	if err := store.Renew(ctx, id, lease, 200*time.Millisecond); err != nil {
+		t.Fatalf("renew of a live lease: %v", err)
+	}
+	time.Sleep(400 * time.Millisecond)
+	if err := store.Renew(ctx, id, lease, time.Minute); !errors.Is(err, routines.ErrLeaseLost) {
+		t.Fatalf("renew after expiry: %v, want ErrLeaseLost", err)
+	}
+}
+
+// Rolling deploy: a replica of the previous release claims with the old,
+// lease-blind UPDATE. Against a live lease the 0175 trigger skips it, so it
+// changes nothing and reports no claim; once the lease is gone it claims as
+// before. An operator's edit (it stamps updated_at) still re-plans the slot
+// under a live lease.
+func TestPlatformRoutineLeaseRefusesAnOldStyleClaimPostgres(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	store := routines.NewStore(pool)
+	const id = "scheduler.postgres.lease.old-claim.v1"
+	newRoutineForLeaseTest(t, pool, id)
+
+	held := time.Now().Add(-time.Second).UTC().Truncate(time.Microsecond)
+	lease, ok, err := store.Acquire(ctx, id, nil, held, "new-replica", time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("acquire: ok=%v err=%v", ok, err)
+	}
+	oldClaim := func(expected, next time.Time) int64 {
+		t.Helper()
+		tag, err := pool.Exec(ctx, `
+UPDATE elitea_runtime.platform_routines
+SET next_run_at = $3
+WHERE id = $1 AND enabled AND next_run_at IS NOT DISTINCT FROM $2::timestamptz`, id, expected, next)
+		if err != nil {
+			t.Fatalf("old-style claim: %v", err)
+		}
+		return tag.RowsAffected()
+	}
+	if got := oldClaim(held, held.Add(time.Hour)); got != 0 {
+		t.Fatalf("an old-style claim under a live lease affected %d rows, want 0", got)
+	}
+	row, err := store.Get(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.NextRunAt == nil || !row.NextRunAt.Equal(held) {
+		t.Fatalf("next_run_at = %v, want it left at %v", row.NextRunAt, held)
+	}
+
+	// An operator's edit is not a claim: it re-plans under a live lease.
+	override := "2h"
+	if _, err := store.Update(ctx, id, routines.Patch{Schedule: &override, Actor: "op"}, time.Now()); err != nil {
+		t.Fatalf("operator edit under a live lease: %v", err)
+	}
+	row, err = store.Get(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.NextRunAt == nil || row.NextRunAt.Equal(held) {
+		t.Fatalf("next_run_at = %v: the operator's edit did not re-plan the slot", row.NextRunAt)
+	}
+
+	// The lease's own release, then an old-style claim succeeds as before.
+	if err := store.Release(ctx, id, lease, routines.Completion{RanAt: time.Now(), Outcome: routines.OutcomeOK, Held: held}); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if got := oldClaim(*row.NextRunAt, row.NextRunAt.Add(time.Hour)); got != 1 {
+		t.Fatalf("an old-style claim with no live lease affected %d rows, want 1", got)
+	}
+}
+
+// failingRenewals is the real store with every renewal failing, as during a
+// database outage that the acquisition just missed.
+type failingRenewals struct{ *routines.Store }
+
+func (failingRenewals) Renew(context.Context, string, routines.Lease, time.Duration) error {
+	return errors.New("connection refused")
+}
+
+// When renewals fail, the holder stops its pass while the lease the database
+// granted is still live: no other replica can have started yet.
+func TestPlatformRoutineLeaseHolderGivesUpBeforeTheLeaseExpiresPostgres(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const id = "scheduler.postgres.lease.give-up.v1"
+	definition := newRoutineForLeaseTest(t, pool, id)
+	a := &routines.Loop{Backend: failingRenewals{routines.NewStore(pool)}, Def: definition,
+		Poll: 50 * time.Millisecond, LeaseTTL: 600 * time.Millisecond, Holder: "replica-a"}
+
+	var stillLive *bool
+	a.Step(ctx, func(passCtx context.Context) (string, error) {
+		select {
+		case <-passCtx.Done():
+		case <-time.After(5 * time.Second):
+			return "", errors.New("the pass was never stopped")
+		}
+		var live bool
+		if err := pool.QueryRow(ctx, `
+SELECT lease_expires_at > clock_timestamp() FROM elitea_runtime.platform_routines WHERE id = $1`,
+			id).Scan(&live); err != nil {
+			return "", err
+		}
+		stillLive = &live
+		return "", context.Cause(passCtx)
+	})
+	if stillLive == nil {
+		t.Fatal("the pass was never stopped")
+	}
+	if !*stillLive {
+		t.Fatal("the holder gave up only after its lease had expired in the database")
 	}
 }
 

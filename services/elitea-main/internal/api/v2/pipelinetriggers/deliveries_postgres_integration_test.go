@@ -16,6 +16,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 )
 
 func (h *harness) deliveryRows(t *testing.T, tokenID string) int {
@@ -329,18 +330,15 @@ func TestAStartRefusalThatIsNotTheInputIsNotBlamedOnTheInput(t *testing.T) {
 }
 
 // The same refusal against the participant key the tenant migrations ship
-// (#1429). This package's bootstrap schema (001_initial.sql) declares
+// (#1429). This package's bootstrap schema (001_initial.sql) always declared
 // chat_participant_mapping's key with ON DELETE CASCADE, so the test above
-// passed while production's key (tenant 0123, no cascade) refused the bare
-// DELETE with 23503 and left the run conversation behind, unlogged.
+// passed while deployments (tenant 0123, no cascade) refused the bare DELETE
+// with 23503 and left the run conversation behind, unlogged. Here the key is
+// first given the shape the migrations produce (0123, then 0157).
 func TestARefusedStartLeavesNoConversationUnderTheShippedParticipantKey(t *testing.T) {
 	h := newHarness(t)
-	if _, err := h.pool.Exec(context.Background(), fmt.Sprintf(`
-ALTER TABLE %[1]s.chat_participant_mapping
-    DROP CONSTRAINT chat_participant_mapping_conversation_id_fkey,
-    ADD CONSTRAINT chat_participant_mapping_conversation_id_fkey
-        FOREIGN KEY (conversation_id) REFERENCES %[1]s.chat_conversations(id)`, homeSchema)); err != nil {
-		t.Fatalf("use the shipped participant key: %v", err)
+	if err := dbtest.UseShippedParticipantKey(context.Background(), h.pool, homeSchema); err != nil {
+		t.Fatal(err)
 	}
 	_, tokenID, secret := h.mintTrigger(t, homeProject, homeSchema, "Nightly report", ownerUserID)
 	h.start.mu.Lock()

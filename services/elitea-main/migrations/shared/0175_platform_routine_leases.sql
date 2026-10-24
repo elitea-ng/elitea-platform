@@ -19,6 +19,20 @@
 -- The times are the database's clock (clock_timestamp()), so replicas with
 -- skewed clocks agree on whether a lease is live.
 --
+-- ROLLING DEPLOY. A replica of the previous release claims with
+--   UPDATE ... SET next_run_at = $3 WHERE id = $1 AND enabled
+--                  AND next_run_at IS NOT DISTINCT FROM $2
+-- which knows nothing of the lease. The BEFORE UPDATE trigger below refuses
+-- (skips) any update that moves next_run_at while another holder's lease is
+-- live and that touches neither the lease nor updated_at: that is exactly the
+-- old claim and the old "plan the next run" write. A leased writer always
+-- changes the lease (Release clears lease_expires_at), and an operator's edit
+-- (Store.Update) always stamps updated_at, so both pass. What the guard cannot
+-- give an old replica is a lease of its own: while old replicas still run,
+-- a new replica may start alongside an old replica's long pass, as before this
+-- migration (the passes are idempotent). Once the rollout ends, every claim is
+-- leased.
+--
 -- A small table (one row per routine): the constant default does not rewrite
 -- it. No data, no permission.
 --
@@ -27,3 +41,23 @@ ALTER TABLE elitea_runtime.platform_routines
     ADD COLUMN IF NOT EXISTS lease_token      bigint      NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS lease_holder     text,
     ADD COLUMN IF NOT EXISTS lease_expires_at timestamptz;
+
+CREATE OR REPLACE FUNCTION elitea_runtime.platform_routines_lease_guard() RETURNS trigger
+LANGUAGE plpgsql AS $body$
+BEGIN
+    IF OLD.lease_expires_at IS NOT NULL
+       AND OLD.lease_expires_at > clock_timestamp()
+       AND NEW.next_run_at IS DISTINCT FROM OLD.next_run_at
+       AND NEW.lease_token = OLD.lease_token
+       AND NEW.lease_holder IS NOT DISTINCT FROM OLD.lease_holder
+       AND NEW.lease_expires_at IS NOT DISTINCT FROM OLD.lease_expires_at
+       AND NEW.updated_at = OLD.updated_at THEN
+        RETURN NULL;
+    END IF;
+    RETURN NEW;
+END
+$body$;
+
+DROP TRIGGER IF EXISTS platform_routines_lease_guard ON elitea_runtime.platform_routines;
+CREATE TRIGGER platform_routines_lease_guard BEFORE UPDATE ON elitea_runtime.platform_routines
+    FOR EACH ROW EXECUTE FUNCTION elitea_runtime.platform_routines_lease_guard();

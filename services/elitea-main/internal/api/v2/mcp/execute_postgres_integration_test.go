@@ -33,6 +33,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/mcp"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 )
 
 /* ── fake start ────────────────────────────────────────────────────────── */
@@ -354,14 +355,16 @@ func TestARefusedAdmissionLeavesNoEmptyConversation(t *testing.T) {
 }
 
 // The same refusal against the participant key the tenant migrations ship
-// (#1429). This file's bootstrap schema (001_initial.sql) declares
+// (#1429). This file's bootstrap schema (001_initial.sql) always declared
 // chat_participant_mapping's key with ON DELETE CASCADE, so the test above
-// passed while production's key (tenant 0123, no cascade) refused the bare
-// DELETE with 23503 and left the conversation behind, unlogged. Here the key
-// is put back to the shipped shape first.
+// passed while deployments (tenant 0123, no cascade) refused the bare DELETE
+// with 23503 and left the conversation behind, unlogged. Here the key is
+// first given the shape the migrations produce (0123, then 0157).
 func TestARefusedAdmissionLeavesNoConversationUnderTheShippedParticipantKey(t *testing.T) {
 	pool := newMCPPool(t)
-	useShippedParticipantKey(t, pool, homeSchema)
+	if err := dbtest.UseShippedParticipantKey(context.Background(), pool, homeSchema); err != nil {
+		t.Fatal(err)
+	}
 	seedUser(t, pool, callerUserID)
 	seedAgent(t, pool, homeSchema, "Release Notes", "writes release notes", "mcp")
 
@@ -390,20 +393,6 @@ SELECT (SELECT count(*) FROM %[1]q.chat_conversations),
 	if conversations != 0 || mappings != 0 {
 		t.Fatalf("a refused admission left %d conversations and %d mappings behind, want 0 and 0",
 			conversations, mappings)
-	}
-}
-
-// useShippedParticipantKey replaces the bootstrap schema's cascading
-// chat_participant_mapping → chat_conversations key with the one tenant 0123
-// ships, which does not cascade.
-func useShippedParticipantKey(t *testing.T, pool *pgxpool.Pool, schema string) {
-	t.Helper()
-	if _, err := pool.Exec(context.Background(), fmt.Sprintf(`
-ALTER TABLE %[1]q.chat_participant_mapping
-    DROP CONSTRAINT chat_participant_mapping_conversation_id_fkey,
-    ADD CONSTRAINT chat_participant_mapping_conversation_id_fkey
-        FOREIGN KEY (conversation_id) REFERENCES %[1]q.chat_conversations(id)`, schema)); err != nil {
-		t.Fatalf("use the shipped participant key: %v", err)
 	}
 }
 

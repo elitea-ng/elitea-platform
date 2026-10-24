@@ -21,9 +21,11 @@ type TxBeginner interface {
 // group, so it can never remove a person's chat or a turn's transcript.
 //
 // One transaction: the conversation row is locked under both guards, its
-// participant mappings go first (chat_participant_mapping's key to
-// chat_conversations does not cascade, tenant 0123, so a bare DELETE of the
-// conversation fails with 23503 and leaves it behind), then the row itself.
+// participant mappings go first, then the row itself. Until tenant 0157
+// chat_participant_mapping's key to chat_conversations did not cascade, and a
+// bare DELETE of the conversation failed with 23503 and left it behind; the
+// explicit delete stays so the sync journal is the one
+// ConversationsRepo.Delete writes.
 // The other tables that name a conversation (selected, archive, reads,
 // folders) cascade.
 //
@@ -39,6 +41,17 @@ func DiscardUnadmittedConversation(
 		return false, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// Sync cascade (tenant 0144), as ConversationsRepo.Delete runs: the
+	// conversation's own tombstone means "drop every message", so the sync
+	// triggers skip the parent bumps and the access_orphaned marker the
+	// mapping deletes would otherwise journal. The conversation tombstone and
+	// the per-user access_participant rows are still written: a run
+	// conversation is listed in the ordinary chat list (only a local child is
+	// hidden), so a client may have synced it, and those rows are who a
+	// private conversation's deletion is shown to.
+	if _, err := tx.Exec(ctx, `SELECT set_config('elitea.sync_cascade', 'conversation', true)`); err != nil {
+		return false, fmt.Errorf("sync cascade: %w", err)
+	}
 	var conversationID int64
 	err = tx.QueryRow(ctx, fmt.Sprintf(`
 SELECT id FROM %s.chat_conversations

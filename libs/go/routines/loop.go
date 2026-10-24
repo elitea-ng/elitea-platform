@@ -74,6 +74,9 @@ type Loop struct {
 	// random suffix.
 	Holder string
 
+	// renewEvery overrides the renewal interval (ttl/3); tests only.
+	renewEvery time.Duration
+
 	registered bool
 	degraded   bool
 	localLast  time.Time
@@ -207,6 +210,10 @@ func (l *Loop) stepRegistered(ctx context.Context, pass Pass, row Row, now time.
 		return l.poll()
 	}
 	ttl := l.leaseTTL()
+	// Stamped before the statement is sent: the lease the database grants
+	// expires ttl after it EXECUTES, so ttl after this instant is the
+	// earliest the lease can run out.
+	issued := time.Now()
 	lease, claimed, err := l.Backend.Acquire(ctx, l.Def.ID, row.NextRunAt, held, l.holder(), ttl)
 	if err != nil {
 		l.logger().Warn("routines: could not claim the next run", "routine", l.Def.ID, "err", err)
@@ -215,9 +222,7 @@ func (l *Loop) stepRegistered(ctx context.Context, pass Pass, row Row, now time.
 	if !claimed {
 		return l.poll()
 	}
-	outcome := l.runLeased(ctx, pass, lease, ttl)
-	ranAt := now
-	l.seen.LastRunAt = &ranAt
+	outcome := l.runLeased(ctx, pass, lease, ttl, issued)
 	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	// Moves only our own slot: an operator's edit during the pass re-planned
@@ -226,7 +231,18 @@ func (l *Loop) stepRegistered(ctx context.Context, pass Pass, row Row, now time.
 	if next := schedule.Next(l.now()); next.After(held) {
 		done.Next = next
 	}
-	if err := l.Backend.Release(settleCtx, l.Def.ID, lease, done); err != nil {
+	switch err := l.Backend.Release(settleCtx, l.Def.ID, lease, done); {
+	case err == nil:
+		ranAt := now
+		l.seen.LastRunAt = &ranAt
+	case errors.Is(err, ErrLeaseLost):
+		// Fencing working as designed: the lease ran out and another replica
+		// took the routine over, so this pass's outcome is not ours to write.
+		l.logger().Info("routines: lease was taken over by another replica; this run is not recorded",
+			"routine", l.Def.ID, "lease_token", lease.Token)
+	default:
+		ranAt := now
+		l.seen.LastRunAt = &ranAt
 		l.logger().Warn("routines: could not record the run and release the lease", "routine", l.Def.ID,
 			"lease_token", lease.Token, "err", err)
 	}
@@ -234,41 +250,64 @@ func (l *Loop) stepRegistered(ctx context.Context, pass Pass, row Row, now time.
 }
 
 // runLeased runs the pass while a goroutine renews the lease every ttl/3.
-// The pass's context is cancelled with [ErrLeaseLost] when the row's token
-// moved on, or when no renewal has succeeded for a whole ttl (the lease may
-// have run out, and another replica may now hold it).
-func (l *Loop) runLeased(ctx context.Context, pass Pass, lease Lease, ttl time.Duration) string {
+//
+// The holder gives up strictly before its lease can run out. `renewed` is the
+// instant the last successful renewal was ISSUED (the database stamps the new
+// expiry when the statement executes, so no earlier than that), and the lease
+// therefore lives at least until renewed+ttl. The pass's context is cancelled
+// with [ErrLeaseLost] once renewed+ttl-every is reached without a success,
+// a margin of one renewal interval before the earliest expiry, and each
+// renewal's own timeout ends at that same deadline, so a slow renewal cannot
+// carry the holder past it. The context is also cancelled when the row's
+// token moved on (another replica took the lease).
+//
+// When the pass ends, the renewer is cancelled before it is waited for: a
+// renewal in flight does not hold up the end of the pass.
+func (l *Loop) runLeased(ctx context.Context, pass Pass, lease Lease, ttl time.Duration, issued time.Time) string {
 	passCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	stop := make(chan struct{})
+	renewerCtx, stopRenewer := context.WithCancel(passCtx)
+	every := l.renewEvery
+	if every <= 0 {
+		every = ttl / 3
+	}
+	every = max(every, time.Millisecond)
+	giveUpAfter := ttl - every
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		every := max(ttl/3, time.Millisecond)
 		ticker := time.NewTicker(every)
 		defer ticker.Stop()
-		renewed := time.Now()
+		renewed := issued
 		for {
 			select {
-			case <-stop:
-				return
-			case <-passCtx.Done():
+			case <-renewerCtx.Done():
 				return
 			case <-ticker.C:
 			}
-			renewCtx, renewCancel := context.WithTimeout(passCtx, every)
+			deadline := renewed.Add(giveUpAfter)
+			if !time.Now().Before(deadline) {
+				l.logger().Warn("routines: lease could not be renewed before it may run out; stopping the pass",
+					"routine", l.Def.ID, "lease_token", lease.Token)
+				cancel(ErrLeaseLost)
+				return
+			}
+			attempt := time.Now()
+			renewCtx, renewCancel := context.WithDeadline(renewerCtx, deadline)
 			err := l.Backend.Renew(renewCtx, l.Def.ID, lease, ttl)
 			renewCancel()
 			switch {
 			case err == nil:
-				renewed = time.Now()
+				renewed = attempt
+			case renewerCtx.Err() != nil:
+				return
 			case errors.Is(err, ErrLeaseLost):
 				l.logger().Warn("routines: lease taken over; stopping the pass", "routine", l.Def.ID,
 					"lease_token", lease.Token)
 				cancel(ErrLeaseLost)
 				return
 			default:
-				if time.Since(renewed) >= ttl {
-					l.logger().Warn("routines: lease not renewed for its whole length; stopping the pass",
+				if !time.Now().Before(deadline) {
+					l.logger().Warn("routines: lease could not be renewed before it may run out; stopping the pass",
 						"routine", l.Def.ID, "lease_token", lease.Token, "err", err)
 					cancel(ErrLeaseLost)
 					return
@@ -278,7 +317,7 @@ func (l *Loop) runLeased(ctx context.Context, pass Pass, lease Lease, ttl time.D
 		}
 	})
 	outcome := l.run(passCtx, pass)
-	close(stop)
+	stopRenewer()
 	wg.Wait()
 	return outcome
 }

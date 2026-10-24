@@ -296,12 +296,14 @@ RETURNING lease_token`,
 }
 
 // Renew extends a held lease by ttl from now. It answers [ErrLeaseLost] when
-// the row's token is no longer the lease's.
+// the row's token is no longer the lease's, or when the lease has already run
+// out: expiry is final, even if nobody has taken the routine over yet, because
+// another replica may be acquiring it at this moment.
 func (s *Store) Renew(ctx context.Context, id string, lease Lease, ttl time.Duration) error {
 	tag, err := s.db.Exec(ctx, `
 UPDATE elitea_runtime.platform_routines
 SET lease_expires_at = clock_timestamp() + $3::bigint * interval '1 millisecond'
-WHERE id = $1 AND lease_token = $2`, id, lease.Token, ttl.Milliseconds())
+WHERE id = $1 AND lease_token = $2 AND lease_expires_at > clock_timestamp()`, id, lease.Token, ttl.Milliseconds())
 	if err != nil {
 		return err
 	}

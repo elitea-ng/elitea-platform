@@ -971,7 +971,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// cloud child turn's poll (child/parent execution id) and its start's
 	// replay lookup (parent execution id, idempotency key) (#1239). Indexes,
 	// no permission.
-	require.EqualValues(t, 156, Head(tenant))
+	// 157: tenant/0157_chat_participant_mapping_conversation_cascade.sql,
+	// chat_participant_mapping.conversation_id's key to chat_conversations
+	// becomes ON DELETE CASCADE, the shape the dev bootstrap always had
+	// (#1429). No data, no permission.
+	require.EqualValues(t, 157, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

@@ -2,10 +2,10 @@ package repos
 
 // DiscardUnadmittedConversation is the one discard the refused-admission
 // paths share (#1429): the desktop child turn, the MCP agent call and the
-// pipeline trigger run. Against the migrated schema, where
-// chat_participant_mapping's key to chat_conversations does NOT cascade
-// (tenant 0123), a bare DELETE failed with 23503 and left the conversation
-// behind; the helper removes the mappings first, in one transaction.
+// pipeline trigger run. Before tenant 0157 chat_participant_mapping's key to
+// chat_conversations did not cascade (tenant 0123), and a bare DELETE failed
+// with 23503 and left the conversation behind. The helper removes the
+// mappings first, in one transaction, under the sync cascade.
 //
 // Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL).
 
@@ -15,11 +15,26 @@ import (
 )
 
 // Each source's conversation, seeded with the two participant mappings the
-// callers build before admission, is refused by a bare DELETE and removed by
-// the helper; a discard under another source does not reach it.
+// callers build before admission, is removed by the helper with its mappings;
+// a discard under another source does not reach it. The sync journal is the
+// one ConversationsRepo.Delete writes: the conversation tombstone and the
+// user's access_participant row, and no access_orphaned marker for the
+// private conversation losing its last user participant.
 func TestDiscardUnadmittedConversationClearsMappingsForEverySource(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	ctx := context.Background()
+
+	// Tenant 0157: the migrated key cascades.
+	var deleteAction string
+	if err := pool.QueryRow(ctx, `
+SELECT confdeltype::text FROM pg_constraint
+ WHERE conrelid = 'p_1.chat_participant_mapping'::regclass AND contype = 'f'
+   AND confrelid = 'p_1.chat_conversations'::regclass`).Scan(&deleteAction); err != nil {
+		t.Fatalf("read the participant key: %v", err)
+	}
+	if deleteAction != "c" {
+		t.Fatalf("chat_participant_mapping → chat_conversations ON DELETE = %q, want cascade (c)", deleteAction)
+	}
 
 	for _, source := range []string{"mcp", "pipeline_trigger", "local_child"} {
 		t.Run(source, func(t *testing.T) {
@@ -42,12 +57,6 @@ SELECT uuid::text FROM conversation`, source).Scan(&conversationUUID); err != ni
 				t.Fatalf("seed conversation: %v", err)
 			}
 
-			// The defect itself: the bare DELETE the callers used is refused.
-			if _, err := pool.Exec(ctx, `DELETE FROM p_1.chat_conversations WHERE uuid = $1::uuid`,
-				conversationUUID); err == nil {
-				t.Fatal("the bare DELETE succeeded: the migrated key cascades, so this test proves nothing")
-			}
-
 			// Another source's discard does not reach it.
 			removed, err := DiscardUnadmittedConversation(ctx, pool, "p_1", conversationUUID, "elitea")
 			if err != nil || removed {
@@ -68,6 +77,29 @@ SELECT (SELECT count(*) FROM p_1.chat_conversations WHERE uuid = $1::uuid),
 			}
 			if conversations != 0 || orphans != 0 {
 				t.Fatalf("after discard: %d conversations, %d orphan mappings", conversations, orphans)
+			}
+			journal := map[string]int{}
+			rows, err := pool.Query(ctx, `
+SELECT kind, count(*) FROM p_1.chat_sync_tombstones
+ WHERE entity_uuid = $1::uuid
+    OR entity_id = (SELECT entity_id FROM p_1.chat_sync_tombstones
+                     WHERE kind = 'conversation' AND entity_uuid = $1::uuid)
+ GROUP BY kind`, conversationUUID)
+			if err != nil {
+				t.Fatalf("read sync journal: %v", err)
+			}
+			for rows.Next() {
+				var kind string
+				var count int
+				if err := rows.Scan(&kind, &count); err != nil {
+					t.Fatal(err)
+				}
+				journal[kind] = count
+			}
+			rows.Close()
+			if len(journal) != 2 || journal["conversation"] != 1 || journal["access_participant"] != 1 {
+				t.Fatalf("sync journal = %v, want one conversation tombstone and one access_participant row "+
+					"(what ConversationsRepo.Delete writes)", journal)
 			}
 
 			// A second call finds nothing and is not an error.
