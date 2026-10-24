@@ -30,6 +30,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use adk_core::{
     AdkError, Content, FinishReason, Llm, LlmRequest, LlmResponse, LlmResponseStream, Part,
@@ -43,7 +44,7 @@ use elitea_agent_runtime::host::{
 };
 use elitea_llm_wire::headers::{EXECUTION_HEADER, PROJECT_HEADER, valid_execution_id};
 use elitea_llm_wire::openai::{self, DoneMatch, TypeCheck, UsageProfile};
-use elitea_llm_wire::refusal::refusal_code;
+use elitea_llm_wire::refusal::{refusal_code, retryable_status};
 use elitea_llm_wire::route::CHAT_COMPLETIONS_ROUTE;
 use elitea_llm_wire::sse::{SseOptions, SseSplitter};
 use elitea_llm_wire::tool_calls::{
@@ -74,7 +75,9 @@ pub struct GatewayTransport {
     pub execution_id: String,
     pub events: Arc<TurnEvents>,
     /// A model bound to report nothing to the webview (no text deltas, no
-    /// usage, no first-token time): the summary model of a compaction.
+    /// usage, no first-token time): the summary model of a compaction. Its
+    /// retries are still reported (`model_retry`, nothing to drop), so a
+    /// turn that waits on one does not look frozen.
     pub quiet: bool,
     /// Where each model step's reasoning is recorded for the commit (not
     /// for a quiet model).
@@ -219,56 +222,56 @@ impl Llm for GatewayModel {
             },
         )?;
         let started = recorder::now();
-        let bearer = self
-            .credentials
-            .bearer()
-            .await
-            .map_err(|error| model_error("model_gateway.unauthorized", &error.message))?;
-        let response = self
-            .http
-            .post(format!("{}{CHAT_COMPLETIONS_ROUTE}", bearer.origin))
-            // The whole call, stream included, as when the client carried it.
-            .timeout(super::api::API_TIMEOUT)
-            .bearer_auth(&bearer.token)
-            .header(PROJECT_HEADER, self.project_id.to_string())
-            .header(EXECUTION_HEADER, &self.execution_id)
-            .header("Accept", "text/event-stream")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|_| {
-                model_error(
-                    "model_gateway.unavailable",
-                    "could not reach the model gateway",
-                )
-            })?;
-        let status = response.status().as_u16();
-        if !(200..300).contains(&status) {
-            let body = response.bytes().await.unwrap_or_default();
-            let code = if context_length_exceeded(status, &body) {
-                CONTEXT_LENGTH_EXCEEDED
-            } else {
-                refusal_code(status, &body)
+        let mut retries = 0_u32;
+        let first_try = std::time::Instant::now();
+        let (responses, completed, usage) = loop {
+            let mut reader = StreamReader::new((!self.quiet).then_some(&*self.events));
+            let failure = match self.call(&body, &mut reader).await {
+                Ok(()) => match reader.finish() {
+                    Ok(finished) => break finished,
+                    Err(failure) => failure,
+                },
+                Err(failure) => failure,
             };
-            return Err(model_error(code, refusal_message(code)));
-        }
-        let mut reader = StreamReader::new((!self.quiet).then_some(&*self.events));
-        let mut bytes = response.bytes_stream();
-        while let Some(chunk) = bytes.next().await {
-            let chunk = chunk.map_err(|_| {
-                model_error(
-                    "model_gateway.incomplete_stream",
-                    "the model stream was cut off",
-                )
-            })?;
-            if !self.quiet {
-                self.events.first_token();
+            // A failed call the gateway reported usage for was billed: it
+            // counts toward the turn's tokens like any other.
+            if let Some(usage) = reader.usage() {
+                self.events
+                    .model_usage(self.lane, &self.request.model_name, usage);
             }
-            if reader.push(&chunk)? {
-                break;
+            let Some(code) = failure.retry else {
+                return Err(*failure.error);
+            };
+            let asked = failure.wait;
+            if retries >= MODEL_RETRIES || first_try.elapsed() >= RETRY_WINDOW {
+                log::warn!(
+                    "model call of execution {} failed ({code}) after {retries} retries",
+                    self.execution_id
+                );
+                return Err(model_error(code, &gave_up(retries)));
             }
-        }
-        let (responses, completed, usage) = reader.finish()?;
+            retries += 1;
+            // The gateway's `Retry-After` when it names a longer wait.
+            let delay = asked.map_or_else(
+                || retry_delay(retries),
+                |asked| retry_delay(retries).max(asked.min(MAX_RETRY_AFTER)),
+            );
+            log::info!(
+                "model call of execution {} failed ({code}); retry {retries} of {MODEL_RETRIES} in {} ms",
+                self.execution_id,
+                delay.as_millis()
+            );
+            // A quiet model streamed nothing to the webview: its units are 0.
+            self.events.model_retry(&ModelRetry {
+                attempt: retries,
+                max_attempts: MODEL_RETRIES,
+                code,
+                delay,
+                text_units: reader.text_units(),
+                thinking_units: reader.thinking_units(),
+            });
+            tokio::time::sleep(delay).await;
+        };
         // Counted whoever called (a summary, a sub-agent): the turn's total
         // is what the gateway logged for its execution id.
         if let Some(usage) = usage {
@@ -301,6 +304,200 @@ impl Llm for GatewayModel {
             responses.into_iter().map(Ok),
         )))
     }
+}
+
+impl GatewayModel {
+    /// One call: the request, then its stream fed to `reader` until
+    /// `[DONE]` or its end. A failure says whether another call may mend it.
+    async fn call(&self, body: &Value, reader: &mut StreamReader<'_>) -> Result<(), CallFailure> {
+        let bearer = self.credentials.bearer().await.map_err(|error| {
+            CallFailure::fatal(model_error("model_gateway.unauthorized", &error.message))
+        })?;
+        // No whole-call timeout: an answer may stream for many minutes. The
+        // response head must come within `API_TIMEOUT`, and then each chunk
+        // within `STREAM_IDLE_TIMEOUT` of the one before.
+        let send = self
+            .http
+            .post(format!("{}{CHAT_COMPLETIONS_ROUTE}", bearer.origin))
+            .bearer_auth(&bearer.token)
+            .header(PROJECT_HEADER, self.project_id.to_string())
+            .header(EXECUTION_HEADER, &self.execution_id)
+            .header("Accept", "text/event-stream")
+            .json(body)
+            .send();
+        let response = match tokio::time::timeout(super::api::API_TIMEOUT, send).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(_)) | Err(_) => {
+                return Err(CallFailure::retry(
+                    UNAVAILABLE,
+                    "could not reach the model gateway",
+                ));
+            }
+        };
+        let status = response.status().as_u16();
+        if !(200..300).contains(&status) {
+            let wait = retry_after(response.headers());
+            let body = tokio::time::timeout(super::api::API_TIMEOUT, response.bytes())
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_default();
+            let code = if context_length_exceeded(status, &body) {
+                CONTEXT_LENGTH_EXCEEDED
+            } else {
+                refusal_code(status, &body)
+            };
+            let error = model_error(code, refusal_message(code));
+            // A 409 is about this execution, not the moment: the same call
+            // meets it again.
+            return Err(
+                if code != CONTEXT_LENGTH_EXCEEDED && status != 409 && retryable_status(status) {
+                    CallFailure {
+                        error: Box::new(error),
+                        retry: Some(code),
+                        wait,
+                    }
+                } else {
+                    CallFailure::fatal(error)
+                },
+            );
+        }
+        let mut bytes = response.bytes_stream();
+        loop {
+            let chunk = match tokio::time::timeout(STREAM_IDLE_TIMEOUT, bytes.next()).await {
+                Ok(Some(Ok(chunk))) => chunk,
+                Ok(None) => return Ok(()),
+                // The answer already came whole (its finish reason): only the
+                // `[DONE]` or the last bytes were lost. Keep it rather than
+                // generate (and bill) it again.
+                Ok(Some(Err(_))) | Err(_) if reader.has_finish() => return Ok(()),
+                Ok(Some(Err(_))) => {
+                    return Err(CallFailure::retry(INCOMPLETE_STREAM, CUT_OFF));
+                }
+                Err(_) => {
+                    return Err(CallFailure::retry(
+                        INCOMPLETE_STREAM,
+                        "the model stream stalled",
+                    ));
+                }
+            };
+            if !self.quiet {
+                self.events.first_token();
+            }
+            if reader.push(&chunk).map_err(CallFailure::fatal)? {
+                return Ok(());
+            }
+        }
+    }
+}
+
+/// How many times one model call is made again after a failure another
+/// call may mend (the gateway unreachable, a cut or stalled stream, a 408,
+/// 429 or 5xx), before the turn fails with a message naming `/retry`.
+pub const MODEL_RETRIES: u32 = 25;
+
+/// How long one model call keeps being made again, from its first try:
+/// past it the turn fails even before [`MODEL_RETRIES`] (a gateway that
+/// stalls each stream would hold the folder for hours).
+#[cfg(not(test))]
+const RETRY_WINDOW: Duration = Duration::from_secs(15 * 60);
+#[cfg(test)]
+const RETRY_WINDOW: Duration = Duration::from_secs(60);
+
+/// The first wait; it doubles with each retry up to [`MAX_RETRY_DELAY`].
+#[cfg(not(test))]
+const FIRST_RETRY_DELAY: Duration = Duration::from_secs(1);
+#[cfg(test)]
+const FIRST_RETRY_DELAY: Duration = Duration::from_millis(1);
+
+/// The longest wait between two calls.
+#[cfg(not(test))]
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const MAX_RETRY_DELAY: Duration = Duration::from_millis(4);
+
+/// How long a model stream may send nothing (no chunk, no keep-alive)
+/// before the call counts as cut off. Reasoning models can think quietly
+/// for minutes.
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
+const UNAVAILABLE: &str = "model_gateway.unavailable";
+const INCOMPLETE_STREAM: &str = "model_gateway.incomplete_stream";
+const CUT_OFF: &str = "the model stream was cut off";
+
+/// The message of a call that failed `retries` more times: the person
+/// sends `/retry` (or presses Retry) to run the turn's message again.
+fn gave_up(retries: u32) -> String {
+    format!("the model call failed {retries} more times; send /retry to try again")
+}
+
+/// The longest `Retry-After` wait the host keeps.
+#[cfg(not(test))]
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(120);
+#[cfg(test)]
+const MAX_RETRY_AFTER: Duration = Duration::from_millis(20);
+
+/// A refusal's `Retry-After` in whole seconds (an HTTP date is not read).
+fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_secs)
+}
+
+/// The wait before retry `retry` (from 1).
+fn retry_delay(retry: u32) -> Duration {
+    let factor = 1_u32 << retry.saturating_sub(1).min(16);
+    FIRST_RETRY_DELAY
+        .saturating_mul(factor)
+        .min(MAX_RETRY_DELAY)
+}
+
+/// Why one call failed.
+#[derive(Debug)]
+struct CallFailure {
+    /// Boxed: `AdkError` is large, and the failure is the cold path.
+    error: Box<AdkError>,
+    /// The code of a failure another call may mend; `None`: final.
+    retry: Option<&'static str>,
+    /// How long the gateway asked to wait (`Retry-After`).
+    wait: Option<Duration>,
+}
+
+impl CallFailure {
+    fn fatal(error: AdkError) -> Self {
+        Self {
+            error: Box::new(error),
+            retry: None,
+            wait: None,
+        }
+    }
+
+    fn retry(code: &'static str, message: &str) -> Self {
+        Self {
+            error: Box::new(model_error(code, message)),
+            retry: Some(code),
+            wait: None,
+        }
+    }
+}
+
+/// A retry, as the `model_retry` event reports it.
+pub struct ModelRetry {
+    /// The retry, from 1.
+    pub attempt: u32,
+    pub max_attempts: u32,
+    pub code: &'static str,
+    pub delay: Duration,
+    /// What the failed call streamed to the webview, in UTF-16 code units
+    /// (the webview's string length): its text and its reasoning, which
+    /// the webview drops.
+    pub text_units: usize,
+    pub thinking_units: usize,
 }
 
 /// The code of a provider's "the prompt is too long" refusal: the step
@@ -772,6 +969,9 @@ struct StreamReader<'a> {
     finish: Option<openai::FinishReason>,
     usage: Option<CallUsage>,
     done: bool,
+    /// What went to the webview, in UTF-16 code units ([`ModelRetry`]).
+    text_units: usize,
+    thinking_units: usize,
 }
 
 impl<'a> StreamReader<'a> {
@@ -786,7 +986,27 @@ impl<'a> StreamReader<'a> {
             finish: None,
             usage: None,
             done: false,
+            text_units: 0,
+            thinking_units: 0,
         }
+    }
+
+    /// The stream named its finish reason: the answer is whole.
+    fn has_finish(&self) -> bool {
+        self.finish.is_some()
+    }
+
+    /// The call's usage, when the gateway reported it.
+    fn usage(&self) -> Option<CallUsage> {
+        self.usage
+    }
+
+    fn text_units(&self) -> usize {
+        self.text_units
+    }
+
+    fn thinking_units(&self) -> usize {
+        self.thinking_units
     }
 
     fn malformed() -> AdkError {
@@ -849,6 +1069,7 @@ impl<'a> StreamReader<'a> {
                 *self.thinking.get_or_insert(0) += reasoning.chars().count();
                 if let Some(events) = self.events {
                     events.thinking_delta(reasoning);
+                    self.thinking_units += reasoning.encode_utf16().count();
                 }
             }
             let answering = delta
@@ -865,6 +1086,7 @@ impl<'a> StreamReader<'a> {
                 self.text.push_str(text);
                 if let Some(events) = self.events {
                     events.text_delta(text);
+                    self.text_units += text.encode_utf16().count();
                 }
             }
             if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
@@ -887,23 +1109,48 @@ impl<'a> StreamReader<'a> {
         }
     }
 
-    /// The adk responses, for an answer without tool calls its text, and
-    /// the call's usage when the gateway reported it.
+    /// The call's answer ([`StreamReader::answer`]). A stream that ended
+    /// before its finish reason is cut off (another call may mend it); a
+    /// malformed one is final.
     #[allow(clippy::type_complexity)]
-    fn finish(mut self) -> adk_core::Result<(Vec<LlmResponse>, Option<String>, Option<CallUsage>)> {
+    fn finish(
+        &mut self,
+    ) -> Result<(Vec<LlmResponse>, Option<String>, Option<CallUsage>), CallFailure> {
         let mut tail = Vec::new();
         self.splitter
             .finish_into(&mut tail)
-            .map_err(|_| Self::malformed())?;
+            .map_err(|_| CallFailure::fatal(Self::malformed()))?;
+        // The tail is what came after the last whole event: on a cut stream,
+        // half an event. It is not a malformed answer: after the finish
+        // reason it is dropped (the answer is whole), before it the call is
+        // cut off and made again.
         for event in tail {
-            self.event(&event.data)?;
+            if let Err(error) = self.event(&event.data) {
+                if self.finish.is_some() {
+                    break;
+                }
+                if self.done {
+                    return Err(CallFailure::fatal(error));
+                }
+                return Err(CallFailure::retry(INCOMPLETE_STREAM, CUT_OFF));
+            }
         }
         let Some(finish) = self.finish else {
-            return Err(model_error(
-                "model_gateway.incomplete_stream",
+            return Err(CallFailure::retry(
+                INCOMPLETE_STREAM,
                 "the model stream ended before the answer was complete",
             ));
         };
+        self.answer(finish).map_err(CallFailure::fatal)
+    }
+
+    /// The adk responses, for an answer without tool calls its text, and
+    /// the call's usage when the gateway reported it.
+    #[allow(clippy::type_complexity)]
+    fn answer(
+        &mut self,
+        finish: openai::FinishReason,
+    ) -> adk_core::Result<(Vec<LlmResponse>, Option<String>, Option<CallUsage>)> {
         self.end_thinking();
         let mut parts = Vec::new();
         if !self.reasoning.is_empty() {
@@ -919,7 +1166,11 @@ impl<'a> StreamReader<'a> {
         }
         let mut has_calls = false;
         if !self.calls.is_empty() {
-            for call in self.calls.finish().map_err(|_| Self::malformed())? {
+            let calls = std::mem::replace(
+                &mut self.calls,
+                ToolCallAssembler::new(ToolCallProfile::Lenient, TOOL_CALL_LIMITS),
+            );
+            for call in calls.finish().map_err(|_| Self::malformed())? {
                 let call = call.map_err(|_| Self::malformed())?;
                 let args: Value = if call.arguments.trim().is_empty() {
                     json!({})
@@ -974,6 +1225,28 @@ mod tests {
             allow_text_continuation: false,
             max_model_turns: 5,
         }
+    }
+
+    #[test]
+    fn the_retry_wait_doubles_up_to_its_cap() {
+        let waits: Vec<u128> = (1..=5).map(|n| retry_delay(n).as_millis()).collect();
+        assert_eq!(waits, [1, 2, 4, 4, 4]);
+        assert_eq!(retry_delay(MODEL_RETRIES), MAX_RETRY_DELAY);
+        assert!(gave_up(25).contains("/retry"));
+    }
+
+    #[test]
+    fn retry_after_is_read_in_whole_seconds_only() {
+        let header = |value: &str| {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(reqwest::header::RETRY_AFTER, value.parse().unwrap());
+            retry_after(&headers)
+        };
+        assert_eq!(header("12"), Some(Duration::from_secs(12)));
+        assert_eq!(header(" 3 "), Some(Duration::from_secs(3)));
+        assert_eq!(header("Wed, 21 Oct 2026 07:28:00 GMT"), None);
+        assert_eq!(header("-1"), None);
+        assert_eq!(retry_after(&reqwest::header::HeaderMap::new()), None);
     }
 
     #[test]
