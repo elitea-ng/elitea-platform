@@ -1,16 +1,16 @@
 /**
- * Rendering and behaviour tests for `pages/admin/SchedulesTasks.tsx` (unit A14).
+ * Rendering and behaviour tests for `pages/admin/SchedulesTasks.tsx`
+ * (issue #1369).
  *
- * The bar these have to clear is not "the page renders". This page's one write
- * enables and disables PLATFORM jobs that then run unattended, so each test
- * asserts one of:
+ * The page's writes switch platform routines off and change when they run, so
+ * each test asserts one of:
  *
  *  - the REQUEST the control produced (a toggle that sends the wrong id, or
- *    that smuggles a field, looks identical on screen to one that does not);
+ *    smuggles a field, looks identical on screen to one that does not);
  *  - that a control the server would refuse is not offered as though it worked.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 
@@ -19,6 +19,7 @@ import { server } from '@/test/setup';
 
 import { AdminSchedulesTasks } from './SchedulesTasks';
 import { renderAdminRoute } from './__tests__/testRouter';
+import type { AdminRoutineRow } from './api/adminSchedulesApi';
 
 interface RecordedRequest {
   readonly method: string;
@@ -26,100 +27,54 @@ interface RecordedRequest {
   readonly body: unknown;
 }
 
-interface ScheduleFixture {
-  readonly id: number;
-  readonly name: string;
-  readonly project_id: number | null;
-  readonly cron: string;
-  readonly active: boolean;
-  readonly rpc_func: string;
-  readonly rpc_kwargs: Record<string, unknown>;
-  readonly last_run: string | null;
-}
-
 let recorded: RecordedRequest[] = [];
 
-const SCHEDULES: ScheduleFixture[] = [
-  {
-    id: 11,
-    name: 'index_scheduling',
-    project_id: null,
-    cron: '*/5 * * * *',
-    active: true,
-    rpc_func: 'indexer_scan',
-    rpc_kwargs: {},
-    last_run: '2026-08-01T10:00:00Z',
-  },
-  {
-    // Inactive on purpose: the handler this page replaced hardcoded
-    // `enabled: true`, so a disabled schedule could not be represented at all.
-    id: 12,
-    name: 'storage_used_space_check',
-    project_id: null,
-    cron: '0 3 * * *',
-    active: false,
-    rpc_func: 'storage_space_check',
-    rpc_kwargs: {},
-    last_run: null,
-  },
-  {
-    id: 13,
-    name: 'usage_monitor',
-    project_id: null,
-    cron: '0 * * * *',
-    active: true,
-    rpc_func: 'usage_collect',
-    rpc_kwargs: { window: 60 },
-    last_run: null,
-  },
+function routine(overrides: Partial<AdminRoutineRow> & { id: string }): AdminRoutineRow {
+  return {
+    owner: 'main',
+    description: `${overrides.id} description`,
+    default_schedule: '* * * * *',
+    schedule_override: null,
+    schedule: '* * * * *',
+    min_interval_seconds: 60,
+    enabled: true,
+    last_run_at: null,
+    last_outcome: null,
+    next_run_at: '2026-08-01T10:05:00Z',
+    updated_by: null,
+    updated_at: '2026-08-01T09:00:00Z',
+    ...overrides,
+  };
+}
+
+const ROUTINES: AdminRoutineRow[] = [
+  routine({
+    id: 'index.schedule.scan.v1',
+    schedule: '*/5 * * * *',
+    schedule_override: '*/5 * * * *',
+    last_run_at: '2026-08-01T10:00:00Z',
+    last_outcome: 'ok',
+  }),
+  // Off on purpose: a routine an operator switched off must still be listed.
+  routine({ id: 'scheduler.audit_retention', owner: 'scheduler', enabled: false, schedule: '1h', default_schedule: '1h', next_run_at: null }),
+  routine({ id: 'scheduler.price_sync', owner: 'scheduler', schedule: '24h', default_schedule: '24h', last_run_at: '2026-08-01T08:00:00Z', last_outcome: 'error' }),
 ];
 
-let listBody: () => Response = () =>
-  HttpResponse.json({ rows: SCHEDULES, total: SCHEDULES.length });
+let listBody: () => Response = () => HttpResponse.json({ rows: ROUTINES, total: ROUTINES.length });
 
-function useScheduleHandlers(): void {
+function useRoutineHandlers(): void {
   server.use(
-    http.get('*/scheduling/schedules/administration/0', ({ request }) => {
+    http.get('*/admin/platform_routines/administration', ({ request }) => {
       recorded.push({ method: 'GET', url: request.url, body: null });
       return listBody();
     }),
-    http.put('*/scheduling/schedules/administration/0', async ({ request }) => {
+    http.put('*/admin/platform_routines/administration/:id', async ({ request }) => {
       recorded.push({ method: 'PUT', url: request.url, body: await request.json() });
-      return HttpResponse.json({ id: 11 });
-    }),
-    // The history drawer runs on the Audit Trail port's endpoint unchanged.
-    http.get('*/elitea_core/audit/administration', ({ request }) => {
-      recorded.push({ method: 'GET-audit', url: request.url, body: null });
-      return HttpResponse.json({
-        rows: [
-          {
-            id: 1,
-            timestamp: '2026-08-01T10:00:00Z',
-            event_type: 'schedule',
-            action: 'Schedule: index_scheduling -> indexer_scan',
-            duration_ms: 12.5,
-            is_error: false,
-            user_id: null,
-            user_email: null,
-            project_id: null,
-            http_method: null,
-            http_route: null,
-            status_code: null,
-            entity_name: null,
-            tool_name: null,
-            model_name: null,
-            trace_id: null,
-            span_id: null,
-            parent_span_id: null,
-          },
-        ],
-        total: 1,
-      });
+      return HttpResponse.json(ROUTINES[0]);
     }),
   );
 }
 
-/** The permission list the Go adminui handler injects for a valid session. */
 function grantAdminUiPermissions(permissions: string[]): void {
   window.admin_ui_config = { permissions, vite_server_url: '/api/v2' };
 }
@@ -128,33 +83,28 @@ function writes(): RecordedRequest[] {
   return recorded.filter((entry) => entry.method === 'PUT');
 }
 
-/**
- * The schedule name is a `Link component="button"`, so its accessible role is
- * `button` and not `link` — asserting on `link` passes vacuously nowhere and
- * fails everywhere, which is how this was caught.
- */
-async function waitForSchedules(): Promise<void> {
-  await screen.findByRole('button', { name: 'index_scheduling' });
+async function waitForRoutines(): Promise<void> {
+  await screen.findByText('index.schedule.scan.v1');
 }
 
-/** The schedule NAME cell of each body row, in render order. */
-function renderedScheduleNames(): string[] {
+/** The routine id of each body row, in render order. */
+function renderedIds(): string[] {
   const table = screen.getByRole('table');
   return within(table)
     .getAllByRole('row')
     .slice(1)
-    .map((row) => within(row).getAllByRole('cell')[0]!.textContent ?? '');
+    .map((row) => within(row).getAllByRole('cell')[0]!.querySelector('span')?.textContent ?? '');
 }
 
 beforeEach(() => {
   recorded = [];
-  listBody = () => HttpResponse.json({ rows: SCHEDULES, total: SCHEDULES.length });
+  listBody = () => HttpResponse.json({ rows: ROUTINES, total: ROUTINES.length });
   configureGeneratedClient({ baseUrl: '/api/v2' });
   grantAdminUiPermissions([
     'configuration.scheduling.schedules.view',
     'configuration.scheduling.schedules.edit',
   ]);
-  useScheduleHandlers();
+  useRoutineHandlers();
 });
 
 afterEach(() => {
@@ -162,98 +112,79 @@ afterEach(() => {
   delete window.admin_ui_config;
 });
 
-describe('AdminSchedulesTasks — the listing', () => {
-  it('renders every schedule with the function it invokes and its last run', async () => {
+describe('AdminSchedulesTasks - the listing', () => {
+  it('renders every routine with its description and schedule', async () => {
     renderAdminRoute(<AdminSchedulesTasks />);
-    await waitForSchedules();
+    await waitForRoutines();
 
-    // `rpc_func` is on screen because it is the only thing that says WHAT a
-    // schedule does; a row without it is a cron with no meaning.
-    expect(screen.getByText('indexer_scan')).toBeInTheDocument();
-    expect(screen.getByText('storage_space_check')).toBeInTheDocument();
-    expect(screen.getByText('usage_collect')).toBeInTheDocument();
-
-    // A schedule that has never run says so rather than showing an em dash or
-    // the epoch.
-    expect(screen.getAllByText('Never')).toHaveLength(2);
+    expect(screen.getByText('index.schedule.scan.v1 description')).toBeInTheDocument();
+    expect(screen.getByText('24h')).toBeInTheDocument();
+    // A custom schedule says what it replaced; a default one says so too.
+    expect(screen.getByText('Custom (default * * * * *)')).toBeInTheDocument();
+    expect(screen.getAllByText('Default')).toHaveLength(2);
   });
 
-  it('renders an inactive schedule with its switch off rather than hiding it', async () => {
+  it('renders a switched-off routine with its switch off rather than hiding it', async () => {
     renderAdminRoute(<AdminSchedulesTasks />);
-    await waitForSchedules();
+    await waitForRoutines();
 
-    const off = screen.getByRole('switch', { name: 'Schedule enabled: storage_used_space_check' });
-    expect(off).not.toBeChecked();
-    const on = screen.getByRole('switch', { name: 'Schedule enabled: index_scheduling' });
-    expect(on).toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Schedule enabled: scheduler.audit_retention' })).not.toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Schedule enabled: index.schedule.scan.v1' })).toBeChecked();
+    // An off routine has no next run to show.
+    expect(screen.getByText('Off')).toBeInTheDocument();
   });
 
-  it('filters on the name and on the function, not on the name alone', async () => {
+  it('shows a failed last run with its outcome', async () => {
+    renderAdminRoute(<AdminSchedulesTasks />);
+    await waitForRoutines();
+    expect(screen.getByText(/\(error\)$/)).toBeInTheDocument();
+  });
+
+  it('filters on the id and on the description', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminSchedulesTasks />);
-    await waitForSchedules();
+    await waitForRoutines();
 
-    // `usage_collect` is the FUNCTION of `usage_monitor`. Searching for it must
-    // find that row: an operator chasing a runaway job knows the function name
-    // from the logs, not the schedule's label.
-    await user.type(screen.getByTestId('admin-schedules-search'), 'usage_collect');
+    await user.type(screen.getByTestId('admin-schedules-search'), 'price_sync');
 
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: 'index_scheduling' })).not.toBeInTheDocument(),
-    );
-    expect(screen.getByRole('button', { name: 'usage_monitor' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('index.schedule.scan.v1')).not.toBeInTheDocument());
+    expect(screen.getByText('scheduler.price_sync')).toBeInTheDocument();
   });
 
   it('sorts on a header click without asking the server again', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminSchedulesTasks />);
-    await waitForSchedules();
+    await waitForRoutines();
     const readsBefore = recorded.filter((entry) => entry.method === 'GET').length;
 
     await user.click(screen.getByRole('button', { name: 'Name' }));
 
-    // Descending by name: usage_monitor first.
-    await waitFor(() => expect(renderedScheduleNames()[0]).toBe('usage_monitor'));
-    // The endpoint is unpaginated and the whole table is already here, so a
-    // sort that refetched would be asking for rows it holds.
+    await waitFor(() => expect(renderedIds()[0]).toBe('scheduler.price_sync'));
     expect(recorded.filter((entry) => entry.method === 'GET')).toHaveLength(readsBefore);
   });
 
-  it('sorts never-run schedules LAST in both directions, not as the epoch', async () => {
+  it('sorts never-run routines LAST in both directions, not as the epoch', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminSchedulesTasks />);
-    await waitForSchedules();
-
-    // "Never" is not "a very long time ago". Sorting it as the epoch buries the
-    // rows an operator most wants to notice at whichever end they are looking
-    // away from, so it is pinned to the bottom of BOTH orders — which is also
-    // why one direction alone cannot prove the comparator right.
-    await user.click(screen.getByRole('button', { name: 'Last run' }));
-    await waitFor(() => expect(renderedScheduleNames()[0]).toBe('index_scheduling'));
+    await waitForRoutines();
 
     await user.click(screen.getByRole('button', { name: 'Last run' }));
-    await waitFor(() => expect(renderedScheduleNames().at(-1)).toBe('index_scheduling'));
-    // The two never-run rows hold the other two places in both orders.
-    expect(renderedScheduleNames().slice(0, 2).sort()).toEqual([
-      'storage_used_space_check',
-      'usage_monitor',
-    ]);
+    await waitFor(() => expect(renderedIds()[0]).toBe('scheduler.price_sync'));
+
+    await user.click(screen.getByRole('button', { name: 'Last run' }));
+    await waitFor(() => expect(renderedIds()[0]).toBe('index.schedule.scan.v1'));
+    expect(renderedIds().at(-1)).toBe('scheduler.audit_retention');
   });
 
   it("surfaces the server's own explanation instead of a generic failure", async () => {
-    listBody = () => HttpResponse.json({ error: 'failed to read schedules' }, { status: 500 });
+    listBody = () => HttpResponse.json({ error: 'failed to read the platform routines' }, { status: 500 });
     renderAdminRoute(<AdminSchedulesTasks />);
 
     const alert = await screen.findByTestId('admin-schedules-unavailable');
-    expect(alert).toHaveTextContent('failed to read schedules');
+    expect(alert).toHaveTextContent('failed to read the platform routines');
   });
 
-  it("quotes the server's explanation of a 403 rather than a generic failure", async () => {
-    // This pin fired, and the change it caught is the intended one (issue 93):
-    // `shared/api/http.ts` no longer escalates a 403 into the single-flight
-    // re-auth path, so a refusal now arrives as `kind: 'http'` WITH its body
-    // instead of as a body-less `kind: 'auth'`. Re-pinned the other way round —
-    // an operator refused this page is told why.
+  it("quotes the server's explanation of a 403", async () => {
     listBody = () => HttpResponse.json({ error: 'permission denied' }, { status: 403 });
     renderAdminRoute(<AdminSchedulesTasks />);
 
@@ -262,43 +193,75 @@ describe('AdminSchedulesTasks — the listing', () => {
   });
 });
 
-describe('AdminSchedulesTasks — the write', () => {
-  it('sends only the id and the flipped active flag when the switch is toggled', async () => {
+describe('AdminSchedulesTasks - the write', () => {
+  it('sends only the flipped enabled flag, to the routine id in the path', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminSchedulesTasks />);
-    await waitForSchedules();
+    await waitForRoutines();
 
-    await user.click(screen.getByRole('switch', { name: 'Schedule enabled: index_scheduling' }));
+    await user.click(screen.getByRole('switch', { name: 'Schedule enabled: index.schedule.scan.v1' }));
 
     await waitFor(() => expect(writes()).toHaveLength(1));
-    // The body is asserted field by field, not just "a PUT happened": a request
-    // carrying `rpc_func` would be refused by the server, and one carrying the
-    // wrong id would disable a different platform job.
-    expect(writes()[0]!.body).toEqual({ id: 11, active: false });
+    expect(writes()[0]!.url).toMatch(/\/admin\/platform_routines\/administration\/index\.schedule\.scan\.v1$/);
+    expect(writes()[0]!.body).toEqual({ enabled: false });
   });
 
-  it('sends the edited cron and nothing else', async () => {
+  it('sends the edited schedule and nothing else', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminSchedulesTasks />);
-    await waitForSchedules();
+    await waitForRoutines();
 
     await user.click(screen.getByRole('button', { name: '*/5 * * * *' }));
-    const field = await screen.findByRole('textbox', { name: 'Cron (5 fields)' });
+    const field = await screen.findByRole('textbox', { name: 'Schedule (interval or cron)' });
     await user.clear(field);
-    await user.type(field, '*/15 * * * *');
+    await user.type(field, '30m');
     await user.tab();
 
     await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0]!.body).toEqual({ id: 11, cron: '*/15 * * * *' });
+    expect(writes()[0]!.body).toEqual({ schedule: '30m' });
   });
 
-  it('does not save a cron the operator abandoned with Escape', async () => {
+  it('sends a schedule committed with Enter once, although the closing editor also blurs', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminSchedulesTasks />);
-    await waitForSchedules();
+    await waitForRoutines();
 
     await user.click(screen.getByRole('button', { name: '*/5 * * * *' }));
-    const field = await screen.findByRole('textbox', { name: 'Cron (5 fields)' });
+    const field = await screen.findByRole('textbox', { name: 'Schedule (interval or cron)' });
+    await user.clear(field);
+    await user.type(field, '30m');
+    // One act: the blur reaches the handler that still holds the draft.
+    act(() => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+      fireEvent.blur(field);
+    });
+
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(writes()).toHaveLength(1);
+  });
+
+  it('sends an empty schedule to restore the default of an overridden routine', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminSchedulesTasks />);
+    await waitForRoutines();
+
+    await user.click(screen.getByRole('button', { name: '*/5 * * * *' }));
+    const field = await screen.findByRole('textbox', { name: 'Schedule (interval or cron)' });
+    await user.clear(field);
+    await user.tab();
+
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0]!.body).toEqual({ schedule: '' });
+  });
+
+  it('does not save a schedule the operator abandoned with Escape', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminSchedulesTasks />);
+    await waitForRoutines();
+
+    await user.click(screen.getByRole('button', { name: '*/5 * * * *' }));
+    const field = await screen.findByRole('textbox', { name: 'Schedule (interval or cron)' });
     await user.clear(field);
     await user.type(field, 'nonsense');
     await user.keyboard('{Escape}');
@@ -307,122 +270,64 @@ describe('AdminSchedulesTasks — the write', () => {
     expect(writes()).toHaveLength(0);
   });
 
-  it('does not save a cron that was opened and left unchanged', async () => {
+  it('does not save a schedule that was opened and left unchanged', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminSchedulesTasks />);
-    await waitForSchedules();
+    await waitForRoutines();
 
     await user.click(screen.getByRole('button', { name: '*/5 * * * *' }));
-    await screen.findByRole('textbox', { name: 'Cron (5 fields)' });
+    await screen.findByRole('textbox', { name: 'Schedule (interval or cron)' });
     await user.tab();
 
-    // A no-op save would report success for an edit that did not happen, and
-    // would stamp the audit trail with a change nobody made.
     await screen.findByRole('button', { name: '*/5 * * * *' });
     expect(writes()).toHaveLength(0);
   });
 
-  it("shows the server's own reason when a cron is rejected", async () => {
+  it("shows the server's own reason when a schedule is rejected", async () => {
     const user = userEvent.setup();
     server.use(
-      http.put('*/scheduling/schedules/administration/0', async ({ request }) => {
+      http.put('*/admin/platform_routines/administration/:id', async ({ request }) => {
         recorded.push({ method: 'PUT', url: request.url, body: await request.json() });
         return HttpResponse.json(
-          { error: 'cron expression is invalid: five fields are required' },
+          { error: 'schedule fires more often than this routine allows: at least 1m0s between runs' },
           { status: 400 },
         );
       }),
     );
     renderAdminRoute(<AdminSchedulesTasks />);
-    await waitForSchedules();
+    await waitForRoutines();
 
     await user.click(screen.getByRole('button', { name: '*/5 * * * *' }));
-    const field = await screen.findByRole('textbox', { name: 'Cron (5 fields)' });
+    const field = await screen.findByRole('textbox', { name: 'Schedule (interval or cron)' });
     await user.clear(field);
-    await user.type(field, '@daily');
+    await user.type(field, '10s');
     await user.tab();
 
-    // `@daily` is a descriptor robfig accepts only WITH `cron.Descriptor`, and
-    // the scheduler's parser is built without it — so the server refuses it and
-    // the operator has to be told which of their inputs was wrong.
     const alert = await screen.findByTestId('admin-schedules-error');
-    expect(alert).toHaveTextContent('cron expression is invalid: five fields are required');
-    expect(writes()[0]!.body).toEqual({ id: 11, cron: '@daily' });
+    expect(alert).toHaveTextContent('fires more often than this routine allows');
+    expect(writes()[0]!.body).toEqual({ schedule: '10s' });
   });
 });
 
-describe('AdminSchedulesTasks — authorisation is presentation only', () => {
-  it('disables the switch and the cron editor without the edit permission', async () => {
-    const user = userEvent.setup();
+describe('AdminSchedulesTasks - authorisation is presentation only', () => {
+  it('disables the switch and the schedule editor without the edit permission', async () => {
     grantAdminUiPermissions(['configuration.scheduling.schedules.view']);
     renderAdminRoute(<AdminSchedulesTasks />);
-    await waitForSchedules();
+    await waitForRoutines();
 
-    expect(screen.getByRole('switch', { name: 'Schedule enabled: index_scheduling' })).toBeDisabled();
-    // The cron renders as text, so there is no button to open an editor with.
+    expect(screen.getByRole('switch', { name: 'Schedule enabled: index.schedule.scan.v1' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: '*/5 * * * *' })).not.toBeInTheDocument();
     expect(screen.getByText('*/5 * * * *')).toBeInTheDocument();
-
-    // The name link still works: read access is read access.
-    await user.click(screen.getByRole('button', { name: 'index_scheduling' }));
-    await screen.findByText('Execution history');
     expect(writes()).toHaveLength(0);
   });
 });
 
-describe('AdminSchedulesTasks — schedules only', () => {
-  // The reference page's Tasks and Active Tasks tabs read a plugin runtime's
-  // task registry this platform does not have; Admin › Tasks answers that
-  // question from the platform's own tables. This page must not grow them back
-  // as tabs that render nothing.
-  it('renders no tab strip and requests nothing about tasks', async () => {
+describe('AdminSchedulesTasks - routines only', () => {
+  it('renders no tab strip and requests nothing about tasks or history', async () => {
     renderAdminRoute(<AdminSchedulesTasks />);
-    await waitForSchedules();
+    await waitForRoutines();
 
     expect(screen.queryByRole('tab')).not.toBeInTheDocument();
-    expect(screen.getByTestId('admin-schedules-search')).toBeInTheDocument();
-    expect(recorded.filter((entry) => entry.url.includes('tasks'))).toHaveLength(0);
-  });
-});
-
-describe('AdminSchedulesTasks — execution history', () => {
-  it('queries schedule audit events for the clicked schedule', async () => {
-    const user = userEvent.setup();
-    renderAdminRoute(<AdminSchedulesTasks />);
-    await waitForSchedules();
-
-    await user.click(screen.getByRole('button', { name: 'index_scheduling' }));
-
-    await waitFor(() =>
-      expect(recorded.some((entry) => entry.method === 'GET-audit')).toBe(true),
-    );
-    const auditRequest = recorded.find((entry) => entry.method === 'GET-audit')!;
-    const query = new URL(auditRequest.url).searchParams;
-    // Scoped to schedule executions, and to THIS schedule's span name.
-    expect(query.get('event_type')).toBe('schedule');
-    expect(query.get('search')).toBe('Schedule: index_scheduling');
-
-    const drawer = await screen.findByText('Execution history');
-    expect(drawer).toBeInTheDocument();
-    expect(await screen.findByText('Succeeded')).toBeInTheDocument();
-  });
-
-  it('does not query the audit trail before a schedule is opened', () => {
-    renderAdminRoute(<AdminSchedulesTasks />);
-    expect(recorded.filter((entry) => entry.method === 'GET-audit')).toHaveLength(0);
-  });
-
-  it('says the period was empty rather than showing nothing at all', async () => {
-    const user = userEvent.setup();
-    server.use(
-      http.get('*/elitea_core/audit/administration', () => HttpResponse.json({ rows: [], total: 0 })),
-    );
-    renderAdminRoute(<AdminSchedulesTasks />);
-    await waitForSchedules();
-
-    await user.click(screen.getByRole('button', { name: 'usage_monitor' }));
-
-    const empty = await screen.findByTestId('admin-schedule-history-empty');
-    expect(within(empty).getByText(/No executions recorded/)).toBeInTheDocument();
+    expect(recorded.filter((entry) => /tasks|audit/.test(entry.url))).toHaveLength(0);
   });
 });

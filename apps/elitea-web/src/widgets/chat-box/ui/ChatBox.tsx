@@ -263,7 +263,7 @@ const ChatBoxInner = memo(function ChatBox({
     handleContinueMcpExecution,
     handleContinueTokenLimit,
     handleClear,
-  } = useChatBoxActions({ chatInputRef, data, state, handlers, deleteAlert, messages, isAgentsPage, readAloudStop, onConversationCreated });
+  } = useChatBoxActions({ chatInputRef, data, state, handlers, deleteAlert, messages, isAgentsPage, readAloudStop, onConversationCreated, onSkillsUnavailable: voiceFeedback.onError });
 
   const staticPause = useStaticPauseCards({ messages, setChatHistory: data.setChatHistory, projectId, conversationUuid, continueExecution: continueStreamedExecution, editorTest, isStreaming });
   // A message typed while an authored pipeline pause is current continues that

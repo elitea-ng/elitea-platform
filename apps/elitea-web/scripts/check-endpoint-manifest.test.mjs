@@ -768,7 +768,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // meta.internal_tools for the native settings sheets. No web code calls it
 // yet (the web still PUTs the whole meta), so the manifest count is
 // unchanged.
-const GENERATED_OPERATION_COUNT = 342;
+// 342 -> 344 (issue 1369): listPlatformRoutines and updatePlatformRoutine,
+// the routine registry behind Admin › Schedules. Admin routes are not in
+// the manifest, so its count is unchanged.
+const GENERATED_OPERATION_COUNT = 344;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

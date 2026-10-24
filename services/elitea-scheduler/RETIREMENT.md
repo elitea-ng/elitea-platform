@@ -22,9 +22,10 @@ What owns scheduled work now:
   tick on its own platform scheduler; PostgreSQL
   `elitea_runtime.scheduled_job_cursors` and
   `elitea_runtime.scheduled_occurrences` own planning, takeover, and completion.
-- `centry.schedule` rows are still listed and edited by the admin Schedules
-  surface, and nothing executes them: no legacy component shares this
-  database. Moving their execution onto the platform scheduler is #1369.
+- The recurring routines of both processes are listed and edited by the admin
+  Schedules page through the registry `elitea_runtime.platform_routines`
+  (#1369). The `centry.schedule` table it used to show is no longer read by
+  anything.
 
 ## What this binary still runs
 
@@ -50,3 +51,20 @@ that never runs costs only a later pass.
 It takes its own loop, started from `cmd/elitea-scheduler`, in the shape the
 price-sync and budget write-back workers already use. When this image is
 retired, the sweep moves with those two and needs the same explicit decision.
+
+## Its workers run on the routine registry
+
+The price-sync, audit-retention, sync-tombstone-retention, native-auth-retention
+and auth-state-retention workers no longer own a fixed ticker. Each runs through
+`libs/go/routines`' `Loop`: every 15 seconds it reads its row of
+`elitea_runtime.platform_routines`, skips the pass while an operator has the
+routine switched off, and otherwise runs when the row's `next_run_at` has
+passed, after claiming that slot in the database so several replicas do not all
+run the same pass. The env settings (`PRICE_SYNC_INTERVAL`,
+`AUDIT_RETENTION_INTERVAL`, and the retention defaults) are now the routine's
+DEFAULT schedule; an operator's override from the admin page wins over it and
+needs no restart. If the registry cannot be read (for example the table is not
+migrated yet), a worker falls back to that default on a local clock, which is
+what it did before the registry existed.
+
+The budget write-back consumer is not a schedule and is not in the registry.

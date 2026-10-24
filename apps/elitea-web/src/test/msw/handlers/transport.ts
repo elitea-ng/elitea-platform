@@ -5,7 +5,7 @@
  *  - R-M3: every factory routes its entry through F2's
  *    `registerValidatedHandlers`, so the fixture body is zod-validated at
  *    registration time (the factory call inside each test).
- *  - R-M4: fixtures carry `recordedAt`; they are `synthetic: true` because
+ *  - fixtures carry `recordedAt`; they are `synthetic: true` because
  *    the probed paths (`/__transport__/…`) intentionally exist on no real
  *    endpoint — the §5.4 behaviours under test are transport semantics, not
  *    endpoint contracts.

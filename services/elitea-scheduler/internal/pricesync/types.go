@@ -1,6 +1,6 @@
 // Package pricesync implements the LLM model price-catalog sync worker
 // (design §8.8). It runs as a cold, low-frequency batch job inside
-// elitea-scheduler (which already has a pgxpool and a ticker loop, so it is off
+// elitea-scheduler (which already has a pgxpool and a routine loop, so it is off
 // the /llm hot path) and keeps gateway.gateway_models — the per-1M-token price
 // catalog — refreshed from one or more ordered PriceSource adapters.
 //

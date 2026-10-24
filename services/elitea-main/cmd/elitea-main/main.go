@@ -3307,6 +3307,10 @@ func startPipelineScheduleRunner(
 		Schedule: cadence,
 		Timeout:  v2pipelinetriggers.ScheduleJobTimeout,
 		Handler:  job,
+
+		Description: "Starts the pipeline runs whose schedules are due.",
+		Cadence:     v2pipelinetriggers.ScheduleJobCadence,
+		MinInterval: time.Minute,
 	})
 	if err != nil {
 		return fmt.Errorf("register pipeline schedule job: %w", err)
@@ -3319,6 +3323,11 @@ func startPipelineScheduleRunner(
 	if err != nil {
 		return fmt.Errorf("construct pipeline schedule runner: %w", err)
 	}
+	controls, err := dbrepos.NewPlatformRoutineControls(pool)
+	if err != nil {
+		return fmt.Errorf("construct pipeline schedule routine controls: %w", err)
+	}
+	runner.WithControls(controls)
 	// Run returns only when ctx is cancelled, which is process shutdown. The
 	// error is logged rather than dropped: a runner that stopped early would
 	// otherwise take every tenant's schedules with it, silently.

@@ -147,8 +147,6 @@ var auditedSurfaces = []string{
 	"/api/v2/elitea_core/user_budget/",
 	// Service descriptor registration — what the platform will call out to.
 	"/api/v2/elitea_core/register_descriptor/",
-	// Scheduled execution: creating one delegates future action to the platform.
-	"/api/v2/scheduling/",
 }
 
 // AuditedSurfaces returns a copy of the prefix list, so a router-level test can

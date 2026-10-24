@@ -112,6 +112,9 @@ function adminVolatileRegions(page: Page): Locator[] {
     // probe rows at seed time, so it is the wall clock of whenever the stack
     // was provisioned.
     page.locator('.MuiDataGrid-cell[data-field="created_at"]'),
+    // `Last run` and `Next run` on Schedules - wall-clock times of the
+    // routines elitea-main registers, which move with every start of the stack.
+    page.getByTestId('admin-schedules-time'),
   ];
 }
 
@@ -229,11 +232,10 @@ const ADMIN_ROUTES: readonly AdminVisualRoute[] = [
     // The schedules table. Like Roles, this page has a textual loading branch
     // (`Loading schedules…`) and mounts no table until the query resolves.
     //
-    // The `Last run` column is NOT masked, deliberately. The two seeded probe
-    // rows are inactive with `last_run` NULL, and the E2E stack runs no
-    // scheduler (`deploy/docker-compose.e2e-standalone.yml` has no
-    // elitea-scheduler service), so the cell reads the literal `Never` on every
-    // run. Masking it would hide the one thing worth seeing there.
+    // The `Last run` and `Next run` cells ARE masked (`adminVolatileRegions`):
+    // they hold the wall-clock times of the routines elitea-main registers on
+    // start. The E2E stack runs no elitea-scheduler, so only elitea-main's
+    // routines are listed.
     // Measured: loaded YES, stalled no.
     landmark: (page) => page.getByRole('table', { name: 'Schedules' }),
   },

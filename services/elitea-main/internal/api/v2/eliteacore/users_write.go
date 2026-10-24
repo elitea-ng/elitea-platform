@@ -114,8 +114,7 @@ const (
 // Handler.Users never reads the parameter.
 //
 // The fix follows the convention the rest of this service already uses for the
-// same trap (internal/api/v2/scheduling/schedules.go,
-// internal/api/v2/moderation/requests.go,
+// same trap (internal/api/v2/moderation/requests.go,
 // internal/api/v2/admin/config_values.go): a handler mounted on a static mode
 // segment takes the mode as a Go value and does not look for a parameter that
 // cannot be there. The `{mode}` handlers keep reading the parameter.

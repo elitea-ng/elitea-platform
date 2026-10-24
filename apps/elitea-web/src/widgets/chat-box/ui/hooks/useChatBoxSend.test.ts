@@ -114,6 +114,10 @@ const commonBody = {
   modelName: 'gpt-4o',
 };
 
+function startPayload(body: Record<string, unknown> | undefined): Record<string, unknown> {
+  return (body?.['payload'] ?? {}) as Record<string, unknown>;
+}
+
 describe('buildStartBody', () => {
   it('omits llm_settings entirely for an application turn', () => {
     const body = buildStartBody({ ...commonBody, isApplicationTurn: true, participantId: 42 });
@@ -122,6 +126,23 @@ describe('buildStartBody', () => {
     expect(body).toBeDefined();
     expect(Object.hasOwn(body ?? {}, 'llm_settings')).toBe(false);
     expect(body?.['participant_id']).toBe(42);
+  });
+
+  it('sends the picked project skills as ids only, on an application turn', () => {
+    const payload = { ...commonBody.payload, projectSkillIds: ['9', 8, '9', 'x', 0, -3] };
+    const body = buildStartBody({ ...commonBody, payload, isApplicationTurn: true, participantId: 42 });
+    expect(startPayload(body)['skills']).toEqual([
+      { source: 'project', id: 9 },
+      { source: 'project', id: 8 },
+    ]);
+  });
+
+  it('sends no skills key when none was picked, and none on a model chat', () => {
+    const none = buildStartBody({ ...commonBody, isApplicationTurn: true, participantId: 42 });
+    expect(Object.hasOwn(startPayload(none), 'skills')).toBe(false);
+    const payload = { ...commonBody.payload, projectSkillIds: ['9'] };
+    const adhoc = buildStartBody({ ...commonBody, payload, isApplicationTurn: false, participantId: undefined });
+    expect(Object.hasOwn(startPayload(adhoc), 'skills')).toBe(false);
   });
 
   it('refuses to build an application body with no addressable participant', () => {

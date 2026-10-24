@@ -30,6 +30,7 @@ function renderActions(
         setIsMentioningEveryone: vi.fn(),
         setSelectedUsers: vi.fn(),
         slash: { resetSlash: vi.fn() },
+        skill: { projectSkillIdsFor: () => [] },
         ...mentionState,
       } as never,
       handlers: { sendQuestion } as never,
@@ -125,6 +126,7 @@ describe('issue 974: read-aloud stops when the answer it is reading goes away', 
           setIsMentioningEveryone: vi.fn(),
           setSelectedUsers: vi.fn(),
           slash: { resetSlash: vi.fn() },
+          skill: { projectSkillIdsFor: () => [] },
         } as never,
         handlers: {
           sendQuestion: vi.fn().mockResolvedValue({ success: true }),
@@ -198,6 +200,7 @@ describe('issue 980: an unchanged save retries rather than rewrites', () => {
           setIsMentioningEveryone: vi.fn(),
           setSelectedUsers: vi.fn(),
           slash: { resetSlash: vi.fn() },
+          skill: { projectSkillIdsFor: () => [] },
         } as never,
         handlers: { regenerateAnswer, sendQuestion: vi.fn() } as never,
         deleteAlert: {} as never,
@@ -272,6 +275,59 @@ describe('useChatBoxActions @mention routing', () => {
       isSendingToUser: true,
       userIds: ['11', '12'],
     });
+  });
+
+  it('sends the project skills the text mentions as ids', async () => {
+    const sendQuestion = vi.fn().mockResolvedValue({ success: true });
+    const projectSkillIdsFor = vi.fn(() => ['9', '8']);
+    const { result } = renderActions(sendQuestion, vi.fn<OnConversationCreated>(), { skill: { projectSkillIdsFor } });
+
+    act(() => result.current.handleSend('use ~Triage and ~Build'));
+
+    await waitFor(() => expect(sendQuestion).toHaveBeenCalledTimes(1));
+    expect(projectSkillIdsFor).toHaveBeenCalledWith('use ~Triage and ~Build');
+    expect(sendQuestion.mock.calls[0]?.[0]).toMatchObject({ projectSkillIds: ['9', '8'] });
+  });
+
+  it('waits for the project skills a ~Name needs before sending', async () => {
+    const sendQuestion = vi.fn().mockResolvedValue({ success: true });
+    const resolveProjectSkillIds = vi.fn(() => Promise.resolve(['9']));
+    const { result } = renderActions(sendQuestion, vi.fn<OnConversationCreated>(), { skill: { projectSkillIdsFor: () => null, resolveProjectSkillIds } });
+
+    act(() => result.current.handleSend('use ~Triage'));
+    act(() => result.current.handleSend('use ~Triage'));
+
+    await waitFor(() => expect(sendQuestion).toHaveBeenCalledTimes(1));
+    expect(resolveProjectSkillIds).toHaveBeenCalledTimes(1);
+    expect(sendQuestion.mock.calls[0]?.[0]).toMatchObject({ projectSkillIds: ['9'] });
+  });
+
+  it('sends without the project skills, and says so, when they cannot be read', async () => {
+    const sendQuestion = vi.fn().mockResolvedValue({ success: true });
+    const onSkillsUnavailable = vi.fn();
+    const skill = { projectSkillIdsFor: () => null, resolveProjectSkillIds: () => Promise.reject(new Error('down')) };
+    const { result } = renderHook(() =>
+      useChatBoxActions({
+        chatInputRef: { current: { reset: vi.fn(), setValue: vi.fn() } },
+        data: { hasPendingHitlInterrupt: false, attachments: { state: { attachments: [], onClearAttachments: vi.fn() } } } as never,
+        state: {
+          isActiveParticipantBroken: false, isMentioningEveryone: false, selectedUsers: [], users: [],
+          setIsMentioningEveryone: vi.fn(), setSelectedUsers: vi.fn(), slash: { resetSlash: vi.fn() }, skill,
+        } as never,
+        handlers: { sendQuestion } as never,
+        deleteAlert: {} as never,
+        messages: [],
+        isAgentsPage: false,
+        readAloudStop: vi.fn(),
+        onSkillsUnavailable,
+      }),
+    );
+
+    act(() => result.current.handleSend('use ~Triage'));
+
+    await waitFor(() => expect(sendQuestion).toHaveBeenCalledTimes(1));
+    expect(sendQuestion.mock.calls[0]?.[0]).toMatchObject({ projectSkillIds: [] });
+    expect(onSkillsUnavailable).toHaveBeenCalledTimes(1);
   });
 
   it('drops a mention that carries no user id rather than sending a participant id', async () => {

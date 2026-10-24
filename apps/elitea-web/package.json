@@ -26,8 +26,6 @@
     "test:storybook": "vitest run --config vitest.config.ts --project storybook",
     "theme-gate": "node scripts/theme-gate.mjs",
     "check-handlers": "node scripts/check-handlers.mjs",
-    "check-fixture-freshness": "node scripts/check-fixture-freshness.mjs",
-    "record-fixtures": "node scripts/record-fixtures.mjs",
     "e2e": "playwright test",
     "e2e:chat-stream": "bash scripts/chat-stream-e2e.sh",
     "e2e:visual": "node scripts/run-visual-container.mjs",

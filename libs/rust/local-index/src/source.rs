@@ -54,18 +54,25 @@ impl std::fmt::Debug for Documents {
     }
 }
 
+/// The text of each file fetched, by key: `(version, text)`.
+type Texts = HashMap<String, (String, String)>;
+
 /// The files of one workspace.
+///
+/// Every field is shared (`Arc`) so that `handle` can hand a copy
+/// of the source to the blocking pool: the [`ContentSource`] futures walk
+/// and read there, not on the async runtime's threads.
 #[derive(Debug)]
 pub struct LocalFolderSource {
     workspace: Arc<Workspace>,
-    previous: HashMap<String, DocumentStat>,
-    selection: Option<Selection>,
-    seen: Mutex<Stats>,
-    hashed: AtomicUsize,
-    reads: AtomicUsize,
+    previous: Arc<HashMap<String, DocumentStat>>,
+    selection: Option<Arc<Selection>>,
+    seen: Arc<Mutex<Stats>>,
+    hashed: Arc<AtomicUsize>,
+    reads: Arc<AtomicUsize>,
     /// The text of every file fetched, when chunking is on: `(version,
     /// text)` by key, cut into chunks by [`Self::take_staged`].
-    staged: Option<Mutex<HashMap<String, (String, String)>>>,
+    staged: Option<Arc<Mutex<Texts>>>,
     /// Reads PDF, Office and e-mail files as text (the desktop's sandboxed
     /// sidecar). Without one those files are left out, as they always were.
     documents: Option<Documents>,
@@ -95,13 +102,28 @@ impl LocalFolderSource {
     pub fn new(workspace: Arc<Workspace>) -> Self {
         Self {
             workspace,
-            previous: HashMap::new(),
+            previous: Arc::default(),
             selection: None,
-            seen: Mutex::default(),
-            hashed: AtomicUsize::new(0),
-            reads: AtomicUsize::new(0),
+            seen: Arc::default(),
+            hashed: Arc::default(),
+            reads: Arc::default(),
             staged: None,
             documents: None,
+        }
+    }
+
+    /// The same source (its counters, stat record and staged texts), for a
+    /// closure the blocking pool runs.
+    fn handle(&self) -> Self {
+        Self {
+            workspace: Arc::clone(&self.workspace),
+            previous: Arc::clone(&self.previous),
+            selection: self.selection.clone(),
+            seen: Arc::clone(&self.seen),
+            hashed: Arc::clone(&self.hashed),
+            reads: Arc::clone(&self.reads),
+            staged: self.staged.clone(),
+            documents: self.documents.clone(),
         }
     }
 
@@ -120,7 +142,7 @@ impl LocalFolderSource {
     /// handed to ingestion ([`Self::take_staged`]).
     #[must_use]
     pub fn chunking(mut self) -> Self {
-        self.staged = Some(Mutex::default());
+        self.staged = Some(Arc::default());
         self
     }
 
@@ -167,7 +189,7 @@ impl LocalFolderSource {
     /// `previous` recorded, instead of reading and hashing it again.
     #[must_use]
     pub fn with_previous(mut self, previous: HashMap<String, DocumentStat>) -> Self {
-        self.previous = previous;
+        self.previous = Arc::new(previous);
         self
     }
 
@@ -175,7 +197,7 @@ impl LocalFolderSource {
     /// (ingestion counts them as skipped) with an empty version, never read.
     #[must_use]
     pub fn selecting(mut self, selection: Selection) -> Self {
-        self.selection = Some(selection);
+        self.selection = Some(Arc::new(selection));
         self
     }
 
@@ -353,16 +375,17 @@ impl LocalFolderSource {
     }
 }
 
-#[allow(
-    clippy::unused_async_trait_impl,
-    reason = "synchronous file I/O inside async fns holds a tokio worker; moving it off the executor is tracked in #1377"
-)]
+/// The walk and the reads run on the blocking pool
+/// ([`elitea_content_source::blocking`]); a fetch whose future is dropped
+/// while it reads still counts its read and stages its text.
 impl ContentSource for LocalFolderSource {
     async fn list(&self) -> Result<Vec<DocumentRef>, SourceError> {
-        self.list_now()
+        let source = self.handle();
+        elitea_content_source::blocking(move || source.list_now()).await
     }
 
     async fn fetch(&self, key: &str) -> Result<Document, SourceError> {
-        self.fetch_now(key)
+        let (source, key) = (self.handle(), key.to_owned());
+        elitea_content_source::blocking(move || source.fetch_now(&key)).await
     }
 }

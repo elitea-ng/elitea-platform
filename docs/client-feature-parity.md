@@ -38,6 +38,7 @@ clients generated from it.
 | Archive and Archived chats (contract 1.10) | shipped | shipped | shipped | Mobile queues Archive and Unarchive offline; Archived chats is online only. |
 | Fork a conversation (contract 1.11) | shipped | shipped | shipped | Mobile forks online only (never queued). |
 | Activity status and read markers in chat lists (contract 1.12) | shipped | shipped | shipped | Mobile does not follow the project event stream: transitions arrive with the delta sync and the list's refetch on foreground, not live `conversation_activity` events. Mobile's "N needs you" counts only the rows it has paged in: its sections (Pinned, Today, ...) are drawn on the device from the flat `/conversations` listing, which carries no group counts, so it cannot use the server's whole-group `needs_you` the web and desktop folder/date groups show. |
+| Project skills in the composer's skill menu (contract 1.19) | shipped | shipped | n-a: the mobile composer has no skill menu | Web picks them in the `~` menu, desktop in the `/` menu. Both send ids only; the server (web) or the host (desktop) reads the skill under the person's permissions. At most five skills and 64 KiB of instructions in a turn. |
 | Notifications | shipped | shipped | shipped | |
 | Discover public agents | shipped | shipped | shipped | |
 | Workspace brand (ADR-0024 runtime branding) | shipped | shipped | shipped | The default mark and identity are shared: `@elitea/client-core/brand`. |
@@ -47,3 +48,4 @@ clients generated from it.
 | Offline cache (encrypted copy on the device) | n-a: the browser keeps no copy of the workspace data | n-a: the desktop webview keeps no copy of the workspace data | shipped | Mobile delta sync (`changes_since`) and the offline outbox. |
 | Home screen widgets and Live Activities | n-a: no home screen surface in a browser | n-a: no widget surface in the desktop host | shipped | |
 | QR connect to a workspace | n-a: the browser opens the workspace URL | n-a: the connect screen takes the workspace URL | shipped | |
+| Admin Schedules: switch platform routines on or off and change their schedules (#1369) | shipped | n-a: platform administration is the web console's job | n-a: platform administration is the web console's job | Admin routes are outside the client contract, which stays at 1.18. |

@@ -8,7 +8,7 @@
  */
 import { useEffect, useState } from 'react';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { EMBEDDINGS_OFF, type EmbeddingsChoice, type EmbedStatus, type IndexEstimate, type IndexIpc, type IndexModels, type RemoteModel } from '@/shared/desktop/indexIpc';
 
@@ -89,6 +89,10 @@ function useEstimate(ipc: IndexIpc, workspaceId: string, enabled: boolean, store
     queryFn: () => ipc.estimate(workspaceId, subject ?? undefined),
     enabled: enabled && subject !== null,
     retry: false,
+    // A new model to consider is a new key; keep the last estimate on screen
+    // while its own loads, or the caps form under it unmounts and drops what
+    // the person is typing. Nothing to estimate shows nothing.
+    placeholderData: (previous) => (subject === null ? undefined : keepPreviousData(previous)),
   });
   return { estimate: estimate.data, consider };
 }

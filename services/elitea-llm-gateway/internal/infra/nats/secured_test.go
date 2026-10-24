@@ -33,6 +33,25 @@ func TestSecuredGatewayRunsOnTheChartsPermissions(t *testing.T) {
 	}
 	defer c.Close()
 
+	// The first counter write on a fresh server creates the budget stream's
+	// file store, which can outlast OpTimeout on a slow runner (seen in CI as
+	// "IncrBudget = 0, nats: unavailable: context deadline exceeded"). Warm
+	// that store on a separate subject with the idempotent increment: a retry
+	// after a lost ack is then suppressed, not counted twice. Only a deadline
+	// is retried; any other error fails at once.
+	warm := BudgetSubject("project", "warmup", 1700000000)
+	var warmErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		_, _, warmErr = c.IncrBudgetIdempotent(ctx, warm, "warmup.1", 1)
+		if warmErr == nil || !strings.Contains(warmErr.Error(), context.DeadlineExceeded.Error()) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if warmErr != nil {
+		t.Fatalf("IncrBudgetIdempotent warm-up: %v\nserver log:\n%s", warmErr, s.Log())
+	}
+
 	subject := BudgetSubject("project", "42", 1700000000)
 	if total, err := c.IncrBudget(ctx, subject, 500); err != nil || total != 500 {
 		t.Fatalf("IncrBudget = %d, %v", total, err)

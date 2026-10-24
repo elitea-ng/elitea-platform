@@ -379,7 +379,7 @@ func TestTheSweeperIsStartedByTheDaemon(t *testing.T) {
 
 	for defect, fragment := range map[string]string{
 		"the sweeper is never constructed":                   "auditretention.New(",
-		"the sweeper is constructed and never run":           "auditSweeper.Run(ctx)",
+		"the sweeper is constructed and never run":           "auditSweeper.Pass)",
 		"the sweeper reads its own switch instead of config": "cfg.AuditRetentionDays",
 		"the sweeper does not share the maintenance switch":  "maintenanceSwitch.Active",
 	} {
