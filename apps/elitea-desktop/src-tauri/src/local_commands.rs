@@ -243,11 +243,13 @@ pub async fn workspace_open(
         return Ok(None);
     };
     let workspace = state.workspaces.add(&path)?;
-    // The folder's MCP files are proposals only (#1230): shown, never run.
+    // The folder's MCP and hooks files are proposals only (#1230, #1237):
+    // shown, never run.
     let agents = state.agents.clone();
     let id = workspace.id.clone();
     tauri::async_runtime::spawn_blocking(move || {
         crate::mcp_commands::propose_on_open(&app, &agents, &id);
+        crate::hooks_commands::propose_on_open(&app, &agents, &id);
     });
     Ok(Some(workspace))
 }

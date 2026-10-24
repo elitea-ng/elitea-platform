@@ -61,6 +61,12 @@
 //! | `search_memory` ([`ToolKind::SearchMemory`], #1233) | allowed (it only reads; kept in plan mode) |
 //! | `save_memory` ([`ToolKind::SaveMemory`]) | allowed (the transcript shows the saved text; the person deletes it in Settings → Memory); denied in plan mode |
 //! | `delete_memory` ([`ToolKind::DeleteMemory`]) | asked every time (it removes data the person may have saved on the web); never remembered; denied in plan mode |
+//! | one of the person's hooks running ([`crate::hooks`], #1237) | not asked (the person wrote it in host data); sandboxed as configured, capped by the policy; never run when the policy turns the shell off, or where its sandbox cannot hide what the session denies |
+//! | a repository-proposed hook (`.elitea/hooks.json`, `.claude/settings.json`) | never runs until the person trusts it (copied into host data for that file's digest); a changed file asks again |
+//! | a `PreToolUse` hook's `deny` | the call is refused (`hook_denied`) after layers 1–2, before layer 3 |
+//! | a `PreToolUse` hook's `ask` ([`HOOK_ASK_PAYLOAD_KEY`]) | an allow from layers 3–5 is asked instead; never remembered; a deny stays a deny |
+//! | a `PreToolUse` hook's `allow` | changes nothing: hooks tighten, never loosen |
+//! | a `PreToolUse` hook's `modified_input` | checked against the tool's schema, then decided by every layer like the model's own input |
 //!
 //! The policy ceiling for both MCP rows is `local_mcp`: off (or absent),
 //! every start and every call is denied. `path_deny` cannot be enforced
@@ -123,6 +129,11 @@ pub const PAYLOAD_KEY: &str = "local_tool_call";
 
 /// Approve, and remember the choice for this workspace.
 pub const APPROVE_ALWAYS: &str = "approve_always";
+
+/// The payload key a `PreToolUse` hook's ask travels under (`{hook,
+/// reason}`, the reason the hook's own text, for the person), beside
+/// [`PAYLOAD_KEY`]: [`RuleApprovals`] asks a call the rules would allow.
+pub const HOOK_ASK_PAYLOAD_KEY: &str = "hook_ask";
 
 /// The payload key the plan an `exit_plan_mode` call proposes travels under
 /// (`{plan}`, Markdown), beside [`PAYLOAD_KEY`].
@@ -369,6 +380,8 @@ pub enum Source {
     User,
     Remembered,
     Default,
+    /// A `PreToolUse` hook asked ([`HOOK_ASK_PAYLOAD_KEY`]).
+    Hook,
 }
 
 impl From<RuleScope> for Source {
@@ -802,6 +815,37 @@ impl RulesEngine {
     #[must_use]
     pub fn plan_mode(&self) -> bool {
         self.profile() == PermissionProfile::Plan
+    }
+
+    /// Whether layers 1 (the policy ceiling) and 2 (plan mode) refuse
+    /// `call` outright: such a call runs no hook. A test run without a
+    /// command is judged by its switches (its command is planned later).
+    #[must_use]
+    pub fn refused_before_hooks(&self, call: &ToolCall) -> bool {
+        if self.plan_mode() && !call.tool.plan_allows() {
+            return true;
+        }
+        if call.tool.runs_commands() && call.command.is_none() {
+            return !(self.policy.allowed && self.policy.shell)
+                || call.sandbox_mode() > self.policy.max_sandbox_mode
+                || (call.network && !self.policy.network);
+        }
+        self.policy_ceiling(call).is_some()
+    }
+
+    /// `decision` with a `PreToolUse` hook's ask applied: an allow becomes
+    /// a question; an ask or a deny stays what it is.
+    #[must_use]
+    pub fn with_hook_ask(decision: Decision, hook: &str) -> Decision {
+        if decision.verdict == Verdict::Allow {
+            Decision::new(
+                Verdict::Ask,
+                Source::Hook,
+                format!("your hook `{hook}` asks for your approval"),
+            )
+        } else {
+            decision
+        }
     }
 
     /// Decide one call.
@@ -1758,7 +1802,16 @@ impl ApprovalChannel for RuleApprovals {
         let Some(call) = call else {
             return self.prompt.request(request).await;
         };
-        let decision = self.engine.decide(&call);
+        let hook_ask = request
+            .payload
+            .get(HOOK_ASK_PAYLOAD_KEY)
+            .and_then(|asked| asked.get("hook"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let mut decision = self.engine.decide(&call);
+        if let Some(hook) = &hook_ask {
+            decision = RulesEngine::with_hook_ask(decision, hook);
+        }
         match decision.verdict {
             Verdict::Allow => Ok(decided("approve", &decision)),
             Verdict::Deny => Ok(decided("reject", &decision)),
@@ -1775,7 +1828,8 @@ impl ApprovalChannel for RuleApprovals {
                 }
             }
             Verdict::Ask => {
-                let rememberable = self.engine.can_remember(&call);
+                // A hook asks every time: "always" would answer nothing.
+                let rememberable = hook_ask.is_none() && self.engine.can_remember(&call);
                 request.available_actions = if rememberable {
                     vec![
                         "approve".to_owned(),

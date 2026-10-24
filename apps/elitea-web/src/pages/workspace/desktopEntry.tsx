@@ -22,6 +22,7 @@ const WorkspaceSessionPage = /* @__PURE__ */ lazy(() => import('./WorkspaceSessi
 const TroubleshootPage = /* @__PURE__ */ lazy(() => import('./TroubleshootPage'));
 const RulesPage = /* @__PURE__ */ lazy(() => import('./RulesPage'));
 const McpPage = /* @__PURE__ */ lazy(() => import('./McpPage'));
+const HooksPage = /* @__PURE__ */ lazy(() => import('./HooksPage'));
 
 function NotAvailable(): React.JSX.Element {
   return <Navigate to="/chat" replace />;
@@ -71,6 +72,16 @@ export function McpEntry(): React.JSX.Element | null {
   return (
     <Suspense fallback={null}>
       <McpPage />
+    </Suspense>
+  );
+}
+
+/** Settings › Hooks (#1237); nothing outside `desktop`. */
+export function HooksEntry(): React.JSX.Element | null {
+  if (import.meta.env.MODE !== 'desktop') return null;
+  return (
+    <Suspense fallback={null}>
+      <HooksPage />
     </Suspense>
   );
 }

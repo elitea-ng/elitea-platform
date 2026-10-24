@@ -8504,3 +8504,61 @@ async fn worktree_merge_undo_takes_only_its_merges_checkpoint() {
         "undone once"
     );
 }
+
+
+/// The person's hooks in a turn (#1237): a `UserPromptSubmit` hook's
+/// context reaches the model framed under the thread's nonce, a `Stop`
+/// hook's text reaches the person as a status note, and a refused message
+/// ends the turn with `hook_denied` before any model call. macOS only: the
+/// hooks run under Seatbelt, and a Linux runner without a sandbox that
+/// hides the deny list runs none.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn hooks_frame_prompt_context_and_report_stop() {
+    use elitea_local_tools::hooks::config::{Hook, HookEvent, Scope};
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let sh = |line: &str| vec!["/bin/sh".to_owned(), "-c".to_owned(), line.to_owned()];
+    h.host
+        .hook_files()
+        .save_hooks(
+            Scope::User,
+            None,
+            vec![
+                Hook::new(
+                    "ctx",
+                    HookEvent::UserPromptSubmit,
+                    sh("if grep -q forbidden; then echo nope >&2; exit 2; fi; echo ticket-ABC"),
+                ),
+                Hook::new("bye", HookEvent::Stop, sh("cat >/dev/null; echo all-done")),
+            ],
+        )
+        .unwrap();
+    run_turn(&h, "hello").await;
+    let first = llm_bodies(&h.server)[0].to_string();
+    assert!(first.contains("ticket-ABC"), "{first}");
+    assert!(first.contains("hook_output nonce="), "{first}");
+    let events = h.emitter.all();
+    assert!(
+        events.iter().any(|e| e.kind == "status"
+            && e.payload["note"] == "hook_stop"
+            && e.payload["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("all-done"))),
+        "{:?}",
+        h.emitter.kinds()
+    );
+    let before = llm_bodies(&h.server).len();
+    run_turn(&h, "forbidden words").await;
+    assert_eq!(
+        llm_bodies(&h.server).len(),
+        before,
+        "a refused message never reaches the model"
+    );
+    assert!(
+        h.emitter
+            .all()
+            .iter()
+            .any(|e| e.kind == "error" && e.payload["code"] == "hook_denied")
+    );
+}

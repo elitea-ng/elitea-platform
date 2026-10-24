@@ -826,6 +826,8 @@ pub struct AgentHost {
     rules: Arc<RuleFiles>,
     /// The person's local MCP servers' settings (`src/mcp.rs`, #1230).
     mcp: Arc<crate::mcp::McpFiles>,
+    /// The person's hooks (`src/hooks.rs`, #1237).
+    hooks: Arc<crate::hooks::HookFiles>,
     /// The agent versions and answering participants read this session.
     caches: TurnCaches,
     /// The commits after `done`, one lane per conversation.
@@ -1017,11 +1019,16 @@ impl AgentHost {
             deps.user_rules_dir.clone(),
             deps.workspaces.clone(),
         ));
+        let hooks = Arc::new(crate::hooks::HookFiles::new(
+            deps.user_rules_dir.clone(),
+            deps.workspaces.clone(),
+        ));
         Ok(Self {
             deps,
             api,
             rules,
             mcp,
+            hooks,
             broker: Arc::new(ApprovalBroker::default()),
             sessions: Mutex::new(HashMap::new()),
             busy: BusySet::default(),
@@ -2419,6 +2426,9 @@ impl AgentHost {
         // The turn's background processes end with it, unless pinned or
         // kept for the session; their exits reach the tool cards first.
         session.end_turn_processes().await;
+        // The person's `Stop` hooks (#1237): what they write is for the
+        // person, before `done`.
+        crate::hooks::after_turn(&session, &events).await;
         workspace.processes.bind_turn(None);
         for info in session.processes() {
             recorder.process_ended(&info);
@@ -2960,6 +2970,18 @@ impl AgentHost {
                 )
             },
         );
+        // The person's hooks (#1237), from both files as they are now: the
+        // session runs the tool ones; `UserPromptSubmit` may refuse the
+        // message or add context (framed, after the volatile context).
+        let hook_context = crate::hooks::before_turn(
+            &self.hooks,
+            &request.workspace_id,
+            &workspace.session,
+            events,
+            &nonce,
+            &message,
+        )
+        .await?;
         // What changes every turn goes in a host message before the
         // person's (`TurnTail`): the system prompt stays the thread's.
         let tail = Arc::new(TurnTail {
@@ -2968,7 +2990,7 @@ impl AgentHost {
                 invoked,
                 &started.memory_recall.text,
                 &nonce,
-            ),
+            ) + &hook_context,
             anchor: message.clone(),
         });
         // ModelTransport: /llm with the native token and the execution id.
@@ -3465,6 +3487,19 @@ impl AgentHost {
     #[must_use]
     pub fn mcp_files(&self) -> &Arc<crate::mcp::McpFiles> {
         &self.mcp
+    }
+
+    /// The hooks files (IPC `hooks_*`, #1237).
+    #[must_use]
+    pub fn hook_files(&self) -> &Arc<crate::hooks::HookFiles> {
+        &self.hooks
+    }
+
+    /// Whether the policy lets hooks run now (local work and the shell on).
+    #[must_use]
+    pub fn hooks_allowed(&self) -> bool {
+        self.policy()
+            .is_ok_and(|policy| policy.allowed && policy.shell)
     }
 
     /// The settings changed: every open session (or `workspace_id`'s only)

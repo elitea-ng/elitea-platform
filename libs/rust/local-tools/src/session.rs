@@ -8,7 +8,12 @@
 //! 3. ask the [`ApprovalChannel`] (rules, then the person);
 //! 4. before the turn's first change, take a checkpoint;
 //! 5. run it, and return a JSON result, failures included, to the model.
+//!
+//! The person's `PreToolUse` hooks run before step 1, after the policy
+//! ceiling and plan mode; their `PostToolUse` hooks after step 5
+//! ([`crate::hooks`], `session/hooks.rs`).
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,6 +40,7 @@ use crate::document::{self, Documents, InProcessExtractor, SidecarExtractor};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::files;
 use crate::git::{Repo, StatusSummary, capped, check_revision, parse_status_summary};
+use crate::hooks::HookSet;
 use crate::ledger::ReadLedger;
 use crate::mcp::{McpServers, ServerStatus};
 use crate::policy::{LocalWorkPolicy, SandboxMode};
@@ -45,6 +51,7 @@ use crate::sandbox::{self, Enforcement, SandboxRequest};
 use crate::shell::{self, CommandSpec, ShellConfig};
 use crate::workspace::{Intent, Workspace, WsPath};
 
+mod hooks;
 mod processes;
 
 pub use processes::{PROCESS_TOOLS, RUN_COMMAND_PROCESSES};
@@ -125,6 +132,15 @@ pub struct LocalSession {
     /// The person's local MCP servers (#1230); dropped with the session,
     /// which stops them.
     mcp: McpServers,
+    /// The person's hooks (#1237), configured by the host each turn.
+    hooks: HookSet,
+    /// The session id hooks are told.
+    session_id: String,
+    /// The conversation the current turn runs for (hooks are told it).
+    conversation: Mutex<Option<String>>,
+    /// The `PreToolUse` hooks that asked, by call id, until the call ends:
+    /// its approval request carries them ([`crate::approvals::HOOK_ASK_PAYLOAD_KEY`]).
+    hook_asks: Mutex<HashMap<String, Value>>,
 }
 
 /// How a command would be confined (see [`LocalSession::command_confinement`]).
@@ -765,6 +781,10 @@ impl LocalSession {
             project: Mutex::new(None),
             processes: ProcessRegistry::new(),
             mcp: McpServers::new(),
+            hooks: HookSet::new(),
+            session_id: config.session_id,
+            conversation: Mutex::new(None),
+            hook_asks: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -785,6 +805,9 @@ impl LocalSession {
     /// [`Self::begin_turn`]; `None` is the default scope.
     pub fn set_conversation(&self, conversation: Option<&str>) {
         self.spill.set_conversation(conversation);
+        if let Ok(mut current) = self.conversation.lock() {
+            *current = conversation.map(str::to_owned);
+        }
     }
 
     /// The workspace's test runners and build checks
@@ -1085,7 +1108,17 @@ impl LocalSession {
 
     /// Run one tool call; the JSON result the model sees.
     pub async fn call(self: &Arc<Self>, tool: &str, call_id: &str, args: Value) -> Value {
+        let (args, mut trail) = match self.pre_tool_hooks(tool, call_id, args).await {
+            Ok(proceed) => proceed,
+            Err(refusal) => return refusal,
+        };
+        // Kept only for the `PostToolUse` hooks (a write's input is large).
+        let post_input = self
+            .hooks
+            .has(crate::hooks::HookEvent::PostToolUse)
+            .then(|| args.clone());
         let result = self.dispatch(tool, call_id, args).await;
+        self.forget_hook_ask(call_id);
         if !TOOLS
             .iter()
             .chain(PROCESS_TOOLS)
@@ -1102,9 +1135,18 @@ impl LocalSession {
                     map.entry("status")
                         .or_insert_with(|| Value::String("ok".to_owned()));
                 }
+                if let Some(input) = post_input {
+                    self.post_tool_hooks(tool, &input, &mut value, &mut trail)
+                        .await;
+                }
+                trail.attach(&mut value);
                 value
             }
-            Err(error) => error.to_result(),
+            Err(error) => {
+                let mut value = error.to_result();
+                trail.attach(&mut value);
+                value
+            }
         }
     }
 
@@ -1390,11 +1432,15 @@ impl LocalSession {
         call: ToolCall,
         message: &str,
     ) -> ToolResult<()> {
+        let mut payload = json!({ PAYLOAD_KEY: call });
+        if let Some(asked) = self.hook_ask(call_id) {
+            payload[crate::approvals::HOOK_ASK_PAYLOAD_KEY] = asked;
+        }
         let request = ApprovalRequest {
             subject: call_id.to_owned(),
             message: message.to_owned(),
             available_actions: vec!["approve".to_owned(), "reject".to_owned()],
-            payload: json!({ PAYLOAD_KEY: call }),
+            payload,
         };
         let outcome = self
             .approvals

@@ -93,6 +93,7 @@ export function buildSettingsSections(gates: SettingsSectionGates): SettingsSect
           ? [
               { id: 'approval-rules', label: 'Approval rules' },
               { id: 'mcp-servers', label: 'MCP servers' },
+              { id: 'hooks', label: 'Hooks' },
               { id: 'troubleshoot', label: 'Troubleshoot' },
             ]
           : []),

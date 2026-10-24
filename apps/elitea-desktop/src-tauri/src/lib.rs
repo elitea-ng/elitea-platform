@@ -21,6 +21,8 @@ mod error;
 mod handoff;
 mod handoff_settings;
 mod history;
+mod hooks;
+mod hooks_commands;
 mod index;
 mod local_commands;
 mod logging;
@@ -474,6 +476,10 @@ pub fn run() {
             mcp_commands::mcp_restart,
             mcp_commands::mcp_status,
             mcp_commands::mcp_proposal_answer,
+            hooks_commands::hooks_list,
+            hooks_commands::hooks_save,
+            hooks_commands::hooks_set_enabled,
+            hooks_commands::hooks_proposal_answer,
             index::index_status,
             index::index_open,
             index::index_enable,
