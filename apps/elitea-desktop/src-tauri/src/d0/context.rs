@@ -318,7 +318,12 @@ pub fn parts_of(body: &Value, estimated: u64) -> ContextParts {
     let mut skills = 0usize;
     let mut tools = 0usize;
     let mut mcp = 0usize;
-    for (at, message) in body["messages"].as_array().into_iter().flatten().enumerate() {
+    for (at, message) in body["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
         if at == 0 && message["role"] == "system" {
             system += encoded_len(message);
         } else if message["name"] == super::model::HOST_CONTEXT_NAME {
@@ -659,7 +664,10 @@ mod tests {
         let parts = parts_of(&body, estimated);
         assert!(parts.system_tokens > parts.tool_tokens, "{parts:?}");
         assert!(parts.tool_tokens > parts.mcp_tool_tokens, "{parts:?}");
-        assert!(parts.mcp_tool_tokens > 0 && parts.skill_tokens > 0, "{parts:?}");
+        assert!(
+            parts.mcp_tool_tokens > 0 && parts.skill_tokens > 0,
+            "{parts:?}"
+        );
         assert!(parts.message_tokens > 0, "{parts:?}");
         assert_eq!(
             parts.system_tokens
