@@ -235,15 +235,10 @@ UPDATE %s.chat_conversations
 	return nil
 }
 
-// DiscardChildConversation is guarded on the source and on the conversation
-// holding no message group, so it can never remove a turn's transcript.
-//
-// One transaction: the conversation row is locked under both guards, its
-// participant mappings go first (chat_participant_mapping's key to
-// chat_conversations does not cascade, so the bare DELETE failed with 23503
-// on every call and left the conversation behind), then the row itself. The
-// other tables that name a conversation (selected, archive, reads, folders)
-// cascade.
+// DiscardChildConversation removes a refused child's conversation through
+// [DiscardUnadmittedConversation]: guarded on the source and on the
+// conversation holding no message group, so it can never remove a turn's
+// transcript, and its participant mappings go first in the same transaction.
 func (r *LocalChildTurnsRepo) DiscardChildConversation(ctx context.Context, projectID int64, conversationUUID string) {
 	if r == nil || r.pool == nil || conversationUUID == "" {
 		return
@@ -252,49 +247,10 @@ func (r *LocalChildTurnsRepo) DiscardChildConversation(ctx context.Context, proj
 	if err != nil {
 		return
 	}
-	if err := r.discardChildConversation(context.WithoutCancel(ctx), schema, conversationUUID); err != nil {
+	if _, err := DiscardUnadmittedConversation(context.WithoutCancel(ctx), r.pool, schema, conversationUUID,
+		localturn.ChildConversationSource); err != nil {
 		slog.WarnContext(ctx, "local child turn: discard conversation failed", "err", err)
 	}
-}
-
-func (r *LocalChildTurnsRepo) discardChildConversation(ctx context.Context, schema, conversationUUID string) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	var conversationID int64
-	err = tx.QueryRow(ctx, fmt.Sprintf(`
-SELECT id FROM %s.chat_conversations
- WHERE uuid = $1::uuid AND source = $2
-   FOR UPDATE`, schema), conversationUUID, localturn.ChildConversationSource).Scan(&conversationID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("lock: %w", err)
-	}
-	// Checked in a statement of its own, after the lock: a group insert holds
-	// a key share on the row, so by now every one is committed (and visible to
-	// this new snapshot) or waits for this transaction.
-	var holdsTurn bool
-	if err := tx.QueryRow(ctx, fmt.Sprintf(`
-SELECT EXISTS (SELECT 1 FROM %s.chat_message_group WHERE conversation_id = $1)`, schema),
-		conversationID).Scan(&holdsTurn); err != nil {
-		return fmt.Errorf("check groups: %w", err)
-	}
-	if holdsTurn {
-		return nil
-	}
-	if _, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.chat_participant_mapping WHERE conversation_id = $1`, schema),
-		conversationID); err != nil {
-		return fmt.Errorf("delete participant mapping: %w", err)
-	}
-	if _, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.chat_conversations WHERE id = $1`, schema),
-		conversationID); err != nil {
-		return fmt.Errorf("delete conversation: %w", err)
-	}
-	return tx.Commit(ctx)
 }
 
 // ReadChildTurn reads the response group the child's first execution

@@ -38,6 +38,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/pipelineruns"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
 // TriggerConversationSource marks the conversations this package creates.
@@ -588,24 +589,24 @@ SELECT
 	return nil
 }
 
-// discardRunConversation removes a conversation whose turn was never admitted.
-//
-// Guarded on `source` AND on the conversation holding no message group: the
-// first means a bug here cannot reach a person's own chat, the second means a
-// conversation that somehow did receive a turn is never removed under it.
+// discardRunConversation removes a conversation whose turn was never admitted,
+// through [repos.DiscardUnadmittedConversation]: guarded on `source` (a bug
+// here cannot reach a person's own chat) and on the conversation holding no
+// message group (one that somehow received a turn is never removed under it),
+// and its participant mappings go first in the same transaction, because
+// chat_participant_mapping's key does not cascade (#1429). The caller is
+// already answering an error, so a failure is logged rather than returned.
 func (h *Handler) discardRunConversation(ctx context.Context, schema, conversationUUID string) {
 	if h.pool == nil || conversationUUID == "" {
 		return
 	}
-	ctx = context.WithoutCancel(ctx)
-	_, _ = h.pool.Exec(ctx, fmt.Sprintf(`
-DELETE FROM %[1]s.chat_conversations AS conversation
-WHERE conversation.uuid = $1::uuid
-  AND conversation.source = $2
-  AND NOT EXISTS (
-      SELECT 1 FROM %[1]s.chat_message_group AS existing
-      WHERE existing.conversation_id = conversation.id
-  )`, schema), conversationUUID, TriggerConversationSource)
+	// The request context may already be dead (the client hung up on the very
+	// error being reported). Cleanup belongs to the row, not to the request.
+	if _, err := repos.DiscardUnadmittedConversation(context.WithoutCancel(ctx), h.pool, schema,
+		conversationUUID, TriggerConversationSource); err != nil {
+		slog.Default().WarnContext(ctx, "pipelinetriggers: discard run conversation failed",
+			"event", "pipeline.trigger.discard_failed", "conversation_uuid", conversationUUID, "err", err)
+	}
 }
 
 // findOrCreateParticipant is find-then-create. `chat_participants` has no

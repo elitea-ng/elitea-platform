@@ -353,6 +353,60 @@ func TestARefusedAdmissionLeavesNoEmptyConversation(t *testing.T) {
 	}
 }
 
+// The same refusal against the participant key the tenant migrations ship
+// (#1429). This file's bootstrap schema (001_initial.sql) declares
+// chat_participant_mapping's key with ON DELETE CASCADE, so the test above
+// passed while production's key (tenant 0123, no cascade) refused the bare
+// DELETE with 23503 and left the conversation behind, unlogged. Here the key
+// is put back to the shipped shape first.
+func TestARefusedAdmissionLeavesNoConversationUnderTheShippedParticipantKey(t *testing.T) {
+	pool := newMCPPool(t)
+	useShippedParticipantKey(t, pool, homeSchema)
+	seedUser(t, pool, callerUserID)
+	seedAgent(t, pool, homeSchema, "Release Notes", "writes release notes", "mcp")
+
+	start := &fakeStart{err: agentexecutionapp.ErrUnsupportedCurrentAgentStart}
+	var mappingsAtStart int
+	start.onStart = func(agentexecutionapp.CurrentApplicationStartRequest) {
+		// The conversation the refusal must discard really has mappings.
+		if err := pool.QueryRow(context.Background(), fmt.Sprintf(
+			`SELECT count(*) FROM %q.chat_participant_mapping`, homeSchema)).Scan(&mappingsAtStart); err != nil {
+			t.Errorf("count mappings at start: %v", err)
+		}
+	}
+	result := callTool(t, pool, start, "/app/"+homeProject+"/mcp", "Release_Notes", "go")
+	if result["isError"] != true {
+		t.Fatalf("isError = %v, want true", result["isError"])
+	}
+	if mappingsAtStart == 0 {
+		t.Fatal("the run conversation had no participant mappings, so this test proves nothing")
+	}
+	var conversations, mappings int
+	if err := pool.QueryRow(context.Background(), fmt.Sprintf(`
+SELECT (SELECT count(*) FROM %[1]q.chat_conversations),
+       (SELECT count(*) FROM %[1]q.chat_participant_mapping)`, homeSchema)).Scan(&conversations, &mappings); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if conversations != 0 || mappings != 0 {
+		t.Fatalf("a refused admission left %d conversations and %d mappings behind, want 0 and 0",
+			conversations, mappings)
+	}
+}
+
+// useShippedParticipantKey replaces the bootstrap schema's cascading
+// chat_participant_mapping → chat_conversations key with the one tenant 0123
+// ships, which does not cascade.
+func useShippedParticipantKey(t *testing.T, pool *pgxpool.Pool, schema string) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), fmt.Sprintf(`
+ALTER TABLE %[1]q.chat_participant_mapping
+    DROP CONSTRAINT chat_participant_mapping_conversation_id_fkey,
+    ADD CONSTRAINT chat_participant_mapping_conversation_id_fkey
+        FOREIGN KEY (conversation_id) REFERENCES %[1]q.chat_conversations(id)`, schema)); err != nil {
+		t.Fatalf("use the shipped participant key: %v", err)
+	}
+}
+
 // A TOOLKIT tool is refused even with a runtime present, and refused with the
 // sentence that names only the missing half — and it must not create a
 // conversation on its way to refusing.
