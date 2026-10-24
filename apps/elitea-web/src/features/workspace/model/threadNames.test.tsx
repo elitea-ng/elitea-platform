@@ -12,8 +12,9 @@ import { readThreads, recordThread } from './threads';
 
 const REF: ThreadRef = { workspaceId: 'w1', projectId: 42, conversationId: '77' };
 
+let client = new QueryClient();
+
 function wrapper({ children }: { children: React.ReactNode }): React.JSX.Element {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
@@ -21,6 +22,7 @@ const title = (): ReturnType<typeof readThreads>[number] | undefined => readThre
 
 describe('thread names', () => {
   beforeEach(() => {
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     configureGeneratedClient({ baseUrl: '/api/v2' });
     clearNamespace();
   });
@@ -64,5 +66,22 @@ describe('thread names', () => {
     server.use(http.get('*/elitea_core/conversation/prompt_lib/42/77', () => HttpResponse.json({ id: 77, name: 'Renamed on the web' })));
     renderHook(() => useServerThreadName(REF), { wrapper });
     await waitFor(() => expect(title()).toMatchObject({ title: 'Renamed on the web', named: true }));
+  });
+
+  it('does not put a cached older name back after the thread was named', async () => {
+    recordThread('w1', { id: '77', title: 'fix the build', updatedAt: 1 });
+    server.use(
+      http.get('*/elitea_core/conversation/prompt_lib/42/77', () => HttpResponse.json({ id: 77, name: 'fix the build' })),
+      http.post('*/elitea_core/conversation_name/prompt_lib/42/77', () => HttpResponse.json({ name: 'Fix the CI build', renamed: true })),
+    );
+    const open = renderHook(() => useServerThreadName(REF), { wrapper });
+    await waitFor(() => expect(client.getQueryData(['workspace', 'threadName', 42, '77'])).toBe('fix the build'));
+    renderHook(() => useThreadNaming(REF, true), { wrapper });
+    await waitFor(() => expect(title()).toMatchObject({ title: 'Fix the CI build', named: true }));
+    // The thread is opened again within the cache's minute.
+    open.unmount();
+    renderHook(() => useServerThreadName(REF), { wrapper });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(title()?.title).toBe('Fix the CI build');
   });
 });

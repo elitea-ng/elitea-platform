@@ -53,8 +53,10 @@ export function useAutoConversationName(projectId: string | undefined, conversat
   const id = (conversation as ConversationLike | undefined)?.id;
   const conversationId = typeof id === 'string' || typeof id === 'number' ? String(id) : undefined;
   useEffect(() => {
-    if (projectId === undefined || conversationId === undefined || expected === undefined || asked.has(conversationId)) return;
-    asked.add(conversationId);
+    // Conversation ids are per project.
+    const key = `${projectId ?? ''}:${conversationId ?? ''}`;
+    if (projectId === undefined || conversationId === undefined || expected === undefined || asked.has(key)) return;
+    asked.add(key);
     generateConversationName(projectId, conversationId, { expected_name: expected })
       .then(() => {
         void queryClient.invalidateQueries({ queryKey: getListConversationsQueryKey(projectId).slice(0, 1) });

@@ -464,7 +464,8 @@ These still apply: the policy ceiling, every deny (a `forbidden` rule
 included), a `PreToolUse` hook's ask, a remote toolkit's confirmation, an
 MCP server's sign-in and the step limit's "Continue?". `plan_mode` and
 `bypass_approvals` together are refused with `invalid_request`. A
-sub-agent of the turn in a task worktree runs in bypass mode too.
+sub-agent of the turn in a task worktree runs in bypass mode too. The
+session leaves bypass mode when the turn (or the sub-agent) ends.
 `rules_explain` explains the rules without the mode. The UI
 keeps the choice per folder and asks the person to confirm it once.
 

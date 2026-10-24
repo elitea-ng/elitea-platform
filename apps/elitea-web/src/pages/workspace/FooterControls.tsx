@@ -36,9 +36,14 @@ export function FooterControls({ planMode, onPlanModeChange, bypass, onBypassCha
     { value: 'plan', label: t('workspace.mode.plan', 'Plan'), ariaLabel: t('workspace.planMode', 'Plan mode (no changes)') },
   ];
   if (onBypassChange !== undefined) options.push({ value: 'bypass', label: t('workspace.mode.bypass', 'Bypass'), ariaLabel: t('workspace.bypassMode', 'Bypass mode (no approvals)') });
+  // Bypass turns plan mode off only once it is on (after its warning, the first time): a cancelled warning keeps the mode.
   const change = (next: ModeValue): void => {
+    if (next === 'bypass') {
+      onBypassChange?.(true);
+      return;
+    }
     onPlanModeChange(next === 'plan');
-    onBypassChange?.(next === 'bypass');
+    onBypassChange?.(false);
   };
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>

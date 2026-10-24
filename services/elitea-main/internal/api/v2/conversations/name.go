@@ -3,6 +3,7 @@ package conversations
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -39,6 +40,10 @@ func (h *Handler) WithNamer(namer NameCompleter) *Handler {
 	return h
 }
 
+// ErrNameChanged reports an Update with RenameOnlyFrom whose row had
+// another name: someone renamed the conversation first.
+var ErrNameChanged = errors.New("conversations: the name changed before the rename")
+
 const (
 	// MaxGeneratedNameLength is the longest title the namer stores, in runes.
 	MaxGeneratedNameLength = 80
@@ -73,12 +78,13 @@ type generatedName struct {
 // answer is the name it has then, and whether this call set it. Other devices
 // get the new name through `changes_since`, as with any rename.
 //
-// The name is read again just before the write, after the model call: the
-// window in which a rename can be lost is the update itself, not the call.
+// The write is a compare-and-set on the name (Conversation.RenameOnlyFrom),
+// so a rename that lands during the model call, or just before the write,
+// is kept: the answer is then that name, with `renamed: false`.
 func (h *Handler) GenerateName(w http.ResponseWriter, r *http.Request) {
 	if h.namer == nil {
 		slog.ErrorContext(r.Context(), "conversation_name: no LLM plane composed")
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "the LLM gateway is not configured"})
+		apierr.WriteStatus(w, http.StatusServiceUnavailable, "the LLM gateway is not configured")
 		return
 	}
 	if !h.authorizeConversation(w, r) {
@@ -123,19 +129,19 @@ func (h *Handler) GenerateName(w http.ResponseWriter, r *http.Request) {
 	if err != nil || name == "" {
 		slog.ErrorContext(r.Context(), "conversation_name: the model gave no title",
 			"project_id", projectID, "conversation_id", conversationID, "err", err)
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "the LLM gateway could not name this conversation"})
+		apierr.WriteStatus(w, http.StatusBadGateway, "the LLM gateway could not name this conversation")
 		return
 	}
-	again, err := h.repo.Get(r.Context(), projectID, conversationID)
-	if err != nil {
-		apierr.Write(w, err)
-		return
-	}
-	if again.Name != expected {
+	updated, err := h.repo.Update(r.Context(), projectID, conversationID, Conversation{Name: name, RenameOnlyFrom: &expected})
+	if errors.Is(err, ErrNameChanged) {
+		again, readErr := h.repo.Get(r.Context(), projectID, conversationID)
+		if readErr != nil {
+			apierr.Write(w, readErr)
+			return
+		}
 		writeJSON(w, http.StatusOK, generatedName{Name: again.Name})
 		return
 	}
-	updated, err := h.repo.Update(r.Context(), projectID, conversationID, Conversation{Name: name})
 	if err != nil {
 		apierr.Write(w, err)
 		return

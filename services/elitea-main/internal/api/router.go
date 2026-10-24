@@ -5055,14 +5055,9 @@ func configurationSecretSealer(pool *pgxpool.Pool) v2configs.SecretSealer {
 	return sealer
 }
 
-// publishAIValidator adapts the predict gateway hop onto the four fields the
-// publish validation's AI step needs (internal/api/v2/eliteacore/
-// publish_ai_validation.go).
-//
-// It exists so eliteacore depends on its own small interface rather than on
-// v2predict's request struct — and so the step's tests take a four-line fake
-// instead of a gateway. A nil completer answers nil, which leaves the option
-// unapplied rather than installing a client that panics on first use.
+// conversationNamer adapts the shared predict completer to the
+// conversations package's NameCompleter (POST /conversation_name). A nil
+// completer answers nil: the route then answers 503.
 func conversationNamer(completer v2predict.Completer) v2convs.NameCompleter {
 	if completer == nil {
 		return nil
@@ -5093,6 +5088,14 @@ func (c conversationNameCompleter) Complete(ctx context.Context, request v2convs
 	})
 }
 
+// publishAIValidator adapts the predict gateway hop onto the four fields the
+// publish validation's AI step needs (internal/api/v2/eliteacore/
+// publish_ai_validation.go).
+//
+// It exists so eliteacore depends on its own small interface rather than on
+// v2predict's request struct — and so the step's tests take a four-line fake
+// instead of a gateway. A nil completer answers nil, which leaves the option
+// unapplied rather than installing a client that panics on first use.
 func publishAIValidator(completer v2predict.Completer) v2core.PublishModelClient {
 	if completer == nil {
 		return nil

@@ -33,6 +33,8 @@ export interface LastLocation {
 
 const MAX_THREADS = 50;
 const MAX_TITLE = 80;
+/** The longest name a rename (and so a thread's title from the server) has. */
+const MAX_NAME = 256;
 const threadsKey = (workspaceId: string): string => `desktop.workspace.${workspaceId}.threads`;
 const LAST_LOCATION_KEY = 'desktop.lastLocation';
 
@@ -94,7 +96,7 @@ export function recordThread(workspaceId: string, thread: WorkspaceThread, rewou
 
 /** Gives thread `id` the conversation's name `title` in place (its place and time stay); marks it named. */
 export function renameThread(workspaceId: string, id: string, title: string): WorkspaceThread[] {
-  const next = readThreads(workspaceId).map((thread) => (thread.id === id ? { ...thread, title: title.trim().slice(0, MAX_TITLE), named: true } : thread));
+  const next = readThreads(workspaceId).map((thread) => (thread.id === id ? { ...thread, title: title.trim().slice(0, MAX_NAME), named: true } : thread));
   try {
     createStorage('local').setJSON(threadsKey(workspaceId), next);
   } catch {

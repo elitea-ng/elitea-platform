@@ -23,6 +23,9 @@ export interface ThreadRef {
   conversationId: string;
 }
 
+/** The query `useServerThreadName` reads the conversation's name under. */
+const threadNameKey = (ref: ThreadRef) => ['workspace', 'threadName', ref.projectId, ref.conversationId] as const;
+
 const nameOf = (data: unknown): string | undefined => {
   const name = (data as { name?: unknown } | undefined)?.name;
   return typeof name === 'string' && name.trim() !== '' ? name : undefined;
@@ -34,6 +37,8 @@ function useStoreName(): (ref: ThreadRef, name: string) => void {
   return useCallback(
     (ref: ThreadRef, name: string) => {
       renameThread(ref.workspaceId, ref.conversationId, name);
+      // The server's name is this one now: an open of the thread must not put a cached older one back.
+      queryClient.setQueryData(threadNameKey(ref), name);
       void queryClient.invalidateQueries({ queryKey: threadsQueryKey(ref.workspaceId) });
     },
     [queryClient],
@@ -67,7 +72,7 @@ export function useServerThreadName(ref: ThreadRef): void {
   const store = useStoreName();
   const { workspaceId, projectId, conversationId } = ref;
   const read = useQuery({
-    queryKey: ['workspace', 'threadName', projectId, conversationId] as const,
+    queryKey: threadNameKey(ref),
     queryFn: async () => nameOf((await getConversation(String(projectId), conversationId)).data) ?? null,
     enabled: conversationId !== '',
     staleTime: 60_000,

@@ -38,6 +38,12 @@ func namingRepo(name *string, updates *[]string) *mockRepo {
 			return conversations.Conversation{Name: *name}, nil
 		},
 		updateFn: func(_ context.Context, _, _ string, conv conversations.Conversation) (conversations.Conversation, error) {
+			if conv.RenameOnlyFrom == nil {
+				return conversations.Conversation{}, errors.New("a generated name is written only as a compare-and-set")
+			}
+			if *conv.RenameOnlyFrom != *name {
+				return conversations.Conversation{}, conversations.ErrNameChanged
+			}
 			*updates = append(*updates, conv.Name)
 			*name = conv.Name
 			return conversations.Conversation{Name: conv.Name}, nil

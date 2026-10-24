@@ -6,7 +6,7 @@
  * a folder turns it on, the person confirms a warning; the folder remembers
  * the confirmation.
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import { createStorage } from '@/shared/lib/storage';
 
@@ -34,8 +34,8 @@ function writeFlag(key: string, on: boolean): void {
 export interface BypassMode {
   /** The folder's turns run in bypass mode. */
   on: boolean;
-  /** Turn it on (after the confirmation, the first time) or off. */
-  request: (on: boolean) => void;
+  /** Turn it on (after the confirmation, the first time) or off; `turnedOn` runs once it is on. */
+  request: (on: boolean, turnedOn?: () => void) => void;
   /** The confirmation is open. */
   confirming: boolean;
   confirm: () => void;
@@ -45,22 +45,34 @@ export interface BypassMode {
 export function useBypassMode(workspaceId: string): BypassMode {
   const [on, setOn] = useState(() => readFlag(bypassKey(workspaceId)));
   const [confirming, setConfirming] = useState(false);
+  // What runs once a confirmed turn-on lands (the composer leaves plan mode).
+  const pending = useRef<(() => void) | undefined>(undefined);
   const set = (next: boolean): void => {
     setOn(next);
     writeFlag(bypassKey(workspaceId), next);
   };
   return {
     on,
-    request: (next) => {
-      if (next && !readFlag(confirmedKey(workspaceId))) setConfirming(true);
-      else set(next);
+    request: (next, turnedOn) => {
+      if (next && !readFlag(confirmedKey(workspaceId))) {
+        pending.current = turnedOn;
+        setConfirming(true);
+        return;
+      }
+      set(next);
+      if (next) turnedOn?.();
     },
     confirming,
     confirm: () => {
       writeFlag(confirmedKey(workspaceId), true);
       setConfirming(false);
       set(true);
+      pending.current?.();
+      pending.current = undefined;
     },
-    cancel: () => setConfirming(false),
+    cancel: () => {
+      pending.current = undefined;
+      setConfirming(false);
+    },
   };
 }

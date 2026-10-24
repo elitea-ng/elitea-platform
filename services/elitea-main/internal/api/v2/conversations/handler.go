@@ -32,17 +32,20 @@ import (
 )
 
 type Conversation struct {
-	InstructionsUpdate *string   `json:"-"`
-	ID                 string    `json:"id"`
-	UUID               string    `json:"uuid,omitempty"`
-	ProjectID          string    `json:"project_id"`
-	Name               string    `json:"name"`
-	Description        string    `json:"description,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
-	CreatedBy          string    `json:"created_by"`
-	MessageCount       int       `json:"message_count"`
-	FolderID           *string   `json:"folder_id,omitempty"`
+	InstructionsUpdate *string `json:"-"`
+	// RenameOnlyFrom makes an Update a compare-and-set of the name: the row
+	// is written only while its name is this one, else ErrNameChanged.
+	RenameOnlyFrom *string   `json:"-"`
+	ID             string    `json:"id"`
+	UUID           string    `json:"uuid,omitempty"`
+	ProjectID      string    `json:"project_id"`
+	Name           string    `json:"name"`
+	Description    string    `json:"description,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	CreatedBy      string    `json:"created_by"`
+	MessageCount   int       `json:"message_count"`
+	FolderID       *string   `json:"folder_id,omitempty"`
 	// `chat_conversations.is_private` — the flag the rail's "Make public"
 	// item writes.
 	//

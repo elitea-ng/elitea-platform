@@ -8,7 +8,7 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Router
 import { act, configure, fireEvent, getConfig, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { readThreads, recordThread, WorkspaceIpcProvider, type WorkspaceTurn } from '@/features/workspace';
@@ -82,6 +82,12 @@ beforeAll(() => {
 afterAll(() => {
   configure({ asyncUtilTimeout });
 });
+
+/** Bypass mode is kept per folder in storage: each bypass test starts, and leaves, without it. */
+function forgetBypass(): void {
+  window.localStorage.removeItem('el.desktop.workspace.w1.bypass');
+  window.localStorage.removeItem('el.desktop.workspace.w1.bypassConfirmed');
+}
 
 beforeEach(() => {
   resetConfigForTests();
@@ -1204,6 +1210,8 @@ describe('WorkspaceSessionPage', () => {
     });
 
     it('turns bypass mode on after the warning, keeps it for the folder and sends it with the turn', async () => {
+      forgetBypass();
+      onTestFinished(forgetBypass);
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       const user = await ready(ipc);
       await user.click(await screen.findByRole('radio', { name: 'Bypass mode (no approvals)' }));
@@ -1223,7 +1231,24 @@ describe('WorkspaceSessionPage', () => {
       await user.click(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' }));
       expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull();
       expect(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' })).toBeChecked();
-    });
+    }, 30_000);
+
+    it('keeps plan mode when the bypass warning is cancelled, and leaves it once bypass is on', async () => {
+      forgetBypass();
+      onTestFinished(forgetBypass);
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      await user.click(await screen.findByRole('radio', { name: 'Plan mode (no changes)' }));
+      await user.click(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Run without approvals?' });
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull());
+      expect(screen.getByRole('radio', { name: 'Plan mode (no changes)' })).toBeChecked();
+      await user.click(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' }));
+      await user.click(within(await screen.findByRole('dialog', { name: 'Run without approvals?' })).getByRole('button', { name: 'Turn on bypass mode' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull());
+      expect(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' })).toBeChecked();
+    }, 30_000);
 
     it('asks the host to read ahead for the selected agent when the composer gets focus', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });

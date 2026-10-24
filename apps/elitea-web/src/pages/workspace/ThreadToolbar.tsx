@@ -8,6 +8,7 @@
  */
 import { useState } from 'react';
 
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 
 import FolderOpenOutlinedIcon from '@mui/icons-material/FolderOpenOutlined';
@@ -27,7 +28,7 @@ import Typography from '@mui/material/Typography';
 
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import CheckOutlinedIcon from '@mui/icons-material/CheckOutlined';
-import { readThreads, threadNames } from '@/features/workspace';
+import { readThreads, threadNames, threadsQueryKey } from '@/features/workspace';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { IndexIdleLine } from '@/features/workspace-index';
@@ -138,7 +139,9 @@ interface RenameProps {
 function ThreadTitle(props: ThreadToolbarProps & RenameProps): React.JSX.Element {
   const { workspace, conversationId, projectId, pathOpen, onPathOpenChange, renaming, onRenamingChange } = props;
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const thread = conversationId === '' ? undefined : readThreads(workspace.id).find((x) => x.id === conversationId);
+  // Through the sidebar's threads query, so a rename or a generated name shows at once.
+  const threads = useQuery({ queryKey: threadsQueryKey(workspace.id), queryFn: () => readThreads(workspace.id) });
+  const thread = conversationId === '' ? undefined : threads.data?.find((x) => x.id === conversationId);
   const title = thread?.title !== undefined && thread.title !== '' ? thread.title : t('workspace.thread.untitled', 'New thread');
   const open = anchor !== null && pathOpen;
   if (renaming && thread !== undefined) {

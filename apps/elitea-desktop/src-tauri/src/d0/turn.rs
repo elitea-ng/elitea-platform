@@ -468,6 +468,19 @@ fn stop_processes_soon(session: &Arc<LocalSession>) {
     }
 }
 
+/// Ends bypass mode on a session when its run ends, however it ends: the
+/// session's engine is the folder's, and a later question outside a turn
+/// start (a rule check, a child's session) is asked again.
+struct EndBypass(Arc<LocalSession>);
+
+impl Drop for EndBypass {
+    fn drop(&mut self) {
+        if self.0.profile() == PermissionProfile::Bypass {
+            self.0.set_profile(PermissionProfile::Build);
+        }
+    }
+}
+
 /// Closes a turn's sub-agents when its run ends, however it ends (an answer,
 /// an error, or a cancel that drops the run): none outlives the turn.
 struct CloseSubAgents(SubAgents);
@@ -860,6 +873,7 @@ pub struct AgentHost {
 pub(crate) struct ChildHold {
     _claim: WorkspaceClaim,
     prompt: Arc<UiPrompt>,
+    _bypass: Option<EndBypass>,
 }
 
 impl Drop for ChildHold {
@@ -1084,6 +1098,7 @@ impl AgentHost {
             ChildHold {
                 _claim: claim,
                 prompt: workspace.prompt.clone(),
+                _bypass: bypass.then(|| EndBypass(workspace.session.clone())),
             },
         ))
     }
@@ -2402,6 +2417,7 @@ impl AgentHost {
         } else {
             PermissionProfile::Build
         });
+        let _bypass = (request.bypass && !request.plan_mode).then(|| EndBypass(session.clone()));
         // The turn's spilled outputs are its conversation's: read_output in
         // another thread of this folder does not see them.
         session.set_conversation(Some(&conversation));

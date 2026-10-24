@@ -33,6 +33,6 @@ export function useComposerModes(workspaceId: string, local: boolean, turn: Work
     mode,
     bypass,
     bypassActive: mode === 'bypass',
-    switchProps: { bypass: on, onBypassChange: local ? bypass.request : undefined },
+    switchProps: { bypass: on, onBypassChange: local ? (next) => bypass.request(next, () => commands.setPlanMode(false)) : undefined },
   };
 }

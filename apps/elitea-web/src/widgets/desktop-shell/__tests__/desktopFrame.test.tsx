@@ -201,6 +201,22 @@ describe('DesktopFrame context menus', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/chat/77'));
   });
 
+  it('keeps the rename field open and says so when the server refuses the rename', async () => {
+    recordThread('w1', { id: '77', title: 'fix the build', updatedAt: 1 });
+    server.use(http.put('*/elitea_core/conversation/prompt_lib/:projectId/:conversationId', () => HttpResponse.json({ error: 'forbidden' }, { status: 403 })));
+    const appIpc: FakeAppIpc = createFakeAppIpc(MACOS_PLATFORM);
+    mount({ appIpc });
+    const folders = await screen.findAllByTestId('shell-folder');
+    appIpc.chooseFromContextMenu('rename');
+    fireEvent.contextMenu(await within(folders[0] as HTMLElement).findByTestId('shell-thread'));
+    const field = await screen.findByTestId('thread-rename');
+    fireEvent.change(field, { target: { value: 'Fix the CI build' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(await screen.findByTestId('thread-rename-error')).toBeInTheDocument();
+    expect(screen.getByTestId('thread-rename')).toHaveValue('Fix the CI build');
+    expect(readThreads('w1').find((x) => x.id === '77')?.title).toBe('fix the build');
+  });
+
   it('renames a thread in place from its menu', async () => {
     recordThread('w1', { id: '77', title: 'fix the build', updatedAt: 1 });
     const renamed: unknown[] = [];

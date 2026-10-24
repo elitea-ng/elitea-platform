@@ -6074,6 +6074,12 @@ async fn a_bypass_turn_asks_nothing_and_keeps_forbidden_rules() {
     assert_eq!(bodies.len(), 3);
     assert!(!bodies[1].to_string().contains("forbidden_by_rule"));
     assert!(bodies[2].to_string().contains("forbidden_by_rule"));
+    // The folder's session leaves bypass mode with the turn.
+    let (session, _) = h.host.process_session(&h.workspace_id).expect("session");
+    assert_eq!(
+        session.profile(),
+        elitea_local_tools::approvals::PermissionProfile::Build
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -924,5 +924,6 @@
   "workspace.rules.sourceBypass": "bypass mode",
   "workspace.thread.rename": "Rename Thread",
   "workspace.thread.renameLabel": "Thread name",
-  "workspace.thread.renameMenu": "Rename…"
+  "workspace.thread.renameMenu": "Rename…",
+  "workspace.thread.renameFailed": "The thread could not be renamed. Try again, or press Esc."
 }
