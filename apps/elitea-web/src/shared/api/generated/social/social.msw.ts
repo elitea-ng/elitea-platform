@@ -56,85 +56,13 @@ import type {
   ThemePreference,
 } from "../model";
 
-export const getGetCurrentAuthorResponseMock = (
-  overrideResponse: Partial<Extract<SocialAuthorProfile, object>> = {},
-): SocialAuthorProfile => ({
-  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  email: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  avatar: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  description: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  personal_project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  personalization: faker.helpers.arrayElement([
-    faker.helpers.arrayElement([{}, null]),
-    null,
-  ]),
-  default_context_management: faker.helpers.arrayElement([
-    {
-      enabled: faker.helpers.arrayElement([
-        faker.datatype.boolean(),
-        undefined,
-      ]),
-      budget_mode: faker.helpers.arrayElement([
-        faker.helpers.arrayElement(["balanced", "full"] as const),
-        undefined,
-      ]),
-      max_context_tokens: faker.helpers.arrayElement([
-        faker.number.int({ min: 1000 }),
-        undefined,
-      ]),
-      preserve_recent_messages: faker.helpers.arrayElement([
-        faker.number.int({ min: 1, max: 99 }),
-        undefined,
-      ]),
-      enable_context_editing: faker.helpers.arrayElement([
-        faker.datatype.boolean(),
-        undefined,
-      ]),
-    },
-    undefined,
-  ]),
-  default_summarization: faker.helpers.arrayElement([
-    {
-      enable_summarization: faker.helpers.arrayElement([
-        faker.datatype.boolean(),
-        undefined,
-      ]),
-      summary_instructions: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
-      summary_model_name: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
-      summary_model_project_id: faker.helpers.arrayElement([
-        faker.number.int(),
-        undefined,
-      ]),
-      summary_trigger_ratio: faker.helpers.arrayElement([
-        faker.number.float({ min: 0, max: 1, fractionDigits: 2 }),
-        undefined,
-      ]),
-      min_messages_for_summary: faker.helpers.arrayElement([
-        faker.number.int({ min: 1 }),
-        undefined,
-      ]),
-      target_summary_tokens: faker.helpers.arrayElement([
-        faker.number.int({ min: 100 }),
-        undefined,
-      ]),
-    },
-    undefined,
-  ]),
-  provider_refs: faker.helpers.arrayElement([
-    Array.from(
-      { length: faker.number.int({ min: 1, max: 10 }) },
-      (_, i) => i + 1,
-    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-    undefined,
-  ]),
-  ...overrideResponse,
+export const getGetCurrentAuthorResponseMock = (): SocialAuthorProfile => ({
+  id: "42",
+  name: "Example User",
+  email: "example.user@example.test",
+  avatar: "",
+  description: "",
+  personal_project_id: "42",
 });
 
 export const getUpdateCurrentAuthorResponseMock = (

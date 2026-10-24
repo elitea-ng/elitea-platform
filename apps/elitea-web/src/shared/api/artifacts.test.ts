@@ -8,8 +8,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { server } from '../../test/setup';
-import artifactList200 from '../../test/msw/fixtures/artifacts/artifact-list.200.json';
-import bucketList200 from '../../test/msw/fixtures/artifacts/bucket-list.200.json';
+import { getListBucketsResponseMock, getListObjectsResponseMock } from './generated/artifacts/artifacts.msw';
 import {
   artifactContentByPath,
   artifactContentNetworkError,
@@ -192,7 +191,7 @@ describe('bucket / object list URLs land on mountArtifactRoutes', () => {
     if (!result.ok) throw new Error('unreachable');
     expect(result.headers).toBeInstanceOf(Headers);
     expect(result.status).toBe(200);
-    expect(result.data).toEqual(bucketList200.body);
+    expect(result.data).toEqual(getListBucketsResponseMock());
     expect(new URL(sink[0]!.url).pathname).toBe('/api/v2/artifacts/buckets/p1');
   });
 
@@ -201,7 +200,7 @@ describe('bucket / object list URLs land on mountArtifactRoutes', () => {
     server.use(artifactListOk(sink));
     const result = await listArtifacts({ baseUrl: '/api/v2', projectId: 'p1', bucket: 'demo-bucket' });
     if (!result.ok) throw new Error('unreachable');
-    expect(result.data).toEqual(artifactList200.body);
+    expect(result.data).toEqual(getListObjectsResponseMock());
     expect(new URL(sink[0]!.url).pathname).toBe('/api/v2/artifacts/objects/p1/demo-bucket');
   });
 

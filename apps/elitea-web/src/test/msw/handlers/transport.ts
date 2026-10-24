@@ -1,53 +1,35 @@
 /**
- * Transport-probe MSW handlers (unit F4). Mock-rule compliance (spec §6.5):
- *  - R-M2: this file is the handlers' home; every response body derives from
- *    a fixture FILE under ../fixtures/transport/ — no inline body literals.
- *  - R-M3: every factory routes its entry through F2's
- *    `registerValidatedHandlers`, so the fixture body is zod-validated at
- *    registration time (the factory call inside each test).
- *  - fixtures carry `recordedAt`; they are `synthetic: true` because
- *    the probed paths (`/__transport__/…`) intentionally exist on no real
- *    endpoint — the §5.4 behaviours under test are transport semantics, not
- *    endpoint contracts.
+ * Transport-probe MSW handlers (unit F4). Mock rules (spec §6.5):
+ *  - R-M2: a body is either a generated contract mock (`get<Op>ResponseMock()`,
+ *    whose value is the operation's example in v2.yaml) or a typed constant
+ *    in this file. The probe paths (`/__transport__/…`) exist on no real
+ *    endpoint on purpose — the §5.4 behaviours under test are transport
+ *    semantics, not endpoint contracts — so their bodies are constants here.
+ *  - The one real route, GET /api/v2/social/author, answers the contract's
+ *    own example (`getGetCurrentAuthorResponseMock`).
  *
  * Tests attach these per-scenario via `server.use(...)`; nothing registers
  * globally (stateful gates must not leak between tests, R-M5 covers strays).
  */
 import { delay, http, HttpResponse } from 'msw';
 import type { RequestHandler } from 'msw';
-import { z } from 'zod';
-import type { ZodType } from 'zod';
 
-import { registerValidatedHandlers } from '../register';
-import author200 from '../fixtures/transport/author.200.json';
-import echo200 from '../fixtures/transport/echo.200.json';
-import forbidden403 from '../fixtures/transport/forbidden.403.json';
-import loginPage200 from '../fixtures/transport/login-page.200.json';
-import notFound404 from '../fixtures/transport/not-found.404.json';
-import probe200 from '../fixtures/transport/probe.200.json';
-import unauthorized401 from '../fixtures/transport/unauthorized.401.json';
+import type { ErrorResponse } from '../../../shared/api/generated/model';
+import { getGetCurrentAuthorResponseMock } from '../../../shared/api/generated/social/social.msw';
 
 export const TRANSPORT_PROBE_PATH = '/api/v2/__transport__/probe';
 export const TRANSPORT_ECHO_PATH = '/api/v2/__transport__/echo';
 export const AUTHOR_PATH = '/api/v2/social/author/';
 
-/* Colocated minimal schemas (R-M3). */
-const probeBody = z.object({ message: z.string() });
-const errorBody = z.object({ error: z.string() });
-// Mirrors the Go wire struct AuthorResponse (social/handler.go:51-58): every
-// field is a string with no omitempty EXCEPT personalization (`any`,
-// omitempty). `id` is a string — intToStr'd server-side, never a number.
-const authorBody = z.object({
-  id: z.string(),
-  name: z.string(),
-  email: z.string(),
-  avatar: z.string(),
-  description: z.string(),
-  personal_project_id: z.string(),
-  personalization: z.unknown().optional(),
-});
-const echoBody = z.object({ received: z.boolean() });
-const loginPageBody = z.string();
+/* Probe bodies. The error bodies use the flat apierr shape; http.ts keeps a
+ * failure body as `unknown` and never parses it. */
+const PROBE_OK: { message: string } = { message: 'transport probe ok' };
+const ECHO_OK: { received: boolean } = { received: true };
+const UNAUTHORIZED: ErrorResponse = { error: 'missing authorization header' };
+const FORBIDDEN: ErrorResponse = { error: 'forbidden' };
+const NOT_FOUND: ErrorResponse = { error: 'not found' };
+/** Stand-in for the edge-auth login page a session-expiry redirect lands on. */
+const LOGIN_PAGE_HTML = '<html><body>edge-auth login page</body></html>';
 
 /** Request facts captured for assertions (headers/bytes, §5.4 probes). */
 export interface CapturedRequest {
@@ -74,39 +56,32 @@ async function capture(request: Request, sink?: CapturedRequest[]): Promise<void
   });
 }
 
-/** R-M3 seam: validate one entry through F2's registration wrapper. */
-function validated(id: string, schema: ZodType, fixture: { recordedAt: string; body: unknown }, handler: RequestHandler): RequestHandler {
-  const [first] = registerValidatedHandlers([{ id, handler, schema, fixture }]);
-  if (first === undefined) throw new Error(`transport handlers: registration returned nothing for ${id}`);
-  return first;
-}
-
 /** Mutable auth gate shared between a test and its gated handlers. */
 export interface SessionGate {
   authed: boolean;
 }
 
-/** 200 probe (fixture body); optionally captures request facts. */
+/** 200 probe; optionally captures request facts. */
 export function probeOk(sink?: CapturedRequest[]): RequestHandler {
-  return validated('transport.probe.ok', probeBody, probe200, http.get(`*${TRANSPORT_PROBE_PATH}`, async ({ request }) => {
+  return http.get(`*${TRANSPORT_PROBE_PATH}`, async ({ request }) => {
     await capture(request, sink);
-    return HttpResponse.json(probe200.body);
-  }));
+    return HttpResponse.json(PROBE_OK);
+  });
 }
 
 /** Any-method 200 probe — exercises the non-GET sugar methods. */
 export function probeAny(sink?: CapturedRequest[]): RequestHandler {
-  return validated('transport.probe.any', probeBody, probe200, http.all(`*${TRANSPORT_PROBE_PATH}`, async ({ request }) => {
+  return http.all(`*${TRANSPORT_PROBE_PATH}`, async ({ request }) => {
     await capture(request, sink);
-    return HttpResponse.json(probe200.body);
-  }));
+    return HttpResponse.json(PROBE_OK);
+  });
 }
 
 /** JSON content-type over a non-JSON body — the lying-server branch (§3.6). */
 export function probeLyingJson(): RequestHandler {
-  return validated('transport.probe.lyingJson', loginPageBody, loginPage200, http.get(`*${TRANSPORT_PROBE_PATH}`, () =>
-    new HttpResponse(loginPage200.body, { headers: { 'Content-Type': 'application/json' } }),
-  ));
+  return http.get(`*${TRANSPORT_PROBE_PATH}`, () =>
+    new HttpResponse(LOGIN_PAGE_HTML, { headers: { 'Content-Type': 'application/json' } }),
+  );
 }
 
 /** 204 No Content — empty-body branch. */
@@ -116,75 +91,71 @@ export function probeNoContent(): RequestHandler {
 
 /** Plain 404 — §3.6 Result-discipline probe. */
 export function probeNotFound(): RequestHandler {
-  return validated('transport.probe.notFound', errorBody, notFound404, http.get(`*${TRANSPORT_PROBE_PATH}`, () =>
-    HttpResponse.json(notFound404.body, { status: 404 }),
-  ));
+  return http.get(`*${TRANSPORT_PROBE_PATH}`, () => HttpResponse.json(NOT_FOUND, { status: 404 }));
 }
 
-/** Network-level failure (no response body — nothing to derive, R-M2 n/a). */
+/** Network-level failure (no response body, R-M2 n/a). */
 export function probeNetworkError(): RequestHandler {
   return http.get(`*${TRANSPORT_PROBE_PATH}`, () => HttpResponse.error());
 }
 
 /** Never responds — abort-mid-flight probe (§5.4 behaviour 8). */
 export function probeNeverending(): RequestHandler {
-  return validated('transport.probe.neverending', probeBody, probe200, http.get(`*${TRANSPORT_PROBE_PATH}`, async () => {
+  return http.get(`*${TRANSPORT_PROBE_PATH}`, async () => {
     await delay('infinite');
-    return HttpResponse.json(probe200.body);
-  }));
+    return HttpResponse.json(PROBE_OK);
+  });
 }
 
 /** 401/403 until `gate.authed`, then the 200 probe body (§5.4 behaviour 2/3). */
 export function probeAuthGated(gate: SessionGate, deniedStatus: 401 | 403 = 401, sink?: CapturedRequest[]): RequestHandler {
-  const denied = deniedStatus === 401 ? unauthorized401 : forbidden403;
-  return validated(`transport.probe.authGated.${deniedStatus}`, errorBody, denied, http.get(`*${TRANSPORT_PROBE_PATH}`, async ({ request }) => {
+  const denied = deniedStatus === 401 ? UNAUTHORIZED : FORBIDDEN;
+  return http.get(`*${TRANSPORT_PROBE_PATH}`, async ({ request }) => {
     await capture(request, sink);
-    if (!gate.authed) return HttpResponse.json(denied.body, { status: deniedStatus });
-    return HttpResponse.json(probe200.body);
-  }));
+    if (!gate.authed) return HttpResponse.json(denied, { status: deniedStatus });
+    return HttpResponse.json(PROBE_OK);
+  });
 }
 
 /** 401 on the first call, then a network-level failure — retry-crash probe. */
 export function probeUnauthorizedThenNetworkError(): RequestHandler {
   let first = true;
-  return validated('transport.probe.401ThenNetError', errorBody, unauthorized401, http.get(`*${TRANSPORT_PROBE_PATH}`, () => {
+  return http.get(`*${TRANSPORT_PROBE_PATH}`, () => {
     if (first) {
       first = false;
-      return HttpResponse.json(unauthorized401.body, { status: 401 });
+      return HttpResponse.json(UNAUTHORIZED, { status: 401 });
     }
     return HttpResponse.error();
-  }));
+  });
 }
 
 /** Redirects to `loginUrl` until `gate.authed` — the SECONDARY sniff signal. */
 export function probeRedirectGated(gate: SessionGate, loginUrl: string): RequestHandler {
-  return validated('transport.probe.redirectGated', probeBody, probe200, http.get(`*${TRANSPORT_PROBE_PATH}`, () => {
+  return http.get(`*${TRANSPORT_PROBE_PATH}`, () => {
     if (!gate.authed) return HttpResponse.redirect(loginUrl, 302);
-    return HttpResponse.json(probe200.body);
-  }));
+    return HttpResponse.json(PROBE_OK);
+  });
 }
 
 /** Serves the synthetic login page at an arbitrary absolute-path pattern. */
 export function loginPage(pathPattern: string): RequestHandler {
-  return validated('transport.loginPage', loginPageBody, loginPage200, http.get(`*${pathPattern}`, () =>
-    HttpResponse.html(loginPage200.body),
-  ));
+  return http.get(`*${pathPattern}`, () => HttpResponse.html(LOGIN_PAGE_HTML));
 }
 
 /** POST echo, 401-gated — the byte-identical-replay probe captures every attempt's body. */
 export function echoAuthGated(gate: SessionGate, sink: CapturedRequest[]): RequestHandler {
-  return validated('transport.echo.authGated', echoBody, echo200, http.post(`*${TRANSPORT_ECHO_PATH}`, async ({ request }) => {
+  return http.post(`*${TRANSPORT_ECHO_PATH}`, async ({ request }) => {
     await capture(request, sink);
-    if (!gate.authed) return HttpResponse.json(unauthorized401.body, { status: 401 });
-    return HttpResponse.json(echo200.body);
-  }));
+    if (!gate.authed) return HttpResponse.json(UNAUTHORIZED, { status: 401 });
+    return HttpResponse.json(ECHO_OK);
+  });
 }
 
-/** auth/me-class endpoint (§5.4 behaviour 5): 200 author when authed, real-shape 401 otherwise. */
+/** auth/me-class endpoint (§5.4 behaviour 5): the contract's example author when authed, a 401 otherwise. */
 export function authorGated(gate: SessionGate, sink?: CapturedRequest[]): RequestHandler {
-  return validated('transport.author.gated', authorBody, author200, http.get(`*${AUTHOR_PATH}`, async ({ request }) => {
+  return http.get(`*${AUTHOR_PATH}`, async ({ request }) => {
     await capture(request, sink);
-    if (!gate.authed) return HttpResponse.json(unauthorized401.body, { status: 401 });
-    return HttpResponse.json(author200.body);
-  }));
+    if (!gate.authed) return HttpResponse.json(UNAUTHORIZED, { status: 401 });
+    return HttpResponse.json(getGetCurrentAuthorResponseMock());
+  });
 }

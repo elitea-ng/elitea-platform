@@ -116,6 +116,8 @@
     "@vitejs/plugin-react": "6.1.1",
     "@vitest/browser-playwright": "4.1.11",
     "@vitest/coverage-v8": "4.1.11",
+    "ajv": "8.20.0",
+    "ajv-formats": "2.1.1",
     "babel-plugin-react-compiler": "1.0.0",
     "dependency-cruiser": "18.5.0",
     "eslint-plugin-i18next": "6.1.5",

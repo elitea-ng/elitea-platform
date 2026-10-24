@@ -1,0 +1,23 @@
+# check-spec-examples RED: the response example's id is a string, and
+# `name` (required) is missing.
+openapi: "3.0.3"
+info: { title: fixture, version: "1" }
+paths:
+  /users/{id}:
+    get:
+      operationId: getUser
+      responses:
+        '200':
+          description: One user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+              example: { id: "1" }
+components:
+  schemas:
+    User:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
