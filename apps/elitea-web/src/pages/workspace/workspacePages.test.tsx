@@ -1236,7 +1236,7 @@ describe('WorkspaceSessionPage', () => {
 
       await user.type(input, '/');
       const menu = await screen.findByTestId('workspace-command-menu');
-      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual(['/new', '/plan', '/undo', '/agent', '/model', '/clear', '/compact', '/help']);
+      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual(['/new', '/plan', '/undo', '/retry', '/agent', '/model', '/steps', '/clear', '/compact', '/help']);
       await user.type(input, 'pl{Enter}');
       expect(screen.getByRole('radio', { name: 'Plan mode (no changes)' })).toBeChecked();
       await waitFor(() => expect(input).toHaveValue(''));
@@ -1367,15 +1367,15 @@ describe('WorkspaceSessionPage', () => {
 
       await user.type(input, '/');
       const menu = await screen.findByTestId('workspace-command-menu');
-      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(10));
+      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(12));
       expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual([
-        '/new', '/plan', '/undo', '/agent', '/model', '/clear', '/compact', '/help', '/code-review', '/style',
+        '/new', '/plan', '/undo', '/retry', '/agent', '/model', '/steps', '/clear', '/compact', '/help', '/code-review', '/style',
       ]);
       expect(within(menu).getByText('Skills')).toBeInTheDocument();
       expect(within(menu).getByText('The house style')).toBeInTheDocument();
 
-      // Filtered by what follows the "/": only the skills match "st".
-      await user.type(input, 'st');
+      // Filtered by what follows the "/": only the skill matches "sty".
+      await user.type(input, 'sty');
       await waitFor(() =>
         expect(
           within(screen.getByTestId('workspace-command-menu'))
@@ -1409,9 +1409,9 @@ describe('WorkspaceSessionPage', () => {
 
       await user.type(input, '/');
       const menu = await screen.findByTestId('workspace-command-menu');
-      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(11));
+      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(13));
       expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual([
-        '/new', '/plan', '/undo', '/agent', '/model', '/clear', '/compact', '/help', '/review', '/standup', '/style',
+        '/new', '/plan', '/undo', '/retry', '/agent', '/model', '/steps', '/clear', '/compact', '/help', '/review', '/standup', '/style',
       ]);
       expect(within(menu).getByText('Commands in this workspace')).toBeInTheDocument();
       expect(within(menu).getByText('Your commands')).toBeInTheDocument();
@@ -1436,7 +1436,7 @@ describe('WorkspaceSessionPage', () => {
       const input = screen.getByTestId('chat-message-input');
       await user.type(input, '/');
       await screen.findByTestId('workspace-command-menu');
-      await waitFor(() => expect(within(screen.getByTestId('workspace-command-menu')).getAllByRole('option')).toHaveLength(10));
+      await waitFor(() => expect(within(screen.getByTestId('workspace-command-menu')).getAllByRole('option')).toHaveLength(12));
       await user.type(input, 'help');
       await user.keyboard('{Enter}');
       const help = await screen.findByTestId('workspace-help');
@@ -1471,8 +1471,8 @@ describe('WorkspaceSessionPage', () => {
 
       await user.type(input, '/');
       const menu = await screen.findByTestId('workspace-command-menu');
-      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(10));
-      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label')).slice(8)).toEqual(['/style', '/deploy']);
+      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(12));
+      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label')).slice(10)).toEqual(['/style', '/deploy']);
       expect(within(menu).getByText('Project skills')).toBeInTheDocument();
       expect(listed[0]?.searchParams.get('page_size')).toBe('100');
 

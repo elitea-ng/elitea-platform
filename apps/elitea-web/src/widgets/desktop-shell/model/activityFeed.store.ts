@@ -150,6 +150,7 @@ function ended(turn: TrackedTurn, phase: TurnPhase): TrackedTurn {
 
 type QuietKind =
   | 'text_delta'
+  | 'model_retry'
   | 'thinking_delta'
   | 'thinking_end'
   | 'context'
@@ -164,6 +165,7 @@ type QuietKind =
 
 const QUIET_KINDS: ReadonlySet<AgentEvent['kind']> = new Set<QuietKind>([
   'text_delta',
+  'model_retry',
   'thinking_delta',
   'thinking_end',
   'context',

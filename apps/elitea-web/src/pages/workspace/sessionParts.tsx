@@ -321,18 +321,15 @@ export function EarlierTurns({
 }
 
 /** Each turn started here, under the prompt that started it; the last one is live. ("Open in chat" is in the header.) */
-export function Exchanges({
-  turn,
-  prompts,
-  promptImages,
-  onFork,
-}: {
+export function Exchanges({ turn, prompts, promptImages, onFork, onRetry }: {
   turn: WorkspaceTurn;
   prompts: readonly string[];
   /** The thumbnails of each prompt's images, by the same index. */
   promptImages: readonly (readonly StripImage[])[];
   /** "Fork from here" on each ended turn; absent = not offered. */
   onFork?: OnFork;
+  /** "Retry" on the live turn's error; absent = not offered. */
+  onRetry?: () => void;
 }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   const exchanges = [
@@ -353,6 +350,7 @@ export function Exchanges({
             onCancel={() => void turn.cancel()}
             onRetryCommit={(executionId) => turn.retryCommit(exchange.key, executionId)}
             onTextContextMenu={(text, event) => copyMenu(text, event, fork)}
+            {...(exchange.live && onRetry !== undefined ? { onRetryTurn: onRetry } : {})}
           />
         </Box>
         );
@@ -377,6 +375,11 @@ export function SessionNotices({ error, commands, customCommands, skills }: Sess
       {commands.notice === 'nothingToUndo' && (
         <Alert severity="info" onClose={commands.closeNotice}>
           {t('workspace.undoNothing', 'The last turn here changed no files.')}
+        </Alert>
+      )}
+      {(commands.notice === 'steps' || commands.notice === 'nothingToRetry') && (
+        <Alert severity="info" onClose={commands.closeNotice} data-testid={`workspace-notice-${commands.notice}`}>
+          {commands.notice === 'steps' ? commands.stepsText : t('workspace.retryNothing', 'There is no message here to send again.')}
         </Alert>
       )}
       {commands.notice === 'modelFixed' && (

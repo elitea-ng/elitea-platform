@@ -59,6 +59,19 @@ describe('TurnTranscript', () => {
     await waitFor(() => expect(onRetry).toHaveBeenCalledWith('e1'));
   });
 
+  it('offers Retry on a failure another try may mend, never on a refusal, and shows a model retry while it waits', async () => {
+    const onRetryTurn = vi.fn();
+    const failed = (code: string) => ({ phase: 'error' as const, items: [], approvals: [], error: { code, message: `failed: ${code}` } });
+    const { rerender } = renderWithTheme(<TurnTranscript view={failed('model_gateway.incomplete_stream')} busy={false} onCancel={vi.fn()} onRetryTurn={onRetryTurn} />);
+    await userEvent.setup().click(screen.getByTestId('turn-error-retry'));
+    expect(onRetryTurn).toHaveBeenCalledTimes(1);
+    rerender(<TurnTranscript view={failed('model_gateway.member_budget_exhausted')} busy={false} onCancel={vi.fn()} onRetryTurn={onRetryTurn} />);
+    expect(screen.getByText('failed: model_gateway.member_budget_exhausted')).toBeInTheDocument();
+    expect(screen.queryByTestId('turn-error-retry')).toBeNull();
+    rerender(<TurnTranscript view={{ phase: 'running', items: [], approvals: [], retrying: { attempt: 3, max_attempts: 25, message: 'x' } }} busy onCancel={vi.fn()} />);
+    expect(screen.getByTestId('turn-retrying')).toHaveTextContent('retrying (3 of 25)');
+  });
+
   it('shows a recorded commit failure without Retry when nothing can resend it', () => {
     const view = { phase: 'done' as const, items: [], approvals: [], commitFailed: { executionId: 'e1', code: 'x', message: 'Not saved.', seq: 3 } };
     renderWithTheme(<TurnTranscript view={view} busy={false} onCancel={vi.fn()} />);

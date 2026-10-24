@@ -173,6 +173,29 @@ export interface TurnTranscriptProps {
   onRetryCommit?: (executionId: string) => Promise<void>;
   /** Right-click on the agent's text (the desktop's native context menu: Copy). */
   onTextContextMenu?: (text: string, event: MouseEvent) => void;
+  /** The turn failed in a way another try may mend: "Retry" sends the message again (`/retry`); absent: not offered. */
+  onRetryTurn?: () => void;
+}
+
+/**
+ * The failures another try may mend: the host gave up on its own model retries (a cut or stalled stream, the gateway
+ * unreachable, slow or rate limited). A refusal (budget, sign-in, a model the project may not use) is not offered one.
+ */
+const RETRYABLE = new Set(['model_gateway.incomplete_stream', 'model_gateway.unavailable', 'model_gateway.upstream_timeout', 'model_gateway.rate_limited', 'model_gateway.conflict']);
+
+/** The turn's error, with "Retry" when another try may mend it. */
+function TurnError({ error, onRetry }: { error: NonNullable<TurnView['error']>; onRetry?: (() => void) | undefined }): React.JSX.Element {
+  const action =
+    onRetry === undefined || !RETRYABLE.has(error.code) ? undefined : (
+      <Button color="inherit" size="small" onClick={onRetry} data-testid="turn-error-retry">
+        {t('workspace.turnError.retry', 'Retry')}
+      </Button>
+    );
+  return (
+    <Alert severity="error" action={action}>
+      {error.message}
+    </Alert>
+  );
 }
 
 /** The answer is on screen, but not in the conversation: the host's reason, and "Retry". */
@@ -199,7 +222,18 @@ function CommitFailed({ failed, onRetry }: { failed: NonNullable<TurnView['commi
   );
 }
 
-export function TurnTranscript({ view, busy, onCancel, onRetryCommit, onTextContextMenu }: TurnTranscriptProps): React.JSX.Element {
+/** A failed model call is made again (`model_retry`): until the model streams again or the turn ends. */
+function RetryNotice({ view }: { view: TurnView }): React.JSX.Element | null {
+  if (view.retrying === undefined || view.error !== undefined) return null;
+  const { attempt, max_attempts: max } = view.retrying;
+  return (
+    <Alert severity="warning" data-testid="turn-retrying">
+      {t('workspace.modelRetrying', 'The model call failed; retrying ({{attempt}} of {{max}}).', { attempt: String(attempt), max: String(max) })}
+    </Alert>
+  );
+}
+
+export function TurnTranscript({ view, busy, onCancel, onRetryCommit, onTextContextMenu, onRetryTurn }: TurnTranscriptProps): React.JSX.Element {
   const showStatus = view.phase !== null;
   return (
     <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -220,9 +254,8 @@ export function TurnTranscript({ view, busy, onCancel, onRetryCommit, onTextCont
           </Box>
         ),
       )}
-      {view.error !== undefined && (
-        <Alert severity="error">{view.error.message}</Alert>
-      )}
+      {view.error !== undefined && <TurnError error={view.error} onRetry={onRetryTurn} />}
+      <RetryNotice view={view} />
       {view.commitFailed !== undefined && <CommitFailed key={view.commitFailed.seq} failed={view.commitFailed} {...(onRetryCommit === undefined ? {} : { onRetry: onRetryCommit })} />}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
         {view.projectInstructions !== undefined && view.projectInstructions.length > 0 && (
