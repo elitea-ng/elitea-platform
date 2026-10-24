@@ -27,6 +27,7 @@ mod index;
 mod local_commands;
 mod logging;
 mod loopback;
+mod lsp_commands;
 mod mcp;
 mod mcp_commands;
 mod menu;
@@ -480,6 +481,7 @@ pub fn run() {
             hooks_commands::hooks_save,
             hooks_commands::hooks_set_enabled,
             hooks_commands::hooks_proposal_answer,
+            lsp_commands::lsp_status,
             index::index_status,
             index::index_open,
             index::index_enable,

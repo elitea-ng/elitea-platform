@@ -444,6 +444,67 @@ async fn a_missing_server_is_reported_once_and_the_edit_succeeds() {
     assert!(result.get("diagnostics").is_none(), "{result}");
 }
 
+/// A server found missing is tried again once the backoff has passed (the
+/// person installed it meanwhile), not on every turn's `configure`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unavailable_server_is_tried_again_after_the_backoff() {
+    let fixture = fixture_with(
+        policy(),
+        &[("go.mod", "module x\n"), ("main.go", "package main\n")],
+    );
+    let program = fixture.base.join("bin/gopls");
+    let settings = LspSettings {
+        enabled: true,
+        waits: BTreeMap::from([(Language::Go, Duration::from_millis(300))]),
+        programs: BTreeMap::from([(
+            Language::Go,
+            ServerProgram {
+                program: program.clone(),
+                args: Vec::new(),
+            },
+        )]),
+        idle: IDLE,
+    };
+    fixture.session.lsp().configure(settings.clone());
+    let first = edit(
+        &fixture,
+        "main.go",
+        "package main\n",
+        "package main\n\nfunc a() {}\n",
+    )
+    .await;
+    assert!(
+        first["diagnostics"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not exist"),
+        "{first}"
+    );
+    // The same settings at the next turn, within the backoff: still off.
+    fixture.session.lsp().configure(settings.clone());
+    assert_eq!(
+        fixture.session.lsp().status()[0].state,
+        LspState::Unavailable
+    );
+    // Installed meanwhile; once the backoff has passed it is tried again.
+    std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+    std::fs::write(&program, "#!/bin/sh\nexit 0\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fixture.session.lsp().retry_unavailable(Duration::ZERO);
+    assert!(fixture.session.lsp().status().is_empty(), "forgotten");
+    let second = edit(&fixture, "main.go", "func a() {}", "func b() {}").await;
+    let message = second["diagnostics"]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        !message.contains("does not exist"),
+        "the program was looked for again: {second}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn no_server_starts_while_commands_are_off() {
     let fixture = fixture_with(

@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use elitea_local_tools::lsp::{LspEvents, LspSettings, LspStatus};
@@ -17,11 +18,22 @@ use crate::workspaces::AgentSettings;
 /// The event name the chip listens to.
 pub const EVENT_NAME: &str = "lsp://event";
 
+/// The next event's `seq`: one counter for the app's lifetime, so a later
+/// event always has a larger one (a workspace's new session does not start
+/// again from 0), and `lsp_status` can say which events it reflects.
+static NEXT_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// The `seq` the next event will carry.
+#[must_use]
+pub fn next_seq() -> u64 {
+    NEXT_SEQ.load(Ordering::SeqCst)
+}
+
 /// One app-channel event, as the webview receives it.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct LspEvent {
     pub workspace_id: String,
-    /// Grows by one per event of this workspace's session, from 0.
+    /// Larger than every earlier event's, of any workspace.
     pub seq: u64,
     /// `lsp_status`.
     pub kind: &'static str,
@@ -50,7 +62,8 @@ pub fn settings_for(agent: &AgentSettings) -> LspSettings {
 pub struct LspSink {
     workspace_id: String,
     emitter: Arc<dyn EventEmitter>,
-    seq: Mutex<u64>,
+    /// One event out at a time, so they leave in `seq` order.
+    sending: Mutex<()>,
 }
 
 impl LspSink {
@@ -59,23 +72,23 @@ impl LspSink {
         Self {
             workspace_id: workspace_id.to_owned(),
             emitter,
-            seq: Mutex::new(0),
+            sending: Mutex::new(()),
         }
     }
 }
 
 impl LspEvents for LspSink {
     fn status(&self, status: &LspStatus) {
-        let Ok(mut seq) = self.seq.lock() else {
-            return;
-        };
+        let _sending = self
+            .sending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.emitter.emit_lsp(LspEvent {
             workspace_id: self.workspace_id.clone(),
-            seq: *seq,
+            seq: NEXT_SEQ.fetch_add(1, Ordering::SeqCst),
             kind: "lsp_status",
             payload: status.clone(),
         });
-        *seq += 1;
     }
 }
 
@@ -108,7 +121,7 @@ mod tests {
     }
 
     #[test]
-    fn statuses_go_out_numbered_per_workspace() {
+    fn statuses_go_out_numbered_in_order_across_sessions() {
         let emitter = Arc::new(VecEmitter::default());
         let sink = LspSink::new("ws", emitter.clone());
         for state in [LspState::Starting, LspState::Ready] {
@@ -120,13 +133,25 @@ mod tests {
         }
         let events = emitter.lsp();
         assert_eq!(events.len(), 2);
-        assert_eq!((events[0].seq, events[1].seq), (0, 1));
+        assert!(events[1].seq > events[0].seq, "{events:?}");
+        assert!(
+            next_seq() > events[1].seq,
+            "the snapshot's seq is past them"
+        );
+        // A new session of the workspace goes on from there.
+        let again = LspSink::new("ws", emitter.clone());
+        again.status(&LspStatus {
+            language: Language::Rust,
+            state: LspState::Stopped,
+            message: None,
+        });
+        assert!(emitter.lsp()[2].seq > events[1].seq);
         let wire = serde_json::to_value(&events[1]).unwrap();
         assert_eq!(
             wire,
             serde_json::json!({
                 "workspace_id": "ws",
-                "seq": 1,
+                "seq": events[1].seq,
                 "kind": "lsp_status",
                 "payload": { "language": "rust", "state": "ready" },
             })

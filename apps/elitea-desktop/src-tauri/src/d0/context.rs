@@ -298,13 +298,26 @@ impl ModelRequestBudget for ProviderBudget {
     }
 }
 
-/// What the turn keeps of its compaction: the commit's summary.
+/// What the turn keeps of its compaction (the commit's summary), and
+/// whether its message went to the model.
 #[derive(Default)]
 pub struct TurnContext {
     compaction: Mutex<Option<Arc<StepCompaction>>>,
+    ran: std::sync::atomic::AtomicBool,
 }
 
 impl TurnContext {
+    /// The person's message passed its `UserPromptSubmit` hooks and the
+    /// run starts: the turn's `Stop` hooks run when it ends.
+    pub fn mark_ran(&self) {
+        self.ran.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[must_use]
+    pub fn ran(&self) -> bool {
+        self.ran.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     pub fn bind(&self, compaction: Arc<StepCompaction>) {
         *self
             .compaction

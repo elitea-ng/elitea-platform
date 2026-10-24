@@ -183,7 +183,7 @@ export function HooksPanel({ ipc, workspaceId }: HooksPanelProps): React.JSX.Ele
       <Typography variant="bodySmall" color="text.secondary">
         {t(
           'workspace.hooks.help',
-          'Hooks are your own commands around the agent’s local tools: before a call (they may refuse it, ask you, or change its input), after one (they may add a note), when you send a message, and when a turn ends. Each runs on this computer under the same sandbox as the agent’s commands, with no network unless you allow it. A repository’s .elitea/hooks.json is only a proposal: nothing runs from it unless you trust it.',
+          'Hooks are your own commands around the agent’s local tools and your local MCP servers’ tools (not its memory tools): before a call (they may refuse it, ask you, or change its input), after one (they may add a note), when you send a message, and when a turn ends. Each runs on this computer under the same sandbox as the agent’s commands, with no network unless you allow it. A repository’s .elitea/hooks.json is only a proposal: nothing runs from it unless you trust it, and it can never replace one of your own hooks.',
         )}
       </Typography>
       {!view.allowed && (

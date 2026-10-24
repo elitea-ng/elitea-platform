@@ -156,6 +156,118 @@ async fn pre_hook_exit_2_denies_with_reason() {
 }
 
 #[tokio::test]
+async fn a_path_guard_sees_through_a_symlink() {
+    let f = fixture();
+    std::fs::create_dir_all(f.root.join("migrations")).expect("dir");
+    std::fs::write(f.root.join("migrations/0001.sql"), "create table a;\n").expect("seed");
+    std::os::unix::fs::symlink("migrations/0001.sql", f.root.join("link.sql")).expect("link");
+    let mut guard = pre(
+        "no-migrations",
+        &["write_file"],
+        f.script(
+            "guard",
+            "cat >/dev/null\necho 'migrations are frozen' >&2\nexit 2",
+        ),
+    );
+    guard.matcher.paths = vec!["migrations/**".to_owned()];
+    f.configure(vec![guard]);
+    let read = f
+        .session
+        .call("read_file", "c0", json!({"path": "link.sql"}))
+        .await;
+    assert_eq!(read["status"], "ok", "{read}");
+    let result = f.session.call("write_file", "c1", write("link.sql")).await;
+    assert_eq!(
+        result["error"], "hook_denied",
+        "the link's target is matched: {result}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.root.join("migrations/0001.sql")).expect("read"),
+        "create table a;\n"
+    );
+    // A path the globs do not match still runs.
+    let other = f.session.call("write_file", "c2", write("notes.txt")).await;
+    assert_eq!(other["status"], "ok", "{other}");
+}
+
+#[tokio::test]
+async fn a_post_hook_that_rewrites_the_file_keeps_the_read_guard_current() {
+    let f = fixture();
+    let mut fmt = Hook::new(
+        "fmt",
+        HookEvent::PostToolUse,
+        f.script(
+            "fmt",
+            "cat >/dev/null\nfor p in \"$@\"; do printf 'formatted\\n' > \"$p\"; done",
+        ),
+    );
+    fmt.command.push("{path}".to_owned());
+    fmt.matcher = HookMatch {
+        tools: vec!["write_file".to_owned(), "edit_file".to_owned()],
+        paths: vec!["*.rs".to_owned()],
+    };
+    fmt.sandbox = SandboxMode::WorkspaceWrite;
+    f.configure(vec![fmt]);
+    let read = f
+        .session
+        .call("read_file", "c0", json!({"path": "main.rs"}))
+        .await;
+    assert_eq!(read["status"], "ok", "{read}");
+    let written = f
+        .session
+        .call(
+            "write_file",
+            "c1",
+            json!({"path": "main.rs", "content": "fn main(){}\n"}),
+        )
+        .await;
+    assert_eq!(written["status"], "ok", "{written}");
+    assert_eq!(
+        std::fs::read_to_string(f.root.join("main.rs")).expect("read"),
+        "formatted\n",
+        "{written}"
+    );
+    assert_eq!(
+        written["hook_changed_files"],
+        json!(["main.rs"]),
+        "{written}"
+    );
+    // The next edit is based on the formatted text and is not stale.
+    let edited = f
+        .session
+        .call(
+            "edit_file",
+            "c2",
+            json!({"path": "main.rs", "old_string": "formatted", "new_string": "done"}),
+        )
+        .await;
+    assert_eq!(edited["status"], "ok", "{edited}");
+    assert_eq!(
+        std::fs::read_to_string(f.root.join("main.rs")).expect("read"),
+        "formatted\n",
+        "the hook ran again after the edit"
+    );
+    // A read-only hook changes nothing, so nothing is recorded again.
+    let mut look = Hook::new(
+        "look",
+        HookEvent::PostToolUse,
+        f.script("look", "cat >/dev/null"),
+    );
+    look.matcher.tools = vec!["write_file".to_owned()];
+    f.configure(vec![look]);
+    let plain = f
+        .session
+        .call(
+            "write_file",
+            "c3",
+            json!({"path": "main.rs", "content": "x\n"}),
+        )
+        .await;
+    assert_eq!(plain["status"], "ok", "{plain}");
+    assert!(plain.get("hook_changed_files").is_none(), "{plain}");
+}
+
+#[tokio::test]
 async fn pre_hook_allow_cannot_lift_destructive_ask() {
     let f = fixture();
     f.configure(vec![pre(
@@ -211,7 +323,7 @@ async fn modified_input_into_denied_path_is_refused() {
     let result = f.session.call("write_file", "c1", write("ok.txt")).await;
     assert_eq!(result["status"], "error", "{result}");
     assert_eq!(result["code"], "local_tools.denied", "{result}");
-    assert_eq!(result["hook_modified_input"]["path"], ".env");
+    assert_eq!(result["hook_modified_input"]["changed"]["path"], ".env");
     assert_eq!(result["hooks"][0]["result"], "modified");
     assert!(!f.root.join(".env").exists());
     assert!(!f.root.join("ok.txt").exists());

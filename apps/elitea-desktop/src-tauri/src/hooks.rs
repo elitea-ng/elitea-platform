@@ -4,8 +4,9 @@
 //!
 //! * `<app config dir>/hooks.json`: the hooks of every workspace;
 //! * `<app data>/workspaces/<id>/hooks.json`: one workspace's (a hook of
-//!   the same id replaces the user one there), and the digests of the
-//!   repository proposals the person answered.
+//!   the same id replaces the user one there, unless a repository
+//!   proposal brought it), and the digests of the repository proposals
+//!   the person answered.
 //!
 //! Both are `0600` files in `0700` folders, read without following a
 //! symlink and refused when another user owns them or others can read them
@@ -18,9 +19,9 @@
 //! Every turn takes both files as they are at its start: the session runs
 //! the tool hooks; this module runs `UserPromptSubmit` before the model
 //! (a deny refuses the turn, annotations are added to the turn's context,
-//! framed under the thread's nonce) and `Stop` when the turn ends (what
-//! they wrote is shown to the person in a `status` note, never to the
-//! model). Local-only: a cloud turn runs none, and the handoff note says
+//! framed under the thread's nonce) and `Stop` when a turn that ran ends
+//! (not a cancelled one, nor one `UserPromptSubmit` refused; what they
+//! wrote is shown to the person in a `status` note, never to the model). Local-only: a cloud turn runs none, and the handoff note says
 //! so.
 
 use std::path::{Path, PathBuf};
@@ -43,6 +44,13 @@ pub const EVENT_NAME: &str = "hooks://event";
 
 /// The tag a hook's text is framed in, for the model.
 pub const HOOK_OUTPUT_TAG: &str = "hook_output";
+
+/// Whether a write may replace a file that does not parse.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Repair {
+    Yes,
+    No,
+}
 
 /// The two files and the writes to them (one at a time).
 pub struct HookFiles {
@@ -126,6 +134,7 @@ impl HookFiles {
         &self,
         scope: Scope,
         workspace_id: Option<&str>,
+        repair: Repair,
         edit: impl FnOnce(&mut HooksConfig) -> ToolResult<()>,
     ) -> ToolResult<()> {
         let _guard = self
@@ -137,13 +146,26 @@ impl HookFiles {
             crate::credentials_file::create_private_dir(dir)
                 .map_err(|error| ToolError::new(ErrorCode::Io, error.to_string()))?;
         }
-        let mut file = config::load(&path)?;
+        let mut file = match config::load(&path) {
+            // A file of ours that does not parse is replaced whole; a
+            // refused one (a symlink, another user's) still refuses.
+            Err(error) if repair == Repair::Yes && error.code() == ErrorCode::InvalidArgument => {
+                log::warn!(
+                    "replacing a hooks.json that does not parse: {}",
+                    error.message()
+                );
+                HooksConfig::default()
+            }
+            loaded => loaded?,
+        };
         edit(&mut file)?;
         config::save(&path, &file)
     }
 
     /// Replace the `scope`'s hooks with `hooks` (the settings pane's
-    /// editor); the answered proposals are kept.
+    /// editor); the answered proposals are kept. A file that does not
+    /// parse is replaced (its answered proposals are lost with it), so the
+    /// pane can repair it.
     ///
     /// # Errors
     ///
@@ -154,7 +176,7 @@ impl HookFiles {
         workspace_id: Option<&str>,
         hooks: Vec<Hook>,
     ) -> ToolResult<()> {
-        self.change(scope, workspace_id, |file| {
+        self.change(scope, workspace_id, Repair::Yes, |file| {
             file.hooks = hooks;
             file.validate()
         })
@@ -164,7 +186,8 @@ impl HookFiles {
     ///
     /// # Errors
     ///
-    /// The file is refused.
+    /// The file is refused, or does not parse (saving the whole list
+    /// repairs it).
     pub fn set_enabled(
         &self,
         scope: Scope,
@@ -173,7 +196,7 @@ impl HookFiles {
         enabled: bool,
     ) -> ToolResult<bool> {
         let mut found = false;
-        self.change(scope, workspace_id, |file| {
+        self.change(scope, workspace_id, Repair::No, |file| {
             if let Some(hook) = file.hooks.iter_mut().find(|hook| hook.id == id) {
                 hook.enabled = enabled;
                 found = true;
@@ -194,20 +217,29 @@ impl HookFiles {
         let Ok(workspace) = Workspace::open(root, path_deny) else {
             return Vec::new();
         };
-        let answered = self
+        let workspace_file = self
             .load(Scope::Workspace, Some(workspace_id))
-            .map(|file| file.answered_proposals)
             .unwrap_or_default();
+        let user = self.load(Scope::User, None).unwrap_or_default();
         proposal::read(&workspace)
             .into_iter()
-            .filter(|proposal| !answered.contains(&proposal.file_sha256))
+            .filter(|proposal| {
+                !workspace_file
+                    .answered_proposals
+                    .contains(&proposal.file_sha256)
+            })
+            .map(|mut proposal| {
+                proposal::mark_taken(&mut proposal, &user, &workspace_file);
+                proposal
+            })
             .collect()
     }
 
     /// The person's answer to the proposal of the file whose bytes hash to
     /// `file_sha256`: the hooks named in `accept` are copied into the
-    /// workspace's file (never over a hook with the same id), and the
-    /// proposal is not shown again. The ids copied.
+    /// workspace's file (never over a hook with the same id there or in
+    /// the person's own file), and the proposal is not shown again. The
+    /// ids copied.
     ///
     /// # Errors
     ///
@@ -234,8 +266,14 @@ impl HookFiles {
             })?;
         let accepted = proposal::accept(&proposal, accept)?;
         let ids = accepted.iter().map(|hook| hook.id.clone()).collect();
-        self.change(Scope::Workspace, Some(workspace_id), |file| {
-            proposal::apply(file, file_sha256, accepted)
+        // A user file that cannot be read refuses the answer: its ids are
+        // what a proposal may not take.
+        let user = match self.load(Scope::User, None) {
+            Err(error) if error.code() == ErrorCode::NotFound => HooksConfig::default(),
+            loaded => loaded?,
+        };
+        self.change(Scope::Workspace, Some(workspace_id), Repair::No, |file| {
+            proposal::apply(file, &user, file_sha256, accepted)
         })?;
         Ok(ids)
     }
@@ -372,6 +410,70 @@ mod tests {
                 .save_hooks(Scope::Workspace, None, vec![hook])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_broken_file_is_repaired_by_a_save_and_reported_by_a_toggle() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (_dir, files) = files();
+        let path = files.user_path().expect("user path");
+        std::fs::create_dir_all(path.parent().expect("dir")).expect("dir");
+        std::fs::set_permissions(
+            path.parent().expect("dir"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .expect("chmod dir");
+        std::fs::write(&path, b"{not json").expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        let toggled = files
+            .set_enabled(Scope::User, None, "done", false)
+            .expect_err("the parse error is reported");
+        assert_eq!(toggled.code(), ErrorCode::InvalidArgument, "{toggled:?}");
+        let hook = Hook::new(
+            "done",
+            elitea_local_tools::hooks::HookEvent::Stop,
+            vec!["/bin/echo".to_owned()],
+        );
+        files
+            .save_hooks(Scope::User, None, vec![hook])
+            .expect("a full save replaces the broken file");
+        assert_eq!(files.merged("w1").0.len(), 1);
+    }
+
+    #[test]
+    fn a_proposal_cannot_replace_a_user_hook() {
+        let (dir, files) = files();
+        let mine = Hook::new(
+            "g",
+            elitea_local_tools::hooks::HookEvent::PreToolUse,
+            vec!["/bin/echo".to_owned(), "mine".to_owned()],
+        );
+        files
+            .save_hooks(Scope::User, None, vec![mine])
+            .expect("save");
+        let root = dir.path().join("repo");
+        std::fs::create_dir_all(root.join(".elitea")).expect("repo");
+        std::fs::write(
+            root.join(".elitea/hooks.json"),
+            br#"{"version":1,"hooks":[{"id":"g","event":"PreToolUse","command":["/bin/echo","theirs"]}]}"#,
+        )
+        .expect("write");
+        let pending = files.pending_proposals("w1", &root, &[]);
+        assert!(
+            pending[0].hooks[0]
+                .problem
+                .as_deref()
+                .is_some_and(|why| why.contains("your own hook")),
+            "the card says why: {:?}",
+            pending[0].hooks[0].problem
+        );
+        let refused = files
+            .answer("w1", &root, &[], &pending[0].file_sha256, &["g".to_owned()])
+            .expect_err("refused");
+        assert_eq!(refused.code(), ErrorCode::InvalidArgument);
+        let merged = files.merged("w1").0;
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].1.command, ["/bin/echo", "mine"]);
     }
 
     #[test]

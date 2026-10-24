@@ -1030,16 +1030,19 @@ report lists each call among its `commands` as `mcp <server> <tool>` with
 ## Hooks (`src/hooks.rs`, `src/hooks_commands.rs`, `libs/rust/local-tools/src/hooks/`, #1237)
 
 The person's own commands around a local turn: `PreToolUse` and
-`PostToolUse` around each local tool call (the `local` toolset's tools, not
-MCP, index or remote tools), `UserPromptSubmit` before the person's message
-goes to the model, `Stop` when the turn ends. **Local-only**: the cloud
+`PostToolUse` around each local tool call (the `local` toolset's tools and
+the local MCP servers' `mcp__<server>__<tool>` tools; not the memory,
+index or remote tools, which are the runtime's), `UserPromptSubmit` before
+the person's message goes to the model, `Stop` when a turn that ran ends
+(not a cancelled turn, nor one a `UserPromptSubmit` hook refused). **Local-only**: the cloud
 executor runs none, and the handoff note says so when the workspace has
 any. They run only while the policy has local work and the shell on.
 
 **Settings.** Two files in host data, never in the workspace folder:
 `<app config dir>/hooks.json` (every workspace) and
 `<app data>/workspaces/<id>/hooks.json` (one workspace; a hook of the same
-`id` replaces the user one there). The same file rules as `mcp.json`
+`id` replaces the user one there, unless it was accepted from a
+repository proposal: those never replace a user hook). The same file rules as `mcp.json`
 (`0600` in `0700`, no symlink, owner only, schema-checked; a refused file
 adds no hook and the turn says so in a `status` message). Every turn takes
 both files as they are at its start.
@@ -1049,7 +1052,7 @@ type HooksFile = { version: 1; hooks: Hook[]; answered_proposals?: string[] };
 type Hook = {                     // unknown keys are refused; at most 32 per file
   id: string;                     // [A-Za-z0-9_-]{1,64}, unique in the file
   event: "PreToolUse" | "PostToolUse" | "Stop" | "UserPromptSubmit";
-  match?: { tools?: string[]; paths?: string[] }; // tool events only; "*" or none: every tool; globs over workspace-relative paths
+  match?: { tools?: string[]; paths?: string[] }; // tool events only; tools: local names, "mcp__<server>__<tool>", "mcp__<server>__*", or "*"/none for every tool (MCP too); paths: globs over workspace-relative paths, matched against the typed path and where an in-workspace symlink leads
   command: string[];              // argv: a bare program (found on PATH) or an absolute path, outside the workspace; no shell unless ["sh","-c",…]; an item exactly "{path}" / "{tool}" is replaced by the matching paths / the tool name
   timeout_ms?: number;            // 1..30000, default 10000; one call's hooks share 30 s
   sandbox?: "read-only" | "workspace-write"; // default read-only; capped by the policy's max_sandbox_mode
@@ -1071,9 +1074,9 @@ type HooksProposal = { file: string; file_sha256: string; hooks: ProposedHook[] 
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `hooks_list` | `{workspace_id?}` | `{allowed: boolean, user?: {path, hooks: Hook[], error?}, workspace?: {path, hooks: Hook[], error?}, last_runs: HookRun[], proposals: HooksProposal[]}` — both files, each hook's last run in the workspace's session (`[]` before its first turn) and the folder's unanswered proposals. Rejects `workspace_unknown` |
-| `hooks_save` | `{scope: "user" \| "workspace", hooks: Hook[], workspace_id?}` | `null` — replaces the file's hooks (its answered proposals kept); the next turn runs them. Rejects `invalid_request` (naming the hook), `hooks_settings_refused`, `workspace_unknown` |
+| `hooks_save` | `{scope: "user" \| "workspace", hooks: Hook[], workspace_id?}` | `null` — replaces the file's hooks (its answered proposals kept; a file that does not parse is replaced whole, which repairs it); the next turn runs them. Rejects `invalid_request` (naming the hook), `hooks_settings_refused`, `workspace_unknown` |
 | `hooks_set_enabled` | `{scope, id, enabled, workspace_id?}` | `boolean` — whether the hook was there. Rejects as `hooks_save` |
-| `hooks_proposal_answer` | `{workspace_id, file_sha256, accept: string[]}` | `{accepted: string[]}` — copies the named hooks (none: declined) of the proposal whose file hashes to `file_sha256` into the workspace's file with `source: "proposal:<sha256>"`; the proposal is not shown again until the file changes. Rejects `conflict` (the file changed since it was shown), `invalid_request` (a hook that cannot be accepted, or whose id the workspace already has) |
+| `hooks_proposal_answer` | `{workspace_id, file_sha256, accept: string[]}` | `{accepted: string[]}` — copies the named hooks (none: declined) of the proposal whose file hashes to `file_sha256` into the workspace's file with `source: "proposal:<sha256>"`; the proposal is not shown again until the file changes. Rejects `conflict` (the file changed since it was shown), `invalid_request` (a hook that cannot be accepted, or whose id the workspace's file or the person's own file already has: a proposal never replaces a user hook, and its card's `problem` says so) |
 
 **Proposals.** When a workspace is opened the host reads
 `.elitea/hooks.json` (this format) and the `hooks` of
@@ -1082,7 +1085,9 @@ has not seen answered on `hooks://event` as `{kind: "hooks_proposal",
 workspace_id, file, file_sha256, hooks: ProposedHook[]}`. Nothing runs from
 a proposal. A Claude hook becomes `["/bin/sh", "-c", command]` in the
 read-only sandbox, its matcher mapped to the local tools (`Bash` →
-`run_command`, `run_tests`; `Edit`; `Write`; …).
+`run_command`, `run_tests`; `Edit` → `edit_file`, `multi_edit`,
+`apply_patch`; `MultiEdit` → `multi_edit`, `apply_patch`; `Write` →
+`write_file`; …).
 
 **Running.** Each hook is its own process group under the same sandbox as
 `run_command` (the session's deny list and `path_deny`), in the workspace
@@ -1106,9 +1111,16 @@ the approval request carry `hook_ask: {hook, reason}` with `source:
 "hook"`, so a call the rules allow is asked (never "always"); `allow`
 changes nothing; `modified_input` is checked against the tool's schema and
 then decided by every rule like the model's own input. A tool result
-records the runs (`hooks: [{id, result, duration_ms}]`) and a modified
-input (`hook_modified_input`). `PostToolUse` annotations are added to the
-result (`hook_annotations`). `UserPromptSubmit` annotations are added to
+records the runs (`hooks: [{id, result, duration_ms}]`) and what a hook
+changed in the input (`hook_modified_input: {changed: {key: value |
+{bytes, sha256}}, removed?: string[]}`, a value over 1 KiB by its size and
+digest). `PostToolUse` annotations are added to the result
+(`hook_annotations`). When a `PostToolUse` hook that can write (its
+sandbox `workspace-write`) changed a file the edit just wrote (a
+formatter), the read guard records the new content, so the next edit is
+not refused as stale, and the result lists it (`hook_changed_files`) and
+marks its `diagnostics` as of the text before the hook (`before_hooks:
+true`). `UserPromptSubmit` annotations are added to
 the turn's context; its `deny` ends the turn with the `error` event
 `hook_denied`. `Stop` text, and any failure outside a tool call, are
 `status` events with `note: "hook_stop"` / `"hook_failed"`, for the person.
@@ -1971,12 +1983,20 @@ change, sign-out, quit) and when diagnostics are turned off; at most two
 run per workspace. Settings: `diagnostics` and `diagnostics_wait_ms` in
 `workspace_agent_settings_*` (host data, never the folder).
 
+A language found unavailable (its server missing) is tried again by a
+turn that starts at least a minute later, or at once when the settings
+change; a `PATH` lookup that found nothing is done again at each turn.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `lsp_status` | `{workspace_id}` | `{seq: number, statuses: {language, state, message?}[]}` — the servers of the workspace's session now (`[]` before its first turn), reflecting every `lsp://event` with a smaller `seq`: the chip seeds itself from it when it mounts. Rejects `workspace_unknown` |
+
 `lsp://event`, one per change of a server's state:
 
 ```ts
 type LspEvent = {
   workspace_id: string;
-  seq: number; // per workspace session, from 0
+  seq: number; // grows across the app's lifetime (every workspace, every session): an event with a smaller seq than the chip shows is older
   kind: "lsp_status";
   payload: {
     language: "rust" | "typescript" | "python" | "go";

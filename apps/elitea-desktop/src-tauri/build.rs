@@ -66,6 +66,7 @@ fn main() {
             "hooks_save",
             "hooks_set_enabled",
             "hooks_proposal_answer",
+            "lsp_status",
             "index_status",
             "index_open",
             "index_enable",

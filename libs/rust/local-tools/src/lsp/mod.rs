@@ -76,6 +76,11 @@ const MAX_RESTARTS: u32 = 2;
 /// is waited for this long.
 const SETTLE: Duration = Duration::from_millis(150);
 
+/// How long a language stays unavailable before a turn's
+/// [`LanguageServers::configure`] tries it again (the program may have been
+/// installed meanwhile).
+pub const RETRY_UNAVAILABLE: Duration = Duration::from_mins(1);
+
 /// The longest wait a host may set.
 pub const MAX_WAIT: Duration = Duration::from_secs(30);
 
@@ -194,7 +199,8 @@ impl Server {
 
 enum Slot {
     Ready(Arc<Server>),
-    Unavailable(String),
+    /// Why, and since when: tried again after [`RETRY_UNAVAILABLE`].
+    Unavailable(String, Instant),
     Crashed(u32),
 }
 
@@ -278,13 +284,17 @@ impl LanguageServers {
         Self::default()
     }
 
-    /// Take the host's settings: servers of a language whose program
-    /// changed stop, every server stops when diagnostics are turned off,
-    /// and what was unavailable is tried again.
+    /// Take the host's settings (the desktop does at each turn's start):
+    /// servers of a language whose program changed stop, every server
+    /// stops when diagnostics are turned off, and what was unavailable is
+    /// tried again: at once when the settings changed, else once it has
+    /// been for [`RETRY_UNAVAILABLE`]. A `PATH` lookup that found nothing
+    /// is done again either way.
     pub fn configure(&self, settings: LspSettings) {
         let previous = std::mem::replace(&mut *lock(&self.inner.settings), settings);
         let settings = self.settings();
         if previous == settings {
+            self.retry_unavailable(RETRY_UNAVAILABLE);
             return;
         }
         let mut stopped = Vec::new();
@@ -293,7 +303,7 @@ impl LanguageServers {
             slots.retain(|language, slot| {
                 let keep = settings.enabled
                     && previous.programs.get(language) == settings.programs.get(language)
-                    && !matches!(slot, Slot::Unavailable(_));
+                    && !matches!(slot, Slot::Unavailable(..));
                 if !keep && matches!(slot, Slot::Ready(_)) {
                     stopped.push(*language);
                 }
@@ -309,6 +319,34 @@ impl LanguageServers {
                 Some("settings changed".to_owned()),
             );
         }
+    }
+
+    /// Forget the languages unavailable for at least `after` (the next
+    /// edit tries them again, and reports them again if they still are),
+    /// and the `PATH` lookups that found nothing.
+    pub(crate) fn retry_unavailable(&self, after: Duration) {
+        let retried: Vec<Language> = {
+            let mut slots = lock(&self.inner.slots);
+            let due: Vec<Language> = slots
+                .iter()
+                .filter(|(_, slot)| {
+                    matches!(slot, Slot::Unavailable(_, since) if since.elapsed() >= after)
+                })
+                .map(|(language, _)| *language)
+                .collect();
+            for language in &due {
+                slots.remove(language);
+            }
+            due
+        };
+        {
+            let mut reported = lock(&self.inner.reported);
+            for language in &retried {
+                reported.remove(language);
+            }
+        }
+        lock(&self.inner.found)
+            .retain(|language, found| found.is_some() && !retried.contains(language));
     }
 
     #[must_use]
@@ -334,7 +372,7 @@ impl LanguageServers {
                 let (state, message) = match slot {
                     Slot::Ready(server) if server.process.exited() => (LspState::Crashed, None),
                     Slot::Ready(_) => (LspState::Ready, None),
-                    Slot::Unavailable(why) => (LspState::Unavailable, Some(why.clone())),
+                    Slot::Unavailable(why, _) => (LspState::Unavailable, Some(why.clone())),
                     Slot::Crashed(_) => (LspState::Crashed, None),
                 };
                 LspStatus {
@@ -409,7 +447,7 @@ impl LanguageServers {
             };
             let open = match lock(&self.inner.slots).get(&language) {
                 Some(Slot::Ready(server)) => lock(&server.docs).contains_key(path),
-                Some(Slot::Unavailable(_)) => true,
+                Some(Slot::Unavailable(..)) => true,
                 _ => false,
             };
             if open {
@@ -448,7 +486,7 @@ impl LanguageServers {
                     restarts
                 }
                 Some(Slot::Crashed(count)) => *count,
-                Some(Slot::Unavailable(why)) => return Err(why.clone()),
+                Some(Slot::Unavailable(why, _)) => return Err(why.clone()),
                 None => 0,
             }
         };
@@ -508,7 +546,7 @@ impl LanguageServers {
     }
 
     fn unavailable(&self, language: Language, why: String) -> String {
-        lock(&self.inner.slots).insert(language, Slot::Unavailable(why.clone()));
+        lock(&self.inner.slots).insert(language, Slot::Unavailable(why.clone(), Instant::now()));
         self.inner
             .emit(language, LspState::Unavailable, Some(why.clone()));
         why

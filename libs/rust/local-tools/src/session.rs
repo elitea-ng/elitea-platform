@@ -1174,9 +1174,16 @@ impl LocalSession {
                     map.entry("status")
                         .or_insert_with(|| Value::String("ok".to_owned()));
                 }
-                if let Some(input) = post_input {
-                    self.post_tool_hooks(tool, &input, &mut value, &mut trail)
-                        .await;
+                if let Some(input) = post_input
+                    && self
+                        .post_tool_hooks(tool, &input, &mut value, &mut trail)
+                        .await
+                    && matches!(
+                        tool,
+                        "write_file" | "edit_file" | "multi_edit" | "apply_patch"
+                    )
+                {
+                    self.restamp_after_hooks(tool, &input, &mut value).await;
                 }
                 trail.attach(&mut value);
                 value

@@ -1,5 +1,7 @@
 //! The person's hooks (#1237): commands from host data that run around the
-//! local tools, sandboxed, with the call as JSON on stdin.
+//! local tools and the local MCP servers' tools, sandboxed, with the call
+//! as JSON on stdin. The memory tools are the runtime's, outside the
+//! session: no hook runs around them.
 //!
 //! * [`config`]: the `hooks.json` files in host data (never the workspace),
 //!   schema-checked, owner-only.
@@ -150,6 +152,9 @@ pub struct HookOutcome {
     pub modified_input: Option<Value>,
     /// Each hook's text (untrusted), in order.
     pub annotations: Vec<(String, String)>,
+    /// A hook that started could write the workspace (its sandbox, capped
+    /// by the policy, is `workspace-write`).
+    pub wrote: bool,
 }
 
 impl HookOutcome {
@@ -329,6 +334,9 @@ impl HookSet {
             } else {
                 self.spawn(env, hook, &call, &paths, stdin, budget).await
             };
+            if raw.is_ok() && sandbox_mode(hook, env.policy) != SandboxMode::ReadOnly {
+                outcome.wrote = true;
+            }
             let mut run = HookRun {
                 id: hook.id.clone(),
                 event: hook.event,
@@ -401,10 +409,7 @@ impl HookSet {
         timeout: Duration,
     ) -> Result<Raw, String> {
         let argv = self.argv(env, hook, call, paths)?;
-        let mode = hook
-            .sandbox
-            .min(SandboxMode::WorkspaceWrite)
-            .min(env.policy.max_sandbox_mode);
+        let mode = sandbox_mode(hook, env.policy);
         let network = hook.network && env.policy.network;
         let temp = hook_temp(env.shell)?;
         let request = shell::sandbox_request(env.workspace, env.shell, mode, network)
@@ -645,6 +650,14 @@ fn interpret(
         }
     }
     Ok(result)
+}
+
+/// The sandbox `hook` runs in: its own, capped by the policy (and never
+/// unconfined).
+fn sandbox_mode(hook: &Hook, policy: &LocalWorkPolicy) -> SandboxMode {
+    hook.sandbox
+        .min(SandboxMode::WorkspaceWrite)
+        .min(policy.max_sandbox_mode)
 }
 
 /// The paths of `call` a tool hook matches (all of them without `paths`

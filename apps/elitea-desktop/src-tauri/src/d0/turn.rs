@@ -2451,9 +2451,6 @@ impl AgentHost {
         // The turn's background processes end with it, unless pinned or
         // kept for the session; their exits reach the tool cards first.
         session.end_turn_processes().await;
-        // The person's `Stop` hooks (#1237): what they write is for the
-        // person, before `done`.
-        crate::hooks::after_turn(&session, &events).await;
         workspace.processes.bind_turn(None);
         for info in session.processes() {
             recorder.process_ended(&info);
@@ -2497,6 +2494,13 @@ impl AgentHost {
             }) => (text, step_limit_reached, tool_call_limit_reached, None),
             Err(error) => (sink.last_text(), false, false, Some(error)),
         };
+        // The person's `Stop` hooks (#1237), only for a turn whose message
+        // went to the model (not one a `UserPromptSubmit` hook refused, nor
+        // a cancelled one, which released its claim above without them):
+        // what they write is for the person, before `done`.
+        if turn_context.ran() {
+            crate::hooks::after_turn(&session, &events).await;
+        }
         // A turn that stopped at a limit is committed as it is, with what
         // the agent last said (or that it stopped there).
         let answer = if stopped_at_calls && answer.trim().is_empty() {
@@ -3007,6 +3011,7 @@ impl AgentHost {
             &message,
         )
         .await?;
+        turn_context.mark_ran();
         // What changes every turn goes in a host message before the
         // person's (`TurnTail`): the system prompt stays the thread's.
         let tail = Arc::new(TurnTail {

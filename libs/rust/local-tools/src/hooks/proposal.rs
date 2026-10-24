@@ -11,7 +11,8 @@
 //! A Claude hook (`{"matcher": "Edit|Write", "hooks": [{"type": "command",
 //! "command": "…", "timeout": 60}]}`) becomes `["/bin/sh", "-c", "…"]` in the
 //! read-only sandbox, its matcher's tool names mapped to the local tools
-//! (`Bash` → `run_command`, `Edit` → `edit_file`, …) and its timeout capped
+//! (`Bash` → `run_command`, `Edit` → `edit_file`, `multi_edit` and
+//! `apply_patch`, `Write` → `write_file`, …) and its timeout capped
 //! at [`MAX_TIMEOUT_MS`]. It receives this crate's stdin contract, not
 //! Claude's.
 
@@ -64,8 +65,10 @@ fn proposed(mut hook: Hook) -> ProposedHook {
 fn local_tools(claude: &str) -> Option<&'static [&'static str]> {
     Some(match claude {
         "Bash" => &["run_command", "run_tests"],
-        "Edit" => &["edit_file"],
-        "MultiEdit" => &["multi_edit"],
+        // Claude's `Edit` is every in-place edit here: the edit tools a
+        // model is offered depend on its edit profile.
+        "Edit" => &["edit_file", "multi_edit", "apply_patch"],
+        "MultiEdit" => &["multi_edit", "apply_patch"],
         "Write" => &["write_file"],
         "Read" => &["read_file"],
         "Grep" => &["search_files"],
@@ -102,7 +105,13 @@ fn claude_hooks(value: &Value) -> Vec<ProposedHook> {
             if kind.is_tool_event() && !matches!(matcher.trim(), "" | "*") {
                 for part in matcher.split('|').map(str::trim) {
                     match local_tools(part) {
-                        Some(names) => tools.extend(names.iter().map(|name| (*name).to_owned())),
+                        Some(names) => {
+                            for name in names {
+                                if !tools.iter().any(|known| known == name) {
+                                    tools.push((*name).to_owned());
+                                }
+                            }
+                        }
                         None => problem = Some(format!("`{part}` names no local tool")),
                     }
                 }
@@ -249,22 +258,54 @@ pub fn accept(proposal: &Proposal, accept: &[String]) -> ToolResult<Vec<Hook>> {
         .collect()
 }
 
-/// `config` with `accepted` added (refused when an id is taken) and the
-/// digest answered.
+/// Why `id` cannot be trusted here: the person's own file has a hook with
+/// it (a workspace hook replaces a user hook of its id, so a repository
+/// could otherwise swap one of theirs for its own), or the workspace's
+/// does.
+fn taken(id: &str, user: &HooksConfig, workspace: &HooksConfig) -> Option<String> {
+    if user.hooks.iter().any(|hook| hook.id == id) {
+        Some(format!(
+            "your own hook `{id}` has this id, and a repository's hook never replaces one of yours"
+        ))
+    } else if workspace.hooks.iter().any(|hook| hook.id == id) {
+        Some(format!(
+            "this workspace already has a hook `{id}`; remove it first"
+        ))
+    } else {
+        None
+    }
+}
+
+/// Mark each proposed hook whose id the person's file or the workspace's
+/// already has, so the trust card says why it cannot be trusted (and
+/// [`accept`] refuses it).
+pub fn mark_taken(proposal: &mut Proposal, user: &HooksConfig, workspace: &HooksConfig) {
+    for shown in &mut proposal.hooks {
+        if shown.problem.is_none() {
+            shown.problem = taken(&shown.hook.id, user, workspace);
+        }
+    }
+}
+
+/// `config` (the workspace's file) with `accepted` added, refused when an
+/// id is taken there or in `user` (the person's file), and the digest
+/// answered.
 ///
 /// # Errors
 ///
-/// [`ErrorCode::InvalidArgument`] when the workspace already has a hook
-/// with an accepted id, or the result breaks a bound.
-pub fn apply(config: &mut HooksConfig, digest: &str, accepted: Vec<Hook>) -> ToolResult<()> {
-    if let Some(hook) = accepted
+/// [`ErrorCode::InvalidArgument`] when either file already has a hook with
+/// an accepted id, or the result breaks a bound.
+pub fn apply(
+    config: &mut HooksConfig,
+    user: &HooksConfig,
+    digest: &str,
+    accepted: Vec<Hook>,
+) -> ToolResult<()> {
+    if let Some(why) = accepted
         .iter()
-        .find(|hook| config.hooks.iter().any(|other| other.id == hook.id))
+        .find_map(|hook| taken(&hook.id, user, config))
     {
-        return Err(ToolError::invalid(format!(
-            "this workspace already has a hook `{}`; remove it first",
-            hook.id
-        )));
+        return Err(ToolError::invalid(why));
     }
     config.hooks.extend(accepted);
     config.answered(digest);
@@ -307,7 +348,10 @@ mod tests {
             .find(|shown| shown.hook.event == HookEvent::PostToolUse)
             .expect("post");
         assert_eq!(post.hook.command, ["/bin/sh", "-c", "cargo fmt"]);
-        assert_eq!(post.hook.matcher.tools, ["edit_file", "write_file"]);
+        assert_eq!(
+            post.hook.matcher.tools,
+            ["edit_file", "multi_edit", "apply_patch", "write_file"]
+        );
         assert_eq!(post.hook.timeout_ms, MAX_TIMEOUT_MS);
         assert_eq!(post.hook.sandbox, SandboxMode::ReadOnly);
         assert!(post.problem.is_none(), "{:?}", post.problem);
@@ -326,12 +370,48 @@ mod tests {
             .expect("parse")
             .expect("some");
         let mut config = HooksConfig::default();
+        let user = HooksConfig::default();
         let accepted = accept(&proposal, &["guard".to_owned()]).expect("accept");
-        apply(&mut config, &proposal.file_sha256, accepted.clone()).expect("apply");
+        apply(&mut config, &user, &proposal.file_sha256, accepted.clone()).expect("apply");
         assert_eq!(
             config.answered_proposals,
             std::slice::from_ref(&proposal.file_sha256)
         );
-        assert!(apply(&mut config, &proposal.file_sha256, accepted).is_err());
+        assert!(apply(&mut config, &user, &proposal.file_sha256, accepted).is_err());
+    }
+
+    #[test]
+    fn a_proposal_cannot_take_the_id_of_a_user_hook() {
+        let ours =
+            br#"{"version":1,"hooks":[{"id":"guard","event":"Stop","command":["/usr/bin/true"]}]}"#;
+        let mut proposal = parse(".elitea/hooks.json", ours)
+            .expect("parse")
+            .expect("some");
+        let mut user = HooksConfig::default();
+        user.hooks.push(Hook::new(
+            "guard",
+            HookEvent::PreToolUse,
+            vec!["/usr/local/bin/my-guard".to_owned()],
+        ));
+        let mut workspace = HooksConfig::default();
+        // Accepted before the card was marked (an older card, a direct
+        // call): `apply` refuses it anyway.
+        let accepted = accept(&proposal, &["guard".to_owned()]).expect("accept");
+        let refused = apply(&mut workspace, &user, &proposal.file_sha256, accepted)
+            .expect_err("a user id is never replaced");
+        assert!(refused.message().contains("your own hook"), "{refused:?}");
+        assert!(workspace.hooks.is_empty(), "nothing copied");
+        assert!(workspace.answered_proposals.is_empty(), "not answered");
+        // The card says why, and accepting it is refused.
+        mark_taken(&mut proposal, &user, &workspace);
+        assert!(
+            proposal.hooks[0]
+                .problem
+                .as_deref()
+                .is_some_and(|why| why.contains("your own hook `guard`")),
+            "{:?}",
+            proposal.hooks[0].problem
+        );
+        assert!(accept(&proposal, &["guard".to_owned()]).is_err());
     }
 }

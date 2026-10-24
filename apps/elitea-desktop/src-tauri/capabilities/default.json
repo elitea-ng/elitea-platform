@@ -66,6 +66,7 @@
     "allow-hooks-save",
     "allow-hooks-set-enabled",
     "allow-hooks-proposal-answer",
+    "allow-lsp-status",
     "allow-index-status",
     "allow-index-open",
     "allow-index-enable",

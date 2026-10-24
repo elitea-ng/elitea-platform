@@ -1,10 +1,12 @@
 /**
  * The desktop host's language-server status (#1236; IPC.md "Language
- * servers"): the `lsp://event` channel. The servers behind edit diagnostics
- * start, stop and fail on the host; this only listens, for the composer's
- * chip. Wire shapes are the host's (snake_case).
+ * servers"): the `lsp://event` channel and the `lsp_status` query. The
+ * servers behind edit diagnostics start, stop and fail on the host; this
+ * only reads, for the composer's chip. Wire shapes are the host's
+ * (snake_case).
  */
-import { tauriListen, type ListenFn, type TauriEventInternals } from './workspaceIpc';
+import { tauriInvoke, type HostInvoke } from './hostBridge';
+import { tauriListen, toWorkspaceIpcError, type ListenFn, type TauriEventInternals } from './workspaceIpc';
 
 export type LspLanguage = 'rust' | 'typescript' | 'python' | 'go';
 
@@ -19,6 +21,24 @@ export interface LspEvent {
 }
 
 export const LSP_EVENT_CHANNEL = 'lsp://event';
+
+/** `lsp_status`: the session's servers now, reflecting every event with a smaller `seq`. */
+export interface LspSnapshot {
+  seq: number;
+  statuses: LspEvent['payload'][];
+}
+
+/** Ask the host for `workspaceId`'s servers now (none before its first turn). */
+export function lspStatus(invoke: HostInvoke, workspaceId: string): Promise<LspSnapshot> {
+  return invoke<LspSnapshot>('lsp_status', { workspace_id: workspaceId }).catch((error: unknown) => {
+    throw toWorkspaceIpcError(error);
+  });
+}
+
+/** The real invoke, or `undefined` outside the Tauri webview. */
+export function tauriLspInvoke(): HostInvoke | undefined {
+  return tauriInvoke();
+}
 
 /** Subscribe with `listen`; resolves once the subscription is live, with its unsubscribe. */
 export function onLspEvent(listen: ListenFn, handler: (event: LspEvent) => void): Promise<() => void> {

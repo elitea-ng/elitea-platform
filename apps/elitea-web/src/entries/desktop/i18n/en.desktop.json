@@ -829,7 +829,7 @@
   "workspace.hooks.failClosed": "Fail closed",
   "workspace.hooks.fileRefused": "These hooks are not used: {{message}}",
   "workspace.hooks.folder": "Folder",
-  "workspace.hooks.help": "Hooks are your own commands around the agent’s local tools: before a call (they may refuse it, ask you, or change its input), after one (they may add a note), when you send a message, and when a turn ends. Each runs on this computer under the same sandbox as the agent’s commands, with no network unless you allow it. A repository’s .elitea/hooks.json is only a proposal: nothing runs from it unless you trust it.",
+  "workspace.hooks.help": "Hooks are your own commands around the agent’s local tools and your local MCP servers’ tools (not its memory tools): before a call (they may refuse it, ask you, or change its input), after one (they may add a note), when you send a message, and when a turn ends. Each runs on this computer under the same sandbox as the agent’s commands, with no network unless you allow it. A repository’s .elitea/hooks.json is only a proposal: nothing runs from it unless you trust it, and it can never replace one of your own hooks.",
   "workspace.hooks.loading": "Loading hooks",
   "workspace.hooks.network": "Network",
   "workspace.hooks.noHost": "Hooks are run by the desktop app.",

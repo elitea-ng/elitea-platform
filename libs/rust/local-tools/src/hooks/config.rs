@@ -18,8 +18,8 @@
 //! `[A-Za-z0-9_-]{1,64}` and unique; `command` an argv (no shell unless the
 //! person writes `["sh", "-c", …]`), at most 64 items of 4 KiB; `timeout_ms`
 //! 1 to 30 000; `sandbox` `read-only` or `workspace-write` (a hook is never
-//! asked about, so it never runs unconfined); `match.tools` tool names (or
-//! `*`) and `match.paths` globs. Both files are `0600` in a `0700` folder,
+//! asked about, so it never runs unconfined); `match.tools` tool names
+//! (local or `mcp__…`, or `*`) and `match.paths` globs. Both files are `0600` in a `0700` folder,
 //! opened without following a symlink, and refused when another user owns
 //! them or others can read them (the `threads.sqlite` rules).
 
@@ -97,8 +97,10 @@ impl HookEvent {
 }
 
 /// Which calls a tool hook runs for: every listed tool (none or `*`: every
-/// tool) and, with `paths`, only calls touching a path one of the globs
-/// matches.
+/// tool, the local MCP servers' too; `mcp__<server>__*`: every tool of one
+/// server) and, with `paths`, only calls touching a path one of the globs
+/// matches. Memory tools (`search_memory`, …) are the runtime's, not the
+/// session's: no hook runs around them.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HookMatch {
@@ -117,8 +119,38 @@ impl HookMatch {
     /// Whether `tool` is one the hook names.
     #[must_use]
     pub fn names_tool(&self, tool: &str) -> bool {
-        self.tools.is_empty() || self.tools.iter().any(|name| name == "*" || name == tool)
+        self.tools.is_empty()
+            || self.tools.iter().any(|name| {
+                name == "*"
+                    || name == tool
+                    || name.strip_suffix('*').is_some_and(|prefix| {
+                        prefix.starts_with(MCP_PREFIX) && tool.starts_with(prefix)
+                    })
+            })
     }
+}
+
+/// What every local MCP tool's name starts with ([`crate::mcp::naming`]).
+const MCP_PREFIX: &str = crate::mcp::naming::PREFIX;
+
+/// Whether `name` may be a `match.tools` entry: `*`, a local tool's name,
+/// or an MCP tool's (`mcp__<server>__<tool>`, `[A-Za-z0-9_-]`), which may
+/// end in `*` to name a prefix.
+fn tool_name_ok(name: &str) -> bool {
+    if name == "*" {
+        return true;
+    }
+    if !(1..=MAX_ID).contains(&name.len()) {
+        return false;
+    }
+    if let Some(rest) = name.strip_prefix(MCP_PREFIX) {
+        let rest = rest.strip_suffix('*').unwrap_or(rest);
+        return rest
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+    }
+    name.bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 const fn yes() -> bool {
@@ -253,13 +285,7 @@ impl Hook {
                 "`match` lists at most {MAX_ARGV} tools and {MAX_ARGV} paths"
             )));
         }
-        if self.matcher.tools.iter().any(|tool| {
-            tool != "*"
-                && (!(1..=MAX_ID).contains(&tool.len())
-                    || !tool
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'))
-        }) {
+        if !self.matcher.tools.iter().all(|tool| tool_name_ok(tool)) {
             return Err(bad("a `match.tools` entry is not a tool name"));
         }
         for glob in &self.matcher.paths {
@@ -508,18 +534,29 @@ fn temp_path(path: &Path) -> PathBuf {
 }
 
 /// The hooks of both files in the order they run: the person's (every
-/// workspace) first, then the workspace's; a workspace hook with a user
-/// hook's id replaces it in that workspace. Disabled hooks are left out.
+/// workspace) first, then the workspace's; a workspace hook the person
+/// wrote with a user hook's id replaces it in that workspace. One accepted
+/// from a repository proposal never does: it is left out, and the user
+/// hook runs (an id the person took after accepting it). Disabled hooks
+/// are left out.
 #[must_use]
 pub fn merged(user: &HooksConfig, workspace: &HooksConfig) -> Vec<(Scope, Hook)> {
+    let user_id = |id: &str| user.hooks.iter().any(|hook| hook.id == id);
+    let replaces = |hook: &Hook| is_user(&hook.source) && user_id(&hook.id);
     user.hooks
         .iter()
-        .filter(|hook| !workspace.hooks.iter().any(|other| other.id == hook.id))
+        .filter(|hook| {
+            !workspace
+                .hooks
+                .iter()
+                .any(|other| other.id == hook.id && replaces(other))
+        })
         .map(|hook| (Scope::User, hook.clone()))
         .chain(
             workspace
                 .hooks
                 .iter()
+                .filter(|hook| is_user(&hook.source) || !user_id(&hook.id))
                 .map(|hook| (Scope::Workspace, hook.clone())),
         )
         .filter(|(_, hook)| hook.enabled)
@@ -547,6 +584,42 @@ mod tests {
         assert_eq!(config.hooks[1].sandbox, SandboxMode::ReadOnly);
         assert!(config.hooks[0].matcher.names_tool("edit_file"));
         assert!(!config.hooks[0].matcher.names_tool("run_command"));
+    }
+
+    #[test]
+    fn mcp_tool_names_match_exactly_or_by_server() {
+        let hook = |tools: &str| {
+            HooksConfig::parse(
+                format!(
+                    r#"{{"version":1,"hooks":[{{"id":"m","event":"PreToolUse","match":{{"tools":{tools}}},"command":["/bin/true"]}}]}}"#
+                )
+                .as_bytes(),
+            )
+        };
+        let exact = hook(r#"["mcp__git-hub__create_issue"]"#).expect("an MCP name");
+        assert!(
+            exact.hooks[0]
+                .matcher
+                .names_tool("mcp__git-hub__create_issue")
+        );
+        assert!(
+            !exact.hooks[0]
+                .matcher
+                .names_tool("mcp__git-hub__delete_repo")
+        );
+        let server = hook(r#"["mcp__git-hub__*"]"#).expect("a server's tools");
+        assert!(
+            server.hooks[0]
+                .matcher
+                .names_tool("mcp__git-hub__delete_repo")
+        );
+        assert!(!server.hooks[0].matcher.names_tool("mcp__other__x"));
+        assert!(!server.hooks[0].matcher.names_tool("write_file"));
+        let every = hook(r#"["*"]"#).expect("every tool");
+        assert!(every.hooks[0].matcher.names_tool("mcp__other__x"));
+        for bad in [r#"["write-file"]"#, r#"["edit_*"]"#, r#"["mcp__a b"]"#] {
+            assert!(hook(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
@@ -601,17 +674,28 @@ mod tests {
         assert_eq!(load(&link).expect_err("link").code(), ErrorCode::Denied);
 
         let mut workspace = HooksConfig::default();
-        let mut replaced = Hook::new("a", HookEvent::Stop, vec!["/bin/cat".to_owned()]);
-        replaced.source = format!("proposal:{}", "0".repeat(64));
+        let replaced = Hook::new("a", HookEvent::Stop, vec!["/bin/cat".to_owned()]);
         workspace.hooks.push(replaced);
         let mut off = Hook::new("c", HookEvent::Stop, vec!["/bin/cat".to_owned()]);
         off.enabled = false;
         workspace.hooks.push(off);
-        let merged = merged(&user, &workspace);
-        let ids: Vec<_> = merged
-            .iter()
-            .map(|(scope, hook)| (scope.as_str(), hook.id.as_str()))
-            .collect();
-        assert_eq!(ids, [("user", "b"), ("workspace", "a")]);
+        let ids = |merged: Vec<(Scope, Hook)>| -> Vec<(&'static str, String)> {
+            merged
+                .into_iter()
+                .map(|(scope, hook)| (scope.as_str(), hook.id))
+                .collect()
+        };
+        assert_eq!(
+            ids(merged(&user, &workspace)),
+            [("user", "b".to_owned()), ("workspace", "a".to_owned())]
+        );
+        // An accepted proposal never replaces a user hook of its id.
+        workspace.hooks[0].source = format!("proposal:{}", "0".repeat(64));
+        let kept = merged(&user, &workspace);
+        assert_eq!(
+            ids(kept.clone()),
+            [("user", "a".to_owned()), ("user", "b".to_owned())]
+        );
+        assert_eq!(kept[0].1.command, ["/bin/echo"]);
     }
 }
