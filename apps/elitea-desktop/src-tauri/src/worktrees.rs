@@ -32,7 +32,7 @@ use elitea_agent_runtime::host::{
     HostError as RuntimeError, HostErrorCode, ToolProvider, ToolsetRequest,
 };
 use elitea_agent_runtime::subagents::ChildIdentity;
-use elitea_local_tools::apply::{self, Mode};
+use elitea_local_tools::apply::{self, ApplyOutcome, Outcome};
 use elitea_local_tools::deny::DenyList;
 use elitea_local_tools::error::{ErrorCode, ToolError};
 use elitea_local_tools::git::{RegisteredWorktree, Repo, register_worktree};
@@ -103,11 +103,60 @@ pub struct Diff {
     pub truncated: bool,
 }
 
+/// What a merge-back preview found, as `worktree_merge_preflight` has
+/// always answered it (the shared engine's outcome, mapped).
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Mode {
+    Nothing,
+    FastForward,
+    Merge,
+    Conflicts,
+}
+
+impl Mode {
+    fn of(report: &ApplyOutcome) -> Self {
+        match report.outcome {
+            Outcome::Conflicts | Outcome::Error => Self::Conflicts,
+            _ if report.changed_paths.is_empty() && report.skipped_paths.is_empty() => {
+                Self::Nothing
+            }
+            Outcome::FastPath => Self::FastForward,
+            Outcome::CleanMerge => Self::Merge,
+        }
+    }
+}
+
+/// How `worktree_merge_apply` writes a preview, as the take-back's modes
+/// name it: `apply` for a fast-forward or a clean merge,
+/// `apply_with_markers` for conflicts (conflicted text files get conflict
+/// markers; a binary conflict keeps the folder's file).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeApplyMode {
+    #[default]
+    Apply,
+    ApplyWithMarkers,
+}
+
+impl MergeApplyMode {
+    /// What a preview offers (nothing for `nothing`).
+    fn offered(report: &ApplyOutcome) -> Vec<Self> {
+        match Mode::of(report) {
+            Mode::Nothing => Vec::new(),
+            Mode::Conflicts => vec![Self::ApplyWithMarkers],
+            Mode::FastForward | Mode::Merge => vec![Self::Apply],
+        }
+    }
+}
+
 /// `worktree_merge_preflight`'s answer.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct MergePreflight {
     pub preflight_id: String,
     pub mode: Mode,
+    /// What `worktree_merge_apply` accepts for this preview.
+    pub modes: Vec<MergeApplyMode>,
     pub applied_paths: Vec<String>,
     pub conflict_paths: Vec<String>,
     pub skipped_paths: Vec<String>,
@@ -650,10 +699,12 @@ impl WorktreeHost {
         let id = uuid::Uuid::new_v4().simple().to_string();
         let answer = MergePreflight {
             preflight_id: id.clone(),
-            mode: preflight.mode,
-            applied_paths: preflight.applied_paths.clone(),
-            conflict_paths: preflight.conflict_paths.clone(),
-            skipped_paths: preflight.skipped_paths.clone(),
+            mode: Mode::of(&preflight.report),
+            modes: MergeApplyMode::offered(&preflight.report),
+            // For conflicts: what applying with markers writes.
+            applied_paths: preflight.report.touched(),
+            conflict_paths: preflight.report.conflict_paths.clone(),
+            skipped_paths: preflight.report.skipped(),
             branch: branch.clone(),
         };
         let mut held = self
@@ -686,21 +737,47 @@ impl WorktreeHost {
     /// `worktree_merge_apply`: apply a preview to the folder, after a
     /// checkpoint of it (`worktree_merge_undo` restores it).
     ///
+    /// `mode` must be one the preview offers; a refused mode keeps the
+    /// preview.
+    ///
     /// # Errors
     ///
-    /// `preflight_expired`, `merge_conflicts`, `folder_changed_since_preflight`,
-    /// `workspace_busy`, write failures.
+    /// `preflight_expired`, `merge_conflicts` (`apply` of a conflicts
+    /// preview), `invalid_request` (`apply_with_markers` without conflicts),
+    /// `folder_changed_since_preflight`, `workspace_busy`, write failures.
     pub async fn merge_apply(
         self: &Arc<Self>,
         preflight_id: &str,
+        mode: MergeApplyMode,
     ) -> Result<MergeApplied, TurnError> {
-        let held = self
-            .preflights
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(preflight_id)
-            .filter(|held| held.at.elapsed() < PREFLIGHT_TTL)
-            .ok_or_else(|| TurnError::new("preflight_expired", "Preview the merge again."))?;
+        let held = {
+            let mut held = self
+                .preflights
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let report = &held
+                .get(preflight_id)
+                .filter(|held| held.at.elapsed() < PREFLIGHT_TTL)
+                .ok_or_else(|| TurnError::new("preflight_expired", "Preview the merge again."))?
+                .preflight
+                .report;
+            if !MergeApplyMode::offered(report).contains(&mode) {
+                return Err(match mode {
+                    MergeApplyMode::Apply if report.outcome == Outcome::Conflicts => {
+                        TurnError::new(
+                            "merge_conflicts",
+                            "Both sides changed the same lines: apply with conflict markers, or keep the work on its branch.",
+                        )
+                    }
+                    _ => TurnError::new(
+                        "invalid_request",
+                        "This preview does not offer that way of applying it.",
+                    ),
+                });
+            }
+            held.remove(preflight_id)
+                .ok_or_else(|| TurnError::new("preflight_expired", "Preview the merge again."))?
+        };
         let parent = self.parent(&held.workspace_id)?;
         let this = Arc::clone(self);
         blocking(move || {
@@ -710,11 +787,13 @@ impl WorktreeHost {
             let session = this
                 .agents
                 .local_session(&parent.id, PathBuf::from(&parent.path))?;
-            let applied = apply::apply(
-                &session,
-                &held.preflight,
-                &format!("before merging {}", held.branch),
-            )
+            let label = format!("before merging {}", held.branch);
+            let applied = match mode {
+                MergeApplyMode::Apply => apply::apply(&session, &held.preflight, &label),
+                MergeApplyMode::ApplyWithMarkers => {
+                    apply::apply_with_markers(&session, &held.preflight, &label)
+                }
+            }
             .map_err(|e| tool_error(&e))?;
             if let Some(seq) = applied.checkpoint {
                 // What `worktree_merge_undo` accepts: this merge's checkpoint.
@@ -732,7 +811,7 @@ impl WorktreeHost {
             Ok(MergeApplied {
                 written: applied.written,
                 deleted: applied.deleted,
-                skipped_paths: applied.skipped_paths,
+                skipped_paths: applied.report.skipped(),
                 checkpoint_id: applied.checkpoint.map(|seq| format!("{}:{seq}", parent.id)),
             })
         })

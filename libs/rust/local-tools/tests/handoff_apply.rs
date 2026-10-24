@@ -164,13 +164,13 @@ fn the_fast_path_lands_the_cloud_tree_as_uncommitted_changes_and_undo_restores()
     let index = std::fs::read(top.join(".git/index")).unwrap();
     let before_tree = tree_fingerprint(top);
     let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
-    assert_eq!(preflight.outcome, Outcome::FastPath);
+    assert_eq!(preflight.report.outcome, Outcome::FastPath);
     assert_eq!(preflight.cloud_turns(), 2);
-    assert_eq!(preflight.conflict_paths, [] as [String; 0]);
+    assert_eq!(preflight.report.conflict_paths, [] as [String; 0]);
     assert!(
-        preflight.skipped_paths.contains(&".env".to_owned()),
+        preflight.report.skipped().contains(&".env".to_owned()),
         "{:?}",
-        preflight.skipped_paths
+        preflight.report.skipped_paths
     );
     for path in [
         "README.md",
@@ -182,9 +182,9 @@ fn the_fast_path_lands_the_cloud_tree_as_uncommitted_changes_and_undo_restores()
         "tool.sh",
     ] {
         assert!(
-            preflight.changed_paths.contains(&path.to_owned()),
+            preflight.report.touched().contains(&path.to_owned()),
             "{path}: {:?}",
-            preflight.changed_paths
+            preflight.report.changed_paths
         );
     }
     let checkpoints = checkpoints(&fixture);
@@ -238,6 +238,7 @@ fn the_fast_path_lands_the_cloud_tree_as_uncommitted_changes_and_undo_restores()
     assert_eq!(std::fs::read(top.join(".git/index")).unwrap(), index);
     let branch = applied.branch.clone().unwrap();
     assert_eq!(branch, "elitea/cloud/c0ffee00");
+    assert_eq!(applied.rest_branch, None, "every turn taken back");
     assert_eq!(
         git(top, &["rev-list", "--count", &format!("{head}..{branch}")]),
         "3",
@@ -288,7 +289,7 @@ fn a_preflight_writes_nothing_to_the_folder_or_any_ref() {
     let state = git_state_fingerprint(top);
     let all = all_refs(top);
     let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
-    assert_eq!(preflight.outcome, Outcome::FastPath);
+    assert_eq!(preflight.report.outcome, Outcome::FastPath);
     assert_eq!(tree_fingerprint(top), tree);
     assert_eq!(git_state_fingerprint(top), state);
     assert_eq!(all_refs(top), all, "not even a private ref");
@@ -308,9 +309,10 @@ fn a_moved_head_offers_a_worktree_and_leaves_the_folder() {
     git(top, &["commit", "-q", "-m", "local commit after the send"]);
     let tree = tree_fingerprint(top);
     let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
-    assert_eq!(preflight.outcome, Outcome::Conflicts);
-    let refused = apply::apply(&sent.source, &preflight, Mode::Apply, &deny(), None).unwrap_err();
-    assert_eq!(refused.code(), ErrorCode::InvalidArgument);
+    // Tree-based (Phase 2): a commit that left the folder's files as they
+    // were is still the fast path; a worktree stays on offer.
+    assert_eq!(preflight.report.outcome, Outcome::FastPath);
+    assert!(preflight.modes().contains(&Mode::Worktree));
     let applied = apply::apply(&sent.source, &preflight, Mode::Worktree, &deny(), None).unwrap();
     let path = applied.worktree_path.clone().unwrap();
     assert_eq!(tree_fingerprint(top), tree, "the folder is untouched");
@@ -343,8 +345,8 @@ fn local_edits_since_the_send_are_conflicts() {
     write(top, "README.md", "edited locally meanwhile\n");
     write(top, "local-only.txt", "new locally\n");
     let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
-    assert_eq!(preflight.outcome, Outcome::Conflicts);
-    assert_eq!(preflight.conflict_paths, ["README.md"]);
+    assert_eq!(preflight.report.outcome, Outcome::Conflicts);
+    assert_eq!(preflight.report.conflict_paths, ["README.md"]);
     let refused = apply::apply(&sent.source, &preflight, Mode::Apply, &deny(), None).unwrap_err();
     assert_eq!(refused.code(), ErrorCode::InvalidArgument);
     assert_eq!(
@@ -360,7 +362,7 @@ fn a_folder_changed_after_its_preflight_is_refused_untouched() {
     let sent = send(&fixture);
     let (bytes, refs) = cloud(&fixture, &sent, &[&cloud_edits]);
     let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
-    assert_eq!(preflight.outcome, Outcome::FastPath);
+    assert_eq!(preflight.report.outcome, Outcome::FastPath);
     write(top, "src/lib.rs", "pub fn changed_after_preview() {}\n");
     let tree = tree_fingerprint(top);
     let all = all_refs(top);
@@ -398,9 +400,9 @@ fn a_thread_with_no_cloud_turn_takes_back_as_a_no_op() {
     let sent = send(&fixture);
     let (bytes, refs) = cloud(&fixture, &sent, &[]);
     let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
-    assert_eq!(preflight.outcome, Outcome::FastPath);
+    assert_eq!(preflight.report.outcome, Outcome::FastPath);
     assert_eq!(preflight.cloud_turns(), 0);
-    assert_eq!(preflight.changed_paths, [] as [String; 0]);
+    assert_eq!(preflight.report.changed_paths, []);
 }
 
 #[test]
@@ -421,7 +423,7 @@ fn a_folder_without_a_repository_takes_back_through_its_shadow() {
         }],
     );
     let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
-    assert_eq!(preflight.outcome, Outcome::FastPath);
+    assert_eq!(preflight.report.outcome, Outcome::FastPath);
     let checkpoints = checkpoints(&fixture);
     let applied = apply::apply(
         &sent.source,
@@ -546,11 +548,14 @@ fn cloud_created_excluded_files_never_overwrite_local_ones() {
 
     // Fast path.
     let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
-    assert_eq!(preflight.outcome, Outcome::FastPath);
+    assert_eq!(preflight.report.outcome, Outcome::FastPath);
     for path in ["config/.env.cloud", "src/ok.rs"] {
-        assert!(preflight.changed_paths.contains(&path.to_owned()), "{path}");
+        assert!(
+            preflight.report.touched().contains(&path.to_owned()),
+            "{path}"
+        );
     }
-    assert!(preflight.skipped_paths.contains(&".env".to_owned()));
+    assert!(preflight.report.skipped().contains(&".env".to_owned()));
     let applied = apply::apply(&sent.source, &preflight, Mode::Apply, &deny(), None).unwrap();
     assert!(applied.written.contains(&"config/.env.cloud".to_owned()));
     assert_eq!(
@@ -616,7 +621,12 @@ fn a_path_in_both_leave_and_path_deny_is_never_written_by_take_back() {
     let (bytes, refs) = cloud(&fixture, &sent, &[&created]);
     let deny = vec!["deploy/**".to_owned()];
     let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny).unwrap();
-    assert!(preflight.skipped_paths.contains(&"deploy/x.tf".to_owned()));
+    assert!(
+        preflight
+            .report
+            .skipped()
+            .contains(&"deploy/x.tf".to_owned())
+    );
     let applied = apply::apply(&sent.source, &preflight, Mode::Apply, &deny, None).unwrap();
     assert!(!applied.written.contains(&"deploy/x.tf".to_owned()));
     assert!(!top.join("deploy/x.tf").exists(), "never written");
@@ -625,4 +635,654 @@ fn a_path_in_both_leave_and_path_deny_is_never_written_by_take_back() {
         "local\n"
     );
     assert!(top.join("src/ok.rs").exists());
+}
+
+// ---- Phase 2: clean merge, conflict markers, up to turn k ----
+
+use elitea_local_tools::handoff::apply::{SkipReason, SkippedPath};
+
+fn skipped_for(preflight: &apply::Preflight, path: &str) -> Option<SkipReason> {
+    preflight
+        .report
+        .skipped_paths
+        .iter()
+        .find(|skip| skip.path == path)
+        .map(|skip| skip.reason)
+}
+
+/// Both sides changed other files: a clean merge lands both, excluded and
+/// denied paths are never written or deleted, the preflight wrote nothing,
+/// `apply_with_markers` is refused (nothing conflicts), and undo restores.
+#[test]
+fn a_clean_merge_lands_both_sides_and_undo_restores() {
+    let fixture = Fixture::repo();
+    let top = &fixture.top;
+    let sent = send(&fixture);
+    let (bytes, refs) = cloud(
+        &fixture,
+        &sent,
+        &[&cloud_edits, &|dir| {
+            write(dir, "private/plan.md", "the cloud wrote a denied path\n");
+        }],
+    );
+    write(top, "staged.txt", "staged, then edited locally\n");
+    write(top, "local-only.txt", "new locally\n");
+    let tree = tree_fingerprint(top);
+    let state = git_state_fingerprint(top);
+    let all = all_refs(top);
+    let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
+    assert_eq!(preflight.report.outcome, Outcome::CleanMerge);
+    assert_eq!(preflight.report.conflict_paths, [] as [String; 0]);
+    assert!(!preflight.report.applied);
+    assert_eq!(preflight.report.base, sent.record.twin);
+    assert!(preflight.report.result_tree.is_some());
+    assert_eq!(
+        preflight.modes(),
+        [Mode::Apply, Mode::Worktree, Mode::Discard]
+    );
+    // The record's exclusions and the deny list, each with its reason.
+    assert_eq!(skipped_for(&preflight, ".env"), Some(SkipReason::Excluded));
+    assert_eq!(
+        skipped_for(&preflight, "keys/id_rsa"),
+        Some(SkipReason::Excluded)
+    );
+    assert_eq!(
+        skipped_for(&preflight, "private/plan.md"),
+        Some(SkipReason::PathDeny)
+    );
+    let renamed = preflight
+        .report
+        .changed_paths
+        .iter()
+        .find(|change| change.path == "docs/moved.md")
+        .unwrap();
+    assert_eq!(renamed.change, apply::Change::Renamed);
+    assert_eq!(renamed.from.as_deref(), Some("untracked/new.md"));
+    // The preflight wrote nothing anyone sees.
+    assert_eq!(tree_fingerprint(top), tree);
+    assert_eq!(git_state_fingerprint(top), state);
+    assert_eq!(all_refs(top), all);
+
+    let refused = apply::apply(
+        &sent.source,
+        &preflight,
+        Mode::ApplyWithMarkers,
+        &deny(),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(refused.code(), ErrorCode::InvalidArgument);
+    let checkpoints = checkpoints(&fixture);
+    let applied = apply::apply(
+        &sent.source,
+        &preflight,
+        Mode::Apply,
+        &deny(),
+        Some(&checkpoints),
+    )
+    .unwrap();
+    assert!(applied.applied && applied.report.applied);
+    // Both sides.
+    assert_eq!(
+        std::fs::read_to_string(top.join("README.md")).unwrap(),
+        "hello from the cloud\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(top.join("staged.txt")).unwrap(),
+        "staged, then edited locally\n"
+    );
+    assert!(top.join("local-only.txt").exists());
+    assert!(top.join("src/new.rs").exists() && !top.join("src/lib.rs").exists());
+    // Never written or deleted.
+    assert_eq!(
+        std::fs::read_to_string(top.join(".env")).unwrap(),
+        "TOKEN=local-only\n"
+    );
+    assert!(top.join("keys/id_rsa").exists());
+    assert!(!top.join("private/plan.md").exists());
+    checkpoints.restore(applied.checkpoint.unwrap()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(top.join("README.md")).unwrap(),
+        "hello, edited\n"
+    );
+    assert!(top.join("src/lib.rs").exists());
+}
+
+/// Both sides changed the same lines of a text file and a binary file:
+/// `apply` is refused, a folder changed since the preflight is refused,
+/// `apply_with_markers` writes markers into the text file and never into
+/// the binary one, the rules still hold, and undo restores.
+#[test]
+fn conflict_markers_go_into_text_files_never_binary_ones() {
+    let fixture = Fixture::repo();
+    let top = &fixture.top;
+    let sent = send(&fixture);
+    let (bytes, refs) = cloud(
+        &fixture,
+        &sent,
+        &[&|dir| {
+            write(dir, "README.md", "hello from the cloud\n");
+            std::fs::write(dir.join("blob.bin"), [1u8, 0, 2, 0]).unwrap();
+            write(dir, "src/new.rs", "pub fn new() {}\n");
+            write(dir, "private/plan.md", "denied\n");
+            write(dir, ".env", "TOKEN=from-the-cloud\n");
+        }],
+    );
+    write(top, "README.md", "hello from the laptop\n");
+    std::fs::write(top.join("blob.bin"), [9u8, 0, 9, 0]).unwrap();
+    let tree = tree_fingerprint(top);
+    let all = all_refs(top);
+    let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
+    assert_eq!(preflight.report.outcome, Outcome::Conflicts);
+    assert_eq!(preflight.report.conflict_paths, ["README.md", "blob.bin"]);
+    assert_eq!(preflight.report.result_tree, None);
+    assert_eq!(
+        preflight.modes(),
+        [Mode::ApplyWithMarkers, Mode::Worktree, Mode::Discard]
+    );
+    assert!(
+        preflight.report.skipped_paths.contains(&SkippedPath {
+            path: "blob.bin".into(),
+            reason: SkipReason::BinaryConflict,
+        }),
+        "{:?}",
+        preflight.report.skipped_paths
+    );
+    assert_eq!(
+        skipped_for(&preflight, "private/plan.md"),
+        Some(SkipReason::PathDeny)
+    );
+    assert_eq!(skipped_for(&preflight, ".env"), Some(SkipReason::Excluded));
+    assert!(!preflight.report.touched().contains(&"blob.bin".to_owned()));
+    assert_eq!(tree_fingerprint(top), tree, "the preflight wrote nothing");
+    assert_eq!(all_refs(top), all);
+
+    let refused = apply::apply(&sent.source, &preflight, Mode::Apply, &deny(), None).unwrap_err();
+    assert_eq!(refused.code(), ErrorCode::InvalidArgument);
+    assert!(refused.message().starts_with("merge_conflicts"));
+    // Changed since the preflight: refused, untouched.
+    write(top, "late.txt", "late\n");
+    let stale = apply::apply(
+        &sent.source,
+        &preflight,
+        Mode::ApplyWithMarkers,
+        &deny(),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(stale.code(), ErrorCode::StaleRead);
+    assert!(stale.message().starts_with(apply::FOLDER_CHANGED));
+    assert_eq!(
+        std::fs::read_to_string(top.join("README.md")).unwrap(),
+        "hello from the laptop\n"
+    );
+    std::fs::remove_file(top.join("late.txt")).unwrap();
+
+    let checkpoints = checkpoints(&fixture);
+    let applied = apply::apply(
+        &sent.source,
+        &preflight,
+        Mode::ApplyWithMarkers,
+        &deny(),
+        Some(&checkpoints),
+    )
+    .unwrap();
+    let readme = std::fs::read_to_string(top.join("README.md")).unwrap();
+    assert!(
+        readme.contains("<<<<<<<")
+            && readme.contains("hello from the laptop")
+            && readme.contains("=======")
+            && readme.contains("hello from the cloud")
+            && readme.contains(">>>>>>>"),
+        "{readme}"
+    );
+    assert_eq!(std::fs::read(top.join("blob.bin")).unwrap(), [9u8, 0, 9, 0]);
+    assert!(!applied.written.contains(&"blob.bin".to_owned()));
+    assert!(top.join("src/new.rs").exists());
+    assert!(!top.join("private/plan.md").exists());
+    assert_eq!(
+        std::fs::read_to_string(top.join(".env")).unwrap(),
+        "TOKEN=local-only\n"
+    );
+    assert!(top.join("keys/id_rsa").exists());
+    // The branch holds the cloud's commits, not the markers.
+    let branch = applied.branch.clone().unwrap();
+    assert_eq!(
+        git(top, &["show", &format!("{branch}:README.md")]),
+        "hello from the cloud"
+    );
+    checkpoints.restore(applied.checkpoint.unwrap()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(top.join("README.md")).unwrap(),
+        "hello from the laptop\n"
+    );
+    assert!(!top.join("src/new.rs").exists());
+}
+
+/// A simple clean repository with a tracked `.env` (excluded).
+fn plain_repo() -> Fixture {
+    let fixture = Fixture::new();
+    let top = &fixture.top;
+    git(top, &["init", "-q"]);
+    write(top, "README.md", "sent\n");
+    write(top, "src/lib.rs", "pub fn a() {}\n");
+    write(top, ".env", "TOKEN=local\n");
+    git(top, &["add", "-A"]);
+    git(top, &["commit", "-q", "-m", "first"]);
+    fixture
+}
+
+/// Taking back up to turn `k` writes exactly `C_k`'s tree (the excluded
+/// `.env` aside), replays only the first `k` turns, and a turn the chain
+/// does not have is refused before anything is written.
+#[test]
+fn taking_back_up_to_turn_k_applies_exactly_that_turns_tree() {
+    let fixture = plain_repo();
+    let top = &fixture.top;
+    let sent = send(&fixture);
+    let (bytes, refs) = cloud(
+        &fixture,
+        &sent,
+        &[
+            &|dir| {
+                write(dir, "README.md", "turn 1\n");
+                write(dir, "t1.txt", "one\n");
+            },
+            &|dir| {
+                write(dir, "README.md", "turn 2\n");
+                write(dir, "t2.txt", "two\n");
+                std::fs::remove_file(dir.join("src/lib.rs")).unwrap();
+            },
+            &|dir| {
+                write(dir, "README.md", "turn 3\n");
+                write(dir, "t3.txt", "three\n");
+            },
+        ],
+    );
+    let tree = tree_fingerprint(top);
+    for bad in [0, 4] {
+        let error = apply::preflight_up_to(
+            &sent.source,
+            &sent.record,
+            &bytes,
+            &refs,
+            &deny(),
+            Some(bad),
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InvalidArgument, "{bad}");
+        assert!(error.message().starts_with("turn_out_of_range"), "{bad}");
+    }
+    // A tampered segment aborts the same way for any turn.
+    let mut tampered = bytes.clone();
+    let offset = bundle::parse_header(&tampered).unwrap().pack_offset;
+    tampered[offset + 30] ^= 0x40;
+    assert!(
+        apply::preflight_up_to(
+            &sent.source,
+            &sent.record,
+            &tampered,
+            &refs,
+            &deny(),
+            Some(2)
+        )
+        .is_err()
+    );
+    assert_eq!(tree_fingerprint(top), tree);
+
+    let preflight =
+        apply::preflight_up_to(&sent.source, &sent.record, &bytes, &refs, &deny(), Some(2))
+            .unwrap();
+    assert_eq!(preflight.cloud_turns(), 3);
+    assert_eq!(preflight.up_to_turn, 2);
+    assert_eq!(preflight.target, preflight.chain[1].sha);
+    assert_ne!(preflight.target, preflight.cloud_tip);
+    assert_eq!(preflight.report.outcome, Outcome::FastPath);
+    assert!(!preflight.report.touched().contains(&"t3.txt".to_owned()));
+    let checkpoints = checkpoints(&fixture);
+    let applied = apply::apply(
+        &sent.source,
+        &preflight,
+        Mode::Apply,
+        &deny(),
+        Some(&checkpoints),
+    )
+    .unwrap();
+    assert_eq!(applied.replayed.len(), 2, "only turns 1 and 2");
+    // Turn 3 is not taken back, but its commit is kept on a branch of its
+    // own, on top of turn 2.
+    let rest = applied.rest_branch.clone().unwrap();
+    assert_eq!(rest, "elitea/cloud/c0ffee00-after-turn-2");
+    assert_eq!(
+        git(top, &["log", "-1", "--format=%s", &rest]),
+        "cloud turn 3"
+    );
+    assert_eq!(
+        git(
+            top,
+            &[
+                "rev-list",
+                "--count",
+                &format!("{}..{rest}", applied.branch.as_deref().unwrap())
+            ]
+        ),
+        "1"
+    );
+    assert!(!top.join("t3.txt").exists());
+    // The folder is exactly C_2's tree, plus the excluded local `.env`.
+    let expected: BTreeMap<String, String> = git(
+        top,
+        &[
+            "ls-tree",
+            "-r",
+            "--format=%(path) %(objectname)",
+            &preflight.target,
+        ],
+    )
+    .lines()
+    .map(|line| {
+        let (path, oid) = line.split_once(' ').unwrap();
+        (path.to_owned(), oid.to_owned())
+    })
+    .collect();
+    let mut actual = BTreeMap::new();
+    for path in tree_fingerprint(top).keys().filter(|p| !p.ends_with('/')) {
+        if path == ".env" {
+            continue;
+        }
+        actual.insert(path.clone(), git(top, &["hash-object", path]));
+    }
+    assert_eq!(actual, expected);
+    assert_eq!(
+        std::fs::read_to_string(top.join(".env")).unwrap(),
+        "TOKEN=local\n"
+    );
+    let branch = applied.branch.unwrap();
+    assert_eq!(
+        git(top, &["log", "-1", "--format=%s", &branch]),
+        "cloud turn 2"
+    );
+}
+
+/// The shared engine's fixture: the same `(base, ours, theirs)` cases
+/// through both callers, the worktree merge-back (#1235) and the handoff
+/// take-back (#1187), with the same outcomes and the same folders.
+mod shared_engine {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use elitea_local_tools::apply as merge_back;
+    use elitea_local_tools::apply::{Outcome, SkipReason};
+    use elitea_local_tools::approvals::{DeferringPrompt, MemoryChoices, WorkspaceSettings};
+    use elitea_local_tools::deny::DenyList;
+    use elitea_local_tools::git::Repo;
+    use elitea_local_tools::handoff::apply::{self as take_back, Mode};
+    use elitea_local_tools::policy::LocalWorkPolicy;
+    use elitea_local_tools::sandbox::SandboxConfig;
+    use elitea_local_tools::session::{LocalSession, SessionConfig};
+
+    use super::handoff_common::{Fixture, git, write};
+    use super::{checkpoints, cloud, send};
+
+    type Edit = fn(&Path);
+
+    struct Case {
+        name: &'static str,
+        ours: Edit,
+        theirs: Edit,
+        outcome: Outcome,
+        conflicts: &'static [&'static str],
+        binary_conflict: Option<&'static str>,
+        /// The folder after the apply (with markers for conflicts):
+        /// `(path, Some(text) | None for absent)`; `a.txt` is checked for
+        /// markers when it conflicts.
+        expect: &'static [(&'static str, Option<&'static str>)],
+    }
+
+    const BASE_A: &str = "1\n2\n3\n4\n5\n6\n7\n";
+
+    fn base(top: &Path) {
+        write(top, "a.txt", BASE_A);
+        write(top, "b.txt", "b\n");
+        write(top, "c.txt", "c\n");
+        std::fs::write(top.join("bin.dat"), [0u8, 1, 2, 0]).unwrap();
+    }
+
+    fn nothing(_: &Path) {}
+
+    const CASES: &[Case] = &[
+        Case {
+            name: "fast_path",
+            ours: nothing,
+            theirs: |dir| {
+                write(dir, "a.txt", "1\ntwo\n3\n4\n5\n6\n7\n");
+                write(dir, "d.txt", "d\n");
+            },
+            outcome: Outcome::FastPath,
+            conflicts: &[],
+            binary_conflict: None,
+            expect: &[
+                ("a.txt", Some("1\ntwo\n3\n4\n5\n6\n7\n")),
+                ("d.txt", Some("d\n")),
+            ],
+        },
+        Case {
+            name: "clean_merge",
+            ours: |dir| {
+                write(dir, "a.txt", "1\n2\n3\n4\n5\n6\nSEVEN\n");
+                write(dir, "b.txt", "b, local\n");
+            },
+            theirs: |dir| {
+                write(dir, "a.txt", "1\ntwo\n3\n4\n5\n6\n7\n");
+                std::fs::remove_file(dir.join("c.txt")).unwrap();
+            },
+            outcome: Outcome::CleanMerge,
+            conflicts: &[],
+            binary_conflict: None,
+            expect: &[
+                ("a.txt", Some("1\ntwo\n3\n4\n5\n6\nSEVEN\n")),
+                ("b.txt", Some("b, local\n")),
+                ("c.txt", None),
+            ],
+        },
+        Case {
+            name: "text_conflict",
+            ours: |dir| write(dir, "a.txt", "1\nTWO\n3\n4\n5\n6\n7\n"),
+            theirs: |dir| {
+                write(dir, "a.txt", "1\ntwo\n3\n4\n5\n6\n7\n");
+                write(dir, "d.txt", "d\n");
+            },
+            outcome: Outcome::Conflicts,
+            conflicts: &["a.txt"],
+            binary_conflict: None,
+            expect: &[("d.txt", Some("d\n"))],
+        },
+        Case {
+            name: "binary_conflict",
+            ours: |dir| std::fs::write(dir.join("bin.dat"), [0u8, 9]).unwrap(),
+            theirs: |dir| {
+                std::fs::write(dir.join("bin.dat"), [0u8, 8]).unwrap();
+                write(dir, "d.txt", "d\n");
+            },
+            outcome: Outcome::Conflicts,
+            conflicts: &["bin.dat"],
+            binary_conflict: Some("bin.dat"),
+            expect: &[("d.txt", Some("d\n")), ("a.txt", Some(BASE_A))],
+        },
+    ];
+
+    fn check(case: &Case, top: &Path, caller: &str) {
+        for (path, text) in case.expect {
+            assert_eq!(
+                std::fs::read_to_string(top.join(path)).ok().as_deref(),
+                *text,
+                "{caller}/{}: {path}",
+                case.name
+            );
+        }
+        if case.conflicts.contains(&"a.txt") {
+            let a = std::fs::read_to_string(top.join("a.txt")).unwrap();
+            assert!(
+                a.contains("<<<<<<<") && a.contains("TWO") && a.contains("two"),
+                "{caller}/{}: {a}",
+                case.name
+            );
+        }
+        if let Some(path) = case.binary_conflict {
+            assert_eq!(
+                std::fs::read(top.join(path)).unwrap(),
+                [0u8, 9],
+                "{caller}/{}: the folder's binary file is kept",
+                case.name
+            );
+        }
+    }
+
+    fn session(root: &Path, data: &Path, id: &str) -> Arc<LocalSession> {
+        LocalSession::open(SessionConfig {
+            root: root.to_path_buf(),
+            session_id: id.to_owned(),
+            policy: LocalWorkPolicy {
+                allowed: true,
+                ..LocalWorkPolicy::default()
+            },
+            settings: WorkspaceSettings::default(),
+            choices: Arc::new(MemoryChoices::default()),
+            prompt: Arc::new(DeferringPrompt),
+            data_dir: data.join(id),
+            shell: None,
+            deny_read: Vec::new(),
+            app_id: None,
+            budgets: elitea_local_tools::budget::Budgets::default(),
+            documents: elitea_local_tools::document::Documents::default(),
+        })
+        .unwrap()
+    }
+
+    fn base_repo() -> Fixture {
+        let fixture = Fixture::new();
+        git(&fixture.top, &["init", "-q"]);
+        base(&fixture.top);
+        git(&fixture.top, &["add", "-A"]);
+        git(&fixture.top, &["commit", "-q", "-m", "base"]);
+        fixture
+    }
+
+    fn through_worktree_merge_back(case: &Case) {
+        let fixture = base_repo();
+        let top = &fixture.top;
+        let main = Repo::discover(top, &SandboxConfig::default(), Arc::new(DenyList::new([])))
+            .unwrap()
+            .unwrap();
+        std::fs::create_dir_all(fixture.data.join("worktrees")).unwrap();
+        let created = elitea_local_tools::worktree::create(
+            &main,
+            &fixture.data.join("worktrees/abcd1234"),
+            "abcd1234",
+            "elitea/abcd1234",
+            "HEAD",
+        )
+        .unwrap();
+        let tree = created.entry.worktree.clone();
+        (case.theirs)(&tree);
+        let theirs = session(&tree, &fixture.data, "wt")
+            .checkpoints()
+            .snapshot_commit()
+            .unwrap();
+        (case.ours)(top);
+        let target = session(top, &fixture.data, "main");
+        let preview = merge_back::preflight(&target, &theirs, &created.base_sha).unwrap();
+        assert_eq!(
+            preview.report.outcome, case.outcome,
+            "worktree/{}",
+            case.name
+        );
+        assert_eq!(
+            preview.report.conflict_paths, case.conflicts,
+            "worktree/{}",
+            case.name
+        );
+        if let Some(path) = case.binary_conflict {
+            assert!(
+                preview
+                    .report
+                    .skipped_paths
+                    .iter()
+                    .any(|s| s.path == path && s.reason == SkipReason::BinaryConflict),
+                "worktree/{}",
+                case.name
+            );
+        }
+        let applied = if case.outcome == Outcome::Conflicts {
+            assert!(merge_back::apply(&target, &preview, "merge").is_err());
+            merge_back::apply_with_markers(&target, &preview, "merge").unwrap()
+        } else {
+            merge_back::apply(&target, &preview, "merge").unwrap()
+        };
+        check(case, top, "worktree");
+        let seq = applied.checkpoint.unwrap();
+        target.restore_checkpoint(seq).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(top.join("d.txt")).ok(),
+            None,
+            "worktree/{}: undone",
+            case.name
+        );
+    }
+
+    fn through_handoff_take_back(case: &Case) {
+        let fixture = base_repo();
+        let top = &fixture.top;
+        let sent = send(&fixture);
+        let theirs = case.theirs;
+        let (bytes, refs) = cloud(&fixture, &sent, &[&|dir: &Path| theirs(dir)]);
+        (case.ours)(top);
+        let preflight =
+            take_back::preflight(&sent.source, &sent.record, &bytes, &refs, &[]).unwrap();
+        assert_eq!(
+            preflight.report.outcome, case.outcome,
+            "handoff/{}",
+            case.name
+        );
+        assert_eq!(
+            preflight.report.conflict_paths, case.conflicts,
+            "handoff/{}",
+            case.name
+        );
+        if let Some(path) = case.binary_conflict {
+            assert!(
+                preflight
+                    .report
+                    .skipped_paths
+                    .iter()
+                    .any(|s| s.path == path && s.reason == SkipReason::BinaryConflict),
+                "handoff/{}",
+                case.name
+            );
+        }
+        let mode = if case.outcome == Outcome::Conflicts {
+            Mode::ApplyWithMarkers
+        } else {
+            Mode::Apply
+        };
+        let checkpoints = checkpoints(&fixture);
+        let applied =
+            take_back::apply(&sent.source, &preflight, mode, &[], Some(&checkpoints)).unwrap();
+        check(case, top, "handoff");
+        checkpoints.restore(applied.checkpoint.unwrap()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(top.join("d.txt")).ok(),
+            None,
+            "handoff/{}: undone",
+            case.name
+        );
+    }
+
+    #[test]
+    fn both_callers_agree_on_every_case() {
+        for case in CASES {
+            through_worktree_merge_back(case);
+            through_handoff_take_back(case);
+        }
+    }
 }
