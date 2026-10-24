@@ -176,6 +176,8 @@ export function createFakeHandoffIpc(initial: FakeInitial = {}): FakeHandoffIpc 
     worktree_path: null,
     branch: 'elitea/cloud/abcd1234',
     imported_turns: 1,
+    turns_not_taken: 0,
+    rest_branch: null,
     released: true,
     copied: [],
   };

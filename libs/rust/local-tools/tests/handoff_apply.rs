@@ -238,6 +238,7 @@ fn the_fast_path_lands_the_cloud_tree_as_uncommitted_changes_and_undo_restores()
     assert_eq!(std::fs::read(top.join(".git/index")).unwrap(), index);
     let branch = applied.branch.clone().unwrap();
     assert_eq!(branch, "elitea/cloud/c0ffee00");
+    assert_eq!(applied.rest_branch, None, "every turn taken back");
     assert_eq!(
         git(top, &["rev-list", "--count", &format!("{head}..{branch}")]),
         "3",
@@ -948,6 +949,26 @@ fn taking_back_up_to_turn_k_applies_exactly_that_turns_tree() {
     )
     .unwrap();
     assert_eq!(applied.replayed.len(), 2, "only turns 1 and 2");
+    // Turn 3 is not taken back, but its commit is kept on a branch of its
+    // own, on top of turn 2.
+    let rest = applied.rest_branch.clone().unwrap();
+    assert_eq!(rest, "elitea/cloud/c0ffee00-after-turn-2");
+    assert_eq!(
+        git(top, &["log", "-1", "--format=%s", &rest]),
+        "cloud turn 3"
+    );
+    assert_eq!(
+        git(
+            top,
+            &[
+                "rev-list",
+                "--count",
+                &format!("{}..{rest}", applied.branch.as_deref().unwrap())
+            ]
+        ),
+        "1"
+    );
+    assert!(!top.join("t3.txt").exists());
     // The folder is exactly C_2's tree, plus the excluded local `.env`.
     let expected: BTreeMap<String, String> = git(
         top,

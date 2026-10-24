@@ -198,16 +198,22 @@ describe('TakeBackDialog turns', () => {
     const picker = await screen.findByRole('combobox', { name: 'Take back up to' });
     expect(picker).toHaveTextContent('Turn 3 (latest)');
     expect(ipc.calls.preflightTurns).toEqual([undefined]);
+    expect(screen.queryByTestId('takeback-turns-after')).toBeNull();
 
     await user.click(picker);
     await user.click(await screen.findByRole('option', { name: 'Turn 2' }));
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Take back up to' })).toHaveTextContent('Turn 2'));
     expect(ipc.calls.preflightTurns).toEqual([undefined, 2]);
     expect(screen.getByText(/The cloud changed 1 files in 2 turns/)).toBeInTheDocument();
+    // Turn 3 is not taken back: the review says so before anything is applied.
+    expect(screen.getByTestId('takeback-turns-after')).toHaveTextContent('Turns 3 to 3 are not taken back');
+    expect(screen.getByTestId('takeback-turns-after')).toHaveTextContent('deleted with the cloud copy');
 
+    ipc.setApply({ imported_turns: 2, turns_not_taken: 1, rest_branch: 'elitea/cloud/abcd1234-after-turn-2' });
     await user.click(screen.getByRole('button', { name: 'Apply to my folder' }));
     await screen.findByTestId('takeback-result');
     expect(ipc.calls.applies).toEqual([{ preflightId: 'pf-1', mode: 'apply', upToTurn: 2 }]);
+    expect(screen.getByTestId('takeback-rest-branch')).toHaveTextContent('elitea/cloud/abcd1234-after-turn-2');
   });
 
   it('shows no picker for a single cloud turn', async () => {

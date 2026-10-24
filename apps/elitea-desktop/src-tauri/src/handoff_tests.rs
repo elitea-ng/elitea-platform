@@ -573,6 +573,12 @@ async fn harness_full(
 /// The cloud executor: hydrate the stored segment, one commit, publish a
 /// COMPACT with `refs/elitea/cloud`, and the conversation's two messages.
 fn cloud_turn(h: &Harness) -> String {
+    cloud_turns_n(h, 1).remove(0)
+}
+
+/// `n` cloud turns, each one commit and one answer in the conversation;
+/// their commits, oldest first.
+fn cloud_turns_n(h: &Harness, n: usize) -> Vec<String> {
     let (sha, refs) = {
         let p = h.platform.lock().unwrap();
         let (sha, _, refs) = p.segment.clone().unwrap();
@@ -601,11 +607,19 @@ fn cloud_turn(h: &Harness) -> String {
         !dir.join(".env").exists(),
         "the excluded file never reached the cloud"
     );
-    std::fs::write(dir.join("README.md"), "hello from the cloud\n").unwrap();
-    std::fs::write(dir.join("src/cloud.rs"), "pub fn c() {}\n").unwrap();
-    git(&dir, &["add", "-A"]);
-    git(&dir, &["commit", "-q", "-m", "cloud turn 1"]);
-    let commit = git(&dir, &["rev-parse", "HEAD"]);
+    let mut commits = Vec::new();
+    for turn in 1..=n {
+        if turn == 1 {
+            std::fs::write(dir.join("README.md"), "hello from the cloud\n").unwrap();
+            std::fs::write(dir.join("src/cloud.rs"), "pub fn c() {}\n").unwrap();
+        } else {
+            std::fs::write(dir.join(format!("src/cloud{turn}.rs")), "pub fn d() {}\n").unwrap();
+        }
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-q", "-m", &format!("cloud turn {turn}")]);
+        commits.push(git(&dir, &["rev-parse", "HEAD"]));
+    }
+    let commit = commits.last().unwrap().clone();
     git(&dir, &["update-ref", "refs/elitea/cloud", "HEAD"]);
     let out = h.app.path().join("cloud.bundle");
     let mut args = vec!["bundle", "create", "-q", out.to_str().unwrap()];
@@ -620,14 +634,31 @@ fn cloud_turn(h: &Harness) -> String {
     p.seq += 1;
     p.segment = Some((sha.clone(), segment.len() as u64, all));
     p.objects.insert(sha, segment);
-    p.groups = vec![
-        json!({"id": 10, "uuid": "q1", "meta": {}, "created_at": "2026-10-15 10:00:00.000000",
-               "message_items": [{"item_type": "text_message", "item_details": {"content": "Make it greet the cloud"}}]}),
-        json!({"id": 11, "uuid": "a1", "reply_to_id": 10, "created_at": "2026-10-15 10:01:00.000000",
-               "meta": {"executed_by": "cloud_executor", "workspace_epoch": p.epoch, "workspace_commit": commit},
-               "message_items": [{"item_type": "text_message", "item_details": {"content": "Done: README greets the cloud."}}]}),
-    ];
-    commit
+    p.groups = Vec::new();
+    for (index, commit) in commits.iter().enumerate() {
+        let turn = index + 1;
+        let (question, answer) = if turn == 1 {
+            (
+                "Make it greet the cloud".to_owned(),
+                "Done: README greets the cloud.".to_owned(),
+            )
+        } else {
+            (
+                format!("Turn {turn}, please"),
+                format!("Done: turn {turn}."),
+            )
+        };
+        let id = 10 * turn as i64;
+        let epoch = p.epoch;
+        p.groups.push(json!({"id": id, "uuid": format!("q{turn}"), "meta": {},
+            "created_at": format!("2026-10-15 10:{:02}:00.000000", 2 * index),
+            "message_items": [{"item_type": "text_message", "item_details": {"content": question}}]}));
+        p.groups.push(json!({"id": id + 1, "uuid": format!("a{turn}"), "reply_to_id": id,
+            "created_at": format!("2026-10-15 10:{:02}:00.000000", 2 * index + 1),
+            "meta": {"executed_by": "cloud_executor", "workspace_epoch": epoch, "workspace_commit": commit},
+            "message_items": [{"item_type": "text_message", "item_details": {"content": answer}}]}));
+    }
+    commits
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1052,6 +1083,52 @@ fn a_version_1_history_gains_the_turn_origin_column() {
     let turns = store.thread(&owner, "w", "c").unwrap();
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].origin, "local");
+}
+
+/// Taking back up to turn 1 of 2 imports only turn 1 into the local
+/// history; turn 2 is reported as not taken back and its commit is kept on
+/// a branch of its own, and the folder has turn 1's tree only.
+#[tokio::test(flavor = "multi_thread")]
+async fn taking_back_up_to_turn_k_imports_only_those_turns() {
+    let h = harness().await;
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    let commits = cloud_turns_n(&h, 2);
+    h.host.reclaim(CONVERSATION).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, Some(1)).await.unwrap();
+    assert_eq!((preflight.cloud_turns, preflight.up_to_turn), (2, 1));
+    let applied = h
+        .host
+        .apply(&preflight.preflight_id, Mode::Apply, Some(1))
+        .await
+        .unwrap();
+    assert!(applied.applied && applied.released);
+    assert_eq!(applied.imported_turns, 1);
+    assert_eq!(applied.turns_not_taken, 1);
+    let rest = applied.rest_branch.clone().unwrap();
+    assert_eq!(
+        git(&h.folder, &["log", "-1", "--format=%s", &rest]),
+        "cloud turn 2"
+    );
+    assert!(h.folder.join("src/cloud.rs").exists());
+    assert!(
+        !h.folder.join("src/cloud2.rs").exists(),
+        "turn 2 not taken back"
+    );
+    let release = h.platform.lock().unwrap().release.clone().unwrap();
+    assert_ne!(release["applied_sha"], json!(commits[1]));
+    let owner = Owner {
+        origin: h.platform.lock().unwrap().origin.clone(),
+        user_id: 7,
+    };
+    let turns = h
+        .history
+        .thread(&owner, &h.workspace_id, CONVERSATION)
+        .unwrap();
+    let ids: Vec<&str> = turns.iter().map(|turn| turn.turn_id.as_str()).collect();
+    assert_eq!(ids, ["cloud:a1"], "turn 2 is not local history");
 }
 
 /// Risk 2: a take-back worktree (the folder moved on since the send)

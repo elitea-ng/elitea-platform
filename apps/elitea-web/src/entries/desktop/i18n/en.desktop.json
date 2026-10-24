@@ -791,7 +791,7 @@
   "workspace.worktree.error.conflicts": "Both sides changed the same files, so nothing was applied. The work stays on its branch.",
   "workspace.worktree.mode.fastForward": "The main folder has not changed since this task started: {{n}} files are brought over as they are.",
   "workspace.worktree.mode.merge": "Both sides changed, but not the same files: {{n}} files are merged into the main folder.",
-  "workspace.worktree.mode.conflicts": "Both sides changed the same files, so nothing can be applied. The work stays on its branch, {{branch}}.",
+  "workspace.worktree.mode.conflicts": "Both sides changed the same files. Apply with conflict markers writes the merge with markers to resolve in those files (a binary file keeps the version in the main folder); otherwise the work stays on its branch, {{branch}}.",
   "workspace.worktree.mode.nothing": "There is nothing on this branch to merge back.",
   "workspace.worktree.mergeTitle": "Merge {{branch}} back",
   "workspace.worktree.checking": "Checking what merging back would change…",
@@ -882,5 +882,9 @@
   "workspace.handoff.skip.tooLarge": "too large",
   "workspace.handoff.turn.label": "Take back up to",
   "workspace.handoff.turn.latest": "Turn {{turn}} (latest)",
-  "workspace.handoff.turn.option": "Turn {{turn}}"
+  "workspace.handoff.turn.option": "Turn {{turn}}",
+  "workspace.handoff.result.restBranch": "The {{n}} later cloud turns were not taken back; their commits are on the branch {{branch}}.",
+  "workspace.handoff.turn.after": "Turns {{from}} to {{to}} are not taken back. They are not added to this thread’s history here, and their conversation is deleted with the cloud copy when its grace period ends. Their changes are kept as commits on a local branch.",
+  "workspace.worktree.applyWithMarkers": "Apply with conflict markers",
+  "workspace.worktree.markerPaths": "With conflict markers to resolve"
 }

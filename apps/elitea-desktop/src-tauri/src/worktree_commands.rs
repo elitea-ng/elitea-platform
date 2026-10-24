@@ -8,7 +8,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::local_commands::IpcError;
-use crate::worktrees::{Diff, Entry, MergeApplied, MergePreflight, WorktreeHost};
+use crate::worktrees::{Diff, Entry, MergeApplied, MergeApplyMode, MergePreflight, WorktreeHost};
 
 /// `worktree_create`: a task worktree of `workspace_id` for `thread_uuid`.
 #[tauri::command(rename_all = "snake_case")]
@@ -70,8 +70,11 @@ pub async fn worktree_merge_preflight(
 pub async fn worktree_merge_apply(
     host: State<'_, Arc<WorktreeHost>>,
     preflight_id: String,
+    mode: Option<MergeApplyMode>,
 ) -> Result<MergeApplied, IpcError> {
-    Ok(host.merge_apply(&preflight_id).await?)
+    Ok(host
+        .merge_apply(&preflight_id, mode.unwrap_or_default())
+        .await?)
 }
 
 /// What `worktree_merge_undo` restored.

@@ -31,7 +31,7 @@ import { t } from '@/shared/i18n';
 
 import { describeHandoffError } from '../model/describeHandoffError';
 import { useTakeBack, type TakeBack } from '../model/useTakeBack';
-import { changedLabel, mutedSx, Paths, Review, type RenderFiles } from './TakeBackReview';
+import { changedLabel, mutedSx, Paths, RestBranch, Review, type RenderFiles } from './TakeBackReview';
 
 export interface TakeBackDialogProps {
   open: boolean;
@@ -118,6 +118,7 @@ function Done({ preflight, result, undone }: { preflight: Preflight; result: App
           {t('workspace.handoff.result.imported', '{{n}} cloud turns were added to this thread’s history here.', { n: String(result.imported_turns) })}
         </Typography>
       )}
+      <RestBranch result={result} />
       {!result.released && (
         <Alert severity="warning" data-testid="takeback-unreleased">
           {t('workspace.handoff.result.unreleased', 'The cloud has not confirmed the hand-back yet. It is sent again automatically; until then this thread stays read-only here.')}

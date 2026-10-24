@@ -175,7 +175,7 @@ other task worktrees are not readable.
 | `worktree_diff` | `{workspace_id, thread_uuid}` | `{diff: string, truncated: boolean}` — the worktree as it is now (uncommitted work included) against `base_sha`; denied paths left out. Rejects `worktree_unknown`, `workspace_busy` while a turn runs in it. |
 | `worktree_remove` | `{workspace_id, thread_uuid, force?: boolean}` | `null` — its workspace (session, turns, history, data), folder and admin directory; its branch is kept when commits are on it, or when the worktree cannot be opened to tell (missing, refused). Rejects `worktree_dirty` when it has uncommitted work and `force` is not `true`, `workspace_busy`. |
 | `worktree_merge_preflight` | `{workspace_id, thread_uuid}` | `MergePreflight` — what merging the worktree (as it is now) into the folder would do, by `git merge-tree` from `base_sha`; writes nothing. Held 15 minutes. |
-| `worktree_merge_apply` | `{preflight_id}` | `MergeApplied` — checkpoints the folder first, then writes each path through the confined writer (path rules apply; what they refuse is in `skipped_paths`). The result lands as uncommitted changes; nothing is committed. Rejects `preflight_expired`, `merge_conflicts` (a `conflicts` preview: nothing is applied, the work stays on the branch), `folder_changed_since_preflight` (preview again), `workspace_busy`. |
+| `worktree_merge_apply` | `{preflight_id, mode?: "apply" \| "apply_with_markers"}` | `MergeApplied` — checkpoints the folder first, then writes each path through the confined writer (path rules apply; what they refuse is in `skipped_paths`). The result lands as uncommitted changes; nothing is committed. `mode` (default `apply`) must be one of the preview's `modes`: a `conflicts` preview offers only `apply_with_markers`, which writes the merge with conflict markers in text files (a binary conflict keeps the folder's file and is skipped as `binary_conflict`), the same as `handoff_apply`'s mode of that name. Rejects `preflight_expired`, `merge_conflicts` (`apply` on a `conflicts` preview: nothing is applied, the work stays on the branch), `invalid_request` (any other mode not offered; the preview is kept), `folder_changed_since_preflight` (preview again), `workspace_busy`. |
 | `worktree_merge_undo` | `{checkpoint_id, confirm_older?: boolean}` | `{restored: string[]}` — restores the checkpoint the merge took (only an id `worktree_merge_apply` returned; once). Rejects `invalid_request` for any other checkpoint, `undo_not_latest` when the folder was checkpointed since (a later turn or merge, whose changes the restore reverts too) and `confirm_older` is not `true`, `workspace_busy`. |
 
 ```ts
@@ -194,9 +194,10 @@ type WorktreeEntry = {
 type MergePreflight = {
   preflight_id: string;
   mode: "fast_forward" | "merge" | "conflicts" | "nothing";
-  applied_paths: string[];
+  applied_paths: string[];     // what an apply writes (with markers for `conflicts`)
   conflict_paths: string[];
   skipped_paths: string[];     // never written: denied paths, symlinks, submodules
+  modes: ("apply" | "apply_with_markers")[]; // [] for `nothing`, ["apply_with_markers"] for `conflicts`
   branch: string;
 };
 type MergeApplied = {
@@ -1586,7 +1587,7 @@ noted). `conversation_uuid` is the server conversation's UUID.
 | `handoff_status_many` | `{conversation_uuids: string[]}` | `{statuses: Record<uuid, HandoffStatus>}` — for the sidebar: a thread this desktop never sent is `LOCAL` with no request; the rest from the host's records, refreshed at most once per project per call and cached 15 s |
 | `handoff_reclaim` | `{conversation_uuid}` | `{state: "RECLAIMING", epoch, cloud_sha}`, or `{state: "CLOUD_RUNNING", reclaim_pending: true, …}` while a cloud turn runs |
 | `handoff_preflight` | `{conversation_uuid, up_to_turn?: number}` | `ApplyOutcome & {preflight_id, cloud_turns, up_to_turn, modes: TakeBackMode[], files: ChangedFile[], diffs_truncated: boolean}` — `up_to_turn` (1-based, default the latest) takes back the cloud turns up to that one; `invalid_request` (`turn_out_of_range`) for a turn the chain does not have |
-| `handoff_apply` | `{preflight_id, mode: TakeBackMode, up_to_turn?: number}` | `{applied, outcome: "applied" \| "applied_with_markers" \| "worktree" \| "discarded", report: ApplyOutcome, checkpoint_id, worktree_path, branch, imported_turns, released, release_refused: string \| null, copied: string[]}` — `up_to_turn`, when given, must be the preflight's (`invalid_request` otherwise; the preview is kept) |
+| `handoff_apply` | `{preflight_id, mode: TakeBackMode, up_to_turn?: number}` | `{applied, outcome: "applied" \| "applied_with_markers" \| "worktree" \| "discarded", report: ApplyOutcome, checkpoint_id, worktree_path, branch, imported_turns, turns_not_taken, rest_branch: string \| null, released, release_refused: string \| null, copied: string[]}` — `up_to_turn`, when given, must be the preflight's (`invalid_request` otherwise; the preview is kept) |
 | `handoff_undo` | `{checkpoint_id}` | `{restored: string[]}` — restores the folder to before a take-back |
 | `handoff_erase` | `{conversation_uuid, project_id?}` | the server's answer; the local folder is kept |
 | `handoff_settings_get` | `{workspace_id}` | `{settings: FolderHandoffSettings, policy: HandoffPolicy, env_offered: EnvVar[], env_notice: string \| null}` |
@@ -1736,8 +1737,15 @@ type HandoffEvent = { conversation_uuid: string;
   submodule entries are never deleted or overwritten (`skipped_paths`, each
   with its reason); a file the cloud created that the exclusions match is
   written only where no local file exists.
+- **Up to turn k.** With `up_to_turn` k below `cloud_turns`, the take-back
+  applies turn k's tree and imports only turns 1..k into the thread history;
+  the later turns are not local history (`turns_not_taken`). The release
+  ends the cloud copy (the server takes no second take-back from `LOCAL`),
+  so their work is kept as commits on the local branch `rest_branch`
+  (`elitea/cloud/<short>-after-turn-<k>`), and the dialog warns that their
+  conversation goes with the cloud copy when its grace ends.
 - **Release and history.** `handoff_apply` releases the thread and imports
-  its cloud turns into the thread history (`StoredTurn.origin: "cloud"`,
+  its cloud turns (up to the chosen turn) into the thread history (`StoredTurn.origin: "cloud"`,
   changed files from the cloud commits' diffs). A release the server did
   not acknowledge (`released: false`) is kept and sent again by the next
   `handoff_status`; until then the thread stays read-only. A release the
