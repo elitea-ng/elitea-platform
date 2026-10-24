@@ -261,6 +261,7 @@ fn write_atomically(target: &Path, bytes: &[u8], sync: bool) -> std::io::Result<
 
 /// The checkpoints of one session in one workspace.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // One value per session, never held in bulk; boxing buys nothing.
 pub enum Checkpoints {
     Git(GitCheckpoints),
     Copy(CopyCheckpoints),
