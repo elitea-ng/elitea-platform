@@ -134,8 +134,8 @@ type Workspace = {
 | `workspace_list` | — | `Workspace[]` |
 | `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, its approval rules, copy checkpoints, its local index), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it, `workspace_has_worktrees` while it has task worktrees (remove them first). A task worktree's workspace is removed with `worktree_remove`. |
 | `workspace_bind_project` | `{id, project_id}` | `Workspace` — rejects with `workspace_busy` while a turn (or an undo) runs in it, `workspace_unknown` for an id it does not know. |
-| `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null, allow_model_override: boolean \| null}` — the workspace's agent settings: `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100); `allow_model_override: false` runs every turn on the agent's own model (the composer hides its model chip; `null`/`true`: a model may be chosen per turn, issue 1228). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
-| `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null, allow_model_override?: boolean \| null}}` | the stored settings — they apply from the next turn. Rejects `invalid_request` for a step limit outside 10 to 200, `storage` for an id it does not know. |
+| `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null, allow_model_override: boolean \| null, diagnostics: boolean \| null, diagnostics_wait_ms: {rust, typescript, python, go: number \| null}}` — the workspace's agent settings: `diagnostics: false` turns edit diagnostics and the `diagnostics` tool off for the workspace (`null`/`true`: on; servers start only when found on `PATH`, see **Language servers**), and `diagnostics_wait_ms` sets how long an edit waits for a language's diagnostics (`null`: 1.5 s, the first answer after a server's start 4 s for Rust, 3 s for the others); `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100); `allow_model_override: false` runs every turn on the agent's own model (the composer hides its model chip; `null`/`true`: a model may be chosen per turn, issue 1228). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
+| `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null, allow_model_override?: boolean \| null, diagnostics?: boolean \| null, diagnostics_wait_ms?: {rust?, typescript?, python?, go?: number \| null}}}` | the stored settings — they apply from the next turn (turning diagnostics off stops the workspace's language servers then). Rejects `invalid_request` for a step limit outside 10 to 200 or a diagnostics wait outside 100 to 30 000 ms, `storage` for an id it does not know. |
 | `workspace_files` | `{workspace_id, query?: string, limit?: number}` | `{path, kind: "file" \| "dir"}[]` — the "@" picker. Workspace-relative paths (no trailing `/`) matching `query` case-insensitively: the name starting with it, then containing it, then the path containing it, then its characters in order; shallower and shorter first. `.gitignore` is honoured, `.git` and `path_deny` matches are left out, symlinks are neither listed nor followed. At most `limit` (default 50, at most 200); a folder past 20 000 entries answers from its first part. Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 | `commands_list` | `{workspace_id}` | `{name, description: string \| null, argument_hint: string \| null, source: "workspace" \| "user", path, ignored: string[]}[]` — the "/" menu's custom commands, by name (see **Custom commands** below): the workspace's `.elitea/commands/` then `.claude/commands/`, then the person's own `<app config dir>/commands/` (created `0700` when missing); the first of a name wins, so a workspace command shadows the person's, even one that cannot be read (too large, not UTF-8, denied, a symlink): that one is not listed, and no other file of its name is offered or run in its place. `path` is workspace-relative, or relative to the person's folder. `ignored` names what the file asks for that the host ignores (front matter keys such as `allowed-tools` and `model`, `! shell lines`, `@ file includes`). Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 
@@ -1027,6 +1027,106 @@ The `approval_request` card carries `mcp: {server, tool?, read_only}`
 report lists each call among its `commands` as `mcp <server> <tool>` with
 `mcp: {server, tool, read_only}`, never its arguments.
 
+## Hooks (`src/hooks.rs`, `src/hooks_commands.rs`, `libs/rust/local-tools/src/hooks/`, #1237)
+
+The person's own commands around a local turn: `PreToolUse` and
+`PostToolUse` around each local tool call (the `local` toolset's tools and
+the local MCP servers' `mcp__<server>__<tool>` tools; not the memory,
+index or remote tools, which are the runtime's), `UserPromptSubmit` before
+the person's message goes to the model, `Stop` when a turn that ran ends
+(not a cancelled turn, nor one a `UserPromptSubmit` hook refused). **Local-only**: the cloud
+executor runs none, and the handoff note says so when the workspace has
+any. They run only while the policy has local work and the shell on.
+
+**Settings.** Two files in host data, never in the workspace folder:
+`<app config dir>/hooks.json` (every workspace) and
+`<app data>/workspaces/<id>/hooks.json` (one workspace; a hook of the same
+`id` replaces the user one there, unless it was accepted from a
+repository proposal: those never replace a user hook). The same file rules as `mcp.json`
+(`0600` in `0700`, no symlink, owner only, schema-checked; a refused file
+adds no hook and the turn says so in a `status` message). Every turn takes
+both files as they are at its start.
+
+```ts
+type HooksFile = { version: 1; hooks: Hook[]; answered_proposals?: string[] };
+type Hook = {                     // unknown keys are refused; at most 32 per file
+  id: string;                     // [A-Za-z0-9_-]{1,64}, unique in the file
+  event: "PreToolUse" | "PostToolUse" | "Stop" | "UserPromptSubmit";
+  match?: { tools?: string[]; paths?: string[] }; // tool events only; tools: local names, "mcp__<server>__<tool>", "mcp__<server>__*", or "*"/none for every tool (MCP too); paths: globs over workspace-relative paths, matched against the typed path and where an in-workspace symlink leads
+  command: string[];              // argv: a bare program (found on PATH) or an absolute path, outside the workspace; no shell unless ["sh","-c",…]; an item exactly "{path}" / "{tool}" is replaced by the matching paths / the tool name
+  timeout_ms?: number;            // 1..30000, default 10000; one call's hooks share 30 s
+  sandbox?: "read-only" | "workspace-write"; // default read-only; capped by the policy's max_sandbox_mode
+  network?: boolean;              // default false; on only when the policy allows the network too
+  fail_closed?: boolean;          // a failure or timeout refuses (PreToolUse, UserPromptSubmit)
+  enabled?: boolean;              // default true
+  source?: string;                // "user", or "proposal:<sha256>" for a trusted proposal
+};
+type HookRun = {
+  id: string; event: Hook["event"];
+  result: "ok" | "deny" | "ask" | "modified" | "annotated" | "failed" | "timed_out";
+  duration_ms: number; at_ms: number;
+  message?: string;               // for the person: why it failed, or what it wrote
+};
+type ProposedHook = Hook & { problem?: string };
+type HooksProposal = { file: string; file_sha256: string; hooks: ProposedHook[] };
+```
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `hooks_list` | `{workspace_id?}` | `{allowed: boolean, user?: {path, hooks: Hook[], error?}, workspace?: {path, hooks: Hook[], error?}, last_runs: HookRun[], proposals: HooksProposal[]}` — both files, each hook's last run in the workspace's session (`[]` before its first turn) and the folder's unanswered proposals. Rejects `workspace_unknown` |
+| `hooks_save` | `{scope: "user" \| "workspace", hooks: Hook[], workspace_id?}` | `null` — replaces the file's hooks (its answered proposals kept; a file that does not parse is replaced whole, which repairs it); the next turn runs them. Rejects `invalid_request` (naming the hook), `hooks_settings_refused`, `workspace_unknown` |
+| `hooks_set_enabled` | `{scope, id, enabled, workspace_id?}` | `boolean` — whether the hook was there. Rejects as `hooks_save` |
+| `hooks_proposal_answer` | `{workspace_id, file_sha256, accept: string[]}` | `{accepted: string[]}` — copies the named hooks (none: declined) of the proposal whose file hashes to `file_sha256` into the workspace's file with `source: "proposal:<sha256>"`; the proposal is not shown again until the file changes. Rejects `conflict` (the file changed since it was shown), `invalid_request` (a hook that cannot be accepted, or whose id the workspace's file or the person's own file already has: a proposal never replaces a user hook, and its card's `problem` says so) |
+
+**Proposals.** When a workspace is opened the host reads
+`.elitea/hooks.json` (this format) and the `hooks` of
+`.claude/settings.json` through the confined reads, and sends each file it
+has not seen answered on `hooks://event` as `{kind: "hooks_proposal",
+workspace_id, file, file_sha256, hooks: ProposedHook[]}`. Nothing runs from
+a proposal. A Claude hook becomes `["/bin/sh", "-c", command]` in the
+read-only sandbox, its matcher mapped to the local tools (`Bash` →
+`run_command`, `run_tests`; `Edit` → `edit_file`, `multi_edit`,
+`apply_patch`; `MultiEdit` → `multi_edit`, `apply_patch`; `Write` →
+`write_file`; …).
+
+**Running.** Each hook is its own process group under the same sandbox as
+`run_command` (the session's deny list and `path_deny`), in the workspace
+root, with an environment built from nothing (`PATH` without relative
+entries, `HOME`, `USER`, the locale, the toolchain homes `CARGO_HOME`,
+`RUSTUP_HOME`, `GOPATH`, `GOROOT`, its own `TMPDIR`, `ELITEA_HOOK_ID`,
+`ELITEA_HOOK_EVENT`). A machine whose sandbox cannot hide the deny list
+runs no hook (a hook is never asked about). Stdin is one JSON line:
+`{event, session_id, conversation_uuid, tool?, input?, cwd: ".",
+workspace_name, output?, prompt?}` (`output` cut at 64 KiB; never an
+absolute workspace path). Exit 0 with optional stdout `{decision:
+"allow"|"deny"|"ask", reason?, modified_input?, annotation?}` (text that is
+not JSON is an annotation); exit 2 denies with stderr as the reason; any
+other exit, a timeout or a start failure is a failure, which proceeds
+unless `fail_closed`. Stdout is kept up to 64 KiB, stderr 16 KiB.
+
+**What a verdict does.** `PreToolUse` runs after the policy ceiling and
+plan mode: `deny` refuses the call (`{status: "error", code:
+"local_tools.denied", error: "hook_denied", hook, reason}`); `ask` makes
+the approval request carry `hook_ask: {hook, reason}` with `source:
+"hook"`, so a call the rules allow is asked (never "always"); `allow`
+changes nothing; `modified_input` is checked against the tool's schema and
+then decided by every rule like the model's own input. A tool result
+records the runs (`hooks: [{id, result, duration_ms}]`) and what a hook
+changed in the input (`hook_modified_input: {changed: {key: value |
+{bytes, sha256}}, removed?: string[]}`, a value over 1 KiB by its size and
+digest). `PostToolUse` annotations are added to the result
+(`hook_annotations`). When a `PostToolUse` hook that can write (its
+sandbox `workspace-write`) changed a file the edit just wrote (a
+formatter), the read guard records the new content, so the next edit is
+not refused as stale, and the result lists it (`hook_changed_files`) and
+marks its `diagnostics` as of the text before the hook (`before_hooks:
+true`). `UserPromptSubmit` annotations are added to
+the turn's context; its `deny` ends the turn with the `error` event
+`hook_denied`. `Stop` text, and any failure outside a tool call, are
+`status` events with `note: "hook_stop"` / `"hook_failed"`, for the person.
+Everything a hook writes that reaches the model is framed as untrusted
+text (`<hook_output nonce="…" hook="id">`).
+
 ## Memory tools (`src/d0/memory.rs`, `libs/rust/agent-runtime/src/memory_tools.rs`, #1233)
 
 No command or event of its own. Every workspace turn is offered the
@@ -1856,13 +1956,63 @@ Notifications and the dock badge are the host's own, from the
 `agent://event` stream (README, "Native features"); the UI does nothing
 for them.
 
+## Language servers (`src/d0/lsp.rs`, `libs/rust/local-tools/src/lsp/`, #1236)
+
+Edits (`write_file`, `edit_file`, `multi_edit`, `apply_patch`) in a local
+turn report the errors they introduced, from language servers found on the
+person's `PATH` (rust-analyzer, typescript-language-server,
+pyright-langserver, gopls; never downloaded) for the languages whose marker
+is at the workspace root (`Cargo.toml`, `package.json`/`tsconfig.json`/
+`jsconfig.json`, `pyproject.toml`/`setup.py`/`setup.cfg`, `go.mod`). The
+tool result gains an additive `diagnostics` field, `{status: "ok" |
+"timeout" | "unavailable", new_errors: {path, line, col, severity, code?,
+message}[], total_errors_in_file: number, truncated?: true, message?:
+string}` (at most 20 entries in 4 KiB; a missing server is reported once,
+as `unavailable` with its `message`), and the turn is offered the
+local-only `diagnostics` tool (read-only, allowed by default). The edit
+never fails because of diagnostics.
+
+A server starts on the first edit of one of its files, under the OS sandbox
+with the workspace **read-only**, the network (loopback too) **off**, the
+session's deny list and `path_deny` hidden, in its own process group with
+the scrubbed command environment; it writes only its cache under the
+session's temporary directory. It never starts where that sandbox is
+`partial` or `none`, nor while the policy turns commands off (`shell`). It
+stops after 10 minutes unused, when the workspace's session ends (policy
+change, sign-out, quit) and when diagnostics are turned off; at most two
+run per workspace. Settings: `diagnostics` and `diagnostics_wait_ms` in
+`workspace_agent_settings_*` (host data, never the folder).
+
+A language found unavailable (its server missing) is tried again by a
+turn that starts at least a minute later, or at once when the settings
+change; a `PATH` lookup that found nothing is done again at each turn.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `lsp_status` | `{workspace_id}` | `{seq: number, statuses: {language, state, message?}[]}` — the servers of the workspace's session now (`[]` before its first turn), reflecting every `lsp://event` with a smaller `seq`: the chip seeds itself from it when it mounts. Rejects `workspace_unknown` |
+
+`lsp://event`, one per change of a server's state:
+
+```ts
+type LspEvent = {
+  workspace_id: string;
+  seq: number; // grows across the app's lifetime (every workspace, every session): an event with a smaller seq than the chip shows is older
+  kind: "lsp_status";
+  payload: {
+    language: "rust" | "typescript" | "python" | "go";
+    state: "starting" | "ready" | "unavailable" | "crashed" | "stopped";
+    message?: string; // why it is unavailable or stopped
+  };
+};
+```
+
 ## Events
 
-Seven event names, all emitted to the `main` window only: `app://command`
+Eight event names, all emitted to the `main` window only: `app://command`
 (above), `app://context-menu` (`{request_id, id}`, the outcome of `context_menu_show`),
 `agent://event`, `index://event`, `handoff://event` (Cloud handoff, above),
-`process://event` (Background processes, above) and `mcp://event` (Local MCP
-servers, above). The webview may listen
+`process://event` (Background processes, above), `mcp://event` (Local MCP
+servers, above) and `lsp://event` (Language servers, above). The webview may listen
 (`core:event:allow-listen` / `allow-unlisten`), never emit.
 
 `index://event`:

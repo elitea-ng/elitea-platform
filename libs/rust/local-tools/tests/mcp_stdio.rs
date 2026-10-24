@@ -395,6 +395,72 @@ async fn a_changed_configuration_stops_the_server_and_plan_mode_keeps_read_only_
     assert_eq!(names, ["mcp__fx__echo"], "allowed and read-only only");
 }
 
+struct HookFrame;
+
+impl elitea_local_tools::hooks::HookFramer for HookFrame {
+    fn frame(&self, hook: &str, text: &str) -> String {
+        format!("[{hook}] {text}")
+    }
+}
+
+/// The person's hooks run around an MCP tool as around a local one
+/// (#1237), matched by its `mcp__<server>__<tool>` name or `*`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hooks_run_around_mcp_tools() {
+    use elitea_local_tools::hooks::{Hook, HookEvent, HookMatch};
+    let fixture = fixture(policy());
+    configure(&fixture, |_| {});
+    let statuses = fixture.session.start_mcp_servers("turn-1").await;
+    assert_eq!(statuses[0].state, ServerState::Ready, "{statuses:?}");
+    let bin = fixture.home.parent().expect("base").join("hooks");
+    std::fs::create_dir_all(&bin).expect("bin");
+    let script = |name: &str, body: &str| {
+        let path = bin.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("script");
+        vec!["/bin/sh".to_owned(), path.display().to_string()]
+    };
+    let mut guard = Hook::new(
+        "no-env",
+        HookEvent::PreToolUse,
+        script(
+            "guard.sh",
+            "cat >/dev/null\necho 'not that one' >&2\nexit 2",
+        ),
+    );
+    guard.matcher = HookMatch {
+        tools: vec!["mcp__fx__env".to_owned()],
+        paths: Vec::new(),
+    };
+    let mut note = Hook::new(
+        "note",
+        HookEvent::PostToolUse,
+        script("note.sh", "cat >/dev/null\necho \"after $ELITEA_HOOK_ID\""),
+    );
+    note.matcher = HookMatch {
+        tools: vec!["*".to_owned()],
+        paths: Vec::new(),
+    };
+    let hooks = fixture.session.hooks();
+    hooks.allow_unconfined(!cfg!(target_os = "macos"));
+    hooks.set_framer(Some(Arc::new(HookFrame)));
+    hooks.configure(vec![(Scope::User, guard), (Scope::User, note)]);
+    let tools = offered(&fixture).await;
+    let asked_before = fixture.person.asked().len();
+    let denied = call(&tools, "mcp__fx__env", json!({})).await;
+    assert_eq!(denied["error"], "hook_denied", "{denied}");
+    assert_eq!(denied["hook"], "no-env");
+    assert_eq!(denied["server"], "fx");
+    assert_eq!(
+        fixture.person.asked().len(),
+        asked_before,
+        "a denied call is never asked"
+    );
+    let hello = call(&tools, "mcp__fx__echo", json!({})).await;
+    assert_eq!(hello["status"], "ok", "{hello}");
+    assert_eq!(hello["hook_annotations"][0], "[note] after note", "{hello}");
+    assert_eq!(hello["hooks"][0]["id"], "note");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_server_that_fails_is_reported_not_fatal() {
     let fixture = fixture(policy());

@@ -915,3 +915,52 @@ async fn denied_files_inside_an_opened_worktree_stay_unreadable() {
     assert!(!denied.status.success(), "read the denied file");
     assert!(!String::from_utf8_lossy(&denied.stdout).contains("LISTED-SECRET-4"));
 }
+
+/// A hook (#1237) runs under the same sandbox as a command: it cannot read
+/// the credentials under the home or the session's data, whatever its
+/// sandbox mode, and its environment is built from nothing.
+#[tokio::test]
+async fn hook_process_cannot_read_credentials() {
+    use elitea_local_tools::hooks::{
+        Hook, HookCall, HookEnv, HookEvent, HookSet, RunResult, Scope,
+    };
+    use elitea_local_tools::policy::LocalWorkPolicy;
+
+    if !available() {
+        return;
+    }
+    let fixture = fixture();
+    plant(&fixture.home.join(".ssh/id_ed25519"), "hook-secret-key");
+    let probe = format!(
+        "cat {}/.ssh/id_ed25519; echo exit=$?; env",
+        quoted(&fixture.home)
+    );
+    let mut hook = Hook::new(
+        "probe",
+        HookEvent::Stop,
+        vec!["/bin/sh".to_owned(), "-c".to_owned(), probe],
+    );
+    hook.sandbox = SandboxMode::WorkspaceWrite;
+    let hooks = HookSet::new();
+    hooks.configure(vec![(Scope::User, hook)]);
+    let policy = LocalWorkPolicy {
+        allowed: true,
+        shell: true,
+        max_sandbox_mode: SandboxMode::WorkspaceWrite,
+        ..LocalWorkPolicy::default()
+    };
+    let env = HookEnv {
+        workspace: &fixture.workspace,
+        shell: &fixture.config,
+        policy: &policy,
+        session_id: "s1",
+        conversation: None,
+    };
+    let outcome = hooks.run(&env, HookCall::event(HookEvent::Stop)).await;
+    assert_eq!(outcome.runs[0].result, RunResult::Annotated, "{outcome:?}");
+    let text = &outcome.annotations[0].1;
+    assert!(!text.contains("hook-secret-key"), "{text}");
+    assert!(!text.contains("exit=0"), "{text}");
+    assert!(text.contains("ELITEA_HOOK_ID=probe"), "{text}");
+    assert!(!text.contains("CARGO_MANIFEST_DIR"), "{text}");
+}

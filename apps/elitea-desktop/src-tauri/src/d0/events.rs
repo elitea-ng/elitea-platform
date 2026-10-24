@@ -30,6 +30,10 @@ pub trait EventEmitter: Send + Sync {
     /// A background process's event on the app channel
     /// (`process://event`, #1223); nowhere by default.
     fn emit_process(&self, _event: super::processes::ProcessEvent) {}
+
+    /// A language server's status on the app channel (`lsp://event`,
+    /// #1236); nowhere by default.
+    fn emit_lsp(&self, _event: super::lsp::LspEvent) {}
 }
 
 /// A turn's phases, as `status` events name them.
@@ -573,6 +577,8 @@ pub struct VecEmitter {
     pub on_event: Mutex<Option<EventHook>>,
     /// The app channel's process events (#1223).
     pub process_events: Mutex<Vec<super::processes::ProcessEvent>>,
+    /// The app channel's language-server events (#1236).
+    pub lsp_events: Mutex<Vec<super::lsp::LspEvent>>,
 }
 
 #[cfg(test)]
@@ -588,6 +594,10 @@ impl VecEmitter {
     pub fn processes(&self) -> Vec<super::processes::ProcessEvent> {
         self.process_events.lock().expect("lock").clone()
     }
+
+    pub fn lsp(&self) -> Vec<super::lsp::LspEvent> {
+        self.lsp_events.lock().expect("lock").clone()
+    }
 }
 
 #[cfg(test)]
@@ -601,6 +611,10 @@ impl EventEmitter for VecEmitter {
 
     fn emit_process(&self, event: super::processes::ProcessEvent) {
         self.process_events.lock().expect("lock").push(event);
+    }
+
+    fn emit_lsp(&self, event: super::lsp::LspEvent) {
+        self.lsp_events.lock().expect("lock").push(event);
     }
 }
 

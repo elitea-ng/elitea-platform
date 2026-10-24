@@ -6,7 +6,9 @@
 //!
 //! A tool is read-only (and concurrency safe, and kept in plan mode) only
 //! when the person marked it so, or trusts its server's `readOnlyHint`.
-//! Every call is a [`ToolKind::McpCall`] the rules decide first.
+//! Every call is a [`ToolKind::McpCall`] the rules decide first, with the
+//! person's `PreToolUse` / `PostToolUse` hooks around it as around a local
+//! tool ([`crate::hooks`]).
 //!
 //! **What a server says is data.** Its tool descriptions (cut at
 //! [`MAX_DESCRIPTION_BYTES`]) and every result's text (cut at the
@@ -207,10 +209,44 @@ impl Tool for McpTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
-        // Failures are results the model reads, not run failures.
-        let mut value = match self.call(ctx.function_call_id(), args).await {
-            Ok(value) => value,
-            Err(error) => error.to_result(),
+        let call_id = ctx.function_call_id().to_owned();
+        let session = &self.session;
+        // The person's hooks run around it as around a local tool (#1237),
+        // under the name the model calls it by.
+        let mut value = match session
+            .mcp_pre_hooks(&self.exposed, &call_id, args, &self.schema, &self.probe())
+            .await
+        {
+            Err(refusal) => refusal,
+            Ok((args, mut trail)) => {
+                let post_input = session
+                    .hooks()
+                    .has(crate::hooks::HookEvent::PostToolUse)
+                    .then(|| args.clone());
+                let result = self.call(&call_id, args).await;
+                session.forget_hook_ask(&call_id);
+                // Failures are results the model reads, not run failures.
+                match result {
+                    Ok(mut value) => {
+                        if let Value::Object(map) = &mut value {
+                            map.entry("status")
+                                .or_insert_with(|| Value::String("ok".to_owned()));
+                        }
+                        if let Some(input) = post_input {
+                            session
+                                .post_tool_hooks(&self.exposed, &input, &mut value, &mut trail)
+                                .await;
+                        }
+                        trail.attach(&mut value);
+                        value
+                    }
+                    Err(error) => {
+                        let mut value = error.to_result();
+                        trail.attach(&mut value);
+                        value
+                    }
+                }
+            }
         };
         if let Value::Object(map) = &mut value {
             map.insert("server".to_owned(), json!(self.server));
@@ -224,15 +260,20 @@ impl Tool for McpTool {
 }
 
 impl McpTool {
-    async fn call(&self, call_id: &str, args: Value) -> ToolResult<Value> {
-        let call = ToolCall {
+    /// The call the rules decide.
+    fn probe(&self) -> ToolCall {
+        ToolCall {
             mcp: Some(McpTarget {
                 server: self.server.clone(),
                 tool: Some(self.tool.clone()),
                 read_only: self.read_only,
             }),
             ..ToolCall::new(ToolKind::McpCall)
-        };
+        }
+    }
+
+    async fn call(&self, call_id: &str, args: Value) -> ToolResult<Value> {
+        let call = self.probe();
         self.session
             .authorize(call_id, call, &format!("use {}", self.exposed))
             .await?;

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-hooks-proposal-answer"
+description = "Enables the hooks_proposal_answer command without any pre-configured scope."
+commands.allow = ["hooks_proposal_answer"]
+
+[[permission]]
+identifier = "deny-hooks-proposal-answer"
+description = "Denies the hooks_proposal_answer command without any pre-configured scope."
+commands.deny = ["hooks_proposal_answer"]

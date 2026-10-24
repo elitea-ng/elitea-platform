@@ -90,6 +90,15 @@ fn exit_plan_mode_is_local_only() {
     assert!(WORKSPACE_TOOLS.iter().all(|spec| spec.name != name));
 }
 
+/// #1236: `diagnostics` is local-only (the cloud executor runs no language
+/// server): in neither table, and its name is no other tool's.
+#[test]
+fn diagnostics_is_local_only() {
+    let name = elitea_local_tools::session::DIAGNOSTICS.name;
+    assert!(TOOLS.iter().all(|spec| spec.name != name));
+    assert!(WORKSPACE_TOOLS.iter().all(|spec| spec.name != name));
+}
+
 /// #1223: background processes are local-only. The shared `TOOLS` table
 /// keeps the foreground `run_command` (the cloud executor offers the same
 /// schema); the desktop swaps in `RUN_COMMAND_PROCESSES` and appends

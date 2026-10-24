@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-hooks-set-enabled"
+description = "Enables the hooks_set_enabled command without any pre-configured scope."
+commands.allow = ["hooks_set_enabled"]
+
+[[permission]]
+identifier = "deny-hooks-set-enabled"
+description = "Denies the hooks_set_enabled command without any pre-configured scope."
+commands.deny = ["hooks_set_enabled"]

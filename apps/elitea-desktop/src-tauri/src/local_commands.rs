@@ -219,6 +219,12 @@ impl EventEmitter for MainWindowEvents {
             log::warn!("could not deliver a process event: {error}");
         }
     }
+
+    fn emit_lsp(&self, event: crate::d0::lsp::LspEvent) {
+        if let Err(error) = self.0.emit_to("main", crate::d0::lsp::EVENT_NAME, &event) {
+            log::warn!("could not deliver a language server event: {error}");
+        }
+    }
 }
 
 /// The native folder dialog; `None` when the person cancelled (or the
@@ -243,11 +249,13 @@ pub async fn workspace_open(
         return Ok(None);
     };
     let workspace = state.workspaces.add(&path)?;
-    // The folder's MCP files are proposals only (#1230): shown, never run.
+    // The folder's MCP and hooks files are proposals only (#1230, #1237):
+    // shown, never run.
     let agents = state.agents.clone();
     let id = workspace.id.clone();
     tauri::async_runtime::spawn_blocking(move || {
         crate::mcp_commands::propose_on_open(&app, &agents, &id);
+        crate::hooks_commands::propose_on_open(&app, &agents, &id);
     });
     Ok(Some(workspace))
 }
@@ -529,6 +537,16 @@ pub fn workspace_agent_settings_set(
                 "The step limit must be {} to {}.",
                 STEP_LIMIT_RANGE.start(),
                 STEP_LIMIT_RANGE.end()
+            ),
+        ));
+    }
+    if !settings.diagnostics_wait_ms.valid() {
+        return Err(IpcError::new(
+            "invalid_request",
+            format!(
+                "A diagnostics wait must be {} to {} ms.",
+                crate::workspaces::DIAGNOSTICS_WAIT_RANGE.start(),
+                crate::workspaces::DIAGNOSTICS_WAIT_RANGE.end()
             ),
         ));
     }

@@ -452,8 +452,10 @@ impl McpFramer for McpFrame {
 }
 
 /// Stop a session's background processes without waiting for them: from
-/// a lock or a synchronous caller (the session is being replaced).
+/// a lock or a synchronous caller (the session is being replaced). Its
+/// language servers (#1236) stop with them.
 fn stop_processes_soon(session: &Arc<LocalSession>) {
+    session.lsp().stop_all();
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         let session = session.clone();
         handle.spawn(async move { session.stop_processes().await });
@@ -826,6 +828,8 @@ pub struct AgentHost {
     rules: Arc<RuleFiles>,
     /// The person's local MCP servers' settings (`src/mcp.rs`, #1230).
     mcp: Arc<crate::mcp::McpFiles>,
+    /// The person's hooks (`src/hooks.rs`, #1237).
+    hooks: Arc<crate::hooks::HookFiles>,
     /// The agent versions and answering participants read this session.
     caches: TurnCaches,
     /// The commits after `done`, one lane per conversation.
@@ -1017,11 +1021,16 @@ impl AgentHost {
             deps.user_rules_dir.clone(),
             deps.workspaces.clone(),
         ));
+        let hooks = Arc::new(crate::hooks::HookFiles::new(
+            deps.user_rules_dir.clone(),
+            deps.workspaces.clone(),
+        ));
         Ok(Self {
             deps,
             api,
             rules,
             mcp,
+            hooks,
             broker: Arc::new(ApprovalBroker::default()),
             sessions: Mutex::new(HashMap::new()),
             busy: BusySet::default(),
@@ -1192,6 +1201,12 @@ impl AgentHost {
             self.deps.emitter.clone(),
         ));
         session.set_process_events(Some(processes.clone()));
+        session
+            .lsp()
+            .set_events(Some(Arc::new(super::lsp::LspSink::new(
+                workspace_id,
+                self.deps.emitter.clone(),
+            ))));
         let entry = Arc::new(WorkspaceSession {
             session,
             prompt,
@@ -1240,6 +1255,18 @@ impl AgentHost {
             .workspaces
             .agent_settings(workspace_id)
             .map_or(true, |settings| settings.model_override_allowed())
+    }
+
+    /// The language-server settings of the workspace's agent settings
+    /// (unreadable settings: the defaults, diagnostics on).
+    fn lsp_settings(&self, workspace_id: &str) -> elitea_local_tools::lsp::LspSettings {
+        super::lsp::settings_for(
+            &self
+                .deps
+                .workspaces
+                .agent_settings(workspace_id)
+                .unwrap_or_default(),
+        )
     }
 
     /// The step limit the workspace's settings set, if any (unreadable
@@ -2370,6 +2397,11 @@ impl AgentHost {
         session.begin_turn(&checkpoint_label(&request.prompt));
         // The processes this turn starts show on its tool cards until it ends.
         workspace.processes.bind_turn(Some(events.clone()));
+        // Edit diagnostics as the workspace's settings say (#1236); a
+        // change stops the servers it affects.
+        session
+            .lsp()
+            .configure(self.lsp_settings(&request.workspace_id));
         events.running(&project.paths(), &turn_model(&admitted));
 
         let sink = Arc::new(TurnSink::with_events(events.clone()));
@@ -2462,6 +2494,13 @@ impl AgentHost {
             }) => (text, step_limit_reached, tool_call_limit_reached, None),
             Err(error) => (sink.last_text(), false, false, Some(error)),
         };
+        // The person's `Stop` hooks (#1237), only for a turn whose message
+        // went to the model (not one a `UserPromptSubmit` hook refused, nor
+        // a cancelled one, which released its claim above without them):
+        // what they write is for the person, before `done`.
+        if turn_context.ran() {
+            crate::hooks::after_turn(&session, &events).await;
+        }
         // A turn that stopped at a limit is committed as it is, with what
         // the agent last said (or that it stopped there).
         let answer = if stopped_at_calls && answer.trim().is_empty() {
@@ -2960,6 +2999,19 @@ impl AgentHost {
                 )
             },
         );
+        // The person's hooks (#1237), from both files as they are now: the
+        // session runs the tool ones; `UserPromptSubmit` may refuse the
+        // message or add context (framed, after the volatile context).
+        let hook_context = crate::hooks::before_turn(
+            &self.hooks,
+            &request.workspace_id,
+            &workspace.session,
+            events,
+            &nonce,
+            &message,
+        )
+        .await?;
+        turn_context.mark_ran();
         // What changes every turn goes in a host message before the
         // person's (`TurnTail`): the system prompt stays the thread's.
         let tail = Arc::new(TurnTail {
@@ -2968,7 +3020,7 @@ impl AgentHost {
                 invoked,
                 &started.memory_recall.text,
                 &nonce,
-            ),
+            ) + &hook_context,
             anchor: message.clone(),
         });
         // ModelTransport: /llm with the native token and the execution id.
@@ -3467,6 +3519,19 @@ impl AgentHost {
         &self.mcp
     }
 
+    /// The hooks files (IPC `hooks_*`, #1237).
+    #[must_use]
+    pub fn hook_files(&self) -> &Arc<crate::hooks::HookFiles> {
+        &self.hooks
+    }
+
+    /// Whether the policy lets hooks run now (local work and the shell on).
+    #[must_use]
+    pub fn hooks_allowed(&self) -> bool {
+        self.policy()
+            .is_ok_and(|policy| policy.allowed && policy.shell)
+    }
+
     /// The settings changed: every open session (or `workspace_id`'s only)
     /// takes them now, stopping a server whose entry changed or went; a new
     /// or changed one starts with the next turn.
@@ -3529,6 +3594,8 @@ impl AgentHost {
         // (a later session's processes then go straight to `SIGKILL`).
         let deadline = std::time::Instant::now() + grace;
         for session in &sessions {
+            // Language servers get `SIGTERM` now (#1236).
+            session.lsp().stop_all();
             session.stop_processes_blocking(
                 deadline.saturating_duration_since(std::time::Instant::now()),
             );

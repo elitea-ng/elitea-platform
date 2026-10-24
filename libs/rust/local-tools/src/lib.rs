@@ -30,8 +30,10 @@ pub mod find;
 pub mod git;
 #[cfg(feature = "handoff")]
 pub mod handoff;
+pub mod hooks;
 pub mod ledger;
 mod line_ending;
+pub mod lsp;
 pub mod mcp;
 pub mod patch;
 pub mod picture;

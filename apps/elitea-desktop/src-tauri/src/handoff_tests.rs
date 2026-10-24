@@ -1894,3 +1894,38 @@ async fn handoff_start_kills_background_processes() {
         elitea_local_tools::process::ProcessState::Killed
     );
 }
+
+/// The handoff note names what stays on the laptop: the person's hooks
+/// (#1237) when they have any, and always the diagnostics tool (#1236).
+#[test]
+fn the_handoff_note_names_hooks_and_diagnostics() {
+    let snap = elitea_local_tools::handoff::snapshot::Snapshot {
+        shadow: false,
+        head: None,
+        tree: String::new(),
+        base: String::new(),
+        upstream: None,
+        handoff: String::new(),
+        twin: String::new(),
+        files: 3,
+        unpacked_bytes: 0,
+        excluded: Vec::new(),
+        included: Vec::new(),
+        findings: Vec::new(),
+        include_findings: Vec::new(),
+        caps: elitea_local_tools::handoff::caps::CapReport::default(),
+        patterns: elitea_local_tools::handoff::exclude::Patterns::default(),
+    };
+    let with_hooks = super::handoff_note(&snap, false, true);
+    assert!(
+        with_hooks.contains("hooks stay on the laptop"),
+        "{with_hooks}"
+    );
+    assert!(
+        with_hooks.contains("diagnostics tool (language servers) is not available in the cloud"),
+        "{with_hooks}"
+    );
+    let without = super::handoff_note(&snap, false, false);
+    assert!(!without.contains("hooks"), "{without}");
+    assert!(without.contains("diagnostics tool"), "{without}");
+}

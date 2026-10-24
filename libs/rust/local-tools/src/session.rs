@@ -8,7 +8,12 @@
 //! 3. ask the [`ApprovalChannel`] (rules, then the person);
 //! 4. before the turn's first change, take a checkpoint;
 //! 5. run it, and return a JSON result, failures included, to the model.
+//!
+//! The person's `PreToolUse` hooks run before step 1, after the policy
+//! ceiling and plan mode; their `PostToolUse` hooks after step 5
+//! ([`crate::hooks`], `session/hooks.rs`).
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,7 +40,9 @@ use crate::document::{self, Documents, InProcessExtractor, SidecarExtractor};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::files;
 use crate::git::{Repo, StatusSummary, capped, check_revision, parse_status_summary};
+use crate::hooks::HookSet;
 use crate::ledger::ReadLedger;
+use crate::lsp::{self, LanguageServers};
 use crate::mcp::{McpServers, ServerStatus};
 use crate::policy::{LocalWorkPolicy, SandboxMode};
 use crate::process::{KeepAlive, ProcessRegistry};
@@ -45,6 +52,7 @@ use crate::sandbox::{self, Enforcement, SandboxRequest};
 use crate::shell::{self, CommandSpec, ShellConfig};
 use crate::workspace::{Intent, Workspace, WsPath};
 
+mod hooks;
 mod processes;
 
 pub use processes::{PROCESS_TOOLS, RUN_COMMAND_PROCESSES};
@@ -125,6 +133,18 @@ pub struct LocalSession {
     /// The person's local MCP servers (#1230); dropped with the session,
     /// which stops them.
     mcp: McpServers,
+    /// The person's hooks (#1237), configured by the host each turn.
+    hooks: HookSet,
+    /// The session id hooks are told.
+    session_id: String,
+    /// The conversation the current turn runs for (hooks are told it).
+    conversation: Mutex<Option<String>>,
+    /// The `PreToolUse` hooks that asked, by call id, until the call ends:
+    /// its approval request carries them ([`crate::approvals::HOOK_ASK_PAYLOAD_KEY`]).
+    hook_asks: Mutex<HashMap<String, Value>>,
+    /// The language servers behind edit diagnostics (#1236); dropped with
+    /// the session, which stops them.
+    lsp: LanguageServers,
 }
 
 /// How a command would be confined (see [`LocalSession::command_confinement`]).
@@ -400,6 +420,27 @@ pub const TOOLS: &[ToolSpec] = &[
         parameters: || json!({ "type": "object", "properties": {} }),
     },
 ];
+
+/// `diagnostics` (#1236), offered after every tool of [`TOOLS`] while the
+/// session's language servers are on and one serves the workspace.
+/// Local-only: the cloud executor runs no language server, so it is not in
+/// [`TOOLS`] and not in the workspace tool contract.
+pub static DIAGNOSTICS: ToolSpec = ToolSpec {
+    name: "diagnostics",
+    kind: ToolKind::Diagnostics,
+    description: "Current compiler/linter errors from the language server for one file, or for every file changed in this session when path is omitted.",
+    parameters: || {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" },
+                "severity": { "type": "string", "enum": ["error", "warning", "all"], "default": "error" },
+                "max": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 }
+            },
+            "additionalProperties": false
+        })
+    },
+};
 
 /// `apply_patch` as [`EditProfile::Patch`] offers it: the same name, kind
 /// and schema, described as the Codex envelope.
@@ -765,6 +806,11 @@ impl LocalSession {
             project: Mutex::new(None),
             processes: ProcessRegistry::new(),
             mcp: McpServers::new(),
+            hooks: HookSet::new(),
+            session_id: config.session_id,
+            conversation: Mutex::new(None),
+            hook_asks: Mutex::new(HashMap::new()),
+            lsp: LanguageServers::new(),
         }))
     }
 
@@ -785,6 +831,9 @@ impl LocalSession {
     /// [`Self::begin_turn`]; `None` is the default scope.
     pub fn set_conversation(&self, conversation: Option<&str>) {
         self.spill.set_conversation(conversation);
+        if let Ok(mut current) = self.conversation.lock() {
+            *current = conversation.map(str::to_owned);
+        }
     }
 
     /// The workspace's test runners and build checks
@@ -833,6 +882,14 @@ impl LocalSession {
     #[must_use]
     pub fn mcp(&self) -> &McpServers {
         &self.mcp
+    }
+
+    /// The session's language servers (#1236): the host configures them
+    /// ([`LanguageServers::configure`]) and hears their status
+    /// ([`LanguageServers::set_events`]).
+    #[must_use]
+    pub fn lsp(&self) -> &LanguageServers {
+        &self.lsp
     }
 
     /// Start the configured MCP servers that have not started yet (the
@@ -1033,6 +1090,10 @@ impl LocalSession {
                 }
             })
             .chain(PROCESS_TOOLS.iter().filter(|_| processes))
+            .chain(
+                std::iter::once(&DIAGNOSTICS)
+                    .filter(|_| self.lsp.offered(&self.workspace, policy.shell)),
+            )
             .filter(|tool| !(tool.kind.runs_commands() || tool.kind.is_process()) || policy.shell)
             .filter(|tool| !matches!(tool.kind, ToolKind::GitRead | ToolKind::GitCommit) || git)
             .filter(|tool| !plan || tool.kind.plan_allows())
@@ -1085,10 +1146,21 @@ impl LocalSession {
 
     /// Run one tool call; the JSON result the model sees.
     pub async fn call(self: &Arc<Self>, tool: &str, call_id: &str, args: Value) -> Value {
+        let (args, mut trail) = match self.pre_tool_hooks(tool, call_id, args).await {
+            Ok(proceed) => proceed,
+            Err(refusal) => return refusal,
+        };
+        // Kept only for the `PostToolUse` hooks (a write's input is large).
+        let post_input = self
+            .hooks
+            .has(crate::hooks::HookEvent::PostToolUse)
+            .then(|| args.clone());
         let result = self.dispatch(tool, call_id, args).await;
+        self.forget_hook_ask(call_id);
         if !TOOLS
             .iter()
             .chain(PROCESS_TOOLS)
+            .chain(std::iter::once(&DIAGNOSTICS))
             .any(|spec| spec.name == tool && spec.kind.is_read_only())
         {
             // A change: what the sandbox masks may differ now.
@@ -1102,9 +1174,25 @@ impl LocalSession {
                     map.entry("status")
                         .or_insert_with(|| Value::String("ok".to_owned()));
                 }
+                if let Some(input) = post_input
+                    && self
+                        .post_tool_hooks(tool, &input, &mut value, &mut trail)
+                        .await
+                    && matches!(
+                        tool,
+                        "write_file" | "edit_file" | "multi_edit" | "apply_patch"
+                    )
+                {
+                    self.restamp_after_hooks(tool, &input, &mut value).await;
+                }
+                trail.attach(&mut value);
                 value
             }
-            Err(error) => error.to_result(),
+            Err(error) => {
+                let mut value = error.to_result();
+                trail.attach(&mut value);
+                value
+            }
         }
     }
 
@@ -1141,64 +1229,13 @@ impl LocalSession {
             ToolKind::ReadOutput => self.read_output(call_id, args).await,
             ToolKind::GitRead => self.git_read(tool, call_id, args).await,
             ToolKind::GitCommit => self.git_commit(call_id, args).await,
-            ToolKind::WriteFile => {
-                let mut args: files::WriteArgs = parse(args)?;
-                let (typed, target) = self.write_target(&args.path)?;
-                self.blocking({
-                    let target = target.clone();
-                    move |this| {
-                        files::check_fresh(&this.workspace, &this.ledger, &target).map(|_| ())
-                    }
-                })
-                .await?;
-                self.authorize_change(
-                    call_id,
-                    ToolKind::WriteFile,
-                    &typed,
-                    &target,
-                    "write a file",
-                )
-                .await?;
-                args.path = target.display_string();
-                self.blocking(move |this| {
-                    this.unchanged_target(&target)?;
-                    files::write(&this.workspace, &this.ledger, &args)
-                })
-                .await
-            }
+            ToolKind::WriteFile => self.write_file(call_id, args).await,
             ToolKind::EditFile => self.edit_file(spec, call_id, args).await,
-            ToolKind::ApplyPatch => {
-                let patch = args
-                    .get("patch")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| ToolError::invalid("`patch` is required"))?
-                    .to_owned();
-                let planned = self
-                    .blocking(move |this| files::plan_patch(&this.workspace, &this.ledger, &patch))
-                    .await?;
-                let typed: Vec<WsPath> =
-                    planned.iter().map(|change| change.typed.clone()).collect();
-                let targets: Vec<WsPath> =
-                    planned.iter().map(|change| change.path.clone()).collect();
-                self.authorize_changes(
-                    call_id,
-                    ToolKind::ApplyPatch,
-                    &typed,
-                    &targets,
-                    "apply a patch",
-                )
-                .await?;
-                self.blocking(move |this| {
-                    for change in &planned {
-                        this.unchanged_target(&change.path)?;
-                    }
-                    files::apply_patch(&this.workspace, &this.ledger, &planned)
-                })
-                .await
-            }
+            ToolKind::ApplyPatch => self.apply_patch(call_id, &args).await,
             ToolKind::RunCommand => self.run_command(call_id, args).await,
             ToolKind::RunTests => self.run_tests(call_id, args).await,
             ToolKind::ExitPlanMode => self.exit_plan_mode(call_id, &args).await,
+            ToolKind::Diagnostics => self.diagnostics(call_id, args).await,
             ToolKind::ProcessRead | ToolKind::ProcessWrite | ToolKind::ProcessKill => {
                 self.process_tool(spec.name, call_id, args).await
             }
@@ -1284,6 +1321,80 @@ impl LocalSession {
         }
     }
 
+    /// `write_file`.
+    async fn write_file(self: &Arc<Self>, call_id: &str, args: Value) -> ToolResult<Value> {
+        let mut args: files::WriteArgs = parse(args)?;
+        let (typed, target) = self.write_target(&args.path)?;
+        self.blocking({
+            let target = target.clone();
+            move |this| files::check_fresh(&this.workspace, &this.ledger, &target).map(|_| ())
+        })
+        .await?;
+        self.authorize_change(
+            call_id,
+            ToolKind::WriteFile,
+            &typed,
+            &target,
+            "write a file",
+        )
+        .await?;
+        args.path = target.display_string();
+        let changed = vec![lsp::Changed {
+            path: target.clone(),
+            deleted: false,
+        }];
+        let (value, before) = self
+            .blocking(move |this| {
+                this.unchanged_target(&target)?;
+                let before = this.lsp.before(&this.workspace, &[target]);
+                Ok((files::write(&this.workspace, &this.ledger, &args)?, before))
+            })
+            .await?;
+        Ok(self.with_diagnostics(value, before, changed).await)
+    }
+
+    /// `apply_patch`: every file of the patch checked and approved first.
+    async fn apply_patch(self: &Arc<Self>, call_id: &str, args: &Value) -> ToolResult<Value> {
+        let patch = args
+            .get("patch")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ToolError::invalid("`patch` is required"))?
+            .to_owned();
+        let planned = self
+            .blocking(move |this| files::plan_patch(&this.workspace, &this.ledger, &patch))
+            .await?;
+        let typed: Vec<WsPath> = planned.iter().map(|change| change.typed.clone()).collect();
+        let targets: Vec<WsPath> = planned.iter().map(|change| change.path.clone()).collect();
+        self.authorize_changes(
+            call_id,
+            ToolKind::ApplyPatch,
+            &typed,
+            &targets,
+            "apply a patch",
+        )
+        .await?;
+        let changed: Vec<lsp::Changed> = planned
+            .iter()
+            .map(|change| lsp::Changed {
+                path: change.path.clone(),
+                deleted: change.content.is_none(),
+            })
+            .collect();
+        let (value, before) = self
+            .blocking(move |this| {
+                for change in &planned {
+                    this.unchanged_target(&change.path)?;
+                }
+                let before = this.lsp.before(&this.workspace, &targets);
+                Ok((
+                    files::apply_patch(&this.workspace, &this.ledger, &planned)?,
+                    before,
+                ))
+            })
+            .await?;
+        Ok(self.with_diagnostics(value, before, changed).await)
+    }
+
     /// `edit_file` and `multi_edit`: one path, the same approval row.
     async fn edit_file(
         self: &Arc<Self>,
@@ -1305,14 +1416,52 @@ impl LocalSession {
         self.authorize_change(call_id, ToolKind::EditFile, &typed, &target, "edit a file")
             .await?;
         edit.set_path(target.display_string());
-        self.blocking(move |this| {
-            this.unchanged_target(&target)?;
-            match &edit {
-                EditCall::One(args) => files::edit(&this.workspace, &this.ledger, args),
-                EditCall::Many(args) => files::multi_edit(&this.workspace, &this.ledger, args),
-            }
-        })
-        .await
+        let changed = vec![lsp::Changed {
+            path: target.clone(),
+            deleted: false,
+        }];
+        let (value, before) = self
+            .blocking(move |this| {
+                this.unchanged_target(&target)?;
+                let before = this.lsp.before(&this.workspace, &[target]);
+                let value = match &edit {
+                    EditCall::One(args) => files::edit(&this.workspace, &this.ledger, args),
+                    EditCall::Many(args) => files::multi_edit(&this.workspace, &this.ledger, args),
+                }?;
+                Ok((value, before))
+            })
+            .await?;
+        Ok(self.with_diagnostics(value, before, changed).await)
+    }
+
+    /// An edit's result with the language servers' `diagnostics` added
+    /// (#1236): an additive field, absent when there is nothing to say.
+    /// Diagnostics never fail the edit.
+    async fn with_diagnostics(
+        self: &Arc<Self>,
+        mut value: Value,
+        before: lsp::Before,
+        changed: Vec<lsp::Changed>,
+    ) -> Value {
+        if let Some(diagnostics) = self.lsp.after(self, before, changed).await
+            && let Value::Object(map) = &mut value
+        {
+            map.insert("diagnostics".to_owned(), diagnostics);
+        }
+        value
+    }
+
+    /// `diagnostics` (#1236): read-only, allowed by default.
+    async fn diagnostics(self: &Arc<Self>, call_id: &str, args: Value) -> ToolResult<Value> {
+        let args: lsp::DiagnosticsArgs = parse(args)?;
+        let mut call = ToolCall::new(ToolKind::Diagnostics);
+        if let Some(path) = &args.path {
+            call.paths = vec![self.workspace.resolve(path, Intent::Read)?.display_string()];
+        }
+        self.authorize(call_id, call, "diagnostics").await?;
+        self.lsp
+            .tool(self, &args, budget::bytes(self.budgets.search))
+            .await
     }
 
     /// `read_output`: no path, the id names one of this session's outputs.
@@ -1390,11 +1539,15 @@ impl LocalSession {
         call: ToolCall,
         message: &str,
     ) -> ToolResult<()> {
+        let mut payload = json!({ PAYLOAD_KEY: call });
+        if let Some(asked) = self.hook_ask(call_id) {
+            payload[crate::approvals::HOOK_ASK_PAYLOAD_KEY] = asked;
+        }
         let request = ApprovalRequest {
             subject: call_id.to_owned(),
             message: message.to_owned(),
             available_actions: vec!["approve".to_owned(), "reject".to_owned()],
-            payload: json!({ PAYLOAD_KEY: call }),
+            payload,
         };
         let outcome = self
             .approvals

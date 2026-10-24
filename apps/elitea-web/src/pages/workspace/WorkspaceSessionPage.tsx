@@ -25,6 +25,7 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
 import { approval, plan, readThreads, threadsQueryKey, useWorkspaceIpc } from '@/features/workspace';
+import { HooksProposals } from '@/features/workspace-hooks';
 import { useHasIndexHost } from '@/features/workspace-index';
 import { McpProposals } from '@/features/workspace-mcp';
 import type { Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
@@ -130,6 +131,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
               )}
               <ForkNotices fork={forking} ipc={ipc} />
               <McpProposals workspaceId={workspace.id} />
+              <HooksProposals workspaceId={workspace.id} />
               <EarlierTurns history={session.history} shown={session.shown} onFork={forking.onFork} />
               <Exchanges turn={turn} prompts={session.prompts} promptImages={session.promptImages} onFork={forking.onFork} />
               <approval.Dialog request={continueRequest} queued={0} onRespond={session.answer} />
