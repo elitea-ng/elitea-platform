@@ -22,7 +22,15 @@
  * If the host copy fails after the server fork, the new thread still opens
  * (its messages are on the server) and the notice says the local history
  * was not copied. The notice is handed to the new thread's session, which
- * mounts fresh after the navigation (`useForkNotice`).
+ * mounts fresh after the navigation (`useForkNotice`). When the fork point is
+ * a recorded turn, the notice offers to restore the folder's files to that
+ * point (`ForkRestoreFiles`): a dry run first, then only on confirmation.
+ *
+ * "Rewind to here" (issue 1234) is the same fork with `mode: 'rewind'`: the
+ * server records a summary of the abandoned turns on the new conversation,
+ * which the agent's next turn sees after the fork point. The new thread
+ * takes the source's place in the folder's list, and the source is listed
+ * under it as the earlier attempt; nothing is deleted.
  */
 import { useEffect, useState } from 'react';
 
@@ -36,6 +44,9 @@ import { forkConversation, getListConversationsQueryKey } from '@/shared/api/gen
 import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
+/** A plain fork, or a rewind (the abandoned turns are summarised on the new conversation). */
+export type ForkMode = 'fork' | 'rewind';
+
 /** Where to fork: nothing is the whole thread. */
 export interface ForkPoint {
   /** The server message the fork ends with (a message group UUID or id). */
@@ -47,6 +58,8 @@ export interface ForkPoint {
 interface ForkNotice {
   severity: 'success' | 'warning';
   text: string;
+  /** The recorded fork point turn: the notice offers to restore the folder's files to it. */
+  restoreTo?: string;
 }
 
 /** The notices for threads a fork just opened, by conversation id: read once by the new thread's session. */
@@ -73,22 +86,35 @@ export interface ForkThreadInput {
 }
 
 interface ForkThread {
-  /** Fork at `point`, or the whole thread. Never rejects: a failure is `error`. */
-  fork: (point?: ForkPoint) => Promise<void>;
+  /** Fork (or rewind) at `point`, or fork the whole thread. Never rejects: a failure is `error`. */
+  fork: (point?: ForkPoint, mode?: ForkMode) => Promise<void>;
   pending: boolean;
   /** Why the last fork did not happen. */
   error: string | null;
   clearError: () => void;
 }
 
+/** The refusal a failed fork answered: its status and the server's `error` code. */
+function forkRefusal(error: unknown): { status: number; code: unknown } | undefined {
+  if (!(error instanceof EliteaApiError) || error.failure.kind !== 'http') return undefined;
+  return { status: error.failure.status, code: (error.failure.body as { error?: unknown } | undefined)?.error };
+}
+
 function describeForkFailure(error: unknown): string {
-  if (error instanceof EliteaApiError && error.failure.kind === 'http' && error.failure.status === 409) {
-    return t('workspace.fork.unsettled', 'This thread cannot be forked there yet: a turn is still running or waits for an approval.');
+  const refusal = forkRefusal(error);
+  if (refusal?.status === 409 && refusal.code === 'thread_executor_is_cloud') {
+    return t('workspace.fork.inCloud', 'This thread is running in the cloud. Take it back to this computer, then fork it.');
   }
-  if (error instanceof EliteaApiError && error.failure.kind === 'http' && error.failure.status === 404) {
-    return t('workspace.fork.notFound', 'This thread or message is no longer there.');
+  switch (refusal?.status ?? 0) {
+    case 413:
+      return t('workspace.fork.tooLarge', 'This thread is too long to fork there. Fork from an earlier message.');
+    case 409:
+      return t('workspace.fork.unsettled', 'This thread cannot be forked there yet: a turn is still running or waits for an approval.');
+    case 404:
+      return t('workspace.fork.notFound', 'This thread or message is no longer there.');
+    default:
+      return t('workspace.fork.failed', 'The thread could not be forked. Try again.');
   }
-  return t('workspace.fork.failed', 'The thread could not be forked. Try again.');
 }
 
 interface Created {
@@ -99,9 +125,10 @@ interface Created {
   messageIds: Readonly<Record<string, string>>;
 }
 
-/** The server half: the new conversation, or a throw. */
-async function forkOnServer(projectId: number, conversationId: string, point: ForkPoint | undefined): Promise<Created> {
-  const response = await forkConversation(String(projectId), conversationId, point === undefined ? {} : { message_id: point.messageId });
+/** The server half: the new conversation, or a throw. `fork_id` makes a resent request answer the same fork. */
+async function forkOnServer(projectId: number, conversationId: string, point: ForkPoint | undefined, mode: ForkMode): Promise<Created> {
+  const body = point === undefined ? {} : { message_id: point.messageId, ...(mode === 'rewind' ? { mode } : {}), fork_id: crypto.randomUUID() };
+  const response = await forkConversation(String(projectId), conversationId, body);
   if (response.status !== 201) throw new Error(`the fork answered ${String(response.status)}`);
   const row = response.data;
   if (row.uuid === undefined || row.uuid === '') throw new Error('the fork answered without a uuid');
@@ -132,32 +159,36 @@ function useForkThread({ ipc, workspaceId, projectId, conversationId }: ForkThre
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fork = async (point?: ForkPoint): Promise<void> => {
+  const fork = async (point?: ForkPoint, mode: ForkMode = 'fork'): Promise<void> => {
     if (conversationId === '' || pending) return;
     setPending(true);
     setError(null);
     let created: Created;
     try {
-      created = await forkOnServer(projectId, conversationId, point);
+      created = await forkOnServer(projectId, conversationId, point, mode);
     } catch (cause: unknown) {
       setError(describeForkFailure(cause));
       setPending(false);
       return;
     }
     const copied = await copyLocalTurns(ipc, workspaceId, conversationId, created, point);
-    recordThread(workspaceId, { id: created.id, title: created.name, updatedAt: Date.now() });
+    recordThread(workspaceId, { id: created.id, title: created.name, updatedAt: Date.now() }, mode === 'rewind' && point !== undefined ? conversationId : undefined);
     rememberThreadUuid(workspaceId, created.id, created.uuid);
     void queryClient.invalidateQueries({ queryKey: threadsQueryKey(workspaceId) });
     void queryClient.invalidateQueries({ queryKey: getListConversationsQueryKey(String(projectId)).slice(0, 1) });
-    notices.set(
-      created.id,
-      copied
-        ? { severity: 'success', text: t('workspace.fork.done', 'Forked into a new thread. Files stay as they are now.') }
+    const done =
+      mode === 'rewind'
+        ? t('workspace.fork.rewound', 'Rewound: this thread goes on from that turn, and the earlier attempt is listed under it. Files stay as they are now.')
+        : t('workspace.fork.done', 'Forked into a new thread. Files stay as they are now.');
+    notices.set(created.id, {
+      ...(copied
+        ? { severity: 'success', text: done }
         : {
             severity: 'warning',
             text: t('workspace.fork.localFailed', 'Forked into a new thread, but the tool history on this computer was not copied. Files stay as they are now.'),
-          },
-    );
+          }),
+      ...(point?.turnId === undefined ? {} : { restoreTo: point.turnId }),
+    });
     setPending(false);
     void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId }, search: { conversation: created.id } });
   };
@@ -166,8 +197,8 @@ function useForkThread({ ipc, workspaceId, projectId, conversationId }: ForkThre
 }
 
 export interface SessionFork extends Pick<ForkThread, 'error' | 'clearError'> {
-  /** "Fork from here" on a message; `undefined` while it is not offered (a fork runs, or the thread is in the cloud). */
-  onFork: ((point: ForkPoint) => void) | undefined;
+  /** "Fork from here" / "Rewind to here" on a message; `undefined` while it is not offered (a fork runs, or the thread is in the cloud). */
+  onFork: ((point: ForkPoint, mode: ForkMode) => void) | undefined;
   /** ⋯ ▸ Fork Thread; `undefined` while the thread is in the cloud. */
   onForkThread: (() => void) | undefined;
   /** What the fork that opened this thread copied. */
@@ -181,7 +212,7 @@ export function useSessionFork(input: ForkThreadInput & { offLaptop: boolean }):
   const [notice, dismissNotice] = useForkNotice(input.conversationId);
   const offered = !input.offLaptop;
   return {
-    onFork: offered && !forking.pending ? (point) => void forking.fork(point) : undefined,
+    onFork: offered && !forking.pending ? (point, mode) => void forking.fork(point, mode) : undefined,
     onForkThread: offered ? () => void forking.fork() : undefined,
     notice,
     dismissNotice,

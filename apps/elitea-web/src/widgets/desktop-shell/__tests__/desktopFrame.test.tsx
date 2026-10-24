@@ -94,6 +94,19 @@ describe('DesktopFrame sidebar', () => {
     expect(within(folders[0] as HTMLElement).queryAllByTestId('shell-thread')).toHaveLength(0);
   });
 
+  it('lists a rewound thread\'s earlier attempts under it, even after the rewound thread moved up', async () => {
+    recordThread('w1', { id: '77', title: 'fix the build', updatedAt: 1 });
+    recordThread('w1', { id: '78', title: 'quick overview', updatedAt: 2 });
+    recordThread('w1', { id: '88', title: 'fix the build (fork)', updatedAt: 3 }, '77');
+    recordThread('w1', { id: '78', title: 'quick overview', updatedAt: 4 });
+    recordThread('w1', { id: '88', title: 'fix the build (fork)', updatedAt: 5 });
+    mount();
+
+    const folders = await screen.findAllByTestId('shell-folder');
+    const threads = await within(folders[0] as HTMLElement).findAllByTestId('shell-thread');
+    expect(threads.map((thread) => thread.textContent)).toEqual(['fix the build (fork)', 'Earlier attempt: fix the build', 'quick overview']);
+  });
+
   it('badges a thread that runs in the cloud or is on its way back, and no other', async () => {
     recordThread('w1', { id: '77', title: 'fix the build', updatedAt: 1 });
     recordThread('w1', { id: '78', title: 'quick overview', updatedAt: 2 });

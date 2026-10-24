@@ -37,6 +37,7 @@ fn main() {
             "session_info",
             "checkpoint_restore",
             "checkpoint_preview",
+            "checkpoint_after",
             "reveal_path",
             "open_path",
             "attachment_add",

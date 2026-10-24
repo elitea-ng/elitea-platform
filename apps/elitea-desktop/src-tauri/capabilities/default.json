@@ -37,6 +37,7 @@
     "allow-session-info",
     "allow-checkpoint-restore",
     "allow-checkpoint-preview",
+    "allow-checkpoint-after",
     "allow-reveal-path",
     "allow-open-path",
     "allow-attachment-add",

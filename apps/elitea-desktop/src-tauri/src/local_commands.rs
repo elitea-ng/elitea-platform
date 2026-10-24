@@ -1002,6 +1002,24 @@ pub async fn checkpoint_restore(
     Ok(Restored { restored })
 }
 
+#[derive(Serialize)]
+pub struct RestorePoint {
+    turn_id: Option<String>,
+}
+
+/// The turn whose checkpoint is the folder as `turn_id` left it (the
+/// first later turn of its workspace that changed files and stands), or
+/// `null` when no later turn changed the folder.
+#[tauri::command(rename_all = "snake_case")]
+pub fn checkpoint_after(
+    state: State<'_, LocalState>,
+    turn_id: String,
+) -> Result<RestorePoint, IpcError> {
+    Ok(RestorePoint {
+        turn_id: state.agents.restore_point_after(&turn_id)?,
+    })
+}
+
 /// What restoring the folder to before a turn would write back and
 /// delete now (later turns' changes and the person's own edits included).
 #[tauri::command(rename_all = "snake_case")]

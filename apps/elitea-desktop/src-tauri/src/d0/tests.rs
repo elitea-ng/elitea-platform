@@ -2909,6 +2909,38 @@ async fn undo_is_for_the_newest_turn_and_an_older_one_restores_the_folder_only_w
 }
 
 #[tokio::test]
+async fn fork_restore_point_is_the_next_writing_turn_and_restores_only_when_confirmed() {
+    let h = harness(writing_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let first = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h, &first.turn_id).await;
+    let second = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h, &second.turn_id).await;
+    let folder = h.folder.path();
+    // The folder as the first turn left it is the second turn's checkpoint.
+    assert_eq!(
+        h.host
+            .restore_point_after(&first.turn_id)
+            .unwrap()
+            .as_deref(),
+        Some(second.turn_id.as_str())
+    );
+    // Nothing changed the folder after the newest turn.
+    assert_eq!(h.host.restore_point_after(&second.turn_id).unwrap(), None);
+    assert_eq!(
+        h.host.restore_point_after("nope").unwrap_err().code,
+        "turn_unknown"
+    );
+    // A fork's restore is the older turn's: previewed, then confirmed.
+    let preview = h.host.restore_preview(&second.turn_id).unwrap();
+    assert_eq!(preview.deleted, ["turn1.txt"]);
+    assert_eq!(files_in(folder), ["turn0.txt", "turn1.txt"]);
+    h.host.restore(&second.turn_id, None, true).unwrap();
+    assert_eq!(files_in(folder), ["turn0.txt"]);
+    // An undone turn is no restore point any more.
+    assert_eq!(h.host.restore_point_after(&first.turn_id).unwrap(), None);
+}
+
+#[tokio::test]
 async fn a_restore_runs_on_the_current_session_and_refuses_a_checkpoint_it_cannot_reach() {
     let h = harness(writing_platform().await, allowed(), UiDecision::AllowOnce).await;
     let first = h.host.start(request(&h.workspace_id)).await.unwrap();

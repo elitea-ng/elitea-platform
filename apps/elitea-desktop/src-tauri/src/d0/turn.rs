@@ -764,6 +764,26 @@ impl TurnTable {
         }
     }
 
+    /// The first turn after `turn_id` in its workspace that changed files
+    /// and was not undone: restoring the folder to before it puts the
+    /// folder back as `turn_id` left it. `None`: no later turn changed it.
+    fn first_writer_after(&self, turn_id: &str) -> Result<Option<String>, TurnError> {
+        let workspace_id = self.get(turn_id)?.workspace_id.clone();
+        Ok(self
+            .order
+            .iter()
+            .skip_while(|id| *id != turn_id)
+            .skip(1)
+            .find(|id| {
+                self.entries.get(*id).is_some_and(|entry| {
+                    entry.workspace_id == workspace_id
+                        && entry.changed_files()
+                        && !entry.is_undone()
+                })
+            })
+            .cloned())
+    }
+
     /// Forget every turn of a removed workspace.
     fn forget_workspace(&mut self, workspace_id: &str) {
         self.entries
@@ -3898,6 +3918,23 @@ impl AgentHost {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .latest_undoable(&entry.workspace_id)
             == Some(turn_id)
+    }
+
+    /// `checkpoint_after`: the turn whose checkpoint is the folder as
+    /// `turn_id` left it, the first later turn of the workspace (any
+    /// thread) that changed files and was not undone; `None` when none did.
+    /// A fork at `turn_id` offers to restore the folder to before it
+    /// (`checkpoint_preview`, then `checkpoint_restore` with
+    /// `confirm_older`).
+    ///
+    /// # Errors
+    ///
+    /// `turn_unknown` / `turn_expired` for a turn the host does not keep.
+    pub fn restore_point_after(&self, turn_id: &str) -> Result<Option<String>, TurnError> {
+        self.turns
+            .lock()
+            .map_err(|_| TurnError::new("internal", "turn table poisoned"))?
+            .first_writer_after(turn_id)
     }
 
     /// `checkpoint_preview`: what restoring the folder to before the turn

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-checkpoint-after"
+description = "Enables the checkpoint_after command without any pre-configured scope."
+commands.allow = ["checkpoint_after"]
+
+[[permission]]
+identifier = "deny-checkpoint-after"
+description = "Denies the checkpoint_after command without any pre-configured scope."
+commands.deny = ["checkpoint_after"]

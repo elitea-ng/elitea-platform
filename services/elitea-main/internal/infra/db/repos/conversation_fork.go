@@ -53,6 +53,15 @@ package repos
 // object that another conversation's row still names
 // (collectConversationAttachments, collectGroupAttachments).
 //
+// REWIND AND REPLAY (issue 1234, conversation_fork_rewind.go). The marker
+// also records the mode, the client's fork_id, a rewind's branch summary
+// and, once the groups are copied, the copy's UUID of the fork point
+// (cut_message_uuid). A fork_id seen before answers its fork, read again
+// under an advisory lock on the key inside the transaction. A Local work
+// source the cloud executor owns is refused, under the handoff's own lock.
+// A plan of more than maxForkGroups groups is refused before anything is
+// copied.
+//
 // SYNC. The copy runs with `elitea.sync_cascade = conversation`, as Delete
 // does: the per-row parent bumps are skipped. The new rows are stamped by
 // their own BEFORE triggers, and the new conversation is stamped last, so
@@ -158,6 +167,11 @@ func (r *ConversationsRepo) ForkConversation(ctx context.Context, projectID, con
 	if err != nil {
 		return conversations.ForkResult{}, err
 	}
+	if request.ForkID != "" {
+		if replay, found, err := replayFork(ctx, r.pool, s, access.ActorID, request, plan); found || err != nil {
+			return replay, err
+		}
+	}
 	copiedObjects := map[conversations.AttachmentCopy]bool{}
 	copyObjects := func(copies []conversations.AttachmentCopy) error {
 		var pending []conversations.AttachmentCopy
@@ -193,12 +207,28 @@ func (r *ConversationsRepo) ForkConversation(ctx context.Context, projectID, con
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if request.ForkID != "" {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`,
+			"elitea.conversation_fork:"+projectID+":"+request.ForkID); err != nil {
+			return conversations.ForkResult{}, fmt.Errorf("conversations: fork: lock fork_id: %w", err)
+		}
+	}
 	// The plan again, under the locks the copy relies on.
 	plan, err = readForkPlan(ctx, tx, s, identity, access, conversationID, request.MessageID, true)
 	if err != nil {
 		return conversations.ForkResult{}, err
 	}
 	src, point, groups := plan.src, plan.point, plan.groups
+	if request.ForkID != "" {
+		// A retry that raced this one: its fork stands, and the objects
+		// this one copied are the handler's to delete.
+		if replay, found, err := replayFork(ctx, tx, s, access.ActorID, request, plan); found || err != nil {
+			return replay, err
+		}
+	}
+	if err := refuseForkWhileHandedOff(ctx, tx, projectID, src); err != nil {
+		return conversations.ForkResult{}, err
+	}
 	if tables["chat_messages_attachment"] != nil && len(groups) > 0 && request.CopyAttachments != nil {
 		copies, err := forkAttachmentCopies(ctx, tx, s, groups, src.uuid, newUUID)
 		if err != nil {
@@ -219,7 +249,11 @@ func (r *ConversationsRepo) ForkConversation(ctx context.Context, projectID, con
 	if request.MessageID == "" {
 		marked = nil
 	}
-	meta, err := forkMeta(src, marked)
+	options, err := forkMarkerExtras(ctx, tx, s, tables, request, plan)
+	if err != nil {
+		return conversations.ForkResult{}, err
+	}
+	meta, err := forkMeta(src, marked, options)
 	if err != nil {
 		return conversations.ForkResult{}, err
 	}
@@ -248,8 +282,16 @@ func (r *ConversationsRepo) ForkConversation(ctx context.Context, projectID, con
 		}
 	}
 
-	// The newest stamp of the copy goes on the conversation (chat_sync_stamp).
-	if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.chat_conversations SET updated_at = updated_at WHERE id = $1`, s), newID); err != nil {
+	// The newest stamp of the copy goes on the conversation (chat_sync_stamp),
+	// with the copy's UUID of the fork point on the marker.
+	cut := ""
+	if marked != nil {
+		cut = messageUUIDs[marked.uuid]
+	}
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.chat_conversations SET updated_at = updated_at,
+		meta = CASE WHEN $2::text = '' THEN meta
+		            ELSE jsonb_set(meta, '{%s,cut_message_uuid}', to_jsonb($2::text)) END
+		WHERE id = $1`, s, conversations.ForkedFromMetaKey), newID, cut); err != nil {
 		return conversations.ForkResult{}, fmt.Errorf("conversations: fork: stamp: %w", err)
 	}
 	// The fork starts read for the forker (client contract 1.12): the copied
@@ -295,6 +337,9 @@ func readForkPlan(ctx context.Context, q forkQuerier, s, identity string, access
 	if plan.point != nil {
 		if plan.groups, err = forkGroups(ctx, q, s, src.id, plan.point); err != nil {
 			return forkPlan{}, err
+		}
+		if len(plan.groups) > maxForkGroups {
+			return forkPlan{}, conversations.ErrForkTooLarge
 		}
 	}
 	return plan, nil
@@ -443,7 +488,7 @@ func forkAttachmentCopies(ctx context.Context, q forkQuerier, s string, groups [
 // forkMeta is the source meta with the server's fork marker, without the
 // conversation-scoped upload listing (the copied items carry the
 // attachments) and without an earlier marker.
-func forkMeta(src forkSource, point *forkPoint) ([]byte, error) {
+func forkMeta(src forkSource, point *forkPoint, options map[string]any) ([]byte, error) {
 	meta := map[string]any{}
 	if len(src.meta) > 0 {
 		if err := json.Unmarshal(src.meta, &meta); err != nil || meta == nil {
@@ -455,6 +500,9 @@ func forkMeta(src forkSource, point *forkPoint) ([]byte, error) {
 	if point != nil {
 		marker["message_id"] = point.id
 		marker["message_uuid"] = point.uuid
+	}
+	for key, value := range options {
+		marker[key] = value
 	}
 	meta[conversations.ForkedFromMetaKey] = marker
 	encoded, err := json.Marshal(meta)

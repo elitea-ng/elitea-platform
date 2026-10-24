@@ -443,6 +443,7 @@ pub fn run() {
             local_commands::session_info,
             local_commands::checkpoint_restore,
             local_commands::checkpoint_preview,
+            local_commands::checkpoint_after,
             local_commands::reveal_path,
             local_commands::open_path,
             process_commands::process_list,
