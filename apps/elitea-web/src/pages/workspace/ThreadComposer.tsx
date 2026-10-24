@@ -14,7 +14,8 @@
  * lazy: the latest turn's tokens, the thread's, a cost only from the
  * catalogue's price, #1227); `/compact` marks the next send. Beside them the
  * language-server chip (`LspChip`, lazy, #1236): the servers behind the
- * edits' diagnostics.
+ * edits' diagnostics, and the step-limit chip (`StepsChip`, lazy): the
+ * model steps each run here may take (`/steps` sets the same).
  * `/retry` sends the last message again and `/steps` shows or sets the
  * folder's step limit (`useRetryAndSteps`).
  * And the model chip (`ModelChip`, `useTurnModel`): the model the next turn
@@ -53,6 +54,7 @@ import { WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceCompo
 const ContextMeter = lazy(() => import('./ContextMeter'));
 const UsageChip = lazy(() => import('./UsageChip'));
 const LspChip = lazy(() => import('./LspChip'));
+const StepsChip = lazy(() => import('./StepsChip'));
 
 export interface ThreadComposerProps {
   ipc: WorkspaceIpc;
@@ -133,15 +135,18 @@ interface ComposerMetersProps {
   usages: NonNullable<Usage>[];
   projectId: number;
   workspaceId: string;
-  /** A local thread: the folder's language-server chip shows (not for the cloud copy). */
+  /** A local thread: the folder's language-server and step-limit chips show (not for the cloud copy). */
   local: boolean;
+  /** The step-limit chip could not store a choice: said above the composer. */
+  onStepsError: (message: string) => void;
 }
 
-/** The footer's language-server chip, context meter and usage chip (all lazy); the meters once a model call reported either. */
-function ComposerMeters({ meter, usages, projectId, workspaceId, local }: ComposerMetersProps): React.JSX.Element | null {
+/** The footer's step-limit and language-server chips, context meter and usage chip (all lazy); the meters once a model call reported either. */
+function ComposerMeters({ meter, usages, projectId, workspaceId, local, onStepsError }: ComposerMetersProps): React.JSX.Element | null {
   if (meter === undefined && usages.length === 0 && !local) return null;
   return (
     <Suspense fallback={null}>
+      {local ? <StepsChip workspaceId={workspaceId} onError={onStepsError} /> : null}
       {local ? <LspChip workspaceId={workspaceId} /> : null}
       {meter === undefined ? null : <ContextMeter meter={meter} />}
       {usages.length === 0 ? null : <UsageChip turns={usages} projectId={projectId} />}
@@ -211,7 +216,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} disabledHint={agentHint} />}
         {...modelBinding(model, !local, commands.modelRef)}
         runLocation={<RunLocationChip handoff={handoff} onOpenInChat={openInChat} />}
-        contextMeter={<ComposerMeters meter={meter} usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} />}
+        contextMeter={<ComposerMeters meter={meter} usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} onStepsError={commands.showSteps} />}
         onPlanModeChange={commands.setPlanMode}
         skills={offered}
         customCommands={customCommands}

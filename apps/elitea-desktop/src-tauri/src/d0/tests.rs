@@ -1197,6 +1197,35 @@ async fn a_cut_model_stream_is_retried() {
     assert_eq!(commits[0]["assistant_message"]["content"], "Whole answer.");
 }
 
+/// A 429's `Retry-After` is kept when it asks for longer than the backoff
+/// (capped: 20 ms in tests, 120 s in the app).
+#[tokio::test]
+async fn a_rate_limit_waits_as_long_as_the_gateway_asks() {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                let mut res = Res::json(429, &json!({"error": {"message": "slow down"}}));
+                res.headers.push(("Retry-After", "7".into()));
+                return res;
+            }
+            return say("Done.");
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let retries = of_kind(&events, "model_retry");
+    assert_eq!(retries.len(), 1);
+    assert_eq!(retries[0]["code"], "model_gateway.rate_limited");
+    // 7 s asked, capped at the test's 20 ms: longer than the 1 ms backoff.
+    assert_eq!(retries[0]["delay_ms"], 20);
+    assert!(of_kind(&events, "error").is_empty());
+}
+
 /// After 25 retries the turn fails, and its error names `/retry`.
 #[tokio::test]
 async fn a_model_call_gives_up_after_25_retries() {

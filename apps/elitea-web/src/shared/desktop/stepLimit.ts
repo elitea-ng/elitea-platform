@@ -8,6 +8,9 @@ import { tauriInvoke } from './hostBridge';
 
 export type StepLimit = number | 'unlimited';
 
+/** No step limit. */
+export const UNLIMITED: StepLimit = 'unlimited';
+
 /** The steps of a run when the workspace sets none (the host's `DEFAULT_STEP_LIMIT`). */
 export const DEFAULT_STEP_LIMIT = 1024;
 
@@ -28,10 +31,22 @@ export async function readStepLimit(workspaceId: string): Promise<StepLimit | nu
   return settings.step_limit ?? null;
 }
 
+type Listener = (workspaceId: string, limit: StepLimit | null) => void;
+
+const listeners = new Set<Listener>();
+
+/** Called with each limit stored here (the composer's chip and `/steps` stay in step); returns the unsubscribe. */
+export function onStepLimitChange(listener: Listener): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
 /** Store the workspace's step limit (`null`: back to the default), keeping its other settings; the next turn uses it. */
 export async function writeStepLimit(workspaceId: string, limit: StepLimit | null): Promise<StepLimit | null> {
   const invoke = host();
   const settings = await invoke<AgentSettings>('workspace_agent_settings_get', { id: workspaceId });
   const saved = await invoke<AgentSettings>('workspace_agent_settings_set', { id: workspaceId, settings: { ...settings, step_limit: limit } });
-  return saved.step_limit ?? null;
+  const stored = saved.step_limit ?? null;
+  for (const listener of listeners) listener(workspaceId, stored);
+  return stored;
 }

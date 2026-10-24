@@ -75,7 +75,9 @@ pub struct GatewayTransport {
     pub execution_id: String,
     pub events: Arc<TurnEvents>,
     /// A model bound to report nothing to the webview (no text deltas, no
-    /// usage, no first-token time): the summary model of a compaction.
+    /// usage, no first-token time): the summary model of a compaction. Its
+    /// retries are still reported (`model_retry`, nothing to drop), so a
+    /// turn that waits on one does not look frozen.
     pub quiet: bool,
     /// Where each model step's reasoning is recorded for the commit (not
     /// for a quiet model).
@@ -231,8 +233,9 @@ impl Llm for GatewayModel {
                 Err(failure) => failure,
             };
             let Some(code) = failure.retry else {
-                return Err(failure.error);
+                return Err(*failure.error);
             };
+            let asked = failure.wait;
             if retries >= MODEL_RETRIES {
                 log::warn!(
                     "model call of execution {} failed ({code}) after {MODEL_RETRIES} retries",
@@ -241,22 +244,25 @@ impl Llm for GatewayModel {
                 return Err(model_error(code, &gave_up()));
             }
             retries += 1;
-            let delay = retry_delay(retries);
+            // The gateway's `Retry-After` when it names a longer wait.
+            let delay = asked.map_or_else(
+                || retry_delay(retries),
+                |asked| retry_delay(retries).max(asked.min(MAX_RETRY_AFTER)),
+            );
             log::info!(
                 "model call of execution {} failed ({code}); retry {retries} of {MODEL_RETRIES} in {} ms",
                 self.execution_id,
                 delay.as_millis()
             );
-            if !self.quiet {
-                self.events.model_retry(&ModelRetry {
-                    attempt: retries,
-                    max_attempts: MODEL_RETRIES,
-                    code,
-                    delay,
-                    text_units: reader.text_units(),
-                    thinking_units: reader.thinking_units(),
-                });
-            }
+            // A quiet model streamed nothing to the webview: its units are 0.
+            self.events.model_retry(&ModelRetry {
+                attempt: retries,
+                max_attempts: MODEL_RETRIES,
+                code,
+                delay,
+                text_units: reader.text_units(),
+                thinking_units: reader.thinking_units(),
+            });
             tokio::time::sleep(delay).await;
         };
         // Counted whoever called (a summary, a sub-agent): the turn's total
@@ -323,6 +329,7 @@ impl GatewayModel {
         };
         let status = response.status().as_u16();
         if !(200..300).contains(&status) {
+            let wait = retry_after(response.headers());
             let body = tokio::time::timeout(super::api::API_TIMEOUT, response.bytes())
                 .await
                 .ok()
@@ -337,8 +344,9 @@ impl GatewayModel {
             return Err(
                 if code != CONTEXT_LENGTH_EXCEEDED && retryable_status(status) {
                     CallFailure {
-                        error,
+                        error: Box::new(error),
                         retry: Some(code),
+                        wait,
                     }
                 } else {
                     CallFailure::fatal(error)
@@ -350,6 +358,10 @@ impl GatewayModel {
             let chunk = match tokio::time::timeout(STREAM_IDLE_TIMEOUT, bytes.next()).await {
                 Ok(Some(Ok(chunk))) => chunk,
                 Ok(None) => return Ok(()),
+                // The answer already came whole (its finish reason): only the
+                // `[DONE]` or the last bytes were lost. Keep it rather than
+                // generate (and bill) it again.
+                Ok(Some(Err(_))) | Err(_) if reader.has_finish() => return Ok(()),
                 Ok(Some(Err(_))) => {
                     return Err(CallFailure::retry(INCOMPLETE_STREAM, CUT_OFF));
                 }
@@ -402,6 +414,24 @@ fn gave_up() -> String {
     format!("the model call failed {MODEL_RETRIES} more times; send /retry to try again")
 }
 
+/// The longest `Retry-After` wait the host keeps.
+#[cfg(not(test))]
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(120);
+#[cfg(test)]
+const MAX_RETRY_AFTER: Duration = Duration::from_millis(20);
+
+/// A refusal's `Retry-After` in whole seconds (an HTTP date is not read).
+fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_secs)
+}
+
 /// The wait before retry `retry` (from 1).
 fn retry_delay(retry: u32) -> Duration {
     let factor = 1_u32 << retry.saturating_sub(1).min(16);
@@ -413,20 +443,28 @@ fn retry_delay(retry: u32) -> Duration {
 /// Why one call failed.
 #[derive(Debug)]
 struct CallFailure {
-    error: AdkError,
+    /// Boxed: `AdkError` is large, and the failure is the cold path.
+    error: Box<AdkError>,
     /// The code of a failure another call may mend; `None`: final.
     retry: Option<&'static str>,
+    /// How long the gateway asked to wait (`Retry-After`).
+    wait: Option<Duration>,
 }
 
 impl CallFailure {
     fn fatal(error: AdkError) -> Self {
-        Self { error, retry: None }
+        Self {
+            error: Box::new(error),
+            retry: None,
+            wait: None,
+        }
     }
 
     fn retry(code: &'static str, message: &str) -> Self {
         Self {
-            error: model_error(code, message),
+            error: Box::new(model_error(code, message)),
             retry: Some(code),
+            wait: None,
         }
     }
 }
@@ -936,6 +974,11 @@ impl<'a> StreamReader<'a> {
         }
     }
 
+    /// The stream named its finish reason: the answer is whole.
+    fn has_finish(&self) -> bool {
+        self.finish.is_some()
+    }
+
     fn text_units(&self) -> usize {
         self.text_units
     }
@@ -1156,6 +1199,20 @@ mod tests {
         assert_eq!(waits, [1, 2, 4, 4, 4]);
         assert_eq!(retry_delay(MODEL_RETRIES), MAX_RETRY_DELAY);
         assert!(gave_up().contains("/retry"));
+    }
+
+    #[test]
+    fn retry_after_is_read_in_whole_seconds_only() {
+        let header = |value: &str| {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(reqwest::header::RETRY_AFTER, value.parse().unwrap());
+            retry_after(&headers)
+        };
+        assert_eq!(header("12"), Some(Duration::from_secs(12)));
+        assert_eq!(header(" 3 "), Some(Duration::from_secs(3)));
+        assert_eq!(header("Wed, 21 Oct 2026 07:28:00 GMT"), None);
+        assert_eq!(header("-1"), None);
+        assert_eq!(retry_after(&reqwest::header::HeaderMap::new()), None);
     }
 
     #[test]

@@ -1,7 +1,8 @@
 /**
  * `/retry` and `/steps`, run by the thread's composer.
  *
- * - `/retry` sends the person's last message here again, as it was sent (its
+ * - `/retry` (or a failed turn's Retry, `SessionCommands.retryRequest`)
+ *   sends the person's last message here again, as it was sent (its
  *   "@" references, its skills or custom command), without its images: their
  *   tokens were spent by the first send. With no message sent in this session
  *   it sends the thread's last recorded prompt. The host retries a failed
@@ -9,7 +10,7 @@
  * - `/steps` shows the folder's step limit; `/steps <number|unlimited|default>`
  *   sets it from the next message (the workspace's agent settings).
  */
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 
 import { describeWorkspaceError, type WorkspaceCommandId } from '@/features/workspace';
 import { DEFAULT_STEP_LIMIT, MAX_STEP_LIMIT, readStepLimit, writeStepLimit, type StepLimit } from '@/shared/desktop/stepLimit';
@@ -30,13 +31,13 @@ export interface SentMessage {
 export interface RetryAndSteps {
   /** Wraps the composer's send: the message is remembered for `/retry`. */
   remembering: (send: WorkspaceComposerProps['onSend']) => WorkspaceComposerProps['onSend'];
-  /** The composer's `onCommand`: `/retry` and `/steps` here, the rest to `run`. */
+  /** The composer's `onCommand`: `/steps` here, the rest (`/retry` too) to `run`. */
   onCommand: (command: WorkspaceCommandId) => void;
   onStepsCommand: (command: StepsCommand) => void;
 }
 
 function limitText(limit: StepLimit | null): string {
-  if (limit === null) return t('workspace.steps.default', 'Each run here takes up to {{steps}} model steps (the default).', { steps: String(DEFAULT_STEP_LIMIT) });
+  if (limit === null) return t('workspace.steps.default', 'Each run here takes up to {{steps}} model steps (the default), or the agent’s own limit when that is higher.', { steps: String(DEFAULT_STEP_LIMIT) });
   if (limit === 'unlimited') return t('workspace.steps.unlimited', 'Runs here have no step limit.');
   return t('workspace.steps.limit', 'Each run here takes up to {{steps}} model steps.', { steps: String(limit) });
 }
@@ -59,6 +60,15 @@ export function useRetryAndSteps(workspaceId: string, commands: SessionCommands,
     }
     void send(message.prompt, message.mentions, message.skills, message.command);
   };
+
+  // A request (`/retry`, a failed turn's Retry) is answered once; the latest
+  // `retry` is the one that sees the current send and message.
+  const latest = useRef(retry);
+  latest.current = retry;
+  const request = commands.retryRequest;
+  useEffect(() => {
+    if (request > 0) latest.current();
+  }, [request]);
 
   const showSteps = (): void => {
     readStepLimit(workspaceId).then(
@@ -85,8 +95,7 @@ export function useRetryAndSteps(workspaceId: string, commands: SessionCommands,
       return sent;
     },
     onCommand: (command) => {
-      if (command === 'retry') retry();
-      else if (command === 'steps') showSteps();
+      if (command === 'steps') showSteps();
       else run(command);
     },
     onStepsCommand,

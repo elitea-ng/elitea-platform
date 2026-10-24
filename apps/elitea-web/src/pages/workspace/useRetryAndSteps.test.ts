@@ -7,6 +7,7 @@ import { useRetryAndSteps, type SentMessage } from './useRetryAndSteps';
 
 function fakeCommands(): SessionCommands & { shown: string[]; nothing: number } {
   const fake = {
+    retryRequest: 0,
     shown: [] as string[],
     nothing: 0,
     showSteps: (text: string) => fake.shown.push(text),
@@ -33,30 +34,45 @@ describe('useRetryAndSteps', () => {
     delete (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
 
-  it('/retry sends the last message again as it was sent, and the recorded prompt before any send', async () => {
+  /** The hook under `commands` whose `retryRequest` the test bumps, as `/retry` and a failed turn's Retry do. */
+  function retrying(send: ReturnType<typeof vi.fn>, busy: boolean, recorded: SentMessage | null) {
     const commands = fakeCommands();
-    const send = vi.fn(() => Promise.resolve(true));
-    const recorded: SentMessage = { prompt: 'from history', mentions: ['a.txt'], skills: [] };
-    const { result } = renderHook(() => useRetryAndSteps('w1', commands, vi.fn(), send, false, recorded));
+    const hook = renderHook(({ request }: { request: number }) => useRetryAndSteps('w1', { ...commands, retryRequest: request }, vi.fn(), send as never, busy, recorded), { initialProps: { request: 0 } });
+    return { commands, hook, ask: (request: number) => hook.rerender({ request }) };
+  }
 
-    result.current.onCommand('retry');
+  it('a retry request sends the last message again as it was sent, and the recorded prompt before any send', async () => {
+    const send = vi.fn(() => Promise.resolve(true));
+    const { hook, ask } = retrying(send, false, { prompt: 'from history', mentions: ['a.txt'], skills: [] });
+    // Nothing is sent before a request.
+    expect(send).not.toHaveBeenCalled();
+    ask(1);
     expect(send).toHaveBeenLastCalledWith('from history', ['a.txt'], [], undefined);
 
-    await result.current.remembering(send)('/style fix it', ['b.txt'], ['style'], undefined, { picks: [{ token: 'img' }], shown: [] } as never);
-    result.current.onCommand('retry');
+    await hook.result.current.remembering(send)('/style fix it', ['b.txt'], ['style'], undefined, { picks: [{ token: 'img' }], shown: [] } as never);
+    ask(2);
     // Without its images: their tokens were spent by the first send.
     expect(send).toHaveBeenLastCalledWith('/style fix it', ['b.txt'], ['style'], undefined);
+    // A re-render with the same request sends nothing more.
+    ask(2);
+    expect(send).toHaveBeenCalledTimes(3);
   });
 
-  it('/retry says so when there is nothing to send, and waits while a turn runs', () => {
-    const commands = fakeCommands();
+  it('a retry request says so when there is nothing to send, and waits while a turn runs', () => {
     const send = vi.fn(() => Promise.resolve(true));
-    const idle = renderHook(() => useRetryAndSteps('w1', commands, vi.fn(), send, false, null));
-    idle.result.current.onCommand('retry');
-    expect(commands.nothing).toBe(1);
-    const busy = renderHook(() => useRetryAndSteps('w1', commands, vi.fn(), send, true, { prompt: 'p', mentions: [], skills: [] }));
-    busy.result.current.onCommand('retry');
+    const idle = retrying(send, false, null);
+    idle.ask(1);
+    expect(idle.commands.nothing).toBe(1);
+    const busy = retrying(send, true, { prompt: 'p', mentions: [], skills: [] });
+    busy.ask(1);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('passes /retry to the session, which turns it into a request', () => {
+    const run = vi.fn();
+    const { result } = renderHook(() => useRetryAndSteps('w1', fakeCommands(), run, vi.fn(), false, null));
+    result.current.onCommand('retry');
+    expect(run).toHaveBeenCalledWith('retry');
   });
 
   it('passes the other commands on', () => {

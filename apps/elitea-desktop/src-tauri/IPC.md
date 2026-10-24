@@ -2284,8 +2284,12 @@ times, when another call may mend it: the gateway did not answer
 (`model_gateway.unavailable`), the stream was cut off, stalled for 5
 minutes or ended before its finish reason
 (`model_gateway.incomplete_stream`), or the gateway answered 408, 409, 429
-or 5xx. It waits 1 s, then twice as long each time, at most 30 s, and sends
-`model_retry` before each wait. A refusal no call can mend (401, 402, 403,
+or 5xx. It waits 1 s, then twice as long each time, at most 30 s, or the
+refusal's `Retry-After` (whole seconds, at most 120 s) when that is
+longer, and sends `model_retry` before each wait. A summary or sub-agent
+call sends it too, with nothing to drop. A stream that already sent its
+finish reason and then loses its last bytes or `[DONE]` is kept, not
+retried. A refusal no call can mend (401, 402, 403,
 400, a too-long request, a malformed stream) is not retried. After the
 25th retry the turn fails with the last failure's code and a message that
 names `/retry`: the composer's `/retry` sends the person's last message
