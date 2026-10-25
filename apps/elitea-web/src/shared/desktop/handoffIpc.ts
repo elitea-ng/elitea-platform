@@ -166,6 +166,10 @@ export interface HandoffStatus {
   updated_at?: string;
   delete_after?: string | null;
   workspace_bytes?: number;
+  /** The server keeps the cloud turns after a take back up to turn k (until `delete_after`). */
+  rest_pending?: boolean;
+  /** How many of those turns this desktop can still take back ("Take back the remaining turns"); 0 when none. */
+  rest_turns?: number;
 }
 
 /** `handoff_reclaim`: `RECLAIMING`, or `CLOUD_RUNNING` with `reclaim_pending` while a cloud turn runs. */
@@ -217,6 +221,8 @@ export interface Preflight extends ApplyOutcome {
   cloud_turns: number;
   /** The cloud turns this preflight takes back (1-based; the latest unless one was picked). */
   up_to_turn: number;
+  /** The turns an earlier take back already took back: 0, or `k` when this takes back the remaining turns `k+1..up_to_turn`. */
+  from_turn?: number;
   /** What `handoff_apply` accepts for this outcome. */
   modes: TakeBackMode[];
   /** Per-file diffs of what the take back writes (text files only, 256 KiB of diff text at most). */
@@ -289,7 +295,8 @@ export interface HandoffIpc {
   settingsGet(workspaceId: string): Promise<HandoffSettingsAnswer>;
   /** Rejects `invalid_request` for a bad pattern, an include that escapes the folder, or a bad env name. */
   settingsSet(workspaceId: string, settings: FolderHandoffSettings): Promise<HandoffSettingsAnswer>;
-  reclaim(conversationUuid: string): Promise<ReclaimAnswer>;
+  /** `rest`: the remaining turns after a take back up to turn k (`handoff_status`'s `rest_turns`). */
+  reclaim(conversationUuid: string, options?: { rest?: boolean }): Promise<ReclaimAnswer>;
   /** `upToTurn`: take back the cloud turns up to this one (1-based); the latest when left out. */
   preflight(conversationUuid: string, upToTurn?: number): Promise<Preflight>;
   /** `upToTurn`, when given, must be the preflight's (`invalid_request` otherwise). */
@@ -342,7 +349,8 @@ export function createHandoffIpc(hostInvoke: HostInvoke, listen: ListenFn): Hand
         : (await invoke<{ statuses: Record<string, HandoffStatus> }>('handoff_status_many', { conversation_uuids: [...uuids] })).statuses,
     settingsGet: (workspaceId) => invoke<HandoffSettingsAnswer>('handoff_settings_get', { workspace_id: workspaceId }),
     settingsSet: (workspaceId, settings) => invoke<HandoffSettingsAnswer>('handoff_settings_set', { workspace_id: workspaceId, settings }),
-    reclaim: (uuid) => invoke<ReclaimAnswer>('handoff_reclaim', { conversation_uuid: uuid }),
+    reclaim: (uuid, options) =>
+      invoke<ReclaimAnswer>('handoff_reclaim', options?.rest === true ? { conversation_uuid: uuid, rest: true } : { conversation_uuid: uuid }),
     preflight: (uuid, upToTurn) =>
       invoke<Preflight>('handoff_preflight', upToTurn === undefined ? { conversation_uuid: uuid } : { conversation_uuid: uuid, up_to_turn: upToTurn }),
     apply: (preflightId, mode, upToTurn) =>

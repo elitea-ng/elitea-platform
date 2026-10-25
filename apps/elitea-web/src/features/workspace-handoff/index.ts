@@ -6,6 +6,7 @@
  * desktop shell, which are themselves reached only in the `desktop` build.
  */
 export { CloudThreadBanner } from './ui/CloudThreadBanner';
+export { RemainingTurnsBanner } from './ui/RemainingTurnsBanner';
 export { ExecutorBadge } from './ui/ExecutorBadge';
 export { EraseCloudCopyDialog } from './ui/EraseCloudCopyDialog';
 export { SendToCloudDialog } from './ui/SendToCloudDialog';

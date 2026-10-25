@@ -121,7 +121,7 @@ function Summary({ preflight }: { preflight: Preflight }): React.JSX.Element {
  * changed files (one commit): the take back writes that change's files and imports the conversation up to its answer.
  */
 function TurnPicker({ preflight, onPickTurn }: { preflight: Preflight; onPickTurn: (turn: number) => void }): React.JSX.Element | null {
-  if (preflight.cloud_turns < 2) return null;
+  if (preflight.cloud_turns < 2 || (preflight.from_turn ?? 0) > 0) return null;
   const turns = Array.from({ length: preflight.cloud_turns }, (_, index) => index + 1);
   return (
     <TextField
@@ -159,6 +159,21 @@ function TurnsAfter({ preflight }: { preflight: Preflight }): React.JSX.Element 
   );
 }
 
+/** Taking back the remaining turns: which changes, merged on top of the folder as it is now. */
+function RemainingScope({ preflight }: { preflight: Preflight }): React.JSX.Element | null {
+  const from = preflight.from_turn ?? 0;
+  if (from === 0) return null;
+  return (
+    <Alert severity="info" data-testid="takeback-remaining-scope">
+      {t(
+        'workspace.handoff.remaining.scope',
+        'Changes {{from}} to {{to}}: what the cloud changed after change {{last}}, which you took back earlier. Your folder keeps your own edits since then.',
+        { from: String(from + 1), to: String(preflight.up_to_turn), last: String(from) },
+      )}
+    </Alert>
+  );
+}
+
 /** After the take-back: where the commits of the turns not taken back are. */
 export function RestBranch({ result }: { result: ApplyResult }): React.JSX.Element | null {
   if (result.rest_branch === null || result.turns_not_taken === 0) return null;
@@ -183,6 +198,7 @@ export function Review({ preflight, confirmingDiscard, renderFiles, onPickTurn }
   return (
     <>
       <Summary preflight={preflight} />
+      <RemainingScope preflight={preflight} />
       <TurnPicker preflight={preflight} onPickTurn={onPickTurn} />
       <TurnsAfter preflight={preflight} />
       <Paths title={t('workspace.handoff.paths.conflicts', 'Changed on both sides')} paths={preflight.conflict_paths} testId="takeback-conflict-paths" />

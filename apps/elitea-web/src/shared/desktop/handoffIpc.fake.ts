@@ -113,6 +113,7 @@ export interface FakeHandoffIpc extends HandoffIpc {
     statuses: string[];
     statusManys: string[][];
     reclaims: string[];
+    reclaimRests: boolean[]; // whether each reclaim asked for the remaining turns
     preflights: string[];
     /** The turn each preflight asked for (`undefined`: the latest). */
     preflightTurns: (number | undefined)[];
@@ -187,7 +188,7 @@ export function createFakeHandoffIpc(initial: FakeInitial = {}): FakeHandoffIpc 
   const handlers = new Set<HandoffEventHandler>();
   const failures = new Map<FailableCommand, HandoffIpcError>();
   const calls: FakeHandoffIpc['calls'] = {
-    previews: [], sends: [], cancels: [], statuses: [], statusManys: [], reclaims: [],
+    previews: [], sends: [], cancels: [], statuses: [], statusManys: [], reclaims: [], reclaimRests: [],
     preflights: [], preflightTurns: [], applies: [], undos: [], erases: [], settingsGets: [], settingsSets: [],
   };
   const failure = (command: FailableCommand): Promise<never> | undefined => {
@@ -342,8 +343,9 @@ export function createFakeHandoffIpc(initial: FakeInitial = {}): FakeHandoffIpc 
       if (failed !== undefined) return failed;
       return Promise.resolve(Object.fromEntries(conversationUuids.map((uuid) => [uuid, statusOf(uuid)])));
     },
-    reclaim(conversationUuid) {
+    reclaim(conversationUuid, options) {
       calls.reclaims.push(conversationUuid);
+      calls.reclaimRests.push(options?.rest === true);
       return failure('reclaim') ?? Promise.resolve({ ...reclaim });
     },
     preflight(conversationUuid, upToTurn) {
