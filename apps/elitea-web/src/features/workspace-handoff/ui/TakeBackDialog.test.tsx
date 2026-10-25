@@ -1,13 +1,15 @@
 /**
  * Take back, driven against the in-memory host: the fast path (apply, then
- * undo), conflicts (worktree or discard), a cloud turn still running, and
- * the failures that leave the thread as it was.
+ * undo), a clean merge, conflicts (markers, worktree or discard), picking a
+ * cloud turn, a cloud turn still running, and the failures that leave the
+ * thread as it was.
  */
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ChangedFilesCard } from '@/features/workspace';
+import type { Preflight } from '@/shared/desktop/handoffIpc';
 import { createFakeHandoffIpc, type FakeHandoffIpc } from '@/shared/desktop/handoffIpc.fake';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 
@@ -28,14 +30,21 @@ describe('TakeBackDialog fast path', () => {
   it('reclaims, checks, and offers to apply the cloud changes; then shows the result with Undo', async () => {
     const user = userEvent.setup();
     const ipc = createFakeHandoffIpc({ status: { state: 'CLOUD_IDLE', executor: 'cloud', read_only: true, sent_from_here: true } });
-    ipc.setPreflight({ changed_paths: ['src/main.rs', 'README.md'], skipped_paths: ['.env'], cloud_turns: 2 });
+    ipc.setPreflight({
+      changed_paths: [
+        { path: 'src/main.rs', change: 'modified', from: null },
+        { path: 'README.md', change: 'modified', from: null },
+      ],
+      skipped_paths: [{ path: '.env', reason: 'excluded' }],
+      cloud_turns: 2,
+    });
     const { onSettled } = mount(ipc);
 
     expect(await screen.findByText(/Your folder is as you left it. The cloud changed 2 files in 2 turns./)).toBeInTheDocument();
     expect(ipc.calls.reclaims).toEqual(['u1']);
     expect(ipc.calls.preflights).toEqual(['u1']);
     expect(screen.getByTestId('takeback-changed-paths')).toHaveTextContent('src/main.rs');
-    expect(screen.getByTestId('takeback-skipped-paths')).toHaveTextContent('.env');
+    expect(screen.getByTestId('takeback-skipped-paths')).toHaveTextContent('.env (kept on this computer)');
     // Nothing was written yet.
     expect(ipc.calls.applies).toEqual([]);
     expect(onSettled).not.toHaveBeenCalled();
@@ -81,24 +90,66 @@ describe('TakeBackDialog fast path', () => {
 });
 
 describe('TakeBackDialog conflicts', () => {
-  const conflicts = {
-    outcome: 'conflicts' as const,
-    conflict_paths: ['src/lib.rs'],
-    changed_paths: ['src/lib.rs', 'docs/a.md'],
-    skipped_paths: [],
-    modes: ['worktree', 'discard'] as ('worktree' | 'discard')[],
+  const conflicts: Partial<Preflight> = {
+    outcome: 'conflicts',
+    conflict_paths: ['src/lib.rs', 'assets/logo.png'],
+    changed_paths: [
+      { path: 'src/lib.rs', change: 'modified', from: null },
+      { path: 'docs/a.md', change: 'renamed', from: 'docs/old.md' },
+    ],
+    skipped_paths: [
+      { path: 'assets/logo.png', reason: 'binary_conflict' },
+      { path: 'secrets/prod.key', reason: 'path_deny' },
+    ],
+    result_tree: null,
+    modes: ['apply_with_markers', 'worktree', 'discard'],
   };
 
-  it('offers only a worktree or discarding, and never Apply', async () => {
+  it('offers markers, a worktree or discarding, and never a plain Apply; lists why paths are skipped', async () => {
     const ipc = createFakeHandoffIpc();
     ipc.setPreflight(conflicts);
     mount(ipc);
-    expect(await screen.findByTestId('takeback-conflicts')).toHaveTextContent('Your folder changed since you sent this thread');
+    expect(await screen.findByTestId('takeback-conflicts')).toHaveTextContent('Your folder and the cloud changed the same lines');
     expect(screen.getByTestId('takeback-conflict-paths')).toHaveTextContent('src/lib.rs');
-    expect(screen.getByTestId('takeback-changed-paths')).toHaveTextContent('docs/a.md');
+    expect(screen.getByTestId('takeback-changed-paths')).toHaveTextContent('docs/old.md → docs/a.md');
+    const skipped = screen.getByTestId('takeback-skipped-paths');
+    expect(skipped).toHaveTextContent('assets/logo.png (binary file changed on both sides; your version is kept)');
+    expect(skipped).toHaveTextContent('secrets/prod.key (blocked by policy)');
+    expect(screen.getByRole('button', { name: 'Apply with conflict markers' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open as worktree' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Discard cloud changes' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Apply to my folder' })).toBeNull();
+  });
+
+  it('applies with conflict markers and lists the files to resolve, never the binary one', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc();
+    ipc.setPreflight(conflicts);
+    ipc.setApply({ outcome: 'applied_with_markers' });
+    mount(ipc);
+    await user.click(await screen.findByRole('button', { name: 'Apply with conflict markers' }));
+    expect(await screen.findByTestId('takeback-result')).toHaveTextContent('conflict markers to resolve');
+    expect(ipc.calls.applies).toEqual([{ preflightId: 'pf-1', mode: 'apply_with_markers' }]);
+    const markers = screen.getByTestId('takeback-marker-paths');
+    expect(markers).toHaveTextContent('src/lib.rs');
+    expect(markers).not.toHaveTextContent('assets/logo.png');
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+  });
+
+  it('never lists a skipped conflicting path as having markers', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc();
+    ipc.setPreflight({
+      ...conflicts,
+      conflict_paths: ['src/lib.rs', 'secrets/prod.key', 'assets/logo.png'],
+    });
+    ipc.setApply({ outcome: 'applied_with_markers' });
+    mount(ipc);
+    await user.click(await screen.findByRole('button', { name: 'Apply with conflict markers' }));
+    const markers = await screen.findByTestId('takeback-marker-paths');
+    expect(markers).toHaveTextContent('src/lib.rs');
+    expect(markers).not.toHaveTextContent('secrets/prod.key');
+    expect(markers).not.toHaveTextContent('assets/logo.png');
   });
 
   it('opens the cloud version as a worktree and shows where it is', async () => {
@@ -137,6 +188,68 @@ describe('TakeBackDialog conflicts', () => {
     await user.click(screen.getByRole('button', { name: 'Discard' }));
     expect(await screen.findByTestId('takeback-result')).toHaveTextContent('discarded');
     expect(ipc.calls.applies).toEqual([{ preflightId: 'pf-1', mode: 'discard' }]);
+  });
+});
+
+describe('TakeBackDialog clean merge', () => {
+  it('says both sides are kept and applies them', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc();
+    ipc.setPreflight({ outcome: 'clean_merge' });
+    mount(ipc);
+    expect(await screen.findByTestId('takeback-clean-merge')).toHaveTextContent('Applying keeps both');
+    expect(screen.queryByRole('button', { name: 'Apply with conflict markers' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Apply to my folder' }));
+    expect(await screen.findByTestId('takeback-result')).toHaveTextContent('uncommitted changes');
+    expect(ipc.calls.applies).toEqual([{ preflightId: 'pf-1', mode: 'apply' }]);
+  });
+});
+
+describe('TakeBackDialog turns', () => {
+  it('takes back the latest turn by default, and up to an earlier one when picked', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc();
+    ipc.setPreflight({ cloud_turns: 3 });
+    mount(ipc);
+    const picker = await screen.findByRole('combobox', { name: 'Take back up to change' });
+    expect(picker).toHaveTextContent('Change 3 (latest)');
+    expect(ipc.calls.preflightTurns).toEqual([undefined]);
+    expect(screen.queryByTestId('takeback-turns-after')).toBeNull();
+
+    await user.click(picker);
+    await user.click(await screen.findByRole('option', { name: 'Change 2' }));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Take back up to change' })).toHaveTextContent('Change 2'));
+    expect(ipc.calls.preflightTurns).toEqual([undefined, 2]);
+    expect(screen.getByText(/The cloud changed 1 files in 2 turns/)).toBeInTheDocument();
+    // Turn 3 is not taken back: the review says so before anything is applied.
+    expect(screen.getByTestId('takeback-turns-after')).toHaveTextContent('Changes 3 to 3 are not taken back');
+    expect(screen.getByTestId('takeback-turns-after')).toHaveTextContent('answers after change 2 are not added');
+
+    ipc.setApply({ imported_turns: 2, turns_not_taken: 1, rest_branch: 'elitea/cloud/abcd1234-after-turn-2' });
+    await user.click(screen.getByRole('button', { name: 'Apply to my folder' }));
+    await screen.findByTestId('takeback-result');
+    expect(ipc.calls.applies).toEqual([{ preflightId: 'pf-1', mode: 'apply', upToTurn: 2 }]);
+    expect(screen.getByTestId('takeback-rest-branch')).toHaveTextContent('elitea/cloud/abcd1234-after-turn-2');
+  });
+
+  it('shows no picker for a single cloud turn', async () => {
+    const ipc = createFakeHandoffIpc();
+    mount(ipc);
+    await screen.findByRole('button', { name: 'Apply to my folder' });
+    expect(screen.queryByRole('combobox', { name: 'Take back up to change' })).toBeNull();
+  });
+
+  it('keeps the previous review when the picked turn cannot be checked', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc();
+    ipc.setPreflight({ cloud_turns: 2 });
+    mount(ipc);
+    const picker = await screen.findByRole('combobox', { name: 'Take back up to change' });
+    ipc.failNext('preflight', 'integrity_failed', 'bad');
+    await user.click(picker);
+    await user.click(await screen.findByRole('option', { name: 'Change 1' }));
+    expect(await screen.findByTestId('takeback-error')).toHaveTextContent('failed their integrity check');
+    expect(screen.getByRole('combobox', { name: 'Take back up to change' })).toHaveTextContent('Change 2 (latest)');
   });
 });
 
@@ -238,7 +351,10 @@ describe('TakeBackDialog diffs', () => {
     const user = userEvent.setup();
     const ipc = createFakeHandoffIpc();
     ipc.setPreflight({
-      changed_paths: ['src/main.rs', 'docs/new.md'],
+      changed_paths: [
+        { path: 'src/main.rs', change: 'modified', from: null },
+        { path: 'docs/new.md', change: 'added', from: null },
+      ],
       files: [
         { path: 'src/main.rs', status: 'modified', added: 1, removed: 1, diff: '--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1 +1 @@\n-fn main() {}\n+fn main() { run() }\n' },
         { path: 'docs/new.md', status: 'added', added: 2, removed: 0, diff: '' },

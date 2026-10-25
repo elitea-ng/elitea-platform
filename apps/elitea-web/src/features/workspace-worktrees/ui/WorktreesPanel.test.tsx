@@ -71,20 +71,41 @@ describe('WorktreesPanel', () => {
     expect(screen.getByTestId('worktree-row')).toBeInTheDocument();
   });
 
-  it('shows the conflicts of a preview and cannot apply: the work stays on its branch', async () => {
+  it('shows the conflicts of a preview: a plain apply is not offered, the work stays on its branch', async () => {
     const user = userEvent.setup();
     const ipc = createFakeWorktreeIpc({
       entries: [clean],
-      preflight: { mode: 'conflicts', applied_paths: [], conflict_paths: ['src/a.ts'], skipped_paths: ['.env'], branch: 'elitea/aaaaaaaa' },
+      preflight: { mode: 'conflicts', applied_paths: ['src/a.ts'], conflict_paths: ['src/a.ts'], skipped_paths: ['.env'], branch: 'elitea/aaaaaaaa' },
     });
     renderPanel(ipc);
     await user.click(within(await screen.findByTestId('worktree-row')).getByRole('button', { name: 'Merge back' }));
     const dialog = await screen.findByRole('dialog');
-    expect(await within(dialog).findByTestId('worktree-merge-mode')).toHaveTextContent('The work stays on its branch, elitea/aaaaaaaa.');
+    expect(await within(dialog).findByTestId('worktree-merge-mode')).toHaveTextContent('the work stays on its branch, elitea/aaaaaaaa.');
     expect(within(dialog).getByTestId('worktree-conflict-paths')).toHaveTextContent('src/a.ts');
     expect(within(dialog).getByTestId('worktree-skipped-paths')).toHaveTextContent('.env');
-    expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeDisabled();
+    expect(within(dialog).queryByRole('button', { name: 'Apply' })).toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'Apply with conflict markers' })).toBeEnabled();
     expect(ipc.calls.apply).toEqual([]);
+  });
+
+  it('applies a conflicting preview with conflict markers, then undoes it', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeWorktreeIpc({
+      entries: [clean],
+      preflight: { mode: 'conflicts', applied_paths: ['src/a.ts', 'src/b.ts'], conflict_paths: ['src/a.ts'], skipped_paths: [], branch: 'elitea/aaaaaaaa' },
+    });
+    renderPanel(ipc);
+    await user.click(within(await screen.findByTestId('worktree-row')).getByRole('button', { name: 'Merge back' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByTestId('worktree-applied-paths')).toHaveTextContent('src/b.ts');
+    await user.click(within(dialog).getByRole('button', { name: 'Apply with conflict markers' }));
+    expect(await within(dialog).findByTestId('worktree-merge-applied')).toHaveTextContent('2 files written, 0 deleted');
+    expect(within(dialog).getByTestId('worktree-marker-paths')).toHaveTextContent('src/a.ts');
+    expect(within(dialog).getByTestId('worktree-marker-paths')).not.toHaveTextContent('src/b.ts');
+    expect(ipc.calls.apply).toEqual([['pf-1', 'apply_with_markers']]);
+
+    await user.click(within(dialog).getByRole('button', { name: 'Undo merge' }));
+    expect(await within(dialog).findByText('Undone: 2 files restored to before the merge.')).toBeInTheDocument();
   });
 
   it('applies a clean preview, then undoes it from the checkpoint', async () => {
@@ -99,7 +120,8 @@ describe('WorktreesPanel', () => {
     expect(await within(dialog).findByTestId('worktree-applied-paths')).toHaveTextContent('src/b.ts');
     await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
     expect(await within(dialog).findByTestId('worktree-merge-applied')).toHaveTextContent('2 files written, 0 deleted');
-    expect(ipc.calls.apply).toEqual([['pf-1']]);
+    expect(ipc.calls.apply).toEqual([['pf-1', 'apply']]);
+    expect(within(dialog).queryByTestId('worktree-marker-paths')).toBeNull();
 
     await user.click(within(dialog).getByRole('button', { name: 'Undo merge' }));
     expect(await within(dialog).findByText('Undone: 2 files restored to before the merge.')).toBeInTheDocument();

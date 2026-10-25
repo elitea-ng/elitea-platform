@@ -8802,7 +8802,10 @@ async fn worktree_merge_undo_takes_only_its_merges_checkpoint() {
         .await
         .unwrap();
     let applied = worktrees
-        .merge_apply(&preflight.preflight_id)
+        .merge_apply(
+            &preflight.preflight_id,
+            crate::worktrees::MergeApplyMode::Apply,
+        )
         .await
         .unwrap();
     let checkpoint = applied.checkpoint_id.expect("a checkpoint");
@@ -8844,6 +8847,75 @@ async fn worktree_merge_undo_takes_only_its_merges_checkpoint() {
             .code,
         "invalid_request",
         "undone once"
+    );
+}
+
+/// The worktree merge-back offers the take-back's markers mode: a conflicts
+/// preview refuses a plain apply (the preview kept), and applying with
+/// markers writes them into the folder, undoably.
+#[tokio::test(flavor = "multi_thread")]
+async fn worktree_merge_back_applies_conflict_markers() {
+    use crate::worktrees::MergeApplyMode;
+    let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let worktrees = worktree_host(&h);
+    let thread = "66666666-6666-4666-8666-666666666666";
+    let entry = worktrees
+        .create(&h.workspace_id, thread, None)
+        .await
+        .unwrap();
+    std::fs::write(
+        std::path::Path::new(&entry.path).join("both.txt"),
+        "from the task\n",
+    )
+    .unwrap();
+    std::fs::write(h.folder.path().join("both.txt"), "from the folder\n").unwrap();
+    let preflight = worktrees
+        .merge_preflight(&h.workspace_id, thread)
+        .await
+        .unwrap();
+    let wire = serde_json::to_value(&preflight).unwrap();
+    assert_eq!(wire["mode"], "conflicts");
+    assert_eq!(wire["modes"], json!(["apply_with_markers"]));
+    assert_eq!(wire["conflict_paths"], json!(["both.txt"]));
+    assert_eq!(
+        worktrees
+            .merge_apply(&preflight.preflight_id, MergeApplyMode::Apply)
+            .await
+            .unwrap_err()
+            .code,
+        "merge_conflicts"
+    );
+    // The folder moved: refused and kept; back as it was, the same preview applies.
+    std::fs::write(h.folder.path().join("late.txt"), "late\n").unwrap();
+    assert_eq!(
+        worktrees
+            .merge_apply(&preflight.preflight_id, MergeApplyMode::ApplyWithMarkers)
+            .await
+            .unwrap_err()
+            .code,
+        elitea_local_tools::apply::FOLDER_CHANGED
+    );
+    std::fs::remove_file(h.folder.path().join("late.txt")).unwrap();
+    let applied = worktrees
+        .merge_apply(&preflight.preflight_id, MergeApplyMode::ApplyWithMarkers)
+        .await
+        .unwrap();
+    assert_eq!(applied.written, ["both.txt"]);
+    let both = std::fs::read_to_string(h.folder.path().join("both.txt")).unwrap();
+    assert!(
+        both.contains("<<<<<<< your folder\n")
+            && both.contains(">>>>>>> task worktree\n")
+            && both.contains("from the folder")
+            && both.contains("from the task"),
+        "{both}"
+    );
+    worktrees
+        .merge_undo(&applied.checkpoint_id.unwrap(), true)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(h.folder.path().join("both.txt")).unwrap(),
+        "from the folder\n"
     );
 }
 

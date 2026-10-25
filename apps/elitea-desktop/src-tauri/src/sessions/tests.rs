@@ -1051,3 +1051,42 @@ async fn a_thread_keeps_its_nonce_until_a_reseed_and_threads_do_not_share_one() 
     // Never printed.
     assert!(!format!("{reseeded:?}").contains(&reseeded.hex()));
 }
+
+/// #1187: a partial take-back's seed boundary survives a schema-1 store's
+/// upgrade, adds up, and goes with the conversation.
+#[tokio::test]
+async fn the_seed_boundary_is_kept_and_upgraded_from_schema_one() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let store = SessionStore::open(dir.path()).unwrap();
+        store
+            .call_blocking("t", |conn| {
+                conn.execute_batch("DROP TABLE seed_skips; PRAGMA user_version = 1;")
+            })
+            .unwrap();
+    }
+    let store = SessionStore::open(dir.path()).unwrap();
+    let who = identity(7, "https://a.example");
+    let key = who.key();
+    assert_eq!(store.seed_skips(&key).await.unwrap(), Vec::<i64>::new());
+    store
+        .skip_on_seed(&who.deployment, 7, &who.conversation_uuid, vec![21, 20])
+        .await
+        .unwrap();
+    store
+        .skip_on_seed(&who.deployment, 7, &who.conversation_uuid, vec![20, 31])
+        .await
+        .unwrap();
+    assert_eq!(store.seed_skips(&key).await.unwrap(), [20, 21, 31]);
+    let version: i64 = store
+        .call_blocking("t", |conn| {
+            conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+        })
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION);
+    store
+        .delete_conversation(&who.deployment, 7, &who.conversation_uuid)
+        .await
+        .unwrap();
+    assert_eq!(store.seed_skips(&key).await.unwrap(), Vec::<i64>::new());
+}
