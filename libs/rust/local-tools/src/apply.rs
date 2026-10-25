@@ -33,7 +33,7 @@
 //! ([`ErrorCode::StaleRead`]) when it moved since the preview; the caller
 //! takes a checkpoint (restoring it undoes the apply); the result's files
 //! are written through the confined
-//! [`Workspace`](crate::workspace::Workspace) writer. `HEAD`, the index and
+//! [`Workspace`] writer. `HEAD`, the index and
 //! every branch of the folder stay as they were.
 //!
 //! merge-tree runs under [`crate::git`]'s four layers, with attributes read
@@ -199,6 +199,7 @@ impl Objects {
 
     /// New objects in `dir`; `alternates` (and the repository's objects)
     /// read through it.
+    #[cfg(feature = "handoff")]
     pub(crate) fn scratch(repo: &Repo, dir: &Path, alternates: &[PathBuf]) -> Self {
         let mut list: Vec<PathBuf> = vec![repo.common_dir().join("objects")];
         list.extend(alternates.iter().cloned());
@@ -233,6 +234,7 @@ impl Objects {
 
 /// An entry of `GIT_ALTERNATE_OBJECT_DIRECTORIES`: C-quoted when it holds
 /// the separator or a quote.
+#[cfg(feature = "handoff")]
 fn quote_alternate(path: &str) -> String {
     if !path.contains([':', '"', '\\']) {
         return path.to_owned();
