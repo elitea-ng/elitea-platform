@@ -42,11 +42,22 @@
  */
 import * as zod from "zod";
 
+export const workspaceHandoffReleaseRequestTurnsNotTakenMin = 0;
+export const workspaceHandoffReleaseRequestTurnsNotTakenMax = 1000;
+
 export const WorkspaceHandoffReleaseRequest = zod
   .object({
     epoch: zod.int(),
     outcome: zod.string().describe("`applied`, `worktree` or `discarded`."),
     applied_sha: zod.string().nullish(),
+    turns_not_taken: zod
+      .int()
+      .min(workspaceHandoffReleaseRequestTurnsNotTakenMin)
+      .max(workspaceHandoffReleaseRequestTurnsNotTakenMax)
+      .optional()
+      .describe(
+        "Contract 1.25. How many cloud turns the take back did not apply (take back up to turn k). More than zero keeps them for a rest take back (reclaim with `rest`) until `cloud_copy_delete_after`. The release of a rest take back keeps the first release's grace.",
+      ),
   })
   .describe(
     "NOTE(W2): internal/api/v2/workspacehandoff/route.go:441 (`releaseBody`).",

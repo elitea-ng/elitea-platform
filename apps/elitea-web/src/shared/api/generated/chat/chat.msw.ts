@@ -1216,6 +1216,10 @@ export const getGetWorkspaceHandoffResponseMock = (
     faker.datatype.boolean(),
     undefined,
   ]),
+  rest_pending: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
+    undefined,
+  ]),
   handoff_id: faker.helpers.arrayElement([faker.string.uuid(), undefined]),
   device_name: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -1306,13 +1310,9 @@ export const getReclaimWorkspaceHandoffResponseMock = (
 ): WorkspaceHandoffReclaimed | WorkspaceHandoffReclaimPending =>
   faker.helpers.arrayElement([
     {
-      state: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      epoch: faker.number.int(),
-      cloud_sha: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        null,
-      ]),
-      ...overrideResponse,
+      state: "RECLAIMING",
+      epoch: 5,
+      cloud_sha: "0123456789abcdef0123456789abcdef01234567",
     },
     {
       state: faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -1329,17 +1329,12 @@ export const getRequestWorkspaceHandoffReclaimResponseMock = (
   overrideResponse: Partial<Extract<WorkspaceHandoffEmpty, object>> = {},
 ): WorkspaceHandoffEmpty => ({ ...overrideResponse });
 
-export const getReleaseWorkspaceHandoffResponseMock = (
-  overrideResponse: Partial<Extract<WorkspaceHandoffReleased, object>> = {},
-): WorkspaceHandoffReleased => ({
-  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  epoch: faker.number.int(),
-  cloud_copy_delete_after: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    null,
-  ]),
-  ...overrideResponse,
-});
+export const getReleaseWorkspaceHandoffResponseMock =
+  (): WorkspaceHandoffReleased => ({
+    state: "LOCAL",
+    epoch: 4,
+    cloud_copy_delete_after: "2026-11-01T12:00:00Z",
+  });
 
 export const getRequestWorkspaceSegmentUploadResponseMock = (
   overrideResponse: Partial<Extract<WorkspaceSegmentUploadGrant, object>> = {},

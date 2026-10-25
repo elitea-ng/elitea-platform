@@ -46,6 +46,12 @@ export const WorkspaceHandoffReclaimRequest = zod
   .object({
     epoch: zod.int(),
     device_id: zod.string().optional(),
+    rest: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Contract 1.25. Take back the cloud turns the last release left (`turns_not_taken` > 0): a released LOCAL thread within its return grace moves to RECLAIMING with a new epoch, keeping the grace. `epoch` is the LOCAL thread's. Absent or false is the take back of a cloud thread.",
+      ),
   })
   .describe(
     "NOTE(W2): internal/api/v2/workspacehandoff/route.go:388 (`reclaimBody`).",

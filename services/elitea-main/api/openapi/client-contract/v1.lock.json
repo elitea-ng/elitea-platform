@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.24",
+  "client_contract": "1.25",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -9350,6 +9350,9 @@
                   "type": "string"
                 },
                 "reclaim_pending": {
+                  "type": "boolean"
+                },
+                "rest_pending": {
                   "type": "boolean"
                 },
                 "state": {
@@ -18851,6 +18854,9 @@
               "epoch": {
                 "type": "integer",
                 "format": "int64"
+              },
+              "rest": {
+                "type": "boolean"
               }
             }
           }
@@ -19652,6 +19658,11 @@
               },
               "outcome": {
                 "type": "string"
+              },
+              "turns_not_taken": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
               }
             }
           }
