@@ -57,9 +57,22 @@ const (
 )
 
 const (
-	// KindCompact is a full bundle with no prerequisites, the only kind Phase 1
-	// publishes.
+	// KindCompact is a full bundle with no prerequisites covering every live
+	// ref. It supersedes every earlier live segment of the thread.
 	KindCompact = "COMPACT"
+	// KindPush is an incremental bundle (Phase 2): its prerequisites are
+	// commits the store already has (the current value of one of the
+	// thread's refs), it carries only the refs it moves, and it supersedes
+	// nothing. A thread's live chain is its newest COMPACT plus every later
+	// PUSH.
+	KindPush = "PUSH"
+	// MaxPrerequisites bounds the prerequisites of one PUSH.
+	MaxPrerequisites = 8
+	// DefaultMaxPushChain is the hard cap of live PUSH segments after the
+	// live COMPACT. Writers compact long before it (the client policy
+	// defaults to 8 PUSH or 64 MiB); the cap only stops a writer that never
+	// does.
+	DefaultMaxPushChain = 32
 	// ObjectFormatSHA1 is the only git object format Phase 1 accepts.
 	ObjectFormatSHA1 = "sha1"
 	// MediaType is the Content-Type of every segment upload.
@@ -136,6 +149,13 @@ var (
 	// ErrQuotaExceeded: the project's workspace copies would pass
 	// max_project_workspace_gb.
 	ErrQuotaExceeded = errors.New("project workspace quota exceeded")
+	// ErrPrerequisiteUnknown: a PUSH names a prerequisite that is not the
+	// current value of any of the thread's refs, or the thread has no live
+	// COMPACT for a PUSH to build on.
+	ErrPrerequisiteUnknown = errors.New("segment prerequisite unknown")
+	// ErrChainTooLong: the thread's live chain already holds the most PUSH
+	// segments the store accepts; the writer publishes a COMPACT instead.
+	ErrChainTooLong = errors.New("segment chain too long")
 	// ErrUnavailable: the object store is not configured.
 	ErrUnavailable = errors.New("workspace store is unavailable")
 )

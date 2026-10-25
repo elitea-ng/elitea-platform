@@ -840,6 +840,12 @@ func writeError(ctx context.Context, writer http.ResponseWriter, operation strin
 			"The project's cloud copies would pass their storage ceiling.")
 	case errors.Is(err, workspacestore.ErrSegmentTooLarge):
 		desktopwire.WriteError(writer, http.StatusRequestEntityTooLarge, "segment_too_large", "The segment is over the size cap.")
+	case errors.Is(err, workspacestore.ErrPrerequisiteUnknown):
+		desktopwire.WriteError(writer, http.StatusConflict, "prerequisite_unknown",
+			"A prerequisite of the PUSH segment is not a commit the store holds as a ref, or the thread has no COMPACT to build on. Publish a COMPACT.")
+	case errors.Is(err, workspacestore.ErrChainTooLong):
+		desktopwire.WriteError(writer, http.StatusConflict, "segment_chain_too_long",
+			"The thread's segment chain is at its cap. Publish a COMPACT segment instead.")
 	case errors.Is(err, workspacestore.ErrRefNotAllowed):
 		desktopwire.WriteError(writer, http.StatusForbidden, "ref_not_allowed", "This writer may not move that ref now.")
 	case errors.Is(err, workspacestore.ErrSegmentMissing):

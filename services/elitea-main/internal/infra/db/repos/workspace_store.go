@@ -324,6 +324,8 @@ func (r *WorkspaceStoreRepository) Publish(ctx context.Context, record workspace
 		lastSeq     int64
 		refsRaw     []byte
 		replaySeq   *int64
+		liveCompact int64
+		livePush    int64
 	)
 	read := &pgx.Batch{}
 	// A bounded wait (publishLockTimeout), not NOWAIT: a take back, a cloud
@@ -341,7 +343,11 @@ SELECT COALESCE((SELECT jsonb_object_agg(name, sha) FROM elitea_runtime.workspac
                  WHERE project_id = $1 AND conversation_uuid = $2::uuid), '{}'::jsonb),
        (SELECT seq FROM elitea_runtime.workspace_segments
         WHERE conversation_uuid = $2::uuid AND project_id = $1 AND sha256 = $3 AND epoch = $4 AND superseded_at IS NULL
-        ORDER BY seq DESC LIMIT 1)`,
+        ORDER BY seq DESC LIMIT 1),
+       (SELECT count(*) FILTER (WHERE kind = 'COMPACT') FROM elitea_runtime.workspace_segments
+        WHERE conversation_uuid = $2::uuid AND project_id = $1 AND superseded_at IS NULL),
+       (SELECT count(*) FILTER (WHERE kind = 'PUSH') FROM elitea_runtime.workspace_segments
+        WHERE conversation_uuid = $2::uuid AND project_id = $1 AND superseded_at IS NULL)`,
 		record.Thread.ProjectID, record.Thread.ConversationUUID, record.SHA256, record.Epoch)
 	results := tx.SendBatch(ctx, read)
 	_, err = results.Exec()
@@ -349,7 +355,7 @@ SELECT COALESCE((SELECT jsonb_object_agg(name, sha) FROM elitea_runtime.workspac
 		err = results.QueryRow().Scan(&state, &epoch, &owner, &running, &response, &hasUpstream, &lastSeq)
 	}
 	if err == nil {
-		err = results.QueryRow().Scan(&refsRaw, &replaySeq)
+		err = results.QueryRow().Scan(&refsRaw, &replaySeq, &liveCompact, &livePush)
 	}
 	closeErr := results.Close()
 	var pgErr *pgconn.PgError
@@ -405,8 +411,18 @@ SELECT COALESCE((SELECT jsonb_object_agg(name, sha) FROM elitea_runtime.workspac
 		return workspacestore.PublishResult{}, conflict
 	}
 
+	// A PUSH builds on what the store already has: a live COMPACT, and
+	// prerequisites that are each the current value of one of the thread's
+	// refs. It may not grow the chain past the hard cap.
+	if record.Kind == workspacestore.KindPush {
+		if err := pushAllowed(record, current, liveCompact, livePush); err != nil {
+			return workspacestore.PublishResult{}, err
+		}
+	}
+
 	// Round trip 2: the writes. A COMPACT covers every live ref, so it
-	// supersedes every earlier live segment of the thread.
+	// supersedes every earlier live segment of the thread; a PUSH supersedes
+	// nothing (the statement matches no row).
 	seq := lastSeq + 1
 	for _, ref := range record.Refs {
 		current[ref.Name] = ref.New
@@ -425,8 +441,8 @@ SELECT COALESCE((SELECT jsonb_object_agg(name, sha) FROM elitea_runtime.workspac
 	write.Queue(`SELECT set_config('lock_timeout', '0', true)`)
 	write.Queue(`
 UPDATE elitea_runtime.workspace_segments SET superseded_at = clock_timestamp()
-WHERE conversation_uuid = $2::uuid AND project_id = $1 AND superseded_at IS NULL
-RETURNING seq`, record.Thread.ProjectID, record.Thread.ConversationUUID)
+WHERE conversation_uuid = $2::uuid AND project_id = $1 AND superseded_at IS NULL AND $3::text = 'COMPACT'
+RETURNING seq`, record.Thread.ProjectID, record.Thread.ConversationUUID, record.Kind)
 	write.Queue(`
 INSERT INTO elitea_runtime.workspace_segments (
     project_id, conversation_uuid, seq, epoch, kind, sha256, byte_length, prerequisites, refs, writer,
@@ -541,6 +557,32 @@ WHERE project_id = $1 AND superseded_at IS NULL`, record.Thread.ProjectID)
 	return workspacestore.PublishResult{Seq: seq, Refs: current, Superseded: superseded}, nil
 }
 
+// pushAllowed is a PUSH's rule over the locked thread: a live COMPACT to build
+// on, every prerequisite the current value of one of its refs (read before
+// this publish moves any), and room in the chain.
+func pushAllowed(record workspacestore.PublishRecord, current map[string]string, liveCompact, livePush int64) error {
+	if liveCompact == 0 {
+		return workspacestore.ErrPrerequisiteUnknown
+	}
+	tips := map[string]bool{}
+	for _, sha := range current {
+		tips[sha] = true
+	}
+	for _, prerequisite := range record.Prerequisites {
+		if !tips[prerequisite] {
+			return workspacestore.ErrPrerequisiteUnknown
+		}
+	}
+	limit := record.MaxPushChain
+	if limit <= 0 {
+		limit = workspacestore.DefaultMaxPushChain
+	}
+	if livePush >= int64(limit) {
+		return workspacestore.ErrChainTooLong
+	}
+	return nil
+}
+
 // refConflict answers the conflict of a publish's expected old values with
 // the stored refs, nil when every one holds.
 func refConflict(refs []workspacestore.RefUpdate, current map[string]string) error {
@@ -616,16 +658,29 @@ SELECT name, sha FROM elitea_runtime.workspace_refs WHERE project_id = $1 AND co
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		segment, ok, err := oneSegmentFrom(ctx, tx, `SELECT `+segmentColumns+`
+		// The live segments: the newest COMPACT and the PUSH chain after it
+		// (a COMPACT supersedes everything before it).
+		live, err := tx.Query(ctx, `SELECT `+segmentColumns+`
 FROM elitea_runtime.workspace_segments
-WHERE conversation_uuid = $2::uuid AND project_id = $1 AND kind = 'COMPACT' AND superseded_at IS NULL AND seq >= $3
-ORDER BY seq DESC LIMIT 1`, thread.ProjectID, thread.ConversationUUID, sinceSeq)
+WHERE conversation_uuid = $2::uuid AND project_id = $1 AND superseded_at IS NULL
+ORDER BY seq`, thread.ProjectID, thread.ConversationUUID)
 		if err != nil {
-			return err
+			return fmt.Errorf("workspace store: read chain: %w", err)
 		}
-		if ok {
-			result.Newest = &segment
+		segments := []workspacestore.SegmentRow{}
+		for live.Next() {
+			segment, err := scanSegment(live)
+			if err != nil {
+				live.Close()
+				return fmt.Errorf("workspace store: read chain: %w", err)
+			}
+			segments = append(segments, segment)
 		}
+		live.Close()
+		if err := live.Err(); err != nil {
+			return fmt.Errorf("workspace store: read chain: %w", err)
+		}
+		result.Chain = workspacestore.SelectChain(segments, sinceSeq)
 		return nil
 	})
 	if err != nil {
@@ -636,9 +691,12 @@ ORDER BY seq DESC LIMIT 1`, thread.ProjectID, thread.ConversationUUID, sinceSeq)
 
 // ClaimSupersededObjects stamps object_deleted_at on a batch of superseded
 // segments FIRST (FOR UPDATE SKIP LOCKED, so replicas share the work), and the
-// caller deletes the objects after the transaction. A row whose object a live
-// segment of the same thread still uses is Shared: the row is retired, the
-// object kept.
+// caller deletes the objects after the transaction. A row whose object is
+// still needed is Shared: the row is retired, the object kept. An object is
+// needed while another segment row of the thread with the same key still has
+// its object (a live COMPACT or PUSH of the chain with identical bytes), or
+// while an unconsumed, unexpired upload grant targets the key (a writer is
+// uploading those bytes again to publish them).
 func (r *WorkspaceStoreRepository) ClaimSupersededObjects(ctx context.Context, before time.Time, limit int) ([]workspacestore.ObjectSweep, error) {
 	rows, err := r.pool.Query(ctx, `
 WITH claimed AS (
@@ -654,7 +712,11 @@ WHERE s.id = claimed.id
 RETURNING s.id, s.project_id, s.object_key, s.physical_bucket,
     EXISTS (SELECT 1 FROM elitea_runtime.workspace_segments AS live
             WHERE live.project_id = s.project_id AND live.conversation_uuid = s.conversation_uuid
-              AND live.object_key = s.object_key AND live.id <> s.id AND live.object_deleted_at IS NULL)`,
+              AND live.object_key = s.object_key AND live.id <> s.id AND live.object_deleted_at IS NULL)
+    OR EXISTS (SELECT 1 FROM elitea_storage.transfer_grants AS g
+               JOIN elitea_storage.buckets AS b ON b.id = g.bucket_id AND b.bucket_type = 'workspace'
+               WHERE g.project_id = s.project_id AND g.key = s.object_key
+                 AND g.consumed_at IS NULL AND g.expires_at > clock_timestamp())`,
 		before, limit)
 	if err != nil {
 		return nil, fmt.Errorf("workspace store: claim superseded: %w", err)
@@ -683,7 +745,11 @@ func (r *WorkspaceStoreRepository) KeyHasLiveObject(ctx context.Context, project
 	var live bool
 	if err := r.pool.QueryRow(ctx, `
 SELECT EXISTS (SELECT 1 FROM elitea_runtime.workspace_segments
-               WHERE project_id = $1 AND object_key = $2 AND object_deleted_at IS NULL)`, projectID, key).Scan(&live); err != nil {
+               WHERE project_id = $1 AND object_key = $2 AND object_deleted_at IS NULL)
+    OR EXISTS (SELECT 1 FROM elitea_storage.transfer_grants AS g
+               JOIN elitea_storage.buckets AS b ON b.id = g.bucket_id AND b.bucket_type = 'workspace'
+               WHERE g.project_id = $1 AND g.key = $2
+                 AND g.consumed_at IS NULL AND g.expires_at > clock_timestamp())`, projectID, key).Scan(&live); err != nil {
 		return false, fmt.Errorf("workspace store: key liveness: %w", err)
 	}
 	return live, nil
