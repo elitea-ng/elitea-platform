@@ -427,7 +427,7 @@ fn start_at(path: &Path, idle_checkpoint: Duration) -> Result<Writing, HostError
 }
 
 fn run_jobs(mut conn: Connection, receiver: &Receiver<Job>, idle_checkpoint: Duration) {
-    let mut jobs = 0;
+    let mut jobs: u64 = 0;
     loop {
         let job = match receiver.recv_timeout(idle_checkpoint) {
             Ok(job) => job,
@@ -445,10 +445,10 @@ fn run_jobs(mut conn: Connection, receiver: &Receiver<Job>, idle_checkpoint: Dur
         // Incremental vacuum (schema 2): the pages a trim freed would
         // otherwise stay in the file's free space, and the store would only
         // grow.
-        if jobs % 64 == 0 {
-            if let Err(error) = conn.pragma_update(None, "incremental_vacuum", 0) {
-                log::warn!("the session store could not vacuum: {error}");
-            }
+        if jobs.is_multiple_of(64)
+            && let Err(error) = conn.pragma_update(None, "incremental_vacuum", 0)
+        {
+            log::warn!("the session store could not vacuum: {error}");
         }
     }
     // The queue closed: fold the WAL into the database before the file may
@@ -485,9 +485,11 @@ pub fn reclaim_database(dir: &Path, file_name: &str) -> Result<u64, HostError> {
     if before == 0 {
         return Ok(before);
     }
-    let conn =
-        Connection::open_with_flags(&path, OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW)
-            .map_err(|e| storage("could not open the database", &e))?;
+    let conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(|e| storage("could not open the database", &e))?;
     conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")
         .map_err(|e| storage("could not reclaim the database", &e))?;
     Ok(before)
@@ -509,7 +511,9 @@ pub fn database_free_page_fraction(dir: &Path, file_name: &str) -> f64 {
     };
     let (pages, free): (i64, i64) = match (
         conn.query_row("PRAGMA page_count;", rusqlite::params![], |row| row.get(0)),
-        conn.query_row("PRAGMA freelist_count;", rusqlite::params![], |row| row.get(0)),
+        conn.query_row("PRAGMA freelist_count;", rusqlite::params![], |row| {
+            row.get(0)
+        }),
     ) {
         (Ok(pages), Ok(free)) if pages > 0 => (pages, free),
         _ => return 0.0,

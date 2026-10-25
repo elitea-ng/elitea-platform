@@ -52,7 +52,7 @@ fn fixture() -> Fixture {
     // the run either way.
     shell.sandbox.allow_unenforced = true;
     let session = LocalSession::open(SessionConfig {
-    spill_dir: None, // under data_dir
+        spill_dir: None, // under data_dir
         root,
         session_id: "s".to_owned(),
         policy: LocalWorkPolicy {

@@ -47,7 +47,7 @@ fn fixture() -> (Fixture, PathBuf) {
     shell.home = Some(home.clone());
     shell.sandbox.allow_unenforced = true;
     let session = LocalSession::open(SessionConfig {
-    spill_dir: None, // under data_dir
+        spill_dir: None, // under data_dir
         root: home.clone(),
         session_id: "s".to_owned(),
         policy: LocalWorkPolicy {
@@ -184,7 +184,7 @@ async fn a_home_workspace_spills_and_the_spill_dir_stays_hidden() {
     shell.home = Some(home.clone());
     shell.sandbox.allow_unenforced = true;
     let session = LocalSession::open(SessionConfig {
-    spill_dir: None, // under data_dir
+        spill_dir: None, // under data_dir
         root: home.clone(),
         session_id: "w1".to_owned(),
         policy: LocalWorkPolicy {

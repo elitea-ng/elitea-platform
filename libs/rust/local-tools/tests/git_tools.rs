@@ -56,7 +56,7 @@ async fn git_diff_leaves_out_path_deny_files() {
         std::fs::write(root.join(file), format!("SECRET-AFTER {file}\n")).expect("change");
     }
     let session = LocalSession::open(SessionConfig {
-    spill_dir: None, // under data_dir
+        spill_dir: None, // under data_dir
         root: root.clone(),
         session_id: "s".to_owned(),
         policy: LocalWorkPolicy {

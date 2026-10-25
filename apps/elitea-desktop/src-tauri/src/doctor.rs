@@ -593,8 +593,12 @@ impl LocalDoctor {
         };
         let now_ms = chrono::Utc::now().timestamp_millis();
         let cutoff_ms = now_ms.saturating_sub(
-            i64::try_from(u128::from(days).saturating_mul(86_400).saturating_mul(1_000))
-                .unwrap_or(i64::MAX),
+            i64::try_from(
+                u128::from(days)
+                    .saturating_mul(86_400)
+                    .saturating_mul(1_000),
+            )
+            .unwrap_or(i64::MAX),
         );
         match store.idle_threads(cutoff_ms) {
             Ok(0) => Check::new(
@@ -634,10 +638,12 @@ impl LocalDoctor {
         const ID: &str = "data.space";
         const TITLE: &str = "What the data directory holds";
         let data = dir_bytes(&self.data_dir);
-        let sessions_bytes =
-            fs::symlink_metadata(&self.sessions_path()).map(|m| m.len()).unwrap_or(0);
-        let history_bytes =
-            fs::symlink_metadata(&self.history_path()).map(|m| m.len()).unwrap_or(0);
+        let sessions_bytes = fs::symlink_metadata(self.sessions_path())
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let history_bytes = fs::symlink_metadata(self.history_path())
+            .map(|m| m.len())
+            .unwrap_or(0);
         let sessions_free = self
             .sessions
             .as_ref()
@@ -672,10 +678,8 @@ impl LocalDoctor {
             );
         }
         if history_vacuum {
-            return Check::new(ID, TITLE, Status::Warn, message).fix(
-                "history.vacuum",
-                "Give the trimmed stores their space back",
-            );
+            return Check::new(ID, TITLE, Status::Warn, message)
+                .fix("history.vacuum", "Give the trimmed stores their space back");
         }
         Check::new(ID, TITLE, Status::Ok, message)
     }
@@ -798,9 +802,7 @@ impl LocalDoctor {
                     id,
                     title,
                     Status::Ok,
-                    format!(
-                        "Opens and passes its integrity check. The file holds {bytes} bytes."
-                    ),
+                    format!("Opens and passes its integrity check. The file holds {bytes} bytes."),
                 )
             }
             Err(error) => Check::new(

@@ -35,7 +35,7 @@ async fn a_forbidden_rule_refuses_with_its_justification_for_the_model() {
     std::fs::create_dir_all(&root).expect("ws");
     let prompt = Arc::new(RecordingPrompt::default());
     let session = LocalSession::open(SessionConfig {
-    spill_dir: None, // under data_dir
+        spill_dir: None, // under data_dir
         root: root.clone(),
         session_id: "s".to_owned(),
         policy: LocalWorkPolicy {

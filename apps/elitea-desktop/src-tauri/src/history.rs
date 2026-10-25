@@ -480,7 +480,11 @@ pub struct HistoryStore {
 /// Open the database at `path` (created owner-only first) and start a
 /// writer on it: the readers' connection and the writer. The idle interval
 /// of the writer's WAL checkpoint, as named by the opening store.
-fn start_at(path: &Path, queued: &Arc<AtomicUsize>, idle_checkpoint: Duration) -> Result<(Connection, Writing), HostError> {
+fn start_at(
+    path: &Path,
+    queued: &Arc<AtomicUsize>,
+    idle_checkpoint: Duration,
+) -> Result<(Connection, Writing), HostError> {
     // Created owner-only BEFORE SQLite opens it, so it is never wider.
     match create_private_file(path) {
         Ok(_) => {}
@@ -1063,15 +1067,16 @@ impl HistoryStore {
         // far: the app's in-flight turns are settled first, and the prune
         // sees a quiet table. The cutoff, not the rows, travels the queue
         // (durable messages carry bounded metadata, never data).
-        let cutoff_ms = now_ms().saturating_sub(i64::try_from(u128::from(idle_days)
-            .saturating_mul(86_400)
-            .saturating_mul(1_000))
-        .unwrap_or(i64::MAX));
+        let cutoff_ms = now_ms().saturating_sub(
+            i64::try_from(
+                u128::from(idle_days)
+                    .saturating_mul(86_400)
+                    .saturating_mul(1_000),
+            )
+            .unwrap_or(i64::MAX),
+        );
         let (ack, done) = std::sync::mpsc::channel();
-        if !self.send(Op::PruneIdle {
-            cutoff_ms,
-            ack,
-        }) {
+        if !self.send(Op::PruneIdle { cutoff_ms, ack }) {
             return Err(HostError::Storage(
                 "the thread history stopped before it could prune".into(),
             ));
@@ -1080,8 +1085,7 @@ impl HistoryStore {
             .recv_timeout(Duration::from_secs(30))
             .map_err(|_| HostError::Storage("the thread history writer did not prune".into()))?;
         self.flush();
-        pruned
-            .map_err(|e| HostError::Storage(format!("the thread history could not prune: {e}")))
+        pruned.map_err(|e| HostError::Storage(format!("the thread history could not prune: {e}")))
     }
 
     /// Copy one thread of `owner` into a new, empty thread of the same
@@ -1333,9 +1337,7 @@ impl Writer {
                             self.checkpoint_wal();
                             Err(RecvTimeoutError::Timeout)
                         }
-                        Err(RecvTimeoutError::Disconnected) => {
-                            Err(RecvTimeoutError::Disconnected)
-                        }
+                        Err(RecvTimeoutError::Disconnected) => Err(RecvTimeoutError::Disconnected),
                     }
                 }
                 Some(since) => {
@@ -1423,10 +1425,10 @@ impl Writer {
         self.commits += 1;
         // The pages a delete or a thread trim freed would otherwise stay in
         // the file's free space, and the file would only grow.
-        if self.commits % 64 == 0 {
-            if let Err(error) = self.conn.pragma_update(None, "incremental_vacuum", 0) {
-                log::warn!("the thread history could not vacuum: {error}");
-            }
+        if self.commits.is_multiple_of(64)
+            && let Err(error) = self.conn.pragma_update(None, "incremental_vacuum", 0)
+        {
+            log::warn!("the thread history could not vacuum: {error}");
         }
     }
 
@@ -1732,10 +1734,12 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
         // thread gives its pages back to the OS instead of the file only
         // growing. The VACUUM is what switches the mode on (it cannot run
         // inside a transaction).
-        1 | 2 | 3 => {
+        1..=3 => {
             let alter = match version {
-                1 => "ALTER TABLE turns ADD COLUMN turn_origin TEXT NOT NULL DEFAULT 'local';\
-                       ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]';",
+                1 => {
+                    "ALTER TABLE turns ADD COLUMN turn_origin TEXT NOT NULL DEFAULT 'local';\
+                       ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]';"
+                }
                 2 => "ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]';",
                 _ => "",
             };
@@ -2124,9 +2128,7 @@ mod tests {
         play(&store, new_turn(me.clone(), "t1", "42"));
         play(&store, new_turn(me.clone(), "t2", "42"));
         assert_eq!(store.thread(&me, "w1", "42").unwrap().len(), 2);
-        store
-            .delete_thread(&me, "w1", "42")
-            .unwrap();
+        store.delete_thread(&me, "w1", "42").unwrap();
         // The Doctor's `history.vacuum`: stop the writer, VACUUM, start it
         // again. The file held a whole deleted thread.
         let before = store.reclaim().unwrap();
@@ -2139,7 +2141,9 @@ mod tests {
     #[test]
     fn a_new_file_is_vacuumed_incrementally() {
         let (root, _store) = store();
-        let conn = rusqlite::Connection::open(root.path().join("ai.elitea.desktop").join(FILE_NAME)).unwrap();
+        let conn =
+            rusqlite::Connection::open(root.path().join("ai.elitea.desktop").join(FILE_NAME))
+                .unwrap();
         let mode: i64 = conn
             .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
             .unwrap();
@@ -2153,9 +2157,8 @@ mod tests {
     #[test]
     fn an_idle_writer_folds_its_wal_into_the_database() {
         let root = tempfile::tempdir().unwrap();
-        let store = Arc::new(
-            HistoryStore::open_at(root.path(), Duration::from_millis(200)).unwrap(),
-        );
+        let store =
+            Arc::new(HistoryStore::open_at(root.path(), Duration::from_millis(200)).unwrap());
         let me = owner(1);
         play(&store, new_turn(me.clone(), "t1", "42"));
         store.flush();
@@ -2179,13 +2182,15 @@ mod tests {
     #[test]
     fn retention_forgets_a_thread_idle_past_the_cutoff() {
         let root = tempfile::tempdir().unwrap();
-        let store = Arc::new(HistoryStore::open_at(root.path(), Duration::from_millis(200)).unwrap());
+        let store =
+            Arc::new(HistoryStore::open_at(root.path(), Duration::from_millis(200)).unwrap());
         // The store's writer is idle; a second connection inserts two
         // threads: one finished two days ago, one just now. A thread is its
         // turns: there is no thread table.
         {
             let conn = rusqlite::Connection::open(store.path()).unwrap();
-            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL").unwrap();
+            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL")
+                .unwrap();
             conn.execute(
                 "INSERT INTO turns (turn_id, origin, user_id, workspace_id, conversation_id, conversation_uuid, prompt, mentions, started_at, finished_at, events_bytes)
                  VALUES ('turn-old', 'https://a.example', 1, 'w1', 't-old', 'uuid-old', '', '[]', 0, ?1, 0)",
@@ -2210,8 +2215,14 @@ mod tests {
         assert!(store.thread(&me, "w1", "t-old").unwrap().is_empty());
         let threads = store.workspace_threads("w1").unwrap();
         let uuids: Vec<&str> = threads.iter().map(|(_, _, u)| u.as_str()).collect();
-        assert!(uuids.contains(&"uuid-new"), "the fresh thread stays: {uuids:?}");
-        assert!(!uuids.contains(&"uuid-old"), "the idle thread goes: {uuids:?}");
+        assert!(
+            uuids.contains(&"uuid-new"),
+            "the fresh thread stays: {uuids:?}"
+        );
+        assert!(
+            !uuids.contains(&"uuid-old"),
+            "the idle thread goes: {uuids:?}"
+        );
     }
 
     #[test]
