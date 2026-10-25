@@ -936,11 +936,12 @@
   "workspace.handoff.skip.outsideFolder": "outside this folder",
   "workspace.handoff.skip.pathDeny": "blocked by policy",
   "workspace.handoff.skip.tooLarge": "too large",
-  "workspace.handoff.turn.label": "Take back up to",
-  "workspace.handoff.turn.latest": "Turn {{turn}} (latest)",
-  "workspace.handoff.turn.option": "Turn {{turn}}",
-  "workspace.handoff.result.restBranch": "The {{n}} later cloud turns were not taken back; their commits are on the branch {{branch}}.",
-  "workspace.handoff.turn.after": "Turns {{from}} to {{to}} are not taken back. They are not added to this thread’s history here, and their conversation is deleted with the cloud copy when its grace period ends. Their changes are kept as commits on a local branch.",
+  "workspace.handoff.turn.label": "Take back up to change",
+  "workspace.handoff.turn.latest": "Change {{turn}} (latest)",
+  "workspace.handoff.turn.option": "Change {{turn}}",
+  "workspace.handoff.result.restBranch": "The {{n}} later changes were not taken back; their commits are on the branch {{branch}}.",
+  "workspace.handoff.turn.after": "Changes {{from}} to {{to}} are not taken back. The cloud’s answers after change {{last}} are not added to this thread’s history here or to the agent’s context, and their conversation is deleted with the cloud copy when its grace period ends. Their changes are kept as commits on a local branch.",
   "workspace.worktree.applyWithMarkers": "Apply with conflict markers",
-  "workspace.worktree.markerPaths": "With conflict markers to resolve"
+  "workspace.worktree.markerPaths": "With conflict markers to resolve",
+  "workspace.handoff.turn.help": "A change is a cloud turn that changed files. The conversation is taken back up to its answer."
 }

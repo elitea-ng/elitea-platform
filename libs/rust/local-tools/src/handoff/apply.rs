@@ -430,10 +430,10 @@ fn pick_turn(
     Ok((k, target))
 }
 
-/// What the send left on the laptop is never written or deleted here:
-/// listed with the skipped paths (one entry per path, the merge's reason
-/// first).
-fn add_record_exclusions(report: &mut ApplyOutcome, record: &SendRecord) {
+/// What the send left on the laptop, and what `path_deny` blocks now that
+/// the cloud changed, are never written or deleted here: listed with the
+/// skipped paths (one entry per path, the merge's reason first).
+fn add_record_exclusions(report: &mut ApplyOutcome, record: &SendRecord, denied: &[String]) {
     let mut skipped: BTreeMap<String, SkipReason> = report
         .skipped_paths
         .iter()
@@ -444,10 +444,61 @@ fn add_record_exclusions(report: &mut ApplyOutcome, record: &SendRecord) {
             .entry(excluded.path.clone())
             .or_insert_with(|| skip_reason(excluded.reason));
     }
+    for path in denied {
+        skipped.entry(path.clone()).or_insert(SkipReason::PathDeny);
+    }
     report.skipped_paths = skipped
         .into_iter()
         .map(|(path, reason)| SkippedPath { path, reason })
         .collect();
+}
+
+/// `tree` without the paths `path_deny` blocks now (read and written in the
+/// preflight's scratch objects); the tree, and the dropped entries by path
+/// (`<mode> <type> <id>`). The folder's snapshot `L` leaves them out, so
+/// the base and the cloud's tree must too: a path denied since the send
+/// would otherwise read as deleted locally and conflict with the cloud's
+/// change.
+fn without_denied(
+    objects: &Objects,
+    tree: &str,
+    exclusions: &Exclusions,
+) -> ToolResult<(String, BTreeMap<String, String>)> {
+    let listed = objects
+        .git()
+        .run(&["ls-tree", "-r", "-z", "--full-tree", tree])?;
+    let mut dropped = BTreeMap::new();
+    for field in listed.split(|byte| *byte == 0).filter(|f| !f.is_empty()) {
+        let text = String::from_utf8_lossy(field);
+        let Some((meta, path)) = text.split_once('\t') else {
+            continue;
+        };
+        if matches!(exclusions.reason(path), Some(Reason::PathDeny)) {
+            dropped.insert(path.to_owned(), meta.to_owned());
+        }
+    }
+    if dropped.is_empty() {
+        return Ok((tree.to_owned(), dropped));
+    }
+    let index = TempDir::new("deny")?;
+    let index_file = index.path().join("index");
+    let dirs = [index.path().to_path_buf(), objects.written_dir()];
+    let git = || objects.git().env("GIT_INDEX_FILE", index_file.as_os_str());
+    git().writes(&dirs).run(&["read-tree", tree])?;
+    let mut info = Vec::new();
+    for path in dropped.keys() {
+        // Mode 0 removes the entry.
+        info.extend_from_slice(
+            format!("0 0000000000000000000000000000000000000000\t{path}").as_bytes(),
+        );
+        info.push(0);
+    }
+    git()
+        .writes(&dirs)
+        .stdin(&info)
+        .run(&["update-index", "-z", "--index-info"])?;
+    let filtered = git().writes(&dirs).text(&["write-tree"])?;
+    Ok((filtered, dropped))
 }
 
 /// Verify a fetched segment, read the cloud chain, snapshot the folder,
@@ -539,17 +590,28 @@ pub fn preflight_up_to(
     let verdict = |path: &str, new: Option<&Entry>, old: Option<&Entry>| {
         decide(top, &exclusions, path, new, old.is_none())
     };
+    let (base_tree, base_denied) = without_denied(&objects, &record.tree, &exclusions)?;
+    let (theirs_tree, theirs_denied) = without_denied(&objects, &target_tree, &exclusions)?;
+    // A denied path the cloud changed is a skip, not a change or a conflict.
+    let denied: Vec<String> = base_denied
+        .keys()
+        .chain(theirs_denied.keys())
+        .filter(|path| base_denied.get(*path) != theirs_denied.get(*path))
+        .cloned()
+        .collect();
     let mut plan = engine::plan(
         &objects,
         Trees {
-            base: &record.tree,
+            base: &base_tree,
             ours: &local,
-            theirs: &target_tree,
+            theirs: &theirs_tree,
+            ours_label: "your folder",
+            theirs_label: "cloud",
         },
         &record.twin,
         &verdict,
     )?;
-    add_record_exclusions(&mut plan.outcome, record);
+    add_record_exclusions(&mut plan.outcome, record, &denied);
     let pack = bytes[bundle.pack_offset..].to_vec();
     Ok(Preflight {
         report: plan.outcome.clone(),
@@ -883,6 +945,24 @@ fn apply_folder(
     exclusions: &Exclusions,
     checkpoints: Option<&Checkpoints>,
 ) -> ToolResult<Applied> {
+    let workspace = Workspace::open(source.top(), &[])?;
+    // An excluded file the cloud created is written only where none is
+    // local: one that appeared since the preview (`L` leaves excluded files
+    // out, so the check above does not see it) is never overwritten.
+    if let Some(write) = preflight.plan.writes.iter().find(|write| {
+        write.new.is_some()
+            && exclusions.reason(&write.path).is_some()
+            && present(source.top(), &write.path)
+    }) {
+        return Err(ToolError::new(
+            ErrorCode::StaleRead,
+            format!(
+                "{FOLDER_CHANGED}: `{}` is a local file the take-back would overwrite; preview the take-back again",
+                write.path
+            ),
+        ));
+    }
+    engine::check_plan(&workspace, &preflight.plan)?;
     let checkpoint = match checkpoints {
         Some(checkpoints) => Some(
             checkpoints
@@ -896,7 +976,6 @@ fn apply_folder(
         commits: replayed,
         rest_branch,
     } = import_and_replay(source, preflight, exclusions)?;
-    let workspace = Workspace::open(source.top(), &[])?;
     let done = engine::write_plan(&preflight.objects, &workspace, &preflight.plan)?;
     Ok(Applied {
         report: ApplyOutcome {

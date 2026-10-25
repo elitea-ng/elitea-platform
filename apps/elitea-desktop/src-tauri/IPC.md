@@ -186,7 +186,7 @@ other task worktrees are not readable.
 | `worktree_diff` | `{workspace_id, thread_uuid}` | `{diff: string, truncated: boolean}` — the worktree as it is now (uncommitted work included) against `base_sha`; denied paths left out. Rejects `worktree_unknown`, `workspace_busy` while a turn runs in it. |
 | `worktree_remove` | `{workspace_id, thread_uuid, force?: boolean}` | `null` — its workspace (session, turns, history, data), folder and admin directory; its branch is kept when commits are on it, or when the worktree cannot be opened to tell (missing, refused). Rejects `worktree_dirty` when it has uncommitted work and `force` is not `true`, `workspace_busy`. |
 | `worktree_merge_preflight` | `{workspace_id, thread_uuid}` | `MergePreflight` — what merging the worktree (as it is now) into the folder would do, by `git merge-tree` from `base_sha`; writes nothing. Held 15 minutes. |
-| `worktree_merge_apply` | `{preflight_id, mode?: "apply" \| "apply_with_markers"}` | `MergeApplied` — checkpoints the folder first, then writes each path through the confined writer (path rules apply; what they refuse is in `skipped_paths`). The result lands as uncommitted changes; nothing is committed. `mode` (default `apply`) must be one of the preview's `modes`: a `conflicts` preview offers only `apply_with_markers`, which writes the merge with conflict markers in text files (a binary conflict keeps the folder's file and is skipped as `binary_conflict`), the same as `handoff_apply`'s mode of that name. Rejects `preflight_expired`, `merge_conflicts` (`apply` on a `conflicts` preview: nothing is applied, the work stays on the branch), `invalid_request` (any other mode not offered; the preview is kept), `folder_changed_since_preflight` (preview again), `workspace_busy`. |
+| `worktree_merge_apply` | `{preflight_id, mode?: "apply" \| "apply_with_markers"}` | `MergeApplied` — checkpoints the folder first, then writes each path through the confined writer (path rules apply; what they refuse is in `skipped_paths`). The result lands as uncommitted changes; nothing is committed. `mode` (default `apply`) must be one of the preview's `modes`: a `conflicts` preview offers only `apply_with_markers`, which writes the merge with conflict markers in text files (a binary conflict keeps the folder's file and is skipped as `binary_conflict`), the same as `handoff_apply`'s mode of that name. Deletions go first (with the directories they empty), so a directory the task turned into a file, or the reverse, lands; conflict markers read `<<<<<<< your folder` / `>>>>>>> task worktree`. Rejects `preflight_expired`, `merge_conflicts` (`apply` on a `conflicts` preview: nothing is applied, the work stays on the branch), `invalid_request` (any other mode not offered), `path_in_the_way` (an ignored file or directory where the result needs the other kind), each of these and `folder_changed_since_preflight` before anything is written, the preview kept, `folder_changed_since_preflight` (preview again), `workspace_busy`. |
 | `worktree_merge_undo` | `{checkpoint_id, confirm_older?: boolean}` | `{restored: string[]}` — restores the checkpoint the merge took (only an id `worktree_merge_apply` returned; once). Rejects `invalid_request` for any other checkpoint, `undo_not_latest` when the folder was checkpointed since (a later turn or merge, whose changes the restore reverts too) and `confirm_older` is not `true`, `workspace_busy`. |
 
 ```ts
@@ -1756,25 +1756,45 @@ type HandoffEvent = { conversation_uuid: string;
   for `conflicts`; 256 KiB of diff text at most, text files only;
   `diffs_truncated`). `handoff_apply` refuses with
   `folder_changed_since_preflight` when the folder moved after the
-  preflight, and `invalid_request` for a mode not in `modes`. Excluded
-  paths (the send's `excluded[]` included), denied paths, symlinks and
-  submodule entries are never deleted or overwritten (`skipped_paths`, each
-  with its reason); a file the cloud created that the exclusions match is
-  written only where no local file exists.
-- **Up to turn k.** With `up_to_turn` k below `cloud_turns`, the take-back
-  applies turn k's tree and imports only turns 1..k into the thread history;
-  the later turns are not local history (`turns_not_taken`). The release
+  preflight (an excluded file the cloud created that now exists locally
+  counts: it is never overwritten), `invalid_request` for a mode not in
+  `modes` (`merge_conflicts: …` for `apply` on conflicts), and
+  `path_in_the_way` when something the snapshot does not hold (an ignored
+  directory) is where the result puts a file, or a file where it needs a
+  directory; each before anything is written or checkpointed, and each
+  keeps the preview (apply it again, or in another mode). Deletions go
+  first and the directories they empty are removed, so a directory the
+  cloud turned into a file (or the reverse) lands. Excluded paths (the
+  send's `excluded[]` included), denied paths, symlinks and submodule
+  entries are never deleted or overwritten (`skipped_paths`, each with its
+  reason); a path `path_deny` blocks since the send is left out of the
+  base and the cloud's tree too, so the cloud's change to it is a
+  `path_deny` skip, never a conflict. A file the cloud created that the
+  exclusions match is written only where no local file exists. Conflict
+  markers name the sides: `<<<<<<< your folder` and `>>>>>>> cloud`
+  (`task worktree` for `worktree_merge_apply`).
+- **Up to turn k.** A turn is a change: a cloud turn that changed files
+  (one commit; `cloud_turns` counts them, and the dialog says "change").
+  With `up_to_turn` k below `cloud_turns`, the take-back applies change k's
+  tree and imports the conversation up to the answer that made change k;
+  every later answer, with a commit or without, is not local history
+  (`turns_not_taken`), and the agent's session leaves those message groups
+  out of every later seed (`sessions.sqlite` `seed_skips`), so the agent
+  never sees them. The release
   ends the cloud copy (the server takes no second take-back from `LOCAL`),
   so their work is kept as commits on the local branch `rest_branch`
   (`elitea/cloud/<short>-after-turn-<k>`), and the dialog warns that their
   conversation goes with the cloud copy when its grace ends.
-- **Release and history.** `handoff_apply` releases the thread and imports
+- **Release and history.** The release's outcome is the server's:
+  `applied` for `apply` and `apply_with_markers` (the folder took the
+  cloud's changes), `worktree`, `discarded`. `handoff_apply` releases the thread and imports
   its cloud turns (up to the chosen turn) into the thread history (`StoredTurn.origin: "cloud"`,
   changed files from the cloud commits' diffs). A release the server did
   not acknowledge (`released: false`) is kept and sent again by the next
   `handoff_status`; until then the thread stays read-only. A release the
   server refuses for good (`release_refused`: `handoff_erased` when the
-  cloud copy was erased meanwhile, `stale_epoch`, `handoff_not_found`) is
+  cloud copy was erased meanwhile, `stale_epoch`, `handoff_not_found`,
+  `invalid_handoff` or `invalid_request` for a body it will never take) is
   not kept: the thread follows the server's state (`LOCAL` after an erase,
   so `released` is `true` and the cloud turns are still imported). The
   release carries the epoch the preflight read, so a take-back asked while

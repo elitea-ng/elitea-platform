@@ -69,10 +69,10 @@ function resultTitle(result: ApplyResult): string {
   }
 }
 
-/** The conflicted files that got markers (a binary conflict keeps the folder's file). */
+/** The conflicted files that got markers: a skipped one (a binary conflict, a denied or excluded path) keeps the folder's file. */
 function markerPaths(preflight: Preflight): string[] {
-  const binary = new Set(preflight.skipped_paths.filter((skip) => skip.reason === 'binary_conflict').map((skip) => skip.path));
-  return preflight.conflict_paths.filter((path) => !binary.has(path));
+  const skipped = new Set(preflight.skipped_paths.map((skip) => skip.path));
+  return preflight.conflict_paths.filter((path) => !skipped.has(path));
 }
 
 /** What an apply into the folder wrote, and where the cloud's commits are. */

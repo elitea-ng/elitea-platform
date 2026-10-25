@@ -281,6 +281,7 @@ fn tool_error(error: &ToolError) -> TurnError {
         }
         ErrorCode::InvalidArgument => "invalid_request",
         ErrorCode::StaleRead => apply::FOLDER_CHANGED,
+        ErrorCode::Conflict if error.message().starts_with("path_in_the_way") => "path_in_the_way",
         ErrorCode::Unsupported => "not_a_git_repository",
         _ => "worktree_failed",
     };
@@ -780,6 +781,7 @@ impl WorktreeHost {
         };
         let parent = self.parent(&held.workspace_id)?;
         let this = Arc::clone(self);
+        let id = preflight_id.to_owned();
         blocking(move || {
             let _claim = this
                 .agents
@@ -793,8 +795,21 @@ impl WorktreeHost {
                 MergeApplyMode::ApplyWithMarkers => {
                     apply::apply_with_markers(&session, &held.preflight, &label)
                 }
-            }
-            .map_err(|e| tool_error(&e))?;
+            };
+            let applied = match applied {
+                Ok(applied) => applied,
+                Err(error) => {
+                    // Refused before anything was written (the folder moved,
+                    // something is in the way): the preview is kept.
+                    if matches!(error.code(), ErrorCode::StaleRead | ErrorCode::Conflict) {
+                        this.preflights
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .insert(id, held);
+                    }
+                    return Err(tool_error(&error));
+                }
+            };
             if let Some(seq) = applied.checkpoint {
                 // What `worktree_merge_undo` accepts: this merge's checkpoint.
                 update_private(

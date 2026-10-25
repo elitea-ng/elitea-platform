@@ -90,6 +90,8 @@ struct Platform {
     groups: Vec<Value>,
     release: Option<Value>,
     fail_release: bool,
+    /// The release body is one the server never takes (422 `invalid_handoff`).
+    invalid_release: bool,
     /// `GET workspace_handoff_policy` (`None`: 404, an older server).
     policy: Option<Value>,
     /// The begin answer's `limits` instead of the defaults.
@@ -321,6 +323,14 @@ fn handle(platform: &Mutex<Platform>, req: &Req) -> Res {
             if p.fail_release {
                 p.fail_release = false;
                 return Res::json(503, &json!({"error": "unavailable", "message": "later"}));
+            }
+            // The server's outcomes (workspacehandoff.Service.Release).
+            let known = ["applied", "worktree", "discarded"];
+            if p.invalid_release || !known.iter().any(|o| body["outcome"] == json!(o)) {
+                return Res::json(
+                    422,
+                    &json!({"error": "invalid_handoff", "message": "The request is not a valid handoff."}),
+                );
             }
             if p.state != "RECLAIMING" || body["epoch"] != json!(p.epoch) {
                 return Res::json(
@@ -1097,6 +1107,7 @@ async fn taking_back_up_to_turn_k_imports_only_those_turns() {
         .await
         .unwrap();
     let commits = cloud_turns_n(&h, 2);
+    no_commit_turn_after_turn_one(&h);
     h.host.reclaim(CONVERSATION).await.unwrap();
     let preflight = h.host.preflight(CONVERSATION, Some(1)).await.unwrap();
     assert_eq!((preflight.cloud_turns, preflight.up_to_turn), (2, 1));
@@ -1129,7 +1140,108 @@ async fn taking_back_up_to_turn_k_imports_only_those_turns() {
         .thread(&owner, &h.workspace_id, CONVERSATION)
         .unwrap();
     let ids: Vec<&str> = turns.iter().map(|turn| turn.turn_id.as_str()).collect();
-    assert_eq!(ids, ["cloud:a1"], "turn 2 is not local history");
+    assert_eq!(
+        ids,
+        ["cloud:a1"],
+        "the answer after change 1 (no commit) and turn 2 are not local history"
+    );
+    // And no later seed of the agent's session holds them.
+    let key = crate::sessions::session_key(&owner.origin, 7, CONVERSATION);
+    assert_eq!(
+        h.sessions.store().seed_skips(&key).await.unwrap(),
+        [15, 16, 20, 21]
+    );
+}
+
+/// A cloud answer that changed nothing (no `workspace_commit`), after turn
+/// 1's answer and before turn 2's question (groups 15 and 16).
+fn no_commit_turn_after_turn_one(h: &Harness) {
+    let mut p = h.platform.lock().unwrap();
+    let epoch = p.epoch;
+    let at = p.groups.iter().position(|g| g["uuid"] == "a1").unwrap() + 1;
+    p.groups.insert(at, json!({"id": 15, "uuid": "qx", "meta": {}, "created_at": "2026-10-15 10:01:20.000000",
+        "message_items": [{"item_type": "text_message", "item_details": {"content": "Just explain the plan"}}]}));
+    p.groups.insert(at + 1, json!({"id": 16, "uuid": "ax", "reply_to_id": 15, "created_at": "2026-10-15 10:01:40.000000",
+        "meta": {"executed_by": "cloud_executor", "workspace_epoch": epoch},
+        "message_items": [{"item_type": "text_message", "item_details": {"content": "The plan, explained."}}]}));
+}
+
+/// Review of #1431: a markers take-back releases as `applied` (the
+/// server's outcomes are applied, worktree and discarded), its markers name
+/// the sides, and a refused mode or a folder that moved keeps the preview.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_markers_take_back_releases_as_applied_and_a_refusal_keeps_the_preview() {
+    let h = harness().await;
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    cloud_turn(&h);
+    std::fs::write(h.folder.join("README.md"), "hello from the laptop\n").unwrap();
+    h.host.reclaim(CONVERSATION).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
+    assert_eq!(preflight.report.outcome, Outcome::Conflicts);
+    let id = preflight.preflight_id.clone();
+
+    // A plain apply is refused, the preview kept.
+    let refused = h.host.apply(&id, Mode::Apply, None).await.unwrap_err();
+    assert_eq!(refused.code, "invalid_request");
+    assert!(
+        refused.message.starts_with("merge_conflicts"),
+        "{}",
+        refused.message
+    );
+    // The folder moved: refused, kept; back as it was: the same preview applies.
+    std::fs::write(h.folder.join("late.txt"), "late\n").unwrap();
+    let stale = h
+        .host
+        .apply(&id, Mode::ApplyWithMarkers, None)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        stale.code,
+        elitea_local_tools::handoff::apply::FOLDER_CHANGED
+    );
+    std::fs::remove_file(h.folder.join("late.txt")).unwrap();
+    let applied = h
+        .host
+        .apply(&id, Mode::ApplyWithMarkers, None)
+        .await
+        .unwrap();
+    assert_eq!(applied.outcome, "applied_with_markers");
+    assert!(applied.released, "{applied:?}");
+    assert_eq!(applied.release_refused, None);
+    let release = h.platform.lock().unwrap().release.clone().unwrap();
+    assert_eq!(release["outcome"], "applied");
+    let readme = std::fs::read_to_string(h.folder.join("README.md")).unwrap();
+    assert!(
+        readme.contains("<<<<<<< your folder\n") && readme.contains(">>>>>>> cloud\n"),
+        "{readme}"
+    );
+}
+
+/// A release body the server never takes (`invalid_handoff`) is refused for
+/// good: not kept, not sent again by the next status.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_release_the_server_never_takes_is_not_retried() {
+    let h = harness().await;
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    cloud_turn(&h);
+    h.host.reclaim(CONVERSATION).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
+    h.platform.lock().unwrap().invalid_release = true;
+    let applied = h
+        .host
+        .apply(&preflight.preflight_id, Mode::Apply, None)
+        .await
+        .unwrap();
+    assert_eq!(applied.release_refused.as_deref(), Some("invalid_handoff"));
+    h.host.status(CONVERSATION, None).await.unwrap();
+    h.host.status(CONVERSATION, None).await.unwrap();
+    assert_eq!(h.platform.lock().unwrap().releases, 1, "not sent again");
 }
 
 /// Risk 2: a take-back worktree (the folder moved on since the send)
@@ -1984,6 +2096,85 @@ async fn a_take_back_makes_the_next_local_turn_see_the_cloud_turns() {
     // And the next turn needs no seed.
     run("thanks").await;
     assert_eq!(seeds(&h), 1);
+}
+
+/// #1431 review: a take-back up to turn 1 of 2 re-seeds the agent's
+/// session without the later cloud turns, which the server still holds:
+/// the next local turn sees turn 1, never the answer after it or turn 2.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_partial_take_back_never_seeds_the_later_cloud_turns() {
+    use crate::d0::turn::TurnRequest;
+    let convo = Arc::new(Mutex::new(crate::d0::tests::Convo::default()));
+    let h = harness_full(
+        Arc::new(crate::handoff_settings::FixedEnv(Vec::new())),
+        None,
+        Some(convo.clone()),
+    )
+    .await;
+    let request = TurnRequest {
+        workspace_id: h.workspace_id.clone(),
+        project_id: 1,
+        conversation_id: json!(CONVERSATION),
+        application_id: 5,
+        version_id: 9,
+        prompt: "what did the cloud do?".to_owned(),
+        plan_mode: false,
+        bypass: false,
+        mentions: Vec::new(),
+        skills: Vec::new(),
+        compact: false,
+        model: None,
+        project_skills: Vec::new(),
+        command: None,
+        images: Vec::new(),
+    };
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    cloud_turns_n(&h, 2);
+    no_commit_turn_after_turn_one(&h);
+    h.host.reclaim(CONVERSATION).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, Some(1)).await.unwrap();
+    let applied = h
+        .host
+        .apply(&preflight.preflight_id, Mode::Apply, Some(1))
+        .await
+        .unwrap();
+    assert!(applied.released, "{applied:?}");
+
+    let started = h.agents.start(request).await.unwrap();
+    for _ in 0..500 {
+        if h.emitter
+            .all()
+            .iter()
+            .any(|e| e.kind == "done" && e.turn_id == started.turn_id)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::timeout(Duration::from_secs(5), h.agents.commits_idle())
+        .await
+        .expect("the turn's commit settled");
+    let bodies: Vec<String> = h
+        ._server
+        .seen()
+        .into_iter()
+        .filter(|r| r.path == "/llm/v1/chat/completions")
+        .map(|r| r.body)
+        .collect();
+    let text = bodies.first().expect("the turn called the model");
+    assert!(text.contains("Make it greet the cloud"), "{text}");
+    assert!(text.contains("what did the cloud do?"), "{text}");
+    for unseen in [
+        "Just explain the plan",
+        "The plan, explained.",
+        "Turn 2, please",
+        "Done: turn 2.",
+    ] {
+        assert!(!text.contains(unseen), "{unseen} in {text}");
+    }
 }
 
 /// #1223: a send stops the workspace's background processes before the

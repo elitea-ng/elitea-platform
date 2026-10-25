@@ -135,6 +135,7 @@ fn tool_error(error: &elitea_local_tools::error::ToolError) -> HandoffError {
         ErrorCode::Unsupported if error.message().contains("sha256") => "unsupported_object_format",
         ErrorCode::Unsupported => "handoff_unsupported",
         ErrorCode::Conflict if error.message().contains("integrity") => "integrity_failed",
+        ErrorCode::Conflict if error.message().starts_with("path_in_the_way") => "path_in_the_way",
         ErrorCode::Conflict => "handoff_conflict",
         ErrorCode::InvalidArgument => "invalid_request",
         _ => "handoff_failed",
@@ -431,7 +432,16 @@ pub struct ApplyAnswer {
 /// the cloud copy was erased or expired (`handoff_erased`), the thread is
 /// not this owner's any more (`handoff_not_found`), or it moved on
 /// (`stale_epoch`). Retrying it would keep the thread read-only forever.
-const RELEASE_REFUSED_FOR_GOOD: [&str; 3] = ["handoff_erased", "handoff_not_found", "stale_epoch"];
+/// A release the server refuses with one of these is never sent again: the
+/// thread follows the server's state. `invalid_handoff` / `invalid_request`
+/// is a body the server will never take, so retrying it would loop forever.
+const RELEASE_REFUSED_FOR_GOOD: [&str; 5] = [
+    "handoff_erased",
+    "handoff_not_found",
+    "stale_epoch",
+    "invalid_handoff",
+    "invalid_request",
+];
 
 /// What a release came to.
 enum Released {
@@ -1678,13 +1688,23 @@ impl HandoffHost {
                 .preflights
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let previewed = preflights
-                .get(preflight_id)
-                .ok_or_else(|| {
-                    HandoffError::new("preflight_unknown", "Preview the take-back again.")
-                })?
-                .preflight
-                .up_to_turn;
+            let previewed = preflights.get(preflight_id).ok_or_else(|| {
+                HandoffError::new("preflight_unknown", "Preview the take-back again.")
+            })?;
+            // A mode the preview does not offer is refused here, the
+            // preview kept (pick another mode without previewing again).
+            if !previewed.preflight.modes().contains(&mode) {
+                let conflicts = previewed.preflight.report.outcome == take_back::Outcome::Conflicts;
+                return Err(HandoffError::new(
+                    "invalid_request",
+                    if mode == Mode::Apply && conflicts {
+                        "merge_conflicts: the cloud and the folder changed the same lines; open the cloud work as a worktree, apply it with conflict markers, or discard it"
+                    } else {
+                        "this take-back does not offer that mode"
+                    },
+                ));
+            }
+            let previewed = previewed.preflight.up_to_turn;
             if let Some(turn) = up_to_turn
                 && turn != previewed
             {
@@ -1732,7 +1752,25 @@ impl HandoffHost {
             .await,
         )?;
         drop(claim);
-        let applied = applied.map_err(|e| tool_error(&e))?;
+        let applied = match applied {
+            Ok(applied) => applied,
+            Err(error) => {
+                // Refused before anything was written (the folder moved, or
+                // something is in the way): the preview is kept, so it can
+                // be applied once the folder is back, or in another mode.
+                if matches!(
+                    error.code(),
+                    elitea_local_tools::error::ErrorCode::StaleRead
+                        | elitea_local_tools::error::ErrorCode::Conflict
+                ) {
+                    self.preflights
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(preflight_id.to_owned(), held);
+                }
+                return Err(tool_error(&error));
+            }
+        };
         let turns_not_taken = held
             .preflight
             .cloud_turns()
@@ -1743,9 +1781,23 @@ impl HandoffHost {
             Mode::Worktree => "worktree",
             Mode::Discard => "discarded",
         };
+        // The server's release outcomes are `applied`, `worktree` and
+        // `discarded`: a markers apply took the cloud's changes into the
+        // folder, so it is `applied`.
+        let release_outcome = match mode {
+            Mode::Apply | Mode::ApplyWithMarkers => "applied",
+            Mode::Worktree => "worktree",
+            Mode::Discard => "discarded",
+        };
+        if turns_not_taken > 0 {
+            let chain: Vec<String> = held.preflight.chain.iter().map(|c| c.sha.clone()).collect();
+            self.keep_seed_boundary(&record, &chain, held.preflight.up_to_turn)
+                .await;
+        }
         let applied_sha = applied.replayed.last().cloned();
-        record.pending_release =
-            Some(json!({"epoch": record.epoch, "outcome": outcome, "applied_sha": applied_sha}));
+        record.pending_release = Some(
+            json!({"epoch": record.epoch, "outcome": release_outcome, "applied_sha": applied_sha}),
+        );
         self.records.put(&record)?;
         let released = self.release(&record).await;
         let (workspace_id, conversation_uuid) =
@@ -1884,6 +1936,39 @@ impl HandoffHost {
             log::warn!("the handoff record was not updated: {}", error.code);
         }
         false
+    }
+
+    /// A partial take-back: the server's message groups after the answer
+    /// that made change `up_to_turn` (the later cloud turns, which the
+    /// server keeps) are left out of every later seed of the agent's
+    /// session, so the agent never sees them as context.
+    async fn keep_seed_boundary(&self, record: &ThreadRecord, chain: &[String], up_to_turn: usize) {
+        let path = format!(
+            "/api/v2/elitea_core/conversation/prompt_lib/{}/{}?messages_limit=1000&sort_order=asc",
+            record.project_id, record.conversation_uuid
+        );
+        let detail = match self.call(Method::GET, &path, None).await {
+            Ok(detail) => detail,
+            Err(error) => {
+                log::warn!(
+                    "the seed boundary of a partial take-back was not kept: {}",
+                    error.code
+                );
+                return;
+            }
+        };
+        let groups = message_groups(&detail);
+        let bound = taken_bound(&groups, chain, up_to_turn);
+        let later: Vec<i64> = groups[bound..]
+            .iter()
+            .filter_map(|group| group.get("id").and_then(Value::as_i64))
+            .collect();
+        if !later.is_empty() {
+            self.deps
+                .agents
+                .skip_on_seed(&record.conversation_uuid, later)
+                .await;
+        }
     }
 
     /// Import the cloud turns into the thread history; how many were added.
@@ -2141,30 +2226,65 @@ fn parse_time(value: Option<&Value>) -> Option<i64> {
         })
 }
 
+/// A conversation detail's message groups, in its order (oldest first).
+fn message_groups(detail: &Value) -> Vec<&Value> {
+    detail
+        .get("message_groups")
+        .and_then(Value::as_array)
+        .map(|groups| groups.iter().collect())
+        .unwrap_or_default()
+}
+
+fn workspace_commit(group: &Value) -> Option<&str> {
+    group
+        .get("meta")
+        .and_then(|meta| meta.get("workspace_commit"))
+        .and_then(Value::as_str)
+}
+
+/// How many of `groups` a take-back up to change `up_to_turn` of `chain`
+/// takes: through the answer that made that change (answers that changed
+/// nothing before it are part of it). The picker's turn is the change, so
+/// "up to turn k" never imports an answer after change k, with a commit or
+/// without one. All of them when every change is taken back.
+fn taken_bound(groups: &[&Value], chain: &[String], up_to_turn: usize) -> usize {
+    if up_to_turn >= chain.len() {
+        return groups.len();
+    }
+    if let Some(last) = up_to_turn.checked_sub(1).map(|index| chain[index].as_str())
+        && let Some(at) = groups
+            .iter()
+            .rposition(|group| workspace_commit(group) == Some(last))
+    {
+        return at + 1;
+    }
+    // The answer of change k is not found: stop before the first later one.
+    let later: std::collections::HashSet<&str> =
+        chain[up_to_turn..].iter().map(String::as_str).collect();
+    groups
+        .iter()
+        .position(|group| workspace_commit(group).is_some_and(|sha| later.contains(sha)))
+        .unwrap_or(0)
+}
+
 /// The cloud turns of a conversation detail (`message_groups`, oldest
 /// first): answers whose meta says `executed_by: cloud_executor` and whose
 /// `workspace_epoch` lies in `[from, to]`, each with its question (the group
 /// it replies to, else the group before it) and its commit's changes.
 ///
-/// Only the turns taken back are imported: the first answer whose commit is
-/// one of the turns after `up_to_turn` ends the import (that turn and every
-/// later one stay out of the local history).
+/// Only the turns taken back are imported: the groups up to the answer that
+/// made change `up_to_turn` ([`taken_bound`]); every later answer, with a
+/// commit or without, stays out of the local history.
 fn cloud_turns(detail: &Value, from: u64, to: u64, preflight: &Preflight) -> Vec<ImportedTurn> {
-    let not_taken: std::collections::HashSet<&str> = preflight.chain[preflight.up_to_turn..]
-        .iter()
-        .map(|commit| commit.sha.as_str())
-        .collect();
-    let groups: Vec<&Value> = detail
-        .get("message_groups")
-        .and_then(Value::as_array)
-        .map(|groups| groups.iter().collect())
-        .unwrap_or_default();
+    let groups = message_groups(detail);
+    let chain: Vec<String> = preflight.chain.iter().map(|c| c.sha.clone()).collect();
+    let bound = taken_bound(&groups, &chain, preflight.up_to_turn);
     let by_id: BTreeMap<i64, &Value> = groups
         .iter()
         .filter_map(|group| Some((group.get("id")?.as_i64()?, *group)))
         .collect();
     let mut out = Vec::new();
-    for (index, group) in groups.iter().enumerate() {
+    for (index, group) in groups.iter().enumerate().take(bound) {
         let meta = group.get("meta").cloned().unwrap_or(Value::Null);
         if meta.get("executed_by").and_then(Value::as_str) != Some(EXECUTED_BY_CLOUD) {
             continue;
@@ -2175,13 +2295,6 @@ fn cloud_turns(detail: &Value, from: u64, to: u64, preflight: &Preflight) -> Vec
             .unwrap_or_default();
         if epoch < from || epoch > to {
             continue;
-        }
-        if meta
-            .get("workspace_commit")
-            .and_then(Value::as_str)
-            .is_some_and(|sha| not_taken.contains(sha))
-        {
-            break;
         }
         let question = group
             .get("reply_to_id")

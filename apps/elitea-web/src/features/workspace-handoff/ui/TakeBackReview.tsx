@@ -116,7 +116,10 @@ function Summary({ preflight }: { preflight: Preflight }): React.JSX.Element {
   }
 }
 
-/** Which cloud turn the take back goes up to; shown when the cloud worked in more than one. */
+/**
+ * Which change the take back goes up to; shown when the cloud made more than one. A change is a cloud turn that
+ * changed files (one commit): the take back writes that change's files and imports the conversation up to its answer.
+ */
 function TurnPicker({ preflight, onPickTurn }: { preflight: Preflight; onPickTurn: (turn: number) => void }): React.JSX.Element | null {
   if (preflight.cloud_turns < 2) return null;
   const turns = Array.from({ length: preflight.cloud_turns }, (_, index) => index + 1);
@@ -124,17 +127,18 @@ function TurnPicker({ preflight, onPickTurn }: { preflight: Preflight; onPickTur
     <TextField
       select
       size="small"
-      label={t('workspace.handoff.turn.label', 'Take back up to')}
+      label={t('workspace.handoff.turn.label', 'Take back up to change')}
       value={preflight.up_to_turn}
       onChange={(event) => onPickTurn(Number(event.target.value))}
+      helperText={t('workspace.handoff.turn.help', 'A change is a cloud turn that changed files. The conversation is taken back up to its answer.')}
       slotProps={{ htmlInput: { 'data-testid': 'takeback-turn' } }}
       sx={{ maxWidth: 280 }}
     >
       {turns.map((turn) => (
         <MenuItem key={turn} value={turn}>
           {turn === preflight.cloud_turns
-            ? t('workspace.handoff.turn.latest', 'Turn {{turn}} (latest)', { turn: String(turn) })
-            : t('workspace.handoff.turn.option', 'Turn {{turn}}', { turn: String(turn) })}
+            ? t('workspace.handoff.turn.latest', 'Change {{turn}} (latest)', { turn: String(turn) })
+            : t('workspace.handoff.turn.option', 'Change {{turn}}', { turn: String(turn) })}
         </MenuItem>
       ))}
     </TextField>
@@ -148,8 +152,8 @@ function TurnsAfter({ preflight }: { preflight: Preflight }): React.JSX.Element 
     <Alert severity="warning" data-testid="takeback-turns-after">
       {t(
         'workspace.handoff.turn.after',
-        'Turns {{from}} to {{to}} are not taken back. They are not added to this thread’s history here, and their conversation is deleted with the cloud copy when its grace period ends. Their changes are kept as commits on a local branch.',
-        { from: String(preflight.up_to_turn + 1), to: String(preflight.cloud_turns) },
+        'Changes {{from}} to {{to}} are not taken back. The cloud’s answers after change {{last}} are not added to this thread’s history here or to the agent’s context, and their conversation is deleted with the cloud copy when its grace period ends. Their changes are kept as commits on a local branch.',
+        { from: String(preflight.up_to_turn + 1), to: String(preflight.cloud_turns), last: String(preflight.up_to_turn) },
       )}
     </Alert>
   );
@@ -160,7 +164,7 @@ export function RestBranch({ result }: { result: ApplyResult }): React.JSX.Eleme
   if (result.rest_branch === null || result.turns_not_taken === 0) return null;
   return (
     <Typography variant="bodySmall" data-testid="takeback-rest-branch" sx={mutedSx}>
-      {t('workspace.handoff.result.restBranch', 'The {{n}} later cloud turns were not taken back; their commits are on the branch {{branch}}.', {
+      {t('workspace.handoff.result.restBranch', 'The {{n}} later changes were not taken back; their commits are on the branch {{branch}}.', {
         n: String(result.turns_not_taken),
         branch: result.rest_branch,
       })}

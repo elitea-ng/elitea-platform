@@ -3990,6 +3990,32 @@ impl AgentHost {
         }
     }
 
+    /// A partial take-back (#1187): the server's message groups
+    /// `group_ids` (the cloud turns after the one taken back to) are left
+    /// out of every later seed of this conversation's session.
+    pub async fn skip_on_seed(&self, conversation_uuid: &str, group_ids: Vec<i64>) {
+        let Some(sessions) = &self.deps.sessions else {
+            return;
+        };
+        let owner = match self.owner(&self.api).await {
+            Ok(owner) => owner,
+            Err(error) => {
+                log::warn!(
+                    "the seed boundary could not be kept: {}",
+                    log_reason(&error.code, error.status)
+                );
+                return;
+            }
+        };
+        if let Err(error) = sessions
+            .store()
+            .skip_on_seed(&owner.origin, owner.user_id, conversation_uuid, group_ids)
+            .await
+        {
+            log::warn!("the seed boundary could not be kept: {error}");
+        }
+    }
+
     /// A take-back brought the cloud's turns into the conversation: its
     /// agent session is marked so the next local turn re-seeds from the
     /// server and folds them in (`executed_by = 'cloud_executor'`).

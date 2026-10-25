@@ -51,7 +51,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::git::{Git, Repo};
 use crate::session::LocalSession;
-use crate::workspace::{Intent, Workspace, WsPath, is_protected_name};
+use crate::workspace::{EntryKind, Intent, Workspace, WsPath, is_protected_name};
 
 /// The machine code of a folder that changed after its preview.
 pub const FOLDER_CHANGED: &str = "folder_changed_since_preflight";
@@ -164,13 +164,19 @@ impl ApplyOutcome {
     }
 }
 
-/// The tree triple of a merge, as tree ids.
+/// The tree triple of a merge, as tree ids, and how conflict markers name
+/// the two sides (`<<<<<<< your folder`, `>>>>>>> cloud`).
 #[derive(Clone, Copy, Debug)]
 pub struct Trees<'a> {
     pub base: &'a str,
     pub ours: &'a str,
     pub theirs: &'a str,
+    pub ours_label: &'a str,
+    pub theirs_label: &'a str,
 }
+
+/// How conflict markers name the merge base (diff3 styles only).
+const BASE_LABEL: &str = "base";
 
 /// Where the engine's git processes find objects and write new ones: the
 /// repository itself, or a scratch object directory over it and other
@@ -207,14 +213,14 @@ impl Objects {
         }
     }
 
-    fn written_dir(&self) -> PathBuf {
+    pub(crate) fn written_dir(&self) -> PathBuf {
         match &self.scratch {
             Some((dir, _)) => dir.clone(),
             None => self.repo.common_dir().join("objects"),
         }
     }
 
-    fn git(&self) -> Git<'_> {
+    pub(crate) fn git(&self) -> Git<'_> {
         let git = self.repo.git(self.repo.top());
         match &self.scratch {
             Some((dir, alternates)) => git
@@ -313,13 +319,15 @@ pub(crate) fn plan(
         check_id(id)?;
     }
     let mut conflicts: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
+    let mut merged_sides = None;
     let (outcome, result) = if trees.ours == trees.base {
         (Outcome::FastPath, trees.theirs.to_owned())
     } else if trees.theirs == trees.base || trees.theirs == trees.ours {
         (Outcome::CleanMerge, trees.ours.to_owned())
     } else {
-        let (tree, conflicted) = merge_tree(objects, trees)?;
+        let (tree, conflicted, commits) = merge_tree(objects, trees)?;
         conflicts = conflicted;
+        merged_sides = Some(commits);
         let outcome = if conflicts.is_empty() {
             Outcome::CleanMerge
         } else {
@@ -328,7 +336,15 @@ pub(crate) fn plan(
         (outcome, tree)
     };
     let binary = binary_conflicts(objects, &conflicts)?;
-    let raw = diff_trees(objects, trees.ours, &result)?;
+    let mut raw = diff_trees(objects, trees.ours, &result)?;
+    if let Some(commits) = &merged_sides {
+        let labels = [
+            (commits.ours.as_str(), trees.ours_label),
+            (commits.theirs.as_str(), trees.theirs_label),
+            (commits.base.as_str(), BASE_LABEL),
+        ];
+        relabel_markers(objects, &mut raw, &conflicts, &binary, &labels)?;
+    }
     let sizes = sizes(
         objects,
         raw.iter()
@@ -338,8 +354,9 @@ pub(crate) fn plan(
     let mut skipped = BTreeSet::new();
     // Where each side of a rename landed (both written: one `renamed`).
     let mut landed: BTreeMap<usize, String> = BTreeMap::new();
-    for (index, change) in raw.iter().enumerate() {
-        let verdict = if binary.contains(&change.path) {
+    let mut verdicts = Vec::with_capacity(raw.len());
+    for change in &raw {
+        verdicts.push(if binary.contains(&change.path) {
             Err(SkipReason::BinaryConflict)
         } else if change.path.split('/').any(is_protected_name)
             || change.old.as_ref().is_some_and(Entry::special)
@@ -352,7 +369,10 @@ pub(crate) fn plan(
             Err(SkipReason::TooLarge)
         } else {
             decide(&change.path, change.new.as_ref(), change.old.as_ref())
-        };
+        });
+    }
+    block_kept_paths(&raw, &mut verdicts);
+    for (index, (change, verdict)) in raw.iter().zip(verdicts).enumerate() {
         match verdict {
             Ok(path) => {
                 landed.insert(index, path.clone());
@@ -435,17 +455,214 @@ fn changed_paths(raw: &[RawChange], landed: &BTreeMap<usize, String>) -> Vec<Cha
     out
 }
 
-/// Write a plan into `workspace` (the caller checked the folder and took
-/// its checkpoint).
+/// `path` is strictly inside the directory `dir`.
+fn is_under(path: &str, dir: &str) -> bool {
+    path.len() > dir.len() && path.starts_with(dir) && path.as_bytes()[dir.len()] == b'/'
+}
+
+/// A path the folder keeps (its change skipped) stays where it is, so the
+/// result cannot put a file over its directory or a directory over it: a
+/// file whose path holds a kept file, or a file under a kept file, is left
+/// alone too, for the kept path's reason.
+fn block_kept_paths(raw: &[RawChange], verdicts: &mut [Result<String, SkipReason>]) {
+    let kept: Vec<(String, SkipReason)> = raw
+        .iter()
+        .zip(verdicts.iter())
+        .filter_map(|(change, verdict)| match verdict {
+            Err(reason) if change.old.is_some() => Some((change.path.clone(), *reason)),
+            _ => None,
+        })
+        .collect();
+    if kept.is_empty() {
+        return;
+    }
+    for (change, verdict) in raw.iter().zip(verdicts.iter_mut()) {
+        if verdict.is_err() || change.new.is_none() {
+            continue;
+        }
+        if let Some((_, reason)) = kept
+            .iter()
+            .find(|(path, _)| is_under(path, &change.path) || is_under(&change.path, path))
+        {
+            *verdict = Err(*reason);
+        }
+    }
+}
+
+/// Give the conflict markers of the conflicted text files the sides'
+/// names instead of the throwaway commits' ids (`merge-tree` labels each
+/// side with the revision it was given): the relabelled blob is written
+/// (into the scratch directory when there is one) and becomes the change's
+/// new entry.
+fn relabel_markers(
+    objects: &Objects,
+    raw: &mut [RawChange],
+    conflicts: &BTreeMap<String, Vec<Entry>>,
+    binary: &BTreeSet<String>,
+    labels: &[(&str, &str)],
+) -> ToolResult<()> {
+    let marked: Vec<usize> = raw
+        .iter()
+        .enumerate()
+        .filter(|(_, change)| {
+            conflicts.contains_key(&change.path)
+                && !binary.contains(&change.path)
+                && change.new.as_ref().is_some_and(|entry| !entry.special())
+        })
+        .map(|(index, _)| index)
+        .collect();
+    let oids: Vec<&str> = marked
+        .iter()
+        .filter_map(|index| raw[*index].new.as_ref().map(|entry| entry.oid.as_str()))
+        .collect();
+    let blobs = read_blobs(objects, &oids, MAX_MARKER_FILE_BYTES)?;
+    for index in marked {
+        let Some(entry) = raw[index].new.as_mut() else {
+            continue;
+        };
+        let Some(bytes) = blobs.get(&entry.oid) else {
+            continue;
+        };
+        let relabelled = relabel(bytes, labels);
+        if relabelled == *bytes {
+            continue;
+        }
+        entry.oid = objects
+            .git()
+            .writes(&[objects.written_dir()])
+            .stdin(&relabelled)
+            .text(&["hash-object", "-w", "--no-filters", "--stdin"])?;
+    }
+    Ok(())
+}
+
+/// `bytes` with each `from` id in a conflict-marker line replaced by its
+/// label.
+fn relabel(bytes: &[u8], labels: &[(&str, &str)]) -> Vec<u8> {
+    const MARKERS: [&[u8]; 3] = [b"<<<<<<< ", b">>>>>>> ", b"||||||| "];
+    let mut out = Vec::with_capacity(bytes.len());
+    for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+        if !MARKERS.iter().any(|marker| line.starts_with(marker)) {
+            out.extend_from_slice(line);
+            continue;
+        }
+        let mut line = line.to_vec();
+        for (from, to) in labels {
+            line = replace_bytes(&line, from.as_bytes(), to.as_bytes());
+        }
+        out.extend_from_slice(&line);
+    }
+    out
+}
+
+fn replace_bytes(haystack: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(haystack.len());
+    let mut rest = haystack;
+    while let Some(at) = rest.windows(from.len()).position(|window| window == from) {
+        out.extend_from_slice(&rest[..at]);
+        out.extend_from_slice(to);
+        rest = &rest[at + from.len()..];
+    }
+    out.extend_from_slice(rest);
+    out
+}
+
+/// The error of a plan that cannot land: something in the folder (an
+/// ignored file the snapshot does not hold) is in the way.
+fn in_the_way(path: &str, what: &str) -> ToolError {
+    ToolError::new(
+        ErrorCode::Conflict,
+        format!(
+            "path_in_the_way: the folder has {what} at `{path}` where the result needs the other; move it and preview again"
+        ),
+    )
+}
+
+/// Every file under the directory `dir` (folder-relative) is in `deleting`.
+fn emptied_by(workspace: &Workspace, dir: &str, deleting: &BTreeSet<&str>) -> ToolResult<bool> {
+    let mut stack = vec![dir.to_owned()];
+    while let Some(next) = stack.pop() {
+        let absolute = workspace.absolute(&WsPath::from_relative(Path::new(&next))?);
+        let entries = std::fs::read_dir(&absolute)
+            .map_err(|error| ToolError::io("cannot list the folder", &error))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| ToolError::io("cannot list the folder", &error))?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let child = format!("{next}/{name}");
+            let is_dir = entry
+                .file_type()
+                .map_err(|error| ToolError::io("cannot list the folder", &error))?
+                .is_dir();
+            if is_dir {
+                stack.push(child);
+            } else if !deleting.contains(child.as_str()) {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// Check, before anything is written, that every file of `plan` can land
+/// in `workspace`: no file (kept) where a written file needs a directory,
+/// no directory holding more than the plan deletes where it writes a
+/// file. Callers run it before their checkpoint; [`write_plan`] runs it
+/// again.
 ///
 /// # Errors
 ///
-/// An unreadable object, write failures.
+/// [`ErrorCode::Conflict`] (`path_in_the_way`), unreadable folder.
+pub(crate) fn check_plan(workspace: &Workspace, plan: &Plan) -> ToolResult<()> {
+    let deleting: BTreeSet<&str> = plan
+        .writes
+        .iter()
+        .filter(|write| write.new.is_none())
+        .map(|write| write.path.as_str())
+        .collect();
+    for write in plan.writes.iter().filter(|write| write.new.is_some()) {
+        let parts: Vec<&str> = write.path.split('/').collect();
+        // Whether the path can exist now (no ancestor missing or a file).
+        let mut reachable = true;
+        for end in 1..parts.len() {
+            let ancestor = parts[..end].join("/");
+            let kind = workspace.stat(&WsPath::from_relative(Path::new(&ancestor))?)?;
+            match kind {
+                Some(EntryKind::Dir) => continue,
+                Some(_) if !deleting.contains(ancestor.as_str()) => {
+                    return Err(in_the_way(&ancestor, "a file"));
+                }
+                // Missing, or a file the plan deletes first.
+                _ => {}
+            }
+            reachable = false;
+            break;
+        }
+        let ws_path = WsPath::from_relative(Path::new(&write.path))?;
+        if reachable
+            && workspace.stat(&ws_path)? == Some(EntryKind::Dir)
+            && !emptied_by(workspace, &write.path, &deleting)?
+        {
+            return Err(in_the_way(&write.path, "a directory"));
+        }
+    }
+    Ok(())
+}
+
+/// Write a plan into `workspace` (the caller checked the folder and took
+/// its checkpoint). It is checked first ([`check_plan`]), so it fails
+/// before writing anything, not halfway; then every deletion goes first
+/// (and the directories they empty), so a directory the result turns into
+/// a file, or a file it turns into a directory, is out of the way.
+///
+/// # Errors
+///
+/// A path in the way, an unreadable object, write failures.
 pub(crate) fn write_plan(
     objects: &Objects,
     workspace: &Workspace,
     plan: &Plan,
 ) -> ToolResult<Written> {
+    check_plan(workspace, plan)?;
     let mut done = Written::default();
     let new: Vec<&str> = plan
         .writes
@@ -453,22 +670,30 @@ pub(crate) fn write_plan(
         .filter_map(|write| write.new.as_ref().map(|entry| entry.oid.as_str()))
         .collect();
     let blobs = read_blobs(objects, &new, MAX_FILE_BYTES)?;
-    for write in &plan.writes {
+    for write in plan.writes.iter().filter(|write| write.new.is_none()) {
         let ws_path = WsPath::from_relative(Path::new(&write.path))?;
-        match &write.new {
-            None => {
-                if workspace.remove_file(&ws_path)? {
-                    done.deleted.push(write.path.clone());
-                }
-            }
-            Some(entry) => {
-                let bytes = blobs.get(&entry.oid).ok_or_else(|| {
-                    ToolError::new(ErrorCode::Git, format!("object {} is missing", entry.oid))
-                })?;
-                workspace.write(&ws_path, bytes, Some(entry.file_mode()))?;
-                done.written.push(write.path.clone());
+        if workspace.remove_file(&ws_path)? {
+            done.deleted.push(write.path.clone());
+        }
+        // The directories this deletion emptied go too (git keeps none).
+        let parts: Vec<&str> = write.path.split('/').collect();
+        for end in (1..parts.len()).rev() {
+            let dir = WsPath::from_relative(Path::new(&parts[..end].join("/")))?;
+            if !workspace.remove_empty_dir(&dir)? {
+                break;
             }
         }
+    }
+    for write in &plan.writes {
+        let Some(entry) = &write.new else {
+            continue;
+        };
+        let ws_path = WsPath::from_relative(Path::new(&write.path))?;
+        let bytes = blobs.get(&entry.oid).ok_or_else(|| {
+            ToolError::new(ErrorCode::Git, format!("object {} is missing", entry.oid))
+        })?;
+        workspace.write(&ws_path, bytes, Some(entry.file_mode()))?;
+        done.written.push(write.path.clone());
     }
     Ok(done)
 }
@@ -494,10 +719,17 @@ fn commit_of(objects: &Objects, tree: &str) -> ToolResult<String> {
 /// `merge-tree --write-tree` of the triple: the result tree (with conflict
 /// markers in conflicted text files) and the conflicted paths with their
 /// stage entries (none: a clean merge).
+/// The throwaway commits `merge-tree` merged (the ids its markers carry).
+struct SideCommits {
+    base: String,
+    ours: String,
+    theirs: String,
+}
+
 fn merge_tree(
     objects: &Objects,
     trees: Trees<'_>,
-) -> ToolResult<(String, BTreeMap<String, Vec<Entry>>)> {
+) -> ToolResult<(String, BTreeMap<String, Vec<Entry>>, SideCommits)> {
     let base = commit_of(objects, trees.base)?;
     let ours = commit_of(objects, trees.ours)?;
     let theirs = commit_of(objects, trees.theirs)?;
@@ -546,7 +778,7 @@ fn merge_tree(
             mode: (*mode).to_owned(),
         });
     }
-    Ok((tree, conflicts))
+    Ok((tree, conflicts, SideCommits { base, ours, theirs }))
 }
 
 /// The conflicted paths whose sides are binary (a NUL in the first 8000
@@ -831,6 +1063,8 @@ pub fn preflight(target: &LocalSession, source: &str, base: &str) -> ToolResult<
             base: &base_tree,
             ours: &ours_tree,
             theirs: &theirs_tree,
+            ours_label: "your folder",
+            theirs_label: "task worktree",
         },
         base,
         &decide,
@@ -903,6 +1137,7 @@ fn apply_mode(
     if preflight.plan.writes.is_empty() {
         return Ok(applied);
     }
+    check_plan(target.workspace(), &preflight.plan)?;
     applied.checkpoint = Some(target.checkpoints().create(label)?.seq);
     let done = write_plan(&Objects::of(repo), target.workspace(), &preflight.plan)?;
     applied.written = done.written;

@@ -136,6 +136,22 @@ describe('TakeBackDialog conflicts', () => {
     expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
   });
 
+  it('never lists a skipped conflicting path as having markers', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc();
+    ipc.setPreflight({
+      ...conflicts,
+      conflict_paths: ['src/lib.rs', 'secrets/prod.key', 'assets/logo.png'],
+    });
+    ipc.setApply({ outcome: 'applied_with_markers' });
+    mount(ipc);
+    await user.click(await screen.findByRole('button', { name: 'Apply with conflict markers' }));
+    const markers = await screen.findByTestId('takeback-marker-paths');
+    expect(markers).toHaveTextContent('src/lib.rs');
+    expect(markers).not.toHaveTextContent('secrets/prod.key');
+    expect(markers).not.toHaveTextContent('assets/logo.png');
+  });
+
   it('opens the cloud version as a worktree and shows where it is', async () => {
     const user = userEvent.setup();
     const ipc = createFakeHandoffIpc();
@@ -195,19 +211,19 @@ describe('TakeBackDialog turns', () => {
     const ipc = createFakeHandoffIpc();
     ipc.setPreflight({ cloud_turns: 3 });
     mount(ipc);
-    const picker = await screen.findByRole('combobox', { name: 'Take back up to' });
-    expect(picker).toHaveTextContent('Turn 3 (latest)');
+    const picker = await screen.findByRole('combobox', { name: 'Take back up to change' });
+    expect(picker).toHaveTextContent('Change 3 (latest)');
     expect(ipc.calls.preflightTurns).toEqual([undefined]);
     expect(screen.queryByTestId('takeback-turns-after')).toBeNull();
 
     await user.click(picker);
-    await user.click(await screen.findByRole('option', { name: 'Turn 2' }));
-    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Take back up to' })).toHaveTextContent('Turn 2'));
+    await user.click(await screen.findByRole('option', { name: 'Change 2' }));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Take back up to change' })).toHaveTextContent('Change 2'));
     expect(ipc.calls.preflightTurns).toEqual([undefined, 2]);
     expect(screen.getByText(/The cloud changed 1 files in 2 turns/)).toBeInTheDocument();
     // Turn 3 is not taken back: the review says so before anything is applied.
-    expect(screen.getByTestId('takeback-turns-after')).toHaveTextContent('Turns 3 to 3 are not taken back');
-    expect(screen.getByTestId('takeback-turns-after')).toHaveTextContent('deleted with the cloud copy');
+    expect(screen.getByTestId('takeback-turns-after')).toHaveTextContent('Changes 3 to 3 are not taken back');
+    expect(screen.getByTestId('takeback-turns-after')).toHaveTextContent('answers after change 2 are not added');
 
     ipc.setApply({ imported_turns: 2, turns_not_taken: 1, rest_branch: 'elitea/cloud/abcd1234-after-turn-2' });
     await user.click(screen.getByRole('button', { name: 'Apply to my folder' }));
@@ -220,7 +236,7 @@ describe('TakeBackDialog turns', () => {
     const ipc = createFakeHandoffIpc();
     mount(ipc);
     await screen.findByRole('button', { name: 'Apply to my folder' });
-    expect(screen.queryByRole('combobox', { name: 'Take back up to' })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Take back up to change' })).toBeNull();
   });
 
   it('keeps the previous review when the picked turn cannot be checked', async () => {
@@ -228,12 +244,12 @@ describe('TakeBackDialog turns', () => {
     const ipc = createFakeHandoffIpc();
     ipc.setPreflight({ cloud_turns: 2 });
     mount(ipc);
-    const picker = await screen.findByRole('combobox', { name: 'Take back up to' });
+    const picker = await screen.findByRole('combobox', { name: 'Take back up to change' });
     ipc.failNext('preflight', 'integrity_failed', 'bad');
     await user.click(picker);
-    await user.click(await screen.findByRole('option', { name: 'Turn 1' }));
+    await user.click(await screen.findByRole('option', { name: 'Change 1' }));
     expect(await screen.findByTestId('takeback-error')).toHaveTextContent('failed their integrity check');
-    expect(screen.getByRole('combobox', { name: 'Take back up to' })).toHaveTextContent('Turn 2 (latest)');
+    expect(screen.getByRole('combobox', { name: 'Take back up to change' })).toHaveTextContent('Change 2 (latest)');
   });
 });
 

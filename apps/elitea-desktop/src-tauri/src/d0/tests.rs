@@ -8885,6 +8885,17 @@ async fn worktree_merge_back_applies_conflict_markers() {
             .code,
         "merge_conflicts"
     );
+    // The folder moved: refused and kept; back as it was, the same preview applies.
+    std::fs::write(h.folder.path().join("late.txt"), "late\n").unwrap();
+    assert_eq!(
+        worktrees
+            .merge_apply(&preflight.preflight_id, MergeApplyMode::ApplyWithMarkers)
+            .await
+            .unwrap_err()
+            .code,
+        elitea_local_tools::apply::FOLDER_CHANGED
+    );
+    std::fs::remove_file(h.folder.path().join("late.txt")).unwrap();
     let applied = worktrees
         .merge_apply(&preflight.preflight_id, MergeApplyMode::ApplyWithMarkers)
         .await
@@ -8892,7 +8903,8 @@ async fn worktree_merge_back_applies_conflict_markers() {
     assert_eq!(applied.written, ["both.txt"]);
     let both = std::fs::read_to_string(h.folder.path().join("both.txt")).unwrap();
     assert!(
-        both.contains("<<<<<<<")
+        both.contains("<<<<<<< your folder\n")
+            && both.contains(">>>>>>> task worktree\n")
             && both.contains("from the folder")
             && both.contains("from the task"),
         "{both}"

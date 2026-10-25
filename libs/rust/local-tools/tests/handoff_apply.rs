@@ -1046,6 +1046,8 @@ mod shared_engine {
         write(top, "b.txt", "b\n");
         write(top, "c.txt", "c\n");
         std::fs::write(top.join("bin.dat"), [0u8, 1, 2, 0]).unwrap();
+        write(top, "sub/x.txt", "x\n");
+        write(top, "f", "f\n");
     }
 
     fn nothing(_: &Path) {}
@@ -1109,7 +1111,70 @@ mod shared_engine {
             binary_conflict: Some("bin.dat"),
             expect: &[("d.txt", Some("d\n")), ("a.txt", Some(BASE_A))],
         },
+        // A directory the cloud turned into a file: its files are deleted
+        // (and the directory they empty) before the file is written.
+        Case {
+            name: "dir_to_file",
+            ours: nothing,
+            theirs: |dir| {
+                std::fs::remove_dir_all(dir.join("sub")).unwrap();
+                write(dir, "sub", "now a file\n");
+            },
+            outcome: Outcome::FastPath,
+            conflicts: &[],
+            binary_conflict: None,
+            expect: &[("sub", Some("now a file\n")), ("sub/x.txt", None)],
+        },
+        // A file turned into a directory, merged with a local edit.
+        Case {
+            name: "file_to_dir",
+            ours: |dir| write(dir, "c.txt", "c, local\n"),
+            theirs: |dir| {
+                std::fs::remove_file(dir.join("f")).unwrap();
+                write(dir, "f/inner.txt", "inner\n");
+            },
+            outcome: Outcome::CleanMerge,
+            conflicts: &[],
+            binary_conflict: None,
+            expect: &[
+                ("f/inner.txt", Some("inner\n")),
+                ("c.txt", Some("c, local\n")),
+            ],
+        },
     ];
+
+    /// What conflict markers name the cloud side, by caller.
+    fn theirs_label(caller: &str) -> &'static str {
+        if caller == "worktree" {
+            "task worktree"
+        } else {
+            "cloud"
+        }
+    }
+
+    /// The base again after an undo, a swapped path included.
+    fn check_undone(case: &Case, top: &Path, caller: &str) {
+        assert_eq!(
+            std::fs::read_to_string(top.join("d.txt")).ok(),
+            None,
+            "{caller}/{}: undone",
+            case.name
+        );
+        assert_eq!(
+            std::fs::read_to_string(top.join("sub/x.txt"))
+                .ok()
+                .as_deref(),
+            Some("x\n"),
+            "{caller}/{}: undone",
+            case.name
+        );
+        assert_eq!(
+            std::fs::read_to_string(top.join("f")).ok().as_deref(),
+            Some("f\n"),
+            "{caller}/{}: undone",
+            case.name
+        );
+    }
 
     fn check(case: &Case, top: &Path, caller: &str) {
         for (path, text) in case.expect {
@@ -1124,6 +1189,13 @@ mod shared_engine {
             let a = std::fs::read_to_string(top.join("a.txt")).unwrap();
             assert!(
                 a.contains("<<<<<<<") && a.contains("TWO") && a.contains("two"),
+                "{caller}/{}: {a}",
+                case.name
+            );
+            // The markers name the sides, not throwaway commit ids.
+            let theirs = format!(">>>>>>> {}\n", theirs_label(caller));
+            assert!(
+                a.contains("<<<<<<< your folder\n") && a.contains(&theirs),
                 "{caller}/{}: {a}",
                 case.name
             );
@@ -1222,12 +1294,7 @@ mod shared_engine {
         check(case, top, "worktree");
         let seq = applied.checkpoint.unwrap();
         target.restore_checkpoint(seq).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(top.join("d.txt")).ok(),
-            None,
-            "worktree/{}: undone",
-            case.name
-        );
+        check_undone(case, top, "worktree");
     }
 
     fn through_handoff_take_back(case: &Case) {
@@ -1270,12 +1337,7 @@ mod shared_engine {
             take_back::apply(&sent.source, &preflight, mode, &[], Some(&checkpoints)).unwrap();
         check(case, top, "handoff");
         checkpoints.restore(applied.checkpoint.unwrap()).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(top.join("d.txt")).ok(),
-            None,
-            "handoff/{}: undone",
-            case.name
-        );
+        check_undone(case, top, "handoff");
     }
 
     #[test]
@@ -1285,4 +1347,147 @@ mod shared_engine {
             through_handoff_take_back(case);
         }
     }
+}
+
+// ---- Review fixes (#1431) ----
+
+/// A path `path_deny` blocks since the send is left out of the base and of
+/// the cloud's tree as the folder's snapshot leaves it out: the cloud's
+/// change to it is a skip (`path_deny`), not a conflict, and the local file
+/// stays.
+#[test]
+fn a_path_denied_since_the_send_is_a_skip_not_a_conflict() {
+    let fixture = plain_repo();
+    let top = &fixture.top;
+    write(top, "notes/plan.md", "local plan\n");
+    git(top, &["add", "-A"]);
+    git(top, &["commit", "-q", "-m", "notes"]);
+    let sent = send(&fixture);
+    let (bytes, refs) = cloud(
+        &fixture,
+        &sent,
+        &[&|dir| {
+            write(dir, "notes/plan.md", "the cloud's plan\n");
+            write(dir, "src/lib.rs", "pub fn b() {}\n");
+        }],
+    );
+    let deny = vec!["private/**".to_owned(), "notes/**".to_owned()];
+    let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny).unwrap();
+    assert_eq!(
+        preflight.report.outcome,
+        Outcome::FastPath,
+        "{:?}",
+        preflight.report
+    );
+    assert_eq!(preflight.report.conflict_paths, Vec::<String>::new());
+    assert_eq!(
+        skipped_for(&preflight, "notes/plan.md"),
+        Some(SkipReason::PathDeny)
+    );
+    assert!(
+        !preflight
+            .report
+            .touched()
+            .contains(&"notes/plan.md".to_owned())
+    );
+    apply::apply(&sent.source, &preflight, Mode::Apply, &deny, None).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(top.join("notes/plan.md")).unwrap(),
+        "local plan\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(top.join("src/lib.rs")).unwrap(),
+        "pub fn b() {}\n"
+    );
+}
+
+/// An excluded file the cloud created is written only where none is local;
+/// one that appears after the preview (the folder's snapshot leaves it out,
+/// so the folder check does not see it) refuses the apply before anything
+/// is written.
+#[test]
+fn an_excluded_file_that_appears_after_the_preview_is_never_overwritten() {
+    let fixture = Fixture::repo();
+    let top = &fixture.top;
+    let sent = send(&fixture);
+    let (bytes, refs) = cloud(
+        &fixture,
+        &sent,
+        &[&|dir| {
+            write(dir, "config/.env.cloud", "CLOUD=1\n");
+            write(dir, "src/ok.rs", "pub fn ok() {}\n");
+        }],
+    );
+    let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
+    assert!(
+        preflight
+            .report
+            .touched()
+            .contains(&"config/.env.cloud".to_owned())
+    );
+    write(top, "config/.env.cloud", "LOCAL=1\n");
+    let checkpoints = checkpoints(&fixture);
+    let refused = apply::apply(
+        &sent.source,
+        &preflight,
+        Mode::Apply,
+        &deny(),
+        Some(&checkpoints),
+    )
+    .unwrap_err();
+    assert_eq!(refused.code(), ErrorCode::StaleRead);
+    assert!(refused.message().starts_with(apply::FOLDER_CHANGED));
+    assert_eq!(
+        std::fs::read_to_string(top.join("config/.env.cloud")).unwrap(),
+        "LOCAL=1\n"
+    );
+    assert!(!top.join("src/ok.rs").exists(), "nothing written");
+}
+
+/// A file the cloud wrote where the folder holds an ignored directory (its
+/// files are in no snapshot): the apply fails before writing anything or
+/// taking a checkpoint, never halfway.
+#[test]
+fn a_directory_in_the_way_fails_before_anything_is_written() {
+    let fixture = Fixture::repo();
+    let top = &fixture.top;
+    let sent = send(&fixture);
+    let (bytes, refs) = cloud(
+        &fixture,
+        &sent,
+        &[&|dir| {
+            write(dir, "build", "a file now\n");
+            write(dir, "src/ok.rs", "pub fn ok() {}\n");
+        }],
+    );
+    let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
+    assert!(
+        preflight.report.touched().contains(&"build".to_owned()),
+        "{:?}",
+        preflight.report
+    );
+    let checkpoints = checkpoints(&fixture);
+    let refused = apply::apply(
+        &sent.source,
+        &preflight,
+        Mode::Apply,
+        &deny(),
+        Some(&checkpoints),
+    )
+    .unwrap_err();
+    assert_eq!(refused.code(), ErrorCode::Conflict);
+    assert!(
+        refused.message().starts_with("path_in_the_way"),
+        "{}",
+        refused.message()
+    );
+    assert_eq!(
+        std::fs::read_to_string(top.join("build/out.o")).unwrap(),
+        "obj\n"
+    );
+    assert!(!top.join("src/ok.rs").exists(), "nothing written");
+    assert!(
+        checkpoints.list().unwrap().is_empty(),
+        "no checkpoint taken"
+    );
 }
