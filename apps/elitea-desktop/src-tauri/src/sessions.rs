@@ -73,7 +73,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -100,6 +100,10 @@ pub const FILE_NAME: &str = "sessions.sqlite";
 pub const SCHEMA_VERSION: i64 = 2;
 /// What one session may hold in all (event JSON bytes).
 pub const MAX_SESSION_BYTES: i64 = 32 * 1024 * 1024;
+/// How long a store may be idle before it folds its WAL into the database
+/// (`wal_checkpoint(TRUNCATE)`): the `-wal` file otherwise keeps the turn's
+/// bytes on disk long after the turn is written.
+pub const WAL_IDLE_CHECKPOINT: Duration = Duration::from_secs(30);
 /// A tool response is stored cut at this many bytes: the cap the server
 /// keeps for a step's output (`d0/recorder.rs` `MAX_TOOL_OUTPUT`).
 pub const MAX_TOOL_RESPONSE_BYTES: usize = 64 * 1024;
@@ -394,6 +398,12 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
 /// Open the database at `path` (created owner-only first) and start the
 /// thread that owns its connection.
 fn start(path: &Path) -> Result<Writing, HostError> {
+    start_at(path, WAL_IDLE_CHECKPOINT)
+}
+
+/// [`start`] with the interval of the idle WAL checkpoint named: tests run
+/// it short so the checkpoint does not wait the full [`WAL_IDLE_CHECKPOINT`].
+fn start_at(path: &Path, idle_checkpoint: Duration) -> Result<Writing, HostError> {
     // Created owner-only BEFORE SQLite opens it, so it is never wider.
     match create_private_file(path) {
         Ok(_) => {}
@@ -411,14 +421,25 @@ fn start(path: &Path) -> Result<Writing, HostError> {
     let (sender, receiver) = std::sync::mpsc::channel::<Job>();
     let thread = std::thread::Builder::new()
         .name("session-store".into())
-        .spawn(move || run_jobs(conn, &receiver))
+        .spawn(move || run_jobs(conn, &receiver, idle_checkpoint))
         .map_err(|e| HostError::Storage(format!("could not start the session store: {e}")))?;
     Ok(Writing { sender, thread })
 }
 
-fn run_jobs(mut conn: Connection, receiver: &Receiver<Job>) {
+fn run_jobs(mut conn: Connection, receiver: &Receiver<Job>, idle_checkpoint: Duration) {
     let mut jobs = 0;
-    while let Ok(job) = receiver.recv() {
+    loop {
+        let job = match receiver.recv_timeout(idle_checkpoint) {
+            Ok(job) => job,
+            Err(RecvTimeoutError::Timeout) => {
+                // Idle for a while: fold the WAL into the database, so the
+                // `-wal` file does not hold the turn's bytes on disk while
+                // the app sits open.
+                checkpoint_wal(&conn);
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
         job(&mut conn);
         jobs += 1;
         // Incremental vacuum (schema 2): the pages a trim freed would
@@ -432,6 +453,12 @@ fn run_jobs(mut conn: Connection, receiver: &Receiver<Job>) {
     }
     // The queue closed: fold the WAL into the database before the file may
     // be moved or read by another process (the Doctor).
+    checkpoint_wal(&conn);
+}
+
+/// Fold the WAL into the database, truncating the `-wal` file; log a
+/// warning when it could not (the store then closes without it).
+fn checkpoint_wal(conn: &Connection) {
     if let Err(error) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
         log::warn!("the session store could not be checkpointed: {error}");
     }
@@ -474,13 +501,24 @@ impl SessionStore {
     /// The directory or file is refused (see the module docs), the file is
     /// not a database, or it was written by a newer schema.
     pub fn open(dir: &Path) -> Result<Self, HostError> {
+        Self::open_at(dir, WAL_IDLE_CHECKPOINT)
+    }
+
+    /// [`Self::open`] with the interval of the idle WAL checkpoint named:
+    /// tests run it short so the checkpoint does not wait the full
+    /// [`WAL_IDLE_CHECKPOINT`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::open`].
+    pub fn open_at(dir: &Path, idle_checkpoint: Duration) -> Result<Self, HostError> {
         create_private_dir(dir)?;
         // Canonical, so the no-follow open refuses a symlinked FILE, not a
         // symlink higher up (macOS's `/var` is one).
         let dir = fs::canonicalize(dir).map_err(|e| HostError::Storage(e.to_string()))?;
         let path = dir.join(FILE_NAME);
         inspect_private(&path, "the session store")?;
-        let writing = start(&path)?;
+        let writing = start_at(&path, idle_checkpoint)?;
         Ok(Self {
             dir,
             path,

@@ -965,6 +965,37 @@ async fn new_files_are_vacuumed_incrementally() {
 }
 
 #[tokio::test]
+async fn an_idle_store_folds_its_wal_into_the_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(FILE_NAME);
+    // A short idle interval: the checkpoint runs long before 30 seconds.
+    let store = SessionStore::open_at(dir.path(), Duration::from_millis(200)).unwrap();
+    let me = identity(1, "https://a.example");
+    let key = me.key();
+    store.open_session(&me, "fp").await.unwrap();
+    store
+        .seed(
+            &key,
+            vec![new("i", text_event("i", "user", "user", "hi"))],
+            Some("0".into()),
+            &[],
+        )
+        .await
+        .unwrap();
+    // The turn's bytes are in the WAL now. Let the store sit idle, and its
+    // idle checkpoint folds them back into the main file.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let wal = std::fs::symlink_metadata(path.with_file_name(format!("{FILE_NAME}-wal")))
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    assert!(
+        wal <= 32,
+        "the idle checkpoint leaves no turn bytes in the wal (holds {wal})"
+    );
+    drop(store);
+}
+
+#[tokio::test]
 async fn the_adk_service_creates_lists_and_deletes() {
     let (_dir, state) = open();
     let service = state.sessions();

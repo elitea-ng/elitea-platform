@@ -103,6 +103,10 @@ pub const MAX_THREAD_BYTES: i64 = 32 * 1024 * 1024;
 pub const FLUSH_INTERVAL: Duration = Duration::from_millis(500);
 /// ...or once this many bytes of events are pending.
 pub const FLUSH_BYTES: usize = 64 * 1024;
+/// How long a writer with nothing pending may sit before it folds the WAL
+/// into the database (`wal_checkpoint(TRUNCATE)`): the `-wal` file
+/// otherwise keeps the turns' bytes on disk while the app sits open.
+pub const WAL_IDLE_CHECKPOINT: Duration = Duration::from_secs(30);
 /// Ops the writer's queue holds before a tap keeps them itself.
 pub const CHANNEL_CAPACITY: usize = 1024;
 
@@ -461,11 +465,14 @@ pub struct HistoryStore {
     writer: Mutex<Option<std::thread::JoinHandle<()>>>,
     /// Ops queued and not yet taken by the writer.
     queued: Arc<AtomicUsize>,
+    /// The writer's idle WAL checkpoint interval (reopens keep it).
+    idle_checkpoint: Duration,
 }
 
 /// Open the database at `path` (created owner-only first) and start a
-/// writer on it: the readers' connection and the writer.
-fn start(path: &Path, queued: &Arc<AtomicUsize>) -> Result<(Connection, Writing), HostError> {
+/// writer on it: the readers' connection and the writer. The idle interval
+/// of the writer's WAL checkpoint, as named by the opening store.
+fn start_at(path: &Path, queued: &Arc<AtomicUsize>, idle_checkpoint: Duration) -> Result<(Connection, Writing), HostError> {
     // Created owner-only BEFORE SQLite opens it, so it is never wider.
     match create_private_file(path) {
         Ok(_) => {}
@@ -483,7 +490,7 @@ fn start(path: &Path, queued: &Arc<AtomicUsize>) -> Result<(Connection, Writing)
     let counter = queued.clone();
     let thread = std::thread::Builder::new()
         .name("history-writer".into())
-        .spawn(move || Writer::new(writer_conn, counter).run(&receiver))
+        .spawn(move || Writer::new(writer_conn, counter).run(&receiver, idle_checkpoint))
         .map_err(|e| HostError::Storage(format!("could not start the history writer: {e}")))?;
     Ok((conn, Writing { sender, thread }))
 }
@@ -497,6 +504,17 @@ impl HistoryStore {
     /// The directory or file is refused (see the module docs), the file is
     /// not a database, or it was written by a newer schema.
     pub fn open(dir: &Path) -> Result<Self, HostError> {
+        Self::open_at(dir, WAL_IDLE_CHECKPOINT)
+    }
+
+    /// [`Self::open`] with the interval of the idle WAL checkpoint named:
+    /// tests run it short so the checkpoint does not wait the full
+    /// [`WAL_IDLE_CHECKPOINT`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::open`].
+    pub fn open_at(dir: &Path, idle_checkpoint: Duration) -> Result<Self, HostError> {
         create_private_dir(dir)?;
         // Canonical, so the no-follow open below refuses a symlinked FILE,
         // not a symlink higher up (macOS's `/var` is one).
@@ -504,7 +522,7 @@ impl HistoryStore {
         let path = dir.join(FILE_NAME);
         inspect(&path)?;
         let queued = Arc::new(AtomicUsize::new(0));
-        let (conn, writing) = start(&path, &queued)?;
+        let (conn, writing) = start_at(&path, &queued, idle_checkpoint)?;
         Ok(Self {
             dir,
             path,
@@ -512,6 +530,7 @@ impl HistoryStore {
             sender: RwLock::new(Some(writing.sender)),
             writer: Mutex::new(Some(writing.thread)),
             queued,
+            idle_checkpoint,
         })
     }
 
@@ -563,7 +582,7 @@ impl HistoryStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.close(&mut conn);
         let moved = move_files_aside(&self.dir, FILE_NAME, &history_files(&self.dir));
-        let started = start(&self.path, &self.queued);
+        let started = start_at(&self.path, &self.queued, self.idle_checkpoint);
         let (opened, writing) = match (&moved, started) {
             (_, Ok(started)) => started,
             (Err(_), Err(_)) => return moved,
@@ -610,7 +629,7 @@ impl HistoryStore {
             log::warn!("the thread history could not be reclaimed: {e}");
             e
         });
-        let started = start(&self.path, &self.queued);
+        let started = start_at(&self.path, &self.queued, self.idle_checkpoint);
         let (opened, writing) = match (&before, started) {
             (_, Ok(started)) => started,
             (Err(_), Err(_)) => return before,
@@ -1225,11 +1244,27 @@ impl Writer {
         }
     }
 
-    fn run(mut self, receiver: &Receiver<Op>) {
+    fn run(mut self, receiver: &Receiver<Op>, idle_checkpoint: Duration) {
         loop {
             let next = match self.since {
-                None => receiver.recv().map_err(|_| RecvTimeoutError::Disconnected),
+                None => {
+                    // Nothing pending: wait for an op, and fold the WAL into
+                    // the database when the queue has sat idle a while (the
+                    // `-wal` file otherwise keeps the turns' bytes on disk).
+                    match receiver.recv_timeout(idle_checkpoint) {
+                        Ok(op) => Ok(op),
+                        Err(RecvTimeoutError::Timeout) => {
+                            self.checkpoint_wal();
+                            Err(RecvTimeoutError::Timeout)
+                        }
+                        Err(RecvTimeoutError::Disconnected) => {
+                            Err(RecvTimeoutError::Disconnected)
+                        }
+                    }
+                }
                 Some(since) => {
+                    // Something pending: the flush timer already wakes the
+                    // writer on its own.
                     receiver.recv_timeout(FLUSH_INTERVAL.saturating_sub(since.elapsed()))
                 }
             };
@@ -1308,6 +1343,14 @@ impl Writer {
             if let Err(error) = self.conn.pragma_update(None, "incremental_vacuum", 0) {
                 log::warn!("the thread history could not vacuum: {error}");
             }
+        }
+    }
+
+    /// Fold the WAL into the database, truncating the `-wal` file; log a
+    /// warning when it could not.
+    fn checkpoint_wal(&self) {
+        if let Err(error) = self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+            log::warn!("the thread history could not be checkpointed: {error}");
         }
     }
 }
@@ -2000,6 +2043,32 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn an_idle_writer_folds_its_wal_into_the_database() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            HistoryStore::open_at(root.path(), Duration::from_millis(200)).unwrap(),
+        );
+        let me = owner(1);
+        play(&store, new_turn(me.clone(), "t1", "42"));
+        store.flush();
+        // The turn's bytes are in the WAL now. Let the writer sit idle, and
+        // its idle checkpoint folds them back into the main file.
+        std::thread::sleep(Duration::from_millis(600));
+        let wal = store
+            .path()
+            .with_file_name(format!("{FILE_NAME}-wal"))
+            .metadata()
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        assert!(
+            wal <= 32,
+            "the idle checkpoint leaves no turn bytes in the wal (holds {wal})"
+        );
+        // The turn is still readable through the store.
+        assert_eq!(store.thread(&me, "w1", "42").unwrap().len(), 1);
     }
 
     #[test]
