@@ -32,6 +32,7 @@ type SweepReport struct {
 	Expired          int
 	ForcedReclaims   int
 	AbandonedReclaim int
+	RestExpired      int
 	DeadTurnsReaped  int
 	IdleErased       int
 	IdleWarned       int
@@ -128,6 +129,25 @@ func (s *Service) Sweep(ctx context.Context) (SweepReport, error) {
 				continue
 			}
 			report.AbandonedReclaim++
+		}
+	}
+
+	// A rest take back whose return grace ran out → LOCAL (released), and
+	// the erasure below removes the cloud copy. It never returns to
+	// CLOUD_IDLE: the cloud turns it holds were already handed back once.
+	if due, err := s.repo.DueRestExpired(ctx, now, SweepBatch); err != nil {
+		errs = append(errs, err)
+	} else {
+		for _, handoff := range due {
+			if _, err := s.repo.ExpireRestReclaim(ctx, TimedTransition{Thread: threadOf(handoff), Epoch: handoff.Epoch}); err != nil {
+				if !errors.Is(err, ErrStaleEpoch) {
+					errs = append(errs, err)
+				}
+				continue
+			}
+			report.RestExpired++
+			s.record(ctx, threadOf(handoff), handoff.OwnerUserID, "", "", now,
+				fmt.Sprintf("handoff.release: rest take back expired after the return grace, epoch %d", handoff.Epoch+1), true)
 		}
 	}
 

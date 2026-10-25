@@ -18,7 +18,18 @@
 //	CLOUD_RUNNING --take back (desktop)---------------------> reclaim_pending; RECLAIMING at turn end or after 60 s
 //	RECLAIMING    --release (desktop)-----------------------> LOCAL
 //	RECLAIMING    --abandoned for 7 days--------------------> CLOUD_IDLE
+//	LOCAL (released, turns not taken) --take back the rest---> RECLAIMING (rest)
+//	RECLAIMING (rest) --release (desktop)--------------------> LOCAL
+//	RECLAIMING (rest) --return grace over--------------------> LOCAL (then erased)
 //	CLOUD_* / RECLAIMING / HANDING_OFF --erase--------------> LOCAL
+//
+// Take back up to turn k (§4.6): a release that applied only some of the
+// cloud turns sends turns_not_taken, and the released LOCAL row is
+// rest_pending. Within the return grace the owner's desktop may take the
+// rest back: LOCAL → RECLAIMING (epoch + 1), keeping rest_pending and the
+// release's delete_after. A rest RECLAIMING row never returns to CLOUD_IDLE:
+// when the grace runs out the sweeper returns it to LOCAL (released), and the
+// erasure removes the cloud copy. Every other transition clears rest_pending.
 //
 // The epoch increments on every ownership change. A cloud turn's
 // CLOUD_IDLE ⇄ CLOUD_RUNNING keeps it: the turn is fenced by its execution id,
@@ -102,6 +113,12 @@ type Handoff struct {
 	UpdatedAt          time.Time
 	DeleteAfter        *time.Time
 	DeletedAt          *time.Time
+	// Released is TRUE when the row came to LOCAL by a release. RestPending
+	// is TRUE on a released LOCAL row whose release left cloud turns not
+	// taken, and on the RECLAIMING row of the rest take back that fetches
+	// them (shared/0176).
+	Released    bool
+	RestPending bool
 	// IncludedExcluded and EnvNames (decision 5, amended): the explicit
 	// includes and the harvested variable names. EnvSecretName names the
 	// thread's hidden vault secret, "" when it has none; it is never sent to a

@@ -26,13 +26,14 @@ const (
 )
 
 type fakeHandoff struct {
-	err      error
-	handoff  handoffapp.Handoff
-	view     handoffapp.View
-	began    handoffapp.BeginRequest
-	erased   handoffapp.EraseRequest
-	released handoffapp.ReleaseRequest
-	policy   handoffapp.Policy
+	err       error
+	handoff   handoffapp.Handoff
+	view      handoffapp.View
+	began     handoffapp.BeginRequest
+	erased    handoffapp.EraseRequest
+	released  handoffapp.ReleaseRequest
+	reclaimed handoffapp.ReclaimRequest
+	policy    handoffapp.Policy
 }
 
 func (f *fakeHandoff) Begin(_ context.Context, request handoffapp.BeginRequest) (handoffapp.BeginOutcome, error) {
@@ -49,7 +50,8 @@ func (f *fakeHandoff) Begin(_ context.Context, request handoffapp.BeginRequest) 
 func (f *fakeHandoff) Complete(context.Context, handoffapp.CompleteRequest) (handoffapp.Handoff, error) {
 	return f.handoff, f.err
 }
-func (f *fakeHandoff) Reclaim(context.Context, handoffapp.ReclaimRequest) (handoffapp.Handoff, error) {
+func (f *fakeHandoff) Reclaim(_ context.Context, request handoffapp.ReclaimRequest) (handoffapp.Handoff, error) {
+	f.reclaimed = request
 	return f.handoff, f.err
 }
 func (f *fakeHandoff) RequestReclaim(context.Context, handoffapp.Thread, int64) error { return f.err }
@@ -247,6 +249,8 @@ func TestErrorsMapToTheContractCodes(t *testing.T) {
 		{workspacestore.ErrSegmentMissing, http.StatusUnprocessableEntity, "segment_missing"},
 		{workspacestore.ErrChecksumMismatch, http.StatusUnprocessableEntity, "checksum_mismatch"},
 		{workspacestore.ErrUnsupportedObjectFormat, http.StatusUnprocessableEntity, "unsupported_object_format"},
+		{workspacestore.ErrPrerequisiteUnknown, http.StatusConflict, "prerequisite_unknown"},
+		{workspacestore.ErrChainTooLong, http.StatusConflict, "segment_chain_too_long"},
 		{errors.New("boom"), http.StatusInternalServerError, "handoff_failed"},
 	} {
 		recorder := httptest.NewRecorder()
@@ -338,6 +342,39 @@ func TestReclaimDuringATurnAnswers202(t *testing.T) {
 	answer := decode(t, response)
 	if response.Code != http.StatusAccepted || answer["reclaim_pending"] != true || answer["waiting_for_execution_id"] != "exec-1" {
 		t.Fatalf("reclaim = %d %v", response.Code, answer)
+	}
+}
+
+// Contract 1.25: take back up to turn k, then the rest.
+func TestRestTakeBackFieldsReachTheServiceAndTheState(t *testing.T) {
+	handoff := &fakeHandoff{handoff: handoffapp.Handoff{State: workspacestore.StateReclaiming, Epoch: 5, RestPending: true}}
+	h := &handler{handoff: handoff, store: &fakeStore{}, conversations: fakeConversations{}}
+	response := serve(t, h.reclaim, nativeUser(), []string{SendPermission}, http.MethodPost, ReclaimPath,
+		"/api/v2/elitea_core/workspace_handoff_reclaim/prompt_lib/1/"+conversation, `{"epoch":4,"rest":true}`)
+	if answer := decode(t, response); response.Code != http.StatusOK || !handoff.reclaimed.Rest ||
+		answer["state"] != "RECLAIMING" || answer["epoch"] != float64(5) {
+		t.Fatalf("rest take back = %d %v (rest %t)", response.Code, answer, handoff.reclaimed.Rest)
+	}
+
+	response = serve(t, h.release, nativeUser(), []string{SendPermission}, http.MethodPost, ReleasePath,
+		"/api/v2/elitea_core/workspace_handoff_release/prompt_lib/1/"+conversation,
+		`{"epoch":3,"outcome":"applied","turns_not_taken":2}`)
+	if response.Code != http.StatusOK || handoff.released.TurnsNotTaken == nil || *handoff.released.TurnsNotTaken != 2 {
+		t.Fatalf("release = %d %s, turns_not_taken %v", response.Code, response.Body, handoff.released.TurnsNotTaken)
+	}
+	response = serve(t, h.release, nativeUser(), []string{SendPermission}, http.MethodPost, ReleasePath,
+		"/api/v2/elitea_core/workspace_handoff_release/prompt_lib/1/"+conversation, `{"epoch":3,"outcome":"applied"}`)
+	if response.Code != http.StatusOK || handoff.released.TurnsNotTaken != nil {
+		t.Fatalf("a release without turns_not_taken = %d, turns_not_taken %v", response.Code, handoff.released.TurnsNotTaken)
+	}
+
+	viewing := &handler{handoff: &fakeHandoff{view: handoffapp.View{Present: true, RestPending: true, Handoff: handoffapp.Handoff{
+		State: workspacestore.StateLocal, Epoch: 4, UpdatedAt: time.Unix(0, 0),
+	}}}, store: &fakeStore{}, conversations: fakeConversations{}}
+	response = serve(t, viewing.state, &auth.User{ID: "7", UserID: "7", AuthType: "session"}, []string{ReadPermission},
+		http.MethodGet, HandoffPath, handoffURL, "")
+	if answer := decode(t, response); answer["rest_pending"] != true || answer["state"] != "LOCAL" {
+		t.Fatalf("state = %v, want rest_pending", answer)
 	}
 }
 

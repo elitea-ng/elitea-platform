@@ -319,6 +319,7 @@ func (h *handler) state(writer http.ResponseWriter, request *http.Request) {
 		"state":           string(view.Handoff.State),
 		"epoch":           view.Handoff.Epoch,
 		"reclaim_pending": view.Handoff.ReclaimPending,
+		"rest_pending":    view.RestPending,
 		"handoff_id":      view.Handoff.HandoffID,
 		"device_name":     view.Handoff.DeviceName,
 		"history_mode":    view.Handoff.HistoryMode,
@@ -410,6 +411,8 @@ func (h *handler) complete(writer http.ResponseWriter, request *http.Request) {
 type reclaimBody struct {
 	Epoch    int64  `json:"epoch"`
 	DeviceID string `json:"device_id"`
+	// Rest takes back the turns the last release left (contract 1.25).
+	Rest bool `json:"rest"`
 }
 
 func (h *handler) reclaim(writer http.ResponseWriter, request *http.Request) {
@@ -426,7 +429,8 @@ func (h *handler) reclaim(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	handoff, err := h.handoff.Reclaim(request.Context(), handoffapp.ReclaimRequest{
-		Thread: target, ActorUserID: actor, Epoch: body.Epoch, DeviceID: body.DeviceID, AuditRoute: ReclaimPath,
+		Thread: target, ActorUserID: actor, Epoch: body.Epoch, DeviceID: body.DeviceID, Rest: body.Rest,
+		AuditRoute: ReclaimPath,
 	})
 	if err != nil {
 		writeError(request.Context(), writer, "reclaim", err)
@@ -464,6 +468,8 @@ type releaseBody struct {
 	Epoch      int64   `json:"epoch"`
 	Outcome    string  `json:"outcome"`
 	AppliedSHA *string `json:"applied_sha"`
+	// TurnsNotTaken is how many cloud turns the take back left (contract 1.25).
+	TurnsNotTaken *int `json:"turns_not_taken"`
 }
 
 func (h *handler) release(writer http.ResponseWriter, request *http.Request) {
@@ -481,7 +487,7 @@ func (h *handler) release(writer http.ResponseWriter, request *http.Request) {
 	}
 	handoff, err := h.handoff.Release(request.Context(), handoffapp.ReleaseRequest{
 		Thread: target, ActorUserID: actor, Epoch: body.Epoch, Outcome: body.Outcome,
-		AppliedSHA: body.AppliedSHA, AuditRoute: ReleasePath,
+		AppliedSHA: body.AppliedSHA, TurnsNotTaken: body.TurnsNotTaken, AuditRoute: ReleasePath,
 	})
 	if err != nil {
 		writeError(request.Context(), writer, "release", err)

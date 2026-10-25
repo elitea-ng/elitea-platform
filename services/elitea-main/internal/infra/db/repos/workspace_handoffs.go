@@ -89,7 +89,7 @@ const handoffColumns = `project_id, conversation_uuid::text, handoff_id::text, s
        base_sha, upstream_sha, handoff_sha, cloud_sha, stats, excluded, last_seq,
        COALESCE(running_execution_id, ''), COALESCE(running_response_message_id::text, ''), expires_at,
        state_changed_at, updated_at, delete_after, deleted_at, note,
-       included_excluded, env_names, COALESCE(env_secret_name, '')`
+       included_excluded, env_names, COALESCE(env_secret_name, ''), released, rest_pending`
 
 type handoffRow struct {
 	workspacehandoff.Handoff
@@ -109,7 +109,7 @@ func scanHandoff(row pgx.Row) (handoffRow, error) {
 		&out.BaseSHA, &out.UpstreamSHA, &out.HandoffSHA, &out.CloudSHA, &stats, &excluded, &out.LastSeq,
 		&out.RunningExecutionID, &out.RunningResponseID, &out.ExpiresAt,
 		&out.StateChangedAt, &out.UpdatedAt, &out.DeleteAfter, &out.DeletedAt, &out.note,
-		&includes, &environment, &out.EnvSecretName)
+		&includes, &environment, &out.EnvSecretName, &out.Released, &out.RestPending)
 	if err != nil {
 		return handoffRow{}, err
 	}
@@ -188,6 +188,10 @@ func transition(
 	released := ", released = FALSE"
 	if strings.Contains(set, "released = TRUE") {
 		released = ""
+	}
+	// Likewise the rest marker: only a release or a rest take back assigns it.
+	if !strings.Contains(set, "rest_pending =") {
+		released += ", rest_pending = FALSE"
 	}
 	query := `UPDATE elitea_runtime.workspace_handoffs
 SET ` + stateChanged + `, state = $3, epoch = epoch + $4, updated_at = clock_timestamp()` + released + set + `
@@ -546,6 +550,70 @@ func (r *WorkspaceHandoffsRepository) Reclaim(
 	return out, err
 }
 
+// ReclaimRest is the rest take back: a released LOCAL row whose release left
+// turns not taken goes back to RECLAIMING (epoch + 1) within its return
+// grace, keeping rest_pending and delete_after. It takes the thread lock
+// exclusively, as a send does, so no local turn starts while it checks that
+// none is uncommitted.
+func (r *WorkspaceHandoffsRepository) ReclaimRest(
+	ctx context.Context, thread workspacehandoff.Thread, actorUserID, epoch int64, deviceID string,
+) (workspacehandoff.TransitionResult, error) {
+	var out workspacehandoff.TransitionResult
+	err := r.inTx(ctx, func(tx pgx.Tx) error {
+		if err := lockWorkspaceThread(ctx, tx, thread.ProjectID, thread.ConversationUUID, false); err != nil {
+			return err
+		}
+		current, found, err := lockHandoff(ctx, tx, thread)
+		if err != nil {
+			return err
+		}
+		if !found || current.OwnerUserID != actorUserID {
+			return workspacehandoff.ErrNotFound
+		}
+		if current.State == workspacestore.StateReclaiming && current.Epoch == epoch+1 && current.RestPending {
+			out = workspacehandoff.TransitionResult{Handoff: current.Handoff} // a retried rest take back
+			return nil
+		}
+		if current.State != workspacestore.StateLocal || current.Epoch != epoch {
+			return workspacehandoff.ErrStaleEpoch
+		}
+		// delete_after is stamped with the database clock, so the grace is
+		// compared there.
+		inGrace := false
+		if current.DeletedAt == nil && current.DeleteAfter != nil {
+			if err := tx.QueryRow(ctx, `SELECT $1::timestamptz > clock_timestamp()`, *current.DeleteAfter).Scan(&inGrace); err != nil {
+				return fmt.Errorf("workspace handoff: read return grace: %w", err)
+			}
+		}
+		if !inGrace {
+			return workspacehandoff.ErrErased
+		}
+		if !current.Released || !current.RestPending {
+			return workspacehandoff.ErrStaleEpoch
+		}
+		var pending bool
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM elitea_runtime.local_turn_executions
+               WHERE project_id = $1 AND conversation_uuid = $2::uuid
+                 AND committed_at IS NULL AND expires_at > clock_timestamp())`,
+			thread.ProjectID, thread.ConversationUUID).Scan(&pending); err != nil {
+			return fmt.Errorf("workspace handoff: read local turns: %w", err)
+		}
+		if pending {
+			return workspacehandoff.ErrLocalTurnInProgress
+		}
+		row, err := transition(ctx, tx, thread, []workspacestore.State{workspacestore.StateLocal}, epoch,
+			workspacestore.StateReclaiming, 1, `, rest_pending = TRUE,
+    device_id = CASE WHEN $7 = '' THEN device_id ELSE $7 END`, deviceID)
+		if err != nil {
+			return err
+		}
+		out = workspacehandoff.TransitionResult{Handoff: row.Handoff, Changed: true}
+		return nil
+	})
+	return out, err
+}
+
 func (r *WorkspaceHandoffsRepository) Release(ctx context.Context, record workspacehandoff.ReleaseRecord) (workspacehandoff.TransitionResult, error) {
 	var out workspacehandoff.TransitionResult
 	err := r.inTx(ctx, func(tx pgx.Tx) error {
@@ -586,9 +654,13 @@ SELECT released FROM elitea_runtime.workspace_handoffs WHERE project_id = $1 AND
 		if current.State != workspacestore.StateReclaiming || current.Epoch != record.Epoch {
 			return workspacehandoff.ErrStaleEpoch
 		}
+		// The release of a rest take back keeps the first release's grace:
+		// the remaining turns never extend how long the cloud copy lives.
 		row, err := transition(ctx, tx, record.Thread, []workspacestore.State{workspacestore.StateReclaiming}, record.Epoch,
-			workspacestore.StateLocal, 1, `, released = TRUE, delete_after = clock_timestamp() + make_interval(secs => $7)`,
-			record.Grace.Seconds())
+			workspacestore.StateLocal, 1, `, released = TRUE, rest_pending = $8,
+    delete_after = CASE WHEN rest_pending AND delete_after IS NOT NULL THEN delete_after
+                        ELSE clock_timestamp() + make_interval(secs => $7) END`,
+			record.Grace.Seconds(), record.RestPending)
 		if err != nil {
 			return err
 		}
@@ -633,7 +705,8 @@ func (r *WorkspaceHandoffsRepository) Erase(ctx context.Context, record workspac
 			}
 			// A released thread within its return grace: erase now.
 			row, err := scanHandoff(tx.QueryRow(ctx, `
-UPDATE elitea_runtime.workspace_handoffs SET delete_after = clock_timestamp(), updated_at = clock_timestamp()
+UPDATE elitea_runtime.workspace_handoffs
+SET delete_after = clock_timestamp(), updated_at = clock_timestamp(), rest_pending = FALSE
 WHERE project_id = $1 AND conversation_uuid = $2::uuid
 RETURNING `+handoffColumns, record.Thread.ProjectID, record.Thread.ConversationUUID))
 			if err != nil {
@@ -841,11 +914,26 @@ ORDER BY state_changed_at LIMIT $2`, grace.Seconds(), limit)
 }
 
 func (r *WorkspaceHandoffsRepository) DueAbandonedReclaim(ctx context.Context, before time.Time, limit int) ([]workspacehandoff.Handoff, error) {
-	return r.due(ctx, `state = 'RECLAIMING' AND state_changed_at <= $1 ORDER BY state_changed_at LIMIT $2`, before, limit)
+	return r.due(ctx, `state = 'RECLAIMING' AND NOT rest_pending AND state_changed_at <= $1
+ORDER BY state_changed_at LIMIT $2`, before, limit)
 }
 
+// AbandonReclaim moves only what DueAbandonedReclaim answered: the epoch
+// compare-and-set keeps a rest take back (never due there) where it is.
 func (r *WorkspaceHandoffsRepository) AbandonReclaim(ctx context.Context, t workspacehandoff.TimedTransition) (workspacehandoff.Handoff, error) {
 	return r.timed(ctx, t, []workspacestore.State{workspacestore.StateReclaiming}, workspacestore.StateCloudIdle, "")
+}
+
+func (r *WorkspaceHandoffsRepository) DueRestExpired(ctx context.Context, now time.Time, limit int) ([]workspacehandoff.Handoff, error) {
+	return r.due(ctx, `state = 'RECLAIMING' AND rest_pending AND delete_after <= $1
+ORDER BY delete_after LIMIT $2`, now, limit)
+}
+
+// ExpireRestReclaim returns a rest take back whose return grace ran out to
+// LOCAL, released, keeping delete_after, so the erasure removes the copy.
+func (r *WorkspaceHandoffsRepository) ExpireRestReclaim(ctx context.Context, t workspacehandoff.TimedTransition) (workspacehandoff.Handoff, error) {
+	return r.timed(ctx, t, []workspacestore.State{workspacestore.StateReclaiming}, workspacestore.StateLocal,
+		`, released = TRUE, rest_pending = FALSE`)
 }
 
 func (r *WorkspaceHandoffsRepository) DueIdle(
@@ -1007,7 +1095,8 @@ func qualifiedHandoffColumns(alias string) string {
 		alias + `.stats, ` + alias + `.excluded, ` + alias + `.last_seq, COALESCE(` + alias + `.running_execution_id, ''), ` +
 		`COALESCE(` + alias + `.running_response_message_id::text, ''), ` + alias + `.expires_at, ` +
 		alias + `.state_changed_at, ` + alias + `.updated_at, ` + alias + `.delete_after, ` + alias + `.deleted_at, ` + alias + `.note, ` +
-		alias + `.included_excluded, ` + alias + `.env_names, COALESCE(` + alias + `.env_secret_name, '')`
+		alias + `.included_excluded, ` + alias + `.env_names, COALESCE(` + alias + `.env_secret_name, ''), ` +
+		alias + `.released, ` + alias + `.rest_pending`
 }
 
 // handoffEventParticipantKind marks the tenant schema's system participant
