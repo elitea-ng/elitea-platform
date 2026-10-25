@@ -509,8 +509,8 @@ func TestPostgresCloudTurnThroughTheGRPCAdapterEndToEnd(t *testing.T) {
 	// ---- The audit: the executor's publishes and the transitions, never the
 	// env value. ----
 	storeActions := strings.Join(storeAudit.actions(), "\n")
-	if strings.Count(storeActions, "store.publish, writer cloud_executor, epoch 2") != 3 ||
-		!strings.Contains(storeActions, "store.publish_refused, writer cloud_executor, epoch 2") ||
+	if strings.Count(storeActions, "store.publish, writer cloud_executor, kind COMPACT, epoch 2") != 3 ||
+		!strings.Contains(storeActions, "store.publish_refused, writer cloud_executor, kind COMPACT, epoch 2") ||
 		!strings.Contains(storeActions, "reason ref_conflict") || !strings.Contains(storeActions, "reason thread_busy") {
 		t.Fatalf("store audit (two turn publishes and the rewind; the replay is not a new row):\n%s", storeActions)
 	}
