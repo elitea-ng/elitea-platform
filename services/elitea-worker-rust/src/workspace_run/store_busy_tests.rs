@@ -118,8 +118,10 @@ async fn the_grpc_store_resends_a_busy_publish_and_it_applies_once() {
         .publish(
             &WorkspaceClaimV1::default(),
             &PublishSegment {
+                kind: super::KIND_COMPACT,
                 segment_sha256: "a".repeat(64),
                 bytes: 3,
+                prerequisites: Vec::new(),
                 old_cloud: Some(CLOUD.to_owned()),
                 new_cloud: next.clone(),
             },

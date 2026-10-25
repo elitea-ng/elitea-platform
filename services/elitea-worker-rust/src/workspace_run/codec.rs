@@ -1,11 +1,12 @@
 //! The bundle and commit operations the cloud executor needs, as a narrow
 //! trait.
 //!
-//! `libs/rust/workspace-store` (the desktop unit's crate, ADR-0034 decision
-//! 2) writes and verifies COMPACT git bundle v2 segments with gix. Until it
-//! is on main the worker codes against [`WorkspaceCodec`]; the binding is one
-//! adapter over `bundle::verify_into`, `ObjectDb::flatten` and
-//! `bundle::write_compact`, plus loose-object writes for the turn's commit.
+//! `libs/rust/workspace-store` (ADR-0034 decision 2) writes and verifies
+//! git bundle v2 segments with gix: `COMPACT` (the whole closure) and, in
+//! Phase 2, `PUSH` (an increment over named prerequisite commits). The
+//! worker codes against [`WorkspaceCodec`]; the binding (`gix_codec.rs`)
+//! verifies a chain of segment files and writes the turn's segment, plus
+//! loose-object writes for the turn's commit.
 //!
 //! Segments move as FILES on the worker's disk (the turn's scratch
 //! directory), never as one buffer: a 200 MB segment is streamed to disk as
@@ -21,13 +22,37 @@ use std::path::Path;
 /// any file is written.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SegmentExpectation {
+    /// `COMPACT` or `PUSH`.
+    pub(crate) kind: String,
     pub(crate) sha256: String,
     pub(crate) bytes: u64,
-    /// The refs the segment must carry, exactly.
+    /// A `PUSH`'s prerequisite commits (what the chain before it must
+    /// hold); empty for a `COMPACT`.
+    pub(crate) prerequisites: Vec<String>,
+    /// The thread's refs after the segment: a `COMPACT` carries exactly
+    /// these, a `PUSH` the ones it moved (each must be one of these).
     pub(crate) refs: BTreeMap<String, String>,
     pub(crate) max_unpacked_bytes: u64,
     pub(crate) max_files: u64,
     pub(crate) max_file_bytes: u64,
+}
+
+/// One segment file of a chain and what the plan says it is.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SegmentFile {
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) expect: SegmentExpectation,
+}
+
+/// How large the turn's segment may be.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SegmentBudget {
+    /// The policy's cap on any segment.
+    pub(crate) max_segment_bytes: u64,
+    /// `Some(bytes)`: write a `PUSH` over the published head when it fits
+    /// in `bytes`, else a `COMPACT`; `None`: a `COMPACT` (the compaction
+    /// policy says the chain is long or large enough).
+    pub(crate) push_bytes: Option<u64>,
 }
 
 /// A checked-out tree.
@@ -51,9 +76,13 @@ pub(crate) struct TurnCommit {
     pub(crate) unix_seconds: i64,
 }
 
-/// A COMPACT segment written for the publish, on disk.
+/// A segment written for the publish, on disk.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BuiltSegment {
+    /// `COMPACT` or `PUSH`.
+    pub(crate) kind: &'static str,
+    /// A `PUSH`'s prerequisites; empty for a `COMPACT`.
+    pub(crate) prerequisites: Vec<String>,
     /// The turn's new commit: the new `refs/elitea/cloud`.
     pub(crate) commit: String,
     /// The segment file (the `out` path the codec was given).
@@ -93,11 +122,13 @@ impl CodecError {
 
 /// The bundle and commit operations of one workspace run.
 pub(crate) trait WorkspaceCodec: Send + Sync {
-    /// Verify the segment FILE `segment` against `expect` into the
+    /// Verify the chain of segment FILES `chain` (a `COMPACT`, then `PUSH`
+    /// segments; each against its expectation, every `PUSH`'s
+    /// prerequisites proved present before its pack is indexed) into the
     /// quarantine object database at `git_dir`, then write the tree of
     /// commit `checkout` into `worktree` (an empty directory). Nothing is
-    /// written to `worktree` unless every check passed. The file is read in
-    /// bounded chunks, never whole.
+    /// written to `worktree` unless every check passed. The files are read
+    /// in bounded chunks, never whole; the caps are the last segment's.
     ///
     /// # Errors
     ///
@@ -105,29 +136,31 @@ pub(crate) trait WorkspaceCodec: Send + Sync {
     /// over a cap.
     fn hydrate(
         &self,
-        segment: &Path,
-        expect: &SegmentExpectation,
+        chain: &[SegmentFile],
         checkout: &str,
         git_dir: &Path,
         worktree: &Path,
     ) -> Result<HydratedTree, CodecError>;
 
     /// Commit `worktree` as the child of `commit.parent` into `git_dir`, and
-    /// write a COMPACT segment carrying `refs` with `refs/elitea/cloud`
-    /// moved to the new commit, streamed into the file `out`. `.git` in
+    /// write the segment that moves `refs/elitea/cloud` to the new commit,
+    /// streamed into the file `out`: a `PUSH` whose prerequisites are the
+    /// published commits of `refs` when `budget` allows one and it fits,
+    /// else a `COMPACT` carrying `refs` with the cloud ref moved. The
+    /// commit is the same either way (same inputs, same object). `.git` in
     /// `worktree` is never read.
     ///
     /// # Errors
     ///
     /// [`CodecError::InvalidTree`] for a tree a commit cannot carry;
-    /// [`CodecError::TooLarge`] over `max_segment_bytes`.
+    /// [`CodecError::TooLarge`] over `budget.max_segment_bytes`.
     fn commit_and_bundle(
         &self,
         git_dir: &Path,
         worktree: &Path,
         commit: &TurnCommit,
         refs: &BTreeMap<String, String>,
-        max_segment_bytes: u64,
+        budget: SegmentBudget,
         out: &Path,
     ) -> Result<BuiltSegment, CodecError>;
 

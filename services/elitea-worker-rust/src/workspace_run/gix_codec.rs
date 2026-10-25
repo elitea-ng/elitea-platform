@@ -1,30 +1,33 @@
 //! [`WorkspaceCodec`] over `elitea-workspace-store` (ADR-0034 decision 2).
 //!
-//! Hydrate verifies the segment into a quarantine object database with the
-//! crate (digest, size, pack checksum, refs, connectivity) and only then
-//! writes the checkout's files. The turn's commit is written as loose
-//! objects into the same quarantine, and the COMPACT segment is the crate's
-//! `write_compact` over it.
+//! Hydrate verifies the chain (a `COMPACT`, then `PUSH` segments) into a
+//! quarantine object database with the crate's checks (digest, size, pack
+//! checksum, refs, prerequisites, connectivity) and only then writes the
+//! checkout's files. The turn's commit is written as loose objects into the
+//! same quarantine, and its segment is a `PUSH` over the published head
+//! (only the objects the head's closure lacks) or a `COMPACT`, streamed to a
+//! file as the crate's `write_push` / `write_compact` would write it.
 //!
 //! No git CLI runs and no repository config is read: the agent-written tree
 //! is only ever read as data (`symlink_metadata`, never followed), and
 //! `.git` anywhere in it is ignored.
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::unix::fs::{PermissionsExt as _, symlink};
 use std::path::{Component, Path};
 
-use elitea_workspace_store::StoreError;
 use elitea_workspace_store::bundle::{self, Limits};
 use elitea_workspace_store::objects::{ObjectDb, oid};
+use elitea_workspace_store::{KIND_COMPACT, KIND_PUSH, StoreError};
 use gix_object::Write as _;
 use sha2::Digest as _;
 
 use super::codec::{
-    BuiltSegment, CodecError, HydratedTree, SegmentExpectation, TurnCommit, WorkspaceCodec,
+    BuiltSegment, CodecError, HydratedTree, SegmentBudget, SegmentExpectation, SegmentFile,
+    TurnCommit, WorkspaceCodec,
 };
 use super::store::REF_CLOUD;
 
@@ -63,13 +66,13 @@ fn safe_relative(path: &str) -> bool {
 impl WorkspaceCodec for StoreCodec {
     fn hydrate(
         &self,
-        segment: &Path,
-        expect: &SegmentExpectation,
+        chain: &[SegmentFile],
         checkout: &str,
         git_dir: &Path,
         worktree: &Path,
     ) -> Result<HydratedTree, CodecError> {
-        let verified = verify_segment_file(segment, git_dir, expect, plain_reader)?;
+        let expect = &chain.last().ok_or(CodecError::Integrity)?.expect;
+        let verified = verify_chain_files(chain, git_dir, plain_reader)?;
         let (written, unpacked) = checkout_into(&verified.db, checkout, expect, worktree)?;
         // Contract 6.4: the explicit includes, from the handoff snapshot's
         // `Elitea-Included: <path>` trailers (one per path).
@@ -96,7 +99,7 @@ impl WorkspaceCodec for StoreCodec {
         worktree: &Path,
         commit: &TurnCommit,
         refs: &BTreeMap<String, String>,
-        max_segment_bytes: u64,
+        budget: SegmentBudget,
         out: &Path,
     ) -> Result<BuiltSegment, CodecError> {
         let objects = git_dir.join("objects");
@@ -128,9 +131,42 @@ impl WorkspaceCodec for StoreCodec {
         }
         tips.push((REF_CLOUD.to_owned(), new_commit));
         let db = ObjectDb::open_objects(&objects).map_err(|error| verify_error(&error))?;
-        let (sha256, bytes) =
-            write_compact_file(&db, &tips, Limits::default(), max_segment_bytes, out)?;
+        if let Some(push_bytes) = budget.push_bytes {
+            // Phase 2: an increment over the published head, when the store
+            // holds one this quarantine has.
+            let prerequisites = elitea_workspace_store::chain::push_prerequisites(&db, refs)
+                .map_err(|error| verify_error(&error))?;
+            if !prerequisites.is_empty() {
+                let moved = [(REF_CLOUD.to_owned(), new_commit)];
+                let cap = push_bytes.min(budget.max_segment_bytes);
+                match write_segment_file(&db, &moved, &prerequisites, Limits::default(), cap, out) {
+                    Ok((sha256, bytes)) => {
+                        return Ok(BuiltSegment {
+                            kind: KIND_PUSH,
+                            prerequisites: prerequisites.iter().map(ToString::to_string).collect(),
+                            commit: new_commit.to_string(),
+                            path: out.to_path_buf(),
+                            sha256,
+                            bytes,
+                        });
+                    }
+                    // Over the chain's byte budget: compact instead.
+                    Err(CodecError::TooLarge) => {}
+                    Err(other) => return Err(other),
+                }
+            }
+        }
+        let (sha256, bytes) = write_segment_file(
+            &db,
+            &tips,
+            &[],
+            Limits::default(),
+            budget.max_segment_bytes,
+            out,
+        )?;
         Ok(BuiltSegment {
+            kind: KIND_COMPACT,
+            prerequisites: Vec::new(),
             commit: new_commit.to_string(),
             path: out.to_path_buf(),
             sha256,
@@ -171,10 +207,12 @@ impl WorkspaceCodec for StoreCodec {
             tips.push((name.clone(), id));
         }
         let (sha256, bytes) =
-            write_compact_file(&db, &tips, Limits::default(), max_segment_bytes, out)?;
+            write_segment_file(&db, &tips, &[], Limits::default(), max_segment_bytes, out)?;
         Ok((
             parent_hex.clone(),
             BuiltSegment {
+                kind: KIND_COMPACT,
+                prerequisites: Vec::new(),
                 commit: parent_hex,
                 path: out.to_path_buf(),
                 sha256,
@@ -302,23 +340,138 @@ pub(crate) struct VerifiedSegment {
     pub(crate) db: ObjectDb,
 }
 
-/// [`bundle::verify_into`] over a FILE: the same checks (size, content
-/// address, header, refs, pack checksum and objects, connectivity, the
-/// unpacked cap), with every read bounded to [`READ_CHUNK_BYTES`]; the pack
-/// is indexed from a buffered stream, so the segment is never held whole.
+/// [`bundle::verify_into`] over one `COMPACT` FILE: a chain of one.
+#[cfg(test)]
 pub(crate) fn verify_segment_file(
     segment: &Path,
     git_dir: &Path,
     expect: &SegmentExpectation,
     reader: SegmentReader,
 ) -> Result<VerifiedSegment, CodecError> {
+    verify_chain_files(
+        &[SegmentFile {
+            path: segment.to_path_buf(),
+            expect: expect.clone(),
+        }],
+        git_dir,
+        reader,
+    )
+}
+
+/// The crate's `chain::verify_chain_into` over FILES: every segment's size,
+/// content address and header; the `COMPACT` first, carrying exactly its
+/// refs; each `PUSH` naming the plan's prerequisites, every one a commit
+/// the chain before it proved (checked BEFORE its pack is indexed), and
+/// moving only refs to the plan's values; packs checked and indexed from a
+/// buffered stream; connectivity walked per segment over what the chain
+/// proved so far, and from the head's refs with the caps at the end. Every
+/// read is bounded to [`READ_CHUNK_BYTES`]: no segment is held whole.
+pub(crate) fn verify_chain_files(
+    chain: &[SegmentFile],
+    git_dir: &Path,
+    reader: SegmentReader,
+) -> Result<VerifiedSegment, CodecError> {
+    let (first, rest) = chain.split_first().ok_or(CodecError::Integrity)?;
+    let head = &chain[chain.len() - 1].expect;
+    let max_objects = usize::try_from(
+        head.max_files
+            .saturating_mul(OBJECTS_PER_FILE)
+            .saturating_add(10_000),
+    )
+    .unwrap_or(usize::MAX);
     bundle::init_quarantine(git_dir).map_err(|error| verify_error(&error))?;
-    let open = || File::open(segment).map(reader).map_err(|_| CodecError::Io);
-    let length = fs::metadata(segment).map_err(|_| CodecError::Io)?.len();
-    if length != expect.bytes {
+    let header = checked_header(first, reader)?;
+    if first.expect.kind != KIND_COMPACT
+        || !first.expect.prerequisites.is_empty()
+        || !header.prerequisites.is_empty()
+        || header.refs.is_empty()
+        || header.ref_map() != first.expect.refs
+    {
         return Err(CodecError::Integrity);
     }
-    // The content address, streamed.
+    let mut db = index_segment(first, header.pack_offset, git_dir, reader)?;
+    let tips: Vec<gix_hash::ObjectId> = header.refs.iter().map(|(_, id)| *id).collect();
+    let mut known: HashSet<gix_hash::ObjectId> =
+        elitea_workspace_store::connectivity::reachable(&db, &tips, max_objects)
+            .map_err(|error| verify_error(&error))?
+            .objects
+            .into_iter()
+            .collect();
+    for segment in rest {
+        let header = checked_header(segment, reader)?;
+        let mut named = Vec::with_capacity(segment.expect.prerequisites.len());
+        for sha in &segment.expect.prerequisites {
+            named.push(oid(sha).map_err(|_| CodecError::Integrity)?);
+        }
+        named.sort();
+        let mut declared = header.prerequisites.clone();
+        declared.sort();
+        if segment.expect.kind != KIND_PUSH
+            || named.is_empty()
+            || named != declared
+            || header.refs.is_empty()
+        {
+            return Err(CodecError::Integrity);
+        }
+        // Before anything of it is indexed: every prerequisite is a commit
+        // the chain already proved, with its closure.
+        if declared
+            .iter()
+            .any(|prerequisite| !known.contains(prerequisite) || !db.exists(prerequisite))
+        {
+            return Err(CodecError::Integrity);
+        }
+        if header
+            .refs
+            .iter()
+            .any(|(name, id)| segment.expect.refs.get(name) != Some(&id.to_string()))
+        {
+            return Err(CodecError::Integrity);
+        }
+        db = index_segment(segment, header.pack_offset, git_dir, reader)?;
+        let tips: Vec<gix_hash::ObjectId> = header.refs.iter().map(|(_, id)| *id).collect();
+        let walk = elitea_workspace_store::connectivity::reachable_excluding(
+            &db,
+            &tips,
+            &known,
+            max_objects,
+        )
+        .map_err(|error| verify_error(&error))?;
+        known.extend(walk.objects);
+    }
+    let mut tips = Vec::with_capacity(head.refs.len());
+    for sha in head.refs.values() {
+        let id = oid(sha).map_err(|_| CodecError::Integrity)?;
+        if !known.contains(&id) {
+            return Err(CodecError::Integrity);
+        }
+        tips.push(id);
+    }
+    let walk = elitea_workspace_store::connectivity::reachable(&db, &tips, max_objects)
+        .map_err(|error| verify_error(&error))?;
+    if walk.blob_bytes > head.max_unpacked_bytes {
+        return Err(CodecError::TooLarge);
+    }
+    Ok(VerifiedSegment { db })
+}
+
+/// A segment file's size and content address (streamed), then its header
+/// (at most 1 MiB plus the pack signature).
+fn checked_header(
+    segment: &SegmentFile,
+    reader: SegmentReader,
+) -> Result<bundle::Header, CodecError> {
+    let open = || {
+        File::open(&segment.path)
+            .map(reader)
+            .map_err(|_| CodecError::Io)
+    };
+    let length = fs::metadata(&segment.path)
+        .map_err(|_| CodecError::Io)?
+        .len();
+    if length != segment.expect.bytes {
+        return Err(CodecError::Integrity);
+    }
     let mut hasher = sha2::Sha256::new();
     let mut input = open()?;
     let mut buffer = vec![0_u8; READ_CHUNK_BYTES];
@@ -329,10 +482,9 @@ pub(crate) fn verify_segment_file(
         }
         sha2::Digest::update(&mut hasher, &buffer[..count]);
     }
-    if hex(&sha2::Digest::finalize(hasher)) != expect.sha256 {
+    if hex(&sha2::Digest::finalize(hasher)) != segment.expect.sha256 {
         return Err(CodecError::Integrity);
     }
-    // The header: at most 1 MiB plus the pack signature.
     let mut head = Vec::new();
     let mut input = open()?.take(MAX_HEADER_BYTES + 4);
     loop {
@@ -342,18 +494,28 @@ pub(crate) fn verify_segment_file(
         }
         head.extend_from_slice(&buffer[..count]);
     }
-    let header = bundle::parse_header(&head).map_err(|error| verify_error(&error))?;
-    drop(head);
-    if !header.prerequisites.is_empty() || header.refs.is_empty() || header.ref_map() != expect.refs
-    {
-        return Err(CodecError::Integrity);
-    }
-    // The pack, streamed into the quarantine's pack directory.
-    let mut input = open()?;
-    let offset = header.pack_offset as u64;
+    bundle::parse_header(&head).map_err(|error| verify_error(&error))
+}
+
+/// Stream a segment's pack (from `offset`) into the quarantine's pack
+/// directory, checked, and reopen the quarantine over it.
+fn index_segment(
+    segment: &SegmentFile,
+    offset: usize,
+    git_dir: &Path,
+    reader: SegmentReader,
+) -> Result<ObjectDb, CodecError> {
+    let length = segment.expect.bytes;
+    let mut input = File::open(&segment.path)
+        .map(reader)
+        .map_err(|_| CodecError::Io)?;
+    let offset = offset as u64;
     std::io::copy(&mut (&mut input).take(offset), &mut std::io::sink())
         .map_err(|_| CodecError::Io)?;
-    let mut pack = std::io::BufReader::with_capacity(READ_CHUNK_BYTES, input.take(length - offset));
+    let mut pack = std::io::BufReader::with_capacity(
+        READ_CHUNK_BYTES,
+        input.take(length.saturating_sub(offset)),
+    );
     let interrupt = std::sync::atomic::AtomicBool::new(false);
     let outcome = gix_pack::Bundle::write_to_directory(
         &mut pack,
@@ -373,25 +535,7 @@ pub(crate) fn verify_segment_file(
     if let Some(keep) = outcome.keep_path {
         let _ = fs::remove_file(keep);
     }
-    let db =
-        ObjectDb::open_objects(&git_dir.join("objects")).map_err(|error| verify_error(&error))?;
-    let limits = Limits {
-        max_objects: usize::try_from(
-            expect
-                .max_files
-                .saturating_mul(OBJECTS_PER_FILE)
-                .saturating_add(10_000),
-        )
-        .unwrap_or(usize::MAX),
-        max_unpacked_bytes: expect.max_unpacked_bytes,
-    };
-    let tips: Vec<gix_hash::ObjectId> = header.refs.iter().map(|(_, id)| *id).collect();
-    let walk = elitea_workspace_store::connectivity::reachable(&db, &tips, limits.max_objects)
-        .map_err(|error| verify_error(&error))?;
-    if walk.blob_bytes > limits.max_unpacked_bytes {
-        return Err(CodecError::TooLarge);
-    }
-    Ok(VerifiedSegment { db })
+    ObjectDb::open_objects(&git_dir.join("objects")).map_err(|error| verify_error(&error))
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -469,24 +613,40 @@ fn entry_header(kind: gix_object::Kind, size: usize) -> Vec<u8> {
     out
 }
 
-/// [`bundle::write_compact`] into a FILE: the v2 header, then a pack of
-/// whole objects written one object at a time (each object is bounded by
-/// the file cap); the bytes and their SHA-256 are counted as they are
-/// written, and a segment over `max_segment_bytes` stops the write.
-fn write_compact_file(
+/// [`bundle::write_compact`] (no `prerequisites`) or [`bundle::write_push`]
+/// into a FILE: the v2 header, then a pack of whole objects (for a `PUSH`,
+/// only those the prerequisites' closure lacks) written one object at a
+/// time (each object is bounded by the file cap); the bytes and their
+/// SHA-256 are counted as they are written, and a segment over
+/// `max_segment_bytes` stops the write ([`CodecError::TooLarge`]).
+fn write_segment_file(
     db: &ObjectDb,
     refs: &[(String, gix_hash::ObjectId)],
+    prerequisites: &[gix_hash::ObjectId],
     limits: Limits,
     max_segment_bytes: u64,
     out: &Path,
 ) -> Result<(String, u64), CodecError> {
-    let walk = elitea_workspace_store::connectivity::reachable(
+    let tips: Vec<gix_hash::ObjectId> = refs.iter().map(|(_, id)| *id).collect();
+    let (held, held_bytes) = if prerequisites.is_empty() {
+        (HashSet::new(), 0)
+    } else {
+        let walk =
+            elitea_workspace_store::connectivity::reachable(db, prerequisites, limits.max_objects)
+                .map_err(|error| verify_error(&error))?;
+        (walk.objects.into_iter().collect(), walk.blob_bytes)
+    };
+    let walk = elitea_workspace_store::connectivity::reachable_excluding(
         db,
-        &refs.iter().map(|(_, id)| *id).collect::<Vec<_>>(),
+        &tips,
+        &held,
         limits.max_objects,
     )
     .map_err(|error| verify_error(&error))?;
-    if walk.blob_bytes > limits.max_unpacked_bytes {
+    if walk.objects.is_empty() {
+        return Err(CodecError::Integrity);
+    }
+    if walk.blob_bytes.saturating_add(held_bytes) > limits.max_unpacked_bytes {
         return Err(CodecError::TooLarge);
     }
     let file = File::create(out).map_err(|_| CodecError::Io)?;
@@ -505,6 +665,9 @@ fn write_compact_file(
         }
     };
     let mut header = b"# v2 git bundle\n".to_vec();
+    for prerequisite in prerequisites {
+        header.extend_from_slice(format!("-{prerequisite} \n").as_bytes());
+    }
     for (name, id) in refs {
         header.extend_from_slice(format!("{id} {name}\n").as_bytes());
     }
@@ -666,8 +829,22 @@ mod tests {
     const BASE_REF: &str = "refs/elitea/base";
     const HANDOFF_REF: &str = "refs/elitea/handoff/1";
 
+    const COMPACT_ONLY: SegmentBudget = SegmentBudget {
+        max_segment_bytes: 1 << 30,
+        push_bytes: None,
+    };
+
+    fn one(path: &Path, expect: &SegmentExpectation) -> Vec<SegmentFile> {
+        vec![SegmentFile {
+            path: path.to_path_buf(),
+            expect: expect.clone(),
+        }]
+    }
+
     fn expectation(segment: &[u8], refs: &BTreeMap<String, String>) -> SegmentExpectation {
         SegmentExpectation {
+            kind: KIND_COMPACT.to_owned(),
+            prerequisites: Vec::new(),
             sha256: sha256_hex(segment),
             bytes: segment.len() as u64,
             refs: refs.clone(),
@@ -743,8 +920,7 @@ mod tests {
         fs::write(&first_file, &first.bytes).expect("segment file");
         let hydrated = StoreCodec
             .hydrate(
-                &first_file,
-                &expectation(&first.bytes, &refs),
+                &one(&first_file, &expectation(&first.bytes, &refs)),
                 &handoff.to_string(),
                 &git_dir,
                 &worktree,
@@ -780,7 +956,7 @@ mod tests {
                 &worktree,
                 &turn_commit(&handoff.to_string(), 3),
                 &refs,
-                1 << 30,
+                COMPACT_ONLY,
                 &scratch.path().join("turn.segment"),
             )
             .expect("built");
@@ -797,7 +973,7 @@ mod tests {
         let mut expect = expectation(&built_bytes, &cloud_refs);
         expect.refs = cloud_refs;
         StoreCodec
-            .hydrate(&built.path, &expect, &built.commit, &check, &out)
+            .hydrate(&one(&built.path, &expect), &built.commit, &check, &out)
             .expect("the published segment verifies");
         assert_eq!(
             fs::read_to_string(out.join("README.md")).expect("r"),
@@ -853,8 +1029,7 @@ mod tests {
         fs::write(&first_file, &first.bytes).expect("segment file");
         StoreCodec
             .hydrate(
-                &first_file,
-                &expectation(&first.bytes, &refs),
+                &one(&first_file, &expectation(&first.bytes, &refs)),
                 &handoff.to_string(),
                 &git_dir,
                 &worktree,
@@ -867,7 +1042,7 @@ mod tests {
                 &worktree,
                 &turn_commit(&handoff.to_string(), 3),
                 &refs,
-                1 << 30,
+                COMPACT_ONLY,
                 &scratch.path().join("c1.segment"),
             )
             .expect("c1");
@@ -879,7 +1054,7 @@ mod tests {
                 &worktree,
                 &turn_commit(&c1.commit, 4),
                 &refs,
-                1 << 30,
+                COMPACT_ONLY,
                 &scratch.path().join("c2.segment"),
             )
             .expect("c2");
@@ -938,6 +1113,258 @@ mod tests {
             ),
             Err(CodecError::Integrity)
         ));
+    }
+
+    fn push_expectation(built: &BuiltSegment, refs: &BTreeMap<String, String>) -> SegmentFile {
+        let bytes = fs::read(&built.path).expect("segment");
+        SegmentFile {
+            path: built.path.clone(),
+            expect: SegmentExpectation {
+                kind: built.kind.to_owned(),
+                prerequisites: built.prerequisites.clone(),
+                ..expectation(&bytes, refs)
+            },
+        }
+    }
+
+    /// The pack's object count (the 4 bytes after `PACK` and the version).
+    fn pack_objects(segment: &Path) -> u32 {
+        let bytes = fs::read(segment).expect("segment");
+        let header = bundle::parse_header(&bytes).expect("header");
+        let count = &bytes[header.pack_offset + 8..header.pack_offset + 12];
+        u32::from_be_bytes(count.try_into().expect("4 bytes"))
+    }
+
+    fn packs_in(git_dir: &Path) -> usize {
+        fs::read_dir(git_dir.join("objects/pack"))
+            .expect("pack dir")
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .is_ok_and(|entry| entry.path().extension().is_some_and(|ext| ext == "pack"))
+            })
+            .count()
+    }
+
+    /// Phase 2: two cloud turns publish PUSH segments carrying only what the
+    /// published head lacks; the chain (COMPACT, PUSH, PUSH) verifies here
+    /// and in the store crate alike. A missing prerequisite is refused
+    /// before the PUSH's pack is indexed, a tampered PUSH or one naming
+    /// other prerequisites is refused, and a PUSH over its budget is
+    /// written as a COMPACT.
+    #[test]
+    #[allow(clippy::too_many_lines, reason = "one chain, its faults")]
+    fn turns_push_increments_and_the_chain_verifies() {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let desktop = scratch.path().join("desktop.git");
+        bundle::init_quarantine(&desktop).expect("init");
+        let source = scratch.path().join("src-tree");
+        fs::create_dir_all(source.join("src")).expect("mkdir");
+        fs::write(source.join("README.md"), "hello\n").expect("w");
+        fs::write(source.join("src/lib.rs"), "pub fn f() {}\n").expect("w");
+        let loose = gix_odb::loose::Store::at(desktop.join("objects"), gix_hash::Kind::Sha1);
+        let tree = write_tree(&loose, &source, 0)
+            .expect("tree")
+            .expect("files");
+        let handoff = loose
+            .write_buf(
+                gix_object::Kind::Commit,
+                format!(
+                    "tree {tree}\nauthor a <a@x> 2 +0000\ncommitter a <a@x> 2 +0000\n\nsnapshot\n"
+                )
+                .as_bytes(),
+            )
+            .expect("handoff");
+        let db = ObjectDb::open_objects(&desktop.join("objects")).expect("db");
+        let first =
+            bundle::write_compact(&db, &[(HANDOFF_REF.to_owned(), handoff)], Limits::default())
+                .expect("segment");
+        let mut refs: BTreeMap<String, String> =
+            [(HANDOFF_REF.to_owned(), handoff.to_string())].into();
+        let first_file = scratch.path().join("first.bundle");
+        fs::write(&first_file, &first.bytes).expect("segment file");
+        let compact = one(&first_file, &expectation(&first.bytes, &refs)).remove(0);
+        let git_dir = scratch.path().join("q.git");
+        let worktree = scratch.path().join("in");
+        fs::create_dir_all(&worktree).expect("in");
+        StoreCodec
+            .hydrate(
+                std::slice::from_ref(&compact),
+                &handoff.to_string(),
+                &git_dir,
+                &worktree,
+            )
+            .expect("hydrated");
+        let push_budget = SegmentBudget {
+            max_segment_bytes: 1 << 30,
+            push_bytes: Some(1 << 20),
+        };
+
+        // Turn 1 edits README: the PUSH carries its blob, the root tree and
+        // the commit, nothing of src/.
+        fs::write(worktree.join("README.md"), "turn one\n").expect("w");
+        let c1 = StoreCodec
+            .commit_and_bundle(
+                &git_dir,
+                &worktree,
+                &turn_commit(&handoff.to_string(), 3),
+                &refs,
+                push_budget,
+                &scratch.path().join("c1.segment"),
+            )
+            .expect("c1");
+        assert_eq!(c1.kind, KIND_PUSH);
+        assert_eq!(c1.prerequisites, vec![handoff.to_string()]);
+        assert_eq!(pack_objects(&c1.path), 3);
+        refs.insert(REF_CLOUD.to_owned(), c1.commit.clone());
+        let push1 = push_expectation(&c1, &refs);
+
+        // Turn 2 on top: prerequisites are every published commit.
+        fs::write(worktree.join("NEW.txt"), "two\n").expect("w");
+        let c2 = StoreCodec
+            .commit_and_bundle(
+                &git_dir,
+                &worktree,
+                &turn_commit(&c1.commit, 4),
+                &refs,
+                push_budget,
+                &scratch.path().join("c2.segment"),
+            )
+            .expect("c2");
+        assert_eq!(c2.kind, KIND_PUSH);
+        let mut expected = vec![handoff.to_string(), c1.commit.clone()];
+        expected.sort();
+        assert_eq!(c2.prerequisites, expected);
+        refs.insert(REF_CLOUD.to_owned(), c2.commit.clone());
+        let push2 = push_expectation(&c2, &refs);
+
+        // The chain verifies and checks out the head.
+        let chain = vec![compact.clone(), push1.clone(), push2.clone()];
+        let out = scratch.path().join("out");
+        fs::create_dir_all(&out).expect("out");
+        let hydrated = StoreCodec
+            .hydrate(&chain, &c2.commit, &scratch.path().join("check.git"), &out)
+            .expect("the chain verifies");
+        assert_eq!(hydrated.files, 3);
+        assert_eq!(
+            fs::read_to_string(out.join("README.md")).expect("r"),
+            "turn one\n"
+        );
+        assert_eq!(fs::read_to_string(out.join("NEW.txt")).expect("r"), "two\n");
+
+        // The store crate (what the desktop reads with) agrees.
+        let bodies: Vec<Vec<u8>> = chain
+            .iter()
+            .map(|link| fs::read(&link.path).expect("body"))
+            .collect();
+        let plan_refs: Vec<BTreeMap<String, String>> = vec![
+            compact.expect.refs.clone(),
+            push1.expect.refs.clone(),
+            push2.expect.refs.clone(),
+        ];
+        let segments: Vec<elitea_workspace_store::chain::ChainSegment<'_>> = chain
+            .iter()
+            .zip(&bodies)
+            .zip(&plan_refs)
+            .enumerate()
+            .map(
+                |(index, ((link, body), refs))| elitea_workspace_store::chain::ChainSegment {
+                    seq: index as u64 + 1,
+                    kind: &link.expect.kind,
+                    sha256: &link.expect.sha256,
+                    prerequisites: &link.expect.prerequisites,
+                    refs,
+                    bytes: body,
+                },
+            )
+            .collect();
+        bundle::init_quarantine(&scratch.path().join("crate.git")).expect("quarantine");
+        let verified = elitea_workspace_store::chain::verify_chain_into(
+            &segments,
+            &scratch.path().join("crate.git"),
+            Limits::default(),
+        )
+        .expect("the store crate verifies the worker's chain");
+        assert_eq!(verified.pack_offsets.len(), 3);
+
+        // A missing PUSH: turn 2's prerequisite c1 is not in the chain, and
+        // its pack is never indexed.
+        let gap = scratch.path().join("gap.git");
+        assert_eq!(
+            StoreCodec.hydrate(
+                &[compact.clone(), push2.clone()],
+                &c2.commit,
+                &gap,
+                &scratch.path().join("gap-out"),
+            ),
+            Err(CodecError::Integrity)
+        );
+        assert_eq!(packs_in(&gap), 1, "only the COMPACT was indexed");
+
+        // A tampered PUSH, re-addressed so only the content is wrong.
+        let mut tampered_bytes = fs::read(&push1.path).expect("push");
+        let last = tampered_bytes.len() - 1;
+        tampered_bytes[last] ^= 0xff;
+        let tampered_path = scratch.path().join("tampered.segment");
+        fs::write(&tampered_path, &tampered_bytes).expect("w");
+        let tampered = SegmentFile {
+            path: tampered_path,
+            expect: SegmentExpectation {
+                sha256: sha256_hex(&tampered_bytes),
+                ..push1.expect.clone()
+            },
+        };
+        assert_eq!(
+            StoreCodec.hydrate(
+                &[compact.clone(), tampered],
+                &c1.commit,
+                &scratch.path().join("t.git"),
+                &scratch.path().join("t-out"),
+            ),
+            Err(CodecError::Integrity)
+        );
+
+        // A PUSH whose plan names other prerequisites than its header.
+        let mut renamed = push2.clone();
+        renamed.expect.prerequisites = vec![handoff.to_string()];
+        assert_eq!(
+            StoreCodec.hydrate(
+                &[compact.clone(), push1, renamed],
+                &c2.commit,
+                &scratch.path().join("r.git"),
+                &scratch.path().join("r-out"),
+            ),
+            Err(CodecError::Integrity)
+        );
+
+        // Over its budget, the turn's segment is a COMPACT.
+        fs::write(worktree.join("NEW.txt"), "three\n").expect("w");
+        let c3 = StoreCodec
+            .commit_and_bundle(
+                &git_dir,
+                &worktree,
+                &turn_commit(&c2.commit, 5),
+                &refs,
+                SegmentBudget {
+                    max_segment_bytes: 1 << 30,
+                    push_bytes: Some(16),
+                },
+                &scratch.path().join("c3.segment"),
+            )
+            .expect("c3");
+        assert_eq!(c3.kind, KIND_COMPACT);
+        assert_eq!(c3.prerequisites, Vec::<String>::new());
+        let mut compact_refs = refs.clone();
+        compact_refs.insert(REF_CLOUD.to_owned(), c3.commit.clone());
+        let c3_bytes = fs::read(&c3.path).expect("c3");
+        StoreCodec
+            .hydrate(
+                &one(&c3.path, &expectation(&c3_bytes, &compact_refs)),
+                &c3.commit,
+                &scratch.path().join("c3.git"),
+                &scratch.path().join("c3-out"),
+            )
+            .expect("the COMPACT reads alone");
     }
 
     /// The segment is a real git bundle: git clones it and `fsck --strict`
@@ -1011,8 +1438,7 @@ mod tests {
         fs::write(&file, &segment).expect("file");
         assert_eq!(
             StoreCodec.hydrate(
-                &file,
-                &expect,
+                &one(&file, &expect),
                 &"1".repeat(40),
                 &scratch.path().join("q"),
                 &worktree
@@ -1098,11 +1524,12 @@ mod tests {
         let tips = [(HANDOFF_REF.to_owned(), handoff)];
         // Over its cap the write stops and says so.
         assert_eq!(
-            write_compact_file(&db, &tips, Limits::default(), 1024 * 1024, &segment),
+            write_segment_file(&db, &tips, &[], Limits::default(), 1024 * 1024, &segment),
             Err(CodecError::TooLarge)
         );
         let (sha256, bytes) =
-            write_compact_file(&db, &tips, Limits::default(), 1 << 30, &segment).expect("written");
+            write_segment_file(&db, &tips, &[], Limits::default(), 1 << 30, &segment)
+                .expect("written");
         assert!(bytes > 3 * 1024 * 1024);
         // The streamed writer produces exactly the store crate's bundle.
         let reference = bundle::write_compact(&db, &tips, Limits::default()).expect("reference");
@@ -1111,6 +1538,8 @@ mod tests {
 
         let refs: BTreeMap<String, String> = [(HANDOFF_REF.to_owned(), handoff.to_string())].into();
         let expect = SegmentExpectation {
+            kind: KIND_COMPACT.to_owned(),
+            prerequisites: Vec::new(),
             sha256,
             bytes,
             refs,
