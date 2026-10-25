@@ -382,7 +382,7 @@ async fn live_take_back_while_a_cloud_turn_runs() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert_eq!(running["state"], "CLOUD_RUNNING", "{running}");
-    let pending = h.host.reclaim(&uuid).await.unwrap();
+    let pending = h.host.reclaim(&uuid, false).await.unwrap();
     assert_eq!(pending["reclaim_pending"], true, "{pending}");
     assert_eq!(pending["state"], "CLOUD_RUNNING");
     assert_eq!(pending["epoch"].as_u64(), Some(sent.epoch));
@@ -542,7 +542,7 @@ async fn live_send_cloud_turn_take_back_import_and_undo() {
         h.host.preflight(&uuid, None).await.unwrap_err().code,
         "handoff_not_reclaimed"
     );
-    let reclaimed = h.host.reclaim(&uuid).await.unwrap();
+    let reclaimed = h.host.reclaim(&uuid, false).await.unwrap();
     assert_eq!(reclaimed["state"], "RECLAIMING");
     let before = std::fs::read_to_string(h.folder.join("README.md")).unwrap();
     let preflight = h.host.preflight(&uuid, None).await.unwrap();
@@ -732,7 +732,7 @@ async fn live_stale_epoch_erased_release_and_quota() {
     // the take-back still completes locally and the release is not kept
     // for retry forever.
     live_cloud_turn(&h, &uuid).await;
-    h.host.reclaim(&uuid).await.unwrap();
+    h.host.reclaim(&uuid, false).await.unwrap();
     let preflight = h.host.preflight(&uuid, None).await.unwrap();
     let (code, body) = raw(
         &h.live,

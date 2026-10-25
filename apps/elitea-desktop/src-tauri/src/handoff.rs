@@ -22,6 +22,12 @@
 //!   cloud_executor`, within the handoff's epochs) are imported into
 //!   `threads.sqlite` with `origin: cloud`, their changed files from the
 //!   cloud commits' diffs.
+//! * **The remaining turns.** A take-back up to turn `k` (applied into the
+//!   folder) keeps the record, `LOCAL` with what taking back turns
+//!   `k+1..N` needs, while the server keeps the cloud copy in its grace
+//!   (`rest_pending`): `handoff_reclaim` with `rest` and the usual preflight
+//!   and apply then take back only those turns, and import only their
+//!   answers.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -30,7 +36,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use elitea_local_tools::handoff::apply::{self as take_back, ApplyOutcome, Mode, Preflight};
+use elitea_local_tools::handoff::apply::{self as take_back, ApplyOutcome, Mode, Preflight, Take};
 use elitea_local_tools::handoff::caps::{self, Caps};
 use elitea_local_tools::handoff::exclude::{Excluded, Patterns, Reason};
 use elitea_local_tools::handoff::scan::Finding;
@@ -164,6 +170,35 @@ struct ThreadRecord {
     /// A release the server did not acknowledge yet.
     #[serde(default)]
     pending_release: Option<Value>,
+    /// After a take-back up to turn `k`: what taking back the remaining
+    /// turns needs (kept while the server's cloud copy is in its grace).
+    #[serde(default)]
+    rest: Option<RestRecord>,
+}
+
+/// The remaining turns after a take-back up to turn `k` (#1187).
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+struct RestRecord {
+    /// `k`.
+    after_turn: usize,
+    /// `N`, the cloud turns there were.
+    turns: usize,
+    /// `C'_k`: the take-back's replayed commit of turn `k`.
+    replayed: String,
+    /// `elitea/cloud/<thread>-after-turn-<k>`.
+    rest_branch: Option<String>,
+    /// The message groups the take-back left out of the agent's seed.
+    skipped_groups: Vec<i64>,
+}
+
+/// The server keeps the remaining turns of a partial take-back.
+fn rest_pending(state: &Value) -> bool {
+    state.get("rest_pending").and_then(Value::as_bool) == Some(true)
+}
+
+/// The number in a release body (`turns_not_taken`).
+fn turns_not_taken_of(release: Option<&Value>) -> u64 {
+    release.map_or(0, |body| u64_of(body, "turns_not_taken"))
 }
 
 /// The records, one owner-only JSON file per thread.
@@ -387,8 +422,11 @@ pub struct PreflightAnswer {
     #[serde(flatten)]
     pub report: ApplyOutcome,
     pub cloud_turns: usize,
-    /// The turns this preflight takes back (`1..=cloud_turns`).
+    /// The turns this preflight takes back (`from_turn+1..=up_to_turn`).
     pub up_to_turn: usize,
+    /// The turns an earlier take-back already took back (0; `k` when this
+    /// preflight takes back the remaining turns).
+    pub from_turn: usize,
     /// What `handoff_apply` accepts: `apply` for `fast_path` and
     /// `clean_merge`, `apply_with_markers` for `conflicts`; `worktree` and
     /// `discard` always.
@@ -1350,6 +1388,7 @@ impl HandoffHost {
             send: snap.record(uuid),
             sent_at: chrono::Utc::now().timestamp_millis(),
             pending_release: None,
+            rest: None,
         };
         self.records.put(&record)?;
         Ok((handoff_id, state, cloud_epoch))
@@ -1420,7 +1459,7 @@ impl HandoffHost {
         let record = self.records.get(&uuid)?;
         let Some(project_id) = record.as_ref().map(|r| r.project_id).or(project_id) else {
             return Ok(
-                json!({"state": "LOCAL", "epoch": 0, "executor": "local", "read_only": false, "sent_from_here": false}),
+                json!({"state": "LOCAL", "epoch": 0, "executor": "local", "read_only": false, "sent_from_here": false, "rest_turns": 0}),
             );
         };
         if let Some(record) = &record
@@ -1430,9 +1469,15 @@ impl HandoffHost {
         }
         let mut state = self.server_state(project_id, &uuid).await?;
         let name = str_of(&state, "state").unwrap_or_else(|| "LOCAL".into());
+        let mut rest_turns = 0;
         if let Some(mut record) = self.records.get(&uuid)? {
-            if name == "LOCAL" && record.pending_release.is_none() {
-                // Erased or expired elsewhere: the folder stays as it is.
+            let rest = record.rest.as_ref().filter(|_| rest_pending(&state));
+            if let Some(rest) = rest {
+                rest_turns = rest.turns.saturating_sub(rest.after_turn);
+            }
+            if name == "LOCAL" && record.pending_release.is_none() && rest.is_none() {
+                // Erased or expired elsewhere (or the remaining turns' grace
+                // is over): the folder stays as it is.
                 self.records.remove(&uuid);
             } else if record.state != name {
                 record.state.clone_from(&name);
@@ -1444,6 +1489,8 @@ impl HandoffHost {
             object.insert("executor".into(), json!(executor_of(&name)));
             object.insert("read_only".into(), json!(name != "LOCAL"));
             object.insert("sent_from_here".into(), json!(record.is_some()));
+            // "Take back the remaining turns" is offered while > 0.
+            object.insert("rest_turns".into(), json!(rest_turns));
         }
         Ok(state)
     }
@@ -1533,15 +1580,28 @@ impl HandoffHost {
     }
 
     /// `handoff_reclaim`: take the thread back (`CLOUD_IDLE` → `RECLAIMING`,
-    /// or `reclaim_pending` while a cloud turn runs).
+    /// or `reclaim_pending` while a cloud turn runs); with `rest`, the
+    /// remaining turns of a take-back up to turn `k` (`LOCAL` →
+    /// `RECLAIMING` while the cloud copy is in its grace).
     ///
     /// # Errors
     ///
-    /// `handoff_unknown` (not sent from this desktop), the server's
-    /// refusals.
-    pub async fn reclaim(&self, conversation_uuid: &str) -> Result<Value, HandoffError> {
+    /// `handoff_unknown` (not sent from this desktop), `rest_unknown` (no
+    /// remaining turns kept here), the server's refusals (`handoff_erased`
+    /// once the grace is over: the record goes).
+    pub async fn reclaim(
+        &self,
+        conversation_uuid: &str,
+        rest: bool,
+    ) -> Result<Value, HandoffError> {
         let uuid = canonical_uuid(conversation_uuid)?;
         let mut record = self.record(&uuid)?;
+        if rest && record.rest.is_none() {
+            return Err(HandoffError::new(
+                "rest_unknown",
+                "There are no remaining cloud turns of this thread to take back.",
+            ));
+        }
         let state = self.server_state(record.project_id, &uuid).await?;
         let epoch = u64_of(&state, "epoch");
         if str_of(&state, "state").as_deref() == Some("RECLAIMING") {
@@ -1550,6 +1610,10 @@ impl HandoffHost {
             self.records.put(&record)?;
             return Ok(state);
         }
+        let mut body = json!({"epoch": epoch, "device_id": self.device_id()});
+        if rest {
+            body["rest"] = json!(true);
+        }
         let answer = self
             .call(
                 Method::POST,
@@ -1557,9 +1621,15 @@ impl HandoffHost {
                     "/api/v2/elitea_core/workspace_handoff_reclaim/prompt_lib/{}/{uuid}",
                     record.project_id
                 ),
-                Some(&json!({"epoch": epoch, "device_id": self.device_id()})),
+                Some(&body),
             )
-            .await?;
+            .await
+            .inspect_err(|error| {
+                if rest && error.code == "handoff_erased" {
+                    // The grace is over: nothing is left to take back.
+                    self.records.remove(&uuid);
+                }
+            })?;
         record.state = str_of(&answer, "state").unwrap_or_else(|| "RECLAIMING".into());
         record.epoch = u64_of(&answer, "epoch");
         self.records.put(&record)?;
@@ -1606,24 +1676,36 @@ impl HandoffHost {
             record.epoch = epoch;
             self.records.put(&record)?;
         }
+        // The remaining turns of a take-back up to `k`, when that is what
+        // the server reclaimed.
+        let take = match record.rest.as_ref().filter(|_| rest_pending(&state)) {
+            Some(rest) if up_to_turn.is_none() => Take::Rest {
+                after_turn: rest.after_turn,
+                replayed: rest.replayed.clone(),
+            },
+            Some(_) => {
+                return Err(HandoffError::new(
+                    "invalid_request",
+                    "the remaining turns are taken back together; preview them without a turn",
+                ));
+            }
+            None => Take::UpTo(up_to_turn),
+        };
         let policy = self.policy_or_default();
         let (root, _) = self.workspace(&record.workspace_id)?;
         let store = self.store(record.project_id, &uuid).await?;
-        let (_plan, segment, bytes) = sync::fetch_latest(&store, 0, self.deps.backoff).await?;
+        // Phase 2: the live chain, a COMPACT and the PUSH segments after it.
+        let (plan, bodies) = sync::fetch_chain(&store, self.deps.backoff).await?;
         let config = self.config(&root, &uuid, &policy, Vec::new(), Caps::default());
         let source = self.open(&config)?;
         let send = record.send.clone();
         let path_deny = policy.path_deny.clone();
         let (preflight, files, diffs_truncated) = joined(
             tokio::task::spawn_blocking(move || {
-                let preflight = take_back::preflight_up_to(
-                    &source,
-                    &send,
-                    &bytes,
-                    &segment.refs,
-                    &path_deny,
-                    up_to_turn,
-                )?;
+                let segments = elitea_workspace_store::chain::plan_segments(&plan, &bodies)
+                    .map_err(|e| elitea_local_tools::handoff::store_error(&e))?;
+                let preflight =
+                    take_back::preflight_chain(&source, &send, &segments, &path_deny, &take)?;
                 let (files, truncated) = preflight_files(&preflight)?;
                 Ok::<_, elitea_local_tools::error::ToolError>((preflight, files, truncated))
             })
@@ -1636,6 +1718,7 @@ impl HandoffHost {
             report: preflight.report.clone(),
             cloud_turns: preflight.cloud_turns(),
             up_to_turn: preflight.up_to_turn,
+            from_turn: preflight.from_turn,
             modes: preflight.modes(),
             files,
             diffs_truncated,
@@ -1789,15 +1872,32 @@ impl HandoffHost {
             Mode::Worktree => "worktree",
             Mode::Discard => "discarded",
         };
+        let mut skipped_groups = Vec::new();
         if turns_not_taken > 0 {
             let chain: Vec<String> = held.preflight.chain.iter().map(|c| c.sha.clone()).collect();
-            self.keep_seed_boundary(&record, &chain, held.preflight.up_to_turn)
+            skipped_groups = self
+                .keep_seed_boundary(&record, &chain, held.preflight.up_to_turn)
                 .await;
         }
         let applied_sha = applied.replayed.last().cloned();
-        record.pending_release = Some(
-            json!({"epoch": record.epoch, "outcome": release_outcome, "applied_sha": applied_sha}),
-        );
+        let mut release =
+            json!({"epoch": record.epoch, "outcome": release_outcome, "applied_sha": applied_sha});
+        // The remaining turns can be taken back later only when the folder
+        // holds turn k's work (an apply): the server keeps them in its grace.
+        if turns_not_taken > 0
+            && release_outcome == "applied"
+            && let Some(replayed) = applied_sha.clone()
+        {
+            release["turns_not_taken"] = json!(turns_not_taken);
+            record.rest = Some(RestRecord {
+                after_turn: held.preflight.up_to_turn,
+                turns: held.preflight.cloud_turns(),
+                replayed,
+                rest_branch: applied.rest_branch.clone(),
+                skipped_groups,
+            });
+        }
+        record.pending_release = Some(release);
         self.records.put(&record)?;
         let released = self.release(&record).await;
         let (workspace_id, conversation_uuid) =
@@ -1805,7 +1905,7 @@ impl HandoffHost {
         let (imported, acknowledged, refused) = match released {
             Ok(Released::Acknowledged(release_epoch)) => {
                 let imported = self.import(&record, held, release_epoch).await;
-                self.records.remove(&conversation_uuid);
+                self.after_release(&record, release_epoch).await;
                 (imported, true, None)
             }
             Ok(Released::Refused(code)) => {
@@ -1886,10 +1986,36 @@ impl HandoffHost {
         }
     }
 
+    /// A release was acknowledged at `release_epoch`. A take-back up to turn
+    /// `k` that keeps the remaining turns keeps the record (`LOCAL`, with
+    /// them); any other drops it, and the remaining turns' take-back lifts
+    /// the seed boundary the first one kept.
+    async fn after_release(&self, record: &ThreadRecord, release_epoch: u64) {
+        if turns_not_taken_of(record.pending_release.as_ref()) > 0 && record.rest.is_some() {
+            let mut kept = record.clone();
+            kept.state = "LOCAL".into();
+            kept.epoch = release_epoch;
+            kept.pending_release = None;
+            if let Err(error) = self.records.put(&kept) {
+                log::warn!("the remaining cloud turns were not kept: {}", error.code);
+            }
+            return;
+        }
+        if let Some(rest) = &record.rest
+            && !rest.skipped_groups.is_empty()
+        {
+            self.deps
+                .agents
+                .unskip_on_seed(&record.conversation_uuid, rest.skipped_groups.clone())
+                .await;
+        }
+        self.records.remove(&record.conversation_uuid);
+    }
+
     async fn retry_release(&self, record: ThreadRecord) {
         match self.release(&record).await {
-            Ok(Released::Acknowledged(_)) => {
-                self.records.remove(&record.conversation_uuid);
+            Ok(Released::Acknowledged(release_epoch)) => {
+                self.after_release(&record, release_epoch).await;
                 self.deps
                     .agents
                     .mark_session_stale(&record.conversation_uuid)
@@ -1942,7 +2068,12 @@ impl HandoffHost {
     /// that made change `up_to_turn` (the later cloud turns, which the
     /// server keeps) are left out of every later seed of the agent's
     /// session, so the agent never sees them as context.
-    async fn keep_seed_boundary(&self, record: &ThreadRecord, chain: &[String], up_to_turn: usize) {
+    async fn keep_seed_boundary(
+        &self,
+        record: &ThreadRecord,
+        chain: &[String],
+        up_to_turn: usize,
+    ) -> Vec<i64> {
         let path = format!(
             "/api/v2/elitea_core/conversation/prompt_lib/{}/{}?messages_limit=1000&sort_order=asc",
             record.project_id, record.conversation_uuid
@@ -1954,7 +2085,7 @@ impl HandoffHost {
                     "the seed boundary of a partial take-back was not kept: {}",
                     error.code
                 );
-                return;
+                return Vec::new();
             }
         };
         let groups = message_groups(&detail);
@@ -1966,9 +2097,10 @@ impl HandoffHost {
         if !later.is_empty() {
             self.deps
                 .agents
-                .skip_on_seed(&record.conversation_uuid, later)
+                .skip_on_seed(&record.conversation_uuid, later.clone())
                 .await;
         }
+        later
     }
 
     /// Import the cloud turns into the thread history; how many were added.
@@ -2274,17 +2406,22 @@ fn taken_bound(groups: &[&Value], chain: &[String], up_to_turn: usize) -> usize 
 ///
 /// Only the turns taken back are imported: the groups up to the answer that
 /// made change `up_to_turn` ([`taken_bound`]); every later answer, with a
-/// commit or without, stays out of the local history.
+/// commit or without, stays out of the local history. The remaining turns
+/// of a take-back up to `k` start after the groups that one took.
 fn cloud_turns(detail: &Value, from: u64, to: u64, preflight: &Preflight) -> Vec<ImportedTurn> {
     let groups = message_groups(detail);
     let chain: Vec<String> = preflight.chain.iter().map(|c| c.sha.clone()).collect();
     let bound = taken_bound(&groups, &chain, preflight.up_to_turn);
+    let start = match preflight.from_turn {
+        0 => 0,
+        k => taken_bound(&groups, &chain, k),
+    };
     let by_id: BTreeMap<i64, &Value> = groups
         .iter()
         .filter_map(|group| Some((group.get("id")?.as_i64()?, *group)))
         .collect();
     let mut out = Vec::new();
-    for (index, group) in groups.iter().enumerate().take(bound) {
+    for (index, group) in groups.iter().enumerate().take(bound).skip(start) {
         let meta = group.get("meta").cloned().unwrap_or(Value::Null);
         if meta.get("executed_by").and_then(Value::as_str) != Some(EXECUTED_BY_CLOUD) {
             continue;
@@ -2466,8 +2603,12 @@ pub async fn handoff_status(
 pub async fn handoff_reclaim(
     state: tauri::State<'_, HandoffState>,
     conversation_uuid: String,
+    rest: Option<bool>,
 ) -> Result<Value, HandoffError> {
-    state.0.reclaim(&conversation_uuid).await
+    state
+        .0
+        .reclaim(&conversation_uuid, rest.unwrap_or(false))
+        .await
 }
 
 #[tauri::command(rename_all = "snake_case")]

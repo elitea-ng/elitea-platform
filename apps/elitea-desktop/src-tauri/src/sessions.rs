@@ -781,6 +781,42 @@ impl SessionStore {
         .await
     }
 
+    /// Seed the message groups `group_ids` again (taken out of what
+    /// [`Self::skip_on_seed`] left out): the remaining cloud turns were
+    /// taken back after all.
+    ///
+    /// # Errors
+    ///
+    /// The store could not be written.
+    pub async fn unskip_on_seed(
+        &self,
+        deployment: &str,
+        user_id: i64,
+        conversation_uuid: &str,
+        group_ids: Vec<i64>,
+    ) -> Result<(), HostError> {
+        let key = session_key(deployment, user_id, conversation_uuid);
+        self.call("could not keep the seed boundary", move |conn| {
+            let tx = conn.transaction()?;
+            let mut ids = read_skips(&tx, &key)?;
+            ids.retain(|id| !group_ids.contains(id));
+            if ids.is_empty() {
+                tx.execute(
+                    "DELETE FROM seed_skips WHERE session_key = ?1",
+                    params![key],
+                )?;
+            } else {
+                let text = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into());
+                tx.execute(
+                    "UPDATE seed_skips SET group_ids = ?2 WHERE session_key = ?1",
+                    params![key, text],
+                )?;
+            }
+            tx.commit()
+        })
+        .await
+    }
+
     /// The message groups a seed of session `key` leaves out
     /// ([`Self::skip_on_seed`]).
     ///

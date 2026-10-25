@@ -131,7 +131,7 @@ pub fn short_thread(uuid: &str) -> &str {
     &uuid[..uuid.len().min(8)]
 }
 
-pub(crate) fn store_error(error: &elitea_workspace_store::StoreError) -> ToolError {
+pub fn store_error(error: &elitea_workspace_store::StoreError) -> ToolError {
     let code = match error {
         elitea_workspace_store::StoreError::Integrity(_) => ErrorCode::Conflict,
         elitea_workspace_store::StoreError::UnsupportedObjectFormat(_)
