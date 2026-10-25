@@ -23,6 +23,7 @@ import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
 import { copyText, modKey, selectInspectorShown, useContextMenu, useDesktopLayout } from '@/widgets/desktop-shell';
 
+import { CompactNotices } from './CompactNotices';
 import type { ForkMode, ForkPoint } from './useForkThread';
 import type { ComposerSkill } from './useAgentSkills';
 import type { SessionCommands } from './useSessionCommands';
@@ -387,11 +388,7 @@ export function SessionNotices({ error, commands, customCommands, skills }: Sess
           {t('workspace.model.fixed', 'This agent runs on its own model here: it pins its model, or this folder’s settings keep it.')}
         </Alert>
       )}
-      {commands.notice === 'compactNext' && (
-        <Alert severity="info" onClose={commands.closeNotice} data-testid="workspace-compact-next">
-          {t('workspace.compactNext', 'Your next message first summarizes this conversation, so the agent continues with more room.')}
-        </Alert>
-      )}
+      <CompactNotices commands={commands} />
     </>
   );
 }

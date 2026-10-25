@@ -173,6 +173,9 @@ pub struct TurnRequest {
     pub version_id: i64,
     pub prompt: String,
     pub plan_mode: bool,
+    /// Bypass mode: every local tool call that would be asked runs without
+    /// the question (`PermissionProfile::Bypass`); never with `plan_mode`.
+    pub bypass: bool,
     /// Workspace-relative paths the person referenced with "@" (checked,
     /// then listed under the prompt; contents are never inlined).
     pub mentions: Vec<String>,
@@ -462,6 +465,19 @@ fn stop_processes_soon(session: &Arc<LocalSession>) {
         handle.spawn(async move { session.stop_processes().await });
     } else {
         session.stop_processes_blocking(elitea_local_tools::process::TERM_GRACE);
+    }
+}
+
+/// Ends bypass mode on a session when its run ends, however it ends: the
+/// session's engine is the folder's, and a later question outside a turn
+/// start (a rule check, a child's session) is asked again.
+struct EndBypass(Arc<LocalSession>);
+
+impl Drop for EndBypass {
+    fn drop(&mut self) {
+        if self.0.profile() == PermissionProfile::Bypass {
+            self.0.set_profile(PermissionProfile::Build);
+        }
     }
 }
 
@@ -857,6 +873,7 @@ pub struct AgentHost {
 pub(crate) struct ChildHold {
     _claim: WorkspaceClaim,
     prompt: Arc<UiPrompt>,
+    _bypass: Option<EndBypass>,
 }
 
 impl Drop for ChildHold {
@@ -1054,7 +1071,8 @@ impl AgentHost {
 
     /// The session an isolated sub-agent runs in: `workspace_id`'s (a task
     /// worktree just made for it), under its claim, its prompt bound to the
-    /// parent turn's `binding`, with the build profile (the child writes).
+    /// parent turn's `binding`, with the build profile (the child writes),
+    /// or the bypass profile for a parent turn in bypass mode.
     ///
     /// # Errors
     ///
@@ -1064,17 +1082,23 @@ impl AgentHost {
         workspace_id: &str,
         root: PathBuf,
         binding: TurnBinding,
+        bypass: bool,
     ) -> Result<(Arc<LocalSession>, ChildHold), TurnError> {
         let claim = WorkspaceClaim::take(&self.busy, workspace_id, TURN_RUNNING)?;
         let policy = self.policy()?;
         let workspace = self.session(workspace_id, root, &policy)?;
         workspace.prompt.bind(Some(binding));
-        workspace.session.set_profile(PermissionProfile::Build);
+        workspace.session.set_profile(if bypass {
+            PermissionProfile::Bypass
+        } else {
+            PermissionProfile::Build
+        });
         Ok((
             workspace.session.clone(),
             ChildHold {
                 _claim: claim,
                 prompt: workspace.prompt.clone(),
+                _bypass: bypass.then(|| EndBypass(workspace.session.clone())),
             },
         ))
     }
@@ -1571,7 +1595,8 @@ impl AgentHost {
             .cloned();
         if let Some(existing) = existing {
             existing.refresh_rules(&self.rules, workspace_id);
-            return Ok(existing.session.rules().decide(&call));
+            // The rules as they are, not the last turn's bypass mode.
+            return Ok(existing.session.rules().decide_by_layers(&call));
         }
         let unavailable = |e: elitea_local_tools::error::ToolError| {
             TurnError::new("workspace_unavailable", e.message().to_owned())
@@ -1908,6 +1933,7 @@ impl AgentHost {
             version_id: request.version_id,
             prompt: String::new(),
             plan_mode: false,
+            bypass: false,
             mentions: Vec::new(),
             skills: Vec::new(),
             compact: false,
@@ -2383,12 +2409,15 @@ impl AgentHost {
         let session = workspace.session.clone();
         // The turn's permission profile (#1225): plan mode until the person
         // accepts the plan (`exit_plan_mode`), which switches it to Build
-        // within this run.
+        // within this run; bypass mode for the whole run.
         session.set_profile(if request.plan_mode {
             PermissionProfile::Plan
+        } else if request.bypass {
+            PermissionProfile::Bypass
         } else {
             PermissionProfile::Build
         });
+        let _bypass = (request.bypass && !request.plan_mode).then(|| EndBypass(session.clone()));
         // The turn's spilled outputs are its conversation's: read_output in
         // another thread of this folder does not see them.
         session.set_conversation(Some(&conversation));
@@ -2775,7 +2804,7 @@ impl AgentHost {
         model: Arc<dyn Llm>,
         limits: ModelContextLimits,
         admitted: &Admitted,
-        host: ContextHost,
+        mut host: ContextHost,
         compact: bool,
         turn_context: &TurnContext,
         summary_model: Option<context::LowTierModel>,
@@ -2825,6 +2854,7 @@ impl AgentHost {
         })
         .map_err(|e| TurnError::new("model_unavailable", e.to_string()))?
         .adk_model();
+        host.compact_at = policy.trigger_tokens(&budget);
         let compaction = Arc::new(StepCompaction::new(
             policy,
             Arc::new(context::ProviderBudget {
@@ -2833,6 +2863,7 @@ impl AgentHost {
                 replay: transport.replay,
                 tail: transport.tail.clone(),
                 cache_hints: transport.cache_hints,
+                parts: host.parts.clone(),
             }),
             summarizer,
             Arc::new(host),
@@ -3087,6 +3118,8 @@ impl AgentHost {
                 service: memory.service.clone(),
                 session_id: memory.session_id.clone(),
                 limits,
+                parts: context::MeasuredParts::default(),
+                compact_at: 0,
             },
             request.compact,
             turn_context,
@@ -3202,6 +3235,7 @@ impl AgentHost {
                         events: events.clone(),
                         recorder: recorder.clone(),
                     },
+                    request.bypass,
                 )) as Arc<dyn super::subagents::ChildCheckouts>
             });
         let children = SubAgents::new(

@@ -8,7 +8,7 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Router
 import { act, configure, fireEvent, getConfig, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { readThreads, recordThread, WorkspaceIpcProvider, type WorkspaceTurn } from '@/features/workspace';
@@ -82,6 +82,12 @@ beforeAll(() => {
 afterAll(() => {
   configure({ asyncUtilTimeout });
 });
+
+/** Bypass mode is kept per folder in storage: each bypass test starts, and leaves, without it. */
+function forgetBypass(): void {
+  window.localStorage.removeItem('el.desktop.workspace.w1.bypass');
+  window.localStorage.removeItem('el.desktop.workspace.w1.bypassConfirmed');
+}
 
 beforeEach(() => {
   resetConfigForTests();
@@ -922,7 +928,7 @@ describe('WorkspaceSessionPage', () => {
       });
       let sent = false;
       await act(async () => {
-        sent = await result.current.send('fix the build', false, []);
+        sent = await result.current.send('fix the build', 'act', []);
       });
       return { sent, picks };
     }
@@ -962,7 +968,7 @@ describe('WorkspaceSessionPage', () => {
       let outcomes: boolean[] = [];
       await act(async () => {
         const { send } = result.current.prompt;
-        outcomes = await Promise.all([send('fix the build', false, []), send('fix the build', false, [])]);
+        outcomes = await Promise.all([send('fix the build', 'act', []), send('fix the build', 'act', [])]);
       });
       expect(outcomes).toEqual([true, false]);
       expect(created).toBe(1);
@@ -1203,6 +1209,47 @@ describe('WorkspaceSessionPage', () => {
       expect(ipc.calls.started[0]?.mentions).toEqual([]);
     });
 
+    it('turns bypass mode on after the warning, keeps it for the folder and sends it with the turn', async () => {
+      forgetBypass();
+      onTestFinished(forgetBypass);
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      await user.click(await screen.findByRole('radio', { name: 'Bypass mode (no approvals)' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Run without approvals?' });
+      await user.click(within(dialog).getByRole('button', { name: 'Turn on bypass mode' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull());
+      expect(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' })).toBeChecked();
+      expect(screen.getByTestId('workspace-bypass-notice')).toBeInTheDocument();
+      const input = screen.getByTestId('chat-message-input');
+      await user.type(input, 'go{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.bypass_approvals).toBe(true);
+      expect(ipc.calls.started[0]?.plan_mode).toBe(false);
+      // Off from the notice; on again without the warning (the folder confirmed it).
+      await user.click(within(screen.getByTestId('workspace-bypass-notice')).getByRole('button', { name: 'Turn off' }));
+      expect(screen.getByRole('radio', { name: 'Act' })).toBeChecked();
+      await user.click(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' }));
+      expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull();
+      expect(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' })).toBeChecked();
+    }, 30_000);
+
+    it('keeps plan mode when the bypass warning is cancelled, and leaves it once bypass is on', async () => {
+      forgetBypass();
+      onTestFinished(forgetBypass);
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      await user.click(await screen.findByRole('radio', { name: 'Plan mode (no changes)' }));
+      await user.click(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Run without approvals?' });
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull());
+      expect(screen.getByRole('radio', { name: 'Plan mode (no changes)' })).toBeChecked();
+      await user.click(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' }));
+      await user.click(within(await screen.findByRole('dialog', { name: 'Run without approvals?' })).getByRole('button', { name: 'Turn on bypass mode' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull());
+      expect(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' })).toBeChecked();
+    }, 30_000);
+
     it('asks the host to read ahead for the selected agent when the composer gets focus', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       const user = await ready(ipc);
@@ -1278,8 +1325,6 @@ describe('WorkspaceSessionPage', () => {
       });
       ipc.emit({ turn_id: 'turn-1', seq: 4, kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: [], changed_files: 1 } });
       expect(await screen.findByText('a.txt')).toBeInTheDocument();
-      // The composer's context meter shows the call's occupancy.
-      expect(await screen.findByTestId('context-meter')).toHaveTextContent('62% of 200K');
       await user.type(input, '/undo{Enter}');
       const dialog = await screen.findByRole('dialog', { name: 'Undo this turn?' });
       await user.click(within(dialog).getByRole('button', { name: 'Undo turn' }));

@@ -789,11 +789,15 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 	}
 	args = append(args, id)
 	privacyCondition := ""
+	if conv.RenameOnlyFrom != nil {
+		args = append(args, *conv.RenameOnlyFrom)
+		privacyCondition += fmt.Sprintf(" AND name = $%d", len(args))
+	}
 	if conv.IsPrivate != nil && *conv.IsPrivate {
 		// Enforce creator authority in the write if another request publishes
 		// the conversation after the visibility read.
 		args = append(args, restrictionActorID)
-		privacyCondition = fmt.Sprintf(" AND (is_private OR author_id = $%d)", argIdx+1)
+		privacyCondition += fmt.Sprintf(" AND (is_private OR author_id = $%d)", len(args))
 	}
 	// `author_id` and `folder_id` are returned so the PUT response describes
 	// the same conversation the GET does. Omitting author_id was #128 defect
@@ -812,6 +816,9 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt, &metaBytes, &isPrivate, &c.Instructions,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
+			if conv.RenameOnlyFrom != nil {
+				return conversations.Conversation{}, conversations.ErrNameChanged
+			}
 			return conversations.Conversation{}, apierr.NotFound("conversation not found")
 		}
 		return conversations.Conversation{}, fmt.Errorf("conversations: update: %w", err)

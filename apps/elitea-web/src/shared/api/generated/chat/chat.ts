@@ -85,6 +85,8 @@ import type {
   ExecutionInterruptList,
   ExportConversationParams,
   ForkConversationRequest,
+  GenerateConversationNameRequest,
+  GeneratedConversationName,
   GetConversationParams,
   GetMessageTraceParams,
   GetWorkspaceFetchPlanParams,
@@ -4317,6 +4319,363 @@ export function useCreateConversation<
   const queryOptions = getCreateConversationQueryOptions(
     projectId,
     conversationCreateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type generateConversationNameResponse200 = {
+  data: GeneratedConversationName;
+  status: 200;
+};
+
+export type generateConversationNameResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type generateConversationNameResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type generateConversationNameResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type generateConversationNameResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type generateConversationNameResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type generateConversationNameResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type generateConversationNameResponse502 = {
+  data: ErrorResponse;
+  status: 502;
+};
+
+export type generateConversationNameResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type generateConversationNameResponseSuccess =
+  generateConversationNameResponse200 & {
+    headers: Headers;
+  };
+export type generateConversationNameResponseError = (
+  | generateConversationNameResponse400
+  | generateConversationNameResponse401
+  | generateConversationNameResponse403
+  | generateConversationNameResponse404
+  | generateConversationNameResponse426
+  | generateConversationNameResponse500
+  | generateConversationNameResponse502
+  | generateConversationNameResponse503
+) & {
+  headers: Headers;
+};
+
+export type generateConversationNameResponse =
+  | generateConversationNameResponseSuccess
+  | generateConversationNameResponseError;
+
+export const getGenerateConversationNameUrl = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return `/elitea_core/conversation_name/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Client contract 1.24. Asks the project's default model for a short
+ * title of the conversation, from its first question and first answer, and renames
+ * the conversation to it. Needs `models.chat.conversation.update` and
+ * access to the conversation, as a rename does. The call is billed to
+ * the caller, like `predict_llm`.
+ *
+ * `expected_name` is the name the client gave the conversation (a cut
+ * of the first message). The route renames only while the stored name
+ * is still that one, so it never overwrites a person's own rename: it
+ * reads the name again after the model call. The answer is the name
+ * the conversation has then, and whether this call set it. A
+ * conversation without a question yet keeps its name. Other devices
+ * get the new name through the `changes_since` delta, as with any
+ * rename.
+ * @summary Name a conversation from its first exchange
+ */
+export const generateConversationName = async (
+  projectId: string,
+  conversationId: string,
+  generateConversationNameRequest: GenerateConversationNameRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<generateConversationNameResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<generateConversationNameResponse>(
+    getGenerateConversationNameUrl(projectId, conversationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(generateConversationNameRequest),
+    },
+  );
+};
+
+export const getGenerateConversationNameQueryKey = (
+  projectId: string,
+  conversationId: string,
+  generateConversationNameRequest?: GenerateConversationNameRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/conversation_name/prompt_lib/${projectId}/${conversationId}`,
+    generateConversationNameRequest,
+  ] as const;
+};
+
+export const getGenerateConversationNameQueryOptions = <
+  TData = Awaited<ReturnType<typeof generateConversationName>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  generateConversationNameRequest: GenerateConversationNameRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateConversationName>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGenerateConversationNameQueryKey(
+      projectId,
+      conversationId,
+      generateConversationNameRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof generateConversationName>>
+  > = ({ signal }) =>
+    generateConversationName(
+      projectId,
+      conversationId,
+      generateConversationNameRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof generateConversationName>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GenerateConversationNameQueryResult = NonNullable<
+  Awaited<ReturnType<typeof generateConversationName>>
+>;
+export type GenerateConversationNameQueryError =
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useGenerateConversationName<
+  TData = Awaited<ReturnType<typeof generateConversationName>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  generateConversationNameRequest: GenerateConversationNameRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateConversationName>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof generateConversationName>>,
+          TError,
+          Awaited<ReturnType<typeof generateConversationName>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGenerateConversationName<
+  TData = Awaited<ReturnType<typeof generateConversationName>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  generateConversationNameRequest: GenerateConversationNameRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateConversationName>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof generateConversationName>>,
+          TError,
+          Awaited<ReturnType<typeof generateConversationName>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGenerateConversationName<
+  TData = Awaited<ReturnType<typeof generateConversationName>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  generateConversationNameRequest: GenerateConversationNameRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateConversationName>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Name a conversation from its first exchange
+ */
+
+export function useGenerateConversationName<
+  TData = Awaited<ReturnType<typeof generateConversationName>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  generateConversationNameRequest: GenerateConversationNameRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateConversationName>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGenerateConversationNameQueryOptions(
+    projectId,
+    conversationId,
+    generateConversationNameRequest,
     options,
   );
 

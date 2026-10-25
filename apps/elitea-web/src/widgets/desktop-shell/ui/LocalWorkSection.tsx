@@ -37,20 +37,18 @@ import { WorktreesPanel } from '@/features/workspace-worktrees';
 import type { HandoffStatus } from '@/shared/desktop/handoffIpc';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
-import { activityGlyph, activityTitleBold } from '@/shared/lib/conversationActivity';
-import { ActivityGroupSummary, ConversationActivityGlyph } from '@/shared/ui/ConversationActivity';
+import { ActivityGroupSummary } from '@/shared/ui/ConversationActivity';
 
 import type { ShellAction } from '../lib/shellActions';
-import { conversationLink, copyText } from '../lib/conversationLink';
 import { folderContextActions } from '../lib/folderMenu';
 import { useAppIpc } from '../model/appIpcContext';
-import { useLocalNeedsYouCount, useLocalThreadActivity, useLocalThreadUnreadTracking } from '../model/localThreadActivity';
+import { useLocalNeedsYouCount, useLocalThreadUnreadTracking } from '../model/localThreadActivity';
 import { useContextMenu, type ContextAction } from '../model/useContextMenu';
 import { WORKSPACE_LIST_KEY } from '../model/useShellActions';
 import type { ShellLocation } from '../model/useShellLocation';
 import { ProjectPickerSheet } from './ProjectPickerSheet';
 import { CHILD_INDENT, ShellRow, SectionCaption } from './rows';
-import { ThreadCloudBadge } from './ThreadCloudBadge';
+import { LocalThreadRow } from './LocalThreadRow';
 import { modKey } from './shortcutLabel';
 
 const THREADS_SHOWN = 8;
@@ -84,50 +82,6 @@ interface FolderThreadsProps extends Omit<SectionProps, 'projects'> {
   statuses: Readonly<Record<string, HandoffStatus>>;
 }
 
-/** A thread's native context menu: open it, open it in the web chat, copy its link. */
-function threadActions(workspace: Workspace, thread: WorkspaceThread, run: SectionProps['run']): ContextAction[] {
-  const link = conversationLink(thread.id);
-  return [
-    { id: 'open', label: t('desktop.menu.open', 'Open'), run: () => run({ type: 'open_workspace', workspaceId: workspace.id, conversationId: thread.id }) },
-    { id: 'chat', label: t('workspace.openInChat', 'Open in chat'), run: () => run({ type: 'go', to: `/chat/${thread.id}` }) },
-    { id: 'link', label: t('workspace.copyLink', 'Copy Link'), enabled: link !== null, run: () => link !== null && copyText(link) },
-  ];
-}
-
-interface ThreadRowProps {
-  readonly workspace: Workspace;
-  readonly thread: WorkspaceThread;
-  readonly uuid: string | undefined;
-  readonly selected: boolean;
-  readonly run: SectionProps['run'];
-  readonly status: HandoffStatus | undefined;
-}
-
-function threadLabel(thread: WorkspaceThread): string {
-  const title = thread.title === '' ? t('desktop.shell.untitledThread', 'Untitled thread') : thread.title;
-  return thread.earlierAttemptOf === undefined ? title : t('desktop.shell.earlierAttempt', 'Earlier attempt: {{title}}', { title });
-}
-
-/** One thread: its title (bold while unread), its activity glyph, and its cloud badge. An earlier attempt sits under its rewound thread. */
-function ThreadRow({ workspace, thread, uuid, selected, run, status }: ThreadRowProps): React.JSX.Element {
-  const showMenu = useContextMenu();
-  const activity = useLocalThreadActivity(thread.id, uuid);
-  const glyph = <ConversationActivityGlyph kind={activityGlyph(activity)} />;
-  return (
-    <ShellRow
-      testId="shell-thread"
-      onContextMenu={(event) => showMenu(event, threadActions(workspace, thread, run))}
-      indent={thread.earlierAttemptOf === undefined ? CHILD_INDENT : 2 * CHILD_INDENT}
-      label={threadLabel(thread)}
-      selected={selected}
-      bold={!selected && activityTitleBold(activity)}
-      status={glyph}
-      onClick={() => run({ type: 'open_workspace', workspaceId: workspace.id, conversationId: thread.id })}
-      trailing={uuid === undefined ? undefined : <ThreadCloudBadge status={status} />}
-    />
-  );
-}
-
 function FolderThreads({ workspace, location, run, all, onToggleAll, statuses }: FolderThreadsProps): React.JSX.Element {
   const threads = useQuery(threadsQuery(workspace.id));
   // The UUIDs the thread pages read (handoff is keyed by them), to badge a row without opening it.
@@ -139,7 +93,7 @@ function FolderThreads({ workspace, location, run, all, onToggleAll, statuses }:
     <Box component="ul" sx={{ margin: 0, padding: 0, listStyle: 'none' }} aria-label={t('desktop.shell.threadsOf', 'Threads in {{name}}', { name: workspace.name })}>
       {shown.map((thread) => (
         <li key={thread.id}>
-          <ThreadRow
+          <LocalThreadRow
             workspace={workspace}
             thread={thread}
             uuid={uuids[thread.id]}

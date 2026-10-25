@@ -61,6 +61,7 @@ import type {
   CreatedConversation,
   ExecutionInterruptDecisionResult,
   ExecutionInterruptList,
+  GeneratedConversationName,
   LocalChildTurnStarted,
   LocalChildTurnState,
   LocalTurnCommitted,
@@ -663,6 +664,14 @@ export const getCreateConversationResponseMock = (
     })),
     undefined,
   ]),
+  ...overrideResponse,
+});
+
+export const getGenerateConversationNameResponseMock = (
+  overrideResponse: Partial<Extract<GeneratedConversationName, object>> = {},
+): GeneratedConversationName => ({
+  name: "Gateway TLS certificate rotation",
+  renamed: true,
   ...overrideResponse,
 });
 
@@ -2501,6 +2510,32 @@ export const getCreateConversationMockHandler = (
   );
 };
 
+export const getGenerateConversationNameMockHandler = (
+  overrideResponse?:
+    | GeneratedConversationName
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<GeneratedConversationName> | GeneratedConversationName),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/conversation_name/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGenerateConversationNameResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetConversationMockHandler = (
   overrideResponse?:
     | ConversationDetail
@@ -3693,6 +3728,7 @@ export const getChatMock = () => [
   getExportConversationMockHandler(),
   getListConversationsMockHandler(),
   getCreateConversationMockHandler(),
+  getGenerateConversationNameMockHandler(),
   getGetConversationMockHandler(),
   getUpdateConversationMockHandler(),
   getDeleteConversationMockHandler(),

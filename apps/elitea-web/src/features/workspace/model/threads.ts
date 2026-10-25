@@ -21,6 +21,8 @@ export interface WorkspaceThread {
   updatedAt: number;
   /** A rewound thread's source: the id of the thread it was rewound into, listed under it as the earlier attempt. */
   earlierAttemptOf?: string;
+  /** The title is the conversation's own name (generated, renamed, or read back from the server): it is not generated again. */
+  named?: boolean;
 }
 
 export interface LastLocation {
@@ -31,13 +33,22 @@ export interface LastLocation {
 
 const MAX_THREADS = 50;
 const MAX_TITLE = 80;
+/** The longest name a rename (and so a thread's title from the server) has. */
+const MAX_NAME = 256;
 const threadsKey = (workspaceId: string): string => `desktop.workspace.${workspaceId}.threads`;
 const LAST_LOCATION_KEY = 'desktop.lastLocation';
 
 function isThread(raw: unknown): raw is WorkspaceThread {
   if (typeof raw !== 'object' || raw === null) return false;
-  const { id, title, updatedAt, earlierAttemptOf } = raw as Record<string, unknown>;
-  return typeof id === 'string' && id !== '' && typeof title === 'string' && typeof updatedAt === 'number' && (earlierAttemptOf === undefined || typeof earlierAttemptOf === 'string');
+  const { id, title, updatedAt, earlierAttemptOf, named } = raw as Record<string, unknown>;
+  return (
+    typeof id === 'string' &&
+    id !== '' &&
+    typeof title === 'string' &&
+    typeof updatedAt === 'number' &&
+    (earlierAttemptOf === undefined || typeof earlierAttemptOf === 'string') &&
+    (named === undefined || typeof named === 'boolean')
+  );
 }
 
 function validThreads(raw: unknown): WorkspaceThread[] {
@@ -79,6 +90,17 @@ export function recordThread(workspaceId: string, thread: WorkspaceThread, rewou
     createStorage('local').setJSON(threadsKey(workspaceId), next);
   } catch {
     // Storage unavailable: the thread is simply not remembered.
+  }
+  return next;
+}
+
+/** Gives thread `id` the conversation's name `title` in place (its place and time stay); marks it named. */
+export function renameThread(workspaceId: string, id: string, title: string): WorkspaceThread[] {
+  const next = readThreads(workspaceId).map((thread) => (thread.id === id ? { ...thread, title: title.trim().slice(0, MAX_NAME), named: true } : thread));
+  try {
+    createStorage('local').setJSON(threadsKey(workspaceId), next);
+  } catch {
+    // Storage unavailable: the name shows again after the next read from the server.
   }
   return next;
 }

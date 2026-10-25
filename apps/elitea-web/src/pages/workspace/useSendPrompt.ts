@@ -5,7 +5,7 @@ import { useRef, useState } from 'react';
 
 import { describeWorkspaceError, type WorkspaceTurn } from '@/features/workspace';
 import type { TurnModelChoice } from '@/shared/desktop/turnModel';
-import type { AttachedImage, TurnCommand, TurnImagePick, TurnStartRequest, Workspace } from '@/shared/desktop/workspaceIpc';
+import type { AttachedImage, TurnCommand, TurnImagePick, TurnMode, TurnStartRequest, Workspace } from '@/shared/desktop/workspaceIpc';
 
 import type { AgentSelection } from './useAgentSelection';
 import { useEnsureConversation } from './useEnsureConversation';
@@ -20,7 +20,7 @@ export interface SendPrompt {
   canSend: boolean;
   sendError: string | null;
   /** `mentions`: the workspace paths the prompt references with "@"; `skills`: the skills it invokes with "/"; `compact`: `/compact` was asked for; `model`: the model chip's choice; `command`: the custom command it runs. */
-  send: (prompt: string, planMode: boolean, mentions: string[], skills?: TurnStartRequest['skills'], compact?: boolean, model?: TurnModelChoice, command?: TurnCommand, images?: SentImages) => Promise<boolean>;
+  send: (prompt: string, mode: TurnMode, mentions: string[], skills?: TurnStartRequest['skills'], compact?: boolean, model?: TurnModelChoice, command?: TurnCommand, images?: SentImages) => Promise<boolean>;
   /** The composer got focus with an agent selected: the host reads ahead what the send will need. */
   prewarm: () => void;
 }
@@ -46,6 +46,11 @@ function notifyStarted(onStarted: ((conversationId: string, prompt: string, imag
 }
 
 /** `/compact` only when asked for: the start request is otherwise as before. */
+/** `plan_mode`, and `bypass_approvals` only when it is on. */
+function modeFields(mode: TurnMode): Pick<TurnStartRequest, 'plan_mode' | 'bypass_approvals'> {
+  return mode === 'bypass' ? { plan_mode: false, bypass_approvals: true } : { plan_mode: mode === 'plan' };
+}
+
 function compactFlag(compact: boolean | undefined): { compact?: true } {
   return compact === true ? { compact: true } : {};
 }
@@ -88,7 +93,7 @@ export function useSendPrompt(
   const agent = selection.agents.find((a) => a.id === selection.agentId);
   const version = selection.versions.find((v) => String(v.id) === selection.versionId);
 
-  const send = async (prompt: string, planMode: boolean, mentions: string[], skills: TurnStartRequest['skills'] = [], compact?: boolean, model?: TurnModelChoice, command?: TurnCommand, images?: SentImages): Promise<boolean> => {
+  const send = async (prompt: string, mode: TurnMode, mentions: string[], skills: TurnStartRequest['skills'] = [], compact?: boolean, model?: TurnModelChoice, command?: TurnCommand, images?: SentImages): Promise<boolean> => {
     if (agent === undefined || version === undefined || prompt.trim() === '' || turn.busy || inFlight.current) return false;
     inFlight.current = true;
     setSending(true);
@@ -119,7 +124,7 @@ export function useSendPrompt(
         application_id: Number(agent.id),
         version_id: version.id,
         prompt,
-        plan_mode: planMode,
+        ...modeFields(mode),
         mentions,
         skills,
         ...compactFlag(compact),

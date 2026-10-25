@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.23"
+  x-elitea-client-contract: "1.24"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -5576,6 +5576,29 @@ components:
         storage_space: { $ref: '#/components/schemas/StatisticEntry' }
         data_retention_limit: { $ref: '#/components/schemas/StatisticEntry' }
 
+    GenerateConversationNameRequest:
+      type: object
+      required:
+        - expected_name
+      properties:
+        expected_name:
+          type: string
+          description: The name the client gave the conversation; the route renames only while the stored name is this one.
+          example: how do I rotate the gateway's TLS
+    GeneratedConversationName:
+      type: object
+      required:
+        - name
+        - renamed
+      properties:
+        name:
+          type: string
+          description: The conversation's name after the call (the generated title, or the name it kept).
+          example: Gateway TLS certificate rotation
+        renamed:
+          type: boolean
+          description: This call set the name.
+          example: true
     ErrorResponse:
       type: object
       required: [error]
@@ -18372,6 +18395,79 @@ paths:
           $ref: "#/components/responses/ClientUpgradeRequired"
         "500":
           $ref: "#/components/responses/500"
+  /elitea_core/conversation_name/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The conversation's numeric id or its UUID; both resolve.
+    post:
+      operationId: generateConversationName
+      summary: Name a conversation from its first exchange
+      description: |
+        Client contract 1.24. Asks the project's default model for a short
+        title of the conversation, from its first question and first answer, and renames
+        the conversation to it. Needs `models.chat.conversation.update` and
+        access to the conversation, as a rename does. The call is billed to
+        the caller, like `predict_llm`.
+
+        `expected_name` is the name the client gave the conversation (a cut
+        of the first message). The route renames only while the stored name
+        is still that one, so it never overwrites a person's own rename: it
+        reads the name again after the model call. The answer is the name
+        the conversation has then, and whether this call set it. A
+        conversation without a question yet keeps its name. Other devices
+        get the new name through the `changes_since` delta, as with any
+        rename.
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateConversationNameRequest"
+      responses:
+        "200":
+          description: The conversation's name now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeneratedConversationName"
+        "400":
+          description: A body without `expected_name`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
+        "502":
+          description: The model gave no title. The name is not changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: No LLM gateway is configured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}:
     parameters:
       - $ref: "#/components/parameters/ProjectId"

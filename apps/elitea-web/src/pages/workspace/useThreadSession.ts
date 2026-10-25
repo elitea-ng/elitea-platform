@@ -28,6 +28,7 @@ import { useSelectedProject } from '@/widgets/app-shell';
 import { useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import type { ChangeSet, DecidedApproval } from './sessionTypes';
+import { useThreadName } from './useThreadName';
 import { useAgentSelection, type AgentSelection } from './useAgentSelection';
 import { useBindableProjects } from './useBindableProjects';
 import { useSendPrompt, type SendPrompt, type SentImages } from './useSendPrompt';
@@ -198,12 +199,13 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
     setPrompts((current) => [...current, prompt]);
     setPromptImages((current) => [...current, images]);
     const known = readThreads(workspace.id).find((thread) => thread.id === id);
-    recordThread(workspace.id, { id, title: known?.title ?? prompt, updatedAt: Date.now() });
+    recordThread(workspace.id, { id, title: known?.title ?? prompt, updatedAt: Date.now(), ...(known?.named === true ? { named: true } : {}) });
     void queryClient.invalidateQueries({ queryKey: threadsQueryKey(workspace.id) });
     if (id !== conversationId) onAdopt(id);
   };
   const { canSend, sendError, send, prewarm } = useSendPrompt(workspace, projectId, raw, turn, onStarted);
   const done = turn.view.done;
+  useThreadName(workspace.id, projectId, conversationId, done);
   const changeSets = changeSetsOf(history, shown, turn, prompts);
   const localTurns = history.kind === 'local' ? history.turns : undefined;
   const recordedPlans = useMemo(() => recordedPlansOf(localTurns), [localTurns]);

@@ -587,7 +587,15 @@ pub async fn agent_turn_start(
     model: Option<TurnModel>,
     command: Option<CommandPick>,
     images: Option<Vec<ImagePick>>,
+    bypass_approvals: Option<bool>,
 ) -> Result<TurnStarted, IpcError> {
+    let bypass = bypass_approvals.unwrap_or(false);
+    if bypass && plan_mode {
+        return Err(IpcError::new(
+            "invalid_request",
+            "A turn cannot run in plan mode and in bypass mode.",
+        ));
+    }
     // A thread in the cloud runs no local turn (ADR-0034 decision 7; the
     // platform refuses it too).
     if let (Some(handoff), Some(conversation)) = (&state.handoff, conversation_id.as_str())
@@ -609,6 +617,7 @@ pub async fn agent_turn_start(
             version_id,
             prompt,
             plan_mode,
+            bypass,
             mentions: mentions.unwrap_or_default(),
             skills,
             project_skills,

@@ -31,16 +31,16 @@ export interface InspectorLayout {
 export const INSPECTOR_WIDTH = { min: 260, max: 720 } as const;
 export const SPLIT_RANGE = { min: 0.2, max: 0.8 } as const;
 
-const TAB_ORDER: readonly InspectorTabId[] = ['changes', 'approvals', 'plan', 'processes', 'index', 'conversation'];
+const TAB_ORDER: readonly InspectorTabId[] = ['changes', 'approvals', 'plan', 'processes', 'index', 'context', 'conversation'];
 const TAB_IDS = new Set<string>(TAB_ORDER);
 /**
  * Tabs a page offers only some of the time (Plan: once the agent keeps a
- * checklist, or in plan mode; Processes: once a background process started): left out of the default layout, they join the
- * top group when first offered (`viewOf`), so they never hold a group open.
+ * checklist, or in plan mode; Processes: once a background process started), and Context, which came later: left out of
+ * the default layout, they join the top group when first offered (`viewOf`), so they never hold a group open.
  */
-const ON_DEMAND: ReadonlySet<InspectorTabId> = new Set<InspectorTabId>(['plan', 'processes']);
+const ON_DEMAND: ReadonlySet<InspectorTabId> = new Set<InspectorTabId>(['plan', 'processes', 'context']);
 
-/** The tabs in their one fixed order (Changes, Approvals, Plan, Processes, Index, Conversation), however the page registered them. */
+/** The tabs in their one fixed order (Changes, Approvals, Plan, Processes, Index, Context, Conversation), however the page registered them. */
 export function byTabOrder<T extends { readonly id: InspectorTabId }>(tabs: readonly T[]): T[] {
   return [...tabs].sort((a, b) => TAB_ORDER.indexOf(a.id) - TAB_ORDER.indexOf(b.id));
 }

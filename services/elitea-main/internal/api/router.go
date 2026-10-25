@@ -1891,7 +1891,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			WithReasoningModels(defaults).
 			WithEvents(cfg.DomainEvents).
 			WithReadEvents(cfg.ConversationActivity).
-			WithAttachmentExtractionWarmer(cfg.AttachmentExtractionWarmer)
+			WithAttachmentExtractionWarmer(cfg.AttachmentExtractionWarmer).
+			WithNamer(conversationNamer(cfg.PredictCompleter))
 		if cfg.Pool != nil {
 			convHandler.WithParticipantCandidates(dbrepos.NewParticipantCandidatesRepo(cfg.Pool))
 		}
@@ -3624,6 +3625,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Get("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Get)
 					r.With(projectPermission("models.chat.conversation.update")).
 						Put("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Update)
+					// A title from the first exchange (the project's default
+					// model): a rename, under the rename's permission. It
+					// renames only a name the client still states as its own.
+					r.With(projectPermission("models.chat.conversation.update")).
+						Post("/conversation_name/prompt_lib/{projectID}/{conversationID}", convHandler.GenerateName)
 					// Client contract 1.15: `meta.internal_tools` alone, in one
 					// statement, under the PUT's permission (internal_tools.go).
 					r.With(projectPermission("models.chat.conversation.update")).
@@ -5047,6 +5053,39 @@ func configurationSecretSealer(pool *pgxpool.Pool) v2configs.SecretSealer {
 		return nil
 	}
 	return sealer
+}
+
+// conversationNamer adapts the shared predict completer to the
+// conversations package's NameCompleter (POST /conversation_name). A nil
+// completer answers nil: the route then answers 503.
+func conversationNamer(completer v2predict.Completer) v2convs.NameCompleter {
+	if completer == nil {
+		return nil
+	}
+	return conversationNameCompleter{completer: completer}
+}
+
+// conversationNameCompleter names a conversation through the shared predict
+// completer: the project's default model, the caller's identity and budget.
+type conversationNameCompleter struct {
+	completer v2predict.Completer
+}
+
+func (c conversationNameCompleter) Complete(ctx context.Context, request v2convs.NameRequest) (string, error) {
+	// A title is a few words: a low temperature keeps it plain, and the
+	// output cap bounds what one naming call can cost.
+	temperature := 0.2
+	maxTokens := 40
+	return c.completer.Complete(ctx, v2predict.CompletionRequest{
+		ProjectID: request.ProjectID,
+		UserID:    request.UserID,
+		Messages: []v2predict.Message{
+			{Role: "system", Content: request.System},
+			{Role: "user", Content: request.User},
+		},
+		Temperature: &temperature,
+		MaxTokens:   &maxTokens,
+	})
 }
 
 // publishAIValidator adapts the predict gateway hop onto the four fields the

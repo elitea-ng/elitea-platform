@@ -950,15 +950,23 @@ pub struct WorktreeCheckouts {
     host: Arc<WorktreeHost>,
     workspace_id: String,
     binding: TurnBinding,
+    /// The parent turn is in bypass mode: so are its children.
+    bypass: bool,
 }
 
 impl WorktreeCheckouts {
     #[must_use]
-    pub fn new(host: Arc<WorktreeHost>, workspace_id: &str, binding: TurnBinding) -> Self {
+    pub fn new(
+        host: Arc<WorktreeHost>,
+        workspace_id: &str,
+        binding: TurnBinding,
+        bypass: bool,
+    ) -> Self {
         Self {
             host,
             workspace_id: workspace_id.to_owned(),
             binding,
+            bypass,
         }
     }
 }
@@ -995,6 +1003,7 @@ impl ChildCheckouts for WorktreeCheckouts {
                 &entry.workspace_id,
                 PathBuf::from(&entry.path),
                 self.binding.clone(),
+                self.bypass,
             )
             .map_err(|e| runtime_error(&e))?;
         let hold = Arc::new(hold);

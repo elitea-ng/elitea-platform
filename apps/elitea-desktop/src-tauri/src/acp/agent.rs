@@ -959,6 +959,7 @@ impl Connection {
                 version_id: session.version_id,
                 prompt: input.text,
                 plan_mode: session.plan.load(Ordering::SeqCst),
+                bypass: false,
                 mentions: input.mentions,
                 skills: Vec::new(),
                 compact: input.compact,

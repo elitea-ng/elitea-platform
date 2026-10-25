@@ -373,6 +373,7 @@ fn request(workspace_id: &str) -> TurnRequest {
         version_id: 9,
         prompt: "Write notes and file a bug".into(),
         plan_mode: false,
+        bypass: false,
         mentions: Vec::new(),
         skills: Vec::new(),
         compact: false,
@@ -6019,6 +6020,65 @@ async fn a_forbidden_rule_reaches_the_model_with_its_justification() {
     assert!(
         second.contains("Publishing goes through the release pipeline; open a PR instead."),
         "{second}"
+    );
+}
+
+/// A bypass turn asks nothing: a command a rule would ask about runs, and
+/// a forbidden one is still refused inline.
+#[tokio::test]
+async fn a_bypass_turn_asks_nothing_and_keeps_forbidden_rules() {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-reset",
+                    "run_command",
+                    &json!({"command": "git reset --hard"}),
+                ),
+                1 => tool_call(
+                    "call-publish",
+                    "run_command",
+                    &json!({"command": "npm publish"}),
+                ),
+                _ => sse(&[
+                    json!({"choices": [{"delta": {"content": "Done."}, "finish_reason": "stop"}]}),
+                ]),
+            };
+        }
+        inner(req)
+    })
+    .await;
+    // Were anything asked, the person would deny it.
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    write_rules(
+        &h.workspaces.data_dir(&h.workspace_id).join("rules.json"),
+        r#"{"version":1,"rules":[{"pattern":["npm","publish"],"decision":"forbidden"},
+            {"pattern":["git","reset"],"decision":"prompt"}]}"#,
+    );
+    h.host
+        .start(TurnRequest {
+            bypass: true,
+            ..request(&h.workspace_id)
+        })
+        .await
+        .unwrap();
+    let events = until_done(&h).await;
+    assert!(
+        of_kind(&events, "approval_request").is_empty(),
+        "{:?}",
+        h.emitter.kinds()
+    );
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies.len(), 3);
+    assert!(!bodies[1].to_string().contains("forbidden_by_rule"));
+    assert!(bodies[2].to_string().contains("forbidden_by_rule"));
+    // The folder's session leaves bypass mode with the turn.
+    let (session, _) = h.host.process_session(&h.workspace_id).expect("session");
+    assert_eq!(
+        session.profile(),
+        elitea_local_tools::approvals::PermissionProfile::Build
     );
 }
 

@@ -20,6 +20,7 @@ import { selectChat } from '@/features/chats/selectedChat';
 import { Composer } from '@/features/chat/Composer';
 import { MessageBubble } from '@/features/chat/MessageBubble';
 import { readRevision, useMarkConversationRead } from '@/features/chat/useMarkConversationRead';
+import { useAutoConversationName } from '@/features/chat/useAutoConversationName';
 import { speaksContract } from '@/api/discovery';
 import { AnswerActions } from '@/features/chat/actions/AnswerActions';
 import { AssistantAvatar, useAgentIconUri } from '@/features/chat/AssistantAvatar';
@@ -251,6 +252,14 @@ export function ThreadView({
     conversationId: Number.isSafeInteger(numericId) && numericId > 0 ? numericId : null,
     revision: readRevision(messages, live?.settled === true),
     enabled: contract112 && inFront && !isOfflineCopy(detail),
+  });
+  // Client contract 1.24: a new chat is named from its first exchange once the answer is in.
+  useAutoConversationName({
+    projectId,
+    conversationId: Number.isSafeInteger(numericId) && numericId > 0 ? numericId : null,
+    detail,
+    messages,
+    enabled: speaksContract(workspace?.discovery, 1, 24) && online && !isOfflineCopy(detail) && live?.settled !== false,
   });
   // Before client contract 1.1 a model (adhoc) chat dropped mentions silently.
   const mentionHint =
