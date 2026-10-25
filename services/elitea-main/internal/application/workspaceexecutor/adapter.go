@@ -318,7 +318,7 @@ func (a *Adapter) Publish(ctx context.Context, claim workspaceruntime.ClaimRef, 
 	}
 	result, err := a.objects.Publish(ctx, workspacestore.PublishRequest{
 		Thread: threadOf(handoff), Caller: caller, Epoch: handoff.Epoch, Kind: request.Kind,
-		SHA256: request.SegmentSHA256, Bytes: int64(request.Bytes), Prerequisites: []string{},
+		SHA256: request.SegmentSHA256, Bytes: int64(request.Bytes), Prerequisites: append([]string{}, request.Prerequisites...),
 		Refs: refs, ObjectFormat: request.ObjectFormat,
 	})
 	if err != nil {
@@ -447,7 +447,10 @@ func storeError(err error) error {
 		return workspaceruntime.Refuse(workspaceruntime.RefusalSegmentTooLarge)
 	case errors.Is(err, workspacestore.ErrQuotaExceeded):
 		return workspaceruntime.Refuse(workspaceruntime.RefusalQuotaExceeded)
-	case errors.Is(err, workspacestore.ErrInvalid), errors.Is(err, workspacehandoff.ErrInvalid):
+	case errors.Is(err, workspacestore.ErrInvalid), errors.Is(err, workspacehandoff.ErrInvalid),
+		// A PUSH on an unknown prerequisite or past the chain cap: the
+		// worker's own bug, never worth a retry of the same request.
+		errors.Is(err, workspacestore.ErrPrerequisiteUnknown), errors.Is(err, workspacestore.ErrChainTooLong):
 		return workspaceruntime.ErrInvalidRequest
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err
