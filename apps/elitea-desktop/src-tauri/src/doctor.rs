@@ -131,6 +131,7 @@ const CONFIRMED_FIXES: &[&str] = &[
     "workspaces.drop_missing",
     "index.rebuild",
     "worktrees.prune",
+    "threads.prune",
 ];
 
 impl Check {
@@ -213,6 +214,29 @@ fn grant_access_hint() -> &'static str {
     } else {
         "Check that your user may read them, then run the checks again."
     }
+}
+
+/// The size of the directory at `path` (all its files, not just the top
+/// level), in bytes. `0` when it cannot be read; the space check counts
+/// what it can reach and shows `0` for the rest.
+fn dir_bytes(path: &Path) -> u64 {
+    let mut total: u64 = 0;
+    for entry in fs::read_dir(path).into_iter().flatten() {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        let meta = match entry.metadata() {
+            Ok(meta) => meta,
+            Err(_) => continue,
+        };
+        if meta.is_dir() {
+            total = total.saturating_add(dir_bytes(&entry.path()));
+        } else {
+            total = total.saturating_add(meta.len());
+        }
+    }
+    total
 }
 
 /// What a file or directory looks like to the app's trust rules.
@@ -329,6 +353,9 @@ pub struct LocalDoctor {
     pub hooks: Arc<dyn DoctorHooks>,
     pub config_dir: PathBuf,
     pub data_dir: PathBuf,
+    /// The host's cache directory: the sessions' spilled outputs (the space
+    /// check counts it; the turns write there).
+    pub cache_dir: Option<PathBuf>,
     pub log_dir: Option<PathBuf>,
     pub credentials: Arc<CredentialsFile>,
     pub workspaces: Arc<WorkspaceStore>,
@@ -336,6 +363,10 @@ pub struct LocalDoctor {
     pub history: Option<Arc<HistoryStore>>,
     /// The agent's session memory opened at launch; `None` when refused.
     pub sessions: Option<Arc<DesktopStateStore>>,
+    /// How many days the thread history keeps a thread before the
+    /// `threads.prune` repair may forget it (from the settings; 0 keeps
+    /// forever, and the repair then never runs).
+    pub history_retention_days: u32,
 }
 
 /// One owner-only SQLite file the Doctor checks (`database_check`).
@@ -404,6 +435,8 @@ impl LocalDoctor {
             ));
         }
         checks.push(self.history_check());
+        checks.push(self.threads_prune_check());
+        checks.push(self.data_space_check());
         checks.push(self.sessions_check());
         checks.push(self.workspaces_check());
         checks.push(self.worktrees_check());
@@ -532,6 +565,119 @@ impl LocalDoctor {
             on_server: "the threads on the server are not affected",
             reclaims: true,
         })
+    }
+
+    /// The thread-history retention (`threads.prune`): the threads idle past
+    /// the retention's cutoff (the last finished turn older than it).
+    /// Offered only when retention is on and the history counts idle
+    /// threads; the repair is refused without the app's confirm.
+    fn threads_prune_check(&self) -> Check {
+        const ID: &str = "threads.prune";
+        const TITLE: &str = "Thread history retention";
+        let days = self.history_retention_days;
+        if days == 0 {
+            return Check::new(
+                ID,
+                TITLE,
+                Status::Ok,
+                "Thread history retention is off; the history keeps every thread.".into(),
+            );
+        }
+        let Some(store) = &self.history else {
+            return Check::new(
+                ID,
+                TITLE,
+                Status::Warn,
+                "The thread history is not open; it will be at the next start.".into(),
+            );
+        };
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let cutoff_ms = now_ms.saturating_sub(
+            i64::try_from(u128::from(days).saturating_mul(86_400).saturating_mul(1_000))
+                .unwrap_or(i64::MAX),
+        );
+        match store.idle_threads(cutoff_ms) {
+            Ok(0) => Check::new(
+                ID,
+                TITLE,
+                Status::Ok,
+                "No idle threads past the retention. The history keeps what it holds.".into(),
+            ),
+            Ok(idle) => Check::new(
+                ID,
+                TITLE,
+                Status::Warn,
+                format!(
+                    "{idle} thread(s) sat idle more than {days} days; their last finished turn is past the retention. The server keeps their messages."
+                ),
+            )
+            .fix(
+                "threads.prune",
+                "Forget the idle threads",
+            ),
+            Err(error) => Check::new(
+                ID,
+                TITLE,
+                Status::Fail,
+                format!("Could not count the idle threads: {error}"),
+            ),
+        }
+    }
+
+    /// What is eating the app's data directory (`data.space`): the size of
+    /// the data dir and of its two databases, each database's free-page
+    /// fraction (trimmed space not yet returned to the disk), and the
+    /// cache dir's spilled outputs. It warns, and offers the vacuum repair,
+    /// when a database holds half or more of itself free and is at least
+    /// 100 MiB, or when the data dir is large.
+    fn data_space_check(&self) -> Check {
+        const ID: &str = "data.space";
+        const TITLE: &str = "What the data directory holds";
+        let data = dir_bytes(&self.data_dir);
+        let sessions_bytes =
+            fs::symlink_metadata(&self.sessions_path()).map(|m| m.len()).unwrap_or(0);
+        let history_bytes =
+            fs::symlink_metadata(&self.history_path()).map(|m| m.len()).unwrap_or(0);
+        let sessions_free = self
+            .sessions
+            .as_ref()
+            .map(|state| state.store().free_page_fraction())
+            .unwrap_or(0.0);
+        let history_free = self
+            .history
+            .as_ref()
+            .map(|store| store.free_page_fraction())
+            .unwrap_or(0.0);
+        let spill = self
+            .cache_dir
+            .as_ref()
+            .map(|dir| dir_bytes(dir))
+            .unwrap_or(0);
+        let message = format!(
+            "The data directory holds {data} ({} session memory, {} thread history); {} of spilled outputs in the cache dir. {:.0}% of the session memory and {:.0}% of the history are free pages.",
+            sessions_bytes,
+            history_bytes,
+            spill,
+            sessions_free * 100.0,
+            history_free * 100.0,
+        );
+        // A database that is at least 100 MiB and half free pages holds
+        // trimmed space it has not given back: offer the vacuum.
+        let sessions_vacuum = sessions_bytes >= 100 * 1024 * 1024 && sessions_free >= 0.5;
+        let history_vacuum = history_bytes >= 100 * 1024 * 1024 && history_free >= 0.5;
+        if sessions_vacuum {
+            return Check::new(ID, TITLE, Status::Warn, message).fix(
+                "sessions.vacuum",
+                "Give the trimmed stores their space back",
+            );
+        }
+        if history_vacuum {
+            return Check::new(ID, TITLE, Status::Warn, message).fix(
+                "history.vacuum",
+                "Give the trimmed stores their space back",
+            );
+        }
+        Check::new(ID, TITLE, Status::Ok, message)
     }
 
     /// The agent's session memory (`sessions.sqlite`): untrusted, loose,
@@ -896,6 +1042,7 @@ impl LocalDoctor {
             "sessions.move_aside" => self.move_sessions_aside(),
             "sessions.vacuum" => self.vacuum_sessions(),
             "history.vacuum" => self.vacuum_history(),
+            "threads.prune" => self.prune_threads(),
             "worktrees.prune" => {
                 crate::worktrees::prune_stale(&self.workspaces, &self.hooks.git_deny(), &|id| {
                     self.hooks.remove_workspace(id)
@@ -1038,6 +1185,23 @@ impl LocalDoctor {
         };
         Ok(format!(
             "The history held {before} bytes; the file now holds only what it uses."
+        ))
+    }
+
+    /// Forget the threads idle past the retention (`threads.prune`): the
+    /// server keeps the messages, the history re-builds a thread from them.
+    /// Refused without the app's confirm (the repair deletes data).
+    fn prune_threads(&self) -> Result<String, HostError> {
+        let store = self.history.as_ref().ok_or_else(|| {
+            HostError::Storage(
+                "the thread history is not open; it will be at the next start".into(),
+            )
+        })?;
+        let days = self.history_retention_days;
+        let pruned = store.prune_idle(days)?;
+        log::info!("diagnostics: pruned {pruned} idle thread(s), retention {days} days");
+        Ok(format!(
+            "Forgotten {pruned} thread(s) idle more than {days} days. The server keeps the messages."
         ))
     }
 }
@@ -1677,8 +1841,10 @@ mod tests {
             config_dir,
             data_dir,
             log_dir: Some(log_dir),
+            cache_dir: None,
             history: None,
             sessions: None,
+            history_retention_days: 0,
         };
         Fixture {
             _root: root,

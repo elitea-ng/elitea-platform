@@ -271,6 +271,11 @@ pub struct HostDeps {
     /// The person's own custom commands (`<app config dir>/commands`,
     /// `slash_commands`); `None`: only the workspace's.
     pub user_commands_dir: Option<PathBuf>,
+    /// The app's cache directory: where the session's spilled outputs live
+    /// (ephemeral: kept a day, bounded, and the OS may clear it); `None`
+    /// when the OS names no cache directory (the spills then stay under
+    /// the data directory).
+    pub cache_dir: Option<PathBuf>,
 }
 
 /// The app's resolved directories as deny entries, as given (the deny list
@@ -1194,6 +1199,9 @@ impl AgentHost {
             ));
         }
         let session = LocalSession::open(SessionConfig {
+            // Spills are ephemeral (a day's retention, bounded): they live
+            // in the app's cache directory, not its data directory.
+            spill_dir: self.deps.cache_dir.clone(),
             root,
             session_id: workspace_id.to_owned(),
             policy: policy.clone(),

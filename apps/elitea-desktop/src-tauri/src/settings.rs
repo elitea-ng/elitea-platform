@@ -26,6 +26,25 @@ pub struct Settings {
     pub display_name: Option<String>,
     /// Overrides the default client id; the deployment registers whichever it expects.
     pub client_id: Option<String>,
+    /// How many days the thread history keeps a thread before the
+    /// `threads.prune` repair may forget it: the last finished turn of an
+    /// idle thread is older than the cutoff, and the server keeps the
+    /// messages (the UI re-builds the thread). `None`: the default (90
+    /// days). `0`: keep forever (retention off).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_retention_days: Option<u32>,
+}
+
+/// The default thread-history retention, in days (the Doctor's
+/// `threads.prune` repair forgets a thread idle past it).
+pub const DEFAULT_HISTORY_RETENTION_DAYS: u32 = 90;
+
+/// What [`Settings::history_retention_days`] means: the setting when it is
+/// present (0 keeps forever), else the default.
+pub fn history_retention_days(settings: &Settings) -> u32 {
+    settings
+        .history_retention_days
+        .unwrap_or(DEFAULT_HISTORY_RETENTION_DAYS)
 }
 
 pub struct SettingsFiles {
@@ -131,6 +150,7 @@ mod tests {
             origin: Some("https://elitea.example.com".into()),
             display_name: Some("Acme".into()),
             client_id: None,
+            history_retention_days: None,
         };
         files.save_settings(&settings).unwrap();
         assert_eq!(files.settings().unwrap(), settings);
@@ -174,5 +194,24 @@ mod tests {
         assert_eq!(resolve_client_id(None, None, Some("build")), "build");
         assert_eq!(resolve_client_id(None, None, None), "desktop");
         assert_eq!(resolve_client_id(Some("  "), Some(""), None), "desktop");
+    }
+
+    #[test]
+    fn retention_is_the_setting_or_the_default_when_absent() {
+        assert_eq!(
+            history_retention_days(&Settings::default()),
+            DEFAULT_HISTORY_RETENTION_DAYS,
+            "no setting: the default"
+        );
+        let off = Settings {
+            history_retention_days: Some(0),
+            ..Settings::default()
+        };
+        assert_eq!(history_retention_days(&off), 0, "zero: keep forever");
+        let ninety = Settings {
+            history_retention_days: Some(90),
+            ..Settings::default()
+        };
+        assert_eq!(history_retention_days(&ninety), 90, "the setting wins");
     }
 }

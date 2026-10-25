@@ -157,6 +157,7 @@ fn fixture(policy: LocalWorkPolicy) -> Fixture {
     // Linux CI has no sandbox helper; macOS runs everything under Seatbelt.
     shell.sandbox.allow_unenforced = !cfg!(target_os = "macos");
     let session = LocalSession::open(SessionConfig {
+    spill_dir: None, // under data_dir
         root: root.clone(),
         session_id: "conv-1".to_owned(),
         policy,

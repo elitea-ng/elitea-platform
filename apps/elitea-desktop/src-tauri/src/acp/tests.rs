@@ -569,6 +569,7 @@ async fn acp(server: MockServer, policy: Value) -> Acp {
             app_id: Some("com.example.elitea-test".into()),
             user_rules_dir: Some(app.path().join("config")),
             user_commands_dir: Some(app.path().join("config/commands")),
+            cache_dir: Some(app.path().join("cache")),
         })
         .unwrap(),
     );

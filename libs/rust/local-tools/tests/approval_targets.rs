@@ -49,6 +49,7 @@ async fn writes_through_symlinks_are_approved_as_their_targets() {
     symlink("../src", root.join("docs/code")).expect("dir link");
     let prompt = Arc::new(RejectingPrompt::default());
     let session = LocalSession::open(SessionConfig {
+    spill_dir: None, // under data_dir
         root: root.clone(),
         session_id: "s".to_owned(),
         policy: LocalWorkPolicy {
@@ -167,6 +168,7 @@ async fn a_patch_target_swapped_during_approval_is_refused() {
     std::fs::write(root.join("a.txt"), "1\n").expect("a");
     std::fs::write(root.join("other.txt"), "1\n").expect("other");
     let session = LocalSession::open(SessionConfig {
+    spill_dir: None, // under data_dir
         root: root.clone(),
         session_id: "s".to_owned(),
         policy: LocalWorkPolicy {

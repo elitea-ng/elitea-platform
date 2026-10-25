@@ -493,6 +493,30 @@ pub fn reclaim_database(dir: &Path, file_name: &str) -> Result<u64, HostError> {
     Ok(before)
 }
 
+/// The fraction of the SQLite database at `dir/file_name` that is free
+/// pages (`0.0..=1.0`): what a trimmed store still holds that it does not
+/// use. `0.0` when the file is missing, not a database, empty, or the
+/// query fails (the check shows `0` then). Opened read-only through a
+/// no-follow connection, on a separate connection from the store's writer.
+pub fn database_free_page_fraction(dir: &Path, file_name: &str) -> f64 {
+    let path = dir.join(file_name);
+    let conn = match Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    ) {
+        Ok(conn) => conn,
+        Err(_) => return 0.0,
+    };
+    let (pages, free): (i64, i64) = match (
+        conn.query_row("PRAGMA page_count;", rusqlite::params![], |row| row.get(0)),
+        conn.query_row("PRAGMA freelist_count;", rusqlite::params![], |row| row.get(0)),
+    ) {
+        (Ok(pages), Ok(free)) if pages > 0 => (pages, free),
+        _ => return 0.0,
+    };
+    free as f64 / pages as f64
+}
+
 impl SessionStore {
     /// Open (or create) `sessions.sqlite` in `dir` and start its thread.
     ///
@@ -502,6 +526,15 @@ impl SessionStore {
     /// not a database, or it was written by a newer schema.
     pub fn open(dir: &Path) -> Result<Self, HostError> {
         Self::open_at(dir, WAL_IDLE_CHECKPOINT)
+    }
+
+    /// The fraction of this database that is free pages (`0.0..=1.0`): what
+    /// a trimmed store still holds that it does not use. `0.0` when the
+    /// file is empty or the query fails. The space check shows it next to
+    /// the file size; a large fraction is the hint for the
+    /// `sessions.vacuum` repair.
+    pub fn free_page_fraction(&self) -> f64 {
+        database_free_page_fraction(&self.dir, FILE_NAME)
     }
 
     /// [`Self::open`] with the interval of the idle WAL checkpoint named:

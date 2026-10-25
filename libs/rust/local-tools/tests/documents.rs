@@ -43,6 +43,7 @@ fn session(documents: Documents) -> (tempfile::TempDir, Arc<LocalSession>) {
     let mut shell = ShellConfig::new(dir.path().join("data/tmp"));
     shell.sandbox.allow_unenforced = true;
     let session = LocalSession::open(SessionConfig {
+    spill_dir: None, // under data_dir
         root,
         session_id: "s".to_owned(),
         policy: LocalWorkPolicy {

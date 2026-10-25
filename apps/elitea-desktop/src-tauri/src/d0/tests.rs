@@ -293,6 +293,7 @@ fn build_host(
             app_id: Some(TEST_APP_ID.to_owned()),
             user_rules_dir: Some(app.join("config")),
             user_commands_dir: Some(app.join("config/commands")),
+            cache_dir: Some(app.join("cache")),
         })
         .unwrap(),
     );
@@ -3054,6 +3055,8 @@ async fn the_doctor_removes_a_vanished_workspace_the_way_the_app_does() {
         workspaces: workspaces.clone(),
         history: None,
         sessions: None,
+        cache_dir: None,
+        history_retention_days: 0,
     };
     let message = doctor.fix("workspaces.drop_missing", true).unwrap();
     assert!(message.contains("Not removed"), "{message}");
@@ -4291,6 +4294,7 @@ fn no_store_host(h: &Harness) -> Arc<AgentHost> {
             app_id: Some(TEST_APP_ID.to_owned()),
             user_rules_dir: None,
             user_commands_dir: None,
+            cache_dir: None,
         })
         .unwrap(),
     )

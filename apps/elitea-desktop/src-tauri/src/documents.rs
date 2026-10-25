@@ -115,6 +115,7 @@ printf '{{"ok":true,"extractor":"fake","page_count":1,"pages":[{{"n":1,"text":"r
         let mut shell = ShellConfig::new(base.join("data/tmp"));
         shell.home = Some(home);
         let session = LocalSession::open(SessionConfig {
+            spill_dir: None, // under data_dir
             root: root.clone(),
             session_id: "s".to_owned(),
             policy: LocalWorkPolicy {

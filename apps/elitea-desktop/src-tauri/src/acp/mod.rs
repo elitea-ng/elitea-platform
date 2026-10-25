@@ -207,6 +207,7 @@ async fn start(dirs: AppDirs) -> Result<(), String> {
             app_id: Some(APP_IDENTIFIER.to_owned()),
             user_rules_dir: Some(dirs.config.clone()),
             user_commands_dir: Some(dirs.config.join("commands")),
+            cache_dir: dirs.cache.clone(),
         })
         .map_err(|error| error.message)?,
     );

@@ -155,6 +155,7 @@ fn fixture(policy: LocalWorkPolicy) -> Fixture {
     // enforcement on macOS.
     shell.sandbox.allow_unenforced = true;
     let session = LocalSession::open(SessionConfig {
+    spill_dir: None, // under data_dir
         root,
         session_id: "conv-1".to_owned(),
         policy,

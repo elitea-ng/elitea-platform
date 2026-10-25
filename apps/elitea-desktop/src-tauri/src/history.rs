@@ -380,6 +380,14 @@ enum Op {
         conversation_id: String,
         conversation_uuid: Option<String>,
     },
+    /// Remove the turns of every thread that sat idle past the cutoff
+    /// (retention): its last finished turn is older than `cutoff_ms`. The
+    /// server keeps the messages; this file is the cache the UI re-builds.
+    /// Answers with the number of turns deleted.
+    PruneIdle {
+        cutoff_ms: i64,
+        ack: std::sync::mpsc::Sender<rusqlite::Result<usize>>,
+    },
     /// Commit what is pending, then answer.
     Flush(std::sync::mpsc::Sender<()>),
 }
@@ -393,7 +401,7 @@ impl Op {
             | Self::Truncated { turn_id }
             | Self::Changes { turn_id, .. }
             | Self::Finish { turn_id, .. } => Some(turn_id),
-            Self::Flush(_) => None,
+            Self::Flush(_) | Self::PruneIdle { .. } => None,
         }
     }
 
@@ -1008,6 +1016,74 @@ impl HistoryStore {
         })
     }
 
+    /// The number of threads that sat idle past the cutoff: their last
+    /// finished turn (`MAX(turns.finished_at)`) is older than `cutoff_ms`,
+    /// in Unix ms. The Doctor's retention check counts these before it
+    /// offers `threads.prune`.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be read.
+    pub fn idle_threads(&self, cutoff_ms: i64) -> Result<usize, HostError> {
+        self.with("could not read the thread history", |conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM (
+                    SELECT 1 FROM turns
+                    WHERE conversation_uuid IS NOT NULL
+                    GROUP BY conversation_uuid
+                    HAVING MAX(finished_at) < ?1 AND MAX(finished_at) IS NOT NULL
+                )",
+                params![cutoff_ms],
+                |row| row.get(0),
+            )
+        })
+    }
+
+    /// The fraction of this database that is free pages (`0.0..=1.0`): what
+    /// a trimmed or pruned store still holds that it does not use. `0.0`
+    /// when the file is empty or the query fails. The space check shows it
+    /// next to the file size; a large fraction is the hint for the
+    /// `history.vacuum` repair.
+    pub fn free_page_fraction(&self) -> f64 {
+        crate::sessions::database_free_page_fraction(&self.dir, FILE_NAME)
+    }
+
+    /// Remove the turns of every thread that sat idle past `idle_days`: its
+    /// last finished turn (`MAX(turns.finished_at)`) is older than the
+    /// cutoff. Threads that never finished a turn, or that stay empty, are
+    /// kept: retention counts finished work, not absence. The server keeps
+    /// the messages; this file is the cache the UI re-builds. Queued on the
+    /// writer (after the queued turns), so it sees the app's last turns.
+    ///
+    /// # Errors
+    ///
+    /// The writer stopped (the store is closed).
+    pub fn prune_idle(&self, idle_days: u32) -> Result<usize, HostError> {
+        // The prune goes through the writer, after everything queued so
+        // far: the app's in-flight turns are settled first, and the prune
+        // sees a quiet table. The cutoff, not the rows, travels the queue
+        // (durable messages carry bounded metadata, never data).
+        let cutoff_ms = now_ms().saturating_sub(i64::try_from(u128::from(idle_days)
+            .saturating_mul(86_400)
+            .saturating_mul(1_000))
+        .unwrap_or(i64::MAX));
+        let (ack, done) = std::sync::mpsc::channel();
+        if !self.send(Op::PruneIdle {
+            cutoff_ms,
+            ack,
+        }) {
+            return Err(HostError::Storage(
+                "the thread history stopped before it could prune".into(),
+            ));
+        }
+        let pruned = done
+            .recv_timeout(Duration::from_secs(30))
+            .map_err(|_| HostError::Storage("the thread history writer did not prune".into()))?;
+        self.flush();
+        pruned
+            .map_err(|e| HostError::Storage(format!("the thread history could not prune: {e}")))
+    }
+
     /// Copy one thread of `owner` into a new, empty thread of the same
     /// workspace (a fork, `thread_history_fork`): the source's turns, oldest
     /// first, up to and including `up_to_turn` (all of them when `None`),
@@ -1276,6 +1352,14 @@ impl Writer {
                     self.commit();
                     let _ = ack.send(());
                 }
+                Ok(Op::PruneIdle { cutoff_ms, ack }) => {
+                    // Retention: settle the queued turns first (commit),
+                    // then prune in its own transaction and answer the
+                    // caller.
+                    self.commit();
+                    let pruned = prune_idle_threads(&self.conn, cutoff_ms);
+                    let _ = ack.send(pruned);
+                }
                 Ok(op) => self.push(op),
                 Err(RecvTimeoutError::Timeout) => self.commit(),
                 Err(RecvTimeoutError::Disconnected) => {
@@ -1362,6 +1446,24 @@ fn add_bytes(conn: &Connection, turn_id: &str, bytes: usize) -> rusqlite::Result
     )
 }
 
+/// Remove the turns of every thread of `owner` that sat idle past the cutoff
+/// (retention): its last finished turn (`MAX(turns.finished_at)`) is older
+/// than `cutoff_ms`, in Unix ms. Threads that never finished a turn stay:
+/// retention counts finished work, not absence. Their `threads` rows go
+/// too. Answers with the number of turns deleted.
+fn prune_idle_threads(conn: &Connection, cutoff_ms: i64) -> rusqlite::Result<usize> {
+    // The idle threads: last finished turn older than the cutoff.
+    let idle = "SELECT conversation_uuid FROM turns
+                WHERE conversation_uuid IS NOT NULL
+                GROUP BY conversation_uuid
+                HAVING MAX(finished_at) < ?1 AND MAX(finished_at) IS NOT NULL";
+    let pruned = conn.execute(
+        &format!("DELETE FROM turns WHERE conversation_uuid IN ({idle})"),
+        params![cutoff_ms],
+    )?;
+    Ok(pruned)
+}
+
 /// Rewrite the `message_ids` of the `done` events of `turn_id` through
 /// `messages`; an id it does not name is kept.
 fn rename_done_messages(
@@ -1423,6 +1525,9 @@ fn insert_event(
 /// (an appended chunk), never an UPDATE of earlier text.
 fn apply(conn: &Connection, op: Op) -> rusqlite::Result<()> {
     match op {
+        // Intercepted on the queue before `apply` (it answers its caller in
+        // its own transaction), so it never reaches a write here.
+        Op::PruneIdle { .. } => Ok(()),
         Op::Begin(turn) => {
             let mentions = serde_json::to_string(&turn.mentions).unwrap_or_else(|_| "[]".into());
             let images = serde_json::to_string(&turn.images).unwrap_or_else(|_| "[]".into());
@@ -2069,6 +2174,44 @@ mod tests {
         );
         // The turn is still readable through the store.
         assert_eq!(store.thread(&me, "w1", "42").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn retention_forgets_a_thread_idle_past_the_cutoff() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(HistoryStore::open_at(root.path(), Duration::from_millis(200)).unwrap());
+        // The store's writer is idle; a second connection inserts two
+        // threads: one finished two days ago, one just now. A thread is its
+        // turns: there is no thread table.
+        {
+            let conn = rusqlite::Connection::open(store.path()).unwrap();
+            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL").unwrap();
+            conn.execute(
+                "INSERT INTO turns (turn_id, origin, user_id, workspace_id, conversation_id, conversation_uuid, prompt, mentions, started_at, finished_at, events_bytes)
+                 VALUES ('turn-old', 'https://a.example', 1, 'w1', 't-old', 'uuid-old', '', '[]', 0, ?1, 0)",
+                rusqlite::params![now_ms() - 2 * 86_400 * 1_000],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO turns (turn_id, origin, user_id, workspace_id, conversation_id, conversation_uuid, prompt, mentions, started_at, finished_at, events_bytes)
+                 VALUES ('turn-new', 'https://a.example', 1, 'w1', 't-new', 'uuid-new', '', '[]', 0, ?1, 0)",
+                rusqlite::params![now_ms()],
+            )
+            .unwrap();
+        }
+        // The check counts the idle threads; the repair forgets them.
+        let cutoff = now_ms() - 86_400 * 1_000;
+        let idle = store.idle_threads(cutoff).unwrap();
+        assert_eq!(idle, 1, "one thread is idle past the cutoff");
+        let pruned = store.prune_idle(1).unwrap();
+        assert_eq!(pruned, 1, "one turn (the idle thread's) is deleted");
+        // The idle thread and its turns are gone; the fresh one stays.
+        let me = owner(1);
+        assert!(store.thread(&me, "w1", "t-old").unwrap().is_empty());
+        let threads = store.workspace_threads("w1").unwrap();
+        let uuids: Vec<&str> = threads.iter().map(|(_, _, u)| u.as_str()).collect();
+        assert!(uuids.contains(&"uuid-new"), "the fresh thread stays: {uuids:?}");
+        assert!(!uuids.contains(&"uuid-old"), "the idle thread goes: {uuids:?}");
     }
 
     #[test]
