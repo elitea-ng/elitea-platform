@@ -130,6 +130,37 @@ pub struct ChainSegment<'a> {
     pub bytes: &'a [u8],
 }
 
+/// The chain of a fetched plan: each of its segments with the bytes
+/// fetched for it ([`crate::sync::fetch_chain`]'s answer), in plan order.
+///
+/// # Errors
+///
+/// [`StoreError::Integrity`] when there is not exactly one body per
+/// segment: a chain short of its head must never verify as an older head.
+pub fn plan_segments<'a>(
+    plan: &'a FetchPlan,
+    bodies: &'a [Vec<u8>],
+) -> Result<Vec<ChainSegment<'a>>, StoreError> {
+    if plan.segments.len() != bodies.len() {
+        return Err(StoreError::Integrity(
+            "the fetched chain does not match its plan".into(),
+        ));
+    }
+    Ok(plan
+        .segments
+        .iter()
+        .zip(bodies)
+        .map(|(segment, bytes)| ChainSegment {
+            seq: segment.seq,
+            kind: &segment.kind,
+            sha256: &segment.sha256,
+            prerequisites: &segment.prerequisites,
+            refs: &segment.refs,
+            bytes,
+        })
+        .collect())
+}
+
 /// Verify a chain (a `COMPACT`, then `PUSH` segments in `seq` order) into
 /// `quarantine` (an empty one, see [`bundle::init_quarantine`]). The result
 /// holds the refs of the chain's last segment, the quarantine's objects and

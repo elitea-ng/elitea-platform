@@ -3,11 +3,13 @@
 //! markers, a worktree, or discard. The merge itself is the shared apply
 //! engine ([`crate::apply`]), the one the worktree merge-back uses.
 //!
-//! **Preflight** ([`preflight`], [`preflight_up_to`]):
+//! **Preflight** ([`preflight`], [`preflight_up_to`], [`preflight_chain`]):
 //!
-//! 1. the fetched segment is verified into a quarantine of its own
-//!    (content address, pack, connectivity from every ref; the refs must be
-//!    the plan's), before anything else is read from it;
+//! 1. the fetched chain (a `COMPACT`, then the `PUSH` segments after it) is
+//!    verified into a quarantine of its own (content addresses, every
+//!    `PUSH`'s prerequisites present before its pack is indexed, packs,
+//!    connectivity from every ref; the refs must be the plan's), before
+//!    anything else is read from it;
 //! 2. the cloud chain `H_1..C` is read (first parents from `C` back to the
 //!    `H_1` this desktop sent; anything else is refused); the person may
 //!    take back only up to turn `k` (`C_k`; the latest by default);
@@ -20,6 +22,13 @@
 //!    lines or files, `conflicts` otherwise (with the conflicting paths).
 //!    Everything is tree-based: a `HEAD` that moved since the send (the
 //!    person committed) is the same algorithm.
+//!
+//! **The remaining turns** ([`Take::Rest`]): after a take-back up to turn
+//! `k`, the turns `k+1..N` are taken back the same way, merging
+//! `(tree(C_k), L, tree(C_N))`: the folder already holds `C_k`'s work, so
+//! only what the later turns changed is applied. Their commits are replayed
+//! onto `C'_k` (the first take-back's replayed `C_k`) and kept on
+//! `elitea/cloud/<thread>-turns-<k+1>-<N>`.
 //!
 //! **Apply** ([`apply`]) first takes `L` (and `HEAD`) again and refuses
 //! with `folder_changed_since_preflight` ([`ErrorCode::StaleRead`]) if it
@@ -49,7 +58,8 @@ use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use elitea_workspace_store::bundle::{self as segment, Expect, Limits, VerifiedBundle};
+use elitea_workspace_store::bundle::{self as segment, Limits, VerifiedBundle};
+use elitea_workspace_store::chain::{self as store_chain, ChainSegment};
 use elitea_workspace_store::objects::{self as store_objects, ChangeKind, FileEntry, ObjectDb};
 use elitea_workspace_store::refs as store_refs;
 use serde::{Deserialize, Serialize};
@@ -99,6 +109,17 @@ pub struct FileDiff {
     pub after: Option<Vec<u8>>,
 }
 
+/// What a preflight takes back.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Take {
+    /// The cloud turns up to `k` (1-based; `None`: all of them).
+    UpTo(Option<usize>),
+    /// The turns after `after_turn`: an earlier take-back took back up to
+    /// it, and `replayed` is that take-back's replayed `C'_k` (the tip of
+    /// its `elitea/cloud/<thread>` branch).
+    Rest { after_turn: usize, replayed: String },
+}
+
 /// A preflight, held until the person picks a mode.
 pub struct Preflight {
     /// The engine's outcome (`applied` false): what applying writes, what
@@ -106,8 +127,12 @@ pub struct Preflight {
     pub report: ApplyOutcome,
     /// Every cloud commit, oldest first (the person may take back fewer).
     pub chain: Vec<CloudCommit>,
-    /// `k`: the turns taken back (`chain[..k]`; `chain.len()` by default).
+    /// `k`: the turns taken back (`chain[from_turn..k]`; `chain.len()` by
+    /// default).
     pub up_to_turn: usize,
+    /// The turns an earlier take-back already took back (0, or the `k` of
+    /// [`Take::Rest`]).
+    pub from_turn: usize,
     /// `C`, the cloud tip (`H_1` when no cloud turn changed anything).
     pub cloud_tip: String,
     /// `C_k`, the commit whose tree is taken back.
@@ -115,10 +140,16 @@ pub struct Preflight {
     /// `L` and `HEAD` as the preflight saw them.
     local_tree: String,
     head: Option<String>,
+    /// The commit whose tree is the merge's base: `H_1`, or `C_k` for the
+    /// remaining turns.
+    base_commit: String,
+    /// `C'_k`, the replay's start for the remaining turns.
+    replay_onto: Option<String>,
     plan: Plan,
     objects: Objects,
     bundle: VerifiedBundle,
-    pack: Vec<u8>,
+    /// Each segment's pack, in chain order.
+    packs: Vec<Vec<u8>>,
     record: SendRecord,
     _scratch: TempDir,
     _quarantine: TempDir,
@@ -129,6 +160,7 @@ impl std::fmt::Debug for Preflight {
         f.debug_struct("Preflight")
             .field("report", &self.report)
             .field("up_to_turn", &self.up_to_turn)
+            .field("from_turn", &self.from_turn)
             .field("cloud_tip", &self.cloud_tip)
             .field("target", &self.target)
             .finish_non_exhaustive()
@@ -519,13 +551,11 @@ pub fn preflight(
 }
 
 /// [`preflight`] taking back the cloud turns up to `up_to_turn` (1-based;
-/// `None`: all of them).
+/// `None`: all of them), from one `COMPACT` segment.
 ///
 /// # Errors
 ///
-/// A segment that fails verification, a cloud tip that does not descend
-/// from the `H_1` this desktop sent, [`ErrorCode::InvalidArgument`]
-/// (`turn_out_of_range`) for a turn the chain does not have, git failures.
+/// As [`preflight_chain`].
 pub fn preflight_up_to(
     source: &Source,
     record: &SendRecord,
@@ -534,20 +564,51 @@ pub fn preflight_up_to(
     path_deny: &[String],
     up_to_turn: Option<usize>,
 ) -> ToolResult<Preflight> {
+    let sha256 = elitea_workspace_store::digest::sha256_hex(bytes);
+    let segments = [ChainSegment {
+        seq: 1,
+        kind: elitea_workspace_store::KIND_COMPACT,
+        sha256: &sha256,
+        prerequisites: &[],
+        refs: plan_refs,
+        bytes,
+    }];
+    preflight_chain(
+        source,
+        record,
+        &segments,
+        path_deny,
+        &Take::UpTo(up_to_turn),
+    )
+}
+
+/// The preflight over a fetched chain (a `COMPACT`, then `PUSH` segments,
+/// as [`store_chain::plan_segments`] pairs a plan with its bodies), taking
+/// back what `take` says.
+///
+/// # Errors
+///
+/// A chain that fails verification, a cloud tip that does not descend from
+/// the `H_1` this desktop sent, [`ErrorCode::InvalidArgument`]
+/// (`turn_out_of_range`) for a turn the chain does not have (or, for the
+/// remaining turns, no turn after `k`), git failures.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the preflight in order: verify, read the chain, snapshot, merge"
+)]
+pub fn preflight_chain(
+    source: &Source,
+    record: &SendRecord,
+    segments: &[ChainSegment<'_>],
+    path_deny: &[String],
+    take: &Take,
+) -> ToolResult<Preflight> {
     check_conversation(&record.conversation_uuid)?;
     let quarantine = TempDir::new("quarantine")?;
     let git_dir = quarantine.path().join("git");
     segment::init_quarantine(&git_dir).map_err(|e| super::store_error(&e))?;
-    let bundle = segment::verify_into(
-        bytes,
-        &git_dir,
-        &Expect {
-            refs: Some(plan_refs),
-            ..Expect::default()
-        },
-        Limits::default(),
-    )
-    .map_err(|e| super::store_error(&e))?;
+    let bundle = store_chain::verify_chain_into(segments, &git_dir, Limits::default())
+        .map_err(|e| super::store_error(&e))?;
     let sent = bundle
         .ref_id(&store_refs::handoff(1))
         .map(|id| id.to_string());
@@ -561,7 +622,30 @@ pub fn preflight_up_to(
     // No cloud turn published: the tip is H_1 itself.
     let tip = bundle.ref_id(store_refs::CLOUD).unwrap_or(handoff);
     let chain = read_chain(&bundle, &tip, &handoff)?;
-    let (up_to_turn, target) = pick_turn(&chain, up_to_turn, &record.handoff)?;
+    let (from_turn, up_to_turn, target, replay_onto) = match take {
+        Take::UpTo(k) => {
+            let (k, target) = pick_turn(&chain, *k, &record.handoff)?;
+            (0, k, target, None)
+        }
+        Take::Rest {
+            after_turn,
+            replayed,
+        } => {
+            if *after_turn == 0 || *after_turn >= chain.len() {
+                return Err(ToolError::invalid(format!(
+                    "turn_out_of_range: this thread has {} cloud turns; there are none after turn {after_turn} to take back",
+                    chain.len()
+                )));
+            }
+            store_objects::oid(replayed).map_err(|e| super::store_error(&e))?;
+            let (k, target) = pick_turn(&chain, None, &record.handoff)?;
+            (*after_turn, k, target, Some(replayed.clone()))
+        }
+    };
+    let base_commit = match from_turn.checked_sub(1) {
+        Some(last) => chain[last].sha.clone(),
+        None => record.handoff.clone(),
+    };
     let sent_tree = bundle
         .db
         .commit(&handoff)
@@ -574,6 +658,12 @@ pub fn preflight_up_to(
             "the handoff in the cloud copy has another tree than was sent",
         ));
     }
+    let base_tree = bundle
+        .db
+        .commit(&store_objects::oid(&base_commit).map_err(|e| super::store_error(&e))?)
+        .map_err(|e| super::store_error(&e))?
+        .tree
+        .to_string();
     let target_tree = bundle
         .db
         .commit(&store_objects::oid(&target).map_err(|e| super::store_error(&e))?)
@@ -590,7 +680,7 @@ pub fn preflight_up_to(
     let verdict = |path: &str, new: Option<&Entry>, old: Option<&Entry>| {
         decide(top, &exclusions, path, new, old.is_none())
     };
-    let (base_tree, base_denied) = without_denied(&objects, &record.tree, &exclusions)?;
+    let (base_tree, base_denied) = without_denied(&objects, &base_tree, &exclusions)?;
     let (theirs_tree, theirs_denied) = without_denied(&objects, &target_tree, &exclusions)?;
     // A denied path the cloud changed is a skip, not a change or a conflict.
     let denied: Vec<String> = base_denied
@@ -608,23 +698,30 @@ pub fn preflight_up_to(
             ours_label: "your folder",
             theirs_label: "cloud",
         },
-        &record.twin,
+        replay_onto.as_deref().unwrap_or(&record.twin),
         &verdict,
     )?;
     add_record_exclusions(&mut plan.outcome, record, &denied);
-    let pack = bytes[bundle.pack_offset..].to_vec();
+    let packs = segments
+        .iter()
+        .zip(&bundle.pack_offsets)
+        .map(|(segment, offset)| segment.bytes[*offset..].to_vec())
+        .collect();
     Ok(Preflight {
         report: plan.outcome.clone(),
         chain,
         up_to_turn,
+        from_turn,
         cloud_tip: tip.to_string(),
         target,
         local_tree: local,
         head,
+        base_commit,
+        replay_onto,
         plan,
         objects,
         bundle,
-        pack,
+        packs,
         record: record.clone(),
         _scratch: scratch,
         _quarantine: quarantine,
@@ -717,14 +814,14 @@ fn import_and_replay(
     exclusions: &Exclusions,
 ) -> ToolResult<Replayed> {
     let objects = source.objects();
-    source
-        .repo
-        .git(source.top())
-        .writes(std::slice::from_ref(&objects))
-        .stdin(&preflight.pack)
-        .run(&["index-pack", "--stdin"])?;
-    let name = OsStr::new("Elitea cloud executor");
-    let email = OsStr::new("cloud@elitea.invalid");
+    for pack in &preflight.packs {
+        source
+            .repo
+            .git(source.top())
+            .writes(std::slice::from_ref(&objects))
+            .stdin(pack)
+            .run(&["index-pack", "--stdin"])?;
+    }
     let head_excluded = head_excluded(source, &preflight.record, exclusions)?;
     let mut previous = preflight.record.twin.clone();
     if !head_excluded.is_empty() {
@@ -733,33 +830,40 @@ fn import_and_replay(
         if tree != preflight.record.tree
             && let Some(head) = &preflight.record.head
         {
-            previous = source
-                .repo
-                .git(source.top())
-                .env("GIT_AUTHOR_NAME", name)
-                .env("GIT_AUTHOR_EMAIL", email)
-                .env("GIT_COMMITTER_NAME", name)
-                .env("GIT_COMMITTER_EMAIL", email)
-                .writes(std::slice::from_ref(&objects))
-                .text(&[
-                    "commit-tree",
-                    "--no-gpg-sign",
-                    &tree,
-                    "-p",
-                    head,
-                    "-m",
-                    &format!(
-                        "Elitea handoff (local twin)\n\nElitea-Handoff-Twin: {}",
-                        preflight.record.handoff
-                    ),
-                ])?;
+            previous = commit_as_cloud(
+                source,
+                &tree,
+                head,
+                &format!(
+                    "Elitea handoff (local twin)\n\nElitea-Handoff-Twin: {}",
+                    preflight.record.handoff
+                ),
+            )?;
         }
+    }
+    // The remaining turns go onto `C'_k` while the repository still has
+    // it; otherwise every turn is replayed again from the twin.
+    let mut skip = 0;
+    if let Some(onto) = &preflight.replay_onto
+        && source
+            .repo
+            .git(source.top())
+            .text(&[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{onto}^{{commit}}"),
+            ])
+            .is_ok_and(|sha| sha == *onto)
+    {
+        previous.clone_from(onto);
+        skip = preflight.from_turn;
     }
     let mut replayed = Vec::new();
     // Every turn is replayed: those after `k` go on a branch of their own,
     // so taking back fewer turns never loses the others' commits.
     let mut tip = previous.clone();
-    for commit in &preflight.chain {
+    for commit in preflight.chain.iter().skip(skip) {
         let tree = source
             .repo
             .git(source.top())
@@ -770,30 +874,32 @@ fn import_and_replay(
         } else {
             commit.message.clone()
         };
-        previous = source
-            .repo
-            .git(source.top())
-            .env("GIT_AUTHOR_NAME", name)
-            .env("GIT_AUTHOR_EMAIL", email)
-            .env("GIT_COMMITTER_NAME", name)
-            .env("GIT_COMMITTER_EMAIL", email)
-            .writes(std::slice::from_ref(&objects))
-            .text(&[
-                "commit-tree",
-                "--no-gpg-sign",
-                &tree,
-                "-p",
-                &previous,
-                "-m",
-                &message,
-            ])?;
+        previous = commit_as_cloud(source, &tree, &previous, &message)?;
         replayed.push(previous.clone());
-        if replayed.len() == preflight.up_to_turn {
+        if skip + replayed.len() == preflight.up_to_turn {
             tip.clone_from(&previous);
         }
     }
-    let rest = replayed.split_off(preflight.up_to_turn);
     let short = short_thread(&preflight.record.conversation_uuid);
+    if preflight.from_turn > 0 {
+        // The remaining turns: only theirs are reported and branched.
+        let commits = replayed.split_off(preflight.from_turn - skip);
+        let branch = keep_branch(
+            source,
+            &format!(
+                "elitea/cloud/{short}-turns-{}-{}",
+                preflight.from_turn + 1,
+                preflight.up_to_turn
+            ),
+            &tip,
+        )?;
+        return Ok(Replayed {
+            branch,
+            commits,
+            rest_branch: None,
+        });
+    }
+    let rest = replayed.split_off(preflight.up_to_turn);
     let branch = keep_branch(source, &format!("elitea/cloud/{short}"), &tip)?;
     let rest_branch = match rest.last() {
         Some(last) => Some(keep_branch(
@@ -808,6 +914,29 @@ fn import_and_replay(
         commits: replayed,
         rest_branch,
     })
+}
+
+/// A commit of `tree` on `parent` in the repository, by the cloud executor.
+fn commit_as_cloud(source: &Source, tree: &str, parent: &str, message: &str) -> ToolResult<String> {
+    let name = OsStr::new("Elitea cloud executor");
+    let email = OsStr::new("cloud@elitea.invalid");
+    source
+        .repo
+        .git(source.top())
+        .env("GIT_AUTHOR_NAME", name)
+        .env("GIT_AUTHOR_EMAIL", email)
+        .env("GIT_COMMITTER_NAME", name)
+        .env("GIT_COMMITTER_EMAIL", email)
+        .writes(&[source.objects()])
+        .text(&[
+            "commit-tree",
+            "--no-gpg-sign",
+            tree,
+            "-p",
+            parent,
+            "-m",
+            message,
+        ])
 }
 
 /// What [`import_and_replay`] made.
@@ -1053,7 +1182,7 @@ fn apply_worktree(
     // worktree builds like the folder; a cloud file never overwrites one.
     applied.copied = copy_local_excluded(source, &workspace, exclusions)?;
     let cloud = flatten_commit(&preflight.bundle.db, &preflight.target)?;
-    let sent = flatten_commit(&preflight.bundle.db, &preflight.record.handoff)?;
+    let sent = flatten_commit(&preflight.bundle.db, &preflight.base_commit)?;
     write_files(
         &workspace,
         &preflight.bundle.db,
