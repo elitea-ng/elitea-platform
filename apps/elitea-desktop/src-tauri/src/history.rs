@@ -79,7 +79,7 @@ use crate::error::HostError;
 
 pub const FILE_NAME: &str = "threads.sqlite";
 /// `PRAGMA user_version` of the schema this build writes.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 /// A string inside one event's payload is cut to this many bytes.
 pub const MAX_EVENT_STRING: usize = 16 * 1024;
 /// One turn's stored events, in payload bytes.
@@ -589,6 +589,49 @@ impl HistoryStore {
             aside.display()
         );
         Ok(aside)
+    }
+
+    /// Give the file's free space back to the OS (the Doctor's
+    /// `history.vacuum`): deleted threads free pages the file would otherwise
+    /// keep. Stop the writer and the reader, `VACUUM` the file, and start
+    /// them again. The bytes the file held before.
+    ///
+    /// # Errors
+    ///
+    /// The file could not be vacuumed (the store is then reopened on it), or
+    /// the reopened history could not start (it stays closed until restart).
+    pub fn reclaim(&self) -> Result<u64, HostError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.close(&mut conn);
+        let before = crate::sessions::reclaim_database(&self.dir, FILE_NAME).map_err(|e| {
+            log::warn!("the thread history could not be reclaimed: {e}");
+            e
+        });
+        let started = start(&self.path, &self.queued);
+        let (opened, writing) = match (&before, started) {
+            (_, Ok(started)) => started,
+            (Err(_), Err(_)) => return before,
+            (Ok(_), Err(error)) => {
+                return Err(HostError::Storage(format!(
+                    "a new history could not start after reclaim ({error}); restart Elitea"
+                )));
+            }
+        };
+        *conn = Some(opened);
+        *self
+            .sender
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(writing.sender);
+        *self
+            .writer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(writing.thread);
+        let before = before?;
+        log::warn!("diagnostics: reclaimed the thread history (it held {before} bytes)");
+        Ok(before)
     }
 
     /// [`Self::thread`] on a blocking thread, for an async caller: the
@@ -1164,6 +1207,9 @@ struct Writer {
     since: Option<Instant>,
     /// Turns a write failed for: their later ops are dropped.
     failed: HashSet<String>,
+    /// Committed batches: every 64th, the file gives its free pages back to
+    /// the OS (incremental vacuum, schema 4).
+    commits: u64,
 }
 
 impl Writer {
@@ -1175,6 +1221,7 @@ impl Writer {
             pending_bytes: 0,
             since: None,
             failed: HashSet::new(),
+            commits: 0,
         }
     }
 
@@ -1253,6 +1300,14 @@ impl Writer {
         }
         if let Err(error) = tx.commit() {
             log::warn!("the thread history could not commit: {error}");
+        }
+        self.commits += 1;
+        // The pages a delete or a thread trim freed would otherwise stay in
+        // the file's free space, and the file would only grow.
+        if self.commits % 64 == 0 {
+            if let Err(error) = self.conn.pragma_update(None, "incremental_vacuum", 0) {
+                log::warn!("the thread history could not vacuum: {error}");
+            }
         }
     }
 }
@@ -1509,26 +1564,44 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(|e| storage("could not read the thread history", &e))?;
     match version {
-        0 => conn
-            .execute_batch(&format!(
+        0 => {
+            // Set before the schema: a database takes the vacuum mode it is
+            // created with, and freed pages then return to the OS on their
+            // own. The mode only sticks while the database is empty (no
+            // tables), so the VACUUM that fixes the empty header must run
+            // before the schema.
+            conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")
+                .map_err(|e| storage("could not create the thread history", &e))?;
+            conn.execute_batch("VACUUM")
+                .map_err(|e| storage("could not create the thread history", &e))?;
+            conn.execute_batch(&format!(
                 "BEGIN; {SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
-            .map_err(|e| storage("could not create the thread history", &e)),
+            .map_err(|e| storage("could not create the thread history", &e))
+        }
         // 2 (ADR-0034): turns imported from the cloud executor. 3 (#1229):
-        // the images a turn carried.
-        1 => conn
-            .execute_batch(&format!(
-                "BEGIN; ALTER TABLE turns ADD COLUMN turn_origin TEXT NOT NULL DEFAULT 'local'; \
-                 ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]'; \
-                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
-            ))
-            .map_err(|e| storage("could not upgrade the thread history", &e)),
-        2 => conn
-            .execute_batch(&format!(
-                "BEGIN; ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]'; \
-                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
-            ))
-            .map_err(|e| storage("could not upgrade the thread history", &e)),
+        // the images a turn carried. 4: incremental vacuum, so a deleted
+        // thread gives its pages back to the OS instead of the file only
+        // growing. The VACUUM is what switches the mode on (it cannot run
+        // inside a transaction).
+        1 | 2 | 3 => {
+            let alter = match version {
+                1 => "ALTER TABLE turns ADD COLUMN turn_origin TEXT NOT NULL DEFAULT 'local';\
+                       ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]';",
+                2 => "ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]';",
+                _ => "",
+            };
+            conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")
+                .map_err(|e| storage("could not upgrade the thread history", &e))?;
+            if !alter.is_empty() {
+                conn.execute_batch(&format!("BEGIN; {alter}; COMMIT;"))
+                    .map_err(|e| storage("could not upgrade the thread history", &e))?;
+            }
+            conn.execute_batch("VACUUM")
+                .map_err(|e| storage("could not upgrade the thread history", &e))?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+                .map_err(|e| storage("could not upgrade the thread history", &e))
+        }
         SCHEMA_VERSION => Ok(()),
         newer => Err(HostError::Storage(format!(
             "the thread history was written by a newer version of the app (schema {newer})"
@@ -1894,6 +1967,39 @@ mod tests {
         let turns = reopened.thread(&owner(1), "w1", "42").unwrap();
         assert_eq!(turns.len(), 2);
         assert!(turns[0].images.is_empty());
+    }
+
+    #[test]
+    fn reclaim_shrinks_the_file_and_keeps_what_is_left() {
+        let (_root, store) = store();
+        let me = owner(1);
+        play(&store, new_turn(me.clone(), "t1", "42"));
+        play(&store, new_turn(me.clone(), "t2", "42"));
+        assert_eq!(store.thread(&me, "w1", "42").unwrap().len(), 2);
+        store
+            .delete_thread(&me, "w1", "42")
+            .unwrap();
+        // The Doctor's `history.vacuum`: stop the writer, VACUUM, start it
+        // again. The file held a whole deleted thread.
+        let before = store.reclaim().unwrap();
+        assert!(before > 0, "the file held bytes");
+        assert!(store.thread(&me, "w1", "42").unwrap().is_empty());
+        play(&store, new_turn(me.clone(), "t3", "42"));
+        assert_eq!(store.thread(&me, "w1", "42").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_new_file_is_vacuumed_incrementally() {
+        let (root, _store) = store();
+        let conn = rusqlite::Connection::open(root.path().join("ai.elitea.desktop").join(FILE_NAME)).unwrap();
+        let mode: i64 = conn
+            .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, 2, "2 = INCREMENTAL");
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
     }
 
     #[test]

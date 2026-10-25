@@ -918,6 +918,53 @@ async fn move_aside_keeps_the_old_file_and_starts_fresh() {
 }
 
 #[tokio::test]
+async fn reclaim_keeps_the_events_and_reopens() {
+    let (_dir, store) = open();
+    let sessions = store.store();
+    let me = identity(1, "https://a.example");
+    let key = me.key();
+    sessions.open_session(&me, "fp").await.unwrap();
+    sessions
+        .seed(
+            &key,
+            vec![
+                new("i", text_event("i", "user", "user", "hi")),
+                new("i", text_event("i", "agent", "model", "hello")),
+            ],
+            Some("0".into()),
+            &[],
+        )
+        .await
+        .unwrap();
+    let held = sessions.rows(&key).await.unwrap();
+    assert_eq!(held.len(), 2, "the events were stored");
+    // The Doctor's `sessions.vacuum`: close, VACUUM, reopen.
+    let before = sessions.reclaim().unwrap();
+    assert!(before > 0, "the file held bytes");
+    let back = sessions.rows(&key).await.unwrap();
+    assert_eq!(back.len(), 2, "the events survived the shrink");
+}
+
+#[tokio::test]
+async fn new_files_are_vacuumed_incrementally() {
+    let (dir, store) = open();
+    store
+        .store()
+        .open_session(&identity(1, "https://a.example"), "fp")
+        .await
+        .unwrap();
+    let conn = rusqlite::Connection::open(dir.path().join(FILE_NAME)).unwrap();
+    let mode: i64 = conn
+        .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(mode, 2, "2 = INCREMENTAL");
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION);
+}
+
+#[tokio::test]
 async fn the_adk_service_creates_lists_and_deletes() {
     let (_dir, state) = open();
     let service = state.sessions();

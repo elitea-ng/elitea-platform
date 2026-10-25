@@ -354,6 +354,10 @@ struct Database {
     move_aside: &'static str,
     /// Why moving it aside loses nothing.
     on_server: &'static str,
+    /// `true` when the app keeps deleting rows from it (trimmed sessions,
+    /// deleted threads): its free space then does not return to the OS on
+    /// its own, and the file only grows.
+    reclaims: bool,
 }
 
 const MOVE_ASIDE: &str = "Move it aside";
@@ -526,6 +530,7 @@ impl LocalDoctor {
             tighten: "history.tighten",
             move_aside: "history.move_aside",
             on_server: "the threads on the server are not affected",
+            reclaims: true,
         })
     }
 
@@ -545,6 +550,7 @@ impl LocalDoctor {
             tighten: "sessions.tighten",
             move_aside: "sessions.move_aside",
             on_server: "the conversations on the server are not affected and rebuild it",
+            reclaims: true,
         })
     }
 
@@ -615,12 +621,42 @@ impl LocalDoctor {
                     db.noun
                 ),
             ),
-            Ok(_) => Check::new(
-                id,
-                title,
-                Status::Ok,
-                "Opens and passes its integrity check.".into(),
-            ),
+            Ok(_) => {
+                // The store is a cache the server rebuilds. Trimmed and
+                // deleted rows free space the file cannot give back on its
+                // own (files before schema 2), so a large file offers the
+                // shrink.
+                let bytes = fs::symlink_metadata(path)
+                    .map(|meta| meta.len())
+                    .unwrap_or_default();
+                if db.reclaims && bytes >= 100 * 1024 * 1024 {
+                    return Check::new(
+                        id,
+                        title,
+                        Status::Ok,
+                        format!(
+                            "Opens and passes its integrity check. The file holds {bytes} bytes; the server rebuilds the {}, and the shrink gives that space back to the disk.",
+                            db.noun
+                        ),
+                    )
+                    .fix(
+                        if db.id == "sessions" {
+                            "sessions.vacuum"
+                        } else {
+                            "history.vacuum"
+                        },
+                        "Shrink the file",
+                    );
+                }
+                Check::new(
+                    id,
+                    title,
+                    Status::Ok,
+                    format!(
+                        "Opens and passes its integrity check. The file holds {bytes} bytes."
+                    ),
+                )
+            }
             Err(error) => Check::new(
                 id,
                 title,
@@ -858,6 +894,8 @@ impl LocalDoctor {
                 Ok("The session memory is now readable by you only.".into())
             }
             "sessions.move_aside" => self.move_sessions_aside(),
+            "sessions.vacuum" => self.vacuum_sessions(),
+            "history.vacuum" => self.vacuum_history(),
             "worktrees.prune" => {
                 crate::worktrees::prune_stale(&self.workspaces, &self.hooks.git_deny(), &|id| {
                     self.hooks.remove_workspace(id)
@@ -940,6 +978,25 @@ impl LocalDoctor {
         ))
     }
 
+    /// `sessions.vacuum`: the open store closes, `VACUUM`s its file and
+    /// reopens it; without one (refused at launch) the file is vacuumed the
+    /// same way and the next launch opens the slimmer store.
+    fn vacuum_sessions(&self) -> Result<String, HostError> {
+        let before = if let Some(store) = &self.sessions {
+            store.store().reclaim()?
+        } else {
+            let before = sessions::reclaim_database(&self.data_dir, sessions::FILE_NAME)?;
+            if before == 0 {
+                return Ok("There was nothing to shrink.".into());
+            }
+            log::warn!("diagnostics: reclaimed the session store ({before} bytes)");
+            before
+        };
+        Ok(format!(
+            "The session memory held {before} bytes; the file now holds only what it uses."
+        ))
+    }
+
     /// `history.move_aside`: the open store closes, moves its three files
     /// together and starts afresh; without one (refused at launch) the
     /// files are moved the same way and the next launch starts afresh.
@@ -963,6 +1020,24 @@ impl LocalDoctor {
         Ok(format!(
             "Moved to {}. Restart Elitea to start a new history.",
             aside.display()
+        ))
+    }
+
+    /// `history.vacuum`: as [`Self::vacuum_sessions`]; the threads on the
+    /// server are not affected.
+    fn vacuum_history(&self) -> Result<String, HostError> {
+        let before = if let Some(store) = &self.history {
+            store.reclaim()?
+        } else {
+            let before = sessions::reclaim_database(&self.data_dir, history::FILE_NAME)?;
+            if before == 0 {
+                return Ok("There was nothing to shrink.".into());
+            }
+            log::warn!("diagnostics: reclaimed the thread history ({before} bytes)");
+            before
+        };
+        Ok(format!(
+            "The history held {before} bytes; the file now holds only what it uses."
         ))
     }
 }

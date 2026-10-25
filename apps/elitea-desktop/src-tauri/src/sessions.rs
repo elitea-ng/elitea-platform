@@ -34,6 +34,10 @@
 //! * A cancelled turn leaves nothing ([`SessionStore::finish_turn`]); a turn
 //!   the server refused marks the session for re-seeding, and a turn that
 //!   never finished (a crash) is dropped when the session is next opened.
+//! * The file gives its freed space back to the OS: it is kept under
+//!   incremental vacuum (schema 2), and the Doctor's `sessions.vacuum`
+//!   ([`SessionStore::reclaim`]) folds it down when the file has grown
+//!   ahead of its sessions.
 //!
 //! One thread owns the SQLite connection ([`SessionStore`] is an actor):
 //! the turn path awaits a reply and never blocks a runtime worker on SQLite,
@@ -93,7 +97,7 @@ use crate::history::{inspect_private, move_files_aside};
 
 pub const FILE_NAME: &str = "sessions.sqlite";
 /// `PRAGMA user_version` of the schema this build writes.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 /// What one session may hold in all (event JSON bytes).
 pub const MAX_SESSION_BYTES: i64 = 32 * 1024 * 1024;
 /// A tool response is stored cut at this many bytes: the cap the server
@@ -353,11 +357,33 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(|e| storage("could not read the session store", &e))?;
     match version {
-        0 => conn
-            .execute_batch(&format!(
+        0 => {
+            // Set before the schema: a database takes the vacuum mode it is
+            // created with, and freed pages then return to the OS on their
+            // own. The mode only sticks while the database is empty (no
+            // tables), so the VACUUM that fixes the empty header must run
+            // before the schema.
+            conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")
+                .map_err(|e| storage("could not create the session store", &e))?;
+            conn.execute_batch("VACUUM")
+                .map_err(|e| storage("could not create the session store", &e))?;
+            conn.execute_batch(&format!(
                 "BEGIN; {SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
-            .map_err(|e| storage("could not create the session store", &e)),
+            .map_err(|e| storage("could not create the session store", &e))
+        }
+        // 1: created before incremental vacuum. Freed pages then stayed in
+        // the file's free space, so the store only grew. The VACUUM is what
+        // switches the mode on and takes it back at once (it cannot run
+        // inside a transaction).
+        1 => {
+            conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")
+                .map_err(|e| storage("could not upgrade the session store", &e))?;
+            conn.execute_batch("VACUUM")
+                .map_err(|e| storage("could not upgrade the session store", &e))?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+                .map_err(|e| storage("could not upgrade the session store", &e))
+        }
         SCHEMA_VERSION => Ok(()),
         newer => Err(HostError::Storage(format!(
             "the session store was written by a newer version of the app (schema {newer})"
@@ -391,8 +417,18 @@ fn start(path: &Path) -> Result<Writing, HostError> {
 }
 
 fn run_jobs(mut conn: Connection, receiver: &Receiver<Job>) {
+    let mut jobs = 0;
     while let Ok(job) = receiver.recv() {
         job(&mut conn);
+        jobs += 1;
+        // Incremental vacuum (schema 2): the pages a trim freed would
+        // otherwise stay in the file's free space, and the store would only
+        // grow.
+        if jobs % 64 == 0 {
+            if let Err(error) = conn.pragma_update(None, "incremental_vacuum", 0) {
+                log::warn!("the session store could not vacuum: {error}");
+            }
+        }
     }
     // The queue closed: fold the WAL into the database before the file may
     // be moved or read by another process (the Doctor).
@@ -403,6 +439,31 @@ fn run_jobs(mut conn: Connection, receiver: &Receiver<Job>) {
 
 fn closed() -> HostError {
     HostError::Storage("the session store is closed; restart Elitea".into())
+}
+
+/// `VACUUM` the database in `dir` while no connection of this process holds
+/// it: the file's free space returns to the OS, and a file older than
+/// schema 2 takes incremental vacuum with it. The bytes it held before.
+/// A missing database holds nothing.
+///
+/// # Errors
+///
+/// The file refused the vacuum (it is not a database, or the disk could
+/// not be written).
+pub fn reclaim_database(dir: &Path, file_name: &str) -> Result<u64, HostError> {
+    let path = dir.join(file_name);
+    let before = fs::symlink_metadata(&path)
+        .map(|meta| meta.len())
+        .unwrap_or_default();
+    if before == 0 {
+        return Ok(before);
+    }
+    let conn =
+        Connection::open_with_flags(&path, OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW)
+            .map_err(|e| storage("could not open the database", &e))?;
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")
+        .map_err(|e| storage("could not reclaim the database", &e))?;
+    Ok(before)
 }
 
 impl SessionStore {
@@ -531,6 +592,45 @@ impl SessionStore {
             aside.display()
         );
         Ok(aside)
+    }
+
+    /// Give the file's free space back to the OS (the Doctor's
+    /// `sessions.vacuum`): the store is a cache the server conversation
+    /// rebuilds, and trims free pages it cannot reclaim on its own, so the
+    /// file would only grow. Close it, `VACUUM` it and reopen it. The bytes
+    /// the file held before (how much could be given back).
+    ///
+    /// # Errors
+    ///
+    /// The file could not be vacuumed (the store is then reopened on it), or
+    /// the reopened store could not start (it stays closed until restart).
+    pub fn reclaim(&self) -> Result<u64, HostError> {
+        self.close();
+        let before = reclaim_database(&self.dir, FILE_NAME).map_err(|e| {
+            log::warn!("the session store could not be reclaimed: {e}");
+            e
+        });
+        let started = start(&self.path);
+        let writing = match (&before, started) {
+            (_, Ok(writing)) => writing,
+            (Err(_), Err(_)) => return before,
+            (Ok(_), Err(error)) => {
+                return Err(HostError::Storage(format!(
+                    "a new session store could not start after reclaim ({error}); restart Elitea"
+                )));
+            }
+        };
+        *self
+            .sender
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(writing.sender);
+        *self
+            .thread
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(writing.thread);
+        let before = before?;
+        log::warn!("diagnostics: reclaimed the session store (it held {before} bytes)");
+        Ok(before)
     }
 
     /// Open the session of `identity` for a turn: created when missing,
