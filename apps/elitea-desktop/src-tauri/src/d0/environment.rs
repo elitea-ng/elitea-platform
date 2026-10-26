@@ -290,6 +290,13 @@ fn tool_guidance(tools: &[String]) -> Vec<String> {
                 .to_owned(),
         );
     }
+    if has("git_push") {
+        clauses.push(
+            "push with git_push (git push in run_command cannot: the sandbox keeps .git \
+             read-only and hides credentials)"
+                .to_owned(),
+        );
+    }
     if writes || has("run_command") {
         clauses.push("denied paths and .git are not writable".to_owned());
         clauses.push("never use sudo; ask the person when a destructive step is needed".to_owned());
@@ -640,6 +647,19 @@ mod tests {
         }
         assert!(!text.contains("- Mode: plan"), "{text}");
         assert_eq!(text.matches("## Environment").count(), 1, "{text}");
+    }
+
+    /// The owner's report: in bypass mode the agent handed `git push` to
+    /// the person ("the sandbox still blocks .git"). Offered `git_push`, it
+    /// is told to push with it; without it, nothing is said about pushing.
+    #[test]
+    fn git_push_is_named_when_it_is_offered() {
+        let mut facts = facts();
+        facts.tools = tools(&["read_file", "write_file", "run_command", "git_push"]);
+        let text = preamble(&facts);
+        assert!(text.contains("push with git_push"), "{text}");
+        facts.tools = tools(&["read_file", "write_file", "run_command"]);
+        assert!(!preamble(&facts).contains("git_push"));
     }
 
     #[test]

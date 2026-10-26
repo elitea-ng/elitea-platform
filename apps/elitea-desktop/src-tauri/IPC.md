@@ -464,8 +464,11 @@ runs without the question. The rules engine answers it `allow` with
 These still apply: the policy ceiling, every deny (a `forbidden` rule
 included), a `PreToolUse` hook's ask, a remote toolkit's confirmation, an
 MCP server's sign-in and the step limit's "Continue?". `plan_mode` and
-`bypass_approvals` together are refused with `invalid_request`. A
-sub-agent of the turn in a task worktree runs in bypass mode too. The
+`bypass_approvals` together are refused with `invalid_request`. The
+OS sandbox does not change: commands still cannot write `.git` or read
+credentials, so a push goes through the `git_push` tool (asked outside
+bypass mode; the policy's network switch and `command_deny` still
+apply). A sub-agent of the turn in a task worktree runs in bypass mode too. The
 session leaves bypass mode when the turn (or the sub-agent) ends.
 `rules_explain` explains the rules without the mode. The UI
 keeps the choice per folder and asks the person to confirm it once.

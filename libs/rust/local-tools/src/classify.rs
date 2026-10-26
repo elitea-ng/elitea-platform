@@ -566,22 +566,50 @@ const GIT_VALUED: &[&str] = &[
     "--config-env",
 ];
 
-fn git_risk(args: &[String]) -> Option<String> {
+/// Whether `command` runs `git push` in any segment (`git -C sub push`,
+/// `env X=1 git push`, `sh -c 'git push'` included): the session points
+/// such a command at `git_push`, since the sandbox keeps `.git` read-only
+/// and hides the credentials a push needs.
+#[must_use]
+pub fn names_git_push(command: &str) -> bool {
+    crate::command::analyse(command)
+        .segments()
+        .iter()
+        .any(|argv| {
+            argv.split_first().is_some_and(|(program, args)| {
+                basename(program) == "git"
+                    && git_subcommand_at(args).is_some_and(|index| args[index] == "push")
+            })
+        })
+}
+
+/// Where git's subcommand is in `args` (after the global options and their
+/// values).
+fn git_subcommand_at(args: &[String]) -> Option<usize> {
     let mut index = 0;
     while let Some(word) = args.get(index) {
         if !word.starts_with('-') {
-            break;
+            return Some(index);
         }
         if GIT_VALUED.contains(&word.as_str()) {
-            let value = args.get(index + 1).map_or("", String::as_str);
-            if word == "-c" && (value.starts_with("alias.") || value.contains('!')) {
-                return ask("`git -c` defines a command");
-            }
             index += 1;
         }
         index += 1;
     }
-    let sub = args.get(index)?.as_str();
+    None
+}
+
+fn git_risk(args: &[String]) -> Option<String> {
+    let index = git_subcommand_at(args);
+    let options = &args[..index.unwrap_or(args.len())];
+    if options
+        .windows(2)
+        .any(|pair| pair[0] == "-c" && (pair[1].starts_with("alias.") || pair[1].contains('!')))
+    {
+        return ask("`git -c` defines a command");
+    }
+    let index = index?;
+    let sub = args[index].as_str();
     let rest = &args[index + 1..];
     let reason = match sub {
         "push" => "pushes to a remote",
@@ -769,5 +797,28 @@ mod tests {
         assert!(risk("cd target && echo hi > x").is_routine());
         assert!(!risk("ls | tee /tmp/x").is_routine());
         assert!(risk("diff <(ls a) <(ls b) > d.txt").is_routine());
+    }
+
+    #[test]
+    fn git_push_is_found_in_every_spelling() {
+        for command in [
+            "git push",
+            "git push origin main",
+            "git -C sub push",
+            "/usr/bin/git -c x=y push -f",
+            "env FOO=1 git push",
+            "cargo test && git push origin HEAD",
+            "sh -c 'git push origin main'",
+        ] {
+            assert!(super::names_git_push(command), "{command}");
+        }
+        for command in [
+            "git status",
+            "git commit -m push",
+            "echo git push",
+            "git log push",
+        ] {
+            assert!(!super::names_git_push(command), "{command}");
+        }
     }
 }
