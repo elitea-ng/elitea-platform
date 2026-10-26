@@ -79,9 +79,9 @@ pub mod toolkits;
 pub mod workspace_archive;
 pub mod workspace_tools;
 
-/// The patched-adk guard. The two builders below exist only in the patched
+/// The patched-adk guard. The three builders below exist only in the patched
 /// adk 2.2.0 crates in `libs/rust/vendor` (the registry releases have
-/// neither), and these constants are compiled into every build of this crate,
+/// none of them), and these constants are compiled into every build of this crate,
 /// not only its tests. So a workspace or host that links the runtime without
 /// the `[patch.crates-io]` lines fails to COMPILE here instead of running the
 /// agent loop unpatched (`libs/rust/vendor/README.md`).
@@ -89,3 +89,7 @@ const _: fn(adk_agent::LlmAgentBuilder, bool) -> adk_agent::LlmAgentBuilder =
     adk_agent::LlmAgentBuilder::retain_prepared_history;
 const _: fn(adk_runner::Runner, bool) -> adk_runner::Runner =
     adk_runner::Runner::with_session_event_refresh;
+const _: fn(
+    adk_agent::LlmAgentBuilder,
+    std::sync::Arc<dyn adk_agent::SteeringSource>,
+) -> adk_agent::LlmAgentBuilder = adk_agent::LlmAgentBuilder::steering_source;

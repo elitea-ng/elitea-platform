@@ -293,3 +293,29 @@ class RemoveIndexResponseV1(_message.Message):
     disposition: RemoveIndexDispositionV1
     rejection: _errors_pb2.RuntimeErrorV1
     def __init__(self, disposition: _Optional[_Union[RemoveIndexDispositionV1, str]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+
+class ClaimSteeringMessagesRequestV1(_message.Message):
+    __slots__ = ("identity", "fence")
+    IDENTITY_FIELD_NUMBER: _ClassVar[int]
+    FENCE_FIELD_NUMBER: _ClassVar[int]
+    identity: _common_pb2.ExecutionIdentityV1
+    fence: _common_pb2.ExecutionFenceV1
+    def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ...) -> None: ...
+
+class SteeringMessageV1(_message.Message):
+    __slots__ = ("steering_id", "content", "queued_at_unix_millis")
+    STEERING_ID_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_FIELD_NUMBER: _ClassVar[int]
+    QUEUED_AT_UNIX_MILLIS_FIELD_NUMBER: _ClassVar[int]
+    steering_id: str
+    content: str
+    queued_at_unix_millis: int
+    def __init__(self, steering_id: _Optional[str] = ..., content: _Optional[str] = ..., queued_at_unix_millis: _Optional[int] = ...) -> None: ...
+
+class ClaimSteeringMessagesResponseV1(_message.Message):
+    __slots__ = ("messages", "rejection")
+    MESSAGES_FIELD_NUMBER: _ClassVar[int]
+    REJECTION_FIELD_NUMBER: _ClassVar[int]
+    messages: _containers.RepeatedCompositeFieldContainer[SteeringMessageV1]
+    rejection: _errors_pb2.RuntimeErrorV1
+    def __init__(self, messages: _Optional[_Iterable[_Union[SteeringMessageV1, _Mapping]]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...

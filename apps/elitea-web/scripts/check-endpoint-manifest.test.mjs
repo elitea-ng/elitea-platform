@@ -780,7 +780,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 347 -> 349 (client contract 1.26, issue 1187): getWorkspaceHandoffChanges
 // and getWorkspaceHandoffDiff, the Files changed view of a cloud thread in
 // the web chat (pages/chat). Generated; the manifest gains both.
-const GENERATED_OPERATION_COUNT = 349;
+// 349 -> 353 (client contract 1.27): steerChatExecution,
+// listChatExecutionSteering, updateChatExecutionSteering and
+// removeChatExecutionSteering, the steering queue of a running chat turn.
+const GENERATED_OPERATION_COUNT = 353;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

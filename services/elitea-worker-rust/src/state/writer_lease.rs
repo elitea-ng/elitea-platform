@@ -15,6 +15,14 @@ pub(crate) struct StateWriterLeaseLost;
 /// failure, monitor shutdown, or insufficient remaining lease lifetime.
 pub(crate) trait StateWriterLease: Send + Sync {
     fn ensure_current(&self) -> Result<(), StateWriterLeaseLost>;
+
+    /// The steering queue (client contract 1.26) fenced by the same claim:
+    /// the live lease that permits state work also permits claiming the
+    /// user messages queued against the turn. `None` (the default) binds no
+    /// steering, as for a test lease.
+    fn steering_source(&self) -> Option<std::sync::Arc<dyn adk_rust::agent::SteeringSource>> {
+        None
+    }
 }
 
 #[cfg(test)]

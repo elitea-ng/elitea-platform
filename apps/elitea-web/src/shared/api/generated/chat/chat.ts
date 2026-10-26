@@ -127,6 +127,10 @@ import type {
   SendChatMessageParams,
   StaticPipelineContinuationBody,
   StaticPipelineContinuationReceipt,
+  SteeringError,
+  SteeringMessage,
+  SteeringMessageList,
+  SteeringMessageRequest,
   StreamExecutionEventsParams,
   SupportAssistantConfig,
   SupportConversation,
@@ -14958,6 +14962,1339 @@ export function useDecideExecutionInterrupt<
     responseMessageId,
     interruptKey,
     executionInterruptDecisionRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type steerChatExecutionResponse202 = {
+  data: SteeringMessage;
+  status: 202;
+};
+
+export type steerChatExecutionResponse400 = {
+  data: SteeringError;
+  status: 400;
+};
+
+export type steerChatExecutionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type steerChatExecutionResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type steerChatExecutionResponse409 = {
+  data: SteeringError;
+  status: 409;
+};
+
+export type steerChatExecutionResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type steerChatExecutionResponse429 = {
+  data: SteeringError;
+  status: 429;
+};
+
+export type steerChatExecutionResponse502 = {
+  data: SteeringError;
+  status: 502;
+};
+
+export type steerChatExecutionResponse504 = {
+  data: ErrorResponse;
+  status: 504;
+};
+
+export type steerChatExecutionResponseSuccess =
+  steerChatExecutionResponse202 & {
+    headers: Headers;
+  };
+export type steerChatExecutionResponseError = (
+  | steerChatExecutionResponse400
+  | steerChatExecutionResponse401
+  | steerChatExecutionResponse403
+  | steerChatExecutionResponse409
+  | steerChatExecutionResponse426
+  | steerChatExecutionResponse429
+  | steerChatExecutionResponse502
+  | steerChatExecutionResponse504
+) & {
+  headers: Headers;
+};
+
+export type steerChatExecutionResponse =
+  steerChatExecutionResponseSuccess | steerChatExecutionResponseError;
+
+export const getSteerChatExecutionUrl = (
+  projectId: string,
+  responseMessageId: string,
+) => {
+  return `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/steering`;
+};
+
+/**
+ * Client contract 1.26. Queues a user message against the turn that
+ * writes this answer. The turn does not stop. The worker injects the
+ * message at its next safe point: after the current tool calls finish
+ * and before the next model request. The model reads it as a new user
+ * message in the same turn. It is not a new turn.
+ *
+ * STATES. A message is `pending` until the worker injects it, then
+ * `injected`. An injected message is a normal user message of the
+ * conversation (`message_id`), placed directly after the turn's
+ * question, so a reload and every other client see it. A pending
+ * message that the author removes is `removed`. A pending message that
+ * no safe point reached before the turn ended is `turn_ended`: the
+ * client sends it as the next turn's message (and then removes it), so
+ * nothing is lost.
+ *
+ * EVENTS. The execution event stream
+ * (`/api/v2/executions/{project_id}/{execution_id}/events`) carries
+ * `steer.queued` (a new or edited pending message), `steer.injected`
+ * (with `message_id`) and `steer.dropped` (`reason: removed`). The
+ * `data` of each is one SteeringMessage.
+ *
+ * WHO. The permission is the send's (`models.chat.messages.create`),
+ * and the caller must be a user participant of the conversation. A
+ * pipeline turn has no safe point and answers 409
+ * `steering_not_supported`; a turn that is not running answers 409
+ * `turn_not_running` (send a new message instead).
+ *
+ * BOUNDS. `content` is at most 16 KiB of UTF-8. At most 10 messages
+ * wait per turn (409 `steering_queue_full`). At most 30 queued
+ * messages a minute per caller on each server replica (429
+ * `rate_limited` with Retry-After). Every queue, edit and removal is
+ * audited with a SHA-256 of the content, never the content.
+ *
+ * IDEMPOTENCY. `Idempotency-Key` is REQUIRED (400
+ * `idempotency_key_required`): a retry with the same key and content
+ * answers the first call's message again. The same key with a different
+ * content is 409 `idempotency_conflict`.
+ * @summary Queue a steering message for a running answer
+ */
+export const steerChatExecution = async (
+  projectId: string,
+  responseMessageId: string,
+  steeringMessageRequest: SteeringMessageRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<steerChatExecutionResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<steerChatExecutionResponse>(
+    getSteerChatExecutionUrl(projectId, responseMessageId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(steeringMessageRequest),
+    },
+  );
+};
+
+export const getSteerChatExecutionQueryKey = (
+  projectId: string,
+  responseMessageId: string,
+  steeringMessageRequest?: SteeringMessageRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/steering`,
+    steeringMessageRequest,
+  ] as const;
+};
+
+export const getSteerChatExecutionQueryOptions = <
+  TData = Awaited<ReturnType<typeof steerChatExecution>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  steeringMessageRequest: SteeringMessageRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof steerChatExecution>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSteerChatExecutionQueryKey(
+      projectId,
+      responseMessageId,
+      steeringMessageRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof steerChatExecution>>
+  > = ({ signal }) =>
+    steerChatExecution(projectId, responseMessageId, steeringMessageRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      responseMessageId !== null &&
+      responseMessageId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof steerChatExecution>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SteerChatExecutionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof steerChatExecution>>
+>;
+export type SteerChatExecutionQueryError =
+  | SteeringError
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | ErrorResponse;
+
+export function useSteerChatExecution<
+  TData = Awaited<ReturnType<typeof steerChatExecution>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  steeringMessageRequest: SteeringMessageRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof steerChatExecution>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof steerChatExecution>>,
+          TError,
+          Awaited<ReturnType<typeof steerChatExecution>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSteerChatExecution<
+  TData = Awaited<ReturnType<typeof steerChatExecution>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  steeringMessageRequest: SteeringMessageRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof steerChatExecution>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof steerChatExecution>>,
+          TError,
+          Awaited<ReturnType<typeof steerChatExecution>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSteerChatExecution<
+  TData = Awaited<ReturnType<typeof steerChatExecution>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  steeringMessageRequest: SteeringMessageRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof steerChatExecution>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Queue a steering message for a running answer
+ */
+
+export function useSteerChatExecution<
+  TData = Awaited<ReturnType<typeof steerChatExecution>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  steeringMessageRequest: SteeringMessageRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof steerChatExecution>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSteerChatExecutionQueryOptions(
+    projectId,
+    responseMessageId,
+    steeringMessageRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listChatExecutionSteeringResponse200 = {
+  data: SteeringMessageList;
+  status: 200;
+};
+
+export type listChatExecutionSteeringResponse400 = {
+  data: SteeringError;
+  status: 400;
+};
+
+export type listChatExecutionSteeringResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listChatExecutionSteeringResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listChatExecutionSteeringResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type listChatExecutionSteeringResponse502 = {
+  data: SteeringError;
+  status: 502;
+};
+
+export type listChatExecutionSteeringResponse504 = {
+  data: ErrorResponse;
+  status: 504;
+};
+
+export type listChatExecutionSteeringResponseSuccess =
+  listChatExecutionSteeringResponse200 & {
+    headers: Headers;
+  };
+export type listChatExecutionSteeringResponseError = (
+  | listChatExecutionSteeringResponse400
+  | listChatExecutionSteeringResponse401
+  | listChatExecutionSteeringResponse403
+  | listChatExecutionSteeringResponse426
+  | listChatExecutionSteeringResponse502
+  | listChatExecutionSteeringResponse504
+) & {
+  headers: Headers;
+};
+
+export type listChatExecutionSteeringResponse =
+  | listChatExecutionSteeringResponseSuccess
+  | listChatExecutionSteeringResponseError;
+
+export const getListChatExecutionSteeringUrl = (
+  projectId: string,
+  responseMessageId: string,
+) => {
+  return `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/steering`;
+};
+
+/**
+ * Client contract 1.26. Every steering message of this answer's turn,
+ * oldest first, in every state (see steerChatExecution). A client that
+ * reloads uses it to show the pending and injected messages, and to
+ * find `turn_ended` messages that still wait to be sent. The same
+ * participant rule and permission as the queue apply; a conversation
+ * the caller is not in answers an empty list.
+ * @summary List the steering messages of an answer
+ */
+export const listChatExecutionSteering = async (
+  projectId: string,
+  responseMessageId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listChatExecutionSteeringResponse> => {
+  return eliteaFetch<listChatExecutionSteeringResponse>(
+    getListChatExecutionSteeringUrl(projectId, responseMessageId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListChatExecutionSteeringQueryKey = (
+  projectId: string,
+  responseMessageId: string,
+) => {
+  return [
+    `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/steering`,
+  ] as const;
+};
+
+export const getListChatExecutionSteeringQueryOptions = <
+  TData = Awaited<ReturnType<typeof listChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListChatExecutionSteeringQueryKey(projectId, responseMessageId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listChatExecutionSteering>>
+  > = ({ signal }) =>
+    listChatExecutionSteering(projectId, responseMessageId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      responseMessageId !== null &&
+      responseMessageId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listChatExecutionSteering>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListChatExecutionSteeringQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listChatExecutionSteering>>
+>;
+export type ListChatExecutionSteeringQueryError =
+  | SteeringError
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | ErrorResponse;
+
+export function useListChatExecutionSteering<
+  TData = Awaited<ReturnType<typeof listChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listChatExecutionSteering>>,
+          TError,
+          Awaited<ReturnType<typeof listChatExecutionSteering>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListChatExecutionSteering<
+  TData = Awaited<ReturnType<typeof listChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listChatExecutionSteering>>,
+          TError,
+          Awaited<ReturnType<typeof listChatExecutionSteering>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListChatExecutionSteering<
+  TData = Awaited<ReturnType<typeof listChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the steering messages of an answer
+ */
+
+export function useListChatExecutionSteering<
+  TData = Awaited<ReturnType<typeof listChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListChatExecutionSteeringQueryOptions(
+    projectId,
+    responseMessageId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateChatExecutionSteeringResponse200 = {
+  data: SteeringMessage;
+  status: 200;
+};
+
+export type updateChatExecutionSteeringResponse400 = {
+  data: SteeringError;
+  status: 400;
+};
+
+export type updateChatExecutionSteeringResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateChatExecutionSteeringResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type updateChatExecutionSteeringResponse404 = {
+  data: SteeringError;
+  status: 404;
+};
+
+export type updateChatExecutionSteeringResponse409 = {
+  data: SteeringError;
+  status: 409;
+};
+
+export type updateChatExecutionSteeringResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type updateChatExecutionSteeringResponse502 = {
+  data: SteeringError;
+  status: 502;
+};
+
+export type updateChatExecutionSteeringResponse504 = {
+  data: ErrorResponse;
+  status: 504;
+};
+
+export type updateChatExecutionSteeringResponseSuccess =
+  updateChatExecutionSteeringResponse200 & {
+    headers: Headers;
+  };
+export type updateChatExecutionSteeringResponseError = (
+  | updateChatExecutionSteeringResponse400
+  | updateChatExecutionSteeringResponse401
+  | updateChatExecutionSteeringResponse403
+  | updateChatExecutionSteeringResponse404
+  | updateChatExecutionSteeringResponse409
+  | updateChatExecutionSteeringResponse426
+  | updateChatExecutionSteeringResponse502
+  | updateChatExecutionSteeringResponse504
+) & {
+  headers: Headers;
+};
+
+export type updateChatExecutionSteeringResponse =
+  | updateChatExecutionSteeringResponseSuccess
+  | updateChatExecutionSteeringResponseError;
+
+export const getUpdateChatExecutionSteeringUrl = (
+  projectId: string,
+  responseMessageId: string,
+  steeringId: string,
+) => {
+  return `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/steering/${steeringId}`;
+};
+
+/**
+ * Client contract 1.26. Replaces the content of a PENDING message
+ * and advances `revision`; the stream carries `steer.queued` again.
+ * Only the message's author may edit it. A message that the worker
+ * already injected, or that is removed or `turn_ended`, answers 409
+ * `steering_not_pending`: the edit lost the race with the safe point.
+ * The same bounds and audit as the queue apply.
+ * @summary Edit a pending steering message
+ */
+export const updateChatExecutionSteering = async (
+  projectId: string,
+  responseMessageId: string,
+  steeringId: string,
+  steeringMessageRequest: SteeringMessageRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateChatExecutionSteeringResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<updateChatExecutionSteeringResponse>(
+    getUpdateChatExecutionSteeringUrl(projectId, responseMessageId, steeringId),
+    {
+      ...options,
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(steeringMessageRequest),
+    },
+  );
+};
+
+export const getUpdateChatExecutionSteeringQueryKey = (
+  projectId: string,
+  responseMessageId: string,
+  steeringId: string,
+  steeringMessageRequest?: SteeringMessageRequest,
+) => {
+  return [
+    "PATCH",
+    `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/steering/${steeringId}`,
+    steeringMessageRequest,
+  ] as const;
+};
+
+export const getUpdateChatExecutionSteeringQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  steeringId: string,
+  steeringMessageRequest: SteeringMessageRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateChatExecutionSteeringQueryKey(
+      projectId,
+      responseMessageId,
+      steeringId,
+      steeringMessageRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof updateChatExecutionSteering>>
+  > = ({ signal }) =>
+    updateChatExecutionSteering(
+      projectId,
+      responseMessageId,
+      steeringId,
+      steeringMessageRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      responseMessageId !== null &&
+      responseMessageId !== undefined &&
+      steeringId !== null &&
+      steeringId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateChatExecutionSteering>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateChatExecutionSteeringQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateChatExecutionSteering>>
+>;
+export type UpdateChatExecutionSteeringQueryError =
+  | SteeringError
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | ErrorResponse;
+
+export function useUpdateChatExecutionSteering<
+  TData = Awaited<ReturnType<typeof updateChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  steeringId: string,
+  steeringMessageRequest: SteeringMessageRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateChatExecutionSteering>>,
+          TError,
+          Awaited<ReturnType<typeof updateChatExecutionSteering>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateChatExecutionSteering<
+  TData = Awaited<ReturnType<typeof updateChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  steeringId: string,
+  steeringMessageRequest: SteeringMessageRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateChatExecutionSteering>>,
+          TError,
+          Awaited<ReturnType<typeof updateChatExecutionSteering>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateChatExecutionSteering<
+  TData = Awaited<ReturnType<typeof updateChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  steeringId: string,
+  steeringMessageRequest: SteeringMessageRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Edit a pending steering message
+ */
+
+export function useUpdateChatExecutionSteering<
+  TData = Awaited<ReturnType<typeof updateChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  steeringId: string,
+  steeringMessageRequest: SteeringMessageRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateChatExecutionSteeringQueryOptions(
+    projectId,
+    responseMessageId,
+    steeringId,
+    steeringMessageRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type removeChatExecutionSteeringResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type removeChatExecutionSteeringResponse400 = {
+  data: SteeringError;
+  status: 400;
+};
+
+export type removeChatExecutionSteeringResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type removeChatExecutionSteeringResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type removeChatExecutionSteeringResponse404 = {
+  data: SteeringError;
+  status: 404;
+};
+
+export type removeChatExecutionSteeringResponse409 = {
+  data: SteeringError;
+  status: 409;
+};
+
+export type removeChatExecutionSteeringResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type removeChatExecutionSteeringResponse502 = {
+  data: SteeringError;
+  status: 502;
+};
+
+export type removeChatExecutionSteeringResponse504 = {
+  data: ErrorResponse;
+  status: 504;
+};
+
+export type removeChatExecutionSteeringResponseSuccess =
+  removeChatExecutionSteeringResponse204 & {
+    headers: Headers;
+  };
+export type removeChatExecutionSteeringResponseError = (
+  | removeChatExecutionSteeringResponse400
+  | removeChatExecutionSteeringResponse401
+  | removeChatExecutionSteeringResponse403
+  | removeChatExecutionSteeringResponse404
+  | removeChatExecutionSteeringResponse409
+  | removeChatExecutionSteeringResponse426
+  | removeChatExecutionSteeringResponse502
+  | removeChatExecutionSteeringResponse504
+) & {
+  headers: Headers;
+};
+
+export type removeChatExecutionSteeringResponse =
+  | removeChatExecutionSteeringResponseSuccess
+  | removeChatExecutionSteeringResponseError;
+
+export const getRemoveChatExecutionSteeringUrl = (
+  projectId: string,
+  responseMessageId: string,
+  steeringId: string,
+) => {
+  return `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/steering/${steeringId}`;
+};
+
+/**
+ * Client contract 1.26. Removes a PENDING or `turn_ended` message (it
+ * becomes `removed`); for a pending one the stream carries
+ * `steer.dropped` with `reason: removed`. Only the author may remove
+ * it. Idempotent: removing a removed message answers 204 again. An
+ * injected message is part of the conversation and answers 409
+ * `steering_not_pending`.
+ * @summary Remove a steering message before it is injected
+ */
+export const removeChatExecutionSteering = async (
+  projectId: string,
+  responseMessageId: string,
+  steeringId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<removeChatExecutionSteeringResponse> => {
+  return eliteaFetch<removeChatExecutionSteeringResponse>(
+    getRemoveChatExecutionSteeringUrl(projectId, responseMessageId, steeringId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getRemoveChatExecutionSteeringQueryKey = (
+  projectId: string,
+  responseMessageId: string,
+  steeringId: string,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/steering/${steeringId}`,
+  ] as const;
+};
+
+export const getRemoveChatExecutionSteeringQueryOptions = <
+  TData = Awaited<ReturnType<typeof removeChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  steeringId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof removeChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRemoveChatExecutionSteeringQueryKey(
+      projectId,
+      responseMessageId,
+      steeringId,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof removeChatExecutionSteering>>
+  > = ({ signal }) =>
+    removeChatExecutionSteering(projectId, responseMessageId, steeringId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      responseMessageId !== null &&
+      responseMessageId !== undefined &&
+      steeringId !== null &&
+      steeringId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof removeChatExecutionSteering>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RemoveChatExecutionSteeringQueryResult = NonNullable<
+  Awaited<ReturnType<typeof removeChatExecutionSteering>>
+>;
+export type RemoveChatExecutionSteeringQueryError =
+  | SteeringError
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | ErrorResponse;
+
+export function useRemoveChatExecutionSteering<
+  TData = Awaited<ReturnType<typeof removeChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  steeringId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof removeChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof removeChatExecutionSteering>>,
+          TError,
+          Awaited<ReturnType<typeof removeChatExecutionSteering>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRemoveChatExecutionSteering<
+  TData = Awaited<ReturnType<typeof removeChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  steeringId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof removeChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof removeChatExecutionSteering>>,
+          TError,
+          Awaited<ReturnType<typeof removeChatExecutionSteering>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRemoveChatExecutionSteering<
+  TData = Awaited<ReturnType<typeof removeChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  steeringId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof removeChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Remove a steering message before it is injected
+ */
+
+export function useRemoveChatExecutionSteering<
+  TData = Awaited<ReturnType<typeof removeChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  steeringId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof removeChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRemoveChatExecutionSteeringQueryOptions(
+    projectId,
+    responseMessageId,
+    steeringId,
     options,
   );
 

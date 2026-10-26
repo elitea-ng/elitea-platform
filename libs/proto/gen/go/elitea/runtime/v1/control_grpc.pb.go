@@ -29,6 +29,7 @@ const (
 	RuntimeControlService_ObserveDesiredState_FullMethodName           = "/elitea.runtime.v1.RuntimeControlService/ObserveDesiredState"
 	RuntimeControlService_PrepareSettlement_FullMethodName             = "/elitea.runtime.v1.RuntimeControlService/PrepareSettlement"
 	RuntimeControlService_RemoveIndex_FullMethodName                   = "/elitea.runtime.v1.RuntimeControlService/RemoveIndex"
+	RuntimeControlService_ClaimSteeringMessages_FullMethodName         = "/elitea.runtime.v1.RuntimeControlService/ClaimSteeringMessages"
 )
 
 // RuntimeControlServiceClient is the client API for RuntimeControlService service.
@@ -45,6 +46,7 @@ type RuntimeControlServiceClient interface {
 	ObserveDesiredState(ctx context.Context, in *ObserveDesiredStateRequestV1, opts ...grpc.CallOption) (*ObserveDesiredStateResponseV1, error)
 	PrepareSettlement(ctx context.Context, in *PrepareSettlementRequestV1, opts ...grpc.CallOption) (*PrepareSettlementResponseV1, error)
 	RemoveIndex(ctx context.Context, in *RemoveIndexRequestV1, opts ...grpc.CallOption) (*RemoveIndexResponseV1, error)
+	ClaimSteeringMessages(ctx context.Context, in *ClaimSteeringMessagesRequestV1, opts ...grpc.CallOption) (*ClaimSteeringMessagesResponseV1, error)
 }
 
 type runtimeControlServiceClient struct {
@@ -155,6 +157,16 @@ func (c *runtimeControlServiceClient) RemoveIndex(ctx context.Context, in *Remov
 	return out, nil
 }
 
+func (c *runtimeControlServiceClient) ClaimSteeringMessages(ctx context.Context, in *ClaimSteeringMessagesRequestV1, opts ...grpc.CallOption) (*ClaimSteeringMessagesResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClaimSteeringMessagesResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeControlService_ClaimSteeringMessages_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RuntimeControlServiceServer is the server API for RuntimeControlService service.
 // All implementations must embed UnimplementedRuntimeControlServiceServer
 // for forward compatibility.
@@ -169,6 +181,7 @@ type RuntimeControlServiceServer interface {
 	ObserveDesiredState(context.Context, *ObserveDesiredStateRequestV1) (*ObserveDesiredStateResponseV1, error)
 	PrepareSettlement(context.Context, *PrepareSettlementRequestV1) (*PrepareSettlementResponseV1, error)
 	RemoveIndex(context.Context, *RemoveIndexRequestV1) (*RemoveIndexResponseV1, error)
+	ClaimSteeringMessages(context.Context, *ClaimSteeringMessagesRequestV1) (*ClaimSteeringMessagesResponseV1, error)
 	mustEmbedUnimplementedRuntimeControlServiceServer()
 }
 
@@ -208,6 +221,9 @@ func (UnimplementedRuntimeControlServiceServer) PrepareSettlement(context.Contex
 }
 func (UnimplementedRuntimeControlServiceServer) RemoveIndex(context.Context, *RemoveIndexRequestV1) (*RemoveIndexResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RemoveIndex not implemented")
+}
+func (UnimplementedRuntimeControlServiceServer) ClaimSteeringMessages(context.Context, *ClaimSteeringMessagesRequestV1) (*ClaimSteeringMessagesResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ClaimSteeringMessages not implemented")
 }
 func (UnimplementedRuntimeControlServiceServer) mustEmbedUnimplementedRuntimeControlServiceServer() {}
 func (UnimplementedRuntimeControlServiceServer) testEmbeddedByValue()                               {}
@@ -410,6 +426,24 @@ func _RuntimeControlService_RemoveIndex_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RuntimeControlService_ClaimSteeringMessages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClaimSteeringMessagesRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeControlServiceServer).ClaimSteeringMessages(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeControlService_ClaimSteeringMessages_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeControlServiceServer).ClaimSteeringMessages(ctx, req.(*ClaimSteeringMessagesRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RuntimeControlService_ServiceDesc is the grpc.ServiceDesc for RuntimeControlService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -456,6 +490,10 @@ var RuntimeControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RemoveIndex",
 			Handler:    _RuntimeControlService_RemoveIndex_Handler,
+		},
+		{
+			MethodName: "ClaimSteeringMessages",
+			Handler:    _RuntimeControlService_ClaimSteeringMessages_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

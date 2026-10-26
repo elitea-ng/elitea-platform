@@ -5016,6 +5016,86 @@ components:
         error: { type: string }
         message: { type: string }
 
+    SteeringMessageRequest:
+      type: object
+      description: >
+        The text of a steering message. NOTE(W2):
+        internal/api/v2/agentexecution/steering.go:124 (`decodeSteeringBody`).
+      required: [content]
+      additionalProperties: false
+      properties:
+        content:
+          type: string
+          minLength: 1
+          maxLength: 16384
+          description: The message, at most 16 KiB of UTF-8 and not only white space.
+
+    SteeringMessage:
+      type: object
+      description: >
+        One steering message of a running turn (client contract 1.26).
+        NOTE(W2): internal/api/v2/agentexecution/steering.go:269
+        (`steeringView`).
+      required: [id, response_message_id, author_id, content, state, revision, created_at, updated_at, injected_at, message_id]
+      properties:
+        id: { type: string, format: uuid }
+        response_message_id: { type: string, format: uuid }
+        author_id:
+          type: integer
+          format: int64
+          description: The user who queued it.
+        content: { type: string }
+        state:
+          type: string
+          description: >
+            One of `pending` (waits for the next safe point), `injected`
+            (the model read it; `message_id` names the conversation
+            message), `removed` (the author removed it) and `turn_ended`
+            (the turn ended first; send it as the next message). A client
+            treats an unknown value as `pending`.
+        revision:
+          type: integer
+          format: int32
+          description: Starts at 1 and advances with every edit.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        injected_at:
+          type: string
+          format: date-time
+          nullable: true
+        message_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: The conversation message that holds the text, once injected.
+
+    SteeringMessageList:
+      type: object
+      description: >
+        The steering messages of one turn, oldest first. NOTE(W2):
+        internal/api/v2/agentexecution/steering.go:169 (`list`).
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SteeringMessage'
+
+    SteeringError:
+      type: object
+      description: >
+        A refused steering call. `error` is a machine code
+        (`steering_invalid`, `idempotency_key_required`,
+        `turn_not_running`, `steering_not_supported`,
+        `steering_queue_full`, `idempotency_conflict`,
+        `steering_not_found`, `steering_not_pending`, `rate_limited`) or,
+        for 401/403/502, a message. NOTE(W2):
+        internal/api/v2/agentexecution/steering.go:316 (`writeSteeringError`).
+      required: [error]
+      properties:
+        error: { type: string }
+        message: { type: string }
+
     ChatExecutionError:
       type: object
       description: >
@@ -21602,6 +21682,318 @@ paths:
               schema:
                 $ref: '#/components/schemas/ExecutionInterruptError'
 
+  /elitea_core/task/prompt_lib/{project_id}/{response_message_id}/steering:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: response_message_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The running answer to steer (its `uid`, the send's or the regeneration's `response_message_id`).
+    post:
+      operationId: steerChatExecution
+      summary: Queue a steering message for a running answer
+      description: |
+        Client contract 1.26. Queues a user message against the turn that
+        writes this answer. The turn does not stop. The worker injects the
+        message at its next safe point: after the current tool calls finish
+        and before the next model request. The model reads it as a new user
+        message in the same turn. It is not a new turn.
+
+        STATES. A message is `pending` until the worker injects it, then
+        `injected`. An injected message is a normal user message of the
+        conversation (`message_id`), placed directly after the turn's
+        question, so a reload and every other client see it. A pending
+        message that the author removes is `removed`. A pending message that
+        no safe point reached before the turn ended is `turn_ended`: the
+        client sends it as the next turn's message (and then removes it), so
+        nothing is lost.
+
+        EVENTS. The execution event stream
+        (`/api/v2/executions/{project_id}/{execution_id}/events`) carries
+        `steer.queued` (a new or edited pending message), `steer.injected`
+        (with `message_id`) and `steer.dropped` (`reason: removed`). The
+        `data` of each is one SteeringMessage.
+
+        WHO. The permission is the send's (`models.chat.messages.create`),
+        and the caller must be a user participant of the conversation. A
+        pipeline turn has no safe point and answers 409
+        `steering_not_supported`; a turn that is not running answers 409
+        `turn_not_running` (send a new message instead).
+
+        BOUNDS. `content` is at most 16 KiB of UTF-8. At most 10 messages
+        wait per turn (409 `steering_queue_full`). At most 30 queued
+        messages a minute per caller on each server replica (429
+        `rate_limited` with Retry-After). Every queue, edit and removal is
+        audited with a SHA-256 of the content, never the content.
+
+        IDEMPOTENCY. `Idempotency-Key` is REQUIRED (400
+        `idempotency_key_required`): a retry with the same key and content
+        answers the first call's message again. The same key with a different
+        content is 409 `idempotency_conflict`.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }
+          description: One key per intended message, repeated on every retry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SteeringMessageRequest'
+            example:
+              content: Skip the tests for now and only fix the build.
+      responses:
+        '202':
+          description: Queued (or the same message again for a retry with the same key).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringMessage'
+              example:
+                id: 7f0c3c9a-2d4e-4b8f-9a51-0d6c2f1e8b11
+                response_message_id: 3b9d2a40-7c55-4e1a-8f0b-6a2c9e4d1f20
+                author_id: 1
+                content: Skip the tests for now and only fix the build.
+                state: pending
+                revision: 1
+                created_at: '2026-10-26T10:15:02Z'
+                updated_at: '2026-10-26T10:15:02Z'
+                injected_at: null
+                message_id: null
+        '400':
+          description: >-
+            An empty or too large `content` (`steering_invalid`), no valid
+            `Idempotency-Key` (`idempotency_key_required`), an invalid id, or
+            an `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringError'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: >-
+            The turn is not running or is not this caller's conversation
+            (`turn_not_running`), a pipeline turn (`steering_not_supported`),
+            ten messages already wait (`steering_queue_full`), or the key was
+            used with another content (`idempotency_conflict`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringError'
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '429':
+          description: Too many queued messages (`rate_limited`); retry after `Retry-After`.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringError'
+        '502':
+          description: The message could not be recorded. Retry with the same key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringError'
+        '504':
+          description: The request timed out. Retry (with the same key for a queue).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      operationId: listChatExecutionSteering
+      summary: List the steering messages of an answer
+      description: |
+        Client contract 1.26. Every steering message of this answer's turn,
+        oldest first, in every state (see steerChatExecution). A client that
+        reloads uses it to show the pending and injected messages, and to
+        find `turn_ended` messages that still wait to be sent. The same
+        participant rule and permission as the queue apply; a conversation
+        the caller is not in answers an empty list.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: The messages.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringMessageList'
+              example:
+                items:
+                  - id: 7f0c3c9a-2d4e-4b8f-9a51-0d6c2f1e8b11
+                    response_message_id: 3b9d2a40-7c55-4e1a-8f0b-6a2c9e4d1f20
+                    author_id: 1
+                    content: Skip the tests for now and only fix the build.
+                    state: injected
+                    revision: 1
+                    created_at: '2026-10-26T10:15:02Z'
+                    updated_at: '2026-10-26T10:15:09Z'
+                    injected_at: '2026-10-26T10:15:09Z'
+                    message_id: 9a1e6b02-55c3-4d7e-b0f4-2e8c7d6a3b90
+        '400':
+          description: An invalid id, or an `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringError'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '502':
+          description: The messages could not be read. Retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringError'
+        '504':
+          description: The request timed out. Retry (with the same key for a queue).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /elitea_core/task/prompt_lib/{project_id}/{response_message_id}/steering/{steering_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: response_message_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The answer the steering message was queued against.
+      - name: steering_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The steering message (its `id`).
+    patch:
+      operationId: updateChatExecutionSteering
+      summary: Edit a pending steering message
+      description: |
+        Client contract 1.26. Replaces the content of a PENDING message
+        and advances `revision`; the stream carries `steer.queued` again.
+        Only the message's author may edit it. A message that the worker
+        already injected, or that is removed or `turn_ended`, answers 409
+        `steering_not_pending`: the edit lost the race with the safe point.
+        The same bounds and audit as the queue apply.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SteeringMessageRequest'
+            example:
+              content: Fix the build first, then run the unit tests.
+      responses:
+        '200':
+          description: The edited message.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringMessage'
+              example:
+                id: 7f0c3c9a-2d4e-4b8f-9a51-0d6c2f1e8b11
+                response_message_id: 3b9d2a40-7c55-4e1a-8f0b-6a2c9e4d1f20
+                author_id: 1
+                content: Fix the build first, then run the unit tests.
+                state: pending
+                revision: 2
+                created_at: '2026-10-26T10:15:02Z'
+                updated_at: '2026-10-26T10:15:05Z'
+                injected_at: null
+                message_id: null
+        '400':
+          description: An empty or too large `content` (`steering_invalid`), an invalid id, or an `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringError'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such message of this caller (`steering_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringError'
+        '409':
+          description: The message is no longer pending (`steering_not_pending`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringError'
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '502':
+          description: The edit could not be recorded. Retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringError'
+        '504':
+          description: The request timed out. Retry (with the same key for a queue).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: removeChatExecutionSteering
+      summary: Remove a steering message before it is injected
+      description: |
+        Client contract 1.26. Removes a PENDING or `turn_ended` message (it
+        becomes `removed`); for a pending one the stream carries
+        `steer.dropped` with `reason: removed`. Only the author may remove
+        it. Idempotent: removing a removed message answers 204 again. An
+        injected message is part of the conversation and answers 409
+        `steering_not_pending`.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '204': { description: 'Removed, or already removed.' }
+        '400':
+          description: An invalid id, or an `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringError'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such message of this caller (`steering_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringError'
+        '409':
+          description: The message was already injected (`steering_not_pending`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringError'
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '502':
+          description: The removal could not be recorded. Retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SteeringError'
+        '504':
+          description: The request timed out. Retry (with the same key for a queue).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /elitea_core/regenerate/prompt_lib/{project_id}/{message_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'

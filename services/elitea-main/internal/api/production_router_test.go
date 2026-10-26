@@ -118,6 +118,40 @@ func TestProductionRouterMountsCurrentAgentCancelOnlyWhenComposed(t *testing.T) 
 	}
 }
 
+func TestProductionRouterMountsCurrentAgentSteeringOnlyWhenComposed(t *testing.T) {
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusTeapot)
+	})
+	queue := "/api/v2/elitea_core/task/prompt_lib/2/10000000-0000-4000-8000-000000000051/steering"
+	item := queue + "/10000000-0000-4000-8000-000000000052"
+	composed := reviewedRoutesRouter(RouterConfig{CurrentAgentSteering: handler})
+	// A composed cancel route must not make the steering paths reachable.
+	uncomposed := reviewedRoutesRouter(RouterConfig{CurrentAgentCancel: handler})
+	for _, test := range []struct {
+		name   string
+		router http.Handler
+		method string
+		path   string
+		want   int
+	}{
+		{name: "queue", router: composed, method: http.MethodPost, path: queue, want: http.StatusTeapot},
+		{name: "list", router: composed, method: http.MethodGet, path: queue, want: http.StatusTeapot},
+		{name: "edit", router: composed, method: http.MethodPatch, path: item, want: http.StatusTeapot},
+		{name: "remove", router: composed, method: http.MethodDelete, path: item, want: http.StatusTeapot},
+		{name: "queue wrong method", router: composed, method: http.MethodPut, path: queue, want: http.StatusMethodNotAllowed},
+		{name: "uncomposed queue", router: uncomposed, method: http.MethodPost, path: queue, want: http.StatusNotFound},
+		{name: "uncomposed item", router: uncomposed, method: http.MethodDelete, path: item, want: http.StatusNotFound},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			test.router.ServeHTTP(response, httptest.NewRequest(test.method, test.path, nil))
+			if response.Code != test.want {
+				t.Fatalf("status=%d want=%d body=%q", response.Code, test.want, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestProductionRouterMountsExecutionInterruptsOnlyWhenComposed(t *testing.T) {
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusTeapot)

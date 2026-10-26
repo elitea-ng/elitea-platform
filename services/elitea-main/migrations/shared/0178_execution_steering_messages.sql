@@ -1,0 +1,66 @@
+-- 0178_execution_steering_messages.sql — steering during execution.
+--
+-- WHY. A user can send a message while a cloud chat turn runs. The message is
+-- a STEERING message: it waits here until the worker reaches its next safe
+-- point (after the tool results of a step, before the next model request).
+-- The worker claims it over gRPC (RuntimeControlService.ClaimSteeringMessages)
+-- and adds it to the model request. In the same transaction Main writes it as
+-- a normal user message of the conversation (`message_id`) and marks it
+-- injected. A worker restart or a client reconnect loses nothing: the row is
+-- the authority until it is injected.
+--
+-- STATES. `pending` waits for a safe point. `injected` is final and names the
+-- conversation message. `removed` is final (the author removed it). There is
+-- no stored `turn_ended`: a pending row whose execution is terminal is read as
+-- `turn_ended`, because no claim can reach it after the claim fence is gone.
+--
+-- The content is the user's text. It is product data in PostgreSQL, like the
+-- question. It never enters the command bus.
+--
+-- No backfill, no permission (the routes use models.chat.messages.create).
+-- No BEGIN/COMMIT: the ledgered runner applies the file in one transaction.
+
+CREATE TABLE IF NOT EXISTS elitea_runtime.execution_steering_messages (
+    steering_id UUID PRIMARY KEY,
+    queue_order BIGINT GENERATED ALWAYS AS IDENTITY,
+    execution_id TEXT NOT NULL,
+    generation BIGINT NOT NULL,
+    project_id BIGINT NOT NULL CHECK (project_id > 0),
+    response_message_id UUID NOT NULL,
+    author_user_id BIGINT NOT NULL CHECK (author_user_id > 0),
+    idempotency_key TEXT NOT NULL,
+    content TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending',
+    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+    message_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    injected_at TIMESTAMPTZ,
+    FOREIGN KEY (execution_id, generation)
+        REFERENCES elitea_runtime.execution_jobs (execution_id, generation)
+        ON DELETE CASCADE,
+    UNIQUE (execution_id, author_user_id, idempotency_key),
+    CONSTRAINT execution_steering_messages_state CHECK (
+        state IN ('pending', 'injected', 'removed')
+    ),
+    CONSTRAINT execution_steering_messages_content CHECK (
+        octet_length(content) BETWEEN 1 AND 16384
+    ),
+    CONSTRAINT execution_steering_messages_idempotency_key CHECK (
+        octet_length(idempotency_key) BETWEEN 1 AND 128
+        AND idempotency_key ~ '^[A-Za-z0-9_-]+$'
+    ),
+    CONSTRAINT execution_steering_messages_injected CHECK (
+        (state = 'injected') = (message_id IS NOT NULL AND injected_at IS NOT NULL)
+    )
+);
+
+-- The claim and the list read one execution's rows in queue order.
+CREATE INDEX IF NOT EXISTS execution_steering_messages_queue_idx
+    ON elitea_runtime.execution_steering_messages
+       (execution_id, generation, queue_order);
+
+-- The list of one answer reads by its response id.
+CREATE INDEX IF NOT EXISTS execution_steering_messages_response_idx
+    ON elitea_runtime.execution_steering_messages
+       (project_id, response_message_id, queue_order);

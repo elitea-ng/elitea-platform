@@ -596,6 +596,9 @@ type RouterConfig struct {
 	// API. It is nil unless ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED.
 	CurrentExecutionInterrupts http.Handler
 	CurrentAgentCancel         http.Handler
+	// CurrentAgentSteering serves the steering queue of a running chat turn
+	// (client contract 1.26). Composed beside CurrentAgentCancel.
+	CurrentAgentSteering http.Handler
 	// CurrentLocalTurns serves startLocalTurn and commitLocalTurn, the
 	// desktop local turn operations (ADR-0029 decision 5c, client contract
 	// 1.5). Composed in cmd/elitea-main wherever a database is configured;

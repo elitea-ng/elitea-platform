@@ -271,6 +271,35 @@ message RemoveIndexResponseV1 {
   reserved 3 to 15;
 }
 
+// ClaimSteeringMessages hands the worker the steering messages queued
+// against the running turn of this claim, oldest first, and records them as
+// injected in the same transaction. The worker calls it at each safe point of
+// an ordinary agent loop: after the tool results of a step and before the
+// next model request. It adds the messages to the model request as user
+// messages; the model checkpoint of that request makes them durable on the
+// worker side. Main writes each message as a conversation message and emits
+// `steer.injected` on the execution event stream. An empty list is the
+// ordinary answer. A pipeline turn never calls it.
+message ClaimSteeringMessagesRequestV1 {
+  ExecutionIdentityV1 identity = 1;
+  ExecutionFenceV1 fence = 2;
+  reserved 3 to 15;
+}
+
+message SteeringMessageV1 {
+  string steering_id = 1;
+  // The user's text, at most 16 KiB of UTF-8.
+  string content = 2;
+  int64 queued_at_unix_millis = 3;
+  reserved 4 to 15;
+}
+
+message ClaimSteeringMessagesResponseV1 {
+  repeated SteeringMessageV1 messages = 1;
+  RuntimeErrorV1 rejection = 2;
+  reserved 3 to 15;
+}
+
 service RuntimeControlService {
   rpc AuthorizeSandboxJob(AuthorizeSandboxJobRequestV1) returns (AuthorizeSandboxJobResponseV1);
   rpc AuthorizeRustCompiledSnapshot(AuthorizeRustCompiledSnapshotRequestV1) returns (AuthorizeRustCompiledSnapshotResponseV1);
@@ -282,4 +311,5 @@ service RuntimeControlService {
   rpc ObserveDesiredState(ObserveDesiredStateRequestV1) returns (ObserveDesiredStateResponseV1);
   rpc PrepareSettlement(PrepareSettlementRequestV1) returns (PrepareSettlementResponseV1);
   rpc RemoveIndex(RemoveIndexRequestV1) returns (RemoveIndexResponseV1);
+  rpc ClaimSteeringMessages(ClaimSteeringMessagesRequestV1) returns (ClaimSteeringMessagesResponseV1);
 }

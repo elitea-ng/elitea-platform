@@ -74,6 +74,8 @@ import type {
   OkResponse,
   ParticipantCandidatesPage,
   StaticPipelineContinuationReceipt,
+  SteeringMessage,
+  SteeringMessageList,
   SupportAssistantConfig,
   SupportConversation,
   SupportConversationDetails,
@@ -1687,6 +1689,51 @@ export const getDecideExecutionInterruptResponseMock = (
   replay: faker.datatype.boolean(),
   ...overrideResponse,
 });
+
+export const getSteerChatExecutionResponseMock = (): SteeringMessage => ({
+  id: "7f0c3c9a-2d4e-4b8f-9a51-0d6c2f1e8b11",
+  response_message_id: "3b9d2a40-7c55-4e1a-8f0b-6a2c9e4d1f20",
+  author_id: 1,
+  content: "Skip the tests for now and only fix the build.",
+  state: "pending",
+  revision: 1,
+  created_at: "2026-10-26T10:15:02Z",
+  updated_at: "2026-10-26T10:15:02Z",
+  injected_at: null,
+  message_id: null,
+});
+
+export const getListChatExecutionSteeringResponseMock =
+  (): SteeringMessageList => ({
+    items: [
+      {
+        id: "7f0c3c9a-2d4e-4b8f-9a51-0d6c2f1e8b11",
+        response_message_id: "3b9d2a40-7c55-4e1a-8f0b-6a2c9e4d1f20",
+        author_id: 1,
+        content: "Skip the tests for now and only fix the build.",
+        state: "injected",
+        revision: 1,
+        created_at: "2026-10-26T10:15:02Z",
+        updated_at: "2026-10-26T10:15:09Z",
+        injected_at: "2026-10-26T10:15:09Z",
+        message_id: "9a1e6b02-55c3-4d7e-b0f4-2e8c7d6a3b90",
+      },
+    ],
+  });
+
+export const getUpdateChatExecutionSteeringResponseMock =
+  (): SteeringMessage => ({
+    id: "7f0c3c9a-2d4e-4b8f-9a51-0d6c2f1e8b11",
+    response_message_id: "3b9d2a40-7c55-4e1a-8f0b-6a2c9e4d1f20",
+    author_id: 1,
+    content: "Fix the build first, then run the unit tests.",
+    state: "pending",
+    revision: 2,
+    created_at: "2026-10-26T10:15:02Z",
+    updated_at: "2026-10-26T10:15:05Z",
+    injected_at: null,
+    message_id: null,
+  });
 
 export const getRegenerateChatMessageResponseMock = (
   overrideResponse: Partial<Extract<ChatExecutionStarted, object>> = {},
@@ -3433,6 +3480,106 @@ export const getDecideExecutionInterruptMockHandler = (
   );
 };
 
+export const getSteerChatExecutionMockHandler = (
+  overrideResponse?:
+    | SteeringMessage
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<SteeringMessage> | SteeringMessage),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/task/prompt_lib/:projectId/:responseMessageId/steering",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSteerChatExecutionResponseMock(),
+        { status: 202 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListChatExecutionSteeringMockHandler = (
+  overrideResponse?:
+    | SteeringMessageList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<SteeringMessageList> | SteeringMessageList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/task/prompt_lib/:projectId/:responseMessageId/steering",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListChatExecutionSteeringResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUpdateChatExecutionSteeringMockHandler = (
+  overrideResponse?:
+    | SteeringMessage
+    | ((
+        info: Parameters<Parameters<typeof http.patch>[1]>[0],
+      ) => Promise<SteeringMessage> | SteeringMessage),
+  options?: RequestHandlerOptions,
+) => {
+  return http.patch(
+    "*/elitea_core/task/prompt_lib/:projectId/:responseMessageId/steering/:steeringId",
+    async (info: Parameters<Parameters<typeof http.patch>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUpdateChatExecutionSteeringResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRemoveChatExecutionSteeringMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/task/prompt_lib/:projectId/:responseMessageId/steering/:steeringId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
 export const getRegenerateChatMessageMockHandler = (
   overrideResponse?:
     | ChatExecutionStarted
@@ -3912,6 +4059,10 @@ export const getChatMock = () => [
   getCancelChatExecutionMockHandler(),
   getListExecutionInterruptsMockHandler(),
   getDecideExecutionInterruptMockHandler(),
+  getSteerChatExecutionMockHandler(),
+  getListChatExecutionSteeringMockHandler(),
+  getUpdateChatExecutionSteeringMockHandler(),
+  getRemoveChatExecutionSteeringMockHandler(),
   getRegenerateChatMessageMockHandler(),
   getContinueChatExecutionMockHandler(),
   getUploadConversationAttachmentMockHandler(),

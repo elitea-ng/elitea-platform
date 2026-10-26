@@ -45,14 +45,14 @@ use super::elitea::runtime::v1::{
     AgentExecutionResultV1, AuthorizeInvocationDispositionV1, AuthorizeInvocationRequestV1,
     AuthorizeInvocationResponseV1, BeginExecutionDispositionV1, BeginExecutionRequestV1,
     BeginExecutionResponseV1, ClaimCommandRequestV1, ClaimCommandResponseV1, ClaimDispositionV1,
-    ClaimReceiptV1, DesiredExecutionStateV1, DigestAlgorithmV1, DigestV1, ExecutionFenceV1,
-    ExecutionIdentityV1, ExecutionInputBundleReferenceV1, ExecutionInputBundleV1,
-    ExecutionInputEntryV1, ExecutionOutcomeV1, ExecutionOutputFrameV1, NodeEventV1,
-    ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
-    PrepareSettlementResponseV1, RemoveIndexDispositionV1, RemoveIndexRequestV1,
-    RemoveIndexResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1, RuntimeErrorCodeV1,
-    RuntimeErrorV1, ScopedContentReferenceV1, SettlementProposalV1, SettlementRecoveryV1,
-    worker_command_v1,
+    ClaimReceiptV1, ClaimSteeringMessagesRequestV1, ClaimSteeringMessagesResponseV1,
+    DesiredExecutionStateV1, DigestAlgorithmV1, DigestV1, ExecutionFenceV1, ExecutionIdentityV1,
+    ExecutionInputBundleReferenceV1, ExecutionInputBundleV1, ExecutionInputEntryV1,
+    ExecutionOutcomeV1, ExecutionOutputFrameV1, NodeEventV1, ObserveDesiredStateRequestV1,
+    ObserveDesiredStateResponseV1, PrepareSettlementRequestV1, PrepareSettlementResponseV1,
+    RemoveIndexDispositionV1, RemoveIndexRequestV1, RemoveIndexResponseV1, RenewLeaseRequestV1,
+    RenewLeaseResponseV1, RuntimeErrorCodeV1, RuntimeErrorV1, ScopedContentReferenceV1,
+    SettlementProposalV1, SettlementRecoveryV1, worker_command_v1,
 };
 use super::output::{
     AgentTerminalOutput, RuntimeFailureKind, ToolkitExecuteReadTerminalOutput,
@@ -1918,6 +1918,13 @@ impl ClaimLeaseHandle {
         }
     }
 
+    fn steering_request(&self) -> ClaimSteeringMessagesRequestV1 {
+        ClaimSteeringMessagesRequestV1 {
+            identity: Some(self.identity.clone()),
+            fence: Some(self.fence.clone()),
+        }
+    }
+
     pub(crate) fn commit_renewal(&mut self, observation: LeaseObservation) {
         self.lease_expires_at_unix_millis = observation.lease_expires_at_unix_millis;
     }
@@ -2425,6 +2432,24 @@ impl<R: ControlRpc> AgentControlClient<R> {
             .observe_desired_state(lease.observe_request())
             .await?;
         parse_observe_desired_state_response(&response).map_err(Into::into)
+    }
+
+    /// Take the steering messages queued against the running turn of one
+    /// unchanged accepted claim. Main marks them injected when it answers,
+    /// so the caller must put the texts into the next model request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed transport, runtime rejection, or response-shape failure.
+    pub(crate) async fn claim_steering(
+        &self,
+        lease: &ClaimLeaseHandle,
+    ) -> Result<Vec<String>, AgentControlError> {
+        let response = self
+            .control
+            .claim_steering_messages(lease.steering_request())
+            .await?;
+        parse_claim_steering_response(response).map_err(Into::into)
     }
 
     /// Prepare settlement only from a consumed, durably acknowledged terminal proof.
@@ -3309,6 +3334,34 @@ fn parse_observe_desired_state_response(
         return Err(runtime_rejection(rejection));
     }
     desired_state(response.desired_state)
+}
+
+/// Validate one steering claim: a rejection carries no messages, and every
+/// message has an id and a non-blank text. The texts keep the queue order.
+fn parse_claim_steering_response(
+    response: ClaimSteeringMessagesResponseV1,
+) -> Result<Vec<String>, ControlSemanticError> {
+    if let Some(rejection) = response.rejection.as_ref() {
+        if !response.messages.is_empty() {
+            return Err(ControlSemanticError::InvalidInput(
+                "the steering response is ambiguous",
+            ));
+        }
+        return Err(runtime_rejection(rejection));
+    }
+    response
+        .messages
+        .into_iter()
+        .map(|message| {
+            if message.steering_id.is_empty() || message.content.trim().is_empty() {
+                Err(ControlSemanticError::InvalidInput(
+                    "the steering response carries a malformed message",
+                ))
+            } else {
+                Ok(message.content)
+            }
+        })
+        .collect()
 }
 
 /// Validate one outcome-bound settlement receipt.

@@ -234,6 +234,10 @@ enum MonitorCommand {
     CheckNow(oneshot::Sender<Result<(), ClaimLeaseError>>),
 }
 
+/// One steering claim (client contract 1.26): the reply carries the texts
+/// Main marked injected, oldest first, or nothing.
+struct SteeringClaim(oneshot::Sender<Vec<String>>);
+
 /// Result of the mandatory first lease poll after `BeginExecution`.
 pub enum ClaimLeaseActivation {
     Active(LeaseMonitoredAgentExecution),
@@ -251,6 +255,7 @@ pub enum ClaimLeaseActivation {
 /// the actor to release its authority.
 pub struct ClaimLeaseMonitor {
     commands: mpsc::Sender<MonitorCommand>,
+    steering: mpsc::Sender<SteeringClaim>,
     state: watch::Receiver<MonitorState>,
     /// ADR-0034 take back: latched true once a renewal says
     /// `workspace_wrap_up`.
@@ -279,6 +284,7 @@ pub(crate) struct ClaimLeaseStateProbe {
     clock: Arc<dyn UnixMillisClock>,
     margin_millis: i64,
     supervision_live: Arc<AtomicBool>,
+    steering: mpsc::Sender<SteeringClaim>,
 }
 
 #[allow(dead_code)] // Consumed by the capability-disabled native invocation lifecycle.
@@ -290,6 +296,7 @@ impl Clone for ClaimLeaseStateProbe {
             clock: Arc::clone(&self.clock),
             margin_millis: self.margin_millis,
             supervision_live: Arc::clone(&self.supervision_live),
+            steering: self.steering.clone(),
         }
     }
 }
@@ -330,6 +337,22 @@ impl ClaimLeaseStateProbe {
         monitor_state_result(&self.state.borrow_and_update())
     }
 
+    /// Take the steering messages queued against this claim's turn, through
+    /// the lease actor, so the claim never overlaps a renewal. It never
+    /// fails: a stopped or lost lease, a closed actor or a refused claim
+    /// gives no messages, and the queued ones stay pending for the next safe
+    /// point (or for the client, once the turn ends).
+    pub(crate) async fn claim_steering(&self) -> Vec<String> {
+        if self.ensure_running().is_err() {
+            return Vec::new();
+        }
+        let (reply, answer) = oneshot::channel();
+        if self.steering.send(SteeringClaim(reply)).await.is_err() {
+            return Vec::new();
+        }
+        answer.await.unwrap_or_default()
+    }
+
     fn ensure_live_margin(&self) -> Result<(), ClaimLeaseError> {
         if !self.supervision_live.load(Ordering::Acquire) {
             return Err(ClaimLeaseError::closed());
@@ -368,6 +391,23 @@ impl ClaimLeaseStateProbe {
 impl StateWriterLease for ClaimLeaseStateProbe {
     fn ensure_current(&self) -> Result<(), StateWriterLeaseLost> {
         self.ensure_live_margin().map_err(|_| StateWriterLeaseLost)
+    }
+
+    fn steering_source(&self) -> Option<Arc<dyn adk_rust::agent::SteeringSource>> {
+        Some(Arc::new(self.clone()))
+    }
+}
+
+/// The agent loop's safe point (client contract 1.26): each claimed text is
+/// a new user message of the same turn.
+#[async_trait::async_trait]
+impl adk_rust::agent::SteeringSource for ClaimLeaseStateProbe {
+    async fn take(&self, _ctx: Arc<dyn adk_rust::InvocationContext>) -> Vec<adk_rust::Content> {
+        self.claim_steering()
+            .await
+            .into_iter()
+            .map(|text| adk_rust::Content::new("user").with_text(text))
+            .collect()
     }
 }
 
@@ -497,6 +537,7 @@ impl ClaimLeaseMonitor {
         let initial_expiry = lease.lease_expires_at_unix_millis();
         let probe_clock: Arc<dyn UnixMillisClock> = clock.clone();
         let (command_sender, command_receiver) = mpsc::channel(1);
+        let (steering_sender, steering_receiver) = mpsc::channel(1);
         let (state_sender, state_receiver) = watch::channel(MonitorState::Running {
             lease_expires_at_unix_millis: initial_expiry,
         });
@@ -510,6 +551,7 @@ impl ClaimLeaseMonitor {
             config,
             LeaseActorChannels {
                 commands: command_receiver,
+                steering: steering_receiver,
                 state: state_sender,
                 wrap_up: wrap_up_sender,
                 shutdown: shutdown_receiver,
@@ -518,6 +560,7 @@ impl ClaimLeaseMonitor {
         ));
         Self {
             commands: command_sender,
+            steering: steering_sender,
             state: state_receiver,
             wrap_up: wrap_up_receiver,
             shutdown: shutdown_sender,
@@ -587,6 +630,7 @@ impl ClaimLeaseMonitor {
             clock: Arc::clone(&self.clock),
             margin_millis: self.margin_millis,
             supervision_live: Arc::clone(&self.supervision_live),
+            steering: self.steering.clone(),
         }
     }
 
@@ -723,6 +767,7 @@ impl Drop for LeaseActorLifetime {
 
 struct LeaseActorChannels {
     commands: mpsc::Receiver<MonitorCommand>,
+    steering: mpsc::Receiver<SteeringClaim>,
     state: watch::Sender<MonitorState>,
     wrap_up: watch::Sender<bool>,
     shutdown: watch::Receiver<bool>,
@@ -741,6 +786,7 @@ async fn run_lease_actor<R, K>(
 {
     let LeaseActorChannels {
         mut commands,
+        mut steering,
         state,
         wrap_up,
         mut shutdown,
@@ -751,6 +797,9 @@ async fn run_lease_actor<R, K>(
     let mut ticker = interval_at(start, config.poll_interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut cancellation_latched = false;
+    // A Main without the steering RPC answers the same way every time: stop
+    // asking for the rest of this claim.
+    let mut steering_served = true;
 
     loop {
         if *shutdown.borrow() {
@@ -787,6 +836,23 @@ async fn run_lease_actor<R, K>(
                     return;
                 }
             }
+            Some(SteeringClaim(reply)) = steering.recv() => {
+                let texts = if steering_served {
+                    tokio::select! {
+                        biased;
+                        changed = shutdown.changed() => {
+                            let _ = changed;
+                            return;
+                        }
+                        claimed = control.claim_steering(&lease) => {
+                            steering_claim_texts(claimed, &mut steering_served)
+                        }
+                    }
+                } else {
+                    Vec::new()
+                };
+                let _ = reply.send(texts);
+            }
             _ = ticker.tick() => {
                 let Some(result) = poll_or_shutdown(
                     &control,
@@ -807,6 +873,34 @@ async fn run_lease_actor<R, K>(
                     return;
                 }
             }
+        }
+    }
+}
+
+/// The texts of one steering claim, or none. A refusal never ends the turn:
+/// the messages stay pending. Only a Main that does not serve the RPC turns
+/// steering off for the rest of the claim.
+fn steering_claim_texts(
+    claimed: Result<Vec<String>, AgentControlError>,
+    served: &mut bool,
+) -> Vec<String> {
+    match claimed {
+        Ok(texts) => texts,
+        Err(error) => {
+            let unsupported = match &error {
+                AgentControlError::Transport(
+                    crate::transport::ControlGrpcError::InvalidConfiguration(_),
+                ) => true,
+                AgentControlError::Semantic(ControlSemanticError::Rejected(rejection)) => {
+                    rejection.kind() == RuntimeControlRejectionKind::UnsupportedCapability
+                }
+                _ => false,
+            };
+            if unsupported {
+                *served = false;
+            }
+            tracing::warn!(error = %error, unsupported, "the steering claim was refused");
+            Vec::new()
         }
     }
 }

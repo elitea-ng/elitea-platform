@@ -18,9 +18,10 @@ use crate::protocol::control::{
 use crate::protocol::elitea::runtime::v1::{
     AuthorizeInvocationRequestV1, AuthorizeInvocationResponseV1, BeginExecutionRequestV1,
     BeginExecutionResponseV1, ClaimCommandRequestV1, ClaimCommandResponseV1,
-    DesiredExecutionStateV1, ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1,
-    PrepareSettlementRequestV1, PrepareSettlementResponseV1, RenewLeaseRequestV1,
-    RenewLeaseResponseV1, RuntimeErrorCodeV1, RuntimeErrorV1,
+    ClaimSteeringMessagesRequestV1, ClaimSteeringMessagesResponseV1, DesiredExecutionStateV1,
+    ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
+    PrepareSettlementResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1, RuntimeErrorCodeV1,
+    RuntimeErrorV1, SteeringMessageV1,
 };
 use crate::transport::{ControlGrpcConfig, ControlRpc};
 
@@ -35,6 +36,8 @@ struct FakeState {
     stall_renew: AtomicBool,
     renew_started: Notify,
     renew_active: AtomicBool,
+    /// `None`: this Main does not serve `ClaimSteeringMessages`.
+    steering: Mutex<Option<ClaimSteeringMessagesResponseV1>>,
 }
 
 impl Default for FakeState {
@@ -57,6 +60,7 @@ impl Default for FakeState {
             stall_renew: AtomicBool::new(false),
             renew_started: Notify::new(),
             renew_active: AtomicBool::new(false),
+            steering: Mutex::new(None),
         }
     }
 }
@@ -93,6 +97,20 @@ impl ControlRpc for FakeRpc {
         _request: Request<AuthorizeInvocationRequestV1>,
     ) -> Result<Response<AuthorizeInvocationResponseV1>, Status> {
         panic!("the lease monitor must not authorize invocation")
+    }
+
+    async fn claim_steering_messages(
+        &self,
+        _request: Request<ClaimSteeringMessagesRequestV1>,
+    ) -> Result<Response<ClaimSteeringMessagesResponseV1>, Status> {
+        self.0.calls.lock().expect("calls").push("steer");
+        self.0
+            .steering
+            .lock()
+            .expect("steering")
+            .clone()
+            .map(Response::new)
+            .ok_or_else(|| Status::unimplemented("steering"))
     }
 
     async fn renew_lease(
@@ -681,4 +699,83 @@ async fn the_take_back_signal_is_latched_and_the_lease_stays_running() {
     monitor.check_now().await.expect("running");
     assert!(*probe.wrap_up_signal().borrow(), "the signal stays latched");
     monitor.close().await.expect("close");
+}
+
+fn steering_message(id: &str, content: &str) -> SteeringMessageV1 {
+    SteeringMessageV1 {
+        steering_id: id.to_owned(),
+        content: content.to_owned(),
+        queued_at_unix_millis: NOW,
+    }
+}
+
+fn steer_calls(state: &FakeState) -> usize {
+    state
+        .calls
+        .lock()
+        .expect("calls")
+        .iter()
+        .filter(|call| **call == "steer")
+        .count()
+}
+
+// Client contract 1.26: the probe claims through the lease actor and gets the
+// texts in queue order; a refusal gives nothing and keeps asking later.
+#[tokio::test(flavor = "current_thread")]
+async fn state_probe_claims_steering_in_queue_order_and_survives_a_refusal() {
+    let state = Arc::new(FakeState::default());
+    *state.steering.lock().expect("steering") = Some(ClaimSteeringMessagesResponseV1 {
+        messages: vec![
+            steering_message("s-1", "skip the tests"),
+            steering_message("s-2", "use main"),
+        ],
+        rejection: None,
+    });
+    let monitor = ClaimLeaseMonitor::start(
+        client(Arc::clone(&state)),
+        test_lease_starting_execution(NOW + 60_000),
+        Arc::new(|| NOW),
+        config(Duration::from_secs(10)),
+    );
+    let probe = monitor.state_probe();
+    assert_eq!(probe.claim_steering().await, ["skip the tests", "use main"]);
+
+    *state.steering.lock().expect("steering") = Some(ClaimSteeringMessagesResponseV1 {
+        messages: Vec::new(),
+        rejection: Some(RuntimeErrorV1 {
+            code: RuntimeErrorCodeV1::StaleFence as i32,
+            retryable: false,
+            ..RuntimeErrorV1::default()
+        }),
+    });
+    assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    assert_eq!(
+        steer_calls(&state),
+        3,
+        "a refusal does not turn steering off"
+    );
+    monitor.close().await.expect("close");
+}
+
+// A Main without the RPC is asked once per claim, never again.
+#[tokio::test(flavor = "current_thread")]
+async fn state_probe_stops_asking_a_main_without_steering() {
+    let state = Arc::new(FakeState::default());
+    let monitor = ClaimLeaseMonitor::start(
+        client(Arc::clone(&state)),
+        test_lease_starting_execution(NOW + 60_000),
+        Arc::new(|| NOW),
+        config(Duration::from_secs(10)),
+    );
+    let probe = monitor.state_probe();
+    assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    assert_eq!(steer_calls(&state), 1);
+    monitor.close().await.expect("close");
+    assert_eq!(
+        probe.claim_steering().await,
+        Vec::<String>::new(),
+        "a closed monitor claims nothing"
+    );
 }

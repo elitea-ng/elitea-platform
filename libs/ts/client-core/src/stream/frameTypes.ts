@@ -28,7 +28,39 @@ export const EXECUTION_EVENT = {
   replayReset: 'execution.replay_reset',
   /** An index ingest finished. */
   indexIngestCompleted: 'index.ingest.completed',
+  /**
+   * Client contract 1.26: a steering message is queued, or its pending text
+   * was edited. `data` is one `SteeringMessage` (state `pending`).
+   */
+  steerQueued: 'steer.queued',
+  /**
+   * The worker injected a steering message at a safe point: the model reads
+   * it now. `data` is the `SteeringMessage` (state `injected`, `message_id`).
+   */
+  steerInjected: 'steer.injected',
+  /**
+   * A pending steering message left the queue without injection. `data` is
+   * the `SteeringMessage` plus `reason` (`removed`).
+   */
+  steerDropped: 'steer.dropped',
 } as const;
+
+/** The steering states of client contract 1.26 (`SteeringMessage.state`). */
+export const STEERING_STATE = {
+  Pending: 'pending',
+  Injected: 'injected',
+  Removed: 'removed',
+  TurnEnded: 'turn_ended',
+} as const;
+
+export type SteeringState = (typeof STEERING_STATE)[keyof typeof STEERING_STATE];
+
+/** The steering SSE event names: a client folds these into its queue view. */
+export const STEERING_EVENTS: ReadonlySet<string> = new Set<string>([
+  EXECUTION_EVENT.steerQueued,
+  EXECUTION_EVENT.steerInjected,
+  EXECUTION_EVENT.steerDropped,
+]);
 
 /** The `type` of each frame the chat stream can carry. */
 export const FRAME_TYPE = {

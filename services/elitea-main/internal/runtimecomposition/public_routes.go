@@ -41,6 +41,10 @@ type PublicRoutes struct {
 	// AgentCancel preserves the current DELETE contract while atomically
 	// cancelling the exact durable execution and its current chat projection.
 	AgentCancel agentexecutionapi.CurrentAgentCanceller
+	// Steering queues user messages against a running chat turn (client
+	// contract 1.26). It is composed beside AgentCancel: both act on the
+	// same running turn, so one exists exactly when the other does.
+	Steering agentexecutionapi.SteeringUseCase
 	// ToolkitExecuteRead runs one explicitly MCP-exposed, selected, non-sensitive
 	// toolkit operation through the durable Rust worker path. It is nil whenever
 	// the agent/runtime plane is disabled.
