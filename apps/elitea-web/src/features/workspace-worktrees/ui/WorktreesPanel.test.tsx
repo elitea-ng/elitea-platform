@@ -161,12 +161,15 @@ describe('WorktreesPanel', () => {
     expect(uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 
-  it('says why a task could not be made', async () => {
+  it('says why a task could not be made: the host\'s reason, never a guess about ownership', async () => {
     const user = userEvent.setup();
     const ipc = createFakeWorktreeIpc();
-    ipc.failNext('create', 'unsafe_repository');
+    const reason = '/work/repo/.git/config sets `core.hookspath` (a hooks path)';
+    ipc.failNext('create', 'unsafe_repository', reason);
     renderPanel(ipc);
     await user.click(await screen.findByRole('button', { name: 'New parallel task' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Git does not trust this repository');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(`Parallel tasks cannot use this repository: ${reason}`);
+    expect(alert).not.toHaveTextContent('another user');
   });
 });

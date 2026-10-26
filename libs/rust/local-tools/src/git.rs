@@ -146,12 +146,14 @@ fn unsafe_repo(message: impl Into<String>) -> ToolError {
     ToolError::new(ErrorCode::UnsafeRepository, message)
 }
 
-/// Refuse `.git/<name>` when one of its entries is dangerous.
-fn refuse_dangerous(name: &str, entries: &[ConfigEntry]) -> ToolResult<()> {
+/// Refuse `.git/<name>` (the file at `path`) when one of its entries is
+/// dangerous, naming the file and the key so the person can remove it.
+fn refuse_dangerous(name: &str, path: &Path, entries: &[ConfigEntry]) -> ToolResult<()> {
     for entry in entries {
         if let Some(reason) = dangerous_key(&entry.key, entry.value.as_deref()) {
             return Err(unsafe_repo(format!(
-                "the repository's .git/{name} sets `{}` ({reason}), which would run code in the host's git",
+                "the repository's .git/{name} ({}) sets `{}` ({reason}), which would run code in the host's git; remove it from that file to use this repository",
+                path.display(),
                 entry.key
             )));
         }
@@ -637,8 +639,9 @@ fn registered_linked_worktree(entry: &RegisteredWorktree) -> ToolResult<(PathBuf
     if !meta.file_type().is_file() {
         return Err(refuse("not a regular file"));
     }
-    if meta.uid() != rustix::process::geteuid().as_raw() {
-        return Err(refuse("another user owns it"));
+    let me = rustix::process::geteuid().as_raw();
+    if meta.uid() != me {
+        return Err(refuse(&another_owner(&dot_git, meta.uid(), me)));
     }
     if meta.len() > 4096 {
         return Err(refuse("too large"));
@@ -691,6 +694,16 @@ fn registered_linked_worktree(entry: &RegisteredWorktree) -> ToolResult<(PathBuf
         return Err(refuse("its repository registered another worktree there"));
     }
     Ok((expected, common))
+}
+
+/// Why a file another uid owns is refused: the path, the owner found and
+/// who is asking, so the person can tell a real foreign owner (`chown` it
+/// back, or work in a copy) from a mistake.
+fn another_owner(path: &Path, owner: u32, me: u32) -> String {
+    format!(
+        "{} belongs to another user (uid {owner}; this app runs as uid {me})",
+        path.display()
+    )
 }
 
 /// A small file's text, trimmed (`None`: missing, not a plain file, or
@@ -1044,16 +1057,20 @@ impl Repo {
                 "borrows objects from elsewhere (alternates)",
             ),
         ] {
-            if std::fs::symlink_metadata(self.common_dir.join(name)).is_ok() {
-                return Err(unsafe_repo(format!("the repository {reason}")));
+            let path = self.common_dir.join(name);
+            if std::fs::symlink_metadata(&path).is_ok() {
+                return Err(unsafe_repo(format!(
+                    "the repository {reason}: {}",
+                    path.display()
+                )));
             }
         }
-        if std::fs::read_dir(self.common_dir.join("modules"))
-            .is_ok_and(|mut entries| entries.next().is_some())
-        {
-            return Err(unsafe_repo(
-                "the repository has submodules with their own git directories",
-            ));
+        let modules = self.common_dir.join("modules");
+        if std::fs::read_dir(&modules).is_ok_and(|mut entries| entries.next().is_some()) {
+            return Err(unsafe_repo(format!(
+                "the repository has submodules with their own git directories ({}); if those submodules are gone, delete the leftover folders there",
+                modules.display()
+            )));
         }
         let mut configs = vec![
             ("config".to_owned(), self.common_dir.join("config")),
@@ -1076,7 +1093,7 @@ impl Repo {
             let ours = parse_config(&text).map_err(|reason| {
                 unsafe_repo(format!(".git/{name} cannot be parsed safely: {reason}"))
             })?;
-            refuse_dangerous(name, &ours)?;
+            refuse_dangerous(name, path, &ours)?;
             if self.verified_config(name, &text) {
                 continue;
             }
@@ -1089,7 +1106,7 @@ impl Repo {
                     error.message()
                 ))
             })?;
-            refuse_dangerous(name, &theirs)?;
+            refuse_dangerous(name, path, &theirs)?;
             if config_sections(&ours) != config_sections(&theirs) {
                 return Err(unsafe_repo(format!(
                     ".git/{name} reads differently to git and to this check"
@@ -1919,6 +1936,102 @@ mod tests {
         .expect("safe")
         .expect("a repository");
         (dir, base, repo)
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    }
+
+    fn discover(dir: &Path) -> crate::error::ToolResult<Option<Repo>> {
+        Repo::discover(
+            dir,
+            &SandboxConfig::default(),
+            Arc::new(DenyList::default()),
+        )
+    }
+
+    /// The owner's report: a repository they cloned themselves was refused
+    /// as "another user's". Nothing about ownership refuses a repository the
+    /// person owns: not a path through a symlinked parent (macOS `/var` →
+    /// `/private/var`, `/tmp`), and not a linked worktree of it, reached
+    /// either way.
+    #[test]
+    fn a_repository_the_person_owns_opens_through_a_symlinked_parent_and_from_its_worktree() {
+        let (_dir, base, _repo) = repo();
+        let top = base.join("repo");
+        std::fs::write(top.join("a.txt"), "a").expect("write");
+        git(&top, &["add", "a.txt"]);
+        git(&top, &["commit", "-q", "-m", "a"]);
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&base, &link).expect("symlink");
+
+        let through_link = discover(&link.join("repo"))
+            .expect("trusted")
+            .expect("found");
+        assert!(!through_link.is_linked_worktree());
+
+        git(&top, &["worktree", "add", "-q", "-b", "task", "../wt"]);
+        super::trust_worktree_parent(&top);
+        for worktree in [base.join("wt"), link.join("wt")] {
+            let repo = discover(&worktree).expect("trusted").expect("found");
+            assert!(repo.is_linked_worktree());
+            assert_eq!(repo.common_dir(), top.join(".git"));
+        }
+    }
+
+    /// When a repository is refused, the reason names the file or folder
+    /// and how to clear it, never a guess about who owns it.
+    #[test]
+    fn refusals_name_the_path_and_the_way_out() {
+        // Leftover submodule git directories (submodules since removed).
+        let (_dir, base, _repo) = repo();
+        let top = base.join("repo");
+        let modules = top.join(".git/modules");
+        std::fs::create_dir_all(modules.join("apps/old-ui")).expect("modules");
+        let error = discover(&top).expect_err("refused");
+        assert_eq!(error.code(), ErrorCode::UnsafeRepository);
+        assert!(
+            error.message().contains(&modules.display().to_string())
+                && error.message().contains("delete the leftover folders"),
+            "{}",
+            error.message()
+        );
+        assert!(!error.message().contains("another user"));
+        std::fs::remove_dir_all(&modules).expect("clean");
+
+        // A config key that runs code: the file and the key are named.
+        git(&top, &["config", "core.hooksPath", ".husky"]);
+        let error = discover(&top).expect_err("refused");
+        let config = top.join(".git/config");
+        assert!(
+            error.message().contains(&format!("({})", config.display()))
+                && error.message().contains("`core.hookspath`")
+                && error.message().contains("remove it from that file"),
+            "{}",
+            error.message()
+        );
+        git(&top, &["config", "--unset", "core.hooksPath"]);
+        discover(&top).expect("trusted again").expect("found");
+    }
+
+    /// A worktree `.git` another uid owns is still refused (the
+    /// CVE-2022-24765 protection), and the refusal names the path, the
+    /// owner found and who is asking.
+    #[test]
+    fn another_owner_names_the_path_and_both_uids() {
+        let text = super::another_owner(Path::new("/work/wt/.git"), 0, 501);
+        assert_eq!(
+            text,
+            "/work/wt/.git belongs to another user (uid 0; this app runs as uid 501)"
+        );
     }
 
     /// Host git runs under the session's deny list (the host's own
