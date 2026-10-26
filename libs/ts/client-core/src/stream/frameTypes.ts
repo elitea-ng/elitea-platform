@@ -40,7 +40,8 @@ export const EXECUTION_EVENT = {
   steerInjected: 'steer.injected',
   /**
    * A pending steering message left the queue without injection. `data` is
-   * the `SteeringMessage` plus `reason` (`removed`).
+   * the `SteeringMessage` plus `reason` (`removed`, or `handed_off` when the
+   * server took a `turn_ended` message as the next turn).
    */
   steerDropped: 'steer.dropped',
 } as const;
@@ -51,6 +52,8 @@ export const STEERING_STATE = {
   Injected: 'injected',
   Removed: 'removed',
   TurnEnded: 'turn_ended',
+  /** A `turn_ended` message that a hand-off took as the next message. Final. */
+  HandedOff: 'handed_off',
 } as const;
 
 export type SteeringState = (typeof STEERING_STATE)[keyof typeof STEERING_STATE];

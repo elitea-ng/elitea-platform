@@ -10,7 +10,8 @@
  * `own` records which messages THIS tab queued, with the project and the
  * conversation they belong to. Only the client that queued a message sends
  * it again when the turn ends before injection, so this part survives a
- * reload (`sessionStorage`). The lists themselves do not: after a reload the
+ * reload (`sessionStorage`), with the Idempotency-Key of an open hand-off
+ * (so a retry after a reload gets the same answer). The lists themselves do not: after a reload the
  * GET of the list and the SSE replay fill them again.
  */
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
@@ -26,6 +27,8 @@ export interface OwnSteeringRecord {
   /** The A17 queue key of the conversation (`chatBoxQueueKey`). */
   readonly conversationKey: string;
   readonly ids: readonly string[];
+  /** The Idempotency-Key of the hand-off that is not done yet, if one started. */
+  readonly handoffKey?: string;
 }
 
 interface ChatSteeringState {
@@ -34,12 +37,14 @@ interface ChatSteeringState {
   /** Answers whose turn refused steering (`steering_not_supported`, a pipeline). */
   readonly unsupported: Readonly<Record<string, true>>;
   readonly apply: (responseMessageId: string, incoming: readonly SteeringItem[]) => void;
-  readonly addOwn: (responseMessageId: string, record: Omit<OwnSteeringRecord, 'ids'>, id: string) => void;
+  readonly addOwn: (responseMessageId: string, record: Omit<OwnSteeringRecord, 'ids' | 'handoffKey'>, id: string) => void;
   /** Forgets own ids (sent again, or final). The record goes when it has no ids. */
   readonly dropOwn: (responseMessageId: string, ids: readonly string[]) => void;
   /** Removes items from the view (they became the next message). */
   readonly forget: (responseMessageId: string, ids: readonly string[]) => void;
   readonly markUnsupported: (responseMessageId: string) => void;
+  /** Keeps (a string) or forgets (`undefined`) the key of the open hand-off of the answer. */
+  readonly setHandoffKey: (responseMessageId: string, key: string | undefined) => void;
 }
 
 const STORAGE_KEY = 'chat.steeringOwn';
@@ -64,7 +69,8 @@ export function parseOwnRecords(raw: unknown): Record<string, OwnSteeringRecord>
     const row = value as Record<string, unknown>;
     const ids = Array.isArray(row['ids']) ? row['ids'].filter((id): id is string => typeof id === 'string').slice(-MAX_IDS) : [];
     if (typeof row['projectId'] !== 'string' || typeof row['conversationKey'] !== 'string' || ids.length === 0) continue;
-    out[responseId] = { projectId: row['projectId'], conversationKey: row['conversationKey'], ids };
+    const key = row['handoffKey'];
+    out[responseId] = { projectId: row['projectId'], conversationKey: row['conversationKey'], ids, ...(typeof key === 'string' && key !== '' ? { handoffKey: key } : {}) };
   }
   return out;
 }
@@ -96,9 +102,10 @@ export function createChatSteeringStore(): ChatSteeringStore {
       },
       addOwn: (responseMessageId, record, id) => {
         const own = get().own;
-        const ids = own[responseMessageId]?.ids ?? [];
+        const current = own[responseMessageId];
+        const ids = current?.ids ?? [];
         if (ids.includes(id)) return;
-        writeOwn({ ...own, [responseMessageId]: { ...record, ids: [...ids, id].slice(-MAX_IDS) } });
+        writeOwn({ ...own, [responseMessageId]: { ...current, ...record, ids: [...ids, id].slice(-MAX_IDS) } });
       },
       dropOwn: (responseMessageId, ids) => {
         const own = { ...get().own };
@@ -114,6 +121,13 @@ export function createChatSteeringStore(): ChatSteeringStore {
         const current = items[responseMessageId];
         if (current === undefined) return;
         set({ items: { ...items, [responseMessageId]: current.filter((item) => !ids.includes(item.id)) } });
+      },
+      setHandoffKey: (responseMessageId, key) => {
+        const own = get().own;
+        const current = own[responseMessageId];
+        if (current === undefined || current.handoffKey === key) return;
+        const { handoffKey: _old, ...rest } = current;
+        writeOwn({ ...own, [responseMessageId]: key === undefined ? rest : { ...rest, handoffKey: key } });
       },
       markUnsupported: (responseMessageId) => {
         set({ unsupported: { ...get().unsupported, [responseMessageId]: true } });
@@ -144,8 +158,8 @@ export const useChatSteeringStore = Object.assign(useChatSteeringStoreHook, {
 
 /**
  * Folds one steering SSE frame into the store. `steer.dropped` carries the
- * message plus `reason`; it is shown as removed whatever state the frame
- * names. A frame that is not a `SteeringMessage` is skipped.
+ * message plus `reason` (`removed` or `handed_off`); it is shown as removed
+ * whatever state the frame names. A frame that is not a `SteeringMessage` is skipped.
  */
 export function applySteeringEvent(event: string, frame: ExecutionEventData): void {
   const parsed = parseSteeringMessage(frame);

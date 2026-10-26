@@ -154,23 +154,27 @@ export function mergeSteeringAll(items: readonly SteeringItem[], incoming: reado
 }
 
 /**
- * The items to show in the transcript. A removed item is not shown. An
+ * The items to show in the transcript. A removed or `handed_off` item is not
+ * shown (a hand-off sends its text as a normal message). An
  * injected item whose `messageId` is already a row of the transcript is not
  * shown either: after a reload the server sends it as an ordinary user
  * message, and the client must not show it two times.
  */
 export function visibleSteering(items: readonly SteeringItem[], transcriptIds: ReadonlySet<string>): SteeringItem[] {
   return items.filter((item) => {
-    if (item.state === STEERING_STATE.Removed) return false;
+    if (item.state === STEERING_STATE.Removed || item.state === STEERING_STATE.HandedOff) return false;
     return item.messageId === null || !transcriptIds.has(item.messageId);
   });
 }
 
 /**
- * The items of this client that the turn did not read: they must go as the
- * next message. Only `own` ids count, because only the client that queued a
- * message sends it again. With `turnEnded` false, a `pending` item does not
- * count (the turn can still inject it); only `turn_ended` does.
+ * The items of this client that the turn did not read. When this list is
+ * not empty, the client calls the hand-off (`handOffChatExecutionSteering`)
+ * and sends ONLY the texts that the hand-off returns: the server can take
+ * the rows first. Only `own` ids count, because only the client that queued
+ * a message hands it off. With `turnEnded` false, a `pending` item does not
+ * count (the turn can still inject it); only `turn_ended` does. A
+ * `handed_off` item never counts: it is final.
  */
 export function leftoverSteering(items: readonly SteeringItem[], own: ReadonlySet<string>, turnEnded: boolean): SteeringItem[] {
   return items.filter((item) => {
@@ -180,7 +184,10 @@ export function leftoverSteering(items: readonly SteeringItem[], own: ReadonlySe
   });
 }
 
-/** The one next message that the leftover items become. Blank texts are skipped. */
+/**
+ * The one next message that the handed-off items become. Blank texts are
+ * skipped. An empty result means: send nothing.
+ */
 export function joinSteeringTexts(items: readonly Pick<SteeringItem, 'content'>[]): string {
   return items
     .map((item) => item.content)

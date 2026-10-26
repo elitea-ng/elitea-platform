@@ -51,7 +51,7 @@ export const SteeringMessage = zod
     state: zod
       .string()
       .describe(
-        "One of `pending` (waits for the next safe point), `injected` (the model read it; `message_id` names the conversation message), `removed` (the author removed it) and `turn_ended` (the turn ended first; send it as the next message). A client treats an unknown value as `pending`.\n",
+        "One of `pending` (waits for the next safe point), `injected` (the model read it; `message_id` names the conversation message), `removed` (the author removed it) and `turn_ended` (the turn ended first; it waits for the hand-off) and `handed_off` (final: a client or the server took it as the next turn's message). A client treats an unknown value as `pending`.\n",
       ),
     revision: zod.int().describe("Starts at 1 and advances with every edit."),
     created_at: zod.iso.datetime({ offset: true }),
@@ -63,7 +63,7 @@ export const SteeringMessage = zod
       .describe("The conversation message that holds the text, once injected."),
   })
   .describe(
-    "One steering message of a running turn (client contract 1.26). NOTE(W2): internal/api/v2/agentexecution/steering.go:272 (`steeringView`).\n",
+    "One steering message of a running turn (client contract 1.26). NOTE(W2): internal/api/v2/agentexecution/steering.go:303 (`steeringView`).\n",
   );
 
 export type SteeringMessage = zod.input<typeof SteeringMessage>;

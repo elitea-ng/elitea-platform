@@ -59,6 +59,7 @@ describe('parseSteeringMessage', () => {
   it('treats an unknown state as pending', () => {
     assert.equal(steeringStateOf('paused_forever'), 'pending');
     assert.equal(steeringStateOf('turn_ended'), 'turn_ended');
+    assert.equal(steeringStateOf('handed_off'), 'handed_off');
     assert.equal(parseSteeringMessage({ ...WIRE, state: 'later' })?.state, 'pending');
   });
 
@@ -92,6 +93,12 @@ describe('mergeSteering', () => {
     assert.equal(replayed[0]?.messageId, 'm1');
   });
 
+  it('handed_off is final: a replayed turn_ended or pending copy of the same revision does not undo it', () => {
+    const handed = mergeSteering([item({ state: 'turn_ended' })], item({ state: 'handed_off' }));
+    assert.equal(handed[0]?.state, 'handed_off');
+    assert.equal(mergeSteering(handed, item())[0]?.state, 'handed_off');
+  });
+
   it('merges a list in order', () => {
     const list = mergeSteeringAll([], [item(), item({ state: 'injected', messageId: 'm1' })]);
     assert.equal(list.length, 1);
@@ -100,8 +107,8 @@ describe('mergeSteering', () => {
 });
 
 describe('visibleSteering', () => {
-  it('hides removed items and items that the transcript already holds', () => {
-    const list = [item({ id: 'a' }), item({ id: 'b', state: 'removed' }), item({ id: 'c', state: 'injected', messageId: 'm1' }), item({ id: 'd', state: 'injected', messageId: 'm2' })];
+  it('hides removed and handed_off items and items that the transcript already holds', () => {
+    const list = [item({ id: 'a' }), item({ id: 'b', state: 'removed' }), item({ id: 'c', state: 'injected', messageId: 'm1' }), item({ id: 'd', state: 'injected', messageId: 'm2' }), item({ id: 'e', state: 'handed_off' })];
     assert.deepEqual(visibleSteering(list, new Set(['m1'])).map((i) => i.id), ['a', 'd']);
   });
 });
@@ -113,6 +120,10 @@ describe('leftoverSteering', () => {
   });
   it('keeps pending items while the turn can still read them', () => {
     assert.deepEqual(leftoverSteering(list, new Set(['a', 'b', 'c']), false).map((i) => i.id), ['b']);
+  });
+  it('never takes a handed_off item: the hand-off already sent it', () => {
+    const handed = [item({ id: 'a', state: 'handed_off' }), item({ id: 'b', state: 'turn_ended' })];
+    assert.deepEqual(leftoverSteering(handed, new Set(['a', 'b']), true).map((i) => i.id), ['b']);
   });
 });
 

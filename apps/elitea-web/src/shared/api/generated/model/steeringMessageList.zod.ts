@@ -48,7 +48,7 @@ export const SteeringMessageList = zod
     items: zod.array(SteeringMessage),
   })
   .describe(
-    "The steering messages of one turn, oldest first. NOTE(W2): internal/api/v2/agentexecution/steering.go:172 (`list`).\n",
+    "The steering messages of one turn, oldest first. NOTE(W2): internal/api/v2/agentexecution/steering.go:175 (`list`).\n",
   );
 
 export type SteeringMessageList = zod.input<typeof SteeringMessageList>;

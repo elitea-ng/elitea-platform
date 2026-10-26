@@ -20,11 +20,18 @@
  *
  * WHEN A MESSAGE IS SENT AGAIN. A message that the turn did not inject is
  * `turn_ended` on the server after the turn. This tab (and only this tab,
- * see `chatSteering.store.ts`'s `own`) then joins the texts of its own
- * leftover messages with a blank line, queues ONE normal message (A17) and
- * DELETEs the rows. It reads the server list for this, never only the
- * local view: the SSE has no `turn_ended` event, and a switch to another
- * conversation also closes the stream while the turn runs on.
+ * see `chatSteering.store.ts`'s `own`) then calls the hand-off
+ * (`POST .../steering/handoff`). The hand-off takes the caller's
+ * `turn_ended` rows in one step (`handed_off`) and returns them. The tab
+ * joins ONLY the returned texts with a blank line and queues ONE normal
+ * message (A17). An empty answer means that the server took them first
+ * (about 10 s after the turn end it starts the next turn itself): the tab
+ * sends nothing. So the server and a client never both start a turn. The
+ * Idempotency-Key of the hand-off stays in the `own` record until the
+ * answer is used, so a retry (also after a reload) gets the same rows. The
+ * tab reads the server list first, never only the local view: the SSE has
+ * no `turn_ended` event, and a switch to another conversation also closes
+ * the stream while the turn runs on.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -39,7 +46,15 @@ import {
   type SteeringItem,
 } from '@elitea/client-core/stream';
 
-import { editSteering, listSteering, newSteeringKey, queueSteering, removeSteering, type SteeringTarget } from '@/entities/conversation/api/steeringApi';
+import {
+  editSteering,
+  handOffSteering,
+  listSteering,
+  newSteeringKey,
+  queueSteering,
+  removeSteering,
+  type SteeringTarget,
+} from '@/entities/conversation/api/steeringApi';
 import { t } from '@/shared/i18n';
 
 import { useChatSteeringStore } from './chatSteering.store';
@@ -145,15 +160,25 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
 
   /**
    * Applies the end-of-turn rule to one answer of this conversation. Reads
-   * the server list; `turn_ended` own messages become ONE A17 message and
-   * their rows are deleted. Own messages that are still `pending` keep the
-   * record, and the list is read again a little later (the server can mark
-   * them a moment after the terminal frame).
+   * the server list. When own messages are `turn_ended`, calls the hand-off
+   * and queues ONLY the texts that it returns as ONE A17 message. Own
+   * messages that are still `pending` keep the record, and the list is read
+   * again a little later (the server can mark them a moment after the
+   * terminal frame). On a failure the record keeps the hand-off key, so the
+   * next settle sends the same key and gets the same rows.
    */
   const settle = useCallback(async (responseId: string, attempt: number): Promise<void> => {
     const record = useChatSteeringStore.getState().own[responseId];
     if (record === undefined || settling.current.has(responseId)) return;
     settling.current.add(responseId);
+    // Runs this settle again after the wait of `attempt`, if one is left and no turn runs then.
+    const again = (): void => {
+      const wait = SETTLE_RETRY_MS[attempt];
+      if (wait === undefined) return;
+      setTimeout(() => {
+        if (!live.current.isStreaming) void settle(responseId, attempt + 1);
+      }, wait);
+    };
     try {
       const target = targetOf(responseId, record.projectId);
       const items = await listSteering(target);
@@ -163,20 +188,25 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
       const leftovers = leftoverSteering(items, own, false);
       // Another conversation is on screen now: its A17 queue is not this one. Keep the record for the reopen.
       if (live.current.conversationKey !== record.conversationKey) return;
-      const text = joinSteeringTexts(leftovers);
-      if (text !== '') live.current.queueAfterTurn(text);
-      await Promise.all(leftovers.map((item) => removeSteering(target, item.id)));
-      store.forget(responseId, leftovers.map((item) => item.id));
+      if (leftovers.length > 0 || record.handoffKey !== undefined) {
+        const key = record.handoffKey ?? newSteeringKey();
+        store.setHandoffKey(responseId, key);
+        const handed = await handOffSteering(target, key);
+        const text = joinSteeringTexts(handed);
+        if (text !== '' && live.current.conversationKey === record.conversationKey) live.current.queueAfterTurn(text);
+        // Another conversation came on screen during the call: keep the text for the reopen.
+        else if (text !== '') stranded.current.set(record.conversationKey, [...(stranded.current.get(record.conversationKey) ?? []), text]);
+        // The answer is used: the next hand-off of this answer needs a new key.
+        store.setHandoffKey(responseId, undefined);
+        store.forget(responseId, leftovers.map((item) => item.id));
+        store.apply(responseId, handed);
+      }
       const open = items.filter((item) => own.has(item.id) && item.state === STEERING_STATE.Pending);
       store.dropOwn(responseId, record.ids.filter((id) => !open.some((item) => item.id === id)));
-      const wait = SETTLE_RETRY_MS[attempt];
-      if (open.length > 0 && wait !== undefined) {
-        setTimeout(() => {
-          if (!live.current.isStreaming) void settle(responseId, attempt + 1);
-        }, wait);
-      }
+      if (open.length > 0) again();
     } catch {
-      // Handled: the record stays, and the next settle (turn end, reopen) reads again.
+      // Handled: the record (and its hand-off key) stays. A later settle sends the same key and gets the same rows.
+      again();
     } finally {
       settling.current.delete(responseId);
     }

@@ -2,7 +2,7 @@ import type { components } from '@/api/generated/elitea.gen';
 import { createApiClient } from '@/api/client';
 import type { BaseFetch } from '@/api/middleware';
 import { prepareTurn } from '@/api/queries/sendMessage';
-import { editSteering, listSteering, queueSteering, removeSteering } from '@/api/queries/steering';
+import { editSteering, handOffSteering, listSteering, queueSteering, removeSteering } from '@/api/queries/steering';
 import { parseFrame } from '@/features/chat/frames';
 import { steeringRows } from '@/features/chat/SteeringRows';
 import { TurnController } from '@/features/chat/turnController';
@@ -36,9 +36,12 @@ const EXAMPLE: SteeringMessage = {
   message_id: null,
 };
 const ANSWER = EXAMPLE.response_message_id;
+// The handOffChatExecutionSteering example of v2.yaml: the same message, now `handed_off`.
+const HANDED: SteeringMessage = { ...EXAMPLE, state: 'handed_off', updated_at: '2026-10-26T10:15:40Z' };
 // The 429 `rate_limited` example of v2.yaml.
 const RATE_LIMITED: SteeringError = { error: 'rate_limited', message: 'Too many steering messages. Retry after the interval in Retry-After.', retry_after_ms: 2000 };
 const ROUTE = `/api/v2/elitea_core/task/prompt_lib/${P}/${ANSWER}/steering`;
+const HANDOFF = `${ROUTE}/handoff`;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const flush = async () => {
   for (let i = 0; i < 10; i++) await new Promise<void>((r) => setTimeout(r, 0));
@@ -121,6 +124,13 @@ describe('steering calls (client contract 1.26)', () => {
     expect(seen.map((s) => `${s.method} ${s.path}`)).toEqual([`GET ${ROUTE}`, `PATCH ${ROUTE}/${EXAMPLE.id}`, `DELETE ${ROUTE}/${EXAMPLE.id}`]);
   });
 
+  it('the hand-off POST sends the Idempotency-Key and no body, and answers the handed_off messages', async () => {
+    const { client, seen } = workspace(() => json({ items: [HANDED] }));
+    await expect(handOffSteering(P, ANSWER, 'key-h', client)).resolves.toMatchObject([{ id: EXAMPLE.id, state: 'handed_off', content: EXAMPLE.content }]);
+    expect(seen[0]).toMatchObject({ method: 'POST', path: HANDOFF, key: 'key-h' });
+    expect(seen[0]?.body ?? '').toBe('');
+  });
+
   it('refuses an answer id that is not a uuid before any request', async () => {
     const { client, seen } = workspace(() => json({}));
     await expect(queueSteering(P, 'resp-1', 'x', 'k', client)).resolves.toMatchObject({ ok: false });
@@ -135,6 +145,10 @@ describe('steer frames', () => {
       kind: 'steer',
       item: { state: 'removed' },
     });
+    expect(parseFrame({ event: 'steer.dropped', data: JSON.stringify({ ...HANDED, reason: 'handed_off' }), id: '4' })).toMatchObject({
+      kind: 'steer',
+      item: { state: 'removed' },
+    });
     expect(parseFrame({ event: 'steer.injected', data: '{}', id: '3' })).toEqual({ kind: 'invalid', event: 'steer.injected' });
   });
 
@@ -145,6 +159,7 @@ describe('steer frames', () => {
         { ...base, id: 'p', content: 'a', state: 'pending', messageId: null },
         { ...base, id: 'i', content: 'b', state: 'injected', messageId: 'm-i' },
         { ...base, id: 't', content: 'c', state: 'turn_ended', messageId: null },
+        { ...base, id: 'h', content: 'd', state: 'handed_off', messageId: null },
       ],
       new Set(['m-i']),
     );
@@ -161,10 +176,11 @@ describe('TurnController steering', () => {
     return t;
   }
 
-  it('queues against the running answer, folds the frames, and sends the unread own messages as ONE next message', async () => {
+  it('queues against the running answer, folds the frames, hands off the unread own messages and sends ONLY what the hand-off returned', async () => {
     const second = { ...EXAMPLE, id: '0d4b5f8e-1c2a-4e3b-9f00-112233445566', content: 'And keep the logs.' };
     const posted = [json(EXAMPLE, 202), json(second, 202)];
-    const { c, stream, seen, onLeftover } = await streaming((method) => {
+    const { c, stream, seen, onLeftover } = await streaming((method, path) => {
+      if (path === HANDOFF) return json({ items: [{ ...second, state: 'handed_off' }, { ...HANDED, id: '5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9', content: 'From the other phone.' }] });
       if (method === 'POST') return posted.shift()!;
       if (method === 'GET') return json({ items: [{ ...EXAMPLE, state: 'injected', message_id: '9a1e6b02-55c3-4d7e-b0f4-2e8c7d6a3b90' }, { ...second, state: 'turn_ended' }] });
       return new Response(null, { status: 204 });
@@ -181,10 +197,69 @@ describe('TurnController steering', () => {
     expect(c.getSnapshot().turn.steering.map((s) => s.state)).toEqual(['injected', 'pending']);
     stream.connections[0].push(sse('execution.node_event', { type: 'agent_response', content: 'done', response_metadata: { finish_reason: 'stop' } }, 2));
     await flush();
+    expect(seen.filter((s) => s.path === HANDOFF).map((s) => s.key)).toEqual(['3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b']);
     expect(onLeftover).toHaveBeenCalledTimes(1);
-    expect(onLeftover).toHaveBeenCalledWith('And keep the logs.');
-    expect(seen.filter((s) => s.method === 'DELETE').map((s) => s.path)).toEqual([`${ROUTE}/${second.id}`]);
+    expect(onLeftover).toHaveBeenCalledWith('And keep the logs.\n\nFrom the other phone.');
+    expect(seen.filter((s) => s.method === 'DELETE')).toEqual([]);
     expect(c.getSnapshot().ownSteering).toEqual([]);
+  });
+
+  it('sends nothing when the hand-off answers an empty list (the server took the messages first)', async () => {
+    const { c, stream, seen, onLeftover } = await streaming((method, path) => {
+      if (path === HANDOFF) return json({ items: [] });
+      if (method === 'POST') return json(EXAMPLE, 202);
+      return json({ items: [{ ...EXAMPLE, state: 'turn_ended' }] });
+    });
+    await expect(c.steer(EXAMPLE.content)).resolves.toBe('queued');
+    stream.connections[0].push(sse('execution.node_event', { type: 'pipeline_finish', content: 'done' }, 1));
+    await flush();
+    expect(seen.filter((s) => s.path === HANDOFF)).toHaveLength(1);
+    expect(onLeftover).not.toHaveBeenCalled();
+    expect(c.getSnapshot().ownSteering).toEqual([]);
+  });
+
+  it('a failed hand-off goes again with the SAME Idempotency-Key, and the text is sent one time', async () => {
+    const handOffs = [json({ error: 'steering_invalid' }, 502), json({ items: [HANDED] })];
+    const waits: number[] = [];
+    const { c, stream, seen, onLeftover } = await streaming(
+      (method, path) => {
+        if (path === HANDOFF) return handOffs.shift()!;
+        if (method === 'POST') return json(EXAMPLE, 202);
+        return json({ items: [{ ...EXAMPLE, state: 'turn_ended' }] });
+      },
+      async (ms) => {
+        waits.push(ms);
+      },
+    );
+    await expect(c.steer(EXAMPLE.content)).resolves.toBe('queued');
+    stream.connections[0].push(sse('execution.node_event', { type: 'pipeline_finish', content: 'done' }, 1));
+    await flush();
+    const keys = seen.filter((s) => s.path === HANDOFF).map((s) => s.key);
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+    expect(waits).toEqual([500]);
+    expect(onLeftover).toHaveBeenCalledTimes(1);
+    expect(onLeftover).toHaveBeenCalledWith(EXAMPLE.content);
+  });
+
+  it('reads the list again while an own message is still pending, then hands it off', async () => {
+    const lists = [json({ items: [EXAMPLE] }), json({ items: [{ ...EXAMPLE, state: 'turn_ended' }] })];
+    const waits: number[] = [];
+    const { c, stream, onLeftover } = await streaming(
+      (method, path) => {
+        if (path === HANDOFF) return json({ items: [HANDED] });
+        if (method === 'POST') return json(EXAMPLE, 202);
+        return lists.shift() ?? json({ items: [] });
+      },
+      async (ms) => {
+        waits.push(ms);
+      },
+    );
+    await expect(c.steer(EXAMPLE.content)).resolves.toBe('queued');
+    stream.connections[0].push(sse('execution.node_event', { type: 'pipeline_finish', content: 'done' }, 1));
+    await flush();
+    expect(waits).toEqual([1500]);
+    expect(onLeftover).toHaveBeenCalledWith(EXAMPLE.content);
   });
 
   it('steering_not_supported: the text is not sent and steering stops for this turn', async () => {

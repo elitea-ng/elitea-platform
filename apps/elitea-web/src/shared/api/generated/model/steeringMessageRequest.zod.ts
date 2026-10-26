@@ -55,7 +55,7 @@ export const SteeringMessageRequest = zod
       ),
   })
   .describe(
-    "The text of a steering message. NOTE(W2): internal/api/v2/agentexecution/steering.go:124 (`decodeSteeringBody`).\n",
+    "The text of a steering message. NOTE(W2): internal/api/v2/agentexecution/steering.go:127 (`decodeSteeringBody`).\n",
   );
 
 export type SteeringMessageRequest = zod.input<typeof SteeringMessageRequest>;

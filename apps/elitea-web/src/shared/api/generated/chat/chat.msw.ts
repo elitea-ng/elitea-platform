@@ -1721,6 +1721,24 @@ export const getListChatExecutionSteeringResponseMock =
     ],
   });
 
+export const getHandOffChatExecutionSteeringResponseMock =
+  (): SteeringMessageList => ({
+    items: [
+      {
+        id: "7f0c3c9a-2d4e-4b8f-9a51-0d6c2f1e8b11",
+        response_message_id: "3b9d2a40-7c55-4e1a-8f0b-6a2c9e4d1f20",
+        author_id: 1,
+        content: "Skip the tests for now and only fix the build.",
+        state: "handed_off",
+        revision: 1,
+        created_at: "2026-10-26T10:15:02Z",
+        updated_at: "2026-10-26T10:15:40Z",
+        injected_at: null,
+        message_id: null,
+      },
+    ],
+  });
+
 export const getUpdateChatExecutionSteeringResponseMock =
   (): SteeringMessage => ({
     id: "7f0c3c9a-2d4e-4b8f-9a51-0d6c2f1e8b11",
@@ -3532,6 +3550,32 @@ export const getListChatExecutionSteeringMockHandler = (
   );
 };
 
+export const getHandOffChatExecutionSteeringMockHandler = (
+  overrideResponse?:
+    | SteeringMessageList
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<SteeringMessageList> | SteeringMessageList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/task/prompt_lib/:projectId/:responseMessageId/steering/handoff",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getHandOffChatExecutionSteeringResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getUpdateChatExecutionSteeringMockHandler = (
   overrideResponse?:
     | SteeringMessage
@@ -4061,6 +4105,7 @@ export const getChatMock = () => [
   getDecideExecutionInterruptMockHandler(),
   getSteerChatExecutionMockHandler(),
   getListChatExecutionSteeringMockHandler(),
+  getHandOffChatExecutionSteeringMockHandler(),
   getUpdateChatExecutionSteeringMockHandler(),
   getRemoveChatExecutionSteeringMockHandler(),
   getRegenerateChatMessageMockHandler(),

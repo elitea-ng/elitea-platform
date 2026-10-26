@@ -3,9 +3,10 @@
  *
  * A message that the user sends while a cloud turn runs is queued against the
  * running answer. The worker injects it at the next safe point. These
- * adapters wrap the four generated operations (`steerChatExecution`,
+ * adapters wrap the five generated operations (`steerChatExecution`,
  * `listChatExecutionSteering`, `updateChatExecutionSteering`,
- * `removeChatExecutionSteering`) and turn each answer into a value: a
+ * `removeChatExecutionSteering`, `handOffChatExecutionSteering`) and turn
+ * each answer into a value: a
  * refusal is `{ ok: false, code }` with the contract's `error` code, never a
  * throw, so that the caller can choose the fallback.
  *
@@ -22,6 +23,7 @@ import {
 } from '@elitea/client-core/stream';
 
 import {
+  handOffChatExecutionSteering,
   listChatExecutionSteering,
   removeChatExecutionSteering,
   steerChatExecution,
@@ -106,4 +108,18 @@ export async function removeSteering(target: SteeringTarget, steeringId: string)
   } catch (error) {
     return refusal(error);
   }
+}
+
+/**
+ * Takes the caller's `turn_ended` messages of the answer (now `handed_off`)
+ * and returns them, oldest first. The caller sends ONLY these texts. An
+ * empty list means that the server (or another tab) took them first: send
+ * nothing. Send the same `idempotencyKey` again on a retry: the server then
+ * answers the same messages again. Throws when the call fails.
+ */
+export async function handOffSteering(target: SteeringTarget, idempotencyKey: string): Promise<SteeringItem[]> {
+  const envelope = await handOffChatExecutionSteering(String(target.projectId), target.responseMessageId, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  });
+  return parseSteeringList(envelope.data);
 }

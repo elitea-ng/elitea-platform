@@ -5,7 +5,7 @@
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
  * client contract:    1.26
- * operations sha256:  3ec128ea4d91c38bca242f7ba1fce3ca43f00e57fdecc0824f011a149c4b0963
+ * operations sha256:  783025a1641da0a5b9253902c5b1a2dfcf89af67eb4083a7bb707da0de98447f
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -1392,9 +1392,19 @@ export interface paths {
          *     conversation (`message_id`), placed directly after the turn's
          *     question, so a reload and every other client see it. A pending
          *     message that the author removes is `removed`. A pending message that
-         *     no safe point reached before the turn ended is `turn_ended`: the
-         *     client sends it as the next turn's message (and then removes it), so
-         *     nothing is lost.
+         *     no safe point reached before the turn ended is `turn_ended`, and
+         *     becomes the next turn's message through ONE hand-off, so nothing is
+         *     lost and no turn starts twice: the client calls
+         *     handOffChatExecutionSteering, which takes the caller's `turn_ended`
+         *     messages atomically (`handed_off`), and then sends their texts as
+         *     one message. When no client hands them off within about 10 seconds
+         *     of the turn's end, the server takes them the same way and starts the
+         *     next turn itself, as the author, with the previous turn's
+         *     participant and its stored settings, after it checks the author's
+         *     permission again (`handed_off`; a reload or a list shows it). That
+         *     turn has no MCP tokens of the client: an MCP server that needs one
+         *     asks for authorization, as for a client that holds no token.
+         *     Whoever takes the messages first wins; the other gets an empty list.
          *
          *     EVENTS. The execution event stream
          *     (`/api/v2/executions/{project_id}/{execution_id}/events`) carries
@@ -1465,6 +1475,43 @@ export interface paths {
          *     The same bounds and audit as the queue apply.
          */
         patch: operations["updateChatExecutionSteering"];
+        trace?: never;
+    };
+    "/elitea_core/task/prompt_lib/{project_id}/{response_message_id}/steering/handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+                /** @description The ended answer whose `turn_ended` messages are taken. */
+                response_message_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Take the caller's turn_ended steering messages as the next message
+         * @description Client contract 1.26. Takes, in one transaction, every `turn_ended`
+         *     steering message of this answer that the CALLER queued, marks them
+         *     `handed_off` and answers them, oldest first. The client then sends
+         *     their texts, joined with a blank line, as one normal message (the
+         *     same send as the composer). The server's own hand-off (about 10
+         *     seconds after the turn ends, see steerChatExecution) takes rows the
+         *     same way, so a message is taken once: when the server took them
+         *     first, the list is empty and the client sends nothing.
+         *
+         *     IDEMPOTENCY. `Idempotency-Key` is REQUIRED (400
+         *     `idempotency_key_required`): a retry with the same key answers the
+         *     same messages again, so a lost answer loses no text. A running turn
+         *     answers an empty list (its messages are not `turn_ended`).
+         */
+        post: operations["handOffChatExecutionSteering"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/elitea_core/toolkit_available_tools/prompt_lib/{project_id}/{toolkit_id}": {
@@ -3530,14 +3577,14 @@ export interface components {
             static_decisions: components["schemas"]["StaticPipelineLeafDecision"][];
             thread_id?: string;
         };
-        /** @description A refused steering call. `error` is a machine code (`steering_invalid`, `idempotency_key_required`, `turn_not_running`, `steering_not_supported`, `steering_queue_full`, `idempotency_conflict`, `steering_not_found`, `steering_not_pending`, `rate_limited`) or, for 401/403/502, a message. `retry_after_ms` is set on a 429 `rate_limited` only: the wait before the next try, in milliseconds. NOTE(W2): internal/api/v2/agentexecution/steering.go:319 (`writeSteeringError`). */
+        /** @description A refused steering call. `error` is a machine code (`steering_invalid`, `idempotency_key_required`, `turn_not_running`, `steering_not_supported`, `steering_queue_full`, `idempotency_conflict`, `steering_not_found`, `steering_not_pending`, `rate_limited`) or, for 401/403/502, a message. `retry_after_ms` is set on a 429 `rate_limited` only: the wait before the next try, in milliseconds. NOTE(W2): internal/api/v2/agentexecution/steering.go:350 (`writeSteeringError`). */
         SteeringError: {
             error: string;
             message?: string;
             /** Format: int64 */
             retry_after_ms?: number;
         };
-        /** @description One steering message of a running turn (client contract 1.26). NOTE(W2): internal/api/v2/agentexecution/steering.go:272 (`steeringView`). */
+        /** @description One steering message of a running turn (client contract 1.26). NOTE(W2): internal/api/v2/agentexecution/steering.go:303 (`steeringView`). */
         SteeringMessage: {
             /**
              * Format: int64
@@ -3563,16 +3610,16 @@ export interface components {
              * @description Starts at 1 and advances with every edit.
              */
             revision: number;
-            /** @description One of `pending` (waits for the next safe point), `injected` (the model read it; `message_id` names the conversation message), `removed` (the author removed it) and `turn_ended` (the turn ended first; send it as the next message). A client treats an unknown value as `pending`. */
+            /** @description One of `pending` (waits for the next safe point), `injected` (the model read it; `message_id` names the conversation message), `removed` (the author removed it) and `turn_ended` (the turn ended first; it waits for the hand-off) and `handed_off` (final: a client or the server took it as the next turn's message). A client treats an unknown value as `pending`. */
             state: string;
             /** Format: date-time */
             updated_at: string;
         };
-        /** @description The steering messages of one turn, oldest first. NOTE(W2): internal/api/v2/agentexecution/steering.go:172 (`list`). */
+        /** @description The steering messages of one turn, oldest first. NOTE(W2): internal/api/v2/agentexecution/steering.go:175 (`list`). */
         SteeringMessageList: {
             items: components["schemas"]["SteeringMessage"][];
         };
-        /** @description The text of a steering message. NOTE(W2): internal/api/v2/agentexecution/steering.go:124 (`decodeSteeringBody`). */
+        /** @description The text of a steering message. NOTE(W2): internal/api/v2/agentexecution/steering.go:127 (`decodeSteeringBody`). */
         SteeringMessageRequest: {
             /** @description The message, at most 16 KiB of UTF-8 and not only white space. */
             content: string;
@@ -6490,6 +6537,84 @@ export interface operations {
                 };
             };
             /** @description The request timed out. Retry (with the same key for a queue). */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    handOffChatExecutionSteering: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description One key per hand-off, repeated on every retry. */
+                "Idempotency-Key": string;
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+                /** @description The ended answer whose `turn_ended` messages are taken. */
+                response_message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The messages this hand-off took (maybe none). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "items": [
+                     *         {
+                     *           "id": "7f0c3c9a-2d4e-4b8f-9a51-0d6c2f1e8b11",
+                     *           "response_message_id": "3b9d2a40-7c55-4e1a-8f0b-6a2c9e4d1f20",
+                     *           "author_id": 1,
+                     *           "content": "Skip the tests for now and only fix the build.",
+                     *           "state": "handed_off",
+                     *           "revision": 1,
+                     *           "created_at": "2026-10-26T10:15:02Z",
+                     *           "updated_at": "2026-10-26T10:15:40Z",
+                     *           "injected_at": null,
+                     *           "message_id": null
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    "application/json": components["schemas"]["SteeringMessageList"];
+                };
+            };
+            /** @description An invalid id, a missing or malformed Idempotency-Key (`idempotency_key_required`), or an `X-Client-Version` that does not parse. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SteeringError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            /** @description The hand-off could not be recorded. Retry with the same key. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SteeringError"];
+                };
+            };
+            /** @description The request timed out. Retry with the same key. */
             504: {
                 headers: {
                     [name: string]: unknown;

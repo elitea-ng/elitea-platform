@@ -783,7 +783,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 349 -> 353 (client contract 1.27): steerChatExecution,
 // listChatExecutionSteering, updateChatExecutionSteering and
 // removeChatExecutionSteering, the steering queue of a running chat turn.
-const GENERATED_OPERATION_COUNT = 353;
+// 353 -> 354 (client contract 1.27): handOffChatExecutionSteering, the
+// hand-off of the turn_ended steering messages as the next message. The
+// manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 354;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

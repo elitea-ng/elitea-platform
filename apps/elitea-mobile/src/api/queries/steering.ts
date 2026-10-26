@@ -19,6 +19,7 @@ import {
  *   GET    /elitea_core/task/prompt_lib/{project_id}/{response_message_id}/steering        listChatExecutionSteering
  *   PATCH  /elitea_core/task/prompt_lib/{project_id}/{response_message_id}/steering/{id}   updateChatExecutionSteering
  *   DELETE /elitea_core/task/prompt_lib/{project_id}/{response_message_id}/steering/{id}   removeChatExecutionSteering
+ *   POST   /elitea_core/task/prompt_lib/{project_id}/{response_message_id}/steering/handoff handOffChatExecutionSteering
  *
  * A message sent while the answer runs is queued against it; the worker
  * injects it at the next safe point of the same turn. Each call answers a
@@ -38,6 +39,7 @@ export type SteeringCallResult =
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 const ROUTE = '/elitea_core/task/prompt_lib/{project_id}/{response_message_id}/steering' as const;
+const HANDOFF_ROUTE = '/elitea_core/task/prompt_lib/{project_id}/{response_message_id}/steering/handoff' as const;
 const ITEM_ROUTE = '/elitea_core/task/prompt_lib/{project_id}/{response_message_id}/steering/{steering_id}' as const;
 
 /** One key per intended message: a uuid without braces (`^[A-Za-z0-9_-]+$`, at most 128). */
@@ -156,4 +158,51 @@ export function removeSteering(
 ): Promise<SteeringCallResult> {
   if (!validTarget(projectId, responseMessageId)) return Promise.resolve({ ok: false, code: 'steering_invalid', status: undefined });
   return call(() => client.DELETE(ITEM_ROUTE, { params: { path: { ...path(projectId, responseMessageId), steering_id: steeringId } } }));
+}
+
+/**
+ * Takes the caller's `turn_ended` messages of the ended answer (now
+ * `handed_off`) and returns them, oldest first. Send ONLY these texts as the
+ * next message. An empty list means that the server took them first (it
+ * then starts the next turn itself): send nothing. A retry sends the SAME
+ * `idempotencyKey` and gets the same messages. Throws when the call fails.
+ */
+export async function handOffSteering(
+  projectId: number,
+  responseMessageId: string,
+  idempotencyKey: string,
+  client: ApiClient = sessionApiClient(),
+): Promise<SteeringItem[]> {
+  if (!validTarget(projectId, responseMessageId)) throw new Error('steering: invalid answer');
+  const { data, response } = await client.POST(HANDOFF_ROUTE, {
+    params: { path: path(projectId, responseMessageId), header: { 'Idempotency-Key': idempotencyKey } },
+  });
+  if (!response.ok) throw new Error(`steering hand-off: ${response.status}`);
+  return parseSteeringList(data);
+}
+
+/** The waits between the tries of a failed hand-off. */
+const HANDOFF_RETRY_MS = [500, 1_500] as const;
+
+/**
+ * `handOffSteering`, tried again with the SAME `idempotencyKey` after each
+ * failure (at most `HANDOFF_RETRY_MS.length` more times). The key makes sure
+ * that a lost answer loses no text: the retry gets the same messages.
+ * Throws the last failure.
+ */
+export async function handOffSteeringWithRetry(
+  projectId: number,
+  responseMessageId: string,
+  idempotencyKey: string,
+  options: { client?: ApiClient; sleep: (ms: number) => Promise<void> },
+): Promise<SteeringItem[]> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await handOffSteering(projectId, responseMessageId, idempotencyKey, options.client);
+    } catch (error) {
+      const wait = HANDOFF_RETRY_MS[attempt];
+      if (wait === undefined) throw error;
+      await options.sleep(wait);
+    }
+  }
 }

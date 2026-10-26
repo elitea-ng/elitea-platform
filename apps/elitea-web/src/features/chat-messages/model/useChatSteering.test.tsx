@@ -1,8 +1,8 @@
 /**
  * Steering during execution (client contract 1.26): where a send goes while a
  * cloud turn runs, the fallbacks of each refusal, and the end-of-turn rule
- * (leftover own messages become ONE next message, then their rows are
- * deleted). The bodies come from the v2.yaml examples through the generated
+ * (the hand-off takes the leftover own messages; ONLY the texts that it
+ * returns become ONE next message). The bodies come from the v2.yaml examples through the generated
  * MSW mocks; a refusal is a typed `SteeringError` constant.
  */
 import { ThemeProvider } from '@mui/material/styles';
@@ -13,6 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_BRAND_PACK, buildEliteaTheme } from '@/shared/brand';
 import {
+  getHandOffChatExecutionSteeringMockHandler,
+  getHandOffChatExecutionSteeringResponseMock,
   getListChatExecutionSteeringResponseMock,
   getRemoveChatExecutionSteeringMockHandler,
   getSteerChatExecutionMockHandler,
@@ -176,30 +178,96 @@ describe('useChatSteering — the end of the turn', () => {
     server.use(http.get(ROUTE, () => HttpResponse.json({ ...getListChatExecutionSteeringResponseMock(), items })));
   }
 
-  it('joins the own turn_ended texts into ONE next message, then deletes their rows', async () => {
-    const deleted: string[] = [];
-    server.use(getRemoveChatExecutionSteeringMockHandler(({ params }) => { deleted.push(String(params['steeringId'])); }));
+  /**
+   * Answers the hand-off with `answers` in order (a number is that HTTP status, with a typed
+   * `SteeringError`). Records the key of each call. Only a list answer uses the generated handler.
+   */
+  function handOff(answers: readonly (readonly SteeringMessage[] | number)[]) {
+    const keys: (string | null)[] = [];
+    const queue = [...answers];
+    const generated = getHandOffChatExecutionSteeringMockHandler(({ request }) => {
+      keys.push(request.headers.get('Idempotency-Key'));
+      const next = queue.shift();
+      return { ...getHandOffChatExecutionSteeringResponseMock(), items: Array.isArray(next) ? [...next] : [] };
+    });
+    server.use(
+      http.post(`${ROUTE}/handoff`, ({ request }) => {
+        const next = queue[0];
+        if (typeof next !== 'number') return undefined;
+        queue.shift();
+        keys.push(request.headers.get('Idempotency-Key'));
+        return HttpResponse.json({ error: 'steering_invalid' } satisfies SteeringError, { status: next });
+      }),
+      generated,
+    );
+    return keys;
+  }
+  const handed = (patch: Partial<SteeringMessage>): SteeringMessage => ({ ...getHandOffChatExecutionSteeringResponseMock().items[0] as SteeringMessage, ...patch });
+
+  it('hands off the own turn_ended messages and sends ONLY the texts that the hand-off returns, as ONE message, with no DELETE', async () => {
+    const deleted = vi.fn();
+    server.use(getRemoveChatExecutionSteeringMockHandler(() => { deleted(); }));
     ownAndList(['a', 'b', 'c'], [
       row({ id: 'a', content: 'first', state: 'turn_ended' }),
       row({ id: 'b', content: 'read', state: 'injected', message_id: 'm-b' }),
       row({ id: 'c', content: 'second', state: 'turn_ended' }),
       row({ id: 'x', content: 'not mine', state: 'turn_ended' }),
     ]);
+    // The server took `c` first; the hand-off returns `a` and a message of another tab of the same user.
+    const keys = handOff([[handed({ id: 'a', content: 'first' }), handed({ id: 'y', content: 'other tab' })]]);
     const { rerender, params, queueAfterTurn } = setup();
     rerender({ ...params, isStreaming: false });
     await waitFor(() => { expect(useChatSteeringStore.getState().own[RESPONSE]).toBeUndefined(); });
+    expect(keys).toHaveLength(1);
+    expect(keys[0]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
     expect(queueAfterTurn).toHaveBeenCalledTimes(1);
-    expect(queueAfterTurn).toHaveBeenCalledWith('first\n\nsecond');
-    expect(deleted.sort()).toEqual(['a', 'c']);
+    expect(queueAfterTurn).toHaveBeenCalledWith('first\n\nother tab');
+    expect(deleted).not.toHaveBeenCalled();
+    expect(useChatSteeringStore.getState().items[RESPONSE]?.find((item) => item.id === 'a')?.state).toBe('handed_off');
+  });
+
+  it('sends nothing when the hand-off answers an empty list (the server took the messages first)', async () => {
+    ownAndList(['a'], [row({ id: 'a', content: 'first', state: 'turn_ended' })]);
+    const keys = handOff([[]]);
+    const { rerender, params, queueAfterTurn } = setup();
+    rerender({ ...params, isStreaming: false });
+    await waitFor(() => { expect(useChatSteeringStore.getState().own[RESPONSE]).toBeUndefined(); });
+    expect(keys).toHaveLength(1);
+    expect(queueAfterTurn).not.toHaveBeenCalled();
+  });
+
+  it('a failed hand-off keeps its key (also in sessionStorage), and the retry after a reload sends the SAME key', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      ownAndList(['a'], [row({ id: 'a', content: 'first', state: 'turn_ended' })]);
+      const keys = handOff([502, [handed({ id: 'a', content: 'first' })]]);
+      const { rerender, params, queueAfterTurn } = setup();
+      rerender({ ...params, isStreaming: false });
+      await waitFor(() => { expect(keys).toHaveLength(1); });
+      await waitFor(() => { expect(sessionStorage.getItem('el.chat.steeringOwn')).toContain(String(keys[0])); });
+      expect(queueAfterTurn).not.toHaveBeenCalled();
+      // A reload: the record and its key come back from sessionStorage.
+      useChatSteeringStore.resetForTests();
+      expect(useChatSteeringStore.getState().own[RESPONSE]?.handoffKey).toBe(keys[0]);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_600); });
+      await waitFor(() => { expect(queueAfterTurn).toHaveBeenCalledWith('first'); });
+      expect(keys).toEqual([keys[0], keys[0]]);
+      expect(queueAfterTurn).toHaveBeenCalledTimes(1);
+      expect(useChatSteeringStore.getState().own[RESPONSE]).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('sends nothing while the server still shows own messages as pending (the turn can still read them)', async () => {
     ownAndList(['a'], [row({ id: 'a', state: 'pending' })]);
+    const keys = handOff([]);
     const { rerender, params, queueAfterTurn } = setup();
     rerender({ ...params, isStreaming: false });
     await waitFor(() => { expect(useChatSteeringStore.getState().items[RESPONSE]?.[0]?.state).toBe('pending'); });
     expect(queueAfterTurn).not.toHaveBeenCalled();
     expect(useChatSteeringStore.getState().own[RESPONSE]?.ids).toEqual(['a']);
+    expect(keys).toHaveLength(0);
   });
 });
 

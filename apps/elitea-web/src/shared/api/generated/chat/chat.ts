@@ -15057,9 +15057,19 @@ export const getSteerChatExecutionUrl = (
  * conversation (`message_id`), placed directly after the turn's
  * question, so a reload and every other client see it. A pending
  * message that the author removes is `removed`. A pending message that
- * no safe point reached before the turn ended is `turn_ended`: the
- * client sends it as the next turn's message (and then removes it), so
- * nothing is lost.
+ * no safe point reached before the turn ended is `turn_ended`, and
+ * becomes the next turn's message through ONE hand-off, so nothing is
+ * lost and no turn starts twice: the client calls
+ * handOffChatExecutionSteering, which takes the caller's `turn_ended`
+ * messages atomically (`handed_off`), and then sends their texts as
+ * one message. When no client hands them off within about 10 seconds
+ * of the turn's end, the server takes them the same way and starts the
+ * next turn itself, as the author, with the previous turn's
+ * participant and its stored settings, after it checks the author's
+ * permission again (`handed_off`; a reload or a list shows it). That
+ * turn has no MCP tokens of the client: an MCP server that needs one
+ * asks for authorization, as for a client that holds no token.
+ * Whoever takes the messages first wins; the other gets an empty list.
  *
  * EVENTS. The execution event stream
  * (`/api/v2/executions/{project_id}/{execution_id}/events`) carries
@@ -15620,6 +15630,303 @@ export function useListChatExecutionSteering<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getListChatExecutionSteeringQueryOptions(
+    projectId,
+    responseMessageId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type handOffChatExecutionSteeringResponse200 = {
+  data: SteeringMessageList;
+  status: 200;
+};
+
+export type handOffChatExecutionSteeringResponse400 = {
+  data: SteeringError;
+  status: 400;
+};
+
+export type handOffChatExecutionSteeringResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type handOffChatExecutionSteeringResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type handOffChatExecutionSteeringResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type handOffChatExecutionSteeringResponse502 = {
+  data: SteeringError;
+  status: 502;
+};
+
+export type handOffChatExecutionSteeringResponse504 = {
+  data: ErrorResponse;
+  status: 504;
+};
+
+export type handOffChatExecutionSteeringResponseSuccess =
+  handOffChatExecutionSteeringResponse200 & {
+    headers: Headers;
+  };
+export type handOffChatExecutionSteeringResponseError = (
+  | handOffChatExecutionSteeringResponse400
+  | handOffChatExecutionSteeringResponse401
+  | handOffChatExecutionSteeringResponse403
+  | handOffChatExecutionSteeringResponse426
+  | handOffChatExecutionSteeringResponse502
+  | handOffChatExecutionSteeringResponse504
+) & {
+  headers: Headers;
+};
+
+export type handOffChatExecutionSteeringResponse =
+  | handOffChatExecutionSteeringResponseSuccess
+  | handOffChatExecutionSteeringResponseError;
+
+export const getHandOffChatExecutionSteeringUrl = (
+  projectId: string,
+  responseMessageId: string,
+) => {
+  return `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/steering/handoff`;
+};
+
+/**
+ * Client contract 1.26. Takes, in one transaction, every `turn_ended`
+ * steering message of this answer that the CALLER queued, marks them
+ * `handed_off` and answers them, oldest first. The client then sends
+ * their texts, joined with a blank line, as one normal message (the
+ * same send as the composer). The server's own hand-off (about 10
+ * seconds after the turn ends, see steerChatExecution) takes rows the
+ * same way, so a message is taken once: when the server took them
+ * first, the list is empty and the client sends nothing.
+ *
+ * IDEMPOTENCY. `Idempotency-Key` is REQUIRED (400
+ * `idempotency_key_required`): a retry with the same key answers the
+ * same messages again, so a lost answer loses no text. A running turn
+ * answers an empty list (its messages are not `turn_ended`).
+ * @summary Take the caller's turn_ended steering messages as the next message
+ */
+export const handOffChatExecutionSteering = async (
+  projectId: string,
+  responseMessageId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<handOffChatExecutionSteeringResponse> => {
+  return eliteaFetch<handOffChatExecutionSteeringResponse>(
+    getHandOffChatExecutionSteeringUrl(projectId, responseMessageId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getHandOffChatExecutionSteeringQueryKey = (
+  projectId: string,
+  responseMessageId: string,
+) => {
+  return [
+    "POST",
+    `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/steering/handoff`,
+  ] as const;
+};
+
+export const getHandOffChatExecutionSteeringQueryOptions = <
+  TData = Awaited<ReturnType<typeof handOffChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof handOffChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getHandOffChatExecutionSteeringQueryKey(projectId, responseMessageId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof handOffChatExecutionSteering>>
+  > = ({ signal }) =>
+    handOffChatExecutionSteering(projectId, responseMessageId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      responseMessageId !== null &&
+      responseMessageId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof handOffChatExecutionSteering>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type HandOffChatExecutionSteeringQueryResult = NonNullable<
+  Awaited<ReturnType<typeof handOffChatExecutionSteering>>
+>;
+export type HandOffChatExecutionSteeringQueryError =
+  | SteeringError
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | ErrorResponse;
+
+export function useHandOffChatExecutionSteering<
+  TData = Awaited<ReturnType<typeof handOffChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof handOffChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof handOffChatExecutionSteering>>,
+          TError,
+          Awaited<ReturnType<typeof handOffChatExecutionSteering>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useHandOffChatExecutionSteering<
+  TData = Awaited<ReturnType<typeof handOffChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof handOffChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof handOffChatExecutionSteering>>,
+          TError,
+          Awaited<ReturnType<typeof handOffChatExecutionSteering>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useHandOffChatExecutionSteering<
+  TData = Awaited<ReturnType<typeof handOffChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof handOffChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Take the caller's turn_ended steering messages as the next message
+ */
+
+export function useHandOffChatExecutionSteering<
+  TData = Awaited<ReturnType<typeof handOffChatExecutionSteering>>,
+  TError =
+    | SteeringError
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | ErrorResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof handOffChatExecutionSteering>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getHandOffChatExecutionSteeringQueryOptions(
     projectId,
     responseMessageId,
     options,
