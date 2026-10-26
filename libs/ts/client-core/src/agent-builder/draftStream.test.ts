@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { EventStreamParser } from '../stream';
-import { INITIAL_DRAFT_STATE, MAX_DRAFT_HISTORY, draftReducer, draftRequestBody, draftStreamReader, type DraftAction, type DraftState } from './draftStream';
+import { INITIAL_DRAFT_STATE, MAX_DRAFT_HISTORY, draftReducer, draftRequestBody, draftStreamReader, networkFailure, readDraft, recordTurn, refusalFailure, refusalFailureFromText, type DraftAction, type DraftState } from './draftStream';
 
 const complete = {
   name: 'Incident Triager',
@@ -78,5 +78,25 @@ describe('draftRequestBody', () => {
     assert.equal(turns.at(-1)?.content, 'turn 28');
     assert.deepEqual(body['current_draft'], { name: 'Old', description: 'd', instructions: 'i' });
     assert.deepEqual(draftRequestBody({ request: 'x' }), { user_description: 'x' });
+  });
+});
+
+describe('refusals and turns', () => {
+  it('reads a refusal from its JSON body, else from the status', () => {
+    assert.deepEqual(refusalFailure(503, { error: 'no gateway', code: 'llm_not_configured' }), { code: 'llm_not_configured', status: 503, message: 'no gateway' });
+    assert.deepEqual(refusalFailureFromText(403, 'not json'), { code: 'http_403', status: 403, message: 'The draft could not be generated. Try again.' });
+    assert.equal(refusalFailureFromText(400, '{"error":"bad"}').message, 'bad');
+    assert.equal(networkFailure(new Error('offline')).message, 'offline');
+    assert.equal(networkFailure('x').code, 'network');
+  });
+
+  it('records a request and the draft it produced as two turns', () => {
+    const turns = recordTurn([{ role: 'user', content: 'a' }], 'make it', { name: 'N', description: 'D' });
+    assert.deepEqual(turns.slice(1), [{ role: 'user', content: 'make it' }, { role: 'assistant', content: 'N: D' }]);
+  });
+
+  it('reads a one-shot draft like a streamed one', () => {
+    assert.equal(readDraft(complete)?.name, 'Incident Triager');
+    assert.equal(readDraft({ description: 'x' }), undefined);
   });
 });

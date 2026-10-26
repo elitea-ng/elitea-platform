@@ -10,6 +10,7 @@ import {
   INITIAL_DRAFT_STATE,
   agentCreateBody,
   draftReducer,
+  recordTurn,
   type AgentCreateInput,
   type DraftAction,
   type DraftState,
@@ -55,7 +56,8 @@ export interface AgentBuilder {
   reset: () => void;
 }
 
-const summary = (draft: { name: string; description: string }): string => `${draft.name}: ${draft.description}`;
+/** The edit-sensitive fields of a draft: what a save sent. */
+const fingerprint = (draft: EditableDraft): string => JSON.stringify(agentCreateBody(draft));
 
 export function useAgentBuilder(projectId: number | null): AgentBuilder {
   const queryClient = useQueryClient();
@@ -66,6 +68,8 @@ export function useAgentBuilder(projectId: number | null): AgentBuilder {
   const [saveError, setSaveError] = useState<string | null>(null);
   // The agent a save already created: a retry after a failed chat start must not create it twice.
   const savedId = useRef<number | null>(null);
+  // What that save sent, so a retry with an edited draft is not answered with the stale agent.
+  const savedFingerprint = useRef<string | null>(null);
 
   const cancel = useCallback(() => {
     controller.current?.abort();
@@ -85,12 +89,13 @@ export function useAgentBuilder(projectId: number | null): AgentBuilder {
       const fold = (action: DraftAction) => {
         if (own.signal.aborted) return;
         if (action.type === 'complete') {
-          turns.current = [...history, { role: 'user', content: trimmed }, { role: 'assistant', content: summary(action.draft) }];
+          turns.current = recordTurn(history, trimmed, action.draft);
         }
         dispatch(action);
       };
       dispatch({ type: 'start' });
       savedId.current = null;
+      savedFingerprint.current = null;
       setSaveError(null);
       void streamAgentDraft({ projectId, input: { request: trimmed, history, current }, signal: own.signal, dispatch: fold }).finally(() => {
         if (controller.current === own) controller.current = null;
@@ -105,8 +110,13 @@ export function useAgentBuilder(projectId: number | null): AgentBuilder {
       setSaving(true);
       setSaveError(null);
       try {
+        // The chat start failed after the agent was saved, and the person has
+        // edited the draft since: starting that chat would silently drop the
+        // edits, so the edited draft is saved as the agent instead.
+        if (savedId.current !== null && savedFingerprint.current !== fingerprint(draft)) savedId.current = null;
         if (savedId.current === null) {
           savedId.current = await createAgent(projectId, draft);
+          savedFingerprint.current = fingerprint(draft);
           void queryClient.invalidateQueries({ queryKey: queryKeys.agents(projectId) });
         }
         const id = savedId.current;
@@ -138,6 +148,7 @@ export function useAgentBuilder(projectId: number | null): AgentBuilder {
       cancel();
       turns.current = [];
       savedId.current = null;
+      savedFingerprint.current = null;
       dispatch({ type: 'reset' });
     },
   };

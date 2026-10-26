@@ -1,6 +1,6 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 
-import type { DraftTurn } from '@elitea/client-core/agent-builder';
+import { readDraft, recordTurn, type DraftTurn } from '@elitea/client-core/agent-builder';
 
 import { hasBackendCapability } from '@/shared/config/backendCapabilities';
 import { t } from '@/shared/i18n';
@@ -8,7 +8,7 @@ import { t } from '@/shared/i18n';
 import { useGenerateAgentDraftMutation } from '../../api/generateAgentDraft';
 import { useAgentDraftStream } from '../../api/generateAgentDraftStream';
 import { applicationErrorMessage } from '../../lib/errorMessage';
-import { mapApplicationDraft, type AgentDraft } from '../../lib/agentDraft';
+import { type AgentDraft } from '../../lib/agentDraft';
 
 /**
  * One "generate" for the Build with AI modal, streamed when this build serves
@@ -32,11 +32,9 @@ export interface AgentDraftGenerator {
   readonly reset: () => void;
 }
 
-const summary = (draft: AgentDraft): string => `${draft.name}: ${draft.description}`;
-
 /** Keeps a request and the draft it produced as two turns of the builder conversation. */
 function remember(turns: { current: DraftTurn[] }, request: string, draft: AgentDraft | undefined): AgentDraft | undefined {
-  if (draft !== undefined) turns.current = [...turns.current, { role: 'user', content: request }, { role: 'assistant', content: summary(draft) }];
+  if (draft !== undefined) turns.current = recordTurn(turns.current, request, draft);
   return draft;
 }
 
@@ -44,29 +42,31 @@ export function useAgentDraftGenerator(projectId: string | undefined): AgentDraf
   const streaming = hasBackendCapability('aiDraftStreaming');
   const oneShot = useGenerateAgentDraftMutation();
   const stream = useAgentDraftStream(projectId);
+  const { generate: streamGenerate, reset: streamReset, state: streamState } = stream;
+  const { generateDraft, reset: oneShotReset, error: oneShotRawError } = oneShot;
   const turns = useRef<DraftTurn[]>([]);
   const [oneShotBusy, setOneShotBusy] = useState(false);
 
   const generate = useCallback(
     async (request: string): Promise<AgentDraft | undefined> => {
       turns.current = [];
-      if (streaming) return remember(turns, request, await stream.generate({ request }));
+      if (streaming) return remember(turns, request, await streamGenerate({ request }));
       if (projectId === undefined) return undefined;
       setOneShotBusy(true);
       try {
-        const response = await oneShot.generateDraft({ projectId, user_description: request });
-        return response === undefined ? undefined : mapApplicationDraft(response);
+        const response = await generateDraft({ projectId, user_description: request });
+        return readDraft(response);
       } finally {
         setOneShotBusy(false);
       }
     },
-    [streaming, stream, oneShot, projectId],
+    [streaming, streamGenerate, generateDraft, projectId],
   );
 
   const refine = useCallback(
     async (request: string, current: AgentDraft): Promise<AgentDraft | undefined> => {
       if (!streaming) return undefined;
-      const draft = await stream.generate({
+      const draft = await streamGenerate({
         request,
         history: turns.current,
         current: {
@@ -79,23 +79,27 @@ export function useAgentDraftGenerator(projectId: string | undefined): AgentDraf
       });
       return remember(turns, request, draft);
     },
-    [streaming, stream],
+    [streaming, streamGenerate],
   );
 
-  const failure = stream.state.phase === 'failed' ? stream.state.failure.message : undefined;
-  const oneShotError = oneShot.error === undefined ? undefined : applicationErrorMessage(oneShot.error) || t('features.agents.generateAgentModal.generateFailed', 'Failed to generate. Please try again.');
+  const failure = streamState.phase === 'failed' ? streamState.failure.message : undefined;
+  const oneShotError = oneShotRawError === undefined ? undefined : applicationErrorMessage(oneShotRawError) || t('features.agents.generateAgentModal.generateFailed', 'Failed to generate. Please try again.');
+  const reset = useCallback(() => {
+    turns.current = [];
+    streamReset();
+    oneShotReset();
+  }, [streamReset, oneShotReset]);
 
-  return {
-    generate,
-    refine,
-    canRefine: streaming,
-    streamText: stream.state.phase === 'streaming' ? stream.state.text : '',
-    isGenerating: streaming ? stream.state.phase === 'streaming' : oneShotBusy,
-    error: streaming ? failure : oneShotError,
-    reset: () => {
-      turns.current = [];
-      stream.reset();
-      oneShot.reset();
-    },
-  };
+  return useMemo(
+    () => ({
+      generate,
+      refine,
+      canRefine: streaming,
+      streamText: streamState.phase === 'streaming' ? streamState.text : '',
+      isGenerating: streaming ? streamState.phase === 'streaming' : oneShotBusy,
+      error: streaming ? failure : oneShotError,
+      reset,
+    }),
+    [generate, refine, streaming, streamState, oneShotBusy, failure, oneShotError, reset],
+  );
 }

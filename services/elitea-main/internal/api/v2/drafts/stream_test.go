@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -199,8 +200,8 @@ func TestDraftStreamBoundsTheHistoryAndShowsTheCurrentDraft(t *testing.T) {
 	serveStream(t, completer, string(body))
 
 	messages := completer.got.Messages
-	if messages[0].Role != "system" || !strings.Contains(messages[0].Content, `"name":"Old"`) {
-		t.Fatalf("system prompt does not carry the current draft: %q", messages[0].Content)
+	if messages[0].Role != "system" || strings.Contains(messages[0].Content, `"name":"Old"`) {
+		t.Fatalf("the system prompt must not carry caller text: %q", messages[0].Content)
 	}
 	for _, message := range messages[1:] {
 		if message.Role == "system" {
@@ -208,7 +209,8 @@ func TestDraftStreamBoundsTheHistoryAndShowsTheCurrentDraft(t *testing.T) {
 		}
 	}
 	// 20 kept of the newest 20 (one of which is the dropped system turn), plus the request.
-	if len(messages) != 1+19+1 || messages[len(messages)-1].Content != "rename it" || messages[1].Content != "turn 11" {
+	if len(messages) != 1+19+1 || !strings.Contains(messages[len(messages)-1].Content, `"name":"Old"`) ||
+		!strings.HasSuffix(messages[len(messages)-1].Content, "rename it") || messages[len(messages)-1].Role != "user" || messages[1].Content != "turn 11" {
 		t.Fatalf("messages = %d, first history %q", len(messages), messages[1].Content)
 	}
 	if completer.got.ProjectID != "7" || completer.got.Model != "m-1" {
@@ -221,5 +223,62 @@ func TestDraftStreamServesABlockingCompleterAsOneToken(t *testing.T) {
 	frames := parseFrames(t, recorder.Body.String())
 	if len(frames) != 2 || frames[0].event != v2drafts.EventDraftToken || frames[1].event != v2drafts.EventDraftComplete {
 		t.Fatalf("frames = %+v", frames)
+	}
+}
+
+func TestDraftStreamCapsTheCurrentDraftToTheAgentDefinitionLimits(t *testing.T) {
+	body, _ := json.Marshal(map[string]any{
+		"user_description": "shorter",
+		"current_draft": map[string]any{
+			"name": strings.Repeat("n", 5000), "description": "d", "instructions": strings.Repeat("i", 500000),
+			"conversation_starters": []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"},
+		},
+	})
+	completer := &streamingStub{pieces: []string{validDraft}}
+	serveStream(t, completer, string(body))
+	last := completer.got.Messages[len(completer.got.Messages)-1].Content
+	if len(last) > 200000 {
+		t.Fatalf("the current draft was relayed uncapped: %d bytes", len(last))
+	}
+}
+
+// blockingStreamer holds the completion until released, so a test can look at
+// what the client has received before the first token.
+type blockingStreamer struct{ release chan struct{} }
+
+func (b *blockingStreamer) Complete(context.Context, v2predict.CompletionRequest) (string, error) {
+	return "", errors.New("unused")
+}
+
+func (b *blockingStreamer) CompleteStream(ctx context.Context, _ v2predict.CompletionRequest, onDelta func(string) error) (string, error) {
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	_ = onDelta(validDraft)
+	return validDraft, nil
+}
+
+func TestDraftStreamSendsTheResponseHeadBeforeTheFirstToken(t *testing.T) {
+	completer := &blockingStreamer{release: make(chan struct{})}
+	mux := chi.NewRouter()
+	mux.Post("/generate_application_draft_stream/prompt_lib/{projectID}",
+		v2drafts.NewHandler(completer).GenerateApplicationDraftStream)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	defer close(completer.release)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	// Do returns when the response head arrives; with no flush after
+	// WriteHeader it would sit here until the (blocked) completion ended.
+	response, err := client.Post(server.URL+"/generate_application_draft_stream/prompt_lib/7", "application/json",
+		strings.NewReader(`{"user_description":"x"}`))
+	if err != nil {
+		t.Fatalf("no response head before the first token: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("status = %d content-type = %q", response.StatusCode, response.Header.Get("Content-Type"))
 	}
 }

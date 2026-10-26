@@ -3,7 +3,7 @@ import { ApiError } from '@/api/errors';
 import { classifySessionFailure, sessionBearerToken } from '@/api/middleware';
 import { apiBaseUrl, isSameOrigin } from '@/api/paths';
 import { expoStreamTransport, type StreamTransport } from '@/api/sse/transport';
-import { draftRequestBody, draftStreamReader, type DraftAction, type DraftRequestInput } from '@elitea/client-core/agent-builder';
+import { draftRequestBody, draftStreamReader, refusalFailureFromText, type DraftAction, type DraftRequestInput } from '@elitea/client-core/agent-builder';
 import { EventStreamParser } from '@elitea/client-core/stream';
 import { getSession } from '@/state/session';
 
@@ -34,24 +34,6 @@ async function readSmallText(body: AsyncIterable<Uint8Array> | null): Promise<st
     if (text.length > MAX_ERROR_BODY_BYTES) return '';
   }
   return text + decoder.decode();
-}
-
-function refusal(status: number, text: string): DraftAction {
-  let body: { error?: unknown; code?: unknown } = {};
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (typeof parsed === 'object' && parsed !== null) body = parsed as typeof body;
-  } catch {
-    // Not JSON: the status alone names it.
-  }
-  return {
-    type: 'error',
-    failure: {
-      code: typeof body.code === 'string' ? body.code : `http_${status}`,
-      status,
-      message: typeof body.error === 'string' && body.error !== '' ? body.error : FALLBACK,
-    },
-  };
 }
 
 export interface StreamDraftOptions {
@@ -93,7 +75,7 @@ export async function streamAgentDraft({ projectId, input, signal, dispatch, tra
         // The same session handling as REST: sign-out, upgrade prompt, or a renewed token.
         await classifySessionFailure({ status: response.status, json: () => Promise.resolve().then(() => JSON.parse(text) as unknown) }, { token, sessionAuth: true, workspaceId });
       }
-      dispatch(refusal(response.status, text));
+      dispatch({ type: 'error', failure: refusalFailureFromText(response.status, text) });
       return;
     }
     const reader = draftStreamReader(dispatch);

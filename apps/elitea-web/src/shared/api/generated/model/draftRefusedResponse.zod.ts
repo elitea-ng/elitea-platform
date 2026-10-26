@@ -49,9 +49,12 @@ export const DraftRefusedResponse = zod
       "agent_draft_invalid",
       "agent_draft_unparseable",
       "agent_draft_cut_off",
+      "agent_schema_unavailable",
     ]),
   })
-  .describe("A generated agent draft the one-shot route refused (422).");
+  .describe(
+    "A generated agent draft the one-shot route refused (422), or agent_schema_unavailable (500) when the embedded schema could not be loaded.",
+  );
 
 export type DraftRefusedResponse = zod.input<typeof DraftRefusedResponse>;
 export type DraftRefusedResponseOutput = zod.output<

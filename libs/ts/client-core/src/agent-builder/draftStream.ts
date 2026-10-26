@@ -54,6 +54,19 @@ export interface DraftTurn {
   readonly content: string;
 }
 
+/**
+ * Appends one exchange to the builder conversation: the request and a short
+ * statement of the draft it produced (the route is shown the draft itself as
+ * `current_draft`, so the assistant turn only needs to name it).
+ */
+export function recordTurn(
+  turns: readonly DraftTurn[],
+  request: string,
+  draft: { readonly name: string; readonly description: string },
+): DraftTurn[] {
+  return [...turns, { role: 'user', content: request }, { role: 'assistant', content: `${draft.name}: ${draft.description}` }];
+}
+
 /** The route keeps at most this many history turns; the client sends no more. */
 export const MAX_DRAFT_HISTORY = 20;
 
@@ -65,8 +78,8 @@ export type DraftStreamEvent =
 const list = (value: unknown): DraftSuggestion[] => (Array.isArray(value) ? (value as DraftSuggestion[]) : []);
 const text = (value: unknown): string => (typeof value === 'string' ? value : '');
 
-/** The draft in a `draft.complete` frame, or undefined when it is not one. */
-function readDraft(data: unknown): StreamedAgentDraft | undefined {
+/** The draft in a `draft.complete` frame or a one-shot `ApplicationDraft` answer, or undefined when it is not one. */
+export function readDraft(data: unknown): StreamedAgentDraft | undefined {
   if (typeof data !== 'object' || data === null) return undefined;
   const raw = data as Record<string, unknown>;
   if (typeof raw['name'] !== 'string' || typeof raw['instructions'] !== 'string') return undefined;
@@ -82,6 +95,36 @@ function readDraft(data: unknown): StreamedAgentDraft | undefined {
     suggested_agents: list(raw['suggested_agents']),
     suggested_skills: list(raw['suggested_skills']),
   };
+}
+
+const REFUSAL_FALLBACK = 'The draft could not be generated. Try again.';
+
+/**
+ * The failure an HTTP refusal before the stream opened becomes (400, 403,
+ * 503, ...): the JSON body's `error` and `code`, else the status alone.
+ * `body` is the parsed body, or undefined when there was none.
+ */
+export function refusalFailure(status: number, body: unknown): DraftStreamFailure {
+  const raw = typeof body === 'object' && body !== null ? (body as { error?: unknown; code?: unknown }) : {};
+  return {
+    code: typeof raw.code === 'string' ? raw.code : `http_${String(status)}`,
+    status,
+    message: typeof raw.error === 'string' && raw.error !== '' ? raw.error : REFUSAL_FALLBACK,
+  };
+}
+
+/** `refusalFailure` for a body read as text (not JSON is the same as no body). */
+export function refusalFailureFromText(status: number, text: string): DraftStreamFailure {
+  try {
+    return refusalFailure(status, JSON.parse(text) as unknown);
+  } catch {
+    return refusalFailure(status, undefined);
+  }
+}
+
+/** The failure a thrown error (a dropped connection, a client error) becomes. */
+export function networkFailure(error: unknown): DraftStreamFailure {
+  return { code: 'network', status: 0, message: error instanceof Error && error.message !== '' ? error.message : REFUSAL_FALLBACK };
 }
 
 /** One SSE event of the draft stream as a builder event; unknown events are ignored (undefined). */

@@ -58,7 +58,7 @@ import { useToggleSet } from './useToggleSet';
  *
  * `handleGenerate` calls the served endpoint through
  * `../../api/generateAgentDraft.ts`'s `useGenerateAgentDraftMutation` and
- * maps its `ApplicationDraft` with `mapApplicationDraft`, so name,
+ * maps its `ApplicationDraft` with `readDraft`, so name,
  * description, instructions, welcome message and conversation starters all
  * arrive filled in (#254 P1). The five `suggested_*` lists stay empty: the
  * contract does not carry them — see `../../lib/agentDraft.ts` for why that
@@ -155,6 +155,7 @@ export function GenerateAgentModal({
     if (requestToken !== generationTokenRef.current) {
       // The modal was closed while this request was in flight — discard the
       // stale result (success or error) instead of writing it into state.
+      resetGenerateError();
       return;
     }
 
@@ -174,10 +175,15 @@ export function GenerateAgentModal({
       setStep('loading');
       const revised = await generator.refine(request, draft);
       if (requestToken !== generationTokenRef.current) return;
-      if (revised !== undefined) setDraft(revised);
+      if (revised !== undefined) {
+        setDraft(revised);
+        // The suggestions are the revised draft's: ids picked from the old
+        // ones would attach resources the new draft no longer suggests.
+        resetSelections();
+      }
       setStep('review');
     },
-    [generator, draft],
+    [generator, draft, resetSelections],
   );
 
   const handleDescriptionKeyDown = useCallback(

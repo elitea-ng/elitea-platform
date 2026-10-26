@@ -471,11 +471,12 @@ func (h *Handler) finishApplicationDraft(ctx context.Context, projectID, content
 	}
 	// AgentDefinition (v2.yaml) is the rule: a missing name, description or
 	// instructions is refused, the same way on both routes.
-	if _, err := loadSchemas(); err != nil {
-		return ApplicationDraft{}, &draftFailure{status: http.StatusInternalServerError, code: "agent_schema_unavailable",
-			message: "the agent schema could not be loaded", cause: err}
-	}
 	if err := ValidateApplicationDraft(draft); err != nil {
+		var unavailable *SchemaUnavailableError
+		if errors.As(err, &unavailable) {
+			return ApplicationDraft{}, &draftFailure{status: http.StatusInternalServerError, code: SchemaUnavailableCode,
+				message: "the agent schema could not be loaded", cause: err}
+		}
 		return ApplicationDraft{}, &draftFailure{
 			status:  http.StatusUnprocessableEntity,
 			code:    DraftInvalidCode,

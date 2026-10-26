@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 
 import {
   INITIAL_DRAFT_STATE,
   draftReducer,
   draftRequestBody,
   draftStreamReader,
+  networkFailure,
+  refusalFailure,
   type DraftAction,
   type DraftRequestInput,
   type DraftState,
@@ -38,19 +40,10 @@ export interface AgentDraftStream {
   readonly reset: () => void;
 }
 
-const FALLBACK_MESSAGE = 'The draft could not be generated. Try again.';
-
-/** The failure an HTTP refusal before the stream becomes. */
-export function refusalFailure(error: unknown): DraftStreamFailure {
-  if (error instanceof EliteaApiError && error.failure.kind === 'http') {
-    const body = (typeof error.failure.body === 'object' && error.failure.body !== null ? error.failure.body : {}) as { error?: unknown; code?: unknown };
-    return {
-      code: typeof body.code === 'string' ? body.code : `http_${String(error.failure.status)}`,
-      status: error.failure.status,
-      message: typeof body.error === 'string' && body.error !== '' ? body.error : FALLBACK_MESSAGE,
-    };
-  }
-  return { code: 'network', status: 0, message: error instanceof Error && error.message !== '' ? error.message : FALLBACK_MESSAGE };
+/** The failure an HTTP refusal before the stream, or a thrown error, becomes. */
+function failureOf(error: unknown): DraftStreamFailure {
+  if (error instanceof EliteaApiError && error.failure.kind === 'http') return refusalFailure(error.failure.status, error.failure.body);
+  return networkFailure(error);
 }
 
 export function useAgentDraftStream(projectId: string | undefined): AgentDraftStream {
@@ -94,7 +87,7 @@ export function useAgentDraftStream(projectId: string | undefined): AgentDraftSt
         reader.finish();
       } catch (error) {
         if (own.signal.aborted) return undefined;
-        fold({ type: 'error', failure: refusalFailure(error) });
+        fold({ type: 'error', failure: failureOf(error) });
       } finally {
         if (controller.current === own) controller.current = null;
       }
@@ -108,5 +101,6 @@ export function useAgentDraftStream(projectId: string | undefined): AgentDraftSt
     dispatch({ type: 'reset' });
   }, [cancel]);
 
-  return { state, generate, cancel, reset };
+  // Stable between renders unless the state moves, so a caller can depend on it.
+  return useMemo(() => ({ state, generate, cancel, reset }), [state, generate, cancel, reset]);
 }

@@ -6722,12 +6722,12 @@ components:
     DraftRefusedResponse:
       type: object
       required: [error, code]
-      description: A generated agent draft the one-shot route refused (422).
+      description: A generated agent draft the one-shot route refused (422), or agent_schema_unavailable (500) when the embedded schema could not be loaded.
       properties:
         error: { type: string }
         code:
           type: string
-          enum: [agent_draft_invalid, agent_draft_unparseable, agent_draft_cut_off]
+          enum: [agent_draft_invalid, agent_draft_unparseable, agent_draft_cut_off, agent_schema_unavailable]
       example: { error: "the generated agent draft is not usable: the draft does not match AgentDefinition: name (missing)", code: agent_draft_invalid }
 
     DraftConversationTurn:

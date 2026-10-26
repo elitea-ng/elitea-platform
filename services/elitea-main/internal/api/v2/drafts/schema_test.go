@@ -130,3 +130,25 @@ func TestValidateNamesTheMissingFieldsWithoutTheirValues(t *testing.T) {
 		t.Fatalf("err = %v, want five starters refused", err)
 	}
 }
+
+func TestTheSchemaRouteAnswers304ForAMatchingETag(t *testing.T) {
+	first := httptest.NewRecorder()
+	NewHandler(nil).GetAgentSchema(first, httptest.NewRequest(http.MethodGet, "/agent_schema/prompt_lib/7", nil))
+	etag := first.Header().Get("ETag")
+	for _, header := range []string{etag, "W/" + etag, `"other", ` + etag, "*"} {
+		request := httptest.NewRequest(http.MethodGet, "/agent_schema/prompt_lib/7", nil)
+		request.Header.Set("If-None-Match", header)
+		recorder := httptest.NewRecorder()
+		NewHandler(nil).GetAgentSchema(recorder, request)
+		if recorder.Code != http.StatusNotModified || recorder.Body.Len() != 0 || recorder.Header().Get("ETag") != etag {
+			t.Errorf("If-None-Match %q: status = %d body = %d bytes", header, recorder.Code, recorder.Body.Len())
+		}
+	}
+	request := httptest.NewRequest(http.MethodGet, "/agent_schema/prompt_lib/7", nil)
+	request.Header.Set("If-None-Match", `"stale"`)
+	recorder := httptest.NewRecorder()
+	NewHandler(nil).GetAgentSchema(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Body.Len() == 0 {
+		t.Errorf("a stale tag: status = %d, want 200 with the schemas", recorder.Code)
+	}
+}

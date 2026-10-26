@@ -156,12 +156,25 @@ func definitionOf(draft ApplicationDraft) map[string]any {
 	}
 }
 
+// SchemaUnavailableCode is the machine code of a draft refused because the
+// embedded schema could not be loaded (a build defect, not the model's fault).
+const SchemaUnavailableCode = "agent_schema_unavailable"
+
+// SchemaUnavailableError is ValidateApplicationDraft's answer when the schema
+// itself could not be loaded, so callers can tell it from an invalid draft.
+type SchemaUnavailableError struct{ Cause error }
+
+func (e *SchemaUnavailableError) Error() string {
+	return "the agent schema could not be loaded: " + e.Cause.Error()
+}
+func (e *SchemaUnavailableError) Unwrap() error { return e.Cause }
+
 // ValidateApplicationDraft checks a draft against AgentDefinition. Both draft
 // routes call it after truncation, so they accept and refuse the same drafts.
 func ValidateApplicationDraft(draft ApplicationDraft) error {
 	compiled, err := loadSchemas()
 	if err != nil {
-		return err
+		return &SchemaUnavailableError{Cause: err}
 	}
 	if err := compiled.validator.Validate(definitionOf(draft)); err != nil {
 		var validation *jsonschema.ValidationError
@@ -204,14 +217,31 @@ func validationSummary(err *jsonschema.ValidationError) string {
 
 // GetAgentSchema serves GET /agent_schema/prompt_lib/{projectID}. It reads no
 // tenant state: every authorized project gets the same bytes.
-func (h *Handler) GetAgentSchema(w http.ResponseWriter, _ *http.Request) {
+func (h *Handler) GetAgentSchema(w http.ResponseWriter, r *http.Request) {
 	compiled, err := loadSchemas()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "the agent schemas could not be loaded")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("ETag", `"`+compiled.body.SchemaVersion+`"`)
+	etag := `"` + compiled.body.SchemaVersion + `"`
+	w.Header().Set("ETag", etag)
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(compiled.encoded)
+}
+
+// etagMatches reports whether an If-None-Match header names etag (weak
+// comparison, RFC 9110 section 13.1.2): a list of entity tags, or `*`.
+func etagMatches(header, etag string) bool {
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "*" || strings.TrimPrefix(candidate, "W/") == etag {
+			return true
+		}
+	}
+	return false
 }

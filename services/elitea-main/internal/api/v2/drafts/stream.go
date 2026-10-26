@@ -77,6 +77,28 @@ type currentAgentDraft struct {
 	ConversationStarters []string `json:"conversation_starters,omitempty"`
 }
 
+// capped bounds every field to the AgentDefinition limit, as
+// finishApplicationDraft does for the model's own answer.
+func (d currentAgentDraft) capped() currentAgentDraft {
+	out := currentAgentDraft{
+		Name:           strings.TrimSpace(truncate(d.Name, applicationNameMaxLength)),
+		Description:    strings.TrimSpace(truncate(d.Description, applicationDescriptionMaxLength)),
+		Instructions:   strings.TrimSpace(truncate(d.Instructions, applicationInstructionsSanityLength)),
+		WelcomeMessage: strings.TrimSpace(truncate(d.WelcomeMessage, applicationWelcomeMessageMaxLength)),
+	}
+	for _, starter := range d.ConversationStarters {
+		starter = strings.TrimSpace(starter)
+		if starter == "" {
+			continue
+		}
+		out.ConversationStarters = append(out.ConversationStarters, truncate(starter, applicationStarterMaxLength))
+		if len(out.ConversationStarters) == applicationMaxConversationStarters {
+			break
+		}
+	}
+	return out
+}
+
 // DraftStreamError is the data of a draft.error frame.
 type DraftStreamError struct {
 	Code    string `json:"code"`
@@ -116,6 +138,12 @@ func (h *Handler) GenerateApplicationDraftStream(w http.ResponseWriter, r *http.
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+	// Flush the headers now: a reasoning model can think for a long time
+	// before its first token, and a client (or proxy) that has seen no
+	// response head yet cannot tell an open stream from a dead connection.
+	if err := http.NewResponseController(w).Flush(); err != nil {
+		return
+	}
 	keepalive := ssewriter.StartKeepalive(w, draftKeepalive)
 	defer keepalive.Stop()
 	frame := func(event string, data any) error {
@@ -160,13 +188,6 @@ func (h *Handler) GenerateApplicationDraftStream(w http.ResponseWriter, r *http.
 // this turn's request.
 func streamCompletionRequest(projectID, userID string, body applicationDraftStreamRequest) (v2predict.CompletionRequest, error) {
 	prompt := applicationDraftSystemPrompt + "\n\n" + conversationalDraftPrompt
-	if body.CurrentDraft != nil {
-		encoded, err := json.Marshal(body.CurrentDraft)
-		if err != nil {
-			return v2predict.CompletionRequest{}, errors.New("current_draft could not be read")
-		}
-		prompt += "\n\nThis is the current draft. Revise it to satisfy the request. Keep what still applies. Return the complete draft.\n" + string(encoded)
-	}
 	messages := []v2predict.Message{{Role: "system", Content: prompt}}
 	history := body.ConversationHistory
 	if len(history) > maxDraftHistoryTurns {
@@ -179,14 +200,25 @@ func streamCompletionRequest(projectID, userID string, body applicationDraftStre
 		}
 		messages = append(messages, v2predict.Message{Role: role, Content: truncate(turn.Content, maxDraftTurnLength)})
 	}
-	messages = append(messages, v2predict.Message{Role: "user", Content: body.UserDescription})
-
-	request := v2predict.CompletionRequest{ProjectID: projectID, UserID: userID, Messages: messages}
-	if body.LLMSettings != nil {
-		request.Model = body.LLMSettings.ModelName
-		request.Temperature = body.LLMSettings.Temperature
-		request.MaxTokens = body.LLMSettings.MaxTokens
-		request.ReasoningEffort = body.LLMSettings.ReasoningEffort
+	// The caller's draft is untrusted text: it rides in a user message (never
+	// the system prompt) and is capped to the AgentDefinition limits first.
+	request := body.UserDescription
+	if body.CurrentDraft != nil {
+		encoded, err := json.Marshal(body.CurrentDraft.capped())
+		if err != nil {
+			return v2predict.CompletionRequest{}, errors.New("current_draft could not be read")
+		}
+		request = "This is the current draft. Revise it to satisfy the request below. Keep what still applies. Return the complete draft.\n" +
+			string(encoded) + "\n\nRequest:\n" + body.UserDescription
 	}
-	return request, nil
+	messages = append(messages, v2predict.Message{Role: "user", Content: request})
+
+	completion := v2predict.CompletionRequest{ProjectID: projectID, UserID: userID, Messages: messages}
+	if body.LLMSettings != nil {
+		completion.Model = body.LLMSettings.ModelName
+		completion.Temperature = body.LLMSettings.Temperature
+		completion.MaxTokens = body.LLMSettings.MaxTokens
+		completion.ReasoningEffort = body.LLMSettings.ReasoningEffort
+	}
+	return completion, nil
 }
