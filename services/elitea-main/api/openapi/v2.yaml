@@ -5057,10 +5057,18 @@ components:
         One steering message of a running turn (client contract 1.27).
         NOTE(W2): internal/api/v2/agentexecution/steering.go:303
         (`steeringView`).
-      required: [id, response_message_id, author_id, content, state, revision, created_at, updated_at, injected_at, message_id]
+      required: [id, response_message_id, author_id, content, state, revision, queue_order, created_at, updated_at, injected_at, message_id]
       properties:
         id: { type: string, format: uuid }
         response_message_id: { type: string, format: uuid }
+        queue_order:
+          type: integer
+          format: int64
+          description: >
+            The server's queue position. Order the messages of an answer by
+            it (ascending): the worker injects them in this order, and a
+            message carried over from an older answer has a lower value than
+            the newer turn's own messages. Not a count: values have gaps.
         author_id:
           type: integer
           format: int64
@@ -21754,6 +21762,10 @@ paths:
         turn has no MCP tokens of the client: an MCP server that needs one
         asks for authorization, as for a client that holds no token.
         Whoever takes the messages first wins; the other gets an empty list.
+        A turn that the user STOPPED, or that FAILED, is never continued by
+        the server: its `turn_ended` messages wait for the author, and the
+        client offers to send them as the next message (it does not send
+        them by itself).
         When the author already sent a newer message in the conversation
         after the turn ended, the server CARRIES the messages over to the
         author's newer turn: they move to the newer answer (same `id`,
@@ -21817,6 +21829,7 @@ paths:
                 content: Skip the tests for now and only fix the build.
                 state: pending
                 revision: 1
+                queue_order: 41
                 created_at: '2026-10-26T10:15:02Z'
                 updated_at: '2026-10-26T10:15:02Z'
                 injected_at: null
@@ -21899,6 +21912,7 @@ paths:
                     content: Skip the tests for now and only fix the build.
                     state: injected
                     revision: 1
+                    queue_order: 41
                     created_at: '2026-10-26T10:15:02Z'
                     updated_at: '2026-10-26T10:15:09Z'
                     injected_at: '2026-10-26T10:15:09Z'
@@ -21949,6 +21963,14 @@ paths:
         `idempotency_key_required`): a retry with the same key answers the
         same messages again, so a lost answer loses no text. A running turn
         answers an empty list (its messages are not `turn_ended`).
+
+        NO LOST TEXT. The body names the `question_id` that the client's
+        next send uses. When no message with that id exists about a minute
+        after the hand-off (the tab closed before it sent), the server
+        starts that turn itself with the same question id and the same
+        text, as its own hand-off does. A late send of the client then
+        reaches the same turn, because the start is idempotent by question
+        id.
       tags: [chat, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'
@@ -21957,6 +21979,21 @@ paths:
           required: true
           schema: { type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }
           description: One key per hand-off, repeated on every retry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [question_id]
+              properties:
+                question_id:
+                  type: string
+                  format: uuid
+                  description: The question id of the client's next send, which carries these texts.
+            example:
+              question_id: 5c2e8f1a-3b7d-4e9c-a0f6-1d8b2c4e6a90
       responses:
         '200':
           description: The messages this hand-off took (maybe none).
@@ -21972,6 +22009,7 @@ paths:
                     content: Skip the tests for now and only fix the build.
                     state: handed_off
                     revision: 1
+                    queue_order: 41
                     created_at: '2026-10-26T10:15:02Z'
                     updated_at: '2026-10-26T10:15:40Z'
                     injected_at: null
@@ -21979,8 +22017,9 @@ paths:
         '400':
           description: >
             An invalid id, a missing or malformed Idempotency-Key
-            (`idempotency_key_required`), or an `X-Client-Version` that does
-            not parse.
+            (`idempotency_key_required`), a body without a valid
+            `question_id` (`steering_invalid`), or an `X-Client-Version` that
+            does not parse.
           content:
             application/json:
               schema:
@@ -22048,6 +22087,7 @@ paths:
                 content: Fix the build first, then run the unit tests.
                 state: pending
                 revision: 2
+                queue_order: 41
                 created_at: '2026-10-26T10:15:02Z'
                 updated_at: '2026-10-26T10:15:05Z'
                 injected_at: null

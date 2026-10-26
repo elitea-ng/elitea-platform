@@ -30,6 +30,16 @@ import (
 // the newer answer, and that answer's hand-off starts the next turn with
 // them after it. Nothing is dropped.
 //
+// STOPPED OR FAILED. A turn that the user stopped, or that failed, is never
+// continued by the server: its messages are held (they stay turn_ended),
+// and the author's client offers them. The carry-over above still applies
+// when the author had already sent a newer message.
+//
+// NO LOST TEXT. A client hand-off names the question id of the client's
+// next send. When no message with that id exists ClientHandOffGrace later
+// (the tab closed first), this routine starts that turn with that question
+// id, so a late client send reaches the same turn.
+//
 // MCP. The client's MCP tokens are never stored, so this turn has none. An MCP
 // server that needs a token asks for authorization in the turn, the same way
 // as for a client that holds no token.
@@ -46,6 +56,11 @@ const ServerHandOffRetryAfter = time.Minute
 // failing (for example a permission store that refuses the author with an
 // error): the messages are not retried for ever.
 const ServerHandOffGiveUpAfter = time.Hour
+
+// ClientHandOffGrace is how long a client has, after its hand-off, to send
+// the message with the question id it named. After it, the routine starts
+// that turn itself (a tab that closed first loses nothing).
+const ClientHandOffGrace = time.Minute
 
 // ServerHandOffKey prefixes the hand-off key of the server's own hand-offs. A
 // client key may not use it.

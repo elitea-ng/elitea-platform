@@ -40,6 +40,16 @@
 -- pipeline turn, leaves them turn_ended on the newer answer, whose hand-off
 -- starts the next turn with them.
 --
+-- NO LOST TEXT. A client hand-off names the question id of the client's
+-- next send. When no message with that id exists about a minute later (the
+-- tab closed first), the routine starts that turn itself with the same
+-- question id; a late client send reaches the same turn.
+--
+-- STOPPED OR FAILED. The routine never continues a turn that the user
+-- stopped or that failed: it sets `handoff_held_at` on its waiting rows
+-- (they stay turn_ended for the client to offer), unless the author had
+-- already sent a newer message (then they are carried over as above).
+--
 -- A turn stopped before any output is deleted with its question; its rows
 -- here are deleted in the same transaction (agent_cancel.go).
 --
@@ -71,6 +81,7 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.execution_steering_messages (
     handoff_question_id UUID,
     handed_off_at TIMESTAMPTZ,
     handoff_started_at TIMESTAMPTZ,
+    handoff_held_at TIMESTAMPTZ,
     FOREIGN KEY (execution_id, generation)
         REFERENCES elitea_runtime.execution_jobs (execution_id, generation)
         ON DELETE CASCADE,
@@ -81,7 +92,7 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.execution_steering_messages (
     CONSTRAINT execution_steering_messages_handoff CHECK (
         (state = 'handed_off') = (handoff_key IS NOT NULL AND handed_off_at IS NOT NULL)
         AND (handoff_by IS NULL OR handoff_by IN ('client', 'server'))
-        AND (handoff_by IS NOT DISTINCT FROM 'server') = (handoff_question_id IS NOT NULL)
+        AND (state = 'handed_off') = (handoff_question_id IS NOT NULL)
     ),
     CONSTRAINT execution_steering_messages_claimed CHECK (
         state <> 'claimed' OR claim_lease_epoch IS NOT NULL
@@ -113,4 +124,4 @@ CREATE INDEX IF NOT EXISTS execution_steering_messages_response_idx
 CREATE INDEX IF NOT EXISTS execution_steering_messages_handoff_idx
     ON elitea_runtime.execution_steering_messages (state, execution_id, generation)
     WHERE state IN ('pending', 'claimed')
-       OR (state = 'handed_off' AND handoff_by = 'server' AND handoff_started_at IS NULL);
+       OR (state = 'handed_off' AND handoff_started_at IS NULL);

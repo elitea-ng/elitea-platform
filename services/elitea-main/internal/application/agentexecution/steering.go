@@ -89,10 +89,12 @@ type SteeringMessage struct {
 	Content           string
 	State             SteeringState
 	Revision          int32
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	InjectedAt        *time.Time
-	MessageID         string
+	// QueueOrder is the queue position (ascending); it has gaps.
+	QueueOrder int64
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	InjectedAt *time.Time
+	MessageID  string
 }
 
 // SteeringTarget names the running answer and the caller.
@@ -139,6 +141,10 @@ type SteeringEffect struct {
 type SteeringHandOffRequest struct {
 	SteeringTarget
 	IdempotencyKey string
+	// QuestionID is the question id of the client's next send, which
+	// carries the texts. The server starts that turn itself when no message
+	// with this id exists ClientHandOffGrace after the hand-off.
+	QuestionID string
 }
 
 // SteeringClaimRequest is one call of the worker at a safe point: the
@@ -268,6 +274,9 @@ func (service *SteeringService) HandOff(ctx context.Context, request SteeringHan
 	}
 	if !steeringIdempotencyKey.MatchString(request.IdempotencyKey) || strings.HasPrefix(request.IdempotencyKey, ServerHandOffKey) {
 		return nil, ErrSteeringIdempotencyRequired
+	}
+	if !validUUID(request.QuestionID) {
+		return nil, ErrInvalidSteering
 	}
 	messages, err := service.store.HandOffSteering(ctx, request)
 	if err != nil {

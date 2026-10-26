@@ -1,6 +1,7 @@
 package agentexecution
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -202,9 +203,21 @@ func (handler *steeringHandler) handOff(writer http.ResponseWriter, request *htt
 	if !ok {
 		return
 	}
+	raw, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, 4<<10))
+	var body struct {
+		QuestionID string `json:"question_id"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err != nil || decoder.Decode(&body) != nil || body.QuestionID == "" || decoder.More() {
+		writeSteeringCode(writer, http.StatusBadRequest, "steering_invalid",
+			"The hand-off needs the question_id of the next send.")
+		return
+	}
 	messages, err := handler.steering.HandOff(request.Context(), agentexecutionapp.SteeringHandOffRequest{
 		SteeringTarget: target,
 		IdempotencyKey: request.Header.Get("Idempotency-Key"),
+		QuestionID:     agentexecutionapp.CanonicalCurrentAgentResponseMessageID(body.QuestionID),
 	})
 	if err != nil {
 		handler.record(request, target, "hand-off", "", err)
@@ -308,6 +321,7 @@ func steeringView(message agentexecutionapp.SteeringMessage) map[string]any {
 		"content":             message.Content,
 		"state":               string(message.State),
 		"revision":            message.Revision,
+		"queue_order":         message.QueueOrder,
 		"created_at":          message.CreatedAt.UTC().Format(time.RFC3339Nano),
 		"updated_at":          message.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		"injected_at":         nil,

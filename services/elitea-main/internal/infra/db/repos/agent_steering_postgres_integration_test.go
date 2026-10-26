@@ -241,7 +241,12 @@ WHERE id = (SELECT conversation_id FROM chat_message_group WHERE uuid = $1::uuid
 
 	// A stop before any output deletes the turn: its steering goes with it.
 	err = repository.projects.WithinProjectTx(t.Context(), 1, steeringWriteTx, func(tx sqlExecutor) error {
-		return DiscardTurnSteering(t.Context(), tx, 1, response)
+		var conversationID int64
+		if err := tx.QueryRow(t.Context(), `SELECT conversation_id FROM chat_message_group WHERE uuid = $1::uuid`,
+			response).Scan(&conversationID); err != nil {
+			return err
+		}
+		return DiscardTurnSteering(t.Context(), tx, 1, conversationID, response)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -367,8 +372,9 @@ INSERT INTO elitea_runtime.execution_claims (
 	}); !errors.Is(err, agentexecutionapp.ErrSteeringNotPending) {
 		t.Fatalf("edit claimed err=%v", err)
 	}
-	// The same epoch does not get its unacknowledged message twice.
-	if again, _, err := claim(fence, nil, false); err != nil || len(again) != 0 {
+	// A lost claim answer loses nothing: the same epoch gets its
+	// unacknowledged message again (the worker ignores ids it holds).
+	if again, _, err := claim(fence, nil, false); err != nil || len(again) != 1 || again[0].ID != claimed[0].ID {
 		t.Fatalf("second claim=%+v err=%v", again, err)
 	}
 

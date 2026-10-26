@@ -234,20 +234,31 @@ func TestSteeringRouteHandsOffWithTheKey(t *testing.T) {
 	route := newSteeringTestRoute(t, useCase, []string{CurrentAgentSteeringPermission}, recorder)
 
 	response := httptest.NewRecorder()
-	route.ServeHTTP(response, steeringRequest(http.MethodPost, "/handoff", "", "handoff-1"))
+	route.ServeHTTP(response, steeringRequest(http.MethodPost, "/handoff", `{"question_id":"10000000-0000-4000-8000-0000000000AA"}`, "handoff-1"))
 	if response.Code != http.StatusOK || len(useCase.handed) != 1 {
 		t.Fatalf("status=%d body=%q handed=%d", response.Code, response.Body.String(), len(useCase.handed))
 	}
-	if got := useCase.handed[0]; got.IdempotencyKey != "handoff-1" || got.ActorUserID != 11 || got.ProjectID != 7 {
+	if got := useCase.handed[0]; got.IdempotencyKey != "handoff-1" || got.ActorUserID != 11 || got.ProjectID != 7 ||
+		got.QuestionID != "10000000-0000-4000-8000-0000000000aa" {
 		t.Fatalf("request=%+v", got)
 	}
 	if !strings.Contains(response.Body.String(), `"state":"handed_off"`) || len(recorder.events) != 1 {
 		t.Fatalf("body=%q events=%d", response.Body.String(), len(recorder.events))
 	}
 
+	// A body without the question id, or with another field, is refused
+	// before the use case.
+	for _, body := range []string{"", `{}x`, `{"question_id":"x","extra":1}`} {
+		response = httptest.NewRecorder()
+		route.ServeHTTP(response, steeringRequest(http.MethodPost, "/handoff", body, "handoff-2"))
+		if response.Code != http.StatusBadRequest || len(useCase.handed) != 1 {
+			t.Fatalf("body=%q status=%d handed=%d", body, response.Code, len(useCase.handed))
+		}
+	}
+
 	useCase.err = agentexecutionapp.ErrSteeringIdempotencyRequired
 	response = httptest.NewRecorder()
-	route.ServeHTTP(response, steeringRequest(http.MethodPost, "/handoff", "", ""))
+	route.ServeHTTP(response, steeringRequest(http.MethodPost, "/handoff", `{"question_id":"10000000-0000-4000-8000-0000000000aa"}`, ""))
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "idempotency_key_required") {
 		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
 	}

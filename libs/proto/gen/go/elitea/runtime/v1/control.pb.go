@@ -1591,8 +1591,9 @@ func (x *RemoveIndexResponseV1) GetRejection() *RuntimeErrorV1 {
 //
 // It has two steps, so a worker that stops between them loses nothing:
 //   - CLAIM: Main records the returned messages as claimed by this lease epoch.
-//     It also returns again the messages that an earlier lease epoch claimed
-//     and never acknowledged.
+//     It also returns again every claimed message that is not acknowledged,
+//     of this lease epoch or an earlier one: a lost answer loses nothing. The
+//     worker ignores the ids it already holds.
 //   - ACKNOWLEDGE: when the model checkpoint that holds a message is persisted,
 //     the worker names it in `acknowledged_steering_ids` (on its next call, or
 //     at once with `acknowledge_only`). Main then writes it as a conversation

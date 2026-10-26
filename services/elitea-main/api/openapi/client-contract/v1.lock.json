@@ -8625,6 +8625,7 @@
                       "id",
                       "injected_at",
                       "message_id",
+                      "queue_order",
                       "response_message_id",
                       "revision",
                       "state",
@@ -8655,6 +8656,10 @@
                         "type": "string",
                         "format": "uuid",
                         "nullable": true
+                      },
+                      "queue_order": {
+                        "type": "integer",
+                        "format": "int64"
                       },
                       "response_message_id": {
                         "type": "string",
@@ -13171,6 +13176,7 @@
                 "id",
                 "injected_at",
                 "message_id",
+                "queue_order",
                 "response_message_id",
                 "revision",
                 "state",
@@ -13201,6 +13207,10 @@
                   "type": "string",
                   "format": "uuid",
                   "nullable": true
+                },
+                "queue_order": {
+                  "type": "integer",
+                  "format": "int64"
                 },
                 "response_message_id": {
                   "type": "string",
@@ -19353,6 +19363,7 @@
                 "id",
                 "injected_at",
                 "message_id",
+                "queue_order",
                 "response_message_id",
                 "revision",
                 "state",
@@ -19383,6 +19394,10 @@
                   "type": "string",
                   "format": "uuid",
                   "nullable": true
+                },
+                "queue_order": {
+                  "type": "integer",
+                  "format": "int64"
                 },
                 "response_message_id": {
                   "type": "string",
@@ -19605,6 +19620,23 @@
           }
         }
       },
+      "request_body": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "type": "object",
+            "required": [
+              "question_id"
+            ],
+            "properties": {
+              "question_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        }
+      },
       "responses": {
         "200": {
           "content": {
@@ -19625,6 +19657,7 @@
                       "id",
                       "injected_at",
                       "message_id",
+                      "queue_order",
                       "response_message_id",
                       "revision",
                       "state",
@@ -19655,6 +19688,10 @@
                         "type": "string",
                         "format": "uuid",
                         "nullable": true
+                      },
+                      "queue_order": {
+                        "type": "integer",
+                        "format": "int64"
                       },
                       "response_message_id": {
                         "type": "string",

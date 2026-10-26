@@ -111,7 +111,7 @@ func (r *SteeringRepository) HandOffSteering(
 			return nil
 		}
 		taken, err := takeTurnEnded(ctx, tx, request.ProjectID, request.ResponseMessageID, request.ActorUserID,
-			request.IdempotencyKey, "client", nil)
+			request.IdempotencyKey, "client", &request.QuestionID)
 		if err != nil || taken == 0 {
 			return err
 		}
@@ -128,51 +128,56 @@ type handOffCandidate struct {
 	projectID         int64
 	responseMessageID string
 	authorUserID      int64
-	// key is set for a server hand-off whose start was not confirmed.
+	// key is set for a hand-off whose turn has not started yet: the
+	// server's own (its start was not confirmed), or a client's whose send
+	// never came.
 	key string
+	// jobState is the ended execution's state, for a group not taken yet.
+	jobState string
 }
 
 func (r *SteeringRepository) TakeServerHandOffs(ctx context.Context, readyBefore, retryBefore time.Duration, limit int) ([]agentexecutionapp.ServerHandOff, []agentexecutionapp.SteeringEffect, error) {
 	if limit <= 0 {
 		return nil, nil, nil
 	}
-	// A server hand-off that did not start within the give-up window (the
+	// A hand-off whose turn did not start within the give-up window (the
 	// start keeps failing) is removed: the author sees it in the list as gone.
 	if _, err := r.shared.Exec(ctx, `
 UPDATE elitea_runtime.execution_steering_messages
 SET state = 'removed', handoff_key = NULL, handoff_by = NULL, handoff_question_id = NULL,
     handed_off_at = NULL, updated_at = clock_timestamp()
-WHERE state = 'handed_off' AND handoff_by = 'server' AND handoff_started_at IS NULL
+WHERE state = 'handed_off' AND handoff_started_at IS NULL
   AND handed_off_at < clock_timestamp() - make_interval(secs => $1)`,
 		agentexecutionapp.ServerHandOffGiveUpAfter.Seconds()); err != nil {
 		return nil, nil, fmt.Errorf("expire steering hand-offs: %w", err)
 	}
 	rows, err := r.shared.Query(ctx, `
-(SELECT DISTINCT message.project_id, message.response_message_id::text, message.author_user_id, ''
+(SELECT DISTINCT message.project_id, message.response_message_id::text, message.author_user_id, '', job.state
  FROM elitea_runtime.execution_steering_messages AS message
  JOIN elitea_runtime.execution_jobs AS job
    ON job.execution_id = message.execution_id
   AND job.generation = message.generation
  WHERE message.state IN ('pending', 'claimed')
+   AND message.handoff_held_at IS NULL
    AND `+steeringEndedSQL+`
    AND job.settled_at IS NOT NULL
    AND job.settled_at < clock_timestamp() - make_interval(secs => $1)
  LIMIT $3)
 UNION ALL
-(SELECT DISTINCT message.project_id, message.response_message_id::text, message.author_user_id, message.handoff_key
+(SELECT DISTINCT message.project_id, message.response_message_id::text, message.author_user_id, message.handoff_key, ''
  FROM elitea_runtime.execution_steering_messages AS message
  WHERE message.state = 'handed_off'
-   AND message.handoff_by = 'server'
    AND message.handoff_started_at IS NULL
-   AND message.handed_off_at < clock_timestamp() - make_interval(secs => $2)
- LIMIT $3)`, readyBefore.Seconds(), retryBefore.Seconds(), limit)
+   AND message.handed_off_at < clock_timestamp() - make_interval(secs =>
+       CASE WHEN message.handoff_by = 'server' THEN $2::float8 ELSE $4::float8 END)
+ LIMIT $3)`, readyBefore.Seconds(), retryBefore.Seconds(), limit, agentexecutionapp.ClientHandOffGrace.Seconds())
 	if err != nil {
 		return nil, nil, fmt.Errorf("find steering hand-offs: %w", err)
 	}
 	var candidates []handOffCandidate
 	for rows.Next() {
 		var candidate handOffCandidate
-		if err := rows.Scan(&candidate.projectID, &candidate.responseMessageID, &candidate.authorUserID, &candidate.key); err != nil {
+		if err := rows.Scan(&candidate.projectID, &candidate.responseMessageID, &candidate.authorUserID, &candidate.key, &candidate.jobState); err != nil {
 			rows.Close()
 			return nil, nil, fmt.Errorf("scan steering hand-off: %w", err)
 		}
@@ -218,6 +223,12 @@ func (r *SteeringRepository) takeServerHandOff(ctx context.Context, candidate ha
 				effects = carried
 				return err
 			}
+			if candidate.jobState != "SUCCEEDED" {
+				// The user stopped the turn, or it failed: the server does
+				// not continue it. The messages wait (turn_ended) for the
+				// author, whose client offers them.
+				return holdTurnEnded(ctx, tx, candidate)
+			}
 			questionID := uuid.NewString()
 			key = agentexecutionapp.ServerHandOffKey + "_" + questionID
 			taken, err := takeTurnEnded(ctx, tx, candidate.projectID, candidate.responseMessageID, candidate.authorUserID,
@@ -256,6 +267,20 @@ LIMIT 1`, candidate.projectID, candidate.responseMessageID, candidate.authorUser
 			return fmt.Errorf("read steering hand-off target: %w", err)
 		}
 		handOff.Adhoc = capability == "agent.execute.adhoc.v1"
+		if candidate.key != "" {
+			// A hand-off taken before: when its question exists, its turn
+			// started (the client sent, or an earlier start committed).
+			var started bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM chat_message_group WHERE uuid = $1::uuid)`,
+				handOff.QuestionID).Scan(&started); err != nil {
+				return fmt.Errorf("read the hand-off question: %w", err)
+			}
+			if started {
+				_, err := tx.Exec(ctx, markHandOffStartedSQL,
+					candidate.projectID, candidate.responseMessageID, candidate.authorUserID, handOff.QuestionID)
+				return err
+			}
+		}
 		messages, err := handOffRows(ctx, tx, candidate.projectID, candidate.responseMessageID, candidate.authorUserID, key)
 		if err != nil {
 			return err
@@ -281,7 +306,8 @@ const newerAuthorTurnSQL = `
 SELECT EXTRACT(EPOCH FROM clock_timestamp() - newer.created_at)::float8,
        COALESCE(binding.response_uuid, ''),
        COALESCE(binding.execution_id, ''),
-       COALESCE(binding.generation, 0)
+       COALESCE(binding.generation, 0),
+       COALESCE(binding.running, FALSE)
 FROM chat_message_group AS response
 JOIN chat_participant_mapping AS author_mapping
   ON author_mapping.conversation_id = response.conversation_id
@@ -298,12 +324,17 @@ JOIN chat_message_group AS newer
 LEFT JOIN LATERAL (
     SELECT newer_response.uuid::text AS response_uuid,
            job_binding.execution_id,
-           job_binding.generation
+           job_binding.generation,
+           (job.desired_state = 'RUNNING'
+            AND job.state IN ('PENDING', 'DISPATCHED', 'CLAIMED', 'RUNNING')) AS running
     FROM chat_message_group AS newer_response
     JOIN elitea_runtime.agent_execution_jobs AS job_binding
       ON job_binding.client_message_id = newer_response.uuid::text
      AND job_binding.execution_id = newer_response.task_id
      AND job_binding.client_execution_generation = newer_response.meta ->> 'execution_generation'
+    JOIN elitea_runtime.execution_jobs AS job
+      ON job.execution_id = job_binding.execution_id
+     AND job.generation = job_binding.generation
     WHERE newer_response.reply_to_id = newer.id
       AND newer_response.conversation_id = newer.conversation_id
     ORDER BY newer_response.id DESC
@@ -338,8 +369,9 @@ func carryTurnEnded(ctx context.Context, tx sqlExecutor, candidate handOffCandid
 	var ageSeconds float64
 	var newerResponse, newerExecution string
 	var newerGeneration int64
+	var newerRunning bool
 	err := tx.QueryRow(ctx, newerAuthorTurnSQL, candidate.responseMessageID, candidate.authorUserID).
-		Scan(&ageSeconds, &newerResponse, &newerExecution, &newerGeneration)
+		Scan(&ageSeconds, &newerResponse, &newerExecution, &newerGeneration, &newerRunning)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, nil
 	}
@@ -348,6 +380,26 @@ func carryTurnEnded(ctx context.Context, tx sqlExecutor, candidate handOffCandid
 	}
 	if newerExecution == "" {
 		return nil, ageSeconds < carryWaitForAnswer.Seconds(), nil
+	}
+	// A running newer turn takes at most its free queue places (the same
+	// cap and lock as a queue). The rest wait here, turn_ended, for the
+	// next pass. An ended newer turn waits for no safe point: no cap.
+	free := 1 << 30
+	if newerRunning {
+		if err := lockSteeringQueue(ctx, tx, newerExecution, newerGeneration); err != nil {
+			return nil, true, err
+		}
+		var waiting int
+		if err := tx.QueryRow(ctx, `
+SELECT count(*) FROM elitea_runtime.execution_steering_messages
+WHERE execution_id = $1 AND generation = $2 AND state IN ('pending', 'claimed')`,
+			newerExecution, newerGeneration).Scan(&waiting); err != nil {
+			return nil, true, fmt.Errorf("count the newer turn's steering: %w", err)
+		}
+		free = agentexecutionapp.MaxPendingSteeringMessages - waiting
+		if free <= 0 {
+			return nil, true, nil
+		}
 	}
 	// The same ordered row lock as the client's hand-off: the first of the
 	// two wins, the other finds no waiting row.
@@ -364,6 +416,7 @@ WITH waiting AS (
       AND message.state IN ('pending', 'claimed')
       AND `+steeringEndedSQL+`
     ORDER BY message.queue_order
+    LIMIT $7
     FOR UPDATE OF message
 ), message AS (
     UPDATE elitea_runtime.execution_steering_messages AS message
@@ -388,7 +441,7 @@ JOIN elitea_runtime.execution_jobs AS job
   ON job.execution_id = message.execution_id
  AND job.generation = message.generation
 ORDER BY message.queue_order`, candidate.projectID, candidate.responseMessageID, candidate.authorUserID,
-		newerExecution, newerGeneration, newerResponse)
+		newerExecution, newerGeneration, newerResponse, free)
 	if err != nil {
 		return nil, true, fmt.Errorf("carry steering over: %w", err)
 	}
@@ -417,33 +470,51 @@ ORDER BY message.queue_order`, candidate.projectID, candidate.responseMessageID,
 	return effects, true, nil
 }
 
-func (r *SteeringRepository) MarkServerHandOffStarted(ctx context.Context, handOff agentexecutionapp.ServerHandOff) error {
-	if _, err := r.shared.Exec(ctx, `
+// markHandOffStartedSQL records that the hand-off's turn started.
+const markHandOffStartedSQL = `
 UPDATE elitea_runtime.execution_steering_messages
 SET handoff_started_at = clock_timestamp(), updated_at = clock_timestamp()
 WHERE project_id = $1 AND response_message_id = $2::uuid AND author_user_id = $3
-  AND state = 'handed_off' AND handoff_by = 'server'
-  AND handoff_question_id = $4::uuid AND handoff_started_at IS NULL`,
+  AND state = 'handed_off'
+  AND handoff_question_id = $4::uuid AND handoff_started_at IS NULL`
+
+// holdTurnEnded marks the waiting rows of a stopped or failed turn as held:
+// the routine does not look at them again. They stay turn_ended.
+func holdTurnEnded(ctx context.Context, tx sqlExecutor, candidate handOffCandidate) error {
+	if _, err := tx.Exec(ctx, `
+UPDATE elitea_runtime.execution_steering_messages
+SET handoff_held_at = clock_timestamp()
+WHERE project_id = $1 AND response_message_id = $2::uuid AND author_user_id = $3
+  AND state IN ('pending', 'claimed') AND handoff_held_at IS NULL`,
+		candidate.projectID, candidate.responseMessageID, candidate.authorUserID); err != nil {
+		return fmt.Errorf("hold steering of a stopped turn: %w", err)
+	}
+	return nil
+}
+
+func (r *SteeringRepository) MarkServerHandOffStarted(ctx context.Context, handOff agentexecutionapp.ServerHandOff) error {
+	if _, err := r.shared.Exec(ctx, markHandOffStartedSQL,
 		handOff.ProjectID, handOff.ResponseMessageID, handOff.AuthorUserID, handOff.QuestionID); err != nil {
 		return fmt.Errorf("mark steering hand-off started: %w", err)
 	}
 	return nil
 }
 
-// dropServerHandOffSQL removes the rows of a server hand-off that can never
-// start. A removed row keeps no hand-off columns (0178 _handoff).
-const dropServerHandOffSQL = `
+// dropHandOffColumns is the SET of a hand-off that can never start: a
+// removed row keeps no hand-off columns (0178 _handoff).
+const dropHandOffColumns = `
 UPDATE elitea_runtime.execution_steering_messages
 SET state = 'removed', handoff_key = NULL, handoff_by = NULL, handoff_question_id = NULL,
     handed_off_at = NULL, updated_at = clock_timestamp()
 WHERE project_id = $1 AND response_message_id = $2::uuid AND author_user_id = $3
-  AND handoff_key = $4 AND state = 'handed_off' AND handoff_by = 'server'
-  AND handoff_started_at IS NULL`
+  AND state = 'handed_off' AND handoff_started_at IS NULL`
+
+// dropServerHandOffSQL removes a not started hand-off by its key.
+const dropServerHandOffSQL = dropHandOffColumns + ` AND handoff_key = $4`
 
 func (r *SteeringRepository) DropServerHandOff(ctx context.Context, handOff agentexecutionapp.ServerHandOff) error {
-	key := agentexecutionapp.ServerHandOffKey + "_" + handOff.QuestionID
-	if _, err := r.shared.Exec(ctx, dropServerHandOffSQL,
-		handOff.ProjectID, handOff.ResponseMessageID, handOff.AuthorUserID, key); err != nil {
+	if _, err := r.shared.Exec(ctx, dropHandOffColumns+` AND handoff_question_id = $4::uuid`,
+		handOff.ProjectID, handOff.ResponseMessageID, handOff.AuthorUserID, handOff.QuestionID); err != nil {
 		return fmt.Errorf("drop steering hand-off: %w", err)
 	}
 	return nil

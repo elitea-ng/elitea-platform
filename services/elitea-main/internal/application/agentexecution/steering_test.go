@@ -136,7 +136,10 @@ func TestSteeringServiceHandOffNeedsAClientKey(t *testing.T) {
 	}
 	store := &steeringStoreStub{}
 	service, _ := NewSteeringService(store, nil)
-	messages, err := service.HandOff(context.Background(), SteeringHandOffRequest{SteeringTarget: steeringTestTarget, IdempotencyKey: "k-1"})
+	if _, err := service.HandOff(context.Background(), SteeringHandOffRequest{SteeringTarget: steeringTestTarget, IdempotencyKey: "k-1", QuestionID: "not-a-uuid"}); err != ErrInvalidSteering || store.calls != 0 {
+		t.Fatalf("bad question id err=%v calls=%d", err, store.calls)
+	}
+	messages, err := service.HandOff(context.Background(), SteeringHandOffRequest{SteeringTarget: steeringTestTarget, IdempotencyKey: "k-1", QuestionID: "10000000-0000-4000-8000-000000000099"})
 	if err != nil || messages == nil || len(messages) != 0 || store.calls != 1 {
 		t.Fatalf("messages=%v err=%v calls=%d", messages, err, store.calls)
 	}
