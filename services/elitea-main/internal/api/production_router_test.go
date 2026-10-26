@@ -1902,6 +1902,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/elitea_core/admin/administration",
 		"GET /api/v2/elitea_core/admin_published_agents/administration",
 		"GET /api/v2/elitea_core/agent_categories/prompt_lib/{projectID}",
+		"GET /api/v2/elitea_core/agent_schema/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/agents_with_skill/prompt_lib/{projectID}/{skillID}",
 		"GET /api/v2/elitea_core/analytics/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/analytics_agent_detail/prompt_lib/{projectID}",

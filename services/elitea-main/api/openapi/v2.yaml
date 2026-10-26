@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.27"
+  x-elitea-client-contract: "1.28"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -6568,6 +6568,167 @@ components:
             read.
         llm_settings:
           $ref: '#/components/schemas/DraftLlmSettings'
+
+    AgentDefinition:
+      type: object
+      description: >
+        ADR-0037 decision 5: the intended cloud agent, as a conversational
+        builder produces it. It is NOT the database passthrough
+        (ApplicationVersionDetail); the review form maps it onto the reviewed
+        create-application body. Served as JSON Schema by getAgentSchema and
+        compiled into the validator both draft routes run before they answer
+        (internal/api/v2/drafts/schema.go), so this component is the one
+        source. Self-contained on purpose: no $ref and no `nullable`, so it is
+        valid JSON Schema as written.
+      required: [name, description, instructions]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 32
+          description: A short, specific name.
+        description:
+          type: string
+          minLength: 1
+          maxLength: 2304
+        instructions:
+          type: string
+          minLength: 1
+          maxLength: 32768
+          description: The agent's system prompt, in Markdown.
+        welcome_message:
+          type: string
+          maxLength: 768
+        conversation_starters:
+          type: array
+          maxItems: 4
+          items:
+            type: string
+            minLength: 1
+            maxLength: 768
+        llm_settings:
+          type: object
+          description: The model the agent runs on. Absent means the project default.
+          properties:
+            model_name: { type: string, minLength: 1 }
+            temperature: { type: number, minimum: 0, maximum: 2 }
+            max_tokens: { type: integer, minimum: 1 }
+            reasoning_effort: { type: string, enum: [low, medium, high] }
+        variables:
+          type: array
+          maxItems: 32
+          items:
+            type: object
+            required: [name]
+            properties:
+              name: { type: string, pattern: '^[A-Za-z_][A-Za-z0-9_]{0,63}$' }
+              value: { type: string }
+        tools:
+          type: array
+          description: References to existing project toolkits. Attaching them is a human step in review.
+          items:
+            type: object
+            required: [id]
+            properties:
+              id: { type: string, minLength: 1 }
+              name: { type: string }
+              type: { type: string }
+        skills:
+          type: array
+          description: References to existing project skills.
+          items:
+            type: object
+            required: [id]
+            properties:
+              id: { type: string, minLength: 1 }
+              name: { type: string }
+      example:
+        name: Incident Triager
+        description: Sorts new incidents by severity and names the owning team.
+        instructions: "## Role\nYou triage incidents. Read the report, assign a severity, name the owning team."
+        welcome_message: What broke?
+        conversation_starters: [Triage this page, Summarise the last hour]
+
+    LocalAgentDefinition:
+      type: object
+      description: >
+        ADR-0037 decision 1: a local agent is an AGENTS.md file in a desktop
+        workspace, read by the D0 project-instructions loader
+        (libs/rust/local-tools/src/project_instructions.rs). The loader is the
+        authority on its caps and refusals; this schema states them so a
+        client can check a file before it asks the approval bridge to write
+        it. Caps the loader enforces on every read: the file name is
+        AGENTS.md (matched case-insensitively, the exact spelling wins); all
+        AGENTS.md text one turn reads, root and nested together, is at most
+        32768 bytes, and text past the cap is not read; a symlinked file or
+        folder is not read; a path the workspace denies is not read. A nested
+        AGENTS.md (scope other than `root`) applies to a turn that references
+        a path under that folder, in addition to the root file.
+      required: [name, instructions, scope]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: The title of the file (its first heading).
+        description:
+          type: string
+          maxLength: 2304
+        instructions:
+          type: string
+          minLength: 1
+          maxLength: 32768
+          description: The Markdown body. Counted in bytes against the loader's 32768-byte cap.
+        scope:
+          type: string
+          minLength: 1
+          maxLength: 512
+          pattern: '^(root|[A-Za-z0-9_][A-Za-z0-9_.@ -]*(/[A-Za-z0-9_][A-Za-z0-9_.@ -]*)*)$'
+          description: >
+            `root` writes AGENTS.md at the workspace root. A relative folder
+            path (no leading slash, no `..` segment, `/` separators) writes a
+            nested AGENTS.md in that folder.
+      example:
+        name: Web app conventions
+        description: How to work in the React client.
+        instructions: "# Web app conventions\n\nRun the unit tests before you commit."
+        scope: apps/web
+
+    AgentSchemaResponse:
+      type: object
+      required: [schema_version, agent_definition, local_agent_definition]
+      description: >
+        The two published agent schemas as JSON Schema, read out of this
+        contract's AgentDefinition and LocalAgentDefinition components.
+      properties:
+        schema_version:
+          type: string
+          description: >
+            12 hex characters of the SHA-256 of the two schemas. It changes
+            exactly when a schema changes; the response ETag carries it.
+        agent_definition:
+          type: object
+          additionalProperties: true
+          description: The AgentDefinition component, as JSON Schema.
+        local_agent_definition:
+          type: object
+          additionalProperties: true
+          description: The LocalAgentDefinition component, as JSON Schema.
+      example:
+        schema_version: 3f2a9c0d41be
+        agent_definition: { type: object, required: [name, description, instructions] }
+        local_agent_definition: { type: object, required: [name, instructions, scope] }
+
+    DraftRefusedResponse:
+      type: object
+      required: [error, code]
+      description: A generated agent draft the one-shot route refused (422).
+      properties:
+        error: { type: string }
+        code:
+          type: string
+          enum: [agent_draft_invalid, agent_draft_unparseable, agent_draft_cut_off]
+      example: { error: "the generated agent draft is not usable: the draft does not match AgentDefinition: name (missing)", code: agent_draft_invalid }
 
     ProjectContextDraft:
       type: object
@@ -23687,10 +23848,12 @@ paths:
             did not answer with JSON, was cut off mid-answer, or returned a
             draft that cannot be saved. Distinct from 502, which means the hop
             itself failed, and from 500, which would say this service is broken.
+            The draft is checked against AgentDefinition (getAgentSchema), the
+            same check the streaming route runs; `code` names the failure.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/DraftRefusedResponse'
         '502':
           description: >
             The LLM gateway is configured and did not complete the request.
@@ -23708,6 +23871,38 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PredictLLMUnavailableResponse'
+
+  /elitea_core/agent_schema/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    get:
+      operationId: getAgentSchema
+      summary: The published agent schemas
+      description: |
+        Client contract 1.28 (ADR-0037 decision 5). The AgentDefinition and
+        LocalAgentDefinition components of this contract, as JSON Schema, and
+        a `schema_version` that changes exactly when one of them changes
+        (also the strong `ETag`). The agent draft route validates its draft
+        against this AgentDefinition before it answers. The route reads no
+        tenant state: every authorized project gets the same body. Gated on
+        `models.applications.applications.create`, the permission of the
+        builders that use it.
+      tags: [applications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: The two schemas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentSchemaResponse'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '500': { $ref: '#/components/responses/500' }
 
   /elitea_core/generate_project_context_draft/prompt_lib/{project_id}:
     parameters:
