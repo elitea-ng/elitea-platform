@@ -12,9 +12,13 @@ export interface UseReattachSeededTurnParams {
   readonly messages: readonly ChatMessage[];
   readonly conversationUuid: string | undefined;
   readonly reattach: (turn: ReattachableTurn) => boolean;
+  /** The reattach opened the stream (steering reads the answer's list again, contract 1.26). */
+  readonly onReattached?: (() => void) | undefined;
 }
 
-export function useReattachSeededTurn({ messages, conversationUuid, reattach }: UseReattachSeededTurnParams): void {
+export function useReattachSeededTurn({ messages, conversationUuid, reattach, onReattached }: UseReattachSeededTurnParams): void {
+  const onReattachedRef = useRef(onReattached);
+  onReattachedRef.current = onReattached;
   const attempted = useRef<Set<string>>(new Set());
   const turn = useMemo(() => findReattachableTurn(messages), [messages]);
   const executionId = turn?.executionId;
@@ -26,6 +30,6 @@ export function useReattachSeededTurn({ messages, conversationUuid, reattach }: 
     const key = `${conversationUuid}:${executionId}`;
     if (attempted.current.has(key)) return;
     attempted.current.add(key);
-    reattach({ executionId, messageId, ...(questionId !== undefined ? { questionId } : {}) });
+    if (reattach({ executionId, messageId, ...(questionId !== undefined ? { questionId } : {}) })) onReattachedRef.current?.();
   }, [conversationUuid, executionId, messageId, questionId, reattach]);
 }

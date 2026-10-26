@@ -1,3 +1,4 @@
+import type { StopChatTaskParams } from '@/entities/conversation/api/conversationApi';
 import type { EditorTestRun } from '@/shared/api/generated/model';
 import type { ExecutionEventData } from '@/shared/api/sse';
 import type { ChatMessage } from '../lib/convertMessagesToChatHistory';
@@ -32,6 +33,12 @@ export interface UseChatStreamTransportParams {
   readonly onContextChanged?: ((projectId: string | number) => void) | undefined;
   /** The run itself failed server-side, or its stream dropped. */
   readonly onStreamError?: ((reason: string) => void) | undefined;
+  /**
+   * A steering frame of the run this transport owns (client contract 1.26):
+   * the SSE event name (`steer.queued`, `steer.injected`, `steer.dropped`)
+   * and its `SteeringMessage` data.
+   */
+  readonly onSteerEvent?: ((event: string, frame: ExecutionEventData) => void) | undefined;
 }
 
 /**
@@ -67,6 +74,11 @@ export interface UseChatStreamTransportResult extends ChatStreamRunStarters {
    * `false` ⇒ this transport already owns a run, so nothing was opened.
    */
   readonly reattach: (params: ChatStreamReattachParams) => boolean;
+  /**
+   * The project and the `response_message_id` of the run this transport owns
+   * now, or `null`. The steering routes address this answer.
+   */
+  readonly runTarget: () => StopChatTaskParams | null;
 }
 
 /** @public The in-flight turn `reattach` observes again. */

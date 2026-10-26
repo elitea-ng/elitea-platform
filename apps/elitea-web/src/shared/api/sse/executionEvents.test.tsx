@@ -11,6 +11,9 @@ import {
   EXECUTION_EVENT_INDEX_INGEST_COMPLETED,
   EXECUTION_EVENT_NODE,
   EXECUTION_EVENT_REPLAY_RESET,
+  EXECUTION_EVENT_STEER_DROPPED,
+  EXECUTION_EVENT_STEER_INJECTED,
+  EXECUTION_EVENT_STEER_QUEUED,
   parseExecutionEventData,
   resolveExecutionEventsUrl,
   useExecutionEventStream,
@@ -105,6 +108,29 @@ describe('useExecutionEvents', () => {
     expect(onIndexIngestCompleted).toHaveBeenCalledWith({ status: 'ok' });
     expect(onFailed).toHaveBeenCalledWith({ message: 'boom' });
     expect(onReplayReset).toHaveBeenCalledWith({ reason: 'progress_retention_window_elapsed' });
+  });
+
+  it('dispatches the three steering events (contract 1.26) with their names', () => {
+    const onSteer = vi.fn();
+    render(
+      <Probe
+        projectId={7}
+        executionId="exec-1"
+        onSteer={onSteer}
+      />,
+    );
+
+    act(() => {
+      registry.emit(EXECUTION_EVENT_STEER_QUEUED, '{"id":"s1","state":"pending"}');
+      registry.emit(EXECUTION_EVENT_STEER_INJECTED, '{"id":"s1","state":"injected"}');
+      registry.emit(EXECUTION_EVENT_STEER_DROPPED, '{"id":"s2","reason":"removed"}');
+    });
+
+    expect(onSteer.mock.calls).toEqual([
+      ['steer.queued', { id: 's1', state: 'pending' }],
+      ['steer.injected', { id: 's1', state: 'injected' }],
+      ['steer.dropped', { id: 's2', reason: 'removed' }],
+    ]);
   });
 
   it('drops an unparseable frame instead of invoking the callback', () => {

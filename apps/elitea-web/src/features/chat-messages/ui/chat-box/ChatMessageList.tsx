@@ -21,6 +21,7 @@ import Box from '@mui/material/Box';
 import Skeleton from '@mui/material/Skeleton';
 
 import { ApplicationAnswer } from './ApplicationAnswer';
+import { SteeringMessages } from './SteeringMessages';
 import { UserMessage } from './UserMessage';
 
 import { useChatSessionStore } from '@/entities/conversation';
@@ -132,6 +133,7 @@ export function ChatMessageList({
   pagination: { isLoadingMore = false, onScrollToTop } = {},
   emptyState,
   assistantName,
+  steering,
 }: ChatMessageListProps): ReactNode {
   const scrollRef = useRef<SimpleBarInstance | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -152,6 +154,8 @@ export function ChatMessageList({
   // user, while nothing is streaming. `isLoading` isn't in this component's
   // props yet (ChatBox.tsx doesn't supply it) so it's omitted here rather
   // than invented.
+  // Steering (contract 1.26): an injected message that the transcript already holds is not shown two times.
+  const transcriptIds = useMemo(() => new Set(chatHistory.map((message) => message.id)), [chatHistory]);
   const lastUserMessageIndex = useMemo(
     () => chatHistory.reduce((last, msg, i) => (msg.role === 'user' ? i : last), -1),
     [chatHistory],
@@ -341,6 +345,9 @@ export function ChatMessageList({
                     enabled: message.id !== WELCOME_MESSAGE_ID && !message.isSummarized,
                   }}
                 />
+              )}
+              {!isUser && steering && (
+                <SteeringMessages responseMessageId={messageId} transcriptIds={transcriptIds} isLive={messageIsStreaming || Boolean(message.isLoading)} model={steering.model} onStopAndSend={steering.onStopAndSend} />
               )}
             </Box>
           );

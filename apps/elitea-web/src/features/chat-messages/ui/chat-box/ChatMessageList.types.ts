@@ -7,6 +7,7 @@ import type { HitlResumePayload } from '../chat-hitl-actions/ChatHitlActions';
 import type { CanvasEditPayload, CodeBlockInfo } from '../canvas/Canvas';
 
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
+import type { ChatSteeringModel } from '../../model/useChatSteering';
 
 /**
  * Type module for `ChatMessageList.tsx`, split out purely to keep that file
@@ -123,4 +124,12 @@ export interface ChatMessageListProps {
    * A persisted authorName takes precedence over the composer selection.
    */
   readonly assistantName?: string | undefined;
+  /** Steering during execution (contract 1.26): shows each answer's steering messages under it. */
+  readonly steering?: ChatMessageListSteering | undefined;
+}
+
+/** @public The steering model and the "Stop and send" action of the chat. */
+export interface ChatMessageListSteering {
+  readonly model: ChatSteeringModel;
+  readonly onStopAndSend?: (() => void) | undefined;
 }

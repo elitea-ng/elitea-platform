@@ -94,6 +94,8 @@ export interface UseChatBoxSendParams {
   readonly userAvatar?: string | undefined;
   /** Graph frames, for a host that also renders a run timeline (the pipeline editor's canvas). Passed straight to `useChatStreamTransport`, which owns the WHICH-frames filter (`shouldForwardAgentEvent`); no second gate here, which would only be a copy that could drift. */
   readonly onAgentEvent?: ((frame: ExecutionEventData) => void) | undefined;
+  /** Steering frames of the owned run (contract 1.26), passed to the transport. */
+  readonly onSteerEvent?: ((event: string, frame: ExecutionEventData) => void) | undefined;
 }
 
 /** @public */
@@ -135,6 +137,8 @@ export interface UseChatBoxSendResult {
    * call alongside the socket-era `stopStreaming`.
    */
   readonly stopStreamedExecution: () => void;
+  /** The answer that the owned run writes (project + `response_message_id`), or `null`. */
+  readonly streamTarget: () => { readonly projectId: string | number; readonly messageGroupUuid: string } | null;
   readonly createConversationForSend: (
     question: string,
   ) => Promise<
@@ -172,7 +176,7 @@ export function useChatBoxSend(
       ? { conversationUuid: params.conversationUuid }
       : {}),
     context: buildChatStreamContext(params),
-    onAgentEvent: params.onAgentEvent,
+    onAgentEvent: params.onAgentEvent, onSteerEvent: params.onSteerEvent,
   });
   const { startDetailed, resumeDetailed, regenerateDetailed } = transport;
   const requireTestTransport = useEditorTestTransport(params.editorTest, transport);
@@ -387,7 +391,7 @@ export function useChatBoxSend(
     regenerateStreamedExecution,
     reattachStreamedExecution,
     isStreaming: transport.isStreaming,
-    stopStreamedExecution: transport.stop,
+    stopStreamedExecution: transport.stop, streamTarget: transport.runTarget,
     createConversationForSend,
     uploadAttachmentsForSend,
   };

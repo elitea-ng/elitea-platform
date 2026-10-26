@@ -81,6 +81,13 @@ export interface ChatBoxQueuedMessagesModel {
   readonly items: readonly QueuedChatMessage[];
   /** What `NewChatInput` calls: queue while a run is open, send otherwise. */
   readonly onSend: (question: string) => void;
+  /**
+   * Queues a text for after the turn whatever the run state is. Steering
+   * (contract 1.26) uses it for a refused steering message and for the
+   * leftover messages that a turn did not inject: they go as a normal message
+   * when the composer settles.
+   */
+  readonly enqueue: (question: string) => void;
   readonly onRemove: (id: string) => void;
   /** Stamps `interjected` on the transcript rows delivered from this queue. */
   readonly decorate: (messages: readonly ChatMessage[]) => readonly ChatMessage[];
@@ -123,6 +130,13 @@ export function useChatBoxQueuedMessages(params: UseChatBoxQueuedMessagesParams)
         sendNowRef.current(question);
         return;
       }
+      useQueuedMessagesStore.getState().enqueue(conversationKey, question);
+    },
+    [conversationKey],
+  );
+
+  const enqueue = useCallback(
+    (question: string) => {
       useQueuedMessagesStore.getState().enqueue(conversationKey, question);
     },
     [conversationKey],
@@ -173,7 +187,7 @@ export function useChatBoxQueuedMessages(params: UseChatBoxQueuedMessagesParams)
     };
   }, [interjectedIds]);
 
-  return { items, onSend, onRemove, decorate };
+  return { items, onSend, enqueue, onRemove, decorate };
 }
 
 /* ── the strip ───────────────────────────────────────────────────────────── */
@@ -266,6 +280,28 @@ export function ChatBoxQueuedMessages({ queue }: ChatBoxQueuedMessagesProps): Re
           </Tooltip>
         </Box>
       ))}
+    </Box>
+  );
+}
+
+export interface ChatBoxSteeringNoticeProps {
+  /** A short text about a refused steering message (contract 1.26), or `null`. */
+  readonly notice: string | null;
+  readonly onDismiss: () => void;
+}
+
+/** One line above the composer when a steering message went to the waiting list instead. */
+export function ChatBoxSteeringNotice({ notice, onDismiss }: ChatBoxSteeringNoticeProps): ReactNode {
+  if (notice === null) return null;
+  const closeLabel = t('widgets.chatBox.steeringNoticeClose', 'Close');
+  return (
+    <Box sx={stripSx} data-testid="chat-steering-notice" aria-live="polite">
+      <Box sx={rowSx}>
+        <Typography variant="bodyMedium" color="text.secondary" sx={{ flex: 1 }}>{notice}</Typography>
+        <IconButton size="small" aria-label={closeLabel} onClick={onDismiss}>
+          <CloseIcon fontSize="small" />
+        </IconButton>
+      </Box>
     </Box>
   );
 }

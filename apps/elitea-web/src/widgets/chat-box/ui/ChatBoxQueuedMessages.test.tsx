@@ -252,7 +252,7 @@ describe('chatBoxQueueKey', () => {
 /* ── the strip ───────────────────────────────────────────────────────────── */
 
 function stripModel(items: readonly { id: string; text: string; queuedAt: number }[], onRemove = vi.fn()): ChatBoxQueuedMessagesModel {
-  return { items, onSend: vi.fn(), onRemove, decorate: (messages) => messages };
+  return { items, onSend: vi.fn(), enqueue: vi.fn(), onRemove, decorate: (messages) => messages };
 }
 
 describe('ChatBoxQueuedMessages', () => {
