@@ -2692,9 +2692,9 @@ async fn create_branch_from_sha_branches_from_that_commit_without_reading_a_bran
 mod open_pull_request {
     use super::*;
     use crate::toolkits::workspace_pull_request::{
-        CredentialUnavailable, DiffUnavailable, GitHubPullRequestTarget, PullRequestAudit,
-        PullRequestOpened, THREAD_CREDENTIAL, ThreadCredential, ThreadCredentialSource,
-        WorkspaceDiff, WorkspaceDiffSource, open_pull_request_toolset,
+        CredentialUnavailable, DiffUnavailable, ForgeKind, PullRequestAudit, PullRequestOpened,
+        PullRequestTarget, THREAD_CREDENTIAL, ThreadConfiguration, ThreadCredential,
+        ThreadCredentialSource, WorkspaceDiff, WorkspaceDiffSource, open_pull_request_toolset,
     };
     use zeroize::Zeroizing;
 
@@ -2730,15 +2730,12 @@ mod open_pull_request {
         source: Result<WorkspaceDiff, DiffUnavailable>,
         audit: &Arc<Audit>,
     ) -> Value {
-        let config = GitHubToolkitConfig::parse(&settings(&[])).expect("config");
-        let client =
-            Arc::new(GitHubClient::test_with_transport(config, script.clone()).expect("client"));
         let toolset = open_pull_request_toolset(
             None,
-            vec![GitHubPullRequestTarget::test(
+            vec![PullRequestTarget::github_test(
                 "team-github",
-                "EliteaAI/elitea-platform",
-                client,
+                &settings(&[]),
+                &(script.clone() as Arc<dyn Transport>),
             )],
             Arc::new(Source(source)),
             audit.clone(),
@@ -2920,9 +2917,12 @@ mod open_pull_request {
 
     #[async_trait]
     impl ThreadCredentialSource for Credential {
-        async fn github_configuration(&self) -> Result<Zeroizing<String>, CredentialUnavailable> {
+        async fn configuration(&self) -> Result<ThreadConfiguration, CredentialUnavailable> {
             *self.calls.lock().expect("calls") += 1;
-            self.answer.clone().map(Zeroizing::new)
+            self.answer.clone().map(|json| ThreadConfiguration {
+                forge: ForgeKind::GitHub,
+                json: Zeroizing::new(json),
+            })
         }
     }
 
@@ -2939,13 +2939,7 @@ mod open_pull_request {
         audit: &Arc<Audit>,
         args: Value,
     ) -> Value {
-        let transport = script.clone();
-        let thread = ThreadCredential::test(
-            credential.clone(),
-            Arc::new(move |config| {
-                GitHubClient::test_with_transport(config, transport.clone()).ok()
-            }),
-        );
+        let thread = ThreadCredential::test(credential.clone(), script.clone());
         let toolset = open_pull_request_toolset(
             Some(thread),
             Vec::new(),

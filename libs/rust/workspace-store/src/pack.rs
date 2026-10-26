@@ -35,8 +35,13 @@ fn entry_header(kind: Kind, size: usize, out: &mut Vec<u8>) {
     out.push(byte);
 }
 
-/// Append a pack of `ids` (read from `db`) to `out`.
-pub(crate) fn write(db: &ObjectDb, ids: &[ObjectId], out: &mut Vec<u8>) -> Result<(), StoreError> {
+/// Append a pack of `ids` (read from `db`) to `out`: whole objects, so a
+/// reader (a segment, or a git server's `receive-pack`) needs no base.
+///
+/// # Errors
+///
+/// An object of `ids` is missing from `db`, or there are too many.
+pub fn write(db: &ObjectDb, ids: &[ObjectId], out: &mut Vec<u8>) -> Result<(), StoreError> {
     let start = out.len();
     let count = u32::try_from(ids.len())
         .map_err(|_| StoreError::Invalid("too many objects for one pack".into()))?;

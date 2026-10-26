@@ -120,6 +120,14 @@ impl GitLabToolkitConfig {
         &self.private_token
     }
 
+    /// The user and secret a git client sends over HTTPS (basic auth):
+    /// GitLab takes `oauth2` with a personal or project access token. The
+    /// caller sends it only to this configuration's own host.
+    #[must_use]
+    pub fn git_http_credential(&self) -> (&str, &str) {
+        ("oauth2", &self.private_token)
+    }
+
     pub fn repository(&self) -> &str {
         &self.repository
     }

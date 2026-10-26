@@ -146,6 +146,20 @@ impl GitHubToolkitConfig {
     pub(crate) const fn auth(&self) -> &GitHubAuth {
         &self.auth
     }
+
+    /// The user and secret a git client sends over HTTPS (basic auth):
+    /// `x-access-token` and the token, or the configured user and password.
+    /// `None` for a GitHub App or an anonymous configuration, which push
+    /// nothing over git. The caller sends it only to this configuration's
+    /// own host.
+    #[must_use]
+    pub fn git_http_credential(&self) -> Option<(&str, &str)> {
+        match &self.auth {
+            GitHubAuth::Token(token) => Some(("x-access-token", token)),
+            GitHubAuth::Basic { username, password } => Some((username, password)),
+            GitHubAuth::Anonymous | GitHubAuth::App { .. } => None,
+        }
+    }
 }
 
 impl GitHubAuth {
