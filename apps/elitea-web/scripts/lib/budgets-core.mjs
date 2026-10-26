@@ -36,7 +36,9 @@
  *     icon `CreateAgentForm.tsx`'s own doc comment disclosed as a standing
  *     gap) to a barrel already sitting exactly at the 20 cap with nothing
  *     left to curate away; one real external consumer
- *     (`pages/agents/ui/EditApplicationConfigurationPanel.tsx`).
+ *     (`pages/agents/ui/EditApplicationConfigurationPanel.tsx`). ADR-0037
+ *     adds `GenerateAgentModal`, the streamed agent builder, for its one
+ *     external consumer (`pages/workspace/CreateAgentDialog.tsx`).
  *
  * Deliberately NOT implemented here (recorded, not forgotten):
  *   cyclomatic complexity 12 — oxlint native `complexity` rule (.oxlintrc.json)

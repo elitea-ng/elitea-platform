@@ -4973,6 +4973,7 @@
   "pages.admin.llmProxy.tools.provider": "Provider",
   "pages.admin.llmProxy.tools.price": "Price (USD)",
   "pages.admin.llmProxy.tools.source": "Source",
+<<<<<<< HEAD
   "pages.admin.llmProxy.tab.tools": "Tools",
   "chatMessages.steering.cancel": "Cancel",
   "chatMessages.steering.delivered": "Delivered",
@@ -4991,4 +4992,12 @@
   "widgets.chatBox.steeringOfferDismiss": "Dismiss",
   "widgets.chatBox.steeringOfferHeading": "The turn ended before it read these messages. Send them as the next message?",
   "widgets.chatBox.steeringOfferSend": "Send"
+||||||| parent of 0695313d1 (feat(web, desktop): the streamed agent builder and Create agent in a desktop thread (ADR-0037 phase 3))
+  "pages.admin.llmProxy.tab.tools": "Tools"
+=======
+  "pages.admin.llmProxy.tab.tools": "Tools",
+  "features.agents.generateAgentModal.refine": "Refine",
+  "features.agents.generateAgentModal.refineLabel": "Change the draft",
+  "features.agents.generateAgentModal.refinePlaceholder": "Ask for a change, e.g. \"Make it more formal\""
+>>>>>>> 0695313d1 (feat(web, desktop): the streamed agent builder and Create agent in a desktop thread (ADR-0037 phase 3))
 }

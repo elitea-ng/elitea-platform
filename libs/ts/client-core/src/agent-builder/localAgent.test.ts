@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { agentBranches, initialBranch } from './branch';
+import { agentCreateBody } from './createBody';
 import { AGENTS_MAX_TOTAL_BYTES, isValidScope, localAgentPath, localAgentPrompt, renderAgentsMd, validateLocalAgent } from './localAgent';
 
 describe('the local agent', () => {
@@ -42,5 +43,18 @@ describe('the branch question', () => {
     assert.deepEqual(agentBranches({ localFolder: false }), ['elitea']);
     assert.equal(initialBranch({ localFolder: false }), 'elitea');
     assert.equal(initialBranch({ localFolder: true }), undefined);
+  });
+});
+
+describe('agentCreateBody', () => {
+  it('builds the reviewed create body', () => {
+    const body = agentCreateBody({ name: ' Triager ', description: 'd', instructions: 'i', welcome_message: ' ', conversation_starters: ['a', ' '] }, { name: 'm', project_id: 3 });
+    assert.equal(body.name, 'Triager');
+    const version = body.versions[0];
+    assert.equal(version?.name, 'base');
+    assert.deepEqual(version?.conversation_starters, ['a']);
+    assert.equal('welcome_message' in (version ?? {}), false);
+    assert.deepEqual((version as { llm_settings?: unknown } | undefined)?.llm_settings, { model_name: 'm', model_project_id: 3 });
+    assert.equal('llm_settings' in (agentCreateBody({ name: 'n', description: 'd', instructions: 'i' }).versions[0] ?? {}), false);
   });
 });

@@ -1007,8 +1007,13 @@ const GENERATED_OPERATION_COUNT = 351;
  * 283 -> 285 (client contract 1.26, issue 1187):
  * workspaceHandoff.changes and workspaceHandoff.diff, the Files changed
  * view of a cloud thread in the web chat (pages/chat). Generated.
+ *
+ * 285 -> 286 (client contract 1.28, ADR-0037):
+ * applications.generateAgentDraftStream, the streamed agent draft of the
+ * Build with AI builder (features/agents `useAgentDraftStream`). Handwritten:
+ * an SSE answer to a POST, read through `eliteaFetch`'s `stream` flag.
  */
-const MANIFEST_ENTRY_COUNT = 285;
+const MANIFEST_ENTRY_COUNT = 286;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

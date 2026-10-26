@@ -108,6 +108,8 @@ export interface HttpRequestOptions {
   originRoot?: boolean;
   /** Read a SUCCESSFUL body as an `ArrayBuffer` (audio). A failure body still parses as JSON or text. */
   binary?: boolean;
+  /** Hand a SUCCESSFUL body over unread, as its `ReadableStream` (an SSE answer to a POST). A failure body still parses. */
+  stream?: boolean;
 }
 
 export interface HttpClient {
@@ -230,10 +232,9 @@ function fromException<T>(cause: unknown, url: string): HttpResult<T> {
   return failure({ kind: 'network', url, message: `http: request to ${url} failed: ${message}`, cause });
 }
 
-async function toResult<T>(response: Response, binary = false): Promise<HttpResult<T>> {
-  if (binary && response.ok) {
-    return { ok: true, status: response.status, data: (await response.arrayBuffer()) as T, headers: response.headers };
-  }
+async function toResult<T>(response: Response, read: Pick<HttpRequestOptions, 'binary' | 'stream'> = {}): Promise<HttpResult<T>> {
+  if (response.ok && read.stream === true) return { ok: true, status: response.status, data: response.body as T, headers: response.headers };
+  if (response.ok && read.binary === true) return { ok: true, status: response.status, data: (await response.arrayBuffer()) as T, headers: response.headers };
   const text = await response.text();
   let body: unknown = text === '' ? undefined : text;
   if (text !== '' && (response.headers.get('content-type') ?? '').includes('application/json')) {
@@ -354,7 +355,7 @@ export function createHttpClient(cfg: HttpConfig): HttpClient {
       if (needsReauth(response)) return authRefusal<T>(response);
     }
 
-    return toResult<T>(response, options.binary === true);
+    return toResult<T>(response, options);
   }
 
   /**
@@ -376,7 +377,7 @@ export function createHttpClient(cfg: HttpConfig): HttpClient {
       return fromException<T>(cause, url);
     }
     const answer = await judgeNativeResponse({ native, first, bearer, init, send, url, signal: options.signal });
-    return answer.kind === 'response' ? toResult<T>(answer.response, options.binary === true) : failure(answer.failure);
+    return answer.kind === 'response' ? toResult<T>(answer.response, options) : failure(answer.failure);
   }
 
   /** Chosen per call, not per client: clients are built before the desktop entry registers its transport. */

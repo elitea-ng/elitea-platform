@@ -1,4 +1,25 @@
 export { agentBranches, initialBranch, type AgentBranch, type BranchSurface } from './branch';
+export { BASE_VERSION_NAME, GENERATED_AGENT_STEP_LIMIT, agentCreateBody, type AgentCreateInput, type AgentCreateModel } from './createBody';
+export {
+  DRAFT_EVENT,
+  INITIAL_DRAFT_STATE,
+  MAX_DRAFT_HISTORY,
+  STREAM_CUT_FAILURE,
+  draftReducer,
+  draftRequestBody,
+  draftStreamEvent,
+  draftStreamReader,
+  type CurrentDraft,
+  type DraftAction,
+  type DraftRequestInput,
+  type DraftState,
+  type DraftStreamEvent,
+  type DraftStreamFailure,
+  type DraftStreamReader,
+  type DraftSuggestion,
+  type DraftTurn,
+  type StreamedAgentDraft,
+} from './draftStream';
 export {
   AGENTS_FILE,
   AGENTS_MAX_TOTAL_BYTES,

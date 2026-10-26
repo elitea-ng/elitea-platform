@@ -3,20 +3,19 @@ import { useCallback, useRef, useState } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
-import CircularProgress from '@mui/material/CircularProgress';
 import type { SxProps, Theme } from '@mui/material/styles';
 import TextField from '@mui/material/TextField';
-import Typography from '@mui/material/Typography';
 
 import type { ApplicationCreatedResponse } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
-import { useGenerateAgentDraftMutation } from '../../api/generateAgentDraft';
 import { applicationErrorMessage } from '../../lib/errorMessage';
-import { EMPTY_AGENT_DRAFT, mapApplicationDraft, type AgentDraft } from '../../lib/agentDraft';
+import { EMPTY_AGENT_DRAFT, type AgentDraft } from '../../lib/agentDraft';
+import { DraftStreamPreview, RefineDraftField } from './DraftConversation';
 import { GenerateAgentReviewForm } from './GenerateAgentReviewForm';
+import { useAgentDraftGenerator } from './useAgentDraftGenerator';
 import { useAgentDraftApproval } from './useAgentDraftApproval';
 import { useToggleSet } from './useToggleSet';
 
@@ -65,6 +64,13 @@ import { useToggleSet } from './useToggleSet';
  * contract does not carry them — see `../../lib/agentDraft.ts` for why that
  * is the endpoint's answer and not this component's guess.
  *
+ * **Streamed and conversational (ADR-0037).** When the build serves
+ * `aiDraftStreaming`, `useAgentDraftGenerator` streams the draft (the
+ * loading step shows the model's text as it arrives) and the review step
+ * offers "Refine": a follow-up request sent with the conversation so far and
+ * the current draft, so the draft is revised rather than regenerated. The
+ * one-shot route stays the fallback. A stream is cancelled on close.
+ *
  * **No-toast-system-yet convention** (`features/notifications/lib/
  * errorMessage.ts`'s own doc comment: dependency-inject the error sink,
  * `console.error`/`console.warn` fallback) applies to `onApproveError`
@@ -98,7 +104,8 @@ export function GenerateAgentModal({
   onAssociationWarning,
 }: GenerateAgentModalProps): ReactNode {
   const { approve, isApproving } = useAgentDraftApproval({ projectId, onAssociationWarning });
-  const { generateDraft, error: generateError, reset: resetGenerateError } = useGenerateAgentDraftMutation();
+  const generator = useAgentDraftGenerator(projectId);
+  const resetGenerateError = generator.reset;
 
   const [step, setStep] = useState<Step>('input');
   const [description, setDescription] = useState('');
@@ -144,11 +151,10 @@ export function GenerateAgentModal({
     setStep('loading');
     resetGenerateError();
 
-    const response = await generateDraft({ projectId, user_description: description });
+    const response = await generator.generate(description);
     if (requestToken !== generationTokenRef.current) {
       // The modal was closed while this request was in flight — discard the
       // stale result (success or error) instead of writing it into state.
-      resetGenerateError();
       return;
     }
 
@@ -157,10 +163,22 @@ export function GenerateAgentModal({
       return;
     }
 
-    setDraft(mapApplicationDraft(response));
+    setDraft(response);
     resetSelections();
     setStep('review');
-  }, [description, projectId, generateDraft, resetGenerateError, resetSelections]);
+  }, [description, projectId, generator, resetGenerateError, resetSelections]);
+
+  const handleRefine = useCallback(
+    async (request: string) => {
+      const requestToken = ++generationTokenRef.current;
+      setStep('loading');
+      const revised = await generator.refine(request, draft);
+      if (requestToken !== generationTokenRef.current) return;
+      if (revised !== undefined) setDraft(revised);
+      setStep('review');
+    },
+    [generator, draft],
+  );
 
   const handleDescriptionKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
@@ -212,16 +230,9 @@ export function GenerateAgentModal({
 
   const content =
     step === 'loading' ? (
-      <Box sx={loadingContainerSx}>
-        <CircularProgress size={24} />
-        <Typography
-          variant="bodyMedium"
-          color="text.secondary"
-        >
-          {t('features.agents.generateAgentModal.generating', 'Generating agent draft...')}
-        </Typography>
-      </Box>
+      <DraftStreamPreview text={generator.streamText} />
     ) : step === 'review' ? (
+      <>
       <GenerateAgentReviewForm
         draft={draft}
         onChange={setDraft}
@@ -234,6 +245,13 @@ export function GenerateAgentModal({
           skills: { selectedIds: skills.selectedIds, onToggle: skills.toggle },
         }}
       />
+      {generator.error !== undefined && (
+        <Alert severity="error" sx={errorAlertSx}>
+          {generator.error}
+        </Alert>
+      )}
+      {generator.canRefine && <RefineDraftField disabled={isApproving} onRefine={(request) => void handleRefine(request)} />}
+      </>
     ) : (
       <Box sx={inputContainerSx}>
         <TextField
@@ -252,12 +270,12 @@ export function GenerateAgentModal({
           variant="standard"
           slotProps={{ input: { disableUnderline: true } }}
         />
-        {generateError !== undefined && (
+        {generator.error !== undefined && (
           <Alert
             severity="error"
             sx={errorAlertSx}
           >
-            {generateErrorMessage(generateError)}
+            {generator.error}
           </Alert>
         )}
       </Box>
@@ -306,13 +324,5 @@ export function GenerateAgentModal({
   );
 }
 
-const loadingContainerSx: SxProps<Theme> = {
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: '0.75rem',
-  padding: '2rem 0',
-};
 const inputContainerSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', minHeight: '16rem' };
 const errorAlertSx: SxProps<Theme> = { marginTop: '0.5rem' };

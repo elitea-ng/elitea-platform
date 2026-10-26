@@ -332,6 +332,18 @@
       ]
     },
     {
+      "id": "applications.generateAgentDraftStream",
+      "method": "POST",
+      "path": "/elitea_core/generate_application_draft_stream/prompt_lib/{project_id}",
+      "operationId": "generateApplicationDraftStream",
+      "source": "handwritten",
+      "responseSchema": null,
+      "fixture": null,
+      "usedBy": [
+        "features/agents"
+      ]
+    },
+    {
       "id": "applications.getAgentCategories",
       "method": "GET",
       "path": "/elitea_core/agent_categories/prompt_lib/{project_id}",

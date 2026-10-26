@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getCreateApplicationMockHandler } from '@/shared/api/generated/applications/applications.msw';
 import type { ApplicationDraft } from '@/shared/api/generated/model';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { resetBackendCapabilitiesForTests, setBackendCapabilityForTests } from '@/shared/config/backendCapabilities';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { server } from '@/test/setup';
 
@@ -51,10 +52,13 @@ function renderModal(overrides: Partial<GenerateAgentModalProps> = {}): ReturnTy
 
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: '/api/v2' });
+  // These cases pin the one-shot fallback; the streamed builder has its own file.
+  setBackendCapabilityForTests('aiDraftStreaming', false);
 });
 
 afterEach(() => {
   resetGeneratedClient();
+  resetBackendCapabilitiesForTests();
 });
 
 describe('GenerateAgentModal', () => {

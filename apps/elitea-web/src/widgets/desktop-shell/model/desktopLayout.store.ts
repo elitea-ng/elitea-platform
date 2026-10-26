@@ -36,6 +36,8 @@ export interface SessionActions {
   sendToCloud?: () => void;
   openInChat?: () => void;
   chooseAgent?: () => void;
+  /** The agent builder of the thread on screen (ADR-0037). */
+  createAgent?: () => void;
   indexSettings?: () => void;
   handoffSettings?: () => void;
   /** Files dropped on the window: the composer attaches the images among them (#1229); absent when it takes none. */
