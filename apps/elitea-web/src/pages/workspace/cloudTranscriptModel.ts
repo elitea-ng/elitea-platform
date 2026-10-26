@@ -41,12 +41,24 @@ interface RawAction {
   readonly content?: unknown;
 }
 
+/** `open_pull_request`'s answer reads as its sentence ("Pull request #7 opened: <url>"), not its JSON (ADR-0034 decision 10). */
+function pullRequestSentence(tool: string, output: unknown): string | undefined {
+  if (tool !== 'open_pull_request' || typeof output !== 'string') return undefined;
+  try {
+    const parsed = JSON.parse(output) as { readonly message?: unknown } | null;
+    return typeof parsed?.message === 'string' ? parsed.message : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function toolItem(action: RawAction, index: number): TranscriptItem | undefined {
   if (action.type !== undefined && action.type !== 'tool') return undefined;
   const callId = typeof action.id === 'string' ? action.id : `tool-${String(index)}`;
   const done = action.status === 'complete' || action.status === 'error' || action.isError === true;
-  const summary = resultText(action.isError === true ? action.content : (action.toolOutputs ?? action.content));
   const tool = action.name ?? action.original_name ?? 'tool';
+  const output = action.isError === true ? action.content : (action.toolOutputs ?? action.content);
+  const summary = pullRequestSentence(tool, output) ?? resultText(output);
   return {
     type: 'tool',
     key: `c${callId}`,

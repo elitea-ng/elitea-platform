@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, StyleSheet, View } from 'react-native';
 
 import { FONT_SCALE } from '@/constants/typeScale';
 import type { ToolStep } from '@/features/chat/toolActivity';
@@ -49,6 +49,21 @@ const STATUS_ICON: Record<Exclude<ToolStep['status'], 'running'>, IconName> = {
 /** A step's status in words: a paused call says what it waits for. */
 export function statusWord(step: Pick<ToolStep, 'status' | 'waitingFor'>): string {
   return step.status === 'waiting' && step.waitingFor === 'answer' ? 'waiting for your answer' : STATUS_WORD[step.status];
+}
+
+/**
+ * The pull request a cloud thread's `open_pull_request` opened (ADR-0034 decision 10), so the
+ * row can open it without the answer repeating the link. Only an `https:` URL of an `ok` result.
+ */
+export function openedPullRequest(step: Pick<ToolStep, 'name' | 'status' | 'output'>): { url: string; number: number | null } | null {
+  if (step.name !== 'open_pull_request' || step.status !== 'done' || step.output === null) return null;
+  try {
+    const parsed = JSON.parse(step.output) as { status?: unknown; url?: unknown; pull_request?: unknown } | null;
+    if (parsed?.status !== 'ok' || typeof parsed.url !== 'string' || !parsed.url.startsWith('https://')) return null;
+    return { url: parsed.url, number: typeof parsed.pull_request === 'number' ? parsed.pull_request : null };
+  } catch {
+    return null;
+  }
 }
 
 /** The wall time the calls covered (first start to last end), when known. */
@@ -155,7 +170,26 @@ export function ToolActivity({
                   </View>
                   <Icon name="chevronRight" size={14} tone="tertiary" weight="semibold" />
                 </Pressable>
-              ))}
+              )).flatMap((row, index) => {
+                const pullRequest = openedPullRequest(group.steps[index]!);
+                if (pullRequest === null) return [row];
+                const label = pullRequest.number === null ? 'Open the pull request' : `Open pull request #${pullRequest.number}`;
+                return [
+                  row,
+                  <Pressable
+                    key={`${group.steps[index]!.id}-pr`}
+                    accessibilityRole="link"
+                    accessibilityLabel={label}
+                    onPress={() => void Linking.openURL(pullRequest.url)}
+                    android_ripple={ripple(design)}
+                    style={({ pressed: on }) => [styles.step, pressed(on)]}>
+                    <Icon name="tool" size={18} tone="accent" />
+                    <Text variant="callout" tone="accent" maxFontSizeMultiplier={FONT_SCALE.control} numberOfLines={1} style={styles.flex}>
+                      {label}
+                    </Text>
+                  </Pressable>,
+                ];
+              })}
             </View>
           ))
         : null}

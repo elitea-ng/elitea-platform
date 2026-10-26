@@ -4993,5 +4993,7 @@
   "widgets.chatBox.steeringOfferSend": "Send",
   "features.agents.generateAgentModal.refine": "Refine",
   "features.agents.generateAgentModal.refineLabel": "Change the draft",
-  "features.agents.generateAgentModal.refinePlaceholder": "Ask for a change, e.g. \"Make it more formal\""
+  "features.agents.generateAgentModal.refinePlaceholder": "Ask for a change, e.g. \"Make it more formal\"",
+  "chatMessages.actionView.pullRequest": "Open the pull request",
+  "chatMessages.actionView.pullRequestNumber": "Open pull request #{{number}}"
 }

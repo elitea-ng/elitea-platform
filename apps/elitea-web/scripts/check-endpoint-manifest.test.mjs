@@ -1016,8 +1016,13 @@ const GENERATED_OPERATION_COUNT = 357;
  * applications.generateAgentDraftStream, the streamed agent draft of the
  * Build with AI builder (features/agents `useAgentDraftStream`). Handwritten:
  * an SSE answer to a POST, read through `eliteaFetch`'s `stream` flag.
+ *
+ * 286 -> 288 (client contract 1.29, ADR-0034 decision 10 amended):
+ * workspaceHandoff.setPullRequestCredential, and
+ * configurations.listForPullRequests (the GitHub configurations it is
+ * chosen from), the cloud notice of the web chat (pages/chat). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 286;
+const MANIFEST_ENTRY_COUNT = 288;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {
