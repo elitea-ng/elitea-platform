@@ -278,6 +278,31 @@ pub struct HostDeps {
     pub cache_dir: Option<PathBuf>,
 }
 
+/// Remove one conversation's spilled outputs of a workspace whose session
+/// is not open: where the session spills now (the cache directory, when the
+/// host names one, as [`HostDeps::cache_dir`] hands it to the session) and
+/// where an earlier build spilled (the workspace's data directory). A
+/// deleted conversation leaves neither behind.
+pub(crate) fn forget_closed_outputs(
+    cache_dir: Option<&Path>,
+    workspace_data_dir: &Path,
+    workspace_id: &str,
+    conversation: &str,
+) {
+    if let Some(cache_dir) = cache_dir {
+        elitea_local_tools::budget::forget_conversation_outputs(
+            cache_dir,
+            workspace_id,
+            conversation,
+        );
+    }
+    elitea_local_tools::budget::forget_conversation_outputs(
+        workspace_data_dir,
+        workspace_id,
+        conversation,
+    );
+}
+
 /// The app's resolved directories as deny entries, as given (the deny list
 /// keeps this spelling and adds the resolved one, lazily: a directory
 /// created after launch is still covered), without duplicates (on macOS
@@ -3978,7 +4003,8 @@ impl AgentHost {
             .and_then(|sessions| sessions.get(workspace_id).cloned());
         match open {
             Some(open) => open.session.spill_store().forget_conversation(conversation),
-            None => elitea_local_tools::budget::forget_conversation_outputs(
+            None => forget_closed_outputs(
+                self.deps.cache_dir.as_deref(),
                 &self.deps.workspaces.data_dir(workspace_id),
                 workspace_id,
                 conversation,
@@ -4867,6 +4893,31 @@ mod tests {
     use super::*;
 
     const NONCE: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn a_closed_sessions_forgotten_conversation_leaves_no_spill_behind() {
+        use elitea_local_tools::budget::SpillStore;
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("cache");
+        let data = root.path().join("data/workspaces/w1");
+        // One spill where the session spills now (the cache dir) and one an
+        // earlier build left under the data dir; another conversation's
+        // spill stays.
+        let spilled = |base: &Path, conversation: &str| {
+            let store = SpillStore::new(base, "w1");
+            store.set_conversation(Some(conversation));
+            store.spill("secret output").unwrap();
+            store.conversation_dir()
+        };
+        let in_cache = spilled(&cache, "42");
+        let in_data = spilled(&data, "42");
+        let other = spilled(&cache, "43");
+        assert!(in_cache.exists() && in_data.exists() && other.exists());
+        forget_closed_outputs(Some(&cache), &data, "w1", "42");
+        assert!(!in_cache.exists(), "the cache dir's spill is gone");
+        assert!(!in_data.exists(), "the data dir's legacy spill is gone");
+        assert!(other.exists(), "another conversation's spill stays");
+    }
 
     #[test]
     fn agents_md_follows_the_agents_own_instructions() {
