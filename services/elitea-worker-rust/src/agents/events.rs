@@ -119,6 +119,15 @@ pub(crate) const DESCENDANT_PARENT_CALL_KEY: &str = "elitea.descendant.parent_ca
 pub(crate) const PIPELINE_TOOL_BOUNDARY_METADATA_KEY: &str = "elitea.pipeline.tool-boundary.v1";
 
 pub(crate) const DESCENDANT_CHECKPOINT_THREAD_KEY: &str = "elitea.descendant.checkpoint_thread_id";
+/// A fixed Parallel member's child pipeline runs under its frozen branch
+/// thread, not the root graph's naming: `{"call", "thread"}` names the member
+/// call and the branch thread its checkpoint thread is relative to. Only the
+/// Parallel node stamps it, after proving the thread against its catalog.
+pub(crate) const FANOUT_MEMBER_THREAD_KEY: &str = "elitea.fanout.member_thread.v1";
+/// A fixed Parallel member's own call (its start and its result). Members run
+/// side by side, so their calls stay open together; only the Parallel node
+/// stamps it.
+pub(crate) const FANOUT_MEMBER_CALL_KEY: &str = "elitea.fanout.member_call.v1";
 /// The pipeline child's own pending graph checkpoint (#973).
 ///
 /// Private runtime state, carried on the PERSISTED descendant interrupt event
@@ -852,6 +861,8 @@ struct ActiveToolCall {
     /// The tool a Smart Tools Selection `invoke_tool` call will actually run,
     /// shown in the tool-call record in place of the meta-tool's own name.
     display_name: Option<String>,
+    /// A fixed Parallel member's call: it may stay open beside its siblings.
+    fanout_member: bool,
 }
 
 #[derive(Clone)]
@@ -1628,6 +1639,11 @@ impl AgentEventProjector {
             return self.project_pipeline_printer(event, &payload);
         }
         let (interrupt_data, _) = pipeline_interrupt_data(&payload, &payload.thread_id)?;
+        if interrupt_data.get("schema").and_then(Value::as_str)
+            == Some(super::graph::FANOUT_PARKED_SCHEMA)
+        {
+            return self.project_fanout_parked(event, &interrupt_data);
+        }
         let guardrail_type = interrupt_data
             .get("guardrail_type")
             .and_then(Value::as_str)
@@ -1644,6 +1660,70 @@ impl AgentEventProjector {
             }
             _ => Err(AgentEventProjectionError::unsupported()),
         }
+    }
+
+    /// The parked fan-out's terminal (contract §8, §9): one `agent_hitl_interrupt`
+    /// carrying only `fanout_parked_v1` (the open cards were raised by their own
+    /// frames), never a root pause member. The paused members' calls stay open.
+    fn project_fanout_parked(
+        &mut self,
+        event: &Event,
+        parked: &Value,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
+        if !matches!(
+            self.state,
+            ProjectionState::Started | ProjectionState::Complete(_)
+        ) || self
+            .active_tools
+            .values()
+            .any(|active| !active.fanout_member)
+        {
+            return Err(AgentEventProjectionError::invalid_state());
+        }
+        let valid = parked.as_object().is_some_and(|object| {
+            object.len() == 3
+                && object
+                    .get("decision_revision_seen")
+                    .is_some_and(Value::is_u64)
+                && object
+                    .get("pending")
+                    .and_then(Value::as_array)
+                    .is_some_and(|pending| {
+                        (1..=elitea_agent_runtime::graph::fanout_budget::MAX_OPEN_INTERRUPTS)
+                            .contains(&pending.len())
+                            && pending.iter().all(|entry| {
+                                entry.as_object().is_some_and(|entry| {
+                                    entry.len() == 2
+                                        && entry
+                                            .get("interrupt_key")
+                                            .and_then(Value::as_str)
+                                            .is_some_and(|key| key.len() == 64)
+                                        && entry
+                                            .get("interrupt_id")
+                                            .and_then(Value::as_str)
+                                            .is_some_and(|id| !id.is_empty() && id.len() <= 512)
+                                })
+                            })
+                    })
+        });
+        if !valid {
+            return Err(AgentEventProjectionError::invalid_state());
+        }
+        let metadata = json!({
+            "thread_id": self.context.thread_id,
+            "chat_project_id": self.context.chat_project_id,
+            "fanout_parked_v1": parked,
+        });
+        let mut batch = ProjectedAgentEventBatch::new();
+        batch.push(self.event(
+            "agent_hitl_interrupt",
+            &Value::String("Parallel branches paused.".to_owned()),
+            None,
+            &metadata,
+            event.timestamp,
+        )?)?;
+        self.state = ProjectionState::Paused;
+        Ok(batch)
     }
 
     fn project_pipeline_node_recovery(
@@ -2576,7 +2656,14 @@ impl AgentEventProjector {
             self.state,
             ProjectionState::Started | ProjectionState::Complete(_)
         );
-        if starts_turn && !self.active_tools.is_empty() {
+        // A turn starts with no call open, except a fan-out member's start
+        // beside its siblings' open member calls.
+        let member_start = event.provider_metadata.contains_key(FANOUT_MEMBER_CALL_KEY)
+            && self
+                .active_tools
+                .values()
+                .all(|active| active.fanout_member);
+        if starts_turn && !self.active_tools.is_empty() && !member_start {
             return Err(AgentEventProjectionError::invalid_state());
         }
         let (event_id, timestamp_start, previous_content, previous_thinking) = match &self.state {
@@ -2883,7 +2970,21 @@ impl AgentEventProjector {
         calls: &[adk_rust::ToolCallView<'_>],
         batch: &mut ProjectedAgentEventBatch,
     ) -> Result<(), AgentEventProjectionError> {
-        if calls.len() > MAX_TOOL_CALLS_PER_MODEL_TURN || !self.active_tools.is_empty() {
+        // Fan-out member calls stay open together, at most one per branch.
+        let member_start = event.provider_metadata.contains_key(FANOUT_MEMBER_CALL_KEY)
+            && self
+                .active_tools
+                .values()
+                .all(|active| active.fanout_member)
+            && self.active_tools.len() + calls.len()
+                <= elitea_agent_runtime::graph::fanout_budget::MAX_PARALLEL_BRANCHES
+            && calls.iter().all(|call| {
+                call.call_id
+                    .is_none_or(|id| !self.active_tools.contains_key(id))
+            });
+        if calls.len() > MAX_TOOL_CALLS_PER_MODEL_TURN
+            || (!self.active_tools.is_empty() && !member_start)
+        {
             return Err(AgentEventProjectionError::invalid_state());
         }
         let timestamp = event
@@ -2934,6 +3035,7 @@ impl AgentEventProjector {
                     .map(|(toolkit, _)| toolkit.clone())
                     .or_else(|| self.toolkit_attribution.get(call.name).cloned()),
                 display_name: inner.map(|(_, tool)| tool),
+                fanout_member: event.provider_metadata.contains_key(FANOUT_MEMBER_CALL_KEY),
             };
             let entry = tool_entry(id, &active, None, None, None, None);
             batch.push(self.event(
@@ -6342,7 +6444,22 @@ fn descendant_checkpoint_thread(
     let checkpoint_thread_id = marker
         .filter(|value| valid_tool_identity(value))
         .ok_or_else(AgentEventProjectionError::invalid_state)?;
-    let expected = match parent_thread_id {
+    let member_thread = event
+        .provider_metadata
+        .get(FANOUT_MEMBER_THREAD_KEY)
+        .map(|raw| {
+            serde_json::from_str::<Value>(raw)
+                .ok()
+                .filter(|value| {
+                    value.as_object().is_some_and(|object| object.len() == 2)
+                        && value["call"].as_str() == Some(parent_call_id)
+                })
+                .and_then(|value| value["thread"].as_str().map(str::to_owned))
+                .filter(|thread| valid_tool_identity(thread))
+                .ok_or_else(AgentEventProjectionError::invalid_state)
+        })
+        .transpose()?;
+    let expected = match member_thread.as_deref().or(parent_thread_id) {
         Some(parent_thread_id) => {
             let node_name = pipeline_application_call_node(parent_call_id)
                 .ok_or_else(AgentEventProjectionError::invalid_state)?;
@@ -6687,6 +6804,7 @@ mod scoped_static_inventory_tests {
                     pipeline_node_name: None,
                     toolkit: None,
                     display_name: None,
+                    fanout_member: false,
                 },
             );
             root.descendants.insert(

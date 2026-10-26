@@ -147,6 +147,14 @@ impl PipelineNodeEventSender {
             }
             return Ok(());
         }
+        // The member's own call start or result (the scoped runtime sends
+        // nothing else without an edge): it stays open beside its siblings.
+        if !event.tool_calls().is_empty() || !event.tool_results().is_empty() {
+            event.provider_metadata.insert(
+                crate::agents::events::FANOUT_MEMBER_CALL_KEY.to_owned(),
+                "1".to_owned(),
+            );
+        }
         if let Some(current) = current {
             event.provider_metadata.insert(
                 DESCENDANT_CONTAINER_INVOCATION_KEY.to_owned(),
@@ -307,6 +315,18 @@ impl ParallelEventScope {
                 DESCENDANT_CHECKPOINT_THREAD_KEY.to_owned(),
                 current.checkpoint_thread_id().to_owned(),
             );
+            // The member's own child pipeline: its thread is relative to the
+            // proved branch thread, not to the root graph's naming.
+            if local.is_some() && current.checkpoint_thread_id() == self.owned_thread {
+                event.provider_metadata.insert(
+                    crate::agents::events::FANOUT_MEMBER_THREAD_KEY.to_owned(),
+                    serde_json::json!({
+                        "call": current.parent_call_id(),
+                        "thread": self.branch_root_thread,
+                    })
+                    .to_string(),
+                );
+            }
             event.invocation_id = format!("pipeline-child:{}", current.parent_call_id());
             current.agent_name().clone_into(&mut event.author);
             event.branch.clear();

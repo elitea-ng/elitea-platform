@@ -176,16 +176,16 @@ pub use yaml::{
 
 #[cfg(test)]
 pub(crate) use parallel::{
-    AdkParallelBranchRuntime, DurableParallelNode, FANOUT_PARKED_SCHEMA, MAX_PARENT_ROWS_PER_VISIT,
+    AdkParallelBranchRuntime, DurableParallelNode, MAX_PARENT_ROWS_PER_VISIT,
     ParallelBranchGraphFactory, ParallelBranchOutcome, ParallelBranchPause, ParallelBranchRuntime,
     ParallelBranchTerminal, ParallelDecision, ParallelOccurrenceCheckpointer, ParallelPauseCard,
     PreparedParallelBranch,
 };
 pub(crate) use parallel::{
-    FanoutChildOrigin, ParallelActivation, ParallelBranchExecution, ParallelCheckpointAppender,
-    ParallelCheckpointAuthority, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
-    ParallelChildOrigin, ParallelChildRequest, ParentHead, ParentSaveProbe,
-    PreparedChildCheckpoint,
+    FANOUT_PARKED_SCHEMA, FanoutChildOrigin, ParallelActivation, ParallelBranchExecution,
+    ParallelCheckpointAppender, ParallelCheckpointAuthority, ParallelChildCheckpoint,
+    ParallelChildCheckpointerFactory, ParallelChildOrigin, ParallelChildRequest, ParentHead,
+    ParentSaveProbe, PreparedChildCheckpoint,
 };
 pub(crate) use printer::{PRINTER_PAUSE_METADATA_KEY, PrinterPauseCatalog, PrinterPauseMetadata};
 

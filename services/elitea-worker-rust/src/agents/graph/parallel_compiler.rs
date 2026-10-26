@@ -113,6 +113,14 @@ impl PipelineNodeRuntimes {
         if let Some(resolver) = self.application.as_ref() {
             self.application = Some(resolver.for_parallel_events(events.clone())?);
         }
+        // An LLM node emits through its factory's sender: a member's saved
+        // pipeline routes it through the branch's proved scope too.
+        if let Some(factory) = self.llm.take() {
+            self.llm = Some(Arc::new(ParallelLlmEvents {
+                inner: factory,
+                events: events.clone(),
+            }));
+        }
         self.events = Some(events);
         Ok(self)
     }
@@ -120,6 +128,33 @@ impl PipelineNodeRuntimes {
     pub(crate) fn with_parallel(mut self, binding: Arc<ParallelCompilerBinding>) -> Self {
         self.parallel = Some(binding);
         self
+    }
+}
+
+/// An LLM factory whose node events go through a Parallel branch's sender.
+struct ParallelLlmEvents {
+    inner: Arc<dyn crate::agents::graph::llm::PipelineLlmAgentFactory>,
+    events: PipelineNodeEventSender,
+}
+
+impl crate::agents::graph::llm::PipelineLlmAgentFactory for ParallelLlmEvents {
+    fn build(
+        &self,
+        definition: &crate::agents::graph::llm::LlmNodeDefinition,
+        input: &crate::agents::graph::llm::LlmExecutionInput,
+        output_schema: Option<serde_json::Value>,
+        replay: Option<&crate::agents::graph::llm::PipelineLlmReplayEnvelope>,
+        scope: &crate::agents::graph::llm::PipelineModelScope,
+    ) -> Result<
+        crate::agents::graph::llm::PipelineLlmAgentBinding,
+        crate::agents::graph::llm::LlmExecutionError,
+    > {
+        self.inner
+            .build(definition, input, output_schema, replay, scope)
+    }
+
+    fn event_sender(&self) -> Option<PipelineNodeEventSender> {
+        self.inner.event_sender().map(|_| self.events.clone())
     }
 }
 

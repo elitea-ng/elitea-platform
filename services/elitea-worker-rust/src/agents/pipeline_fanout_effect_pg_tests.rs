@@ -62,7 +62,12 @@ fn pipeline_yaml(on_error: &str) -> String {
 }
 
 fn request(on_error: &str) -> super::super::request::AgentExecutionRequest {
-    let mut request = agent_pipeline_request("release-agent", "agent");
+    request_for(on_error, "agent")
+}
+
+/// Every branch selects one saved participant of `agent_type`.
+fn request_for(on_error: &str, agent_type: &str) -> super::super::request::AgentExecutionRequest {
+    let mut request = agent_pipeline_request("release-agent", agent_type);
     request.payload.application["version_details"]["instructions"] = json!(pipeline_yaml(on_error));
     request
 }
@@ -81,6 +86,13 @@ fn effectful_agent() -> Value {
             "max_tokens": 2048, "reasoning_effort": null, "temperature": 0.2,
             "openai_compatible": true}
     })
+}
+
+/// The saved Agent, which may also ask the user (`ask_user`).
+fn asking_agent() -> Value {
+    let mut agent = effectful_agent();
+    agent["meta"] = json!({"internal_tools": ["ask_user"]});
+    agent
 }
 
 /// Child model-scope sessions (`elitea-model-*`) holding a durable
@@ -177,9 +189,9 @@ impl Tool for CrashingMcpTool {
 
 /// The platform answers by request path, not call order: each scoped Agent
 /// node materializes its own participant (same shape as the 2a-1 fixture).
-/// `asks`: the saved Agent may also ask the user (`ask_user`).
+/// The one saved participant every branch selects.
 struct SavedAgentVersions {
-    asks: bool,
+    details: Value,
 }
 
 #[tonic::async_trait]
@@ -192,12 +204,8 @@ impl crate::transport::input_content::content_fake::ContextRoutes for SavedAgent
             json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":17,
                 "token":"ephemeral-fanout-token"})
         } else if call.route.ends_with("/3/versions/4") {
-            let mut agent = effectful_agent();
-            if self.asks {
-                agent["meta"] = json!({"internal_tools": ["ask_user"]});
-            }
             json!({"schema_version":"elitea.runtime.application-version.v1","project_id":17,
-                "application_id":3,"version_id":4,"version_details":agent,
+                "application_id":3,"version_id":4,"version_details":self.details,
                 // Main's authenticated digest of the frozen version: the saved
                 // participant fingerprint a Parallel branch is bound to.
                 "frozen_definition_sha256":"ab".repeat(32)})
@@ -210,10 +218,10 @@ impl crate::transport::input_content::content_fake::ContextRoutes for SavedAgent
 
 fn saved_runtime(
     outcomes: Vec<TestModelGatewayOutcome>,
-    asks: bool,
+    details: Value,
 ) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
     let runtime = RuntimeContextClient::with_rpc(
-        crate::transport::input_content::content_fake::Routes(SavedAgentVersions { asks }),
+        crate::transport::input_content::content_fake::Routes(SavedAgentVersions { details }),
         RuntimeContextConfig {
             origin: "https://content.internal".to_owned(),
             deadline: Duration::from_secs(1),
@@ -239,9 +247,9 @@ fn assembler(
     pool: &sqlx::PgPool,
     outcomes: Vec<TestModelGatewayOutcome>,
     connector: Arc<dyn McpConnector>,
-    asks: bool,
+    details: Value,
 ) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
-    let (platform, model_facade, captured) = saved_runtime(outcomes, asks);
+    let (platform, model_facade, captured) = saved_runtime(outcomes, details);
     let assembler = PipelineNativeAgentAssembler::postgres(
         pool.clone(),
         SessionLimits::default(),
@@ -275,13 +283,21 @@ fn claim(
 /// `agent_fanout_member` statuses it emitted on completion, the failure's
 /// code otherwise.
 async fn run_to_end(
-    mut invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
+    invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
 ) -> Result<Vec<Value>, String> {
+    run_collecting(invocation).await.map(|(members, _)| members)
+}
+
+/// As [`run_to_end`], also returning every `interrupt_card_v1` raised.
+async fn run_collecting(
+    mut invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
+) -> Result<(Vec<Value>, Vec<Value>), String> {
     invocation
         .project_start(timestamp(1))
         .expect("pipeline browser start");
     let (mut run, mut projector, completion) = invocation.start().expect("pipeline start");
     let mut members = Vec::new();
+    let mut cards = Vec::new();
     loop {
         match run.next_event().await {
             Err(error) => {
@@ -296,15 +312,25 @@ async fn run_to_end(
                     .project(&event)
                     .map_err(|error| error.to_string())?
                 {
-                    // One pause authority: a fan-out never raises a legacy card.
+                    // One pause authority: a fan-out never raises a legacy card;
+                    // its only pause terminal is the park (fanout_parked_v1).
+                    let metadata: Value =
+                        serde_json::from_slice(&frame.response_metadata).unwrap_or_default();
+                    let legacy = frame.r#type == "mcp_authorization_required"
+                        || (frame.r#type == "agent_hitl_interrupt"
+                            && (metadata.get("fanout_parked_v1").is_none()
+                                || metadata.get("hitl_interrupts").is_some()
+                                || metadata.get("hitl_interrupt").is_some()));
                     assert!(
-                        !matches!(
-                            frame.r#type.as_str(),
-                            "agent_hitl_interrupt" | "mcp_authorization_required"
-                        ),
+                        !legacy,
                         "a legacy pause frame inside a fan-out: {}",
                         frame.r#type
                     );
+                    if frame.r#type == "agent_interrupt_pending" {
+                        let metadata: Value = serde_json::from_slice(&frame.response_metadata)
+                            .expect("card frame metadata");
+                        cards.push(metadata["interrupt_card_v1"].clone());
+                    }
                     if frame.r#type == "agent_fanout_member" {
                         let metadata: Value = serde_json::from_slice(&frame.response_metadata)
                             .expect("member frame metadata");
@@ -318,7 +344,7 @@ async fn run_to_end(
     completion
         .select()
         .await
-        .map(|_| members)
+        .map(|_| (members, cards))
         .map_err(|error| error.to_string())
 }
 
@@ -431,7 +457,7 @@ async fn postgres_fanout_agent_branch_that_asks_for_a_decision_ends_typed() {
             tool_calls: Arc::new(AtomicUsize::new(0)),
             read_only: false,
         }),
-        true,
+        asking_agent(),
     );
     let request = request("continue");
     let invocation = assembler
@@ -478,6 +504,82 @@ async fn postgres_fanout_agent_branch_that_asks_for_a_decision_ends_typed() {
         "{entries:?}"
     );
     assert_eq!(entries[2]["status"], "succeeded");
+    db.pool.close().await;
+}
+
+/// A saved pipeline participant whose LLM node asks the user.
+fn asking_pipeline() -> Value {
+    json!({
+        "agent_type": "pipeline",
+        "instructions": "state:\n  input: str\n  messages: list\n  answer: str\nentry_point: answer\nnodes:\n  - id: answer\n    type: llm\n    input_mapping:\n      task: {type: variable, value: input}\n    input: [messages]\n    output: [answer, messages]\n    tool_names:\n      ask_user: [\"ask_user\"]\n    transition: END\n",
+        "meta": {"internal_tools": ["ask_user"]}, "variables": [], "tools": [],
+        "llm_settings": null
+    })
+}
+
+/// Commit 6: three saved-pipeline branches each ask the user. Every branch
+/// raises one `ask_user` card frame under its own member tier, nothing raises a
+/// legacy card, and with nothing decided the activation parks.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_fanout_pipeline_branches_that_ask_raise_one_card_each_and_park() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let (assembler, captured) = assembler(
+        &db.pool,
+        (0..3)
+            .map(|_| TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()))
+            .collect(),
+        Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::new(AtomicUsize::new(0)),
+            read_only: false,
+        }),
+        asking_pipeline(),
+    );
+    let request = request_for("continue", "pipeline");
+    let invocation = assembler
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "assemble the fan-out pipeline: {error} {:?}",
+                error
+                    .cause()
+                    .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code)
+            )
+        });
+    let (members, cards) = run_collecting(invocation)
+        .await
+        .expect("the activation parks");
+    assert_eq!(model_requests(&captured), 3);
+    assert_eq!(cards.len(), 3, "{cards:?}");
+    for (card, (ordinal, branch)) in cards
+        .iter()
+        .zip([(1, "first"), (2, "second"), (3, "third")])
+    {
+        assert_eq!(card["kind"], "ask_user");
+        assert_eq!(card["available_actions"], json!(["answer"]));
+        assert_eq!(card["display"]["guardrail_type"], "clarifying_question");
+        assert_eq!(card["fanout_v1"]["member"], branch);
+        assert_eq!(card["fanout_v1"]["ordinal"], ordinal);
+        assert_eq!(card["parent_agent_path"][0]["sibling_ordinal"], ordinal);
+    }
+    let statuses = members
+        .iter()
+        .map(|member| member["status"].as_str().unwrap_or_default().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        statuses,
+        ["start", "paused", "start", "paused", "start", "paused"]
+    );
     db.pool.close().await;
 }
 
@@ -534,7 +636,7 @@ async fn postgres_fanout_effect_child() {
                     pool: pool.clone(),
                     read_only: mode == "read_only",
                 }),
-                false,
+                effectful_agent(),
             );
             let invocation = assembler
                 .assemble(claim(&request, 1))
@@ -565,7 +667,7 @@ async fn postgres_fanout_effect_child() {
                     // The same tool declarations as the crashed process offered.
                     read_only: mode == "read_only",
                 }),
-                false,
+                effectful_agent(),
             );
             let invocation = assembler
                 .assemble(claim(&request, 2))
@@ -640,7 +742,7 @@ async fn postgres_fanout_effect_child() {
                     tool_calls: Arc::clone(&tool_calls),
                     read_only: false,
                 }),
-                false,
+                effectful_agent(),
             );
             let invocation = assembler
                 .assemble(claim(&request, 2))
