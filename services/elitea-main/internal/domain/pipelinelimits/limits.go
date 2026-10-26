@@ -54,6 +54,11 @@ const (
 	// CodeToolkitNotAttached is a direct tool node whose toolkit is not one of
 	// the version's attached tools; refused when a run starts.
 	CodeToolkitNotAttached = "PIPELINE_TOOLKIT_NOT_ATTACHED"
+	// CodeParallelBranchUnsupported is a fixed Parallel branch that names a
+	// node the runtime cannot run as a branch: anything but an Agent node (an
+	// inline LLM node until FU-247). The Worker compiler refuses the same
+	// (parallel_compiler.rs validate_parallel_ownership).
+	CodeParallelBranchUnsupported = "PIPELINE_PARALLEL_BRANCH_UNSUPPORTED"
 	// maxNamedBytes bounds a node id, type or toolkit name echoed in a refusal.
 	maxNamedBytes = 128
 )
@@ -66,7 +71,7 @@ func Refusal(err error) *apierr.APIError {
 		return nil
 	}
 	switch api.Code {
-	case CodeNodeTypeUnsupported, CodeToolkitNotAttached:
+	case CodeNodeTypeUnsupported, CodeToolkitNotAttached, CodeParallelBranchUnsupported:
 		return api
 	}
 	if errors.Is(err, ErrInstructionsTooLarge) || errors.Is(err, ErrTooManyNodes) || errors.Is(err, ErrExpansionTooLarge) {
@@ -77,8 +82,9 @@ func Refusal(err error) *apierr.APIError {
 
 // Check refuses a pipeline definition that exceeds MaxInstructionsBytes, whose
 // anchor and alias expansion exceeds the Worker's YAML budget (expansion.go),
-// whose top-level `nodes` list holds more than MaxNodes entries, or one of
-// whose nodes declares a `type` the deployment's runtime does not admit. The
+// whose top-level `nodes` list holds more than MaxNodes entries, one of
+// whose nodes declares a `type` the deployment's runtime does not admit, or
+// whose fixed Parallel branch names a declared node that is not an Agent. The
 // size is tested first, on the byte length, so an over-size document is never
 // parsed; the expansion, the node count and the node types are read in the
 // same single parse, and the expansion is metered without being built.
@@ -132,11 +138,13 @@ func check(instructions string, attached *[]string) error {
 		if len(nodes.Content) > MaxNodes {
 			return ErrTooManyNodes
 		}
+		declared := make([]map[string]*yaml.Node, 0, len(nodes.Content))
 		for _, node := range nodes.Content {
 			fields := nodeFields(aliased(node))
 			if err := checkNodeType(fields); err != nil {
 				return err
 			}
+			declared = append(declared, fields)
 			if attached == nil {
 				continue
 			}
@@ -144,8 +152,65 @@ func check(instructions string, attached *[]string) error {
 				return err
 			}
 		}
+		if err := checkParallelBranches(declared); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// checkParallelBranches refuses a fixed Parallel branch whose `node` names a
+// declared node with a string type other than `agent`. As the compiler, the
+// branch runs the first node with that id; a missing node, a non-string type
+// or a malformed branch is left to the compiler, which refuses it.
+func checkParallelBranches(declared []map[string]*yaml.Node) error {
+	var typeOf map[string]*yaml.Node
+	for _, owner := range declared {
+		branches := owner["branches"]
+		if nodeType, _ := stringScalar(owner["type"]); nodeType != "parallel" || branches == nil || branches.Kind != yaml.SequenceNode {
+			continue
+		}
+		if typeOf == nil {
+			typeOf = make(map[string]*yaml.Node, len(declared))
+			for _, fields := range declared {
+				if id := fields["id"]; id != nil && id.Kind == yaml.ScalarNode {
+					if _, seen := typeOf[id.Value]; !seen {
+						typeOf[id.Value] = fields["type"]
+					}
+				}
+			}
+		}
+		for _, branch := range branches.Content {
+			target := branchNode(aliased(branch))
+			if target == "" {
+				continue
+			}
+			if nodeType, ok := stringScalar(typeOf[target]); ok && nodeType != "agent" {
+				return &apierr.APIError{
+					Status: http.StatusBadRequest,
+					Code:   CodeParallelBranchUnsupported,
+					Message: fmt.Sprintf("%s runs node %s as a Parallel branch, but a branch can only run an Agent node (a saved agent or pipeline) for now. Put the %s node in a saved pipeline and run that pipeline from an Agent node.",
+						nodeLabel(owner["id"]), quoted(target), quoted(nodeType)),
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// branchNode is a Parallel branch's scalar `node`, or "".
+func branchNode(branch *yaml.Node) string {
+	if branch.Kind != yaml.MappingNode {
+		return ""
+	}
+	for i := 0; i+1 < len(branch.Content); i += 2 {
+		if aliased(branch.Content[i]).Value == "node" {
+			if value := aliased(branch.Content[i+1]); value.Kind == yaml.ScalarNode {
+				return value.Value
+			}
+		}
+	}
+	return ""
 }
 
 // nodeFields reads the scalar fields admission looks at; nil for a non-mapping.
@@ -153,10 +218,10 @@ func nodeFields(node *yaml.Node) map[string]*yaml.Node {
 	if node.Kind != yaml.MappingNode {
 		return nil
 	}
-	fields := make(map[string]*yaml.Node, 3)
+	fields := make(map[string]*yaml.Node, 4)
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		switch key := aliased(node.Content[i]).Value; key {
-		case "id", "type", "toolkit_name":
+		case "id", "type", "toolkit_name", "branches":
 			fields[key] = aliased(node.Content[i+1])
 		}
 	}

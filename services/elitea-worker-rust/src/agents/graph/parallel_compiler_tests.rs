@@ -466,6 +466,25 @@ fn a_branch_of_an_unadmitted_kind_is_refused_typed_by_name() {
     }
 }
 
+/// An inline LLM node is not a Parallel branch yet (FU-247): refused typed
+/// by name; run it from a saved pipeline through an Agent node instead.
+#[test]
+fn an_inline_llm_branch_is_refused_typed_by_name() {
+    let yaml = YAML.replace(
+        "  - id: workerB\n    type: agent\n    tool: Research Agent\n",
+        "  - id: workerB\n    type: llm\n",
+    );
+    assert_ne!(yaml, YAML, "fixture replacement applied");
+    match PipelineDefinition::from_yaml(&yaml) {
+        Err(error @ PipelineConfigurationError::FanoutChildUnsupported { .. }) => {
+            assert_eq!(error.code(), "graph.fanout.child_kind_unsupported");
+            assert!(error.to_string().contains("workerB"), "{error}");
+        }
+        Err(other) => panic!("expected a typed child-kind refusal, got {other:?}"),
+        Ok(_) => panic!("an inline LLM branch compiled"),
+    }
+}
+
 /// A branch whose saved pipeline contains a Code node is refused by name
 /// until Wave 3 (Map refuses the same through its effect-free cohort).
 #[test]

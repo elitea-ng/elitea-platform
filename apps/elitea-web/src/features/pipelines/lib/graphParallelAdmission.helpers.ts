@@ -16,6 +16,16 @@ function validateOwnedAgentTopology(document: YamlPipelineDocument, agent: YamlP
     check.issue(field, 'A parent route cannot target the owned Agent.');
   }
 }
+/**
+ * A declared node of another kind is named with its kind (Main's
+ * PIPELINE_PARALLEL_BRANCH_UNSUPPORTED text); an inline LLM branch is FU-247.
+ */
+function branchKindMessage(id: string, matches: readonly YamlPipelineNode[]): string {
+  const kind = matches.length === 1 ? matches[0]?.type : undefined;
+  if (typeof kind !== 'string') return 'Select one exact declared Agent node id.';
+  return `Node "${id}" is a "${kind}" node, but a branch can only run an Agent node (a saved agent or pipeline) for now. `
+    + `Put the "${kind}" node in a saved pipeline and run that pipeline from an Agent node.`;
+}
 /** yaml.rs::RawParallelBranchDefinition and parallel_compiler.rs::validate_parallel_ownership. */
 function validateOwnedAgent(document: YamlPipelineDocument, owner: YamlPipelineNode, value: unknown, field: string, check: ExtensionValidator): void {
   if (typeof value !== 'string' || !isValidGraphId(value) || value === owner.id) {
@@ -25,7 +35,7 @@ function validateOwnedAgent(document: YamlPipelineDocument, owner: YamlPipelineN
   const matches = (document.nodes ?? []).filter((node) => node.id === value);
   const agent = matches[0];
   if (matches.length !== 1 || agent?.type !== 'agent') {
-    check.issue(field, 'Select one exact declared Agent node id.');
+    check.issue(field, branchKindMessage(value, matches));
     return;
   }
   if (parallelAgentReferenceCounts(document).get(value) !== 1

@@ -87,6 +87,15 @@ describe('strict fixed Parallel admission', () => {
     const value = document();
     expect(graphParallelIssues({ ...value, nodes: value.nodes?.map((node) => node.id === 'Agent_left' ? { ...node, type: 'llm' } : node) ?? [] }).length).toBeGreaterThan(0);
   });
+  it('names an inline LLM branch (FU-247) and its kind instead of admitting it', () => {
+    const value = document();
+    const issues = graphParallelIssues({ ...value, nodes: value.nodes?.map((node) => node.id === 'Agent_left' ? { ...node, type: 'llm' } : node) ?? [] });
+    expect(issues.map((issue) => issue.message)).toContain(
+      'branches[0].node: Node "Agent_left" is a "llm" node, but a branch can only run an Agent node (a saved agent or pipeline) for now. '
+        + 'Put the "llm" node in a saved pipeline and run that pipeline from an Agent node.',
+    );
+    expect(parallelOwnedAgent({ ...value, nodes: value.nodes?.map((node) => node.id === 'Agent_left' ? { ...node, type: 'llm' } : node) ?? [] }, 'extension', 0)).toBeUndefined();
+  });
   it('withholds child mutation when another node reuses the selected exact Agent identity', () => {
     const value = document();
     const invalid = { ...value, nodes: [...(value.nodes ?? []), { id: 'Agent_left', type: 'printer' }] };

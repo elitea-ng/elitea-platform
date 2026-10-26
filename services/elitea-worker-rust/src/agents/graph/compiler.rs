@@ -3194,6 +3194,14 @@ impl FanoutChildRefusal {
             Self::ContainsCode => "graph.fanout.child_contains_code",
         }
     }
+
+    /// Whether `code` is a fan-out child refusal: fixed by editing the pipeline.
+    #[must_use]
+    pub(crate) fn is_code(code: &str) -> bool {
+        [Self::Kind, Self::ContainsCode]
+            .iter()
+            .any(|refusal| refusal.code() == code)
+    }
 }
 
 impl std::fmt::Display for FanoutChildRefusal {

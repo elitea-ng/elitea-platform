@@ -1570,9 +1570,11 @@ pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailu
     match error.code() {
         NativeAgentAssemblyErrorCode::UnsupportedCapability
             if error.cause().is_some_and(|cause| {
-                // A toolkit a direct node's position cannot serve is fixed by
-                // editing the pipeline.
+                // A toolkit a direct node's position cannot serve, or a node
+                // kind a Parallel branch cannot run (an inline LLM node until
+                // FU-247), is fixed by editing the pipeline.
                 cause.code() == crate::agents::pipeline::UNSERVED_DIRECT_TOOLKIT_CODE
+                    || crate::agents::graph::compiler::FanoutChildRefusal::is_code(cause.code())
             }) =>
         {
             RuntimeFailureKind::PipelineNodeTypeNotAvailable
@@ -1784,6 +1786,33 @@ mod taxonomy_tests {
             code,
             crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::UnsupportedCapability
         );
+        assert_eq!(message, PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE);
+        assert!(!retryable);
+    }
+
+    /// A Parallel branch that names an inline LLM node (FU-247) is refused at
+    /// assembly with the same registered message, never the generic one.
+    #[test]
+    fn an_inline_llm_parallel_branch_ends_as_the_registered_deployment_message() {
+        use crate::agents::graph::compiler::PipelineDefinition;
+        use crate::protocol::output::{
+            PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE, runtime_error_policy,
+        };
+
+        let refusal = PipelineDefinition::from_yaml(
+            "state:\n  answer: str\n  joined: list\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{id: one, node: ask}, {id: two, node: other}]\n    max_concurrency: 2\n    wait: all\n    output: [joined]\n    transition: END\n  - id: ask\n    type: llm\n    output: [answer]\n  - id: other\n    type: llm\n    output: [answer]\n",
+        )
+        .err()
+        .expect("an inline LLM branch is refused");
+        assert_eq!(refusal.code(), "graph.fanout.child_kind_unsupported");
+        assert!(refusal.to_string().contains("node ask "), "{refusal}");
+        let error = crate::agents::runtime::pipeline_configuration_assembly_error(
+            &refusal,
+            "the stored pipeline could not be compiled",
+        );
+        let kind = assembly_failure(&error);
+        assert_eq!(kind, RuntimeFailureKind::PipelineNodeTypeNotAvailable);
+        let (_, message, retryable) = runtime_error_policy(kind);
         assert_eq!(message, PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE);
         assert!(!retryable);
     }
