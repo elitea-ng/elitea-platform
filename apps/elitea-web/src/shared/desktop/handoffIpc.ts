@@ -176,17 +176,48 @@ export interface ReclaimAnswer {
   cloud_sha?: string | null;
 }
 
-export type TakeBackMode = 'apply' | 'worktree' | 'discard';
+/** `apply_with_markers` is offered for `conflicts` only, `apply` for `fast_path` and `clean_merge`. */
+export type TakeBackMode = 'apply' | 'apply_with_markers' | 'worktree' | 'discard';
 
-export interface Preflight {
-  preflight_id: string;
-  outcome: 'fast_path' | 'conflicts';
-  changed_paths: string[];
+/** `fast_path`: the folder is as sent; `clean_merge`: both sides changed other lines or files; `conflicts`: the same lines. */
+type TakeBackOutcome = 'fast_path' | 'clean_merge' | 'conflicts' | 'error';
+
+export type SkipReason = 'excluded' | 'path_deny' | 'too_large' | 'binary_conflict' | 'not_a_file' | 'outside_folder';
+
+/** A path the take back writes or deletes; a rename names its old path. */
+export interface TakeBackChangedPath {
+  path: string;
+  change: 'added' | 'modified' | 'deleted' | 'renamed';
+  from: string | null;
+}
+
+/** A path the take back never writes or deletes, and why. */
+export interface SkippedPath {
+  path: string;
+  reason: SkipReason;
+}
+
+/** The shared apply engine's outcome (the client contract of issue #1187). */
+export interface ApplyOutcome {
+  outcome: TakeBackOutcome;
+  /** `false` for a preflight. */
+  applied: boolean;
+  /** What applying writes or deletes (for `conflicts`: what applying with markers would). */
+  changed_paths: TakeBackChangedPath[];
   conflict_paths: string[];
-  /** Excluded paths, symlinks and submodule entries: never written or deleted. */
-  skipped_paths: string[];
+  /** Excluded and denied paths, symlinks, submodules, binary conflicts: never written or deleted. */
+  skipped_paths: SkippedPath[];
+  base: string;
+  /** `null` for `conflicts`. */
+  result_tree: string | null;
+}
+
+export interface Preflight extends ApplyOutcome {
+  preflight_id: string;
   cloud_turns: number;
-  /** What `handoff_apply` accepts now: `apply` only on the fast path. */
+  /** The cloud turns this preflight takes back (1-based; the latest unless one was picked). */
+  up_to_turn: number;
+  /** What `handoff_apply` accepts for this outcome. */
   modes: TakeBackMode[];
   /** Per-file diffs of what the take back writes (text files only, 256 KiB of diff text at most). */
   files: HandoffChangedFile[];
@@ -198,12 +229,19 @@ export type HandoffChangedFile = Omit<ChangedFile, 'status'> & { status: 'added'
 
 export interface ApplyResult {
   applied: boolean;
-  outcome: 'applied' | 'worktree' | 'discarded';
+  outcome: 'applied' | 'applied_with_markers' | 'worktree' | 'discarded';
+  /** The engine's outcome of the apply (`applied` set when files were written). */
+  report: ApplyOutcome;
   /** `handoff_undo` restores it; `null` when the folder was not written. */
   checkpoint_id: string | null;
   worktree_path: string | null;
   branch: string | null;
+  /** The cloud turns added to the thread's history here: turns 1..`up_to_turn` only. */
   imported_turns: number;
+  /** The cloud turns after `up_to_turn`: not taken back and not local history (they go with the cloud copy). */
+  turns_not_taken: number;
+  /** The local branch that keeps the commits of the turns not taken back; `null` when every turn was. */
+  rest_branch: string | null;
   /** The release was acknowledged; `false`: kept and sent again with the next status. */
   released: boolean;
   /**
@@ -252,8 +290,10 @@ export interface HandoffIpc {
   /** Rejects `invalid_request` for a bad pattern, an include that escapes the folder, or a bad env name. */
   settingsSet(workspaceId: string, settings: FolderHandoffSettings): Promise<HandoffSettingsAnswer>;
   reclaim(conversationUuid: string): Promise<ReclaimAnswer>;
-  preflight(conversationUuid: string): Promise<Preflight>;
-  apply(preflightId: string, mode: TakeBackMode): Promise<ApplyResult>;
+  /** `upToTurn`: take back the cloud turns up to this one (1-based); the latest when left out. */
+  preflight(conversationUuid: string, upToTurn?: number): Promise<Preflight>;
+  /** `upToTurn`, when given, must be the preflight's (`invalid_request` otherwise). */
+  apply(preflightId: string, mode: TakeBackMode, upToTurn?: number): Promise<ApplyResult>;
   /** Restore the folder to before a take back. */
   undo(checkpointId: string): Promise<{ restored: string[] }>;
   /** Erase the cloud copy; the local folder is kept. */
@@ -303,8 +343,10 @@ export function createHandoffIpc(hostInvoke: HostInvoke, listen: ListenFn): Hand
     settingsGet: (workspaceId) => invoke<HandoffSettingsAnswer>('handoff_settings_get', { workspace_id: workspaceId }),
     settingsSet: (workspaceId, settings) => invoke<HandoffSettingsAnswer>('handoff_settings_set', { workspace_id: workspaceId, settings }),
     reclaim: (uuid) => invoke<ReclaimAnswer>('handoff_reclaim', { conversation_uuid: uuid }),
-    preflight: (uuid) => invoke<Preflight>('handoff_preflight', { conversation_uuid: uuid }),
-    apply: (preflightId, mode) => invoke<ApplyResult>('handoff_apply', { preflight_id: preflightId, mode }),
+    preflight: (uuid, upToTurn) =>
+      invoke<Preflight>('handoff_preflight', upToTurn === undefined ? { conversation_uuid: uuid } : { conversation_uuid: uuid, up_to_turn: upToTurn }),
+    apply: (preflightId, mode, upToTurn) =>
+      invoke<ApplyResult>('handoff_apply', upToTurn === undefined ? { preflight_id: preflightId, mode } : { preflight_id: preflightId, mode, up_to_turn: upToTurn }),
     undo: (checkpointId) => invoke<{ restored: string[] }>('handoff_undo', { checkpoint_id: checkpointId }),
     erase: (uuid, projectId) => invoke<unknown>('handoff_erase', withProject(uuid, projectId)),
     onEvent: (handler) => listen(HANDOFF_EVENT_CHANNEL, (payload) => handler(payload as HandoffEvent)),

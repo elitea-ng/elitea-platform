@@ -23,7 +23,9 @@ describe('createHandoffIpc', () => {
     await ipc.status('u1', 42);
     await ipc.reclaim('u1');
     await ipc.preflight('u1');
+    await ipc.preflight('u1', 2);
     await ipc.apply('pf-1', 'worktree');
+    await ipc.apply('pf-2', 'apply_with_markers', 2);
     await ipc.undo('w1:7');
     await ipc.erase('u1');
     await ipc.erase('u1', 42);
@@ -41,7 +43,9 @@ describe('createHandoffIpc', () => {
       ['handoff_status', { conversation_uuid: 'u1', project_id: 42 }],
       ['handoff_reclaim', { conversation_uuid: 'u1' }],
       ['handoff_preflight', { conversation_uuid: 'u1' }],
+      ['handoff_preflight', { conversation_uuid: 'u1', up_to_turn: 2 }],
       ['handoff_apply', { preflight_id: 'pf-1', mode: 'worktree' }],
+      ['handoff_apply', { preflight_id: 'pf-2', mode: 'apply_with_markers', up_to_turn: 2 }],
       ['handoff_undo', { checkpoint_id: 'w1:7' }],
       ['handoff_erase', { conversation_uuid: 'u1' }],
       ['handoff_erase', { conversation_uuid: 'u1', project_id: 42 }],

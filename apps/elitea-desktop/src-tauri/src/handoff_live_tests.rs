@@ -388,7 +388,7 @@ async fn live_take_back_while_a_cloud_turn_runs() {
     assert_eq!(pending["state"], "CLOUD_RUNNING");
     assert_eq!(pending["epoch"].as_u64(), Some(sent.epoch));
     assert_eq!(
-        h.host.preflight(&uuid).await.unwrap_err().code,
+        h.host.preflight(&uuid, None).await.unwrap_err().code,
         "handoff_not_reclaimed"
     );
     std::fs::write(&hold, "").unwrap();
@@ -401,11 +401,11 @@ async fn live_take_back_while_a_cloud_turn_runs() {
     let turn: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(turn["state"], "RECLAIMING");
     assert_eq!(turn["epoch"].as_u64(), Some(sent.epoch + 1));
-    let preflight = h.host.preflight(&uuid).await.unwrap();
-    assert_eq!(preflight.outcome, Outcome::FastPath);
+    let preflight = h.host.preflight(&uuid, None).await.unwrap();
+    assert_eq!(preflight.report.outcome, Outcome::FastPath);
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Apply)
+        .apply(&preflight.preflight_id, Mode::Apply, None)
         .await
         .unwrap();
     assert!(applied.released, "{applied:?}");
@@ -540,18 +540,18 @@ async fn live_send_cloud_turn_take_back_import_and_undo() {
 
     // 4. take back: reclaim, preflight with diffs, apply, release, import.
     assert_eq!(
-        h.host.preflight(&uuid).await.unwrap_err().code,
+        h.host.preflight(&uuid, None).await.unwrap_err().code,
         "handoff_not_reclaimed"
     );
     let reclaimed = h.host.reclaim(&uuid).await.unwrap();
     assert_eq!(reclaimed["state"], "RECLAIMING");
     let before = std::fs::read_to_string(h.folder.join("README.md")).unwrap();
-    let preflight = h.host.preflight(&uuid).await.unwrap();
+    let preflight = h.host.preflight(&uuid, None).await.unwrap();
     assert_eq!(
-        preflight.outcome,
+        preflight.report.outcome,
         Outcome::FastPath,
         "{:?}",
-        preflight.conflict_paths
+        preflight.report.conflict_paths
     );
     assert_eq!(preflight.cloud_turns, 1);
     let readme = preflight
@@ -572,7 +572,7 @@ async fn live_send_cloud_turn_take_back_import_and_undo() {
     );
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Apply)
+        .apply(&preflight.preflight_id, Mode::Apply, None)
         .await
         .unwrap();
     assert!(applied.applied && applied.released, "{applied:?}");
@@ -734,7 +734,7 @@ async fn live_stale_epoch_erased_release_and_quota() {
     // for retry forever.
     live_cloud_turn(&h, &uuid).await;
     h.host.reclaim(&uuid).await.unwrap();
-    let preflight = h.host.preflight(&uuid).await.unwrap();
+    let preflight = h.host.preflight(&uuid, None).await.unwrap();
     let (code, body) = raw(
         &h.live,
         &h.live.token,
@@ -746,7 +746,7 @@ async fn live_stale_epoch_erased_release_and_quota() {
     assert_eq!(code, 200, "{body}");
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Discard)
+        .apply(&preflight.preflight_id, Mode::Discard, None)
         .await
         .unwrap();
     assert_eq!(applied.outcome, "discarded");

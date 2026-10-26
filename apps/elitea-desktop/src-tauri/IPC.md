@@ -186,7 +186,7 @@ other task worktrees are not readable.
 | `worktree_diff` | `{workspace_id, thread_uuid}` | `{diff: string, truncated: boolean}` — the worktree as it is now (uncommitted work included) against `base_sha`; denied paths left out. Rejects `worktree_unknown`, `workspace_busy` while a turn runs in it. |
 | `worktree_remove` | `{workspace_id, thread_uuid, force?: boolean}` | `null` — its workspace (session, turns, history, data), folder and admin directory; its branch is kept when commits are on it, or when the worktree cannot be opened to tell (missing, refused). Rejects `worktree_dirty` when it has uncommitted work and `force` is not `true`, `workspace_busy`. |
 | `worktree_merge_preflight` | `{workspace_id, thread_uuid}` | `MergePreflight` — what merging the worktree (as it is now) into the folder would do, by `git merge-tree` from `base_sha`; writes nothing. Held 15 minutes. |
-| `worktree_merge_apply` | `{preflight_id}` | `MergeApplied` — checkpoints the folder first, then writes each path through the confined writer (path rules apply; what they refuse is in `skipped_paths`). The result lands as uncommitted changes; nothing is committed. Rejects `preflight_expired`, `merge_conflicts` (a `conflicts` preview: nothing is applied, the work stays on the branch), `folder_changed_since_preflight` (preview again), `workspace_busy`. |
+| `worktree_merge_apply` | `{preflight_id, mode?: "apply" \| "apply_with_markers"}` | `MergeApplied` — checkpoints the folder first, then writes each path through the confined writer (path rules apply; what they refuse is in `skipped_paths`). The result lands as uncommitted changes; nothing is committed. `mode` (default `apply`) must be one of the preview's `modes`: a `conflicts` preview offers only `apply_with_markers`, which writes the merge with conflict markers in text files (a binary conflict keeps the folder's file and is skipped as `binary_conflict`), the same as `handoff_apply`'s mode of that name. Deletions go first (with the directories they empty), so a directory the task turned into a file, or the reverse, lands; conflict markers read `<<<<<<< your folder` / `>>>>>>> task worktree`. Rejects `preflight_expired`, `merge_conflicts` (`apply` on a `conflicts` preview: nothing is applied, the work stays on the branch), `invalid_request` (any other mode not offered), `path_in_the_way` (an ignored file or directory where the result needs the other kind), each of these and `folder_changed_since_preflight` before anything is written, the preview kept, `folder_changed_since_preflight` (preview again), `workspace_busy`. |
 | `worktree_merge_undo` | `{checkpoint_id, confirm_older?: boolean}` | `{restored: string[]}` — restores the checkpoint the merge took (only an id `worktree_merge_apply` returned; once). Rejects `invalid_request` for any other checkpoint, `undo_not_latest` when the folder was checkpointed since (a later turn or merge, whose changes the restore reverts too) and `confirm_older` is not `true`, `workspace_busy`. |
 
 ```ts
@@ -205,9 +205,10 @@ type WorktreeEntry = {
 type MergePreflight = {
   preflight_id: string;
   mode: "fast_forward" | "merge" | "conflicts" | "nothing";
-  applied_paths: string[];
+  applied_paths: string[];     // what an apply writes (with markers for `conflicts`)
   conflict_paths: string[];
   skipped_paths: string[];     // never written: denied paths, symlinks, submodules
+  modes: ("apply" | "apply_with_markers")[]; // [] for `nothing`, ["apply_with_markers"] for `conflicts`
   branch: string;
 };
 type MergeApplied = {
@@ -1609,12 +1610,26 @@ noted). `conversation_uuid` is the server conversation's UUID.
 | `handoff_status` | `{conversation_uuid, project_id?}` | `HandoffStatus`: the server's state (contract §2.9) plus `executor: "local" \| "cloud" \| "returning"`, `read_only: boolean`, `sent_from_here: boolean` |
 | `handoff_status_many` | `{conversation_uuids: string[]}` | `{statuses: Record<uuid, HandoffStatus>}` — for the sidebar: a thread this desktop never sent is `LOCAL` with no request; the rest from the host's records, refreshed at most once per project per call and cached 15 s |
 | `handoff_reclaim` | `{conversation_uuid}` | `{state: "RECLAIMING", epoch, cloud_sha}`, or `{state: "CLOUD_RUNNING", reclaim_pending: true, …}` while a cloud turn runs |
-| `handoff_preflight` | `{conversation_uuid}` | `{preflight_id, outcome: "fast_path" \| "conflicts", changed_paths, conflict_paths, skipped_paths, cloud_turns, modes, files: ChangedFile[], diffs_truncated: boolean}` |
-| `handoff_apply` | `{preflight_id, mode: "apply" \| "worktree" \| "discard"}` | `{applied, outcome: "applied" \| "worktree" \| "discarded", checkpoint_id, worktree_path, branch, imported_turns, released, release_refused: string \| null, copied: string[]}` |
+| `handoff_preflight` | `{conversation_uuid, up_to_turn?: number}` | `ApplyOutcome & {preflight_id, cloud_turns, up_to_turn, modes: TakeBackMode[], files: ChangedFile[], diffs_truncated: boolean}` — `up_to_turn` (1-based, default the latest) takes back the cloud turns up to that one; `invalid_request` (`turn_out_of_range`) for a turn the chain does not have |
+| `handoff_apply` | `{preflight_id, mode: TakeBackMode, up_to_turn?: number}` | `{applied, outcome: "applied" \| "applied_with_markers" \| "worktree" \| "discarded", report: ApplyOutcome, checkpoint_id, worktree_path, branch, imported_turns, turns_not_taken, rest_branch: string \| null, released, release_refused: string \| null, copied: string[]}` — `up_to_turn`, when given, must be the preflight's (`invalid_request` otherwise; the preview is kept) |
 | `handoff_undo` | `{checkpoint_id}` | `{restored: string[]}` — restores the folder to before a take-back |
 | `handoff_erase` | `{conversation_uuid, project_id?}` | the server's answer; the local folder is kept |
 | `handoff_settings_get` | `{workspace_id}` | `{settings: FolderHandoffSettings, policy: HandoffPolicy, env_offered: EnvVar[], env_notice: string \| null}` |
 | `handoff_settings_set` | `{workspace_id, settings: FolderHandoffSettings}` | as `handoff_settings_get`; `invalid_request` for a bad pattern, an include that escapes the folder, or an env name that is not a variable name |
+
+```ts
+type TakeBackMode = "apply" | "apply_with_markers" | "worktree" | "discard";
+// The shared apply engine's outcome (#1187 client contract).
+type ApplyOutcome = {
+  outcome: "fast_path" | "clean_merge" | "conflicts" | "error";
+  applied: boolean;              // false for a preflight
+  changed_paths: {path: string; change: "added" | "modified" | "deleted" | "renamed"; from: string | null}[];
+  conflict_paths: string[];
+  skipped_paths: {path: string; reason: "excluded" | "path_deny" | "too_large" | "binary_conflict" | "not_a_file" | "outside_folder"}[];
+  base: string;                  // H'_1, the twin of the sent snapshot
+  result_tree: string | null;    // null for conflicts
+};
+```
 
 ```ts
 type ExcludeReason = "platform" | "project" | "user" | "eliteaignore" | "path_deny" | "leave_on_laptop" | "not_a_file";
@@ -1722,29 +1737,64 @@ type HandoffEvent = { conversation_uuid: string;
   `read_only: true`; the UI shows the transcript read-only.
 - **Take back.** `handoff_reclaim`, then `handoff_preflight` once the state
   is `RECLAIMING` (else `handoff_not_reclaimed`). The preflight verifies the
-  segment (`integrity_failed` for a tampered one) and writes nothing to the
-  folder or any ref. `fast_path`: the folder and `HEAD` are as at send;
-  `apply` writes the cloud's changed paths as uncommitted changes (`HEAD`
-  and the index untouched), keeps the cloud commits on
-  `elitea/cloud/<first 8 of the UUID>` and takes a checkpoint first
-  (`checkpoint_id`, for `handoff_undo`). `conflicts`: only `worktree` (the
-  cloud tip beside the folder, `<folder>-elitea-cloud-<short>`) and
-  `discard` are offered (`modes`); the worktree gets the folder's excluded
-  files (`.env`, keys; `copied`) and opens as a workspace (host git trusts a
-  linked worktree of an open workspace). `files` are the per-file diffs of
-  what the take-back writes (256 KiB of diff text at most, text files only;
+  segment (`integrity_failed` for a tampered one), merges the sent tree, the
+  folder and the cloud's tree at turn `up_to_turn` with the shared apply
+  engine (the one `worktree_merge_*` uses), and writes nothing to the folder
+  or any ref. Tree-based, so a `HEAD` that moved since the send is the same
+  algorithm. `fast_path`: the folder is as at send; `clean_merge`: both
+  sides changed other lines or files. Both offer `apply`: the result lands
+  as uncommitted changes (`HEAD` and the index untouched), the cloud commits
+  up to `up_to_turn` are kept on `elitea/cloud/<first 8 of the UUID>`, and a
+  checkpoint is taken first (`checkpoint_id`, for `handoff_undo`).
+  `conflicts`: `apply_with_markers` (conflicted text files get conflict
+  markers; a binary conflict keeps the folder's file and is listed as
+  `binary_conflict`), `worktree` (the cloud's tree beside the folder,
+  `<folder>-elitea-cloud-<short>`) and `discard` (`modes`); the worktree
+  gets the folder's excluded files (`.env`, keys; `copied`) and opens as a
+  workspace (host git trusts a linked worktree of an open workspace).
+  `files` are the per-file diffs of what the take-back writes (with markers
+  for `conflicts`; 256 KiB of diff text at most, text files only;
   `diffs_truncated`). `handoff_apply` refuses with
   `folder_changed_since_preflight` when the folder moved after the
-  preflight. Excluded paths, symlinks and submodule entries are never
-  deleted or overwritten (`skipped_paths`); a file the cloud created that
-  the exclusions match is written only where no local file exists.
-- **Release and history.** `handoff_apply` releases the thread and imports
-  its cloud turns into the thread history (`StoredTurn.origin: "cloud"`,
+  preflight (an excluded file the cloud created that now exists locally
+  counts: it is never overwritten), `invalid_request` for a mode not in
+  `modes` (`merge_conflicts: …` for `apply` on conflicts), and
+  `path_in_the_way` when something the snapshot does not hold (an ignored
+  directory) is where the result puts a file, or a file where it needs a
+  directory; each before anything is written or checkpointed, and each
+  keeps the preview (apply it again, or in another mode). Deletions go
+  first and the directories they empty are removed, so a directory the
+  cloud turned into a file (or the reverse) lands. Excluded paths (the
+  send's `excluded[]` included), denied paths, symlinks and submodule
+  entries are never deleted or overwritten (`skipped_paths`, each with its
+  reason); a path `path_deny` blocks since the send is left out of the
+  base and the cloud's tree too, so the cloud's change to it is a
+  `path_deny` skip, never a conflict. A file the cloud created that the
+  exclusions match is written only where no local file exists. Conflict
+  markers name the sides: `<<<<<<< your folder` and `>>>>>>> cloud`
+  (`task worktree` for `worktree_merge_apply`).
+- **Up to turn k.** A turn is a change: a cloud turn that changed files
+  (one commit; `cloud_turns` counts them, and the dialog says "change").
+  With `up_to_turn` k below `cloud_turns`, the take-back applies change k's
+  tree and imports the conversation up to the answer that made change k;
+  every later answer, with a commit or without, is not local history
+  (`turns_not_taken`), and the agent's session leaves those message groups
+  out of every later seed (`sessions.sqlite` `seed_skips`), so the agent
+  never sees them. The release
+  ends the cloud copy (the server takes no second take-back from `LOCAL`),
+  so their work is kept as commits on the local branch `rest_branch`
+  (`elitea/cloud/<short>-after-turn-<k>`), and the dialog warns that their
+  conversation goes with the cloud copy when its grace ends.
+- **Release and history.** The release's outcome is the server's:
+  `applied` for `apply` and `apply_with_markers` (the folder took the
+  cloud's changes), `worktree`, `discarded`. `handoff_apply` releases the thread and imports
+  its cloud turns (up to the chosen turn) into the thread history (`StoredTurn.origin: "cloud"`,
   changed files from the cloud commits' diffs). A release the server did
   not acknowledge (`released: false`) is kept and sent again by the next
   `handoff_status`; until then the thread stays read-only. A release the
   server refuses for good (`release_refused`: `handoff_erased` when the
-  cloud copy was erased meanwhile, `stale_epoch`, `handoff_not_found`) is
+  cloud copy was erased meanwhile, `stale_epoch`, `handoff_not_found`,
+  `invalid_handoff` or `invalid_request` for a body it will never take) is
   not kept: the thread follows the server's state (`LOCAL` after an erase,
   so `released` is `true` and the cloud turns are still imported). The
   release carries the epoch the preflight read, so a take-back asked while

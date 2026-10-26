@@ -63,7 +63,13 @@
 //!           response_message_id TEXT NULL, invocation_id TEXT, author TEXT,
 //!           event TEXT /* adk Event JSON */, bytes INTEGER,
 //!           PRIMARY KEY (session_key, seq)) WITHOUT ROWID
+//! seed_skips (session_key TEXT PRIMARY KEY,
+//!             group_ids TEXT /* JSON array of message-group ids */)
 //! ```
+//!
+//! `seed_skips` (schema 2) holds the server's message groups a re-seed
+//! leaves out: the cloud turns after the one a partial take-back stopped at
+//! (#1187), which the server still holds but the thread never took back.
 //!
 //! `server_cursor` is the conversation's message-group COUNT when the
 //! session last agreed with the server (the conversation detail every turn
@@ -146,7 +152,35 @@ CREATE TABLE events (
     PRIMARY KEY (session_key, seq)
 ) WITHOUT ROWID;
 CREATE INDEX events_by_turn ON events (session_key, turn_execution_id);
+CREATE TABLE seed_skips (
+    session_key TEXT PRIMARY KEY NOT NULL,
+    group_ids TEXT NOT NULL
+);
 ";
+
+/// Schema 1 to 2: the seed boundary of a partial take-back.
+const MIGRATE_1_TO_2: &str = "
+BEGIN;
+CREATE TABLE IF NOT EXISTS seed_skips (
+    session_key TEXT PRIMARY KEY NOT NULL,
+    group_ids TEXT NOT NULL
+);
+PRAGMA user_version = 2;
+COMMIT;
+";
+
+fn read_skips(conn: &Connection, key: &str) -> rusqlite::Result<Vec<i64>> {
+    let text: Option<String> = conn
+        .query_row(
+            "SELECT group_ids FROM seed_skips WHERE session_key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(text
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default())
+}
 
 fn storage(what: &str, error: &rusqlite::Error) -> HostError {
     HostError::Storage(format!("{what}: {error}"))
@@ -376,18 +410,9 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
             ))
             .map_err(|e| storage("could not create the session store", &e))
         }
-        // 1: created before incremental vacuum. Freed pages then stayed in
-        // the file's free space, so the store only grew. The VACUUM is what
-        // switches the mode on and takes it back at once (it cannot run
-        // inside a transaction).
-        1 => {
-            conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")
-                .map_err(|e| storage("could not upgrade the session store", &e))?;
-            conn.execute_batch("VACUUM")
-                .map_err(|e| storage("could not upgrade the session store", &e))?;
-            conn.pragma_update(None, "user_version", SCHEMA_VERSION)
-                .map_err(|e| storage("could not upgrade the session store", &e))
-        }
+        1 => conn
+            .execute_batch(MIGRATE_1_TO_2)
+            .map_err(|e| storage("could not upgrade the session store", &e)),
         SCHEMA_VERSION => Ok(()),
         newer => Err(HostError::Storage(format!(
             "the session store was written by a newer version of the app (schema {newer})"
@@ -886,6 +911,53 @@ impl SessionStore {
         .await
     }
 
+    /// Leave the server's message groups `group_ids` out of every later
+    /// seed of this conversation's session (added to any already left
+    /// out): the cloud turns after the one a partial take-back stopped at.
+    /// Kept whether or not the session exists yet.
+    ///
+    /// # Errors
+    ///
+    /// The store could not be written.
+    pub async fn skip_on_seed(
+        &self,
+        deployment: &str,
+        user_id: i64,
+        conversation_uuid: &str,
+        group_ids: Vec<i64>,
+    ) -> Result<(), HostError> {
+        let key = session_key(deployment, user_id, conversation_uuid);
+        self.call("could not keep the seed boundary", move |conn| {
+            let tx = conn.transaction()?;
+            let mut ids = read_skips(&tx, &key)?;
+            ids.extend(group_ids);
+            ids.sort_unstable();
+            ids.dedup();
+            let text = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into());
+            tx.execute(
+                "INSERT INTO seed_skips (session_key, group_ids) VALUES (?1, ?2)
+                 ON CONFLICT (session_key) DO UPDATE SET group_ids = excluded.group_ids",
+                params![key, text],
+            )?;
+            tx.commit()
+        })
+        .await
+    }
+
+    /// The message groups a seed of session `key` leaves out
+    /// ([`Self::skip_on_seed`]).
+    ///
+    /// # Errors
+    ///
+    /// The store could not be read.
+    pub async fn seed_skips(&self, key: &str) -> Result<Vec<i64>, HostError> {
+        let key = key.to_owned();
+        self.call("could not read the seed boundary", move |conn| {
+            read_skips(conn, &key)
+        })
+        .await
+    }
+
     /// Claim the session for one running turn; its events are tagged with
     /// `execution_id`. Refused while another turn holds the session.
     ///
@@ -974,6 +1046,10 @@ impl SessionStore {
     ) -> Result<bool, HostError> {
         let key = session_key(deployment, user_id, conversation_uuid);
         self.call("could not delete the session", move |conn| {
+            conn.execute(
+                "DELETE FROM seed_skips WHERE session_key = ?1",
+                params![key],
+            )?;
             Ok(conn.execute("DELETE FROM sessions WHERE session_key = ?1", params![key])? > 0)
         })
         .await
@@ -986,6 +1062,7 @@ impl SessionStore {
     /// The store could not be written.
     pub fn delete_all(&self) -> Result<usize, HostError> {
         self.call_blocking("could not delete the sessions", |conn| {
+            conn.execute("DELETE FROM seed_skips", [])?;
             conn.execute("DELETE FROM sessions", [])
         })
     }
