@@ -63,14 +63,97 @@ impl GitCredential {
     }
 }
 
-/// What to push: a new branch at `tip`, carried by `pack`.
+/// What to push: a new branch at `tip` (its objects are the [`PushPack`]
+/// [`push_new_branch`] takes).
 pub struct PushRequest<'a> {
     /// `https://host/path/repo.git`.
     pub repository_url: &'a Url,
     /// The branch name the model asked for (no `refs/heads/`).
     pub branch: &'a str,
     pub tip: &'a str,
-    pub pack: &'a [u8],
+}
+
+/// A git pack with room reserved in front of it for the push command, so
+/// the `receive-pack` request body IS the pack's own buffer: the command is
+/// written into the headroom and the body is a view of the buffer from
+/// there, never a second copy of the pack (which can be as large as one
+/// cloud push carries).
+pub struct PushPack {
+    /// `HEADROOM` reserved bytes, then the pack.
+    buffer: Vec<u8>,
+}
+
+impl PushPack {
+    /// Bytes reserved for the command: its pkt-line (two ids, the ref with
+    /// a branch of at most 200 bytes and a `_vN` suffix, the capabilities)
+    /// and the flush fit with room to spare.
+    pub const HEADROOM: usize = 1_024;
+
+    /// An empty pack buffer, its headroom reserved.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            buffer: vec![0; Self::HEADROOM],
+        }
+    }
+
+    /// A copy of `pack` behind the headroom (fixtures and small packs).
+    #[must_use]
+    pub fn from_pack(pack: &[u8]) -> Self {
+        let mut buffer = Vec::with_capacity(Self::HEADROOM + pack.len());
+        buffer.resize(Self::HEADROOM, 0);
+        buffer.extend_from_slice(pack);
+        Self { buffer }
+    }
+
+    /// Append the pack with `write`, which may only append to the buffer it
+    /// is handed (the headroom is checked to be intact in length).
+    ///
+    /// # Errors
+    ///
+    /// `write`'s own error.
+    pub fn append<E>(
+        &mut self,
+        write: impl FnOnce(&mut Vec<u8>) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let result = write(&mut self.buffer);
+        if self.buffer.len() < Self::HEADROOM {
+            self.buffer.resize(Self::HEADROOM, 0);
+        }
+        result
+    }
+
+    /// The pack's bytes.
+    #[must_use]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.buffer[Self::HEADROOM..]
+    }
+
+    /// The pack's length in bytes.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.buffer.len() - Self::HEADROOM
+    }
+
+    /// No pack was written.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// `command` followed by the pack, in the pack's own buffer; `None`
+    /// when `command` does not fit the headroom.
+    fn into_body(mut self, command: &[u8]) -> Option<bytes::Bytes> {
+        let start = Self::HEADROOM.checked_sub(command.len())?;
+        self.buffer[start..Self::HEADROOM].copy_from_slice(command);
+        Some(bytes::Bytes::from(self.buffer).slice(start..))
+    }
+}
+
+impl Default for PushPack {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Why a push did not happen. The sentence names no secret.
@@ -126,6 +209,7 @@ pub async fn push_new_branch(
     transport: Arc<dyn Transport>,
     credential: &GitCredential,
     request: &PushRequest<'_>,
+    pack: PushPack,
 ) -> Result<Pushed, PushFailure> {
     if request.repository_url.scheme() != "https" {
         return Err(PushFailure::Protocol);
@@ -133,18 +217,19 @@ pub async fn push_new_branch(
     let pinned = OriginGuard::new(request.repository_url, transport);
     let refs = advertised_refs(&pinned, credential, request.repository_url).await?;
     let branch = free_name(&refs.names, request.branch)?;
-    let mut body = Vec::with_capacity(request.pack.len() + 256);
+    let mut command = Vec::with_capacity(PushPack::HEADROOM);
     // Only what is read back: no side-band, so the report is plain pkt-lines.
     pkt_line(
-        &mut body,
+        &mut command,
         format!(
             "{ZERO_ID} {} refs/heads/{branch}\0report-status {AGENT}\n",
             request.tip
         )
         .as_bytes(),
     );
-    body.extend_from_slice(b"0000");
-    body.extend_from_slice(request.pack);
+    command.extend_from_slice(b"0000");
+    // The pack is not copied: the command goes into its headroom.
+    let body = pack.into_body(&command).ok_or(PushFailure::Protocol)?;
     let url = service_url(request.repository_url, "git-receive-pack", false);
     let mut http = Request::new(Method::POST, url);
     authorize(&mut http, credential)?;
@@ -465,6 +550,35 @@ mod tests {
                 base64::engine::general_purpose::STANDARD.encode("x-access-token:ghp_secret")
             )
         );
+    }
+
+    /// The body is the command, then the pack, from the pack's own buffer.
+    #[test]
+    fn the_body_is_the_command_in_the_packs_headroom() {
+        let mut pack = PushPack::new();
+        pack.append(|buffer| {
+            buffer.extend_from_slice(b"PACK-bytes");
+            Ok::<(), ()>(())
+        })
+        .expect("appended");
+        assert_eq!(pack.as_slice(), b"PACK-bytes");
+        assert_eq!(pack.len(), 10);
+        let address = pack.as_slice().as_ptr();
+        let body = pack.into_body(b"0008cmd0000").expect("fits");
+        assert_eq!(&body[..], b"0008cmd0000PACK-bytes");
+        // The same allocation: the pack was not copied.
+        assert_eq!(body[11..].as_ptr(), address);
+        let longest = vec![b'x'; PushPack::HEADROOM + 1];
+        assert!(PushPack::from_pack(b"PACK").into_body(&longest).is_none());
+        // The longest command a push builds fits.
+        let branch = "b".repeat(200) + "_v20";
+        let mut command = Vec::new();
+        pkt_line(
+            &mut command,
+            format!("{ZERO_ID} {ZERO_ID} refs/heads/{branch}\0report-status {AGENT}\n").as_bytes(),
+        );
+        command.extend_from_slice(b"0000");
+        assert!(command.len() <= PushPack::HEADROOM);
     }
 
     #[test]

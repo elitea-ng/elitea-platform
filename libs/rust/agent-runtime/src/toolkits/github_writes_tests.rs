@@ -3089,24 +3089,10 @@ mod open_pull_request {
     }
 
     #[tokio::test]
-    async fn an_ssh_alias_remote_is_scoped_by_its_repository() {
+    async fn an_ssh_alias_remote_is_refused_not_taken_for_the_credentials_host() {
+        // `github-work` is an alias in the desktop's SSH config: it names no
+        // host, so nothing is written to the credential's host under it.
         let script = Arc::new(Script::default());
-        script.json("POST", "/git/refs", 201, json!({}));
-        script.json(
-            "GET",
-            "/contents/src/a.txt",
-            200,
-            file_json("one\ntwo\n", 'a'),
-        );
-        script.json("GET", "/contents/src/new.txt", 404, json!({}));
-        script.json("PUT", "/contents/src/a.txt", 200, json!({}));
-        script.json("PUT", "/contents/src/new.txt", 201, json!({}));
-        script.json(
-            "POST",
-            "/pulls",
-            201,
-            json!({"number": 3, "html_url": "https://github.example.test/o/r/pull/3"}),
-        );
         let mut aliased = diff(PATCH_TWO_FILES);
         aliased.remote_url = "github-work:EliteaAI/elitea-platform.git".to_owned();
         let credential = Credential::new(Ok(configuration("https://github.example.test/api/v3")));
@@ -3118,6 +3104,14 @@ mod open_pull_request {
             change(),
         )
         .await;
-        assert_eq!(result["status"], "ok", "{result}");
+        assert_eq!(result["status"], "refused", "{result}");
+        assert!(
+            result["message"]
+                .as_str()
+                .expect("message")
+                .contains("SSH alias `github-work`"),
+            "{result}"
+        );
+        assert!(script.hits().is_empty(), "nothing reached the forge");
     }
 }

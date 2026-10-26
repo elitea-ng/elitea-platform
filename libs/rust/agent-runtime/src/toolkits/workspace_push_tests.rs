@@ -19,9 +19,9 @@ use zeroize::Zeroizing;
 
 use super::workspace_pull_request::{
     BranchPushed, CredentialUnavailable, DiffUnavailable, ForgeKind, PreparedPush,
-    PullRequestAudit, PullRequestOpened, PullRequestTarget, PushUnavailable, THREAD_CREDENTIAL,
-    ThreadConfiguration, ThreadCredential, ThreadCredentialSource, Upstream, WorkspaceDiff,
-    WorkspaceDiffSource, WorkspaceForgeTools, WorkspacePushSource,
+    PullRequestAudit, PullRequestOpened, PullRequestTarget, PushPack, PushUnavailable,
+    THREAD_CREDENTIAL, ThreadConfiguration, ThreadCredential, ThreadCredentialSource, Upstream,
+    WorkspaceDiff, WorkspaceDiffSource, WorkspaceForgeTools, WorkspacePushSource,
 };
 
 const TIP: &str = "1111111111111111111111111111111111111111";
@@ -198,6 +198,13 @@ struct Source {
 
 #[async_trait]
 impl WorkspacePushSource for Source {
+    async fn upstream(&self) -> Result<Upstream, PushUnavailable> {
+        match self.answer {
+            Some(PushUnavailable::NoUpstream) => Err(PushUnavailable::NoUpstream),
+            _ => Ok(self.upstream.clone()),
+        }
+    }
+
     async fn prepare_push(&self) -> Result<PreparedPush, PushUnavailable> {
         *self.calls.lock().expect("calls") += 1;
         if let Some(unavailable) = self.answer {
@@ -208,7 +215,7 @@ impl WorkspacePushSource for Source {
             tip: TIP.to_owned(),
             commits: 3,
             files: 2,
-            pack: b"PACK\0\0\0\x02\0\0\0\0fake-pack".to_vec(),
+            pack: PushPack::from_pack(b"PACK\0\0\0\x02\0\0\0\0fake-pack"),
         })
     }
 }
@@ -240,28 +247,41 @@ impl PullRequestAudit for Audit {
 
 struct Credential {
     forge: ForgeKind,
-    json: Result<String, CredentialUnavailable>,
+    /// What Main answers now (a test may change it between calls).
+    json: Mutex<Result<String, CredentialUnavailable>>,
     calls: Mutex<usize>,
+}
+
+impl Credential {
+    fn calls(&self) -> usize {
+        *self.calls.lock().expect("calls")
+    }
+
+    fn answer(&self, answer: Result<String, CredentialUnavailable>) {
+        *self.json.lock().expect("json") = answer;
+    }
 }
 
 #[async_trait]
 impl ThreadCredentialSource for Credential {
     async fn configuration(&self) -> Result<ThreadConfiguration, CredentialUnavailable> {
         *self.calls.lock().expect("calls") += 1;
-        self.json.clone().map(|json| ThreadConfiguration {
-            forge: self.forge,
-            json: Zeroizing::new(json),
-        })
+        self.json
+            .lock()
+            .expect("json")
+            .clone()
+            .map(|json| ThreadConfiguration {
+                forge: self.forge,
+                json: Zeroizing::new(json),
+            })
     }
 }
 
 fn github_credential() -> Arc<Credential> {
     Arc::new(Credential {
         forge: ForgeKind::GitHub,
-        json: Ok(
-            json!({"base_url": "https://github.example.test/api/v3", "access_token": "ghp-thread-token"})
-                .to_string(),
-        ),
+        json: Mutex::new(Ok(json!({"base_url": "https://github.example.test/api/v3", "access_token": "ghp-thread-token"})
+            .to_string())),
         calls: Mutex::new(0),
     })
 }
@@ -269,7 +289,9 @@ fn github_credential() -> Arc<Credential> {
 fn gitlab_credential(url: &str) -> Arc<Credential> {
     Arc::new(Credential {
         forge: ForgeKind::GitLab,
-        json: Ok(json!({"url": url, "private_token": "glpat-thread-token"}).to_string()),
+        json: Mutex::new(Ok(
+            json!({"url": url, "private_token": "glpat-thread-token"}).to_string(),
+        )),
         calls: Mutex::new(0),
     })
 }
@@ -368,9 +390,10 @@ fn basic(user: &str, secret: &str) -> String {
 #[tokio::test]
 async fn git_push_creates_a_new_branch_on_the_upstream_repository_and_never_moves_one() {
     let forge = Forge::with_branches(&["main", "cloud-change"]);
+    let credential = github_credential();
     let rig = Rig::new(
         &forge,
-        Some(github_credential()),
+        Some(credential.clone()),
         Vec::new(),
         // An ssh remote is pushed to over HTTPS on the credential's host.
         source("git@github.example.test:EliteaAI/elitea-platform.git"),
@@ -421,6 +444,7 @@ async fn git_push_creates_a_new_branch_on_the_upstream_repository_and_never_move
         !recorded.contains("ghp-thread-token"),
         "no token in the audit or the answer"
     );
+    assert_eq!(credential.calls(), 1, "one redemption for the push");
 
     // The pull request opens from the pushed branch without a second push.
     let result = rig
@@ -444,9 +468,103 @@ async fn git_push_creates_a_new_branch_on_the_upstream_repository_and_never_move
         json!({"title": "Cloud change", "body": "From the cloud", "head": "cloud-change_v2", "base": "main"})
     );
     assert_eq!(*rig.source.calls.lock().expect("calls"), 1);
+    assert_eq!(
+        credential.calls(),
+        2,
+        "push: false redeems the credential again; nothing secret was kept"
+    );
     let opened = rig.audit.opened.lock().expect("audit").clone();
     assert_eq!(opened.len(), 1);
     assert_eq!(opened[0].files, 2);
+
+    // The project turned pull requests off after the push: the next call
+    // is refused by Main's redemption, and nothing reaches the forge.
+    credential.answer(Err(CredentialUnavailable::Disabled));
+    let result = rig
+        .call(
+            "open_pull_request",
+            json!({"title": "Again", "branch": "cloud-change_v2", "push": false}),
+        )
+        .await;
+    assert_eq!(result["status"], "refused", "{result}");
+    assert!(
+        result["message"]
+            .as_str()
+            .expect("message")
+            .contains("turned off")
+    );
+    assert_eq!(forge.hits().len(), 3, "nothing after the refusal");
+    assert_eq!(rig.audit.opened.lock().expect("audit").len(), 1);
+}
+
+#[tokio::test]
+async fn an_ssh_alias_is_never_taken_for_the_credentials_host() {
+    let forge = Forge::with_branches(&["main"]);
+    let rig = Rig::new(
+        &forge,
+        Some(github_credential()),
+        Vec::new(),
+        source("github-work:EliteaAI/elitea-platform.git"),
+    )
+    .await;
+    for (tool, args) in [
+        ("git_push", json!({"branch": "x"})),
+        ("open_pull_request", json!({"title": "t", "branch": "x"})),
+    ] {
+        let result = rig.call(tool, args).await;
+        assert_eq!(result["status"], "refused", "{tool}: {result}");
+        assert!(
+            result["message"]
+                .as_str()
+                .expect("message")
+                .contains("SSH alias `github-work`"),
+            "{result}"
+        );
+    }
+    assert!(forge.hits().is_empty(), "nothing was sent");
+    assert_eq!(
+        *rig.source.calls.lock().expect("calls"),
+        0,
+        "nothing was prepared"
+    );
+}
+
+#[tokio::test]
+async fn a_credential_that_cannot_push_goes_to_the_api_without_a_pack() {
+    let forge = Forge::with_branches(&["main"]);
+    let anonymous = Arc::new(Credential {
+        forge: ForgeKind::GitHub,
+        json: Mutex::new(Ok(
+            json!({"base_url": "https://github.example.test/api/v3"}).to_string(),
+        )),
+        calls: Mutex::new(0),
+    });
+    let rig = Rig::new(
+        &forge,
+        Some(anonymous.clone()),
+        Vec::new(),
+        source("https://github.example.test/EliteaAI/elitea-platform.git"),
+    )
+    .await;
+    let result = rig
+        .call("open_pull_request", json!({"title": "t", "branch": "x"}))
+        .await;
+    // The fixture's diff source has no change: the API path's own answer.
+    assert_eq!(result["status"], "refused", "{result}");
+    assert_eq!(
+        result["message"],
+        "There is no change to open a pull request with."
+    );
+    assert_eq!(
+        *rig.source.calls.lock().expect("calls"),
+        0,
+        "no pack is prepared for the API path"
+    );
+    assert_eq!(anonymous.calls(), 1, "one redemption for the call");
+    let result = rig.call("git_push", json!({"branch": "x"})).await;
+    assert_eq!(result["status"], "refused", "{result}");
+    assert_eq!(*rig.source.calls.lock().expect("calls"), 0);
+    assert!(forge.hits().is_empty());
 }
 
 #[tokio::test]
@@ -565,7 +683,7 @@ async fn refusals_send_nothing_and_record_nothing() {
         let result = rig.call("git_push", json!({"branch": branch})).await;
         assert_eq!(result["status"], "error", "{branch}: {result}");
     }
-    assert_eq!(*credential.calls.lock().expect("calls"), 0);
+    assert_eq!(credential.calls(), 0);
     // A branch git_push did not push cannot be a pull request's head.
     let result = rig
         .call(

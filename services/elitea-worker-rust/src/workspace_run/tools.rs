@@ -185,6 +185,15 @@ impl TurnPushSource {
 impl elitea_agent_runtime::toolkits::workspace_pull_request::WorkspacePushSource
     for TurnPushSource
 {
+    async fn upstream(
+        &self,
+    ) -> Result<
+        elitea_agent_runtime::toolkits::workspace_pull_request::Upstream,
+        elitea_agent_runtime::toolkits::workspace_pull_request::PushUnavailable,
+    > {
+        self.turn.push_upstream().await
+    }
+
     async fn prepare_push(
         &self,
     ) -> Result<

@@ -29,7 +29,7 @@ const page = (titles: string[], shared: string[] = []) => ({
 let server: FakeServer;
 let queries: QueryClient;
 
-async function open(answer: { status: number; body: unknown }) {
+async function open(answer: { status: number; body: unknown }, current = { type: 'github', elitea_title: 'work', private: false }) {
   server = fakeServer();
   globalThis.fetch = ((input: RequestInfo, init?: RequestInit) => server.fetch(new Request(input, init))) as typeof fetch;
   server.on('GET', `/configurations/configurations/${P}?type=github`, page(['work'], ['org']));
@@ -38,7 +38,7 @@ async function open(answer: { status: number; body: unknown }) {
   server.on('GET', `/configurations/configurations/9?type=gitlab`, page(['mine']));
   server.on('PUT', PUT, answer);
   queries = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
-  queries.setQueryData(queryKeys.handoff(P, UUID), { state: 'CLOUD_IDLE', epoch: 3, pull_request_credential: { type: 'github', elitea_title: 'work', private: false } });
+  queries.setQueryData(queryKeys.handoff(P, UUID), { state: 'CLOUD_IDLE', epoch: 3, pull_request_credential: current });
   return await render(
     <QueryClientProvider client={queries}>
       <PullRequestCredentialScreen />
@@ -71,4 +71,11 @@ it('keeps the sheet open with the refusal', async () => {
   expect(await screen.findByText('Pushes and pull requests from the cloud are turned off for this project.')).toBeTruthy();
   expect(mockBack).not.toHaveBeenCalled();
   expect(JSON.parse(server.requests.find((r) => r.method === 'PUT')!.body ?? '{}')).toEqual({ credential: null });
+});
+
+it('shows a current choice the listing does not, and leaves it as it is', async () => {
+  await open({ status: 200, body: {} }, { type: 'github', elitea_title: 'gone', private: true });
+  expect(await screen.findByText('gone (GitHub, yours) (current, not listed)')).toBeTruthy();
+  await fireEvent.press(screen.getByTestId('pr-credential-unlisted'));
+  expect(server.requests.some((r) => r.method === 'PUT')).toBe(false);
 });

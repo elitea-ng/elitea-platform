@@ -13,7 +13,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { server } from '@/test/setup';
 
-import { CloudPullRequestCredential, credentialChoices } from './CloudPullRequestCredential';
+import { CloudPullRequestCredential, credentialChoices, savedCredential } from './CloudPullRequestCredential';
 
 const BASE = '/api/v2';
 const UUID = '0b1d6f4e-3c52-4d3a-9a54-5f1c9a0e7c11';
@@ -27,11 +27,12 @@ const page = (titles: string[], shared: string[] = []) => ({
   shared: { items: shared.map((elitea_title) => ({ elitea_title })), total: shared.length },
 });
 
-function serve(status = 200): { bodies: unknown[] } {
+function serve(status = 200, listStatus = 200): { bodies: unknown[] } {
   const served = { bodies: [] as unknown[] };
   server.use(
     http.get(`${BASE}/configurations/configurations/42`, ({ request }) => {
       const type = new URL(request.url).searchParams.get('type');
+      if (listStatus !== 200 && type === 'gitlab') return HttpResponse.json({ error: 'unavailable' }, { status: listStatus });
       return HttpResponse.json(type === 'gitlab' ? page(['team-gitlab']) : page(['team-github'], ['org-github']));
     }),
     http.get(`${BASE}/social/author`, () => HttpResponse.json({ id: 1, name: 'Alice', personal_project_id: '7' })),
@@ -77,7 +78,40 @@ describe('credentialChoices', () => {
   });
 });
 
+describe('savedCredential', () => {
+  const current = { type: 'github' as const, elitea_title: 'gone', private: false };
+  const listed = credentialChoices([{ type: 'gitlab', project: { items: [{ elitea_title: 'lab' }] }, personal: undefined }]);
+  it('sends null only for an explicit None, and nothing when the current choice is kept', () => {
+    expect(savedCredential('', current, listed)).toBeNull();
+    expect(savedCredential('', null, listed)).toBeUndefined();
+    expect(savedCredential('github:project:gone', current, listed)).toBeUndefined();
+    expect(savedCredential('gitlab:project:lab', current, listed)).toEqual({ type: 'gitlab', elitea_title: 'lab', private: false });
+    // A key that is neither listed nor current changes nothing.
+    expect(savedCredential('github:project:other', current, listed)).toBeUndefined();
+  });
+});
+
 describe('CloudPullRequestCredential', () => {
+  it('keeps a current choice the listing does not show, and Save leaves it as it is', async () => {
+    const served = serve();
+    mount({ type: 'github', elitea_title: 'gone', private: true });
+    await userEvent.click(screen.getByTestId('cloud-pr-credential-button'));
+    expect(await screen.findByLabelText('gone (GitHub, yours) (current, not listed)')).toBeChecked();
+    await userEvent.click(screen.getByTestId('cloud-pr-credential-save'));
+    await waitFor(() => expect(screen.queryByTestId('cloud-pr-credential-save')).not.toBeInTheDocument());
+    expect(served.bodies).toEqual([]);
+  });
+
+  it('treats a failed listing as an error: nothing can be saved, so nothing is cleared', async () => {
+    const served = serve(200, 503);
+    mount({ type: 'github', elitea_title: 'team-github', private: false });
+    await userEvent.click(screen.getByTestId('cloud-pr-credential-button'));
+    expect(await screen.findByTestId('cloud-pr-credential-list-failed')).toBeInTheDocument();
+    expect(screen.getByTestId('cloud-pr-credential-save')).toBeDisabled();
+    expect(screen.queryByLabelText('None')).not.toBeInTheDocument();
+    expect(served.bodies).toEqual([]);
+  });
+
   it('sends the chosen typed reference, never a secret', async () => {
     const served = serve();
     const onSaved = vi.fn();

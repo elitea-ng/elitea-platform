@@ -528,7 +528,8 @@ func TestRecordEventIsClaimBoundAndCarriesNoPath(t *testing.T) {
 	if len(store.events) != 2 || store.events[0].Attrs["rules"] != "aws-access-key,private-key" || store.events[0].Attrs["findings"] != "2" ||
 		store.events[1].Attrs["files"] != "3" || store.events[1].Attrs["number"] != "42" || len(store.events[1].Attrs) != 5 {
 		t.Fatalf("recorded = %+v", store.events)
-	}	// branch.pushed (amendment 2026-10-26): the new branch and its commit
+	}
+	// branch.pushed (amendment 2026-10-26): the new branch and its commit
 	// count; a push of nothing is not an event.
 	pushed, err := client.WorkspaceRecordEvent(context.Background(), &runtimev1.WorkspaceRecordEventRequestV1{
 		Claim: claim(2), Kind: runtimev1.WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_BRANCH_PUSHED,

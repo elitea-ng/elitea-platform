@@ -41,7 +41,7 @@ const (
 	WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_SEGMENT_TOO_LARGE         WorkspaceRefusalCodeV1 = 8
 	WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED            WorkspaceRefusalCodeV1 = 9
 	// The thread's owner chose no pull-request credential (or it no longer
-	// resolves to a GitHub configuration).
+	// resolves to a GitHub or GitLab configuration).
 	WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_NO_FORGE_CREDENTIAL WorkspaceRefusalCodeV1 = 14
 	// The effective policy does not allow pull requests from the cloud.
 	WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_PULL_REQUESTS_DISABLED WorkspaceRefusalCodeV1 = 15

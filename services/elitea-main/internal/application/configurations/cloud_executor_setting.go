@@ -91,10 +91,11 @@ func (catalog *CurrentAvailableCatalog) addCloudExecutorProjectSetting() error {
 				"exclusions match. Cannot be turned on when the platform has it off."),
 			"env_harvest": optionalBool("Allow Environment Variables", "Allow users to send selected environment "+
 				"variables. Cannot be turned on when the platform has it off."),
-			"pull_requests": optionalBool("Allow Pull Requests", "Allow cloud turns to open a pull request. "+
+			"pull_requests": optionalBool("Allow Pull Requests", "Allow cloud turns to push and open a pull request (GitHub) or merge request (GitLab) "+
+				"through a GitHub or GitLab configuration. "+
 				"Cannot be turned on when the platform has it off."),
 			"pull_request_approval": optionalBool("Approve Each Pull Request", "Require a person's approval "+
-				"before each pull request. Can be turned on when the platform does not require it, never off "+
+				"before each push and pull (merge) request. Can be turned on when the platform does not require it, never off "+
 				"when it does."),
 			"env_deny_add": optionalList("Denied Variable Names to Add", "Name patterns never offered, on top of "+
 				"the platform list."),

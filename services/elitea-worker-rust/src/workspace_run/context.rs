@@ -80,7 +80,8 @@ pub(crate) struct WorkspaceRuntimeContext {
     /// `allow`. Absent from an older Main: `ask`.
     #[serde(default)]
     pub(crate) pull_requests: PullRequestMode,
-    /// The thread's owner chose a GitHub credential for its pull requests:
+    /// The thread's owner chose a GitHub or GitLab configuration for its
+    /// pushes and pull (merge) requests:
     /// the worker redeems it over `WorkspaceForgeCredential` when the tool
     /// runs. The credential is never in this field.
     #[serde(default)]

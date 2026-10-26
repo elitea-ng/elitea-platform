@@ -29,9 +29,17 @@
 //! Scope: the push goes to `https://<the credential's host>/<the remote's
 //! repository>.git`, whatever the recorded remote's scheme. An `ssh://` or
 //! scp-like remote is mapped to that HTTPS URL; a remote on another host
-//! than the credential's is refused (an SSH alias, a host without a dot,
-//! names no host to compare and is scoped by its repository), and a bound
-//! toolkit's repository must be the remote's.
+//! than the credential's is refused, and so is an SSH alias (a host without
+//! a dot, such as `github-work:o/r`) unless it is the credential's host
+//! itself: an alias names no host to compare, so it is never taken to mean
+//! the credential's. A bound toolkit's repository must be the remote's.
+//!
+//! Every call resolves its target once: the thread's credential is redeemed
+//! from Main (which re-checks the policy switches) and scoped to the
+//! upstream before anything is prepared, and that one redemption serves the
+//! whole call. Nothing secret outlives a call: a branch `git_push` pushed is
+//! remembered by its name, upstream and toolkit only, and `open_pull_request`
+//! with `push: false` redeems the credential again.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -52,6 +60,7 @@ use super::families::github::writes::{
 };
 use super::families::gitlab::client::GitLabClient;
 use super::families::gitlab::config::GitLabToolkitConfig;
+pub use super::git_receive_pack::PushPack;
 use super::git_receive_pack::{GitCredential, PushRequest, push_new_branch};
 use super::snapshot::{AdmittedToolSnapshot, FrozenToolKind};
 
@@ -194,8 +203,8 @@ pub struct PreparedPush {
     /// Files that differ from the upstream commit.
     pub files: u32,
     /// A git pack of every object the remote needs beyond the upstream
-    /// commit.
-    pub pack: Vec<u8>,
+    /// commit, with room in front for the push command (never copied).
+    pub pack: PushPack,
 }
 
 impl std::fmt::Debug for PreparedPush {
@@ -218,6 +227,12 @@ pub enum PushUnavailable {
     Empty,
     /// Over the segment budget (the bytes one turn may carry).
     TooLarge,
+    /// The thread's stored history is damaged: an object is missing or
+    /// corrupt (not a size limit; a retry does not help).
+    StoreIntegrity,
+    /// A tracked file the handoff left out (excluded or over the size cap)
+    /// would be deleted or published by the push; nothing was pushed.
+    ExcludedTracked,
     /// The workspace could not be read; the message is data-free.
     Failed(&'static str),
 }
@@ -232,6 +247,12 @@ impl PushUnavailable {
             Self::TooLarge => {
                 "The change is over the bytes one cloud push carries; take the thread back and push it from the desktop."
             }
+            Self::StoreIntegrity => {
+                "The thread's stored history is incomplete or damaged (an object is missing or corrupt), so nothing was pushed; take the thread back and push it from the desktop."
+            }
+            Self::ExcludedTracked => {
+                "A tracked file the handoff left out (excluded or too large) would be lost or published by this push, so nothing was pushed; take the thread back and push it from the desktop."
+            }
             Self::Failed(message) => message,
         }
     }
@@ -241,6 +262,9 @@ impl PushUnavailable {
 /// host outside the sandbox.
 #[async_trait]
 pub trait WorkspacePushSource: Send + Sync {
+    /// The recorded upstream alone (cheap: no pack is built), so a call can
+    /// resolve and scope its target before it prepares anything.
+    async fn upstream(&self) -> Result<Upstream, PushUnavailable>;
     async fn prepare_push(&self) -> Result<PreparedPush, PushUnavailable>;
 }
 
@@ -562,7 +586,10 @@ impl PullRequestTarget {
     }
 
     /// Whether this target may write to the recorded upstream: the same
-    /// repository and (unless the remote is an SSH alias) the same host.
+    /// repository on the same host. An SSH alias (a host without a dot)
+    /// names no host, so it matches only when it is the credential's host
+    /// spelled the same; otherwise it is refused, never assumed to be the
+    /// credential's host.
     fn scope(&self, upstream: &Upstream) -> Result<(), String> {
         let remote =
             remote_path_as_written(&upstream.remote_url).map(|path| path.to_ascii_lowercase());
@@ -576,18 +603,27 @@ impl PullRequestTarget {
                 )
             });
         }
-        if let Some(remote) = remote_host(&upstream.remote_url) {
-            let host = self.web_host();
-            // A host without a dot is an SSH alias (`github-work:o/r`), which
-            // names no host to compare: the repository decides.
-            if remote.contains('.') && remote != host {
-                return Err(format!(
-                    "The {} credential is for {host}, but this folder's upstream is on {remote}; choose a credential for {remote}.",
-                    self.kind.name()
-                ));
-            }
+        let host = self.web_host();
+        let Some(remote) = remote_host(&upstream.remote_url) else {
+            return Err(
+                "This folder's upstream remote names no host, so nothing can be pushed.".to_owned(),
+            );
+        };
+        if remote == host {
+            return Ok(());
         }
-        Ok(())
+        if !remote.contains('.') {
+            // `github-work:o/r`: an alias from the desktop's SSH config,
+            // which the cloud cannot read.
+            return Err(format!(
+                "This folder's upstream remote uses the SSH alias `{remote}`, which names no host the {} credential (for {host}) can be checked against; set the remote's URL to {host} on the desktop and send the thread again.",
+                self.kind.name()
+            ));
+        }
+        Err(format!(
+            "The {} credential is for {host}, but this folder's upstream is on {remote}; choose a credential for {remote}.",
+            self.kind.name()
+        ))
     }
 
     async fn open_request(
@@ -792,9 +828,11 @@ impl Toolset for PullRequestToolset {
     }
 }
 
-/// A branch `git_push` created this turn.
+/// A branch `git_push` created this turn: non-secret facts only. The
+/// target (its client, its credential) is never kept across calls.
 struct PushedBranch {
-    target: Arc<PullRequestTarget>,
+    /// The toolkit it was pushed through, or [`THREAD_CREDENTIAL`].
+    toolkit: String,
     branch: String,
     upstream: Upstream,
     files: u32,
@@ -863,17 +901,26 @@ impl Shared {
         }
     }
 
-    /// The chosen target, scoped to the upstream.
+    /// The chosen target, scoped to the upstream: the thread's credential
+    /// is redeemed here (Main re-checks the policy switches on each
+    /// redemption), once per call; a bound toolkit is the turn's own.
     async fn target(
         &self,
         choice: &Choice<'_>,
         upstream: &Upstream,
-    ) -> Result<Arc<PullRequestTarget>, String> {
+    ) -> Result<Arc<PullRequestTarget>, Value> {
         let target = match choice {
             Choice::Toolkit(target) => Arc::clone(target),
-            Choice::Thread(thread) => Arc::new(thread.target(upstream).await?),
+            Choice::Thread(thread) => Arc::new(
+                thread
+                    .target(upstream)
+                    .await
+                    .map_err(|sentence| answer("refused", sentence))?,
+            ),
         };
-        target.scope(upstream)?;
+        target
+            .scope(upstream)
+            .map_err(|sentence| answer("refused", sentence))?;
         Ok(target)
     }
 
@@ -881,25 +928,46 @@ impl Shared {
         json!({"type": "string", "description": format!("What to {what} through: `@thread` (the thread's own GitHub or GitLab credential, the default when it has one) or a GitHub or GitLab toolkit's name. Optional when there is only one choice."), "enum": self.choices()})
     }
 
-    /// Prepare, scope and push the thread's commits as a new branch.
+    /// The recorded upstream, without preparing a push.
+    async fn upstream(&self) -> Result<Upstream, Value> {
+        let Some(source) = &self.push else {
+            return Err(answer("refused", "This host cannot push."));
+        };
+        source
+            .upstream()
+            .await
+            .map_err(|unavailable| answer("refused", unavailable.sentence()))
+    }
+
+    /// The thread's commits, re-parented onto `upstream` (the one the
+    /// target was scoped to) and packed.
+    async fn prepare(&self, upstream: &Upstream) -> Result<PreparedPush, Value> {
+        let Some(source) = &self.push else {
+            return Err(answer("refused", "This host cannot push."));
+        };
+        let prepared = source
+            .prepare_push()
+            .await
+            .map_err(|unavailable| answer("refused", unavailable.sentence()))?;
+        if prepared.upstream != *upstream {
+            return Err(answer(
+                "error",
+                "The folder's upstream changed while the push was prepared; nothing was pushed.",
+            ));
+        }
+        Ok(prepared)
+    }
+
+    /// Push the prepared commits as a new branch through `target` (already
+    /// resolved and scoped to `prepared.upstream`).
     async fn push(
         &self,
-        choice: &Choice<'_>,
+        target: Arc<PullRequestTarget>,
         branch: &str,
         prepared: PreparedPush,
     ) -> Result<PushOutcome, Value> {
-        let target = self
-            .target(choice, &prepared.upstream)
-            .await
-            .map_err(|sentence| answer("refused", sentence))?;
         let Some(credential) = target.git.as_ref() else {
-            return Err(answer(
-                "refused",
-                format!(
-                    "`{}` cannot push over git (a GitHub App or anonymous configuration); choose a credential with a token or a password.",
-                    target.toolkit_name
-                ),
-            ));
+            return Err(cannot_push(&target));
         };
         let Some(repository_url) = target.git_url() else {
             return Err(answer("refused", "The repository's git URL is not valid."));
@@ -909,15 +977,22 @@ impl Shared {
             None => host_transport(&PUSH_POLICY)
                 .map_err(|_| answer("error", "The push client could not be built."))?,
         };
+        let PreparedPush {
+            upstream,
+            tip,
+            commits,
+            files,
+            pack,
+        } = prepared;
         let pushed = push_new_branch(
             transport,
             credential,
             &PushRequest {
                 repository_url: &repository_url,
                 branch,
-                tip: &prepared.tip,
-                pack: &prepared.pack,
+                tip: &tip,
             },
+            pack,
         )
         .await
         .map_err(|failure| {
@@ -932,38 +1007,39 @@ impl Shared {
             forge: target.kind,
             repository: target.repository.clone(),
             branch: pushed.branch.clone(),
-            base: prepared.upstream.branch.clone(),
+            base: upstream.branch.clone(),
             url: url.clone(),
-            commits: prepared.commits,
-            upstream_sha: prepared.upstream.sha.clone(),
+            commits,
+            upstream_sha: upstream.sha.clone(),
         });
         if let Ok(mut pushed_branches) = self.pushed.lock() {
             pushed_branches.push(PushedBranch {
-                target: Arc::clone(&target),
+                toolkit: target.toolkit_name.clone(),
                 branch: pushed.branch.clone(),
-                upstream: prepared.upstream.clone(),
-                files: prepared.files,
+                upstream: upstream.clone(),
+                files,
             });
         }
         Ok(PushOutcome {
             target,
             branch: pushed.branch,
             url,
-            commits: prepared.commits,
-            files: prepared.files,
-            upstream: prepared.upstream,
+            commits,
+            files,
+            upstream,
         })
     }
+}
 
-    async fn prepare(&self) -> Result<PreparedPush, Value> {
-        let Some(source) = &self.push else {
-            return Err(answer("refused", "This host cannot push."));
-        };
-        source
-            .prepare_push()
-            .await
-            .map_err(|unavailable| answer("refused", unavailable.sentence()))
-    }
+/// A configuration without a git credential (a GitHub App, anonymous).
+fn cannot_push(target: &PullRequestTarget) -> Value {
+    answer(
+        "refused",
+        format!(
+            "`{}` cannot push over git (a GitHub App or anonymous configuration); choose a credential with a token or a password.",
+            target.toolkit_name
+        ),
+    )
 }
 
 /// The common arguments: the choice and a branch that is not the upstream's.
@@ -1042,9 +1118,15 @@ impl GitPushTool {
             )
         })?;
         let branch = checked_branch(arguments)?;
-        let prepared = shared.prepare().await?;
-        not_upstream(branch, &prepared.upstream)?;
-        let pushed = shared.push(&choice, branch, prepared).await?;
+        let upstream = shared.upstream().await?;
+        not_upstream(branch, &upstream)?;
+        // One redemption for the call, before anything is prepared.
+        let target = shared.target(&choice, &upstream).await?;
+        if target.git.is_none() {
+            return Err(cannot_push(&target));
+        }
+        let prepared = shared.prepare(&upstream).await?;
+        let pushed = shared.push(target, branch, prepared).await?;
         Ok(json!({
             "status": "ok",
             "message": format!(
@@ -1124,18 +1206,28 @@ impl OpenPullRequestTool {
         if shared.push.is_none() {
             return self.through_api(&choice, branch, title, body).await;
         }
-        let prepared = shared.prepare().await?;
-        not_upstream(branch, &prepared.upstream)?;
-        // A configuration that cannot push over git opens through the API.
-        let target = shared
-            .target(&choice, &prepared.upstream)
-            .await
-            .map_err(|sentence| answer("refused", sentence))?;
+        let upstream = shared.upstream().await?;
+        not_upstream(branch, &upstream)?;
+        // One redemption for the call, before anything is prepared.
+        let target = shared.target(&choice, &upstream).await?;
         if target.git.is_none() {
-            drop(prepared);
-            return self.through_api(&choice, branch, title, body).await;
+            // A configuration that cannot push over git opens through the
+            // API: no pack is prepared for it.
+            let diff = shared
+                .diff
+                .pull_request_diff()
+                .await
+                .map_err(|unavailable| answer("refused", unavailable.sentence()))?;
+            if diff.upstream() != upstream {
+                return Err(answer(
+                    "error",
+                    "The folder's upstream changed while the change was read; no pull request was opened.",
+                ));
+            }
+            return self.api(&target, &diff, branch, title, body).await;
         }
-        let pushed = shared.push(&choice, branch, prepared).await?;
+        let prepared = shared.prepare(&upstream).await?;
+        let pushed = shared.push(target, branch, prepared).await?;
         self.open(&pushed, title, body).await
     }
 
@@ -1159,23 +1251,28 @@ impl OpenPullRequestTool {
             pushed
                 .iter()
                 .rev()
-                .find(|entry| entry.branch == branch && entry.target.toolkit_name == wanted)
-                .map(|entry| PushOutcome {
-                    target: Arc::clone(&entry.target),
-                    branch: entry.branch.clone(),
-                    url: entry.target.branch_url(&entry.branch),
-                    commits: 0,
-                    files: entry.files,
-                    upstream: entry.upstream.clone(),
-                })
+                .find(|entry| entry.branch == branch && entry.toolkit == wanted)
+                .map(|entry| (entry.upstream.clone(), entry.files))
         };
-        let Some(pushed) = found else {
+        let Some((upstream, files)) = found else {
             return Err(answer(
                 "refused",
                 format!(
                     "`{branch}` is not a branch git_push pushed this turn through that credential; push it first, or leave `push` out."
                 ),
             ));
+        };
+        // Redeemed again for this call: the credential (and the policy
+        // switches Main checks when it redeems it) may have changed since
+        // the push.
+        let target = self.0.target(choice, &upstream).await?;
+        let pushed = PushOutcome {
+            url: target.branch_url(branch),
+            target,
+            branch: branch.to_owned(),
+            commits: 0,
+            files,
+            upstream,
         };
         self.open(&pushed, title, body).await
     }
@@ -1233,10 +1330,21 @@ impl OpenPullRequestTool {
             .map_err(|unavailable| answer("refused", unavailable.sentence()))?;
         let upstream = diff.upstream();
         not_upstream(branch, &upstream)?;
-        let target = shared
-            .target(choice, &upstream)
-            .await
-            .map_err(|sentence| answer("refused", sentence))?;
+        let target = shared.target(choice, &upstream).await?;
+        self.api(&target, &diff, branch, title, body).await
+    }
+
+    /// The API path through `target`, already resolved and scoped to the
+    /// diff's upstream.
+    async fn api(
+        &self,
+        target: &PullRequestTarget,
+        diff: &WorkspaceDiff,
+        branch: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<Value, Value> {
+        let shared = &self.0;
         let Opener::GitHub(client) = &target.opener else {
             return Err(answer(
                 "refused",

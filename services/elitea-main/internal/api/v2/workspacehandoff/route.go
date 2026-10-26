@@ -895,7 +895,7 @@ func writeError(ctx context.Context, writer http.ResponseWriter, operation strin
 			"Pull requests from the cloud are turned off for this project or deployment.")
 	case errors.Is(err, handoffapp.ErrForgeCredentialInvalid):
 		desktopwire.WriteError(writer, http.StatusUnprocessableEntity, "pull_request_credential_invalid",
-			"Choose a GitHub configuration of this project, or one of your private ones.")
+			"Choose a GitHub or GitLab configuration of this project, or one of your private ones.")
 	case errors.Is(err, workspacestore.ErrThreadBusy):
 		// Retryable, and not a ref conflict: nothing was compared. The
 		// caller sends the SAME publish again after Retry-After.

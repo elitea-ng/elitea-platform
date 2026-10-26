@@ -74,7 +74,7 @@ enum WorkspaceRefusalCodeV1 {
   reserved 10 to 13;
   reserved "WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM", "WORKSPACE_REFUSAL_CODE_V1_DIFF_TOO_LARGE", "WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY", "WORKSPACE_REFUSAL_CODE_V1_DIFF_EMPTY";
   // The thread's owner chose no pull-request credential (or it no longer
-  // resolves to a GitHub configuration).
+  // resolves to a GitHub or GitLab configuration).
   WORKSPACE_REFUSAL_CODE_V1_NO_FORGE_CREDENTIAL = 14;
   // The effective policy does not allow pull requests from the cloud.
   WORKSPACE_REFUSAL_CODE_V1_PULL_REQUESTS_DISABLED = 15;

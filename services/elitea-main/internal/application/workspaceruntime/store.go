@@ -204,8 +204,8 @@ type Store interface {
 	// logged, audited or cached.
 	EnvSecret(ctx context.Context, claim ClaimRef) (map[string]string, error)
 	// RecordEvent writes an audit event the worker observed in the running
-	// turn (decision 12): EventScanBlocked or EventPullRequestOpened, with
-	// the allowlisted attributes only (never a path).
+	// turn (decision 12): EventScanBlocked, EventPullRequestOpened or
+	// EventBranchPushed, with the allowlisted attributes only (never a path).
 	RecordEvent(ctx context.Context, claim ClaimRef, event ExecutorEvent) error
 	// RecordChanges keeps the files the running turn's published commit
 	// changed (ADR-0034 Phase 2): changes.Commit must be the thread's
@@ -234,8 +234,8 @@ type ForgeCredential struct {
 // MaxForgeCredentialBytes bounds the encoded credential the worker receives.
 const MaxForgeCredentialBytes = 32 << 10
 
-// The executor audit events (workspacehandoff.EventScanBlocked and
-// EventPullRequestOpened).
+// The executor audit events (workspacehandoff.EventScanBlocked,
+// EventPullRequestOpened and EventBranchPushed).
 const (
 	EventScanBlocked       = "handoff.scan_blocked"
 	EventPullRequestOpened = "pull_request.opened"

@@ -790,7 +790,7 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // and getAgentSchema, the conversational agent builder's streamed draft and
 // the published agent schemas.
 // 356 -> 357 (client contract 1.29, ADR-0034 decision 10 amended):
-// setWorkspaceHandoffPullRequestCredential, the GitHub configuration a cloud
+// setWorkspaceHandoffPullRequestCredential, the GitHub or GitLab configuration a cloud
 // thread opens pull requests through, chosen from the cloud notice of the
 // web chat (pages/chat). Generated; the manifest gains it.
 const GENERATED_OPERATION_COUNT = 357;
@@ -1019,7 +1019,7 @@ const GENERATED_OPERATION_COUNT = 357;
  *
  * 286 -> 288 (client contract 1.29, ADR-0034 decision 10 amended):
  * workspaceHandoff.setPullRequestCredential, and
- * configurations.listForPullRequests (the GitHub configurations it is
+ * configurations.listForPullRequests (the GitHub or GitLab configurations it is
  * chosen from), the cloud notice of the web chat (pages/chat). Generated.
  */
 const MANIFEST_ENTRY_COUNT = 288;

@@ -756,8 +756,8 @@ func TestPostgresEveryHandoffTransitionPublishesOneLiveEvent(t *testing.T) {
 
 // Executor audit events (decision 12) from the worker's RPC through the real
 // gRPC server, the adapter and RecordExecutorEvent into centry.audit_events:
-// counts, rule ids and the file count, never a path; a finished (stale)
-// claim is refused.
+// counts, rule ids and the file count, never a path; branch.pushed writes
+// its row too; a finished (stale) claim is refused.
 func TestPostgresExecutorAuditEventsReachTheAuditTable(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	seedCurrentAgentContinuationSchema(t, pool)
@@ -830,6 +830,10 @@ CREATE TABLE IF NOT EXISTS centry.audit_events (
 		Toolkit: "github", Branch: "elitea/cloud-1", Base: "main", Number: 42, Files: 7, Url: "https://github.com/o/r/pull/42"}); !got.GetRecorded() {
 		t.Fatalf("pull_request.opened = %v", got)
 	}
+	if got := record(&runtimev1.WorkspaceRecordEventRequestV1{Kind: runtimev1.WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_BRANCH_PUSHED,
+		Toolkit: "@thread", Branch: "elitea/cloud-2", Base: "main", Commits: 3, Url: "https://github.com/o/r/tree/elitea/cloud-2"}); !got.GetRecorded() {
+		t.Fatalf("branch.pushed = %v", got)
+	}
 	if err := adapter.FinishExecution(ctx, "exec-audit"); err != nil {
 		t.Fatal(err)
 	}
@@ -841,7 +845,7 @@ CREATE TABLE IF NOT EXISTS centry.audit_events (
 		t.Fatal(err)
 	}
 	rows, err := pool.Query(ctx, `SELECT action, entity_name, project_id FROM centry.audit_events
-WHERE action LIKE 'handoff.scan_blocked%' OR action LIKE 'pull_request.opened%' ORDER BY id`)
+WHERE action LIKE 'handoff.scan_blocked%' OR action LIKE 'pull_request.opened%' OR action LIKE 'branch.pushed%' ORDER BY id`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -858,9 +862,10 @@ WHERE action LIKE 'handoff.scan_blocked%' OR action LIKE 'pull_request.opened%' 
 		}
 		actions = append(actions, action)
 	}
-	if len(actions) != 2 ||
+	if len(actions) != 3 ||
 		actions[0] != "handoff.scan_blocked: epoch 2, findings 3, rules aws-access-key,private-key" ||
 		!strings.HasPrefix(actions[1], "pull_request.opened: epoch 2, base main, branch elitea/cloud-1, files 7, number 42") ||
+		!strings.HasPrefix(actions[2], "branch.pushed: epoch 2, base main, branch elitea/cloud-2, commits 3, toolkit @thread") ||
 		strings.Contains(strings.Join(actions, " "), "late-rule") {
 		t.Fatalf("audit rows = %q", actions)
 	}

@@ -584,18 +584,84 @@ impl WorkspaceTurn {
         self.store.forge_credential(&self.claim).await
     }
 
-    /// The thread's commits re-parented onto the recorded upstream commit,
-    /// packed for `git_push` (ADR-0034 decision 10, amendment 2026-10-26):
-    /// the store history plus the workspace as it is now, moved out of the
-    /// sandbox and redacted exactly as the end-of-turn commit would be. The
-    /// new commits are written into the turn's own quarantine (unreferenced
-    /// there, so no segment carries them); the pack is bounded by the
-    /// segment budget.
+    /// The workspace as it is now, moved out of the sandbox into a private
+    /// directory of the scratch space and redacted exactly as the end-of-turn
+    /// commit would be, so no harvested value leaves through a push or a
+    /// pull request either. `git_push` and the pull-request diff both read
+    /// it; the directory is removed when the returned guard drops.
     ///
     /// # Errors
     ///
-    /// No upstream, no change, over the budget, or the workspace could not
-    /// be read.
+    /// The view could not be made, pulled or redacted (data-free).
+    async fn redacted_view(&self, prefix: &str) -> Result<tempfile::TempDir, ()> {
+        let view = tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir_in(self.scratch.path())
+            .map_err(|_| ())?;
+        self.sandbox.pull_tree(view.path()).await.map_err(|_| ())?;
+        if self.file_redactor.is_empty() {
+            return Ok(view);
+        }
+        let (redactor, codec, git_dir, parent, tree) = (
+            Arc::clone(&self.file_redactor),
+            Arc::clone(&self.codec),
+            self.git_dir.clone(),
+            self.parent.clone(),
+            view.path().to_path_buf(),
+        );
+        tokio::task::spawn_blocking(move || {
+            let parent_files = codec.parent_files(&git_dir, &parent).map_err(|_| ())?;
+            redactor
+                .redact_tree(&tree, parent_files.as_ref())
+                .map_err(|_| ())
+        })
+        .await
+        .map_err(|_| ())??;
+        Ok(view)
+    }
+
+    /// The upstream recorded on `refs/elitea/upstream`, read without
+    /// preparing a push, so a call can resolve and scope its target first.
+    ///
+    /// # Errors
+    ///
+    /// No upstream, or the store could not be read.
+    pub(crate) async fn push_upstream(
+        &self,
+    ) -> Result<
+        elitea_agent_runtime::toolkits::workspace_pull_request::Upstream,
+        elitea_agent_runtime::toolkits::workspace_pull_request::PushUnavailable,
+    > {
+        use elitea_agent_runtime::toolkits::workspace_pull_request::PushUnavailable;
+        let failed =
+            || PushUnavailable::Failed("The workspace could not be read; nothing was pushed.");
+        let upstream = self
+            .refs
+            .get(super::store::REF_UPSTREAM)
+            .cloned()
+            .ok_or(PushUnavailable::NoUpstream)?;
+        let git_dir = self.git_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            let db =
+                elitea_workspace_store::objects::ObjectDb::open_objects(&git_dir.join("objects"))
+                    .map_err(|_| failed())?;
+            super::push_prep::read_upstream(&db, &upstream)
+        })
+        .await
+        .map_err(|_| failed())?
+    }
+
+    /// The thread's commits re-parented onto the recorded upstream commit,
+    /// packed for `git_push` (ADR-0034 decision 10, amendment 2026-10-26):
+    /// the store history plus the [redacted view](Self::redacted_view) of
+    /// the workspace. The new commits are written into the turn's own
+    /// quarantine (unreferenced there, so no segment carries them); the pack
+    /// is bounded by the segment budget.
+    ///
+    /// # Errors
+    ///
+    /// No upstream, no change, over the budget, a damaged store, a left-out
+    /// tracked file the push would lose, or the workspace could not be read.
     pub(crate) async fn prepare_push(
         &self,
     ) -> Result<
@@ -610,17 +676,8 @@ impl WorkspaceTurn {
             .get(super::store::REF_UPSTREAM)
             .cloned()
             .ok_or(PushUnavailable::NoUpstream)?;
-        let view = tempfile::Builder::new()
-            .prefix("push-")
-            .tempdir_in(self.scratch.path())
-            .map_err(|_| failed())?;
-        self.sandbox
-            .pull_tree(view.path())
-            .await
-            .map_err(|_| failed())?;
-        let (redactor, codec, git_dir, parent, tree, max_bytes) = (
-            Arc::clone(&self.file_redactor),
-            Arc::clone(&self.codec),
+        let view = self.redacted_view("push-").await.map_err(|()| failed())?;
+        let (git_dir, parent, tree, max_bytes) = (
             self.git_dir.clone(),
             self.parent.clone(),
             view.path().to_path_buf(),
@@ -630,28 +687,20 @@ impl WorkspaceTurn {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs());
         let signature = format!("{COMMIT_AUTHOR_NAME} <{COMMIT_AUTHOR_EMAIL}> {seconds} +0000");
-        tokio::task::spawn_blocking(move || {
-            if !redactor.is_empty() {
-                let parent_files = codec
-                    .parent_files(&git_dir, &parent)
-                    .map_err(|_| failed())?;
-                redactor
-                    .redact_tree(&tree, parent_files.as_ref())
-                    .map_err(|_| failed())?;
-            }
+        let prepared = tokio::task::spawn_blocking(move || {
             super::push_prep::prepare_push(
                 &git_dir, &upstream, &parent, &tree, max_bytes, &signature,
             )
         })
         .await
-        .map_err(|_| failed())?
+        .map_err(|_| failed())?;
+        drop(view);
+        prepared
     }
 
     /// The pull-request diff (ADR-0034 decision 10), computed here from the
-    /// turn's own repository: U from the verified quarantine, the workspace
-    /// as it is now, moved out of the sandbox and redacted exactly as the
-    /// end-of-turn commit would be, so no harvested value reaches a pull
-    /// request either.
+    /// turn's own repository: U from the verified quarantine and the
+    /// [redacted view](Self::redacted_view) of the workspace.
     ///
     /// # Errors
     ///
@@ -672,37 +721,21 @@ impl WorkspaceTurn {
             .get(super::store::REF_UPSTREAM)
             .cloned()
             .ok_or(DiffUnavailable::NoUpstream)?;
-        let view = tempfile::Builder::new()
-            .prefix("pull-request-")
-            .tempdir_in(self.scratch.path())
-            .map_err(|_| failed())?;
-        self.sandbox
-            .pull_tree(view.path())
+        let view = self
+            .redacted_view("pull-request-")
             .await
-            .map_err(|_| failed())?;
-        let (redactor, codec, git_dir, parent, tree) = (
-            Arc::clone(&self.file_redactor),
-            Arc::clone(&self.codec),
-            self.git_dir.clone(),
-            self.parent.clone(),
-            view.path().to_path_buf(),
-        );
-        tokio::task::spawn_blocking(move || {
-            if !redactor.is_empty() {
-                let parent = codec
-                    .parent_files(&git_dir, &parent)
-                    .map_err(|_| failed())?;
-                redactor
-                    .redact_tree(&tree, parent.as_ref())
-                    .map_err(|_| failed())?;
-            }
+            .map_err(|()| failed())?;
+        let (git_dir, tree) = (self.git_dir.clone(), view.path().to_path_buf());
+        let diff = tokio::task::spawn_blocking(move || {
             let db =
                 elitea_workspace_store::objects::ObjectDb::open_objects(&git_dir.join("objects"))
                     .map_err(|_| failed())?;
             super::pr_diff::pull_request_diff(&db, &upstream, &tree)
         })
         .await
-        .map_err(|_| failed())?
+        .map_err(|_| failed())?;
+        drop(view);
+        diff
     }
 
     /// End the turn. Returns the stamp of the published commit, or `None`

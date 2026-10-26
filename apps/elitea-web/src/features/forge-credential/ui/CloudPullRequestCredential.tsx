@@ -98,9 +98,11 @@ function usePersonalProjectId(open: boolean): string | undefined {
   return (author.data as { readonly data?: SocialAuthorProfile } | undefined)?.data?.personal_project_id;
 }
 
+/** A listing that did not answer 200 is a failure, never an empty list: an empty list would hide the current choice. */
 async function listForge(projectId: string, type: WorkspaceForgeCredentialType, includeShared: boolean): Promise<ListedPage> {
   const response = await listConfigurations(projectId, { type, include_shared: includeShared, limit: 200 });
-  return response.status === 200 ? response.data : {};
+  if (response.status !== 200) throw new Error(`listing ${type} configurations answered ${response.status}`);
+  return response.data;
 }
 
 async function listAll(projectId: string, personalId: string | undefined): Promise<ForgeListing[]> {
@@ -113,7 +115,15 @@ async function listAll(projectId: string, personalId: string | undefined): Promi
   );
 }
 
-function useChoices(projectId: string, open: boolean): { readonly choices: CredentialChoice[]; readonly loading: boolean } {
+interface Choices {
+  readonly choices: CredentialChoice[];
+  readonly loading: boolean;
+  /** The listing failed: nothing can be saved, so nothing is cleared. */
+  readonly failed: boolean;
+  readonly retry: () => void;
+}
+
+function useChoices(projectId: string, open: boolean): Choices {
   const personalId = usePersonalProjectId(open);
   const otherPersonal = personalId !== undefined && personalId !== '' && personalId !== projectId ? personalId : undefined;
   const listings = useQuery({
@@ -121,7 +131,15 @@ function useChoices(projectId: string, open: boolean): { readonly choices: Crede
     queryFn: () => listAll(projectId, otherPersonal),
     enabled: open,
   });
-  return { choices: credentialChoices(listings.data ?? []), loading: listings.isPending };
+  return { choices: credentialChoices(listings.data ?? []), loading: listings.isPending, failed: listings.isError, retry: () => void listings.refetch() };
+}
+
+/** What Save sends for `selected`: `undefined` when nothing changes (the current choice kept, listed or not), `null` only for an explicit None. */
+export function savedCredential(selected: string, current: WorkspaceForgeCredential | null | undefined, choices: readonly CredentialChoice[]): WorkspaceForgeCredential | null | undefined {
+  if (selected === NONE) return current ? null : undefined;
+  if (current && selected === choiceKey(current)) return undefined;
+  const choice = choices.find((entry) => entry.key === selected);
+  return choice ? { type: choice.type, elitea_title: choice.elitea_title, private: choice.private } : undefined;
 }
 
 function failureMessage(error: unknown): string {
@@ -138,6 +156,51 @@ const choiceLabel = (choice: WorkspaceForgeCredential): string => {
     : t('features.forgeCredential.project', '{{title}} ({{forge}})', { title: choice.elitea_title, forge });
 };
 
+interface ChoiceListProps extends Choices {
+  /** The current choice when the listing does not show it. */
+  readonly unlisted: WorkspaceForgeCredential | undefined;
+  readonly selected: string;
+  readonly onSelect: (key: string) => void;
+}
+
+/** The dialog's body: loading, a failed listing (nothing can be saved), or the choices. */
+function ChoiceList({ loading, failed, retry, choices, unlisted, selected, onSelect }: ChoiceListProps): React.JSX.Element {
+  return (
+    <>
+      {loading ? (
+        <Typography variant="bodySmall">{t('features.forgeCredential.loading', 'Loading GitHub and GitLab credentials…')}</Typography>
+      ) : failed ? (
+        <>
+          <Typography variant="bodySmall" color="error" role="alert" data-testid="cloud-pr-credential-list-failed">
+            {t('features.forgeCredential.listFailed', 'The GitHub and GitLab credentials could not be listed. Nothing was changed.')}
+          </Typography>
+          <Button size="small" onClick={retry} data-testid="cloud-pr-credential-retry">
+            {t('features.forgeCredential.retry', 'Try again')}
+          </Button>
+        </>
+      ) : (
+        <RadioGroup value={selected} onChange={(event) => onSelect(event.target.value)} data-testid="cloud-pr-credential-choices">
+          <FormControlLabel value={NONE} control={<Radio />} label={t('features.forgeCredential.none', 'None')} />
+          {unlisted && (
+            <FormControlLabel
+              value={choiceKey(unlisted)}
+              control={<Radio />}
+              data-testid="cloud-pr-credential-unlisted"
+              label={t('features.forgeCredential.unlisted', '{{label}} (current, not listed)', { label: choiceLabel(unlisted) })}
+            />
+          )}
+          {choices.map((choice) => (
+            <FormControlLabel key={choice.key} value={choice.key} control={<Radio />} label={choiceLabel(choice)} />
+          ))}
+        </RadioGroup>
+      )}
+      {!loading && !failed && choices.length === 0 && (
+        <Typography variant="bodySmall">{t('features.forgeCredential.empty', 'There is no GitHub or GitLab credential yet. Add one in Credentials, then choose it here.')}</Typography>
+      )}
+    </>
+  );
+}
+
 export interface CloudPullRequestCredentialProps {
   readonly projectId: string;
   readonly conversationUuid: string;
@@ -152,7 +215,9 @@ export interface CloudPullRequestCredentialProps {
 export function CloudPullRequestCredential({ projectId, conversationUuid, current, onSaved, onError }: CloudPullRequestCredentialProps): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(current ? choiceKey(current) : NONE);
-  const { choices, loading } = useChoices(projectId, open);
+  const { choices, loading, failed, retry } = useChoices(projectId, open);
+  // The current choice stays selectable (and is what Save keeps) even when the listing does not show it.
+  const unlisted = current && !choices.some((entry) => entry.key === choiceKey(current)) ? current : undefined;
   const save = useMutation({
     mutationFn: (credential: WorkspaceForgeCredential | null) => setWorkspaceHandoffPullRequestCredential(projectId, conversationUuid, { credential }),
     onSuccess: () => {
@@ -162,8 +227,9 @@ export function CloudPullRequestCredential({ projectId, conversationUuid, curren
     onError: (error) => onError(failureMessage(error)),
   });
   const choose = (): void => {
-    const choice = choices.find((entry) => entry.key === selected);
-    save.mutate(choice ? { type: choice.type, elitea_title: choice.elitea_title, private: choice.private } : null);
+    const credential = savedCredential(selected, current, choices);
+    if (credential === undefined) setOpen(false);
+    else save.mutate(credential);
   };
   const label = current
     ? t('features.forgeCredential.button', 'Pushes and pull requests: {{title}}', { title: choiceLabel(current) })
@@ -190,25 +256,13 @@ export function CloudPullRequestCredential({ projectId, conversationUuid, curren
               "The cloud agent can push this thread's commits to a new branch of the folder's GitHub or GitLab repository and open a pull request (a merge request on GitLab), through the credential you choose. Nothing existing is overwritten. The credential stays on the server; you are asked before each push unless your project allows them without asking.",
             )}
           </Typography>
-          {loading ? (
-            <Typography variant="bodySmall">{t('features.forgeCredential.loading', 'Loading GitHub and GitLab credentials…')}</Typography>
-          ) : (
-            <RadioGroup value={selected} onChange={(event) => setSelected(event.target.value)} data-testid="cloud-pr-credential-choices">
-              <FormControlLabel value={NONE} control={<Radio />} label={t('features.forgeCredential.none', 'None')} />
-              {choices.map((choice) => (
-                <FormControlLabel key={choice.key} value={choice.key} control={<Radio />} label={choiceLabel(choice)} />
-              ))}
-            </RadioGroup>
-          )}
-          {!loading && choices.length === 0 && (
-            <Typography variant="bodySmall">{t('features.forgeCredential.empty', 'There is no GitHub or GitLab credential yet. Add one in Credentials, then choose it here.')}</Typography>
-          )}
+          <ChoiceList loading={loading} failed={failed} retry={retry} choices={choices} unlisted={unlisted} selected={selected} onSelect={setSelected} />
         </DialogContent>
         <DialogActions>
           <Button disabled={save.isPending} onClick={() => setOpen(false)}>
             {t('features.forgeCredential.cancel', 'Cancel')}
           </Button>
-          <Button variant="contained" disabled={save.isPending || loading} onClick={choose} data-testid="cloud-pr-credential-save">
+          <Button variant="contained" disabled={save.isPending || loading || failed} onClick={choose} data-testid="cloud-pr-credential-save">
             {t('features.forgeCredential.save', 'Save')}
           </Button>
         </DialogActions>

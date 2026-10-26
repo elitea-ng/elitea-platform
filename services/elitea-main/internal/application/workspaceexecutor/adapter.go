@@ -399,7 +399,9 @@ func (a *Adapter) ForgeCredential(ctx context.Context, claim workspaceruntime.Cl
 
 // RecordEvent writes the running turn's executor audit event.
 func (a *Adapter) RecordEvent(ctx context.Context, claim workspaceruntime.ClaimRef, event workspaceruntime.ExecutorEvent) error {
-	if event.Kind != workspaceruntime.EventScanBlocked && event.Kind != workspaceruntime.EventPullRequestOpened {
+	switch event.Kind {
+	case workspaceruntime.EventScanBlocked, workspaceruntime.EventPullRequestOpened, workspaceruntime.EventBranchPushed:
+	default:
 		return workspaceruntime.ErrInvalidRequest
 	}
 	handoff, _, err := a.running(ctx, claim)

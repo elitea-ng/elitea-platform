@@ -65,3 +65,34 @@ func TestForgeCredentialIsBoundToTheRunningTurnAndMapsItsRefusals(t *testing.T) 
 		t.Fatalf("plain = %v", err)
 	}
 }
+
+// Every executor event the worker sends reaches RecordExecutorEvent through
+// the adapter: branch.pushed as well as scan_blocked and pull_request.opened
+// (an event the allowlist dropped never wrote its audit row). Anything else
+// is refused before the thread is read.
+func TestRecordEventPassesEveryExecutorEventKind(t *testing.T) {
+	row := workspacehandoff.Handoff{ProjectID: 1, ConversationUUID: conversation, Epoch: 2, State: workspacestore.StateCloudRunning}
+	handoffs := &fakeHandoffs{running: map[string]workspacehandoff.Handoff{"exec": row}}
+	adapter, err := New(handoffs, fakeObjects{}, &fakeThreads{}, Resources{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := workspaceruntime.ClaimRef{ExecutionID: "exec", ThreadUUID: conversation, Epoch: 2}
+	for _, kind := range []string{workspaceruntime.EventScanBlocked, workspaceruntime.EventPullRequestOpened, workspaceruntime.EventBranchPushed} {
+		if err := adapter.RecordEvent(context.Background(), ref, workspaceruntime.ExecutorEvent{Kind: kind, Attrs: map[string]string{"commits": "2"}}); err != nil {
+			t.Fatalf("%s = %v", kind, err)
+		}
+	}
+	if err := adapter.RecordEvent(context.Background(), ref, workspaceruntime.ExecutorEvent{Kind: "store.publish"}); !errors.Is(err, workspaceruntime.ErrInvalidRequest) {
+		t.Fatalf("unknown kind = %v", err)
+	}
+	want := []string{"exec|handoff.scan_blocked", "exec|pull_request.opened", "exec|branch.pushed"}
+	if len(handoffs.events) != len(want) {
+		t.Fatalf("events = %v", handoffs.events)
+	}
+	for i := range want {
+		if handoffs.events[i] != want[i] {
+			t.Fatalf("events = %v", handoffs.events)
+		}
+	}
+}
