@@ -28,6 +28,7 @@ import type { ChatMessage } from '@/features/chat-messages';
 import { DRAFT_CONVERSATION_KEY, useQueuedMessagesStore } from '../model/queuedMessages.store';
 import {
   ChatBoxQueuedMessages,
+  ChatBoxSteeringOffer,
   chatBoxQueueKey,
   useChatBoxQueuedMessages,
   type ChatBoxQueuedMessagesModel,
@@ -47,7 +48,7 @@ function wrapper({ children }: { readonly children: ReactNode }): ReactNode {
 interface HarnessProps {
   readonly isStreaming: boolean;
   readonly onSendNow: (question: string) => void;
-  readonly send: (params: { readonly question: string }) => Promise<QueuedSendOutcome>;
+  readonly send: (params: { readonly question: string; readonly questionId?: string | undefined }) => Promise<QueuedSendOutcome>;
   readonly onConversationCreated?: (conversation: { readonly id?: string | number; readonly uuid?: string }) => void;
   readonly conversationKey?: string;
 }
@@ -198,6 +199,33 @@ describe('when the queue drains', () => {
   });
 });
 
+describe('a text with a fixed question id (steering hand-off, contract 1.27)', () => {
+  it('delivers it with exactly that question id, also after a reload', async () => {
+    const send = vi.fn(resolving());
+    const { result, rerender } = renderModel({ isStreaming: true, onSendNow: vi.fn(), send });
+    act(() => { result.current.enqueue('left over', 'q-fixed'); result.current.enqueue('typed'); });
+    useQueuedMessagesStore.resetForTests();
+    rerender({ isStreaming: false, onSendNow: vi.fn(), send });
+    await waitFor(() => { expect(send).toHaveBeenCalledTimes(1); });
+    expect(send).toHaveBeenCalledWith({ question: 'left over', questionId: 'q-fixed' });
+  });
+});
+
+describe('ChatBoxSteeringOffer', () => {
+  it('shows nothing without an offer, and the texts with Send and Dismiss with one', async () => {
+    const onSend = vi.fn();
+    const onDismiss = vi.fn();
+    const { rerender } = render(<ChatBoxSteeringOffer offer={null} onSend={onSend} onDismiss={onDismiss} />, { wrapper });
+    expect(screen.queryByTestId('chat-steering-offer')).toBeNull();
+    rerender(<ChatBoxSteeringOffer offer={{ responseMessageId: 'r', text: 'one\n\ntwo' }} onSend={onSend} onDismiss={onDismiss} />);
+    expect(screen.getByTestId('chat-steering-offer-text').textContent).toBe('one\n\ntwo');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('the "Sent while running" mark (ELITEA-2870)', () => {
   it('stamps the delivered question and nothing else', async () => {
     const send = vi.fn(resolving({ questionId: 'q-1' }));
@@ -252,7 +280,7 @@ describe('chatBoxQueueKey', () => {
 /* ── the strip ───────────────────────────────────────────────────────────── */
 
 function stripModel(items: readonly { id: string; text: string; queuedAt: number }[], onRemove = vi.fn()): ChatBoxQueuedMessagesModel {
-  return { items, onSend: vi.fn(), onRemove, decorate: (messages) => messages };
+  return { items, onSend: vi.fn(), enqueue: vi.fn(), onRemove, decorate: (messages) => messages };
 }
 
 describe('ChatBoxQueuedMessages', () => {

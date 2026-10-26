@@ -78,7 +78,8 @@ func TestCurrentAgentCancelRepositoryProjectsRetainedSalvagedAndDeletedResponses
 	} {
 		t.Run(name, func(t *testing.T) {
 			executor := &currentAgentCancelExecutorStub{
-				scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{{err: pgx.ErrNoRows}}}, // no ledger row: the stop still asks
+				// The turn's conversation, then no ledger row: the stop still asks.
+				scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{{values: []any{int64(9)}}, {err: pgx.ErrNoRows}}},
 				cancelRow: sqlcgen.CancelCurrentAgentExecutionRow{
 					ResponseMessageGroupID: 51,
 					QuestionMessageGroupID: &questionID,
@@ -99,7 +100,8 @@ func TestCurrentAgentCancelRepositoryProjectsRetainedSalvagedAndDeletedResponses
 			if outcome.Deleted != projection.Deleted || outcome.Salvaged != projection.Salvaged || outcome.Replay {
 				t.Fatalf("outcome=%+v projection=%+v", outcome, projection)
 			}
-			if calls := executor.rowCalls; len(calls) != 1 || !strings.Contains(calls[0].sql, "execution_interrupt_responses") {
+			// The turn's conversation (its steering), then the response's cards.
+			if calls := executor.rowCalls; len(calls) != 2 || !strings.Contains(calls[1].sql, "execution_interrupt_responses") {
 				t.Fatalf("stop did not close interrupt cards in its transaction: %+v", calls)
 			}
 			if projects.projectID != 2 || projects.options.AccessMode != pgx.ReadWrite ||
@@ -109,6 +111,20 @@ func TestCurrentAgentCancelRepositoryProjectsRetainedSalvagedAndDeletedResponses
 				executor.projectParams.ExecutionID != "execution-1" ||
 				executor.projectParams.ExecutionGeneration != "20000000-0000-4000-8000-000000000031" {
 				t.Fatalf("project=%d options=%+v cancel=%+v projection=%+v", projects.projectID, projects.options, executor.cancelParams, executor.projectParams)
+			}
+			// A deleted turn discards its steering in the turn's conversation.
+			var discards []queryCall
+			for _, call := range executor.execCalls {
+				if strings.Contains(call.sql, "steering") {
+					discards = append(discards, call)
+				}
+			}
+			if projection.Deleted {
+				if len(discards) != 3 || discards[0].args[0] != int64(9) {
+					t.Fatalf("discard calls=%+v, want 3 in conversation 9", discards)
+				}
+			} else if len(discards) != 0 {
+				t.Fatalf("discard calls=%+v, want none", discards)
 			}
 		})
 	}
@@ -202,7 +218,7 @@ func TestCurrentAgentCancelRepositoryTreatsAVanishedProjectionAsReplay(t *testin
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			executor := &currentAgentCancelExecutorStub{
-				scriptedExecutor: &scriptedExecutor{},
+				scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{{err: pgx.ErrNoRows}}},
 				cancelRow: sqlcgen.CancelCurrentAgentExecutionRow{
 					ResponseMessageGroupID: 51, QuestionMessageGroupID: &questionID,
 					ExecutionID: "execution-1", Generation: 1,

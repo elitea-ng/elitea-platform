@@ -8,9 +8,8 @@
  * that list. The common case (a higher seq than any seen) is applied
  * incrementally; a late lower seq re-folds from the sorted list.
  *
- * Kept compact: a `text_delta` (or `thinking_delta`) whose seq directly
- * follows a stored run of its kind is merged into it (the run then covers `seq..last`), so a long answer is
- * one stored event, not thousands, and an append copies a short list. The
+ * Kept compact: a `text_delta` (or `thinking_delta`) whose seq directly follows a stored run of its kind is merged
+ * into it (the run then covers `seq..last`): a long answer is one stored event, an append copies a short list. The
  * channel is global (every workspace's turns), so the turns this hook did
  * not begin are kept only for the few most recently heard
  * ([`MAX_UNCLAIMED_TURNS`]): one of them may be the turn whose start has not
@@ -23,6 +22,7 @@ import type { AgentEvent, ApprovalRequestPayload, ContextMeter, TurnPhase } from
 
 import { endsRetry, withoutRetry, type RetryingView } from './modelRetry';
 import { applySubAgentEvent, isSubAgentEvent, type SubAgentLane } from './subAgentEvents';
+import type { SteerView } from './steeringEvents';
 import type { TranscriptItem } from './transcriptItem';
 import { applySideEvent, isSideEvent } from './turnSideEvents';
 import type { TurnUsage } from './turnUsage';
@@ -36,7 +36,7 @@ interface TurnDone {
   changedFiles: number;
 }
 
-export interface TurnView {
+export interface TurnView extends SteerView {
   phase: TurnPhase | null;
   message?: string;
   /** Why an ended turn stopped (`status` `done`'s `note`): `step_limit_reached`, `tool_call_limit_reached`. */

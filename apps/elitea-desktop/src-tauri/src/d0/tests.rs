@@ -669,6 +669,8 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
         body["user_message"]["content"],
         "Write notes and file a bug"
     );
+    // No steering: the commit leaves `steering_messages` out.
+    assert!(body.get("steering_messages").is_none(), "{body}");
     assert_eq!(
         body["assistant_message"],
         json!({"content": "Done.", "model_name": "gpt-test"})
@@ -9430,4 +9432,175 @@ async fn child_tool_refused_in_plan_mode() {
             "plan_mode={plan_mode}: {tools:?}"
         );
     }
+}
+
+/// Steering: a message sent while the turn runs reaches the model as a user
+/// message after the step's tool results, in the same turn, and the next
+/// turn's history keeps it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_steering_message_reaches_the_next_model_request_of_the_turn() {
+    let slow = Arc::new(AtomicBool::new(true));
+    let inner = memory_platform(Arc::new(Mutex::new(Convo::default())), memory_script());
+    let server = serve({
+        let slow = slow.clone();
+        move |req: &Req| {
+            if req.path == "/llm/v1/chat/completions" {
+                // block_in_place: a blocking wait here would starve the timer.
+                tokio::task::block_in_place(|| {
+                    for _ in 0..250 {
+                        if !slow.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                });
+            }
+            inner(req)
+        }
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let started = h
+        .host
+        .start(turn(&h, "create hello.txt with hi"))
+        .await
+        .unwrap();
+    let steer_id = h.host.steer(&started.turn_id, "Also add a README").unwrap();
+    assert_eq!(
+        h.host.steer(&started.turn_id, "   ").unwrap_err().code,
+        "steer_invalid"
+    );
+    slow.store(false, Ordering::SeqCst);
+    until_done_of(&h, &started.turn_id).await;
+    let events: Vec<AgentEvent> = h
+        .emitter
+        .all()
+        .into_iter()
+        .filter(|e| e.turn_id == started.turn_id)
+        .collect();
+    for (index, event) in events.iter().enumerate() {
+        assert_eq!(event.seq, index as u64, "{:?}", h.emitter.kinds());
+    }
+    let compact: Vec<&str> = events.iter().map(|e| e.kind).collect();
+    let at = |name: &str| compact.iter().position(|kind| *kind == name).unwrap();
+    assert!(at("steer_queued") < at("tool_call"), "{compact:?}");
+    assert!(at("tool_result") < at("steer_injected"), "{compact:?}");
+    assert!(at("steer_injected") < at("text_delta"), "{compact:?}");
+    assert!(!compact.contains(&"steer_dropped"), "{compact:?}");
+    let injected = &events[at("steer_injected")];
+    assert_eq!(injected.payload["steer_id"], steer_id.as_str());
+    assert_eq!(injected.payload["text"], "Also add a README");
+
+    // The second model request has the message right after the tool's result.
+    let bodies = llm_bodies(&h.server);
+    let second = shape(&bodies[1]);
+    let steered = second
+        .iter()
+        .position(|(role, content, _)| role == "user" && content == "Also add a README")
+        .unwrap_or_else(|| panic!("{second:?}"));
+    assert_eq!(second[steered - 1].0, "tool", "{second:?}");
+
+    // The commit carries the message after the question, as the session
+    // has it.
+    commits_settled(&h.host).await;
+    let commits = seen(&h.server, &format!("/{}", started.execution_id));
+    let commit = commits
+        .iter()
+        .find(|req| req.path.contains("/local_turn_commit/"))
+        .unwrap_or_else(|| panic!("no commit"));
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    assert_eq!(
+        body["steering_messages"],
+        json!([{ "content": "Also add a README" }])
+    );
+
+    // The run ended: the turn takes no more messages.
+    let late = h.host.steer(&started.turn_id, "too late").unwrap_err();
+    assert_eq!(late.code, "turn_not_running");
+    let gone = h
+        .host
+        .steer_update(&started.turn_id, &steer_id, None)
+        .unwrap_err();
+    assert_eq!(gone.code, "turn_not_running");
+
+    // The next turn's history has the message once, as the person's.
+    run_turn(&h, "what file did you just create?").await;
+    let bodies = llm_bodies(&h.server);
+    let last = shape(bodies.last().unwrap());
+    assert_eq!(
+        last.iter()
+            .filter(|(role, content, _)| role == "user" && content == "Also add a README")
+            .count(),
+        1,
+        "{last:?}"
+    );
+}
+
+/// Steering: the messages that still wait when the turn ends are dropped as
+/// `turn_ended` before `done` (the UI sends them as the next turn).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cancelled_turn_drops_its_waiting_steering_messages() {
+    let server = serve({
+        let inner = platform(agent_details(), &[]);
+        move |req: &Req| {
+            if req.path == "/llm/v1/chat/completions" {
+                std::thread::sleep(Duration::from_secs(2));
+            }
+            inner(req)
+        }
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+    let first = h.host.steer(&started.turn_id, "first").unwrap();
+    let second = h.host.steer(&started.turn_id, "second").unwrap();
+    let third = h.host.steer(&started.turn_id, "third").unwrap();
+    h.host
+        .steer_update(&started.turn_id, &second, Some("second, changed"))
+        .unwrap();
+    h.host.steer_update(&started.turn_id, &third, None).unwrap();
+    assert_eq!(
+        h.host
+            .steer_update(&started.turn_id, &third, None)
+            .unwrap_err()
+            .code,
+        "steer_not_pending"
+    );
+    assert_eq!(
+        h.host.steer("unknown", "x").unwrap_err().code,
+        "turn_unknown"
+    );
+    h.host.cancel(&started.turn_id).unwrap();
+    assert_eq!(
+        h.host.steer(&started.turn_id, "after").unwrap_err().code,
+        "turn_not_running"
+    );
+    let events = until_done(&h).await;
+    let dropped: Vec<(Value, Value, Value)> = events
+        .iter()
+        .filter(|e| e.kind == "steer_dropped")
+        .map(|e| {
+            (
+                e.payload["steer_id"].clone(),
+                e.payload["text"].clone(),
+                e.payload["reason"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        dropped,
+        [
+            (json!(third), json!("third"), json!("removed")),
+            (json!(first), json!("first"), json!("turn_ended")),
+            (json!(second), json!("second, changed"), json!("turn_ended")),
+        ]
+    );
+    assert!(!events.iter().any(|e| e.kind == "steer_injected"));
+    let last_drop = events
+        .iter()
+        .rposition(|e| e.kind == "steer_dropped")
+        .unwrap();
+    let usage = events.iter().position(|e| e.kind == "usage_total").unwrap();
+    assert!(last_drop < usage, "{:?}", h.emitter.kinds());
+    assert_eq!(events.last().unwrap().kind, "done");
 }

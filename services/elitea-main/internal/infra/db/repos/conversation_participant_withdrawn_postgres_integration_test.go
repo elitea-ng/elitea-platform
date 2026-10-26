@@ -49,6 +49,7 @@ ALTER TABLE p_1.application_versions
     ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'::jsonb`); err != nil {
 		t.Fatalf("prepare the application_versions publication columns: %v", err)
 	}
+	ensureApplicationCompositionColumns(t, repo)
 }
 
 // seedApplicationVersion inserts one `application_versions` row and answers its
@@ -166,6 +167,7 @@ func TestListParticipantsSaysNothingAboutAVersionThatIsGone(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	repo := NewConversationsRepo(pool)
 
+	ensureApplicationCompositionColumns(t, repo)
 	meta := participantPublication(t, repo, seedAgentParticipantAt(t, repo, 987_654_321))
 
 	if _, present := meta["version_withdrawn"]; present {

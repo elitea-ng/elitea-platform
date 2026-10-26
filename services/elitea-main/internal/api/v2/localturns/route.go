@@ -97,6 +97,10 @@ type commitBody struct {
 	UserMessage struct {
 		Content string `json:"content"`
 	} `json:"user_message"`
+	// SteeringMessages are the texts the turn took while it ran (contract 1.27).
+	SteeringMessages []struct {
+		Content string `json:"content"`
+	} `json:"steering_messages"`
 	AssistantMessage struct {
 		Content string `json:"content"`
 		IsError bool   `json:"is_error"`
@@ -217,10 +221,15 @@ func (h *handler) commit(writer http.ResponseWriter, request *http.Request) {
 	if body.LocalWork != nil {
 		report = *body.LocalWork
 	}
+	var steering []string
+	for _, message := range body.SteeringMessages {
+		steering = append(steering, message.Content)
+	}
 	turn, err := h.useCase.Commit(request.Context(), localturn.CommitRequest{
 		ProjectID: projectID, ActorUserID: actor, ExecutionID: chi.URLParam(request, "executionID"),
 		Credential:       localturn.Credential{TokenID: user.TokenID, NativeClientID: user.NativeClientID},
 		UserMessage:      body.UserMessage.Content,
+		SteeringMessages: steering,
 		AssistantMessage: body.AssistantMessage.Content,
 		AssistantIsError: body.AssistantMessage.IsError,
 		AssistantError:   body.AssistantMessage.Error,

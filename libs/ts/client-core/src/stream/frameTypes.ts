@@ -28,7 +28,55 @@ export const EXECUTION_EVENT = {
   replayReset: 'execution.replay_reset',
   /** An index ingest finished. */
   indexIngestCompleted: 'index.ingest.completed',
+  /**
+   * Client contract 1.27: a steering message is queued, or its pending text
+   * was edited. `data` is one `SteeringMessage` (state `pending`). It also
+   * comes when the server carries a leftover message of an older answer to
+   * the author's newer answer: the same `id`, the newer
+   * `response_message_id` and a higher `revision`.
+   */
+  steerQueued: 'steer.queued',
+  /**
+   * The worker injected a steering message at a safe point: the model reads
+   * it now. `data` is the `SteeringMessage` (state `injected`, `message_id`).
+   */
+  steerInjected: 'steer.injected',
+  /**
+   * A steering message left the queue without injection. `data` is the
+   * `SteeringMessage` plus `reason` (`STEERING_DROP_REASON`).
+   */
+  steerDropped: 'steer.dropped',
 } as const;
+
+/** The steering states of client contract 1.27 (`SteeringMessage.state`). */
+export const STEERING_STATE = {
+  Pending: 'pending',
+  Injected: 'injected',
+  Removed: 'removed',
+  TurnEnded: 'turn_ended',
+  /** A `turn_ended` message that a hand-off took as the next message. Final. */
+  HandedOff: 'handed_off',
+} as const;
+
+export type SteeringState = (typeof STEERING_STATE)[keyof typeof STEERING_STATE];
+
+/**
+ * The `reason` of a `steer.dropped` event (client contract 1.27).
+ *
+ * - `removed`: the author removed the pending message.
+ */
+export const STEERING_DROP_REASON = {
+  Removed: 'removed',
+} as const;
+
+export type SteeringDropReason = (typeof STEERING_DROP_REASON)[keyof typeof STEERING_DROP_REASON];
+
+/** The steering SSE event names: a client folds these into its queue view. */
+export const STEERING_EVENTS: ReadonlySet<string> = new Set<string>([
+  EXECUTION_EVENT.steerQueued,
+  EXECUTION_EVENT.steerInjected,
+  EXECUTION_EVENT.steerDropped,
+]);
 
 /** The `type` of each frame the chat stream can carry. */
 export const FRAME_TYPE = {

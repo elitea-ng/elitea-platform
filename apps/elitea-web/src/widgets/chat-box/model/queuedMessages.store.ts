@@ -42,6 +42,12 @@ export interface QueuedChatMessage {
   /** Exactly what the reader typed. Never trimmed: ELITEA-2868 requires the text to survive a Stop verbatim. */
   readonly text: string;
   readonly queuedAt: number;
+  /**
+   * The `question_id` that the delivery MUST send, when the text has one
+   * already: a steering hand-off (contract 1.27) names it to the server
+   * before the send.
+   */
+  readonly questionId?: string | undefined;
 }
 
 /**
@@ -75,7 +81,7 @@ interface PersistedShape {
 
 interface QueuedMessagesState extends PersistedShape {
   /** Appends `text`; answers the stored row, or `undefined` when the text is blank (ELITEA-2873) or the cap is reached. */
-  readonly enqueue: (conversationKey: string, text: string) => QueuedChatMessage | undefined;
+  readonly enqueue: (conversationKey: string, text: string, questionId?: string) => QueuedChatMessage | undefined;
   /** Drops one waiting message by id — the list's own remove control. */
   readonly remove: (conversationKey: string, id: string) => void;
   /** Takes the HEAD of the queue (FIFO, ELITEA-2865) and removes it. */
@@ -110,7 +116,8 @@ function readQueuedRow(raw: unknown): QueuedChatMessage | undefined {
   const row = raw as Record<string, unknown>;
   if (typeof row['id'] !== 'string' || typeof row['text'] !== 'string') return undefined;
   const queuedAt = typeof row['queuedAt'] === 'number' ? row['queuedAt'] : 0;
-  return { id: row['id'], text: row['text'], queuedAt };
+  const questionId = row['questionId'];
+  return { id: row['id'], text: row['text'], queuedAt, ...(typeof questionId === 'string' && questionId !== '' ? { questionId } : {}) };
 }
 
 function readStringList(raw: unknown, cap: number): readonly string[] {
@@ -179,7 +186,7 @@ export function createQueuedMessagesStore(): QueuedMessagesStore {
     };
     return {
       ...loadPersisted(),
-      enqueue: (conversationKey, text) => {
+      enqueue: (conversationKey, text, questionId) => {
         // ELITEA-2873: a blank or whitespace-only message is not a message.
         // The composer already refuses to send one; this is the second half of
         // the same rule, for any caller that is not the composer.
@@ -191,6 +198,7 @@ export function createQueuedMessagesStore(): QueuedMessagesStore {
           id: crypto.randomUUID(),
           text,
           queuedAt: Date.now(),
+          ...(questionId === undefined ? {} : { questionId }),
         };
         commit({
           queues: withList(state.queues, conversationKey, [...current, row]),

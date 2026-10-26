@@ -324,7 +324,7 @@ func TestForkFromAMessageCopiesTheHistoryUpToAndIncludingIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(meta), `"steps_limit": 9`) || strings.Contains(string(meta), `"attachments"`) ||
-		strings.Contains(string(meta), "999") || instructions != "be brief" || !private {
+		strings.Contains(string(meta), `"conversation_id": 999`) || instructions != "be brief" || !private {
 		t.Fatalf("fork meta %s, instructions %q, private %v", meta, instructions, private)
 	}
 

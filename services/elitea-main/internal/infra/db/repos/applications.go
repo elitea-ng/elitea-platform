@@ -15,6 +15,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/foldervisibility"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenant"
@@ -812,7 +813,7 @@ func (r *ApplicationsRepo) UpdateWithVersion(ctx context.Context, req applicatio
 	return app, ver, nil
 }
 
-func (r *ApplicationsRepo) updateVersion(ctx context.Context, q querier, projectID, applicationID, versionID string, v applications.Version) (applications.Version, error) {
+func (r *ApplicationsRepo) updateVersion(ctx context.Context, q relationReader, projectID, applicationID, versionID string, v applications.Version) (applications.Version, error) {
 	s, err := tenantSchema(projectID)
 	if err != nil {
 		return applications.Version{}, err
@@ -827,8 +828,19 @@ func (r *ApplicationsRepo) updateVersion(ctx context.Context, q querier, project
 		if err := checkPipelineInstructions(ctx, q, s, applicationID, versionID, v); err != nil {
 			return applications.Version{}, err
 		}
+		if err := checkVersionComposition(ctx, q, s, applicationID, versionID, v.AgentType, v.Instructions, true); err != nil {
+			return applications.Version{}, err
+		}
 	} else if v.AgentType == pipelineAgentType {
-		if err := checkStoredPipelineInstructions(ctx, q, s, applicationID, versionID); err != nil {
+		instructions, err := checkStoredPipelineInstructions(ctx, q, s, applicationID, versionID)
+		if err != nil {
+			return applications.Version{}, err
+		}
+		if err := checkVersionComposition(ctx, q, s, applicationID, versionID, v.AgentType, instructions, false); err != nil {
+			return applications.Version{}, err
+		}
+	} else if v.AgentType != "" {
+		if err := checkVersionComposition(ctx, q, s, applicationID, versionID, v.AgentType, "", false); err != nil {
 			return applications.Version{}, err
 		}
 	}
@@ -984,11 +996,66 @@ func checkPipelineInstructions(ctx context.Context, q querier, schema, applicati
 	return refusal
 }
 
+// CheckVersionComposition is checkVersionComposition for the other writers of
+// a version (the internal MCP update and instruction patch), inside their
+// transaction: a refusal is an *apierr.APIError (applicationcomposition.Refusal).
+func CheckVersionComposition(ctx context.Context, q relationReader, schema string, applicationID, versionID int64, agentType, instructions string, instructionsWritten bool) error {
+	return checkVersionComposition(ctx, q, schema, strconv.FormatInt(applicationID, 10), strconv.FormatInt(versionID, 10),
+		agentType, instructions, instructionsWritten)
+}
+
+// checkVersionComposition refuses a version write whose result would break a
+// composition bound the Worker enforces (FU-244): the version is walked as it
+// is about to be stored (its kind, its pipeline Agent nodes) with its stored
+// attachments, and so is every version that attaches it (CheckWithAncestors). Only a write that changes the kind or writes pipeline
+// instructions is walked, so an ordinary agent save never pays for it.
+// instructionsWritten says whether instructions is the body's new text or the
+// stored text of a kind switch.
+func checkVersionComposition(ctx context.Context, q relationReader, schema, applicationID, versionID, agentType, instructions string, instructionsWritten bool) error {
+	appID, appErr := strconv.ParseInt(applicationID, 10, 64)
+	verID, verErr := strconv.ParseInt(versionID, 10, 64)
+	if appErr != nil || verErr != nil {
+		return apierr.NotFound("version not found")
+	}
+	source := NewCompositionSource(q, schema)
+	id := applicationcomposition.Identity{ApplicationID: appID, VersionID: verID}
+	stored, ok, err := source.Version(ctx, id)
+	if err != nil {
+		return fmt.Errorf("applications: update version: %w", err)
+	}
+	if !ok {
+		return nil
+	}
+	kind := stored.Kind
+	if agentType == pipelineAgentType {
+		kind = applicationcomposition.KindPipeline
+	} else if agentType != "" {
+		kind = applicationcomposition.KindAgent
+	}
+	if kind == stored.Kind && (!instructionsWritten || kind != applicationcomposition.KindPipeline) {
+		return nil
+	}
+	saved := stored
+	saved.Kind = kind
+	saved.AgentNodes, saved.StaticPause = nil, false
+	if kind == applicationcomposition.KindPipeline {
+		saved.AgentNodes, saved.StaticPause = applicationcomposition.ReadPipeline(instructions)
+	}
+	err = applicationcomposition.CheckWithAncestors(ctx, source, id, &saved)
+	if refusal := applicationcomposition.Refusal(err); refusal != nil {
+		return refusal
+	}
+	if err != nil {
+		return fmt.Errorf("applications: update version: %w", err)
+	}
+	return nil
+}
+
 // checkStoredPipelineInstructions bounds the instructions a version already
 // stores when a request turns it into a pipeline without sending new ones, so
 // a type change cannot store an over-bound pipeline. Only the length crosses
 // the wire for an over-size text; an in-bound text is read to count its nodes.
-func checkStoredPipelineInstructions(ctx context.Context, q querier, schema, applicationID, versionID string) error {
+func checkStoredPipelineInstructions(ctx context.Context, q querier, schema, applicationID, versionID string) (string, error) {
 	var size int
 	var instructions string
 	err := q.QueryRow(ctx, fmt.Sprintf(
@@ -997,15 +1064,15 @@ func checkStoredPipelineInstructions(ctx context.Context, q querier, schema, app
 		   FROM %s.application_versions WHERE application_id = $1 AND id = $2`, schema),
 		applicationID, versionID, pipelinelimits.MaxInstructionsBytes).Scan(&size, &instructions)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return apierr.NotFound("version not found")
+		return "", apierr.NotFound("version not found")
 	}
 	if err != nil {
-		return fmt.Errorf("applications: update version: stored instructions: %w", err)
+		return "", fmt.Errorf("applications: update version: stored instructions: %w", err)
 	}
 	if size > pipelinelimits.MaxInstructionsBytes {
-		return pipelinelimits.ErrInstructionsTooLarge
+		return "", pipelinelimits.ErrInstructionsTooLarge
 	}
-	return pipelinelimits.Check(instructions)
+	return instructions, pipelinelimits.Check(instructions)
 }
 
 func (r *ApplicationsRepo) DeleteVersion(ctx context.Context, projectID, applicationID, versionID string) error {

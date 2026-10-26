@@ -38,14 +38,11 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * WHERE THIS SERVICE REFUSES A CYCLE, AND WHERE THE BASELINE DID
  * ─────────────────────────────────────────────────────────────────────────────
- * DISCLOSED GAP. The baseline refused a circular link at LINK time: the request
- * that would close the loop was rejected. This service accepts it and refuses at
- * PUBLISH time instead — the pre-publish check walks the graph with a visited
- * set and answers a `circular dependency` finding, so nothing circular can be
- * published and the check cannot loop for ever. The cycle case below asserts
- * the refusal at the surface that makes it, and states the link's own status so
- * that a link-time guard added later fails here loudly instead of silently
- * making this fixture unbuildable.
+ * At LINK time, as the baseline did (FU-244, PLAN §8.8): the request that would
+ * close the loop is refused with APPLICATION_COMPOSITION_INVALID naming the
+ * loop, and nothing is written, so a circular graph never reaches publish. The
+ * pre-publish check runs the same composition check as a second line, for a
+ * graph stored before the link-time check existed.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHICH PROJECT EACH CASE PUBLISHES FROM
@@ -682,44 +679,25 @@ test('a circular sub-agent graph cannot be published', async ({ request }) => {
     );
     expect(forward.status(), await refusal(forward)).toBe(201);
 
-    // The link that closes the loop. See the header: the baseline refused this
-    // request and this service accepts it, refusing at publish time instead.
-    // The status is asserted so that a link-time guard added later reports
-    // itself here rather than leaving the case silently unbuildable.
+    // The link that closes the loop is refused where it is made (see the header),
+    // naming the loop, and nothing is written.
     const backward = await attachSubAgent(
       request,
       second,
       { applicationId: first.id, versionId: first.versionId },
       projectId,
     );
-    expect(backward.status(), await refusal(backward)).toBe(201);
-
-    // The pre-publish check walks the graph with a visited set, so it TERMINATES
-    // and says why. A checker that recursed without one would not answer at all.
-    const validated = await publishValidate(request, projectId, first.versionId, {
-      version_name: versionName('cyc'),
-    });
-    expect(validated.status(), await refusal(validated)).toBe(422);
-    const result = (await validated.json()) as Record<string, unknown>;
-    const critical = (result['critical_issues'] ?? []) as readonly Record<string, unknown>[];
-    expect(critical).toHaveLength(1);
-    expect(critical[0]?.['field']).toBe('sub_agents');
-    expect(String(critical[0]?.['issue'])).toContain('circular');
-    expect(critical[0]?.['source']).toBe('deterministic');
-    // The short circuit: nothing else was checked, so the counts name the one
-    // structural finding and nothing beside it.
-    expect(result['counts']).toEqual({ critical: 1, warnings: 0, suggestions: 0 });
-    expect(result['validation_token'], 'a failed check handed out an approval token').toBeNull();
-
-    // …and the publish itself refuses for the same reason, so the check is not
-    // an advisory a caller can skip by going straight to the publish route.
-    const refused = await publish(request, projectId, first.versionId, {
-      version_name: versionName('cyc'),
-    });
-    expect(refused.status(), await refusal(refused)).toBe(422);
-    const refusedBody = (await refused.json()) as Record<string, unknown>;
-    expect(refusedBody['error']).toBe('validation_failed');
-    expect(JSON.stringify(refusedBody['validation_result'])).toContain('circular');
+    expect(backward.status(), await refusal(backward)).toBe(400);
+    const refusedLink = (await backward.json()) as Record<string, unknown>;
+    expect(refusedLink['code']).toBe('APPLICATION_COMPOSITION_INVALID');
+    expect(String(refusedLink['error'])).toContain('circular');
+    expect(String(refusedLink['error'])).toContain(first.name);
+    expect(
+      (await subAgentsOf(request, second.id, second.versionId, projectId)).some(
+        (entry) => entry.applicationId === first.id,
+      ),
+      'a refused link was written',
+    ).toBe(false);
 
     // Nothing was published. A refusal that had already cloned the row answers
     // the same 422.
@@ -730,61 +708,50 @@ test('a circular sub-agent graph cannot be published', async ({ request }) => {
   }
 });
 
-test('a sub-agent chain deeper than three tiers is refused with one structural finding', async ({
-  request,
-}) => {
+test('a sub-agent chain is refused at the link that would make a fourth agent level', async ({ request }) => {
   const projectId = await resolvePublishAuthorProjectId(request);
   const chain: Agent[] = [];
-  for (let tier = 0; tier < 5; tier += 1) {
+  for (let tier = 0; tier < 4; tier += 1) {
     chain.push(await createPublishableAgent(request, autotestName(`sa9_t${tier}`), projectId));
   }
+  const link = (from: number) =>
+    attachSubAgent(
+      request,
+      chain[from]!,
+      { applicationId: chain[from + 1]!.id, versionId: chain[from + 1]!.versionId },
+      projectId,
+    );
 
   try {
-    for (let tier = 0; tier < chain.length - 1; tier += 1) {
-      const linked = await attachSubAgent(
-        request,
-        chain[tier]!,
-        { applicationId: chain[tier + 1]!.id, versionId: chain[tier + 1]!.versionId },
-        projectId,
-      );
+    // PLAN §8.8: at most three agents on a path, the root included. Linked top
+    // down, the first two links hold three agents and are accepted.
+    for (const from of [0, 1]) {
+      const linked = await link(from);
       expect(linked.status(), await refusal(linked)).toBe(201);
     }
 
-    // THE BOUNDARY, from the shallow end first: the chain that starts one tier
-    // down is three hops deep and is accepted. Without this half the case would
-    // pass against a checker that refused every chain.
-    const shallow = await publishValidate(request, projectId, chain[1]!.versionId, {
+    // THE BOUNDARY: the third link is checked from every agent that reaches the
+    // one it is added to, so the top of the chain sees a fourth level and the
+    // link is refused, typed and naming the path, and nothing is written.
+    const deep = await link(2);
+    expect(deep.status(), await refusal(deep)).toBe(400);
+    const refusedLink = (await deep.json()) as Record<string, unknown>;
+    expect(refusedLink['code']).toBe('APPLICATION_COMPOSITION_INVALID');
+    expect(String(refusedLink['error'])).toContain('nested more than 3 levels deep');
+    expect(String(refusedLink['error'])).toContain(
+      `"${chain[0]!.name}" → "${chain[1]!.name}" → "${chain[2]!.name}" → "${chain[3]!.name}"`,
+    );
+    expect(
+      (await subAgentsOf(request, chain[2]!.id, chain[2]!.versionId, projectId)).length,
+      'a refused link was written',
+    ).toBe(0);
+
+    // …and the three agents that were linked publish: the pre-publish check
+    // finds no structural problem in them.
+    const validated = await publishValidate(request, projectId, chain[0]!.versionId, {
       version_name: versionName('ok'),
     });
-    expect(
-      shallow.status(),
-      `a three-tier chain was refused: ${await refusal(shallow)}`,
-    ).toBe(200);
-
-    const refused = await publishValidate(request, projectId, chain[0]!.versionId, {
-      version_name: versionName('deep'),
-    });
-    expect(refused.status(), await refusal(refused)).toBe(422);
-    const result = (await refused.json()) as Record<string, unknown>;
-    const critical = (result['critical_issues'] ?? []) as readonly Record<string, unknown>[];
-
-    // ONE finding, and no further checking: the tags recommendation and the
-    // conversation-starters warning every agent here would otherwise raise are
-    // absent, which is what says the check stopped rather than carried on
-    // walking a structure it had already rejected.
-    expect(result['counts']).toEqual({ critical: 1, warnings: 0, suggestions: 0 });
-    expect(critical).toHaveLength(1);
-    expect(critical[0]?.['field']).toBe('sub_agents');
-    expect(String(critical[0]?.['issue'])).toContain('nesting depth');
-    expect(critical[0]?.['source']).toBe('deterministic');
-    // No `context`: the finding is about the SHAPE of the tree, not about one
-    // sub-agent in it, and a context would name a node that is not at fault.
-    expect(critical[0]?.['context']).toBeNull();
-    expect(String(critical[0]?.['fix'] ?? ''), 'the refusal says nothing about the repair').not.toBe(
-      '',
-    );
-    expect(result['validation_token']).toBeNull();
-    expect(result['ai_validation_available']).toBe(false);
+    expect(validated.status(), `a three-agent chain was refused: ${await refusal(validated)}`).toBe(200);
   } finally {
     await cleanUp(request, projectId, chain);
   }

@@ -17,6 +17,7 @@ import (
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -623,6 +624,8 @@ func writeStartError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusBadRequest, "Invalid agent execution request")
 	case pipelinelimits.Refusal(err) != nil:
 		writePipelineLimit(writer, pipelinelimits.Refusal(err))
+	case applicationcomposition.Refusal(err) != nil:
+		writePipelineLimit(writer, applicationcomposition.Refusal(err))
 	case errors.Is(err, agentexecutionapp.ErrProjectSkillUnknown):
 		writeJSON(writer, http.StatusNotFound, map[string]string{
 			"error":   "project_skill_unknown",

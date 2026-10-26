@@ -39,6 +39,9 @@ describe('FRAME_TYPE', () => {
       failed: 'execution.failed',
       replayReset: 'execution.replay_reset',
       indexIngestCompleted: 'index.ingest.completed',
+      steerQueued: 'steer.queued',
+      steerInjected: 'steer.injected',
+      steerDropped: 'steer.dropped',
     });
   });
 });

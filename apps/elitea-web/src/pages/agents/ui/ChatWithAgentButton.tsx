@@ -22,7 +22,8 @@ export interface ChatWithAgentButtonProps {
   readonly name: string | undefined;
   /** The version the chat runs — the participant pins it, see the mapping note below. */
   readonly activeVersion: ApplicationVersionDetail | undefined;
-  readonly onError: () => void;
+  /** Called with the failure, so the caller can show the server's own refusal (e.g. FU-244 composition). */
+  readonly onError: (error?: unknown) => void;
 }
 
 /**
@@ -131,8 +132,8 @@ export function ChatWithAgentButton({ projectId, applicationId, name, activeVers
           },
         ],
       });
-    } catch {
-      onError();
+    } catch (error) {
+      onError(error);
       setIsStarting(false);
       return;
     }

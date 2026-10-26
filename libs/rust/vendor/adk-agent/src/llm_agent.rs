@@ -214,6 +214,21 @@ pub trait ToolCallConfirmation: Send + Sync {
     async fn requires_confirmation(&self, tool_name: &str, args: &serde_json::Value) -> bool;
 }
 
+/// Elitea patch (steering): the user messages queued against a running
+/// invocation. The loop asks at each safe point: after the tool results of a
+/// step are in the history and before the next model request. Each returned
+/// `Content` (role `user`) is appended to the history in order, so the next
+/// request, its `before_model` callbacks (the checkpoint among them) and every
+/// later step see it. The source owns its own side effects (persisting the
+/// message, telling the client); it never fails the turn, so a source that
+/// cannot reach its queue returns an empty list and the messages wait for the
+/// next safe point.
+#[async_trait]
+pub trait SteeringSource: Send + Sync {
+    /// The queued messages, oldest first. Empty is the ordinary answer.
+    async fn take(&self, ctx: Arc<dyn InvocationContext>) -> Vec<Content>;
+}
+
 /// An LLM-powered agent that orchestrates tool calls and sub-agent delegation.
 ///
 /// `LlmAgent` is the primary agent type in ADK. It sends requests to an LLM,
@@ -271,6 +286,8 @@ pub struct LlmAgent {
     /// Elitea patch (ADR-0034): an argument-aware confirmation check, asked
     /// for calls the name policy does not already confirm.
     tool_call_confirmation: Option<Arc<dyn ToolCallConfirmation>>,
+    /// Elitea patch (steering): queued user messages, taken at safe points.
+    steering_source: Option<Arc<dyn SteeringSource>>,
     /// Per-agent tool execution strategy override. When `Some`, overrides the
     /// `RunConfig` strategy for this agent's dispatch loop.
     tool_execution_strategy: Option<ToolExecutionStrategy>,
@@ -719,6 +736,7 @@ pub struct LlmAgentBuilder {
     circuit_breaker_threshold: Option<u32>,
     tool_confirmation_policy: ToolConfirmationPolicy,
     tool_call_confirmation: Option<Arc<dyn ToolCallConfirmation>>,
+    steering_source: Option<Arc<dyn SteeringSource>>,
     tool_execution_strategy: Option<ToolExecutionStrategy>,
     input_guardrails: GuardrailSet,
     output_guardrails: GuardrailSet,
@@ -772,6 +790,7 @@ impl LlmAgentBuilder {
             circuit_breaker_threshold: None,
             tool_confirmation_policy: ToolConfirmationPolicy::Never,
             tool_call_confirmation: None,
+            steering_source: None,
             tool_execution_strategy: None,
             input_guardrails: GuardrailSet::new(),
             output_guardrails: GuardrailSet::new(),
@@ -1154,6 +1173,15 @@ impl LlmAgentBuilder {
         self
     }
 
+    /// Elitea patch (steering): take queued user messages from `source` at
+    /// each safe point of the loop (after a step's tool results, before the
+    /// next model request) and append them to the history. Unset, nothing
+    /// changes.
+    pub fn steering_source(mut self, source: Arc<dyn SteeringSource>) -> Self {
+        self.steering_source = Some(source);
+        self
+    }
+
     /// Require confirmation for all tool calls.
     pub fn require_tool_confirmation_for_all(mut self) -> Self {
         self.tool_confirmation_policy = ToolConfirmationPolicy::Always;
@@ -1401,6 +1429,7 @@ impl LlmAgentBuilder {
             circuit_breaker_threshold: self.circuit_breaker_threshold,
             tool_confirmation_policy: self.tool_confirmation_policy,
             tool_call_confirmation: self.tool_call_confirmation,
+            steering_source: self.steering_source,
             tool_execution_strategy: self.tool_execution_strategy,
             input_guardrails: Arc::new(self.input_guardrails),
             output_guardrails: Arc::new(self.output_guardrails),
@@ -2471,6 +2500,7 @@ impl Agent for LlmAgent {
         let circuit_breaker_threshold = self.circuit_breaker_threshold;
         let tool_confirmation_policy = self.tool_confirmation_policy.clone();
         let tool_call_confirmation = self.tool_call_confirmation.clone();
+        let steering_source = self.steering_source.clone();
         let tool_guardrails = Arc::clone(&self.tool_guardrails);
         let output_guardrails = self.output_guardrails.clone();
         let agent_tool_execution_strategy = self.tool_execution_strategy;
@@ -3408,6 +3438,13 @@ impl Agent for LlmAgent {
                     tool_map = refreshed_tools.map;
                     tool_declarations = refreshed_tools.declarations;
                     valid_transfer_targets = refreshed_tools.transfer_targets;
+
+                    // Elitea patch (steering): the safe point. The step's tool
+                    // results are in the history and the next model request is
+                    // not built yet, so a queued user message lands after them.
+                    if let Some(source) = steering_source.as_ref() {
+                        conversation_history.extend(source.take(ctx.clone()).await);
+                    }
                 }
 
                 // If all function calls were from long-running tools, we need ONE more model call

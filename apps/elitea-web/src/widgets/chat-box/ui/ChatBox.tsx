@@ -19,7 +19,7 @@ import { useNavBlockerStore } from '@/widgets/app-shell';
 import type { AttachmentButtonHandle, VoiceButtonHandle } from '@/widgets/chat';
 import { ChatConversationStarters, NewChatInput, voiceHooks } from '@/features/chat-input';
 import { useSocketClient } from '@/shared/api/socket/client';
-import { ChatMessageList, useDeleteMessageAlert, currentNodeRecoveryBinding } from '@/features/chat-messages';
+import { ChatMessageList, useDeleteMessageAlert, currentNodeRecoveryBinding, applySteeringEvent, useChatSteering } from '@/features/chat-messages';
 import { getAllTokens } from '@/features/mcps';
 import { conversationApi } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
@@ -43,7 +43,7 @@ export type { ChatBoxProps } from './ChatBox.types';
 import { buildChatBoxContinuationProps } from './ChatBoxContinuation';
 import { useChatBoxLlmSettingsDialog } from './ChatBoxLlmSettingsDialog';
 import { buildChatBoxAttachmentProps, buildChatBoxInputSlots, useChatBoxVoiceFeedback } from './ChatBoxInputSlots';
-import { ChatBoxQueuedMessages, chatBoxQueueKey, useChatBoxQueuedMessages } from './ChatBoxQueuedMessages';
+import { ChatBoxQueuedMessages, ChatBoxSteeringNotice, ChatBoxSteeringOffer, chatBoxQueueKey, useChatBoxQueuedMessages } from './ChatBoxQueuedMessages';
 import { ChatBoxVoicePlayer } from './ChatBoxVoicePlayer';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
 import { ChatBoxWithdrawnNotice } from './ChatBoxWithdrawnNotice';
@@ -161,13 +161,12 @@ const ChatBoxInner = memo(function ChatBox({
   const { modelsList, selectedLlmModel, handleSelectModel, configuredModelProjectId } = useChatBoxModelSelection({
     projectId, selectedModel: data.selectedModel, llm, setSelectedModel: data.setSelectedModel,
   });
-  const { startStreamedExecution, continueStreamedExecution, regenerateStreamedExecution, reattachStreamedExecution, stopStreamedExecution, isStreaming: isStreamedExecution, createConversationForSend, uploadAttachmentsForSend } = useChatBoxSend({
+  const { startStreamedExecution, continueStreamedExecution, regenerateStreamedExecution, reattachStreamedExecution, stopStreamedExecution, streamTarget, isStreaming: isStreamedExecution, createConversationForSend, uploadAttachmentsForSend } = useChatBoxSend({
     deps: { createConversation: lifecycle.createConversation, uploadAttachments: data.attachments.upload.uploadAttachments },
     setChatHistory: data.setChatHistory, projectId, projectIdString, isAgentsPage, conversationUuid,
     activeParticipant, participants: conversationParticipants, userName, userAvatar,
-    llmSettings, model: data.selectedModel, configuredModelProjectId, userId, onAgentEvent, getInternalToolsForSend, editorTest,
+    llmSettings, model: data.selectedModel, configuredModelProjectId, userId, onAgentEvent, getInternalToolsForSend, editorTest, onSteerEvent: applySteeringEvent,
   });
-  useReattachSeededTurn({ messages, conversationUuid, reattach: reattachStreamedExecution }); // #6654: a reload mid-turn observes the run again
   useChatBoxInterruptLedger({ projectId, conversationUuid, messages, setChatHistory: data.setChatHistory, reattach: reattachStreamedExecution }); // per-interrupt cards across tabs; a fan-out wake attaches
   // After `useChatBoxSend`: a "+" pick on a chat with no conversation has to create one first, and it reuses the adapter the first send would have used, so an eagerly created conversation is seeded exactly like a send-created one.
   const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), ...(onConversationCreated ? { onConversationCreated } : {}) });
@@ -293,6 +292,9 @@ const ChatBoxInner = memo(function ChatBox({
   const stopGeneration = useCallback(() => {
     stopChatGeneration(stopStreamRef.current, () => streamingRef.current.stopStreaming(), editorTest);
   }, [stopStreamRef, streamingRef, editorTest]);
+  // Contract 1.27: a send while the owned cloud turn runs STEERS it; a refusal or a leftover goes through the A17 queue.
+  const steering = useChatSteering({ conversationKey: chatBoxQueueKey(conversationUuid, conversationId), isStreaming, streamTarget, send: queued.onSend, queueAfterTurn: queued.enqueue, answerFailed: (id) => messages.some((m) => m.id === id && (Boolean(m.exception) || m.failureCode !== undefined)) });
+  useReattachSeededTurn({ messages, conversationUuid, reattach: reattachStreamedExecution, onReattached: steering.onReattached }); // #6654: a reload mid-turn observes the run again
   // MUST target the host `ref`, never `chatInputRef` — see `ChatBox.types.ts`.
   useImperativeHandle(ref, () => ({
     onClear: () => { handleClearRef.current(); },
@@ -323,7 +325,7 @@ const ChatBoxInner = memo(function ChatBox({
             onForkFromMessage,
           }, noRegenerate)}
           continuation={{ ...buildChatBoxContinuationProps({ onHitlResume: handleHitlResume, onContinueMcpExecution: handleContinueMcpExecution, onContinueTokenLimitExecution: handleContinueTokenLimit }, projectIdString), staticPause }}
-          tts={buildTtsProps(readAloud, state.isSpeakingMode)} canvas={buildCanvasProps(editorCallbacks)}
+          tts={buildTtsProps(readAloud, state.isSpeakingMode)} canvas={buildCanvasProps(editorCallbacks)} steering={{ model: steering, onStopAndSend: stopGeneration }}
         />
         {state.shouldShowStarters && (
           <ChatConversationStarters
@@ -335,7 +337,7 @@ const ChatBoxInner = memo(function ChatBox({
       <Box sx={{ p: 1 }}>
         {readOnlyNotice ?? <>
         <ChatBoxVoicePlayer showPlayer={readAloud.showPlayer} voicePlayerProps={readAloud.voicePlayerProps} />
-        <ChatBoxQueuedMessages queue={queued} />
+        <ChatBoxQueuedMessages queue={queued} /><ChatBoxSteeringNotice notice={steering.notice} onDismiss={steering.dismissNotice} /><ChatBoxSteeringOffer offer={steering.offer} onSend={steering.acceptOffer} onDismiss={steering.dismissOffer} />
         <ChatBoxPopups
           {...buildChatBoxPopupsProps({
             state,
@@ -353,7 +355,7 @@ const ChatBoxInner = memo(function ChatBox({
           conversationId={conversationId !== undefined ? String(conversationId) : undefined}
           state={{ isLoading: isComposerBusy, disabledInput: isDraftInputBusy, isStreaming, disabledSend, isCreatingConversation: data.lifecycle.isCreating, allowSendWhileStreaming: true }}
           content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type your message...'), clearInputAfterSubmit: true, slashHighlights: state.combinedHighlightRanges }}
-          callbacks={{ onSend: queued.onSend, onStopGeneration: stopGeneration, onNormalKeyDown: state.onNormalKeyDown, onInputChange: state.onInputChange }}
+          callbacks={{ onSend: steering.onSend, onStopGeneration: () => { steering.onStop(); stopGeneration(); }, onNormalKeyDown: state.onNormalKeyDown, onInputChange: state.onInputChange }}
           agentEditor={buildAgentEditorProps({
             participantForEditor,
             activeParticipantDetails: agentEditorParticipantDetails,

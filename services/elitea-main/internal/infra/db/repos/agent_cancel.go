@@ -130,6 +130,15 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 				return err
 			}
 
+			// The conversation of the turn, read while its rows exist: a stop
+			// that deletes the turn deletes its steering in that conversation.
+			// A concurrent stop may have deleted them already: then this stop
+			// deletes nothing, and the id is not used.
+			var conversationID int64
+			if err := tx.QueryRow(ctx, `SELECT conversation_id FROM chat_message_group WHERE id = $1`,
+				row.ResponseMessageGroupID).Scan(&conversationID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("read the stopped turn's conversation: %w", err)
+			}
 			projection, projectionErr := queries.ProjectCurrentAgentStop(
 				ctx,
 				sqlcgen.ProjectCurrentAgentStopParams{
@@ -154,7 +163,11 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 				outcome.Deleted = true
 				var closeErr error
 				notice, closeErr = cancelOpenInterruptCards(ctx, tx, request)
-				return closeErr
+				if closeErr != nil {
+					return closeErr
+				}
+				// The steering of the deleted turn goes with it, now.
+				return DiscardTurnSteering(ctx, tx, int64(projectID), conversationID, request.ResponseMessageID)
 			}
 			if !projection.Deleted && !projection.Retained && !projection.Salvaged &&
 				!projection.QuestionDeleted {

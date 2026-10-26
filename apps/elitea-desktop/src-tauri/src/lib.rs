@@ -470,6 +470,8 @@ pub fn run() {
             local_commands::turn_commit_retry,
             local_commands::agent_turn_cancel,
             local_commands::agent_turn_status,
+            local_commands::agent_turn_steer,
+            local_commands::agent_turn_steer_update,
             local_commands::approval_respond,
             local_commands::turn_changes,
             local_commands::thread_history,

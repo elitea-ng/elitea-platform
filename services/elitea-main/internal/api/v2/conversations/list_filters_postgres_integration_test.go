@@ -92,6 +92,10 @@ CREATE TABLE p_1.chat_conversations (
     updated_at timestamp
 );
 CREATE TABLE p_1.chat_participants(id serial PRIMARY KEY,entity_name text,entity_meta jsonb);
+CREATE TABLE p_1.applications(id serial PRIMARY KEY,name text);
+CREATE TABLE p_1.application_versions(id serial PRIMARY KEY,application_id integer,agent_type text,instructions text);
+CREATE TABLE p_1.elitea_tools(id serial PRIMARY KEY,name text,type text,settings jsonb);
+CREATE TABLE p_1.entity_tool_mapping(id serial PRIMARY KEY,entity_version_id integer,entity_type text,tool_id integer);
 CREATE TABLE p_1.chat_participant_mapping(conversation_id integer,participant_id integer);
 -- tenant/0151: the project's conversation archive (client contract 1.10).
 CREATE TABLE p_1.chat_conversation_archives (

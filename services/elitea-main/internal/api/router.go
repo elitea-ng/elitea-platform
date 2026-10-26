@@ -596,6 +596,9 @@ type RouterConfig struct {
 	// API. It is composed whenever the agent runtime is (no separate flag).
 	CurrentExecutionInterrupts http.Handler
 	CurrentAgentCancel         http.Handler
+	// CurrentAgentSteering serves the steering queue of a running chat turn
+	// (client contract 1.27). Composed beside CurrentAgentCancel.
+	CurrentAgentSteering http.Handler
 	// CurrentLocalTurns serves startLocalTurn and commitLocalTurn, the
 	// desktop local turn operations (ADR-0029 decision 5c, client contract
 	// 1.5). Composed in cmd/elitea-main wherever a database is configured;

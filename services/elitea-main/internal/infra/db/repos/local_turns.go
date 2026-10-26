@@ -293,6 +293,15 @@ RETURNING id, created_at`, schema),
 	if err := insertLocalTurnText(ctx, tx, schema, questionGroup, record.UserMessage); err != nil {
 		return localturn.CommittedTurn{}, err
 	}
+	// The steering messages the turn took, in order, as a cloud turn's
+	// injected ones are stored: user messages at the question's created_at
+	// with larger ids, so they read directly after the question. A replayed
+	// commit returned above, so they are written once.
+	for _, content := range record.SteeringMessages {
+		if err := insertLocalTurnSteering(ctx, tx, schema, target, questionAt, turn.ResponseMessageID, content); err != nil {
+			return localturn.CommittedTurn{}, err
+		}
+	}
 
 	var responseGroup int64
 	err = tx.QueryRow(ctx, fmt.Sprintf(`
@@ -351,6 +360,38 @@ WITH item AS (
 INSERT INTO %[1]s.chat_messages_text (id, content)
 SELECT item.id, $2 FROM item`, schema), groupID, content); err != nil {
 		return fmt.Errorf("local turn: insert text: %w", err)
+	}
+	return nil
+}
+
+// insertLocalTurnSteering writes one steering message of a local turn: a user
+// message of the question's author to the question's target, dated at the
+// question (`questionAt` goes back as a `timestamp`, see the commit), with
+// meta.steering naming the answer, and its one text item.
+func insertLocalTurnSteering(
+	ctx context.Context, tx pgx.Tx, schema string, target localTurnTarget,
+	questionAt time.Time, responseMessageID, content string,
+) error {
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`
+WITH steering_group AS (
+    INSERT INTO %[1]s.chat_message_group
+        (uuid, author_participant_id, conversation_id, sent_to_id, meta, is_streaming, created_at)
+    VALUES (gen_random_uuid(), $1, $2, $3,
+            jsonb_build_object('steering', jsonb_build_object(
+                'origin', 'local', 'response_message_id', $4::text)),
+            FALSE, $5::timestamp)
+    RETURNING id
+), steering_item AS (
+    INSERT INTO %[1]s.chat_message_items (uuid, item_type, order_index, meta, message_group_id, created_at)
+    SELECT gen_random_uuid(), 'text_message', 0, '{}'::jsonb, steering_group.id, now() AT TIME ZONE 'UTC'
+    FROM steering_group
+    RETURNING id
+)
+INSERT INTO %[1]s.chat_messages_text (id, content)
+SELECT steering_item.id, $6 FROM steering_item`, schema),
+		target.userParticipantID, target.conversationID, target.targetID,
+		responseMessageID, questionAt, content); err != nil {
+		return localTurnWriteError("insert steering message", err)
 	}
 	return nil
 }

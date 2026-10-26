@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -22,6 +23,12 @@ const (
 )
 
 var errInvalidCurrentApplicationNesting = errors.New("invalid current application nesting")
+
+// errCurrentApplicationCompositionBound marks the nesting refusals that are a
+// bound of the saved composition (a circular reference, the raw hop bound, a
+// container past the tier bound), not a broken row: the start answers them
+// with the typed composition refusal (FU-244), the rest stay unsupported.
+var errCurrentApplicationCompositionBound = errors.New("application composition bound")
 
 type currentApplicationNestingQuerier interface {
 	ResolveCurrentApplicationNestingNode(
@@ -74,7 +81,21 @@ func validateCurrentApplicationNesting(
 	versionID int32,
 	startDepth int,
 ) error {
-	_, err := resolveCurrentApplicationNesting(ctx, queries, versionID, startDepth)
+	_, err := resolveCurrentApplicationNesting(ctx, queries, versionID, startDepth, true)
+	return err
+}
+
+// validateCurrentApplicationRows is validateCurrentApplicationNesting without
+// the agent-tier rule: the start of a selected agent or pipeline checks its
+// levels with the shared composition check (checkStartComposition, the rule
+// attach, save, publish and the Worker apply), and this walk keeps the row,
+// cycle, hop and skill-name checks.
+func validateCurrentApplicationRows(
+	ctx context.Context,
+	queries currentApplicationNestingQuerier,
+	versionID int32,
+) error {
+	_, err := resolveCurrentApplicationNesting(ctx, queries, versionID, 1, false)
 	return err
 }
 
@@ -83,6 +104,7 @@ func resolveCurrentApplicationNesting(
 	queries currentApplicationNestingQuerier,
 	versionID int32,
 	startDepth int,
+	enforceTiers bool,
 ) (currentApplicationNestingResolution, error) {
 	if ctx == nil || queries == nil || versionID <= 0 || startDepth <= 0 {
 		return currentApplicationNestingResolution{}, errInvalidCurrentApplicationNesting
@@ -133,6 +155,7 @@ func resolveCurrentApplicationNesting(
 			path,
 			&registries,
 			registered,
+			enforceTiers,
 		); err != nil {
 			return currentApplicationNestingResolution{}, err
 		}
@@ -149,6 +172,7 @@ func walkCurrentApplicationNesting(
 	path map[currentApplicationNestingKey]struct{},
 	registries *[]currentApplicationSkillRegistry,
 	registered map[currentApplicationNestingKey]struct{},
+	enforceTiers bool,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -165,16 +189,16 @@ func walkCurrentApplicationNesting(
 	key := currentApplicationNestingKey{applicationID: applicationID, versionID: versionID}
 	if _, exists := path[key]; exists {
 		return fmt.Errorf(
-			"%w: circular reference to application %d version %d",
-			errInvalidCurrentApplicationNesting,
+			"%w: %w: circular reference to application %d version %d",
+			errInvalidCurrentApplicationNesting, errCurrentApplicationCompositionBound,
 			applicationID,
 			versionID,
 		)
 	}
 	if rawDepth > currentMaxApplicationNestingHops {
 		return fmt.Errorf(
-			"%w: application nesting exceeds %d raw hops",
-			errInvalidCurrentApplicationNesting,
+			"%w: %w: application nesting exceeds %d raw hops",
+			errInvalidCurrentApplicationNesting, errCurrentApplicationCompositionBound,
 			currentMaxApplicationNestingHops,
 		)
 	}
@@ -193,11 +217,11 @@ func walkCurrentApplicationNesting(
 		)
 	}
 	currentAgentTiers := agentTiers + currentApplicationAgentTierContribution(node.agentType)
-	if node.agentType != "pipeline" && len(node.children) > 0 &&
+	if enforceTiers && node.agentType != "pipeline" && len(node.children) > 0 &&
 		currentAgentTiers >= currentMaxAgentNestingTiers {
 		return fmt.Errorf(
-			"%w: agent version %d is a container at tier %d",
-			errInvalidCurrentApplicationNesting,
+			"%w: %w: agent version %d is a container at tier %d",
+			errInvalidCurrentApplicationNesting, errCurrentApplicationCompositionBound,
 			versionID,
 			currentAgentTiers,
 		)
@@ -237,6 +261,7 @@ func walkCurrentApplicationNesting(
 			path,
 			registries,
 			registered,
+			enforceTiers,
 		); err != nil {
 			return err
 		}
@@ -323,9 +348,17 @@ func currentApplicationAgentTierContribution(agentType string) int {
 	return 1
 }
 
+// filterCurrentAdhocApplicationNesting answers the tools an ad-hoc turn offers
+// its chat model. The Worker builds every offered agent or pipeline under one
+// chat root sharing its budgets, so they are judged together, in the turn's
+// order (applicationcomposition.ChatToolFits, PLAN §8.8): one that is valid as a
+// root but does not fit below the chat model with the ones before it is not
+// offered. It runs only when selected directly, and the participant list says
+// so (meta.agent_subtree_tiers, enrichParticipantNesting).
 func filterCurrentAdhocApplicationNesting(
 	ctx context.Context,
 	queries currentApplicationNestingQuerier,
+	source applicationcomposition.Source,
 	tools json.RawMessage,
 ) (json.RawMessage, error) {
 	decoder := json.NewDecoder(bytes.NewReader(tools))
@@ -339,15 +372,39 @@ func filterCurrentAdhocApplicationNesting(
 		return nil, errInvalidCurrentApplicationNesting
 	}
 
-	filtered := make([]any, 0, len(items))
-	for _, item := range items {
+	var candidates []applicationcomposition.Identity
+	candidateOf := map[int]int{}
+	for index, item := range items {
 		tool, ok := item.(map[string]any)
 		if !ok {
 			return nil, errInvalidCurrentApplicationNesting
 		}
-		toolType, _ := tool["type"].(string)
-		if toolType != "application" {
+		if toolType, _ := tool["type"].(string); toolType != "application" {
+			continue
+		}
+		settings, _ := tool["settings"].(map[string]any)
+		applicationID, validApplication := positiveCurrentApplicationNestingValue(settings["application_id"])
+		versionID, validVersion := positiveCurrentApplicationNestingValue(settings["application_version_id"])
+		if validApplication && validVersion {
+			candidateOf[index] = len(candidates)
+			candidates = append(candidates, applicationcomposition.Identity{
+				ApplicationID: int64(applicationID), VersionID: int64(versionID),
+			})
+		}
+	}
+	fits, err := applicationcomposition.ChatToolFits(ctx, source, candidates)
+	if err != nil {
+		return nil, err
+	}
+
+	filtered := make([]any, 0, len(items))
+	for index, item := range items {
+		tool := item.(map[string]any)
+		if toolType, _ := tool["type"].(string); toolType != "application" {
 			filtered = append(filtered, tool)
+			continue
+		}
+		if candidate, ok := candidateOf[index]; ok && !fits[candidate].Fits {
 			continue
 		}
 		materialized, materializeErr := materializeCurrentApplicationToolNestedSkills(
@@ -449,6 +506,7 @@ func materializeCurrentApplicationToolNestedSkills(
 		queries,
 		versionID,
 		startDepth,
+		true,
 	)
 	if err != nil {
 		return nil, err

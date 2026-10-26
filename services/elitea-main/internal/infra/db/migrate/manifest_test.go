@@ -757,13 +757,18 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// cloud turn changed, which the worker records after it publishes, for
 	// the web Files changed view (#1187). No data, no permission.
 	//
-	// 178: shared/0178_execution_interrupt_wakes.sql, park and wake for the
+	// 178: shared/0178_execution_steering_messages.sql, the
+	// elitea_runtime.execution_steering_messages queue: user messages sent
+	// while a cloud turn runs, injected by the worker at its next safe point.
+	// No data, no permission.
+	//
+	// 179: shared/0179_execution_interrupt_wakes.sql, park and wake for the
 	// per-interrupt decision ledger (fanout-interrupt-decisions v1.1 §8): the
 	// park columns on execution_interrupt_responses and
 	// elitea_runtime.execution_interrupt_wakes with the partial unique index
 	// "one active continuation per response", and the open-card index a new
 	// turn supersedes through. No data, no permission.
-	require.EqualValues(t, 178, Head(shared))
+	require.EqualValues(t, 179, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

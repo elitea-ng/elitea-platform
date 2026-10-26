@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextsettings"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicproject"
@@ -292,7 +293,56 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 	}
 	r.enrichAgentParticipantTools(ctx, s, items)
 	r.enrichAgentParticipantPublication(ctx, s, items)
+	r.enrichParticipantNesting(ctx, s, items)
 	return items, nil
+}
+
+// enrichParticipantNesting tells the participant list which agents and
+// pipelines an ad-hoc turn does not offer to the chat model (PLAN §8.8): a
+// participant valid as a root that does not fit below the chat model, together
+// with the ones before it, runs only when selected directly. The fields are the
+// ones the legacy read served (EliteaUI's isSkippedContainerParticipant gate,
+// `1 + tiers > max`):
+//   - meta.agent_subtree_tiers: the participant's own agent tiers (pipelines
+//     consume none), or max_agent_nesting_tiers when it is not offered;
+//   - meta.max_agent_nesting_tiers: applicationcomposition.MaxAgentTiers;
+//   - meta.is_container: it reaches other agents, or it is not offered.
+//
+// It judges exactly the participants an ad-hoc turn offers (the conversation's
+// own project, a name, in participant order) with the check the turn's start
+// applies (filterCurrentAdhocApplicationNesting), in the conversation's own
+// schema, so the warning and the turn cannot disagree. Participants of another
+// project are never offered to the chat model and get no fields. A failed read
+// leaves the participants as read (the keys absent), like the enrichments above.
+func (r *ConversationsRepo) enrichParticipantNesting(ctx context.Context, s string, items []conversations.Participant) {
+	var candidates []applicationcomposition.Identity
+	var indexes []int
+	for i := range items {
+		if items[i].EntityName != participantEntityApplication {
+			continue
+		}
+		applicationID, okApplication := positiveInteger(items[i].EntityMeta["id"])
+		versionID, okVersion := participantVersionID(items[i].EntitySettings)
+		project, okProject := positiveInteger(items[i].EntityMeta["project_id"])
+		name, _ := items[i].Meta["name"].(string)
+		if !okApplication || !okVersion || !okProject || name == "" || schema(strconv.FormatInt(project, 10)) != s {
+			continue
+		}
+		candidates = append(candidates, applicationcomposition.Identity{ApplicationID: applicationID, VersionID: int64(versionID)})
+		indexes = append(indexes, i)
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	fits, err := applicationcomposition.ChatToolFits(ctx, NewCompositionSource(r.pool, s), candidates)
+	if err != nil {
+		return
+	}
+	for k, i := range indexes {
+		items[i].Meta["agent_subtree_tiers"] = fits[k].Tiers
+		items[i].Meta["max_agent_nesting_tiers"] = applicationcomposition.MaxAgentTiers
+		items[i].Meta["is_container"] = !fits[k].Fits || fits[k].Tiers > 1
+	}
 }
 
 // enrichAgentParticipantPublication answers, for each agent participant,
@@ -1304,13 +1354,42 @@ func (r *ConversationsRepo) UpdateEntitySettings(ctx context.Context, projectID,
 	if err != nil {
 		return apierr.BadRequest("invalid participant settings")
 	}
-	q := fmt.Sprintf(`UPDATE %s.chat_participant_mapping SET entity_settings = $1 WHERE conversation_id = $2 AND participant_id = $3`, s)
-	result, err := r.pool.Exec(ctx, q, data, id, participantID)
+	// FU-244: switching an agent or pipeline participant to another version is
+	// a composition change; the new version must hold as a root. The mapping
+	// row is locked and the participant's project authorized inside the same
+	// transaction as the write, so a decision cannot outlive the access it read.
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("conversations: update entity settings: %w", err)
 	}
-	if result.RowsAffected() == 0 {
+	defer func() { _ = tx.Rollback(ctx) }()
+	var entityName string
+	var entityMeta []byte
+	err = tx.QueryRow(ctx, fmt.Sprintf(`SELECT p.entity_name, p.entity_meta::text
+		FROM %s.chat_participant_mapping AS pm JOIN %s.chat_participants AS p ON p.id = pm.participant_id
+		WHERE pm.conversation_id = $1 AND pm.participant_id = $2
+		FOR UPDATE OF pm`, s, s), id, participantID).Scan(&entityName, &entityMeta)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return apierr.NotFound("participant not found")
+	}
+	if err != nil {
+		return fmt.Errorf("conversations: update entity settings: participant: %w", err)
+	}
+	if _, switches := settings["version_id"]; switches {
+		var meta map[string]any
+		if err := json.Unmarshal(entityMeta, &meta); err != nil {
+			return fmt.Errorf("conversations: update entity settings: participant meta: %w", err)
+		}
+		if err := checkParticipantComposition(ctx, tx, s, entityName, meta, settings); err != nil {
+			return err
+		}
+	}
+	q := fmt.Sprintf(`UPDATE %s.chat_participant_mapping SET entity_settings = $1 WHERE conversation_id = $2 AND participant_id = $3`, s)
+	if _, err := tx.Exec(ctx, q, data, id, participantID); err != nil {
+		return fmt.Errorf("conversations: update entity settings: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("conversations: update entity settings: %w", err)
 	}
 	return nil
 }
@@ -3104,6 +3183,12 @@ func nilIfEmpty(s string) *string {
 func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s string, id int64, body map[string]any) (int, error) {
 	entityName, _ := body["entity_name"].(string)
 	entityMetaMap, _ := body["entity_meta"].(map[string]any)
+	entitySettingsMap, _ := body["entity_settings"].(map[string]any)
+	// FU-244: a conversation runs an agent or pipeline participant as a root,
+	// so its saved composition must hold (no cycle, at most 3 agent levels).
+	if err := checkParticipantComposition(ctx, transaction, s, entityName, entityMetaMap, entitySettingsMap); err != nil {
+		return 0, err
+	}
 	entityMeta, _ := json.Marshal(body["entity_meta"])
 	entitySettings, _ := json.Marshal(body["entity_settings"])
 	if string(entitySettings) == "null" {

@@ -161,7 +161,10 @@ type QuietKind =
   | 'subagent_finished'
   | 'process_started'
   | 'tool_output_delta'
-  | 'process_exited';
+  | 'process_exited'
+  | 'steer_queued'
+  | 'steer_injected'
+  | 'steer_dropped';
 
 const QUIET_KINDS: ReadonlySet<AgentEvent['kind']> = new Set<QuietKind>([
   'text_delta',
@@ -177,6 +180,9 @@ const QUIET_KINDS: ReadonlySet<AgentEvent['kind']> = new Set<QuietKind>([
   'process_started',
   'tool_output_delta',
   'process_exited',
+  'steer_queued',
+  'steer_injected',
+  'steer_dropped',
 ]);
 
 /**

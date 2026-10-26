@@ -42,6 +42,11 @@ struct Checkpoint {
     delegation: Option<adk_rust::Content>,
     #[serde(default)]
     output_continuation: Option<output::OutputContinuation>,
+    /// The steering messages the model request holds (client contract
+    /// 1.27), so a replacement claim acknowledges them instead of taking
+    /// them again.
+    #[serde(default)]
+    steering_ids: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -151,6 +156,7 @@ pub(super) struct ModelCheckpointWriter {
     read_only_tools: Option<ReadOnlyTools>,
     replay_delegation: Option<Arc<Mutex<Option<adk_rust::Content>>>>,
     output_continuation: Arc<Mutex<Option<output::OutputContinuation>>>,
+    steering: Option<Arc<dyn crate::state::TurnSteering>>,
 }
 
 /// Names of the read-only tools a child was offered (D2, T-2A §8).
@@ -179,6 +185,7 @@ impl ModelCheckpointWriter {
             read_only_tools: None,
             replay_delegation: None,
             output_continuation: Arc::default(),
+            steering: None,
         }
     }
 
@@ -196,6 +203,19 @@ impl ModelCheckpointWriter {
                 .read_only_tools
                 .as_ref()
                 .is_some_and(|tools| tools.lock().is_ok_and(|tools| tools.contains(name)))
+    }
+
+    /// The turn's steering queue: each persisted checkpoint names the
+    /// steering messages it holds and acknowledges them after the write.
+    pub(super) fn with_steering(
+        mut self,
+        steering: Option<Arc<dyn crate::state::TurnSteering>>,
+    ) -> Self {
+        if let Some(steering) = &steering {
+            steering.bind_checkpoint();
+        }
+        self.steering = steering;
+        self
     }
 
     pub(super) fn with_context_events(
@@ -357,6 +377,9 @@ impl ModelCheckpointWriter {
             })
         {
             return Err(invalid_checkpoint());
+        }
+        if let Some(steering) = &self.steering {
+            steering.restored(&checkpoint.steering_ids);
         }
         let Some(mut model) = checkpoint.model else {
             return Err(invalid_checkpoint());
@@ -661,6 +684,14 @@ impl ModelCheckpointWriter {
             checkpoint["output_continuation"] =
                 serde_json::to_value(output).map_err(|_| invalid_checkpoint())?;
         }
+        let steering_ids = self
+            .steering
+            .as_ref()
+            .map(|steering| steering.checkpoint_ids())
+            .unwrap_or_default();
+        if !steering_ids.is_empty() {
+            checkpoint["steering_ids"] = json!(steering_ids);
+        }
         event
             .actions
             .state_delta
@@ -681,7 +712,11 @@ impl ModelCheckpointWriter {
         // limits. A failed write stops ADK before the provider/tool call.
         self.sessions
             .append_event_for_identity(AppendEventRequest { identity, event })
-            .await
+            .await?;
+        if let (Some(steering), false) = (&self.steering, steering_ids.is_empty()) {
+            steering.persisted(&steering_ids).await;
+        }
+        Ok(())
     }
 }
 

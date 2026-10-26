@@ -14,6 +14,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 )
 
@@ -622,6 +623,8 @@ func TestCurrentApplicationStartRouteNamesThePipelineLimitItRefused(t *testing.T
 			pipelinelimits.CheckStart("nodes:\n  - id: fetch\n    type: toolkit\n    toolkit_name: jira\n", nil),
 			pipelinelimits.CodeToolkitNotAttached, `Attach "jira" under Tools → Toolkit`,
 		},
+		// FU-244: a stored composition the start validation rejects for a bound.
+		"composition": {applicationcomposition.ErrAtStart, applicationcomposition.Code, "form a circular reference"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			// The shape the use case returns: the unsupported sentinel plus the limit.

@@ -1839,6 +1839,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var currentNodeRecovery http.Handler
 	var currentExecutionInterrupts http.Handler
 	var currentAgentCancel http.Handler
+	var currentAgentSteering http.Handler
 	var currentApplicationTask http.Handler
 	var currentIndexCancel http.Handler
 	var currentIndexMeta http.Handler
@@ -2092,6 +2093,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			); scheduleErr != nil {
 				return fmt.Errorf("compose pipeline schedule job: %w", scheduleErr)
 			}
+			// The server's hand-off of leftover steering messages: it starts
+			// the next turn through the same use case as the chat composer.
+			if publicRoutes.Steering != nil {
+				if handOffErr := startSteeringHandOff(
+					ctx, runtimePools.Admission, publicRoutes.AgentStart,
+					legacyrbac.NewPostgresResolver(pool), publicRoutes.Steering, logger,
+				); handOffErr != nil {
+					return fmt.Errorf("compose steering hand-off: %w", handOffErr)
+				}
+			}
 			currentAgentStart, err = agentexecutionapi.NewCurrentApplicationStartRoute(
 				publicRoutes.AgentStart,
 				// The browser's session cookie is this route's only credential
@@ -2145,6 +2156,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			)
 			if err != nil {
 				return fmt.Errorf("compose current agent-cancel route: %w", err)
+			}
+		}
+		if publicRoutes.Steering != nil {
+			currentAgentSteering, err = agentexecutionapi.NewCurrentAgentSteeringRoute(
+				publicRoutes.Steering,
+				apiGroupAuth,
+				legacyrbac.NewPostgresResolver(pool),
+				auditRecorder,
+			)
+			if err != nil {
+				return fmt.Errorf("compose current agent-steering route: %w", err)
 			}
 		}
 		// The legacy application_task path (issue 254 P2). It needs BOTH halves
@@ -2698,6 +2720,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SCIMAccessTokenTTL:             scimAccessTokenTTL,
 		SCIMClientAddresses:            scimClientAddresses,
 		CurrentAgentCancel:             currentAgentCancel,
+		CurrentAgentSteering:           currentAgentSteering,
 		CurrentLocalTurns:              currentLocalTurns,
 		CurrentWorkspaceHandoff:        workspaceHandoff.Route,
 		CloudExecutorStorageEncryption: workspaceHandoff.Encryption,

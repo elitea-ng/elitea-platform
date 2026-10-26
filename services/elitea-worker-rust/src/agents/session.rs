@@ -303,6 +303,10 @@ pub(crate) struct OrdinaryRuntimeBindings {
     /// The cloud workspace's argument-aware confirmation (ADR-0034): a
     /// destructive or escaping `run_command` is a HITL interrupt.
     tool_call_confirmation: Option<Arc<dyn adk_rust::agent::ToolCallConfirmation>>,
+    /// Client contract 1.27: the user messages queued against the running
+    /// turn, taken by the root agent at each safe point. Only the ordinary
+    /// root agent takes them; a pipeline or a child agent never does.
+    steering: Option<Arc<dyn crate::state::TurnSteering>>,
 }
 
 impl OrdinaryRuntimeBindings {
@@ -326,7 +330,18 @@ impl OrdinaryRuntimeBindings {
             application_runtime,
             lazy_tools_index: None,
             tool_call_confirmation: None,
+            steering: None,
         }
+    }
+
+    /// Take steering messages at the root agent's safe points.
+    #[must_use]
+    pub(crate) fn with_steering(
+        mut self,
+        steering: Option<Arc<dyn crate::state::TurnSteering>>,
+    ) -> Self {
+        self.steering = steering;
+        self
     }
 
     /// Ask a person before a destructive or escaping `run_command` of the
@@ -466,6 +481,8 @@ pub(crate) struct PipelineRuntimeBindings {
     pub(crate) nodes: super::graph::compiler::PipelineNodeRuntimes,
     pub(crate) applications: ApplicationRuntimeProjection,
     pub(crate) node_events: Option<PipelineNodeEventReceiver>,
+    /// Attachments a pipeline `agent` node's Agent left out (FU-243), named on the notice.
+    pub(crate) skipped_application_children: Vec<SkippedApplicationChild>,
 }
 
 fn application_event_agent(
@@ -2069,6 +2086,7 @@ pub(super) async fn assemble_pipeline_native(
         nodes: node_runtimes,
         applications: application_runtime,
         node_events,
+        skipped_application_children,
     } = runtime;
     let ApplicationRuntimeProjection {
         presentations: application_tools,
@@ -2181,6 +2199,13 @@ pub(super) async fn assemble_pipeline_native(
         ))
         .build()
         .map_err(|_| invalid_configuration())?;
+    // FU-243: a pipeline root names what its Agent nodes left out, like an ordinary root.
+    let projection =
+        projection.with_skipped_capabilities(super::skipped_capabilities::skipped_capabilities(
+            &[],
+            InternalToolCatalog::empty(),
+            &skipped_application_children,
+        ));
     let projector = AgentEventProjector::with_tool_catalogs(
         projection,
         SensitiveToolCatalog::default(),
@@ -2794,7 +2819,8 @@ where
     )
     .with_request_budget(model.request_budget())
     .with_context_compaction(durable_context)
-    .with_step_compaction(step_compaction);
+    .with_step_compaction(step_compaction)
+    .with_steering(runtime.steering.clone());
     let checkpoint = if checkpoint_recovery {
         let restored = checkpoint
             .restore(session.as_ref())
@@ -2865,6 +2891,23 @@ where
     ))
 }
 
+/// The argument-aware confirmation gate and the steering source of the root
+/// agent, each only when the turn has one.
+fn bind_turn_hooks(
+    mut builder: LlmAgentBuilder,
+    tool_call_confirmation: Option<Arc<dyn adk_rust::agent::ToolCallConfirmation>>,
+    steering: Option<Arc<dyn crate::state::TurnSteering>>,
+) -> LlmAgentBuilder {
+    if let Some(gate) = tool_call_confirmation {
+        builder = builder.tool_call_confirmation(gate);
+    }
+    if let Some(source) = steering {
+        let source: Arc<dyn adk_rust::agent::SteeringSource> = source;
+        builder = builder.steering_source(source);
+    }
+    builder
+}
+
 fn build_runtime_agent(
     model: Arc<dyn Llm>,
     generation_config: GenerateContentConfig,
@@ -2899,6 +2942,7 @@ fn build_runtime_agent(
         // Already part of the bound model's system instruction (ordinary.rs).
         lazy_tools_index: _,
         tool_call_confirmation,
+        steering,
     } = runtime;
     let mut delegated_authorization = delegated_authorization;
     let (model, toolsets) = crate::toolkits::bind_authorization_model_tools(
@@ -2948,9 +2992,7 @@ fn build_runtime_agent(
     if internal_tools.ask_user_enabled() {
         builder = builder.require_tool_confirmation(ASK_USER_TOOL_NAME);
     }
-    if let Some(gate) = tool_call_confirmation {
-        builder = builder.tool_call_confirmation(gate);
-    }
+    builder = bind_turn_hooks(builder, tool_call_confirmation, steering);
     let ApplicationRuntimeProjection {
         presentations: application_tools,
         events: application_events,
@@ -3101,6 +3143,7 @@ async fn prepare_direct_resume(
         // Already part of the bound model's system instruction (ordinary.rs).
         lazy_tools_index: _,
         tool_call_confirmation,
+        steering,
     } = runtime;
     let events = stored.events().all();
     let resolved = match start {
@@ -3222,7 +3265,8 @@ async fn prepare_direct_resume(
         .with_internal_tools(internal_tools)
         .with_instruction_plan(instruction_plan)
         .with_toolkit_attribution(toolkit_attribution)
-        .with_tool_call_confirmation(tool_call_confirmation),
+        .with_tool_call_confirmation(tool_call_confirmation)
+        .with_steering(steering),
         parallel_applications,
     })
 }

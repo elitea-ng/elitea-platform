@@ -27,6 +27,10 @@
  * shrinks it and answers a token and a thumbnail. The thumbnails sit above
  * the input with a remove button each; Send carries the tokens. The host
  * enforces the limits (five images, 10 MiB each); this only stops offering.
+ *
+ * Steering (`onSteer`): while a turn runs, the input stays open and Send queues the text against the turn
+ * (images stay for the next turn). "Stop and send" (`onStopAndSend`) stops the turn and sends the text next.
+ * Texts that did not start the next turn (`unsent`) go back into the input, with "Send again" (`SteeringControls`).
  */
 import { useMemo, useRef, useState, type ComponentRef, type KeyboardEvent, type ReactNode } from 'react';
 
@@ -44,6 +48,8 @@ import { NewChatInput } from '@/features/chat-input';
 import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
 
 import { FooterControls } from './FooterControls';
+import { RetryUnsent, StopAndSend, useRestoredDraft } from './SteeringControls';
+import type { UnsentSteers } from './useSteering';
 import type { ComposerSkill } from './useAgentSkills';
 import { useImageAttachments } from './useImageAttachments';
 import type { SentImages } from './useSendPrompt';
@@ -109,6 +115,12 @@ export interface WorkspaceComposerProps {
   onStepsCommand?: ((command: StepsCommand) => void) | undefined;
   /** The composer got focus: the page lets the host read ahead for the send (#1213). */
   onFocus?: () => void;
+  /** While `busy`: Send queues the text against the running turn; resolves `true` once queued (the input clears). */
+  onSteer?: ((text: string) => Promise<boolean>) | undefined;
+  /** While `busy`: stop the turn, then send the text as the next turn. */
+  onStopAndSend?: ((text: string) => Promise<boolean>) | undefined;
+  /** The texts that did not start the next turn: put into the input, with "Send again" while no turn runs. */
+  unsent?: UnsentSteers | undefined;
 }
 
 /** What `/steps <value>` asks for (`composer.stepsCommand`). */
@@ -132,11 +144,15 @@ function sendButtonSx(theme: Theme) {
 }
 
 /** The input's hint: what to type, or why it is off. */
-function placeholderFor(readOnly: boolean): string {
-  return readOnly
-    ? t('workspace.composer.cloudPlaceholder', 'This thread is running in the cloud. Take it back to continue here.')
+function placeholderFor(readOnly: boolean, steering: boolean): string {
+  if (readOnly) return t('workspace.composer.cloudPlaceholder', 'This thread is running in the cloud. Take it back to continue here.');
+  return steering
+    ? t('workspace.steer.placeholder', 'Add a message for the agent. It reads it after its current step.')
     : t('workspace.composer.placeholder', 'What should the agent do? Type @ to add a file, / for commands and skills');
 }
+
+/** Send steers the running turn: the page offers it and a turn runs. */
+const steersNow = (busy: boolean, onSteer: WorkspaceComposerProps['onSteer']): boolean => busy && onSteer !== undefined;
 
 /** One "/" menu row: host commands under the menu's title, then a section per source, then the skills. */
 function slashItem(entry: SlashEntry): SuggestionItem {
@@ -163,8 +179,7 @@ function slashItem(entry: SlashEntry): SuggestionItem {
   }
 }
 
-/** What the start request names for the skill a message invokes: a version skill by name, a project skill by id. */
-/** The start request's `skills` for the skill a message invokes. */
+/** The start request's `skills` for the skill a message invokes: a version skill by name, a project skill by id. */
 export function skillPicks(skill: ComposerSkill | null): TurnStartRequest['skills'] {
   if (skill === null) return [];
   return [skill.project === true ? { source: 'project', id: skill.id } : skill.name];
@@ -184,6 +199,8 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   const { ipc, workspaceId, canSend, busy, planMode, onPlanModeChange, skills, customCommands, onSend, onStop, onCommand } = props;
   // The thread runs in the cloud: the input is off, and `canSend` is false.
   const locked = props.readOnly === true;
+  const steering = steersNow(busy, props.onSteer);
+  const [hasDraft, setHasDraft] = useState(false);
   const inputRef = useRef<ComposerHandle>(null);
   const [token, setToken] = useState<Token>(null);
   const [dismissed, setDismissed] = useState<Token>(null);
@@ -191,6 +208,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   // What was picked with "@", in pick order (a folder keeps its trailing "/").
   const [picked, setPicked] = useState<string[]>([]);
   const attachments = useImageAttachments(ipc, workspaceId, takesImages(props.acceptImages, locked));
+  useRestoredDraft(inputRef, props.unsent, () => setHasDraft(true));
 
   const open = token !== null && !sameToken(token, dismissed) ? token : null;
   const files = useQuery({
@@ -217,6 +235,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   const highlighted = Math.min(activeIndex, Math.max(items.length - 1, 0));
 
   const track = (value: string): void => {
+    setHasDraft(value.trim() !== '');
     const caret = inputRef.current?.getCursorPosition() ?? value.length;
     const next = composer.activeToken(value, caret);
     if (!sameToken(next, token)) setActiveIndex(0);
@@ -278,6 +297,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
 
   const clearInput = (): void => {
     inputRef.current?.reset();
+    setHasDraft(false);
     setPicked([]);
     setToken(null);
   };
@@ -295,6 +315,11 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
       clearInput();
       return;
     }
+    if (steering) {
+      // A steering message is plain text: the images stay for the next turn.
+      void props.onSteer?.(question).then((queued) => queued && clearInput());
+      return;
+    }
     const mentions = composer.referencedPaths(question, picked);
     // The longest name the message starts with; a custom command over a skill of its name.
     const { command, skill } = composer.invokedPick(question, customCommands, skills);
@@ -305,6 +330,16 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
       clearInput();
       attachments.clear();
     });
+  };
+
+  const stopAndSend = (): void => {
+    const text = inputRef.current?.getInputContent() ?? '';
+    if (text.trim() !== '') void props.onStopAndSend?.(text).then((sent) => sent && clearInput());
+  };
+
+  const retryUnsent = (): void => {
+    const text = inputRef.current?.getInputContent() ?? '';
+    if (text.trim() !== '') void props.unsent?.onRetry(text).then((sent) => sent && clearInput());
   };
 
   return (
@@ -325,11 +360,13 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
           onClose={() => setDismissed(open)}
         />
       )}
+      <StopAndSend shown={steersNow(busy, props.onStopAndSend)} disabled={!hasDraft} onClick={stopAndSend} />
+      <RetryUnsent unsent={props.unsent} busy={busy} hasDraft={hasDraft} canSend={canSend} onClick={retryUnsent} />
       <NewChatInput
         ref={inputRef}
-        state={{ isStreaming: busy, disabledSend: !canSend, disabledInput: locked }}
+        state={{ isStreaming: busy, disabledSend: !canSend, disabledInput: locked, allowSendWhileStreaming: steering }}
         content={{
-          placeholder: props.placeholder ?? placeholderFor(locked),
+          placeholder: props.placeholder ?? placeholderFor(locked, steering),
           clearInputAfterSubmit: false,
           tooltipOfSendButton: t('workspace.send', 'Send'),
         }}
