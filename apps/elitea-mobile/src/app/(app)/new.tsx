@@ -51,6 +51,8 @@ export default function NewConversationScreen() {
   const workspace = useWorkspaceInfo();
   const contract13 = speaksContract(workspace?.discovery, 1, 3);
   const suggested = useRecommendations(projectId, contract13);
+  // Create an agent (client contract 1.28, ADR-0037): the builder replaces this sheet.
+  const canCreateAgent = speaksContract(workspace?.discovery, 1, 28);
   const [error, setError] = useState<string | null>(null);
 
   const start = async (choice: Choice) => {
@@ -158,7 +160,20 @@ export default function NewConversationScreen() {
           stickySectionHeadersEnabled={false}
           contentContainerStyle={[styles.list, { paddingHorizontal: margin }]}
           ListHeaderComponent={
-            suggestions.length > 0 ? (
+            <>
+            {canCreateAgent && needle === '' ? (
+              <View style={[styles.cell, styles.create, { backgroundColor: colors.surface, borderRadius: radius.listRow }]}>
+                <ListRow
+                  title="Create an agent"
+                  subtitle="Describe it; AI writes it and you review it"
+                  leading={<IconTile icon="sparkles" size={36} tone="accent" />}
+                  disabled={busyKey !== null}
+                  onPress={() => router.replace('/agent-new')}
+                  testID="new-create-agent"
+                />
+              </View>
+            ) : null}
+            {suggestions.length > 0 ? (
               <View style={styles.suggested}>
                 <Text heading variant="footnote" tone="secondary" emphasized style={styles.sectionHeader}>
                   Suggested
@@ -180,7 +195,8 @@ export default function NewConversationScreen() {
                   }}
                 />
               </View>
-            ) : undefined
+            ) : null}
+            </>
           }
           ListEmptyComponent={
             needle !== '' ? (
@@ -251,5 +267,6 @@ const styles = StyleSheet.create({
   sectionHeader: { paddingHorizontal: 16, paddingBottom: 6 },
   suggested: { paddingBottom: 20, gap: 6 },
   cell: { overflow: 'hidden', borderCurve: 'continuous' },
+  create: { marginBottom: 20 },
   divider: { height: StyleSheet.hairlineWidth, marginStart: 64 },
 });
