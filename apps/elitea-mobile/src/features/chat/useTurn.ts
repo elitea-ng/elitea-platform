@@ -1,5 +1,5 @@
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 
 import { queryKeys } from '@/api/queries/keys';
 import type { components } from '@/api/generated/elitea.gen';
@@ -26,6 +26,7 @@ import {
   subscribeLiveTurns,
   turnKey,
   type LiveTurn,
+  type SteerOutcome,
 } from '@/features/chat/turnController';
 
 const noopSubscribe = () => () => {};
@@ -44,7 +45,30 @@ export interface UseTurnArgs {
   participantId: number | null;
   /** The model of a plain model conversation (adhoc turn); null for an agent. */
   model?: TurnModel | null;
+  /**
+   * The workspace speaks client contract 1.26: a message sent while the
+   * answer runs steers it (it is queued and read at the next safe point).
+   */
+  steering?: boolean;
 }
+
+/** What the composer says when a message could not steer the running answer; null when it was taken. */
+export function steerOutcomeText(outcome: SteerOutcome): string | null {
+  switch (outcome) {
+    case 'queued':
+    case 'after_turn':
+      return null;
+    case 'not_supported':
+      return STEERING_NOT_SUPPORTED_TEXT;
+    case 'queue_full':
+      return 'The agent already has the most waiting messages. Wait for the answer to finish.';
+    default:
+      return "Couldn't send the message to the running answer. Try again.";
+  }
+}
+
+/** The notice while a turn that cannot take messages runs (a pipeline). */
+export const STEERING_NOT_SUPPORTED_TEXT = "This agent can't read new messages while it works. Send yours when the answer is finished.";
 
 /** What a message carries besides its text. */
 export interface SendExtras {
@@ -82,6 +106,15 @@ export interface UseTurn {
   reconnect: () => void;
   /** Forget a failed or settled turn. */
   dismiss: () => void;
+  /**
+   * A message sent now steers the running answer (client contract 1.26):
+   * the workspace speaks 1.26 and the answer streams and is admitted.
+   */
+  canSteer: boolean;
+  /** Changes the text of a pending steering message. Resolves to an error text, or null. */
+  editSteering: (id: string, text: string) => Promise<string | null>;
+  /** Removes a pending steering message. Resolves to an error text, or null. */
+  removeSteering: (id: string) => Promise<string | null>;
   busy: boolean;
   /**
    * Stops the streaming answer on the server (client contract 1.3; the
@@ -183,8 +216,15 @@ export function freshConversation<T>(queryClient: QueryClient, projectId: number
  * body, stream replayed from the start); unmounting stops its network work
  * but keeps the turn for the next mount.
  */
-export function useTurn({ projectId, conversationRef, conversationUuid, participantId, model = null }: UseTurnArgs): UseTurn {
+export function useTurn({ projectId, conversationRef, conversationUuid, participantId, model = null, steering = false }: UseTurnArgs): UseTurn {
   const queryClient = useQueryClient();
+  // The end-of-turn rule of steering (contract 1.26) sends the leftover texts as ONE normal message, through `send`.
+  const sendRef = useRef<(text: string) => Promise<string | null>>(async () => null);
+  const onLeftover = useCallback((text: string) => {
+    void sendRef.current(text).then((problem) => {
+      if (problem !== null) log.warn('could not send the waiting messages', { problem });
+    });
+  }, []);
   const key = projectId !== null && conversationUuid ? turnKey(projectId, conversationUuid) : null;
 
   const getController = useCallback(() => (key ? (getLiveTurn(key) ?? null) : null), [key]);
@@ -220,6 +260,14 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
       };
       if (projectId === null || !conversationUuid || participantId === null || key === null) {
         return 'This conversation cannot be messaged from mobile.';
+      }
+      const running = getLiveTurn(key);
+      if (steering && running?.isActive) {
+        // Steering (contract 1.26): the text goes to the running answer, not to a new turn.
+        if (fields.attachments) return 'Send files when the answer is finished.';
+        if (running.getSnapshot().steeringUnsupported === true) return STEERING_NOT_SUPPORTED_TEXT;
+        if (!running.canSteer) return 'The answer has not started yet. Try again in a moment.';
+        return steerOutcomeText(await running.steer(text));
       }
       if (shouldQueue() || (await mustQueueBehindOutbox(projectId, conversationUuid))) {
         // Offline with the encrypted store open, or an earlier message of this
@@ -264,6 +312,7 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
               if (queued && getLiveTurn(key) === next) setLiveTurn(key, null);
               return queued;
             },
+            onLeftover,
           },
         );
       } catch (error) {
@@ -274,8 +323,11 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
       setLiveTurn(key, next);
       return null;
     },
-    [projectId, conversationUuid, participantId, model, key, queryClient, conversationRef],
+    [projectId, conversationUuid, participantId, model, key, queryClient, conversationRef, steering, onLeftover],
   );
+  useEffect(() => {
+    sendRef.current = send;
+  }, [send]);
 
   const continueWith = useCallback(
     async (contract: ContinueContract, body: components['schemas']['ChatContinueRequest']): Promise<string | null> => {
@@ -289,11 +341,12 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
         onRefreshNeeded: () => void refetch(),
         // Someone answered it first: the transcript shows what happened.
         onAlreadyResolved: () => void refetch(),
+        onLeftover,
       });
       setLiveTurn(key, next);
       return null;
     },
-    [projectId, conversationUuid, key, queryClient, conversationRef],
+    [projectId, conversationUuid, key, queryClient, conversationRef, onLeftover],
   );
 
   const regenerate = useCallback(
@@ -316,6 +369,7 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
               if (regeneration) onSettled?.(detail === null ? null : answerRegenerated(detail, regeneration.answerUuid, regeneration.regenerationId));
             },
             onRefreshNeeded: () => void refetch(),
+            onLeftover,
           },
         );
       } catch (error) {
@@ -325,14 +379,17 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
       setLiveTurn(key, next);
       return null;
     },
-    [projectId, conversationUuid, key, model, queryClient, conversationRef],
+    [projectId, conversationUuid, key, model, queryClient, conversationRef, onLeftover],
   );
 
   const retry = useCallback(() => void controller?.reattach(), [controller]);
   const reconnect = useCallback(() => controller?.reconnect(), [controller]);
+  // Only the turn this render shows: the end-of-turn rule of steering can start the next turn first.
   const dismiss = useCallback(() => {
-    if (key) setLiveTurn(key, null);
-  }, [key]);
+    if (key && (controller === null || getLiveTurn(key) === controller)) setLiveTurn(key, null);
+  }, [key, controller]);
+  const editSteering = useCallback(async (id: string, text: string) => (controller ? controller.editSteering(id, text) : null), [controller]);
+  const removeSteering = useCallback(async (id: string) => (controller ? controller.removeSteering(id) : null), [controller]);
 
   const stop = useCallback(async (): Promise<StopResult> => {
     const result = (problem: string | null, restoreText: string | null = null, lostAttachments: string[] = []): StopResult => ({
@@ -384,5 +441,12 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
     },
     [key],
   );
-  return { live, send, continueWith, retry, reconnect, dismiss, busy, stop, canStop, isRunning, regenerate };
+  const canSteer =
+    steering &&
+    live !== null &&
+    !live.queued &&
+    live.turn.phase === 'streaming' &&
+    (live.execution?.responseMessageId ?? null) !== null &&
+    live.steeringUnsupported !== true;
+  return { live, send, continueWith, retry, reconnect, dismiss, busy, stop, canStop, isRunning, regenerate, canSteer, editSteering, removeSteering };
 }

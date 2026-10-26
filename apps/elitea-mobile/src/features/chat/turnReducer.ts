@@ -1,4 +1,4 @@
-import { ANSWER_DELTA_TYPES, FRAME_TYPE, TURN_FAILURE_TYPES } from '@elitea/client-core/stream';
+import { ANSWER_DELTA_TYPES, FRAME_TYPE, TURN_FAILURE_TYPES, mergeSteeringAll, type SteeringItem } from '@elitea/client-core/stream';
 
 import type { Frame, NodeEvent } from '@/features/chat/frames';
 import { budgetRefusalText, budgetScopeOf, type BudgetScope } from '@/features/usage/budgetRefusal';
@@ -67,6 +67,20 @@ export interface TurnState {
    * `CANCELLED`. It settles like a finished answer, keeping its partial text.
    */
   stopped: boolean;
+  /**
+   * The steering messages of this turn (client contract 1.26), in queue
+   * order: from the `steer.*` frames and from the steering calls' answers.
+   */
+  steering: SteeringItem[];
+}
+
+/**
+ * Folds steering messages into the turn, also after it ended (the REST
+ * answers and the list read at the end come after the terminal frame).
+ */
+export function withSteering(state: TurnState, items: readonly SteeringItem[]): TurnState {
+  if (items.length === 0) return state;
+  return { ...state, steering: mergeSteeringAll(state.steering, items) };
 }
 
 export const INITIAL_TURN: TurnState = {
@@ -80,6 +94,7 @@ export const INITIAL_TURN: TurnState = {
   tools: [],
   pause: null,
   stopped: false,
+  steering: [],
 };
 /** The `execution.failed` code of a run that was stopped. */
 export const CANCELLED_CODE = 'CANCELLED';
@@ -130,6 +145,7 @@ function failureText(content: unknown): string {
 }
 
 export function reduceTurn(state: TurnState, frame: Frame): TurnState {
+  if (frame.kind === 'steer') return withSteering(state, [frame.item]);
   // A settled turn ignores late frames.
   if (state.phase === 'done' || state.phase === 'failed' || state.phase === 'paused') return state;
 

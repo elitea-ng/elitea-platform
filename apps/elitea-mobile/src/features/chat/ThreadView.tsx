@@ -27,6 +27,8 @@ import { AssistantAvatar, useAgentIconUri } from '@/features/chat/AssistantAvata
 import { ChatEmptyState, MODEL_CHAT_SUGGESTIONS } from '@/features/chat/ChatEmptyState';
 import { ThreadLayout, Toast, useToast } from '@/features/chat/ThreadLayout';
 import { LiveReply, PersistedMessage, QueuedMessage } from '@/features/chat/ThreadRows';
+import { SteeringMessage, steeringRows } from '@/features/chat/SteeringRows';
+import type { SteeringItem } from '@elitea/client-core/stream';
 import { displayHost } from '@/features/connect/connectFlow';
 import type { ActiveTrigger, MentionCandidate, TriggerChar } from '@/features/chat/mentions/mentions';
 import {
@@ -84,7 +86,7 @@ import { canReadAloud, readAloud, stopReading, useReading } from '@/features/spe
 import { exportErrorText } from '@/api/queries/exportConversation';
 import { shareTranscript } from '@/features/chat/export/shareTranscript';
 import { answerHiddenByRegeneration, newQuestionId, type LiveTurn } from '@/features/chat/turnController';
-import { ATTACHMENT_ONLY_TEXT, useTurn } from '@/features/chat/useTurn';
+import { ATTACHMENT_ONLY_TEXT, STEERING_NOT_SUPPORTED_TEXT, useTurn } from '@/features/chat/useTurn';
 import { CloudExecutorNotice } from '@/features/localWork/CloudExecutorNotice';
 import { lastAnswerRanOnDesktop } from '@/features/localWork/model';
 import { useLocalWork } from '@/features/localWork/useLocalWork';
@@ -98,7 +100,9 @@ type Row =
   | { kind: 'persisted'; key: string; message: ChatMessage }
   | { kind: 'outbox'; key: string; item: OutboxItem }
   | { kind: 'live_user'; key: string; text: string; files: string[] }
-  | { kind: 'live_reply'; key: string; live: LiveTurn };
+  | { kind: 'live_reply'; key: string; live: LiveTurn }
+  /** A message sent while the live answer runs (client contract 1.26). */
+  | { kind: 'steer'; key: string; item: SteeringItem; own: boolean };
 
 /**
  * Where the thread is drawn: `stack`, its own screen (`/c/[id]`) whose title and actions go in
@@ -149,6 +153,8 @@ export function ThreadView({
   const forkAvailable = speaksContract(workspace?.discovery, 1, 11);
   // Client contract 1.12: read markers (markConversationRead).
   const contract112 = speaksContract(workspace?.discovery, 1, 12);
+  // Client contract 1.26: a message sent while the answer runs steers it.
+  const contract126 = speaksContract(workspace?.discovery, 1, 26);
   const { policy } = usePolicy();
   const [actionsFor, setActionsFor] = useState<{ message: ChatMessage; dislike: boolean } | null>(null);
   // On-device speech: dictation into the composer, and reading an answer aloud.
@@ -192,6 +198,7 @@ export function ThreadView({
     conversationUuid,
     participantId: target.ok && addressable ? target.participantId : null,
     model: target.ok && target.kind === 'model' ? model : null,
+    steering: contract126,
   });
   const { live, dismiss } = turn;
   // VoiceOver hears when the answer is done, stopped, failed or waits for the user.
@@ -681,6 +688,12 @@ export function ThreadView({
   // Inverted list: the first rows are the newest, at the bottom.
   for (const item of [...outbox].reverse()) rows.push({ kind: 'outbox', key: `outbox-${item.questionId}`, item });
   if (live && !live.settled) {
+    // Steering messages go under the live answer (the list is inverted: pushed first is drawn lowest).
+    const transcriptIds = new Set(messages.map((m) => m.uuid).filter((id): id is string => id !== null));
+    const own = new Set(live.ownSteering ?? []);
+    for (const item of steeringRows(live.turn.steering, transcriptIds).reverse()) {
+      rows.push({ kind: 'steer', key: `steer-${item.id}`, item, own: own.has(item.id) });
+    }
     rows.push({ kind: 'live_reply', key: `live-reply-${live.questionId}`, live });
     const lastUser = [...messages].reverse().find((m) => m.role === 'user');
     if (!live.continuation && lastUser?.text !== live.userText) {
@@ -845,6 +858,16 @@ export function ThreadView({
                       );
                     case 'outbox':
                       return <QueuedMessage item={item.item} onSendAgain={turn.send} />;
+                    case 'steer':
+                      return (
+                        <SteeringMessage
+                          item={item.item}
+                          own={item.own}
+                          onEdit={turn.editSteering}
+                          onRemove={turn.removeSteering}
+                          onStopAndSend={contract13 && online && turn.canStop ? () => void stopWithFiles() : null}
+                        />
+                      );
                     case 'live_reply':
                       return (
                         <LiveReply
@@ -914,7 +937,13 @@ export function ThreadView({
             disabledReason={disabledReason}
             busy={turn.busy}
             people={people}
-            hint={mentionHint}
+            hint={
+              turn.canSteer
+                ? 'The agent reads your message at its next step.'
+                : turn.busy && live?.steeringUnsupported === true
+                  ? STEERING_NOT_SUPPORTED_TEXT
+                  : mentionHint
+            }
             externalTriggers={externalTriggers}
             onTriggerChange={setTrigger}
             externalSuggestions={suggestionState}
@@ -938,6 +967,7 @@ export function ThreadView({
             leading={<AttachButton disabledReason={attachReason} scan={documentScan.source} onPick={(source) => void pickInto(source)} onBlocked={showToast} />}
             onSend={({ text, mentions }) => sendWithFiles(text, mentions)}
             onStop={contract13 && online && turn.canStop ? stopWithFiles : null}
+            steer={turn.canSteer}
             dictation={dictation}
             autoDictate={then === 'dictate' && dictation}
           />
