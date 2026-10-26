@@ -185,7 +185,15 @@ Counts from this branch head (after the review round and the merge of `main`), a
 with the CI environment (`ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`,
 `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`):
 
-R2_COUNTS
+- **Worker** `cargo test --offline --locked --no-fail-fast --all-targets --all-features -- --test-threads=4`:
+  **2646 passed, 0 failed, 103 ignored** (the ignored are the supervisor/preparation/hydration `#[ignore]` suites CI
+  runs separately). `cargo fmt --check` and `cargo clippy --locked --all-targets --all-features -D warnings` clean.
+  No `libs/rust` change.
+- **Main** `go test -race -count=1 ./...`: **222 packages ok, 0 failed** (33 without tests); `go vet` clean. The last
+  commit (`3ee734d8f`, the project-existence check) was run after it: its package passes, with the new case.
+- **Web** `vitest run`: 1914 files / **19023 tests passed**, 6 expected fail, 1 skipped; 1 failed:
+  `themePreference.test.ts` "keeps the mark in memory when storage refuses the write", which this branch does not touch
+  (pre-existing, storage behaviour under node). `tsc --noEmit` and `oxlint` clean.
 
 New or changed tests (red before the change where marked):
 
