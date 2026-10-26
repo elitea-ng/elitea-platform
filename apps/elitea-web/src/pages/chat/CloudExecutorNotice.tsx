@@ -13,7 +13,7 @@
  * `returning` (the desktop is taking the thread back) replaces the composer:
  * a new cloud turn would not start, so there is nothing to type into.
  */
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -35,7 +35,11 @@ import { eraseWorkspaceHandoff, getWorkspaceHandoff, requestWorkspaceReclaim, ty
 import { i18n, t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 
+import { changedCount, useCloudChanges } from './cloudChanges';
 import cloudCatalogue from './i18n/en.chatCloud.json';
+
+// The Files changed dialog loads when it is opened.
+const CloudFilesChanged = lazy(() => import('./CloudFilesChanged'));
 
 // The notice's strings ride with this (lazy) chat chunk, not the web app's
 // initial catalogue: only a handed-off Local work thread renders them. Deep
@@ -111,6 +115,26 @@ function Actions({ returning, isOwner, canErase, requesting, onTakeBack, onErase
   );
 }
 
+/** "Files changed (N)": what the cloud turns changed since the handoff; hidden until a turn recorded some. */
+function FilesChanged({ projectId, conversationUuid }: { projectId: string; conversationUuid: string }): React.JSX.Element | null {
+  const [open, setOpen] = useState(false);
+  const changes = useCloudChanges(projectId, conversationUuid, open);
+  const count = changedCount(changes.data);
+  if (changes.data === undefined || changes.data.turns.length === 0) return null;
+  return (
+    <>
+      <Button size="small" color="inherit" data-testid="cloud-files-changed-button" onClick={() => setOpen(true)}>
+        {t('pages.chat.cloud.files.open', 'Files changed ({{n}})', { n: String(count) })}
+      </Button>
+      {open && (
+        <Suspense fallback={null}>
+          <CloudFilesChanged projectId={projectId} conversationUuid={conversationUuid} open={open} onClose={() => setOpen(false)} />
+        </Suspense>
+      )}
+    </>
+  );
+}
+
 function useHandoffInfo(projectId: string, conversationUuid: string): { readonly requested: boolean } {
   const queryClient = useQueryClient();
   // The desktop taking the thread back (or an erase elsewhere) moves it without this page doing anything: the live stream says so at once, the poll is the fallback.
@@ -179,6 +203,7 @@ export default function CloudExecutorNotice({ projectId, conversationUuid, execu
               ? t('pages.chat.cloud.returningBody', 'This thread is being taken back to the desktop it came from. You can read it here; to continue, use the desktop app.')
               : t('pages.chat.cloud.body', 'This thread works on a copy of your desktop folder in the cloud. Take it back to continue on your desktop.')}
           </Typography>
+          <FilesChanged projectId={projectId} conversationUuid={conversationUuid} />
           <Actions
             returning={returning}
             isOwner={isOwner}

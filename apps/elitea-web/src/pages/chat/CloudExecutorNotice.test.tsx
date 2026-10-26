@@ -9,6 +9,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { getGetWorkspaceHandoffChangesMockHandler } from '@/shared/api/generated/chat/chat.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/api/sse/testing';
 import { resetConfigForTests } from '@/shared/config/get-config';
@@ -32,6 +33,8 @@ interface Served {
 function serve(options: { permissions?: string[]; info?: Record<string, unknown> } = {}): Served {
   const served: Served = { requests: [], erased: 0 };
   server.use(
+    // The Files changed count (the contract's example).
+    getGetWorkspaceHandoffChangesMockHandler(),
     http.get(`${BASE}/auth/permissions/prompt_lib/42`, () => HttpResponse.json((options.permissions ?? []).map((name) => ({ name, enabled: true })))),
     http.get(HANDOFF, () => HttpResponse.json(options.info ?? { state: 'CLOUD_IDLE', epoch: 2 })),
     http.delete(HANDOFF, () => {
@@ -59,6 +62,13 @@ beforeEach(() => configureGeneratedClient({ baseUrl: BASE }));
 afterEach(() => resetGeneratedClient());
 
 describe('CloudExecutorNotice', () => {
+  it('offers Files changed with what the cloud turns changed since the handoff', async () => {
+    serve();
+    mount();
+    // The example records three files since the handoff.
+    expect(await screen.findByTestId('cloud-files-changed-button')).toHaveTextContent('Files changed (3)');
+  });
+
   it('shows the Cloud executor badge', () => {
     serve();
     mount();
