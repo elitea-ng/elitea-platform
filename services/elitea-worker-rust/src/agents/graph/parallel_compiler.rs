@@ -28,6 +28,7 @@ use adk_rust::graph::{
     Channel, Checkpoint, Checkpointer, CompiledGraph, END, GraphError, Node, NodeContext,
     NodeOutput, START, State, StateGraph, StateSchema,
 };
+use elitea_agent_runtime::graph::fanout::runner::DecisionSource;
 use ring::digest;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -40,31 +41,48 @@ pub(crate) struct ParallelCompilerBinding {
     deadline: tokio::time::Instant,
     /// One latch per run, fired by the run's durable Stop.
     cancellation: Arc<FanoutCancellation>,
+    /// The claim's fenced decision ledger (none: nothing is ever decided).
+    decisions: Option<Arc<dyn DecisionSource>>,
 }
 
 impl ParallelCompilerBinding {
-    pub(crate) fn new(
-        authority: Arc<dyn ParallelCheckpointAuthority>,
-        deadline: tokio::time::Instant,
-    ) -> Result<Arc<Self>, PipelineConfigurationError> {
+    /// Whether fixed Parallel is admitted on this build. Checked before any
+    /// binding is built, so a gated pipeline is refused the same typed way.
+    pub(crate) fn admitted() -> Result<(), PipelineConfigurationError> {
         if !FIXED_PARALLEL_INTEGRATION_READY {
             return Err(PipelineConfigurationError::Unsupported(
                 "fixed Parallel requires composed continuation and restart acceptance",
             ));
         }
-        Ok(Arc::new(Self::bound(authority, deadline, Arc::default())))
+        Ok(())
+    }
+
+    pub(crate) fn new(
+        authority: Arc<dyn ParallelCheckpointAuthority>,
+        deadline: tokio::time::Instant,
+        decisions: Arc<dyn DecisionSource>,
+    ) -> Result<Arc<Self>, PipelineConfigurationError> {
+        Self::admitted()?;
+        Ok(Arc::new(Self::bound(
+            authority,
+            deadline,
+            Arc::default(),
+            Some(decisions),
+        )))
     }
 
     fn bound(
         authority: Arc<dyn ParallelCheckpointAuthority>,
         deadline: tokio::time::Instant,
         cancellation: Arc<FanoutCancellation>,
+        decisions: Option<Arc<dyn DecisionSource>>,
     ) -> Self {
         Self {
             occurrence: Arc::new(ParallelOccurrenceCheckpointer::new(authority.clone())),
             authority,
             deadline,
             cancellation,
+            decisions,
         }
     }
 
@@ -81,8 +99,9 @@ impl ParallelCompilerBinding {
     pub(crate) fn for_tests(
         authority: Arc<dyn ParallelCheckpointAuthority>,
         deadline: tokio::time::Instant,
+        decisions: Option<Arc<dyn DecisionSource>>,
     ) -> Arc<Self> {
-        Arc::new(Self::bound(authority, deadline, Arc::default()))
+        Arc::new(Self::bound(authority, deadline, Arc::default(), decisions))
     }
 }
 
@@ -146,6 +165,7 @@ impl PipelineDefinition {
             authority,
             binding.deadline,
             Arc::clone(&binding.cancellation),
+            binding.decisions.clone(),
         ));
         let parent: Arc<dyn Checkpointer> = bound.occurrence.clone();
         runtimes.parallel = Some(bound);
@@ -214,9 +234,12 @@ impl PipelineDefinition {
             factory,
             Arc::clone(&binding.occurrence),
         ));
+        let mut node = DurableParallelNode::new(definition.clone(), runtime);
+        if let Some(decisions) = &binding.decisions {
+            node = node.with_decisions(Arc::clone(decisions));
+        }
         builder = builder.node(
-            DurableParallelNode::new(definition.clone(), runtime)
-                .with_deadline(binding.deadline)
+            node.with_deadline(binding.deadline)
                 .with_cancellation(Arc::clone(&binding.cancellation))
                 .with_node_events(runtimes.events.clone())
                 .with_member_names(member_names)

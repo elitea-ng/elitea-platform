@@ -388,7 +388,7 @@ impl PipelineNativeAgentAssembler {
     #[cfg(not(test))]
     #[allow(clippy::unused_self)] // The test build reads its own flag.
     const fn fanout_composition(&self) -> super::session::FanoutComposition {
-        super::session::FanoutComposition::Unbound
+        super::session::FanoutComposition::Bound
     }
 
     #[cfg(test)]
@@ -396,7 +396,7 @@ impl PipelineNativeAgentAssembler {
         if self.fixed_parallel_for_tests {
             super::session::FanoutComposition::BoundForTests
         } else {
-            super::session::FanoutComposition::Unbound
+            super::session::FanoutComposition::Bound
         }
     }
 
@@ -502,10 +502,6 @@ impl PipelineNativeAgentAssembler {
     }
 
     /// Lend the content client of the claim-fenced fan-out decision routes.
-    #[allow(
-        dead_code,
-        reason = "lent at bootstrap by the fan-out composition (2a-2 commit 10)"
-    )]
     #[must_use]
     pub(crate) fn with_fanout_decisions(
         mut self,

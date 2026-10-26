@@ -375,7 +375,7 @@ fn compiler_refuses_missing_or_different_underlying_parent_authority() {
             .bind_parallel_authority(same.clone(), &PipelineNodeRuntimes::default())
             .is_err()
     );
-    let binding = ParallelCompilerBinding::for_tests(authority, tokio::time::Instant::now());
+    let binding = ParallelCompilerBinding::for_tests(authority, tokio::time::Instant::now(), None);
     let runtimes = PipelineNodeRuntimes::default().with_parallel(binding);
     assert!(
         definition
@@ -404,7 +404,7 @@ fn parallel_binds_through_the_fanout_turn_authority() {
     );
     let root: Arc<dyn Checkpointer> = authority.clone();
     let runtimes = PipelineNodeRuntimes::default().with_parallel(
-        ParallelCompilerBinding::for_tests(authority, tokio::time::Instant::now()),
+        ParallelCompilerBinding::for_tests(authority, tokio::time::Instant::now(), None),
     );
     let (_, bound) = definition.bind_parallel_authority(root, &runtimes).unwrap();
     assert!(bound.parallel_authority_bound);
@@ -413,7 +413,15 @@ fn parallel_binds_through_the_fanout_turn_authority() {
 #[test]
 fn production_binding_remains_gated_before_composed_restart_acceptance() {
     let authority: Arc<dyn ParallelCheckpointAuthority> = Arc::new(TestAuthority::default());
-    assert!(ParallelCompilerBinding::new(authority, tokio::time::Instant::now()).is_err());
+    assert!(ParallelCompilerBinding::admitted().is_err());
+    assert!(
+        ParallelCompilerBinding::new(
+            authority,
+            tokio::time::Instant::now(),
+            Arc::new(elitea_agent_runtime::graph::fanout::runner::NoDecisions),
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -477,6 +485,7 @@ fn a_branch_whose_saved_pipeline_contains_code_is_refused_typed() {
         .with_parallel(ParallelCompilerBinding::for_tests(
             authority,
             tokio::time::Instant::now() + std::time::Duration::from_secs(10),
+            None,
         ))
         .with_composition_definitions(std::collections::BTreeMap::from([(
             "workerB".to_owned(),

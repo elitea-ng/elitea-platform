@@ -1535,10 +1535,6 @@ impl PipelineStateServices {
         self.node_recovery_authority.clone()
     }
     /// This claim's decision source for the fan-out runner.
-    #[allow(
-        dead_code,
-        reason = "plugged into Parallel by the fan-out composition (2a-2 commit 10)"
-    )]
     pub(super) fn fanout_decisions(
         &self,
     ) -> Option<Arc<crate::execution::fanout_decisions::FanoutDecisionClient>> {
@@ -1546,7 +1542,6 @@ impl PipelineStateServices {
     }
 
     /// Preserve the single `PostgreSQL` capability holder before trait erasure.
-    #[cfg_attr(not(test), allow(dead_code))] // Fixed Parallel admission is still gated.
     pub(super) fn parallel_authority(
         &self,
     ) -> Option<Arc<dyn super::graph::ParallelCheckpointAuthority>> {
@@ -1977,11 +1972,13 @@ pub(super) const PIPELINE_RESUME_MARKER: &str = "[elitea:pipeline-resume:v1]";
 /// How a pipeline's fixed Parallel nodes are composed with the turn boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum FanoutComposition {
-    /// Production until the fan-out composition lands: Parallel is not bound
-    /// and its compiler refuses typed.
-    Unbound,
-    /// Test-only: bind Parallel through `FanoutTurnAuthority` with the test
-    /// binding, the shape the fan-out composition adopts.
+    /// Production: a pipeline that holds a fixed Parallel node (its own or a
+    /// saved child's) binds it through `FanoutTurnAuthority` with the claim's
+    /// fenced decision ledger, once Parallel is admitted; until then it is
+    /// refused typed, as the compiler refuses it.
+    Bound,
+    /// Test-only: bind Parallel with the test binding (no admission gate; the
+    /// claim's ledger when the backend lends one).
     #[cfg(test)]
     BoundForTests,
 }
@@ -1995,16 +1992,16 @@ type PipelineTurn = (
 );
 
 /// The root graph's turn boundary, and the node runtimes it binds.
-#[cfg_attr(not(test), allow(clippy::unnecessary_wraps))] // The test composition can fail.
 fn pipeline_turn(
     fanout: FanoutComposition,
     state: &PipelineStateServices,
     plan: &OrdinaryNativeAgentPlan,
     is_resume: bool,
+    has_parallel: bool,
     node_runtimes: super::graph::compiler::PipelineNodeRuntimes,
 ) -> Result<PipelineTurn, NativeAgentAssemblyError> {
-    match fanout {
-        FanoutComposition::Unbound => Ok((
+    if !has_parallel {
+        return Ok((
             Arc::new(super::graph::turn_checkpointer::TurnCheckpointer::new(
                 Arc::clone(&state.checkpointer),
                 &plan.execution_id,
@@ -2013,31 +2010,56 @@ fn pipeline_turn(
             )),
             node_runtimes,
             None,
-        )),
+        ));
+    }
+    if fanout == FanoutComposition::Bound {
+        super::graph::compiler::ParallelCompilerBinding::admitted()
+            .map_err(|error| pipeline_configuration_error(&error))?;
+    }
+    // The same Arc is the root checkpointer and the binding's parent, so
+    // `bind_parallel_authority` binds through the turn boundary.
+    let authority: Arc<dyn super::graph::ParallelCheckpointAuthority> = Arc::new(
+        super::graph::fanout_turn::FanoutTurnAuthority::new(
+            state
+                .parallel_authority()
+                .ok_or_else(invalid_configuration)?,
+            plan.session_id(),
+            &plan.execution_id,
+            plan.generation,
+            is_resume,
+        )
+        .map_err(|_| invalid_configuration())?,
+    );
+    let decisions = state.fanout_decisions().map(|client| {
+        client as Arc<dyn elitea_agent_runtime::graph::fanout::runner::DecisionSource>
+    });
+    let binding = match fanout {
+        // Without the claim's ledger no card could ever be decided: refused.
+        FanoutComposition::Bound => super::graph::compiler::ParallelCompilerBinding::new(
+            Arc::clone(&authority),
+            plan.fanout_deadline()?,
+            decisions.ok_or_else(fanout_decisions_unavailable)?,
+        )
+        .map_err(|error| pipeline_configuration_error(&error))?,
         #[cfg(test)]
         FanoutComposition::BoundForTests => {
-            // The same Arc is the root checkpointer and the binding's parent,
-            // so `bind_parallel_authority` binds through the turn boundary.
-            let authority: Arc<dyn super::graph::ParallelCheckpointAuthority> = Arc::new(
-                super::graph::fanout_turn::FanoutTurnAuthority::new(
-                    state
-                        .parallel_authority()
-                        .ok_or_else(invalid_configuration)?,
-                    plan.session_id(),
-                    &plan.execution_id,
-                    plan.generation,
-                    is_resume,
-                )
-                .map_err(|_| invalid_configuration())?,
-            );
-            let binding = super::graph::compiler::ParallelCompilerBinding::for_tests(
+            super::graph::compiler::ParallelCompilerBinding::for_tests(
                 Arc::clone(&authority),
                 plan.fanout_deadline()?,
-            );
-            let stop = binding.cancellation();
-            Ok((authority, node_runtimes.with_parallel(binding), Some(stop)))
+                decisions,
+            )
         }
-    }
+    };
+    let stop = binding.cancellation();
+    Ok((authority, node_runtimes.with_parallel(binding), Some(stop)))
+}
+
+fn fanout_decisions_unavailable() -> NativeAgentAssemblyError {
+    NativeAgentAssemblyError::new(
+        NativeAgentAssemblyErrorCode::DependencyUnavailable,
+        "the fan-out decision ledger is unavailable",
+    )
+    .with_cause("graph.fanout.decisions_unavailable", None)
 }
 
 /// Build one admitted graph Runner with activated durable state contracts.
@@ -2093,8 +2115,23 @@ pub(super) async fn assemble_pipeline_native(
     )
     .await?;
     let is_resume = resume.is_some();
-    let (turn_checkpointer, node_runtimes, fanout_stop) =
-        pipeline_turn(fanout, &state, &plan, is_resume, node_runtimes)?;
+    // A saved child pipeline's Parallel binds through the same root turn.
+    let has_parallel = definition.has_parallel_nodes()
+        || node_runtimes
+            .composition_definitions()
+            .is_some_and(|definitions| {
+                definitions
+                    .values()
+                    .any(PipelineDefinition::has_parallel_nodes)
+            });
+    let (turn_checkpointer, node_runtimes, fanout_stop) = pipeline_turn(
+        fanout,
+        &state,
+        &plan,
+        is_resume,
+        has_parallel,
+        node_runtimes,
+    )?;
     let graph = definition
         .compile_with_runtime(ROOT_AGENT_NAME, turn_checkpointer, resume, &node_runtimes)
         .map_err(|error| pipeline_configuration_error(&error))?;
