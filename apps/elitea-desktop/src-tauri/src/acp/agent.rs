@@ -1379,9 +1379,8 @@ pub(super) fn tool_kind(tool: &str, remote: bool) -> ToolKind {
         | "git_log" | "git_branches" | "process_output" | "process_list" | "get_entity_content"
         | "get_entity_details" => ToolKind::Read,
         "write_file" | "edit_file" | "multi_edit" | "apply_patch" | "git_commit" => ToolKind::Edit,
-        "run_command" | "run_tests" | "process_write" | "process_kill" | "process_wait" => {
-            ToolKind::Execute
-        }
+        "run_command" | "run_tests" | "process_write" | "process_kill" | "process_wait"
+        | "git_push" => ToolKind::Execute,
         "search_files"
         | "find_files"
         | "search_workspace"

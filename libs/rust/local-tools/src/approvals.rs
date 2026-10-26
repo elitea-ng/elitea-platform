@@ -45,6 +45,7 @@
 //! | `read_file`, `list_tree`, `search_files`, `find_files`, `read_output`, `read_document`, git reads | allowed |
 //! | `write_file`, `edit_file`, `apply_patch` inside the workspace | allowed (the turn's checkpoint undoes them; `path_deny`, `.git` and paths outside the workspace are refused before any rule) |
 //! | `git_commit` | allowed (denied paths are never committed: left out of the given paths; a commit of what is staged is refused while the index holds one) |
+//! | `git_push` ([`ToolKind::GitPush`]) | asked every time (it sends commits to a remote); never remembered. Its ceiling is the policy's `network`, and it is judged as the command `git push <remote> <branch>`: a `command_deny` or `command_allow` miss denies it, and a `forbidden`/`prompt` prefix rule or a deny/ask rule on `run_command` tightens it. Only a workspace rule naming `git_push` itself allows it |
 //! | `run_command` in `read-only` or `workspace-write`, no network, not destructive (see [`crate::classify`]) | allowed, compound commands included (`cargo test 2>&1 \| tee target/log`, `npm ci && npm test`) |
 //! | `run_command` that is destructive, asks for the network or `full-access`, or would run unconfined: its sandbox cannot hide what it denies (no sandbox on a host that allows unenforced ones, Landlock alone, a bubblewrap walk cut at its cap; [`ToolCall::unconfined`], decided per command, from the sandbox chosen for it) | asked |
 //! | `run_tests` | as `run_command` (the test command it runs): no network, allowed; `network: true` asked, until "always allow" for that runner kind in this workspace |
@@ -127,6 +128,9 @@ use crate::workspace::{CASE_INSENSITIVE_FS, Intent, Workspace, nfc};
 const LOOPBACK_REASON: &str =
     "listening on or connecting to localhost (127.0.0.1, ::1) needs your approval";
 
+/// Why a push is asked (a push is never remembered).
+const PUSH_REASON: &str = "pushing to a remote needs your approval";
+
 /// Why keeping a process past its turn is asked.
 const KEEP_ALIVE_REASON: &str =
     "keeping this process running after the turn ends needs your approval";
@@ -200,6 +204,13 @@ pub enum ToolKind {
     /// A commit through the host's hardened git: allowed by default (a
     /// workspace rule may ask or deny); never remembered.
     GitCommit,
+    /// `git_push`: a push through the host's hardened git, with the
+    /// person's own credentials (`.git` is read-only and credentials are
+    /// hidden in the command sandbox, so `run_command` cannot push). Asked
+    /// by default (bypass mode allows it); judged as the command
+    /// `git push <remote> <branch>` ([`ToolCall::command`]); never
+    /// remembered.
+    GitPush,
     /// `exit_plan_mode`: the plan goes to the person, who accepts (the
     /// session leaves [`PermissionProfile::Plan`]) or declines it. Offered
     /// in plan mode only; never remembered, never answered by a rule.
@@ -1030,6 +1041,7 @@ impl RulesEngine {
             }
             (_, Some(Risk::Routine)) => allow("a routine command in the sandbox"),
             (ToolKind::GitCommit, None) => allow("commits never stage denied paths"),
+            (ToolKind::GitPush, None) => Decision::new(Verdict::Ask, Source::Default, PUSH_REASON),
             (ToolKind::ProcessKill, None) => allow("the session's own processes may be stopped"),
             (tool, None) if tool.is_read_only() => allow("read-only tools are allowed"),
             (_, None) => {
@@ -1144,6 +1156,9 @@ impl RulesEngine {
             }
             return None;
         }
+        if call.tool == ToolKind::GitPush {
+            return self.push_ceiling(call);
+        }
         if !call.tool.runs_commands() {
             return None;
         }
@@ -1191,6 +1206,43 @@ impl RulesEngine {
         None
     }
 
+    /// `git_push`'s ceiling: the network, and the policy's command lists
+    /// applied to the push as the command it is (`git push …`), so a
+    /// policy that denies `git push` denies the tool too.
+    fn push_ceiling(&self, call: &ToolCall) -> Option<Decision> {
+        let deny = |reason: String| Some(Decision::new(Verdict::Deny, Source::Policy, reason));
+        if !self.policy.network {
+            return deny("network access is disabled by policy".to_owned());
+        }
+        let Some(command) = call.command.as_deref() else {
+            return deny("no command".to_owned());
+        };
+        let segments = analyse(command).segments();
+        let Some(argv) = segments.first() else {
+            return deny("the push cannot be analysed".to_owned());
+        };
+        if self
+            .command_deny
+            .iter()
+            .any(|pattern| pattern.matches_name(argv))
+        {
+            return deny(format!("`{}` is denied by policy", argv.join(" ")));
+        }
+        let (cwd, search) = self.resolution(call);
+        if !self.command_allow.is_empty()
+            && !self
+                .command_allow
+                .iter()
+                .any(|pattern| pattern.matches_in(argv, &cwd, &search))
+        {
+            return deny(format!(
+                "`{}` is not in the policy's command_allow",
+                argv.join(" ")
+            ));
+        }
+        None
+    }
+
     /// Where a command's program is resolved from: its working directory
     /// (the call's first path) and the absolute `PATH` entries.
     fn resolution(&self, call: &ToolCall) -> (PathBuf, Vec<PathBuf>) {
@@ -1229,7 +1281,8 @@ impl RulesEngine {
     /// The command prefix rules' decision (workspace file, then the
     /// person's; the strongest wins, the first of equals).
     fn prefix_rules(&self, call: &ToolCall, shape: Option<&CommandShape>) -> Option<Decision> {
-        if !(call.tool.runs_commands() || call.tool == ToolKind::McpStart) {
+        let push = call.tool == ToolKind::GitPush;
+        if !(call.tool.runs_commands() || call.tool == ToolKind::McpStart || push) {
             return None;
         }
         let shape = shape?;
@@ -1259,6 +1312,10 @@ impl RulesEngine {
                     segments
                         .iter()
                         .any(|argv| set.matches(rule, argv, Some(resolver)))
+                } else if push {
+                    // A push is never allowed by a command rule: only by
+                    // a rule naming `git_push`, or by the person.
+                    false
                 } else {
                     // An allow vouches for exactly one simple command,
                     // within its sandbox and network bounds.
@@ -1317,9 +1374,11 @@ impl RulesEngine {
             let rule = &compiled.rule;
             // A rule that tightens `run_command` tightens `run_tests` too:
             // it is not a way around the person's command rules.
-            let applies = rule.tools.is_empty()
+            // A push is allowed only by a rule that names `git_push`.
+            let applies = (rule.tools.is_empty()
+                && !(call.tool == ToolKind::GitPush && rule.verdict == Verdict::Allow))
                 || rule.tools.contains(&call.tool)
-                || (call.tool == ToolKind::RunTests
+                || (matches!(call.tool, ToolKind::RunTests | ToolKind::GitPush)
                     && rule.verdict != Verdict::Allow
                     && rule.tools.contains(&ToolKind::RunCommand));
             if !applies {
@@ -1650,6 +1709,12 @@ impl RulesEngine {
             return Some(ToolError::new(
                 ErrorCode::Denied,
                 "commits are asked every time",
+            ));
+        }
+        if call.tool == ToolKind::GitPush {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "pushes are asked every time",
             ));
         }
         if call.tool == ToolKind::RunTests && call.runner.is_none() {
@@ -3411,6 +3476,85 @@ mod tests {
         );
         engine.set_profile(PermissionProfile::Build);
         assert_eq!(verdict(&engine, &shell("git reset --hard")).0, Verdict::Ask);
+    }
+
+    /// `git_push`: asked by default and never remembered; bypass mode allows
+    /// it; the policy (network, `command_deny`), a forbidden prefix rule and
+    /// a deny rule on `run_command` still refuse it; a catch-all allow does
+    /// not cover it, only a rule naming `git_push`.
+    #[test]
+    fn a_push_is_asked_bypassed_and_still_denied_by_every_deny() {
+        let push = ToolCall {
+            command: Some("git push origin main".to_owned()),
+            network: true,
+            ..ToolCall::new(ToolKind::GitPush)
+        };
+        // `policy()` denies `git push`; these engines do not, but the one
+        // that checks the policy's deny list.
+        let open = LocalWorkPolicy {
+            network: true,
+            command_deny: vec!["rm".to_owned()],
+            ..policy()
+        };
+        let (_dir, engine) = engine_with_rules(open.clone(), NONE, NONE);
+        assert_eq!(verdict(&engine, &push), (Verdict::Ask, Source::Default));
+        assert!(!engine.can_remember(&push));
+        assert!(engine.remember(&push, None).is_err());
+        engine.set_profile(PermissionProfile::Bypass);
+        assert_eq!(verdict(&engine, &push), (Verdict::Allow, Source::Bypass));
+        engine.set_profile(PermissionProfile::Plan);
+        assert_eq!(verdict(&engine, &push), (Verdict::Deny, Source::PlanMode));
+
+        let (_dir, offline) = engine_with(
+            LocalWorkPolicy {
+                network: false,
+                ..open.clone()
+            },
+            Vec::new(),
+        );
+        offline.set_profile(PermissionProfile::Bypass);
+        assert_eq!(verdict(&offline, &push), (Verdict::Deny, Source::Policy));
+        let (_dir, denied) = engine_with(
+            LocalWorkPolicy {
+                network: true,
+                command_deny: vec!["git push".to_owned()],
+                ..policy()
+            },
+            Vec::new(),
+        );
+        denied.set_profile(PermissionProfile::Bypass);
+        assert_eq!(verdict(&denied, &push), (Verdict::Deny, Source::Policy));
+        let (_dir, forbidden) = engine_with_rules(
+            open.clone(),
+            r#"{"version":1,"rules":[{"pattern":["git","push"],"decision":"forbidden"}]}"#,
+            NONE,
+        );
+        forbidden.set_profile(PermissionProfile::Bypass);
+        assert_eq!(verdict(&forbidden, &push).0, Verdict::Deny);
+        let rule = |tools: Vec<ToolKind>, command: Option<&str>, verdict: Verdict| WorkspaceRule {
+            tools,
+            command: command.map(str::to_owned),
+            path: None,
+            verdict,
+        };
+        let (_dir, shell_deny) = engine_with(
+            open.clone(),
+            vec![rule(
+                vec![ToolKind::RunCommand],
+                Some("git push"),
+                Verdict::Deny,
+            )],
+        );
+        shell_deny.set_profile(PermissionProfile::Bypass);
+        assert_eq!(verdict(&shell_deny, &push).0, Verdict::Deny);
+        let (_dir, catch_all) =
+            engine_with(open.clone(), vec![rule(Vec::new(), None, Verdict::Allow)]);
+        assert_eq!(verdict(&catch_all, &push), (Verdict::Ask, Source::Default));
+        let (_dir, named) = engine_with(
+            open,
+            vec![rule(vec![ToolKind::GitPush], None, Verdict::Allow)],
+        );
+        assert_eq!(verdict(&named, &push).0, Verdict::Allow);
     }
 
     #[test]

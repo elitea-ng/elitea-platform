@@ -56,6 +56,26 @@
 //!    workspace for a restore). A path this module did not foresee still
 //!    runs confined.
 //! 4. **Timeouts** on every call, killing the process group.
+//!
+//! # Pushing ([`Repo::push`])
+//!
+//! A push needs the network and the person's credentials, which the
+//! command sandbox withholds by design (`.git` read-only, `~/.ssh`, the
+//! keychain and credential files hidden). `git_push` therefore runs the
+//! host's git **without** the file-system sandbox, as the person would in
+//! a terminal, and keeps the other layers, tightened for the transport:
+//! the repository is checked as above, and its local config may not set
+//! any `http.*` key or a remote's `proxy`, `vcs`, `receivepack` or
+//! `uploadpack` (a proxy with TLS checks off would see the person's token;
+//! a remote helper is a program); hooks stay off (`--no-verify`,
+//! `core.hooksPath=/dev/null`); only the `https` and `ssh` transports are
+//! allowed (`protocol.allow=never`, so no `ext::`, `file://` or remote
+//! helper runs code locally); only a configured remote's name and a local
+//! branch reach the command line; and the credential helper, `ssh` and
+//! `ssh-agent` used are the person's own (global config, `SSH_AUTH_SOCK`).
+//! What git prints is returned with any `user:password@` in a URL
+//! redacted. The agent's shell sandbox is unchanged: commands still cannot
+//! write `.git`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -86,6 +106,128 @@ pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long a git call that writes (a checkpoint, a restore) may take.
 pub const WRITE_TIMEOUT: Duration = Duration::from_mins(2);
+
+/// How long a push may take.
+pub const PUSH_TIMEOUT: Duration = Duration::from_mins(5);
+
+/// The [`HARDENING`] overrides a push drops: the person's own `ssh`,
+/// askpass-free credential helper and transports are what it needs
+/// (`protocol.allow` comes back as [`push_hardening`]'s allowlist).
+const PUSH_DROPS: &[&str] = &[
+    "core.sshCommand=/usr/bin/false",
+    "credential.helper=",
+    "protocol.allow=never",
+];
+
+/// The overrides on a push: [`HARDENING`] without [`PUSH_DROPS`], then
+/// only `https` and `ssh` allowed (`allow_file`: the crate's own tests,
+/// which push to a local bare repository), no submodule pushes and no
+/// push signing.
+fn push_hardening(allow_file: bool) -> Vec<&'static str> {
+    let mut words = Vec::new();
+    let mut hardening = HARDENING.iter();
+    while let Some(word) = hardening.next() {
+        if *word == "-c" {
+            let value = hardening.next().copied().unwrap_or_default();
+            if !PUSH_DROPS.contains(&value) {
+                words.extend(["-c", value]);
+            }
+        } else {
+            words.push(word);
+        }
+    }
+    words.extend([
+        "-c",
+        "protocol.allow=never",
+        "-c",
+        "protocol.https.allow=always",
+        "-c",
+        "protocol.ssh.allow=always",
+        "-c",
+        "push.recurseSubmodules=no",
+        "-c",
+        "push.gpgSign=false",
+    ]);
+    if allow_file {
+        words.extend(["-c", "protocol.file.allow=always"]);
+    }
+    words
+}
+
+/// Why a repository-local config key is refused for a push: what could
+/// see the person's credentials on the wire or run a program for the
+/// transport.
+fn push_dangerous_key(key: &str) -> Option<&'static str> {
+    let section = key.split('.').next().unwrap_or_default();
+    let name = key.rsplit('.').next().unwrap_or_default();
+    if section == "http" {
+        return Some("an http transport setting");
+    }
+    if section == "remote" && matches!(name, "proxy" | "vcs" | "receivepack" | "uploadpack") {
+        return Some("a remote's proxy or program");
+    }
+    None
+}
+
+/// Whether `url` is a transport a push may use: `https://`, `ssh://`
+/// (`git+ssh://`, `ssh+git://`) or scp-like `[user@]host:path`. `local`:
+/// a path too (the crate's own tests).
+fn push_url_allowed(url: &str, local: bool) -> bool {
+    let lower = url.to_ascii_lowercase();
+    if ["https://", "ssh://", "git+ssh://", "ssh+git://"]
+        .iter()
+        .any(|scheme| lower.starts_with(scheme))
+    {
+        return true;
+    }
+    if url.contains("://") || url.contains("::") || url.starts_with('-') {
+        return false;
+    }
+    // scp-like: a host before the first colon, and no slash before it.
+    if let Some((host, path)) = url.split_once(':')
+        && !host.is_empty()
+        && !host.contains('/')
+        && !path.is_empty()
+    {
+        return true;
+    }
+    local && Path::new(url).is_absolute()
+}
+
+/// `text` with the user information of every URL in it (`scheme://user:
+/// secret@host`) replaced by `***`: push output never carries a token
+/// someone put in a remote URL.
+#[must_use]
+pub fn redact_url_credentials(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("://") {
+        let (head, tail) = rest.split_at(at + 3);
+        out.push_str(head);
+        let end = tail
+            .find(|c: char| c == '/' || c.is_whitespace())
+            .unwrap_or(tail.len());
+        match tail[..end].rfind('@') {
+            Some(user) => {
+                out.push_str("***");
+                out.push_str(&tail[user..end]);
+            }
+            None => out.push_str(&tail[..end]),
+        }
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// What a push did.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Pushed {
+    pub remote: String,
+    pub branch: String,
+    /// git's porcelain report, URL credentials redacted, capped.
+    pub report: String,
+}
 
 /// The largest repository config this module reads.
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -1376,6 +1518,181 @@ impl Repo {
         (vec![self.common_dir.clone()], protected)
     }
 
+    /// Push `branch` (the current branch when `None`) to the configured
+    /// remote `remote` (`origin` when `None`), as `git push <remote>
+    /// refs/heads/<branch>:refs/heads/<branch>`, never forced. See the
+    /// module's *Pushing* section for what keeps it safe.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::UnsafeRepository`] for a repository or config a push
+    /// must not use; [`ErrorCode::InvalidArgument`] for an unknown remote,
+    /// a branch that is not a local one, or a remote URL whose transport
+    /// is not `https` or `ssh`; [`ErrorCode::Git`] when git fails (its
+    /// message redacted).
+    pub fn push(
+        &self,
+        remote: Option<&str>,
+        branch: Option<&str>,
+        set_upstream: bool,
+    ) -> ToolResult<Pushed> {
+        self.check()?;
+        self.check_push_config()?;
+        let remote = remote.unwrap_or("origin");
+        let remotes = self.git(&self.top).text(&["remote"])?;
+        if remote.starts_with('-') || !remotes.lines().any(|name| name == remote) {
+            return Err(ToolError::invalid(format!(
+                "`{remote}` is not a remote of this repository (remotes: {})",
+                if remotes.is_empty() {
+                    "none".to_owned()
+                } else {
+                    remotes.lines().collect::<Vec<_>>().join(", ")
+                }
+            )));
+        }
+        let branch = match branch {
+            Some(branch) => branch.to_owned(),
+            None => self
+                .git(&self.top)
+                .text(&["symbolic-ref", "--quiet", "--short", "HEAD"])
+                .map_err(|_| ToolError::invalid("HEAD is detached: name the branch to push"))?,
+        };
+        let full = format!("refs/heads/{branch}");
+        if branch.is_empty()
+            || branch.starts_with('-')
+            || self
+                .git(&self.top)
+                .run(&["check-ref-format", &full])
+                .is_err()
+            || self
+                .git(&self.top)
+                .run(&[
+                    "rev-parse",
+                    "--quiet",
+                    "--verify",
+                    &format!("{full}^{{commit}}"),
+                ])
+                .is_err()
+        {
+            return Err(ToolError::invalid(format!(
+                "`{branch}` is not a local branch"
+            )));
+        }
+        let url = self
+            .git(&self.top)
+            .text(&["remote", "get-url", "--push", remote])?;
+        if !push_url_allowed(&url, cfg!(test)) {
+            return Err(ToolError::invalid(format!(
+                "`{remote}` pushes to {}, which is not an https or ssh URL",
+                redact_url_credentials(&url)
+            )));
+        }
+        let refspec = format!("{full}:{full}");
+        let mut args = vec![
+            "push",
+            "--porcelain",
+            "--no-verify",
+            "--no-recurse-submodules",
+        ];
+        if set_upstream {
+            args.push("--set-upstream");
+        }
+        args.extend([remote, refspec.as_str()]);
+        let output = self.spawn_push(&args).map_err(|error| {
+            ToolError::new(error.code(), redact_url_credentials(error.message()))
+        })?;
+        let (report, _) = capped(&output);
+        Ok(Pushed {
+            remote: remote.to_owned(),
+            branch,
+            report: redact_url_credentials(report.trim_end()),
+        })
+    }
+
+    /// The local config keys a push refuses ([`push_dangerous_key`]),
+    /// besides what [`Repo::check`] refuses for every call.
+    fn check_push_config(&self) -> ToolResult<()> {
+        let mut files = vec![
+            ("config", self.common_dir.join("config")),
+            ("config.worktree", self.common_dir.join("config.worktree")),
+        ];
+        if self.is_linked_worktree() {
+            files.push((
+                "worktree config.worktree",
+                self.git_dir.join("config.worktree"),
+            ));
+        }
+        for (name, path) in files {
+            let Some(text) = read_config_file(&path, name)? else {
+                continue;
+            };
+            let entries = parse_config(&text).map_err(|reason| {
+                unsafe_repo(format!(".git/{name} cannot be parsed safely: {reason}"))
+            })?;
+            if let Some((entry, reason)) = entries
+                .iter()
+                .find_map(|entry| push_dangerous_key(&entry.key).map(|reason| (entry, reason)))
+            {
+                return Err(unsafe_repo(format!(
+                    "the repository's .git/{name} sets `{}` ({reason}), which a push with your \
+                     credentials must not use",
+                    entry.key
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Run a push: hardened, without the file-system sandbox (the person's
+    /// credential helper and `ssh` must read their credentials, and git
+    /// updates the remote-tracking refs), with the network.
+    fn spawn_push(&self, args: &[&str]) -> ToolResult<Vec<u8>> {
+        let mut command = Command::new(git_binary()?);
+        command
+            .current_dir(&self.top)
+            .args(push_hardening(cfg!(test)))
+            .args(args)
+            .env_clear()
+            .envs(host_git_environment());
+        // The person's agent, temporary directory and proxy: what their
+        // `ssh` and credential helper need, nothing the repository sets.
+        for name in [
+            "SSH_AUTH_SOCK",
+            "TMPDIR",
+            "USER",
+            "LOGNAME",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "HTTP_PROXY",
+            "http_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "NO_PROXY",
+            "no_proxy",
+        ] {
+            if let Some(value) = std::env::var_os(name).filter(|value| !value.is_empty()) {
+                command.env(name, value);
+            }
+        }
+        command
+            .env("GIT_DIR", &self.git_dir)
+            .env("GIT_WORK_TREE", &self.top)
+            .env("LC_ALL", "C")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GCM_INTERACTIVE", "never")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_ATTR_NOSYSTEM", "1")
+            .env("GIT_NO_REPLACE_OBJECTS", "1")
+            .env("GIT_PROTOCOL_FROM_USER", "0");
+        if self.is_linked_worktree() {
+            command.env("GIT_COMMON_DIR", &self.common_dir);
+        }
+        if let Some(global) = &self.global_config {
+            command.env("GIT_CONFIG_GLOBAL", global);
+        }
+        run_bounded(command, None, PUSH_TIMEOUT, "push", false)
+    }
+
     /// A git call in this repository, from `cwd` (inside the work tree).
     pub(crate) fn git<'a>(&'a self, cwd: &'a Path) -> Git<'a> {
         Git {
@@ -2385,5 +2702,79 @@ mod tests {
         assert!(truncated);
         assert!(out.len() <= super::OUTPUT_CAP);
         assert!(!out.contains('\u{fffd}'));
+    }
+
+    /// A push keeps every hardening line but the transport ones it needs,
+    /// and allows `https` and `ssh` only (the file transport is the crate's
+    /// tests' alone).
+    #[test]
+    fn a_push_allows_only_https_and_ssh_and_keeps_hooks_off() {
+        let words = super::push_hardening(false);
+        for kept in [
+            "core.hooksPath=/dev/null",
+            "core.fsmonitor=false",
+            "core.askPass=",
+            "protocol.allow=never",
+            "protocol.https.allow=always",
+            "protocol.ssh.allow=always",
+            "push.recurseSubmodules=no",
+        ] {
+            assert!(words.contains(&kept), "{kept}");
+        }
+        for dropped in [
+            "credential.helper=",
+            "core.sshCommand=/usr/bin/false",
+            "protocol.file.allow=always",
+            "protocol.http.allow=always",
+            "protocol.ext.allow=always",
+        ] {
+            assert!(!words.contains(&dropped), "{dropped}");
+        }
+        assert!(super::push_hardening(true).contains(&"protocol.file.allow=always"));
+        let allowed = |url: &str| super::push_url_allowed(url, false);
+        assert!(allowed("https://github.com/o/r.git"));
+        assert!(allowed("ssh://git@github.com/o/r.git"));
+        assert!(allowed("git@github.com:o/r.git"));
+        for refused in [
+            "http://example.com/r.git",
+            "file:///tmp/r.git",
+            "ext::sh -c touch% /tmp/x",
+            "/tmp/r.git",
+            "../r.git",
+            "-oProxyCommand=x:y",
+            "fd::17",
+        ] {
+            assert!(!allowed(refused), "{refused}");
+        }
+        assert!(super::push_url_allowed("/tmp/r.git", true));
+        assert_eq!(
+            super::push_dangerous_key("http.https://github.com/.sslverify"),
+            Some("an http transport setting")
+        );
+        assert!(super::push_dangerous_key("remote.origin.proxy").is_some());
+        assert!(super::push_dangerous_key("remote.origin.vcs").is_some());
+        assert!(super::push_dangerous_key("remote.origin.url").is_none());
+    }
+
+    #[test]
+    fn push_output_never_carries_url_credentials() {
+        let redact = super::redact_url_credentials;
+        assert_eq!(
+            redact("To https://x-access-token:ghp_secret@github.com/o/r.git\n=\tmain"),
+            "To https://***@github.com/o/r.git\n=\tmain"
+        );
+        assert_eq!(
+            redact("fatal: unable to access 'https://me:pw@host/r/': 403"),
+            "fatal: unable to access 'https://***@host/r/': 403"
+        );
+        assert_eq!(
+            redact("To ssh://git@github.com/o/r.git"),
+            "To ssh://***@github.com/o/r.git"
+        );
+        assert_eq!(
+            redact("To https://github.com/o/r"),
+            "To https://github.com/o/r"
+        );
+        assert_eq!(redact("no url"), "no url");
     }
 }
