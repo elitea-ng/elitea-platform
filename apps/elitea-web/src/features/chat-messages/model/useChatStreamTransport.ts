@@ -26,14 +26,8 @@ import type { ExecutionEventData } from "@/shared/api/sse";
 import { EliteaApiError } from "@/shared/api/generated/mutator";
 import { t } from "@/shared/i18n";
 
-import {
-  recordStreamFailure,
-  runtimeFailureReason,
-} from "../lib/chatStreamSettle";
-import {
-  applyChatStreamFrame,
-  type ChatStreamContext,
-} from "../lib/chatStreamReducer";
+import { recordStreamFailure, runtimeFailureReason } from "../lib/chatStreamSettle";
+import { applyChatStreamFrame, type ChatStreamContext } from "../lib/chatStreamReducer";
 import { isRootContextFrame } from "../lib/chatStreamContextFrames";
 import { isChatStreamFrame } from "../lib/chatStreamFrame";
 import { shouldForwardAgentEvent } from "../lib/agentGraphEvents";
@@ -45,10 +39,7 @@ import { resetTurnForReplay } from "../lib/chatStreamReattach";
 import { useChatStreamConnection } from "./useChatStreamConnection";
 import { usePendingReplay, useReattach } from "./usePendingReplay";
 import { isPauseFrameType, usePauseSettle } from "./usePauseSettle";
-import {
-  nonEmptyString,
-  useChatStreamRunStarters,
-} from "./useChatStreamRunStarters";
+import { nonEmptyString, useChatStreamRunStarters } from "./useChatStreamRunStarters";
 
 import { convertMessagesToChatHistory } from "../lib/convertMessagesToChatHistory";
 import type { MessageGroupWire, MessageParticipantWire } from "@/entities/message/lib/wire";
@@ -83,6 +74,8 @@ export function useChatStreamTransport(
   onAgentEventRef.current = onAgentEvent;
   const onStreamErrorRef = useRef(onStreamError);
   onStreamErrorRef.current = onStreamError;
+  const onSteerRef = useRef(params.onSteerEvent); // contract 1.27 steering frames of the owned run
+  onSteerRef.current = params.onSteerEvent;
   // The conversation on screen NOW, and the one the open stream was started
   // for. `start` is async and resolves outside React's render, so the current
   // value has to be readable there rather than closed over (#328).
@@ -255,6 +248,7 @@ export function useChatStreamTransport(
     // Retain ownership and Stop while the connection keeps retrying.
     onConnectionInterrupted: (reason) => onStreamErrorRef.current?.(reason),
     onNeverOpened,
+    onSteer: (event, frame) => { if (ownsRun()) onSteerRef.current?.(event, frame); },
   });
   closeStreamRef.current = connection.close;
   const { isStreaming, open: openStream } = connection;
@@ -385,6 +379,7 @@ export function useChatStreamTransport(
   }, [ownsRun]);
 
   const reattach = useReattach(ownsRun, subscribeToRun, pendingReplay);
+  const runTarget = useCallback(() => (ownsRun() ? cancelRef.current : null), [ownsRun]);
 
   return useMemo(
     () => ({
@@ -394,7 +389,8 @@ export function useChatStreamTransport(
       close: detach,
       stop,
       reattach,
+      runTarget,
     }),
-    [starters, isStreaming, attachExistingRun, detach, stop, reattach],
+    [starters, isStreaming, attachExistingRun, detach, stop, reattach, runTarget],
   );
 }

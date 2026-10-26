@@ -299,6 +299,14 @@ impl RuntimeControlService for FakeControl {
             "not part of the Code attempt fixture",
         ))
     }
+    async fn claim_steering_messages(
+        &self,
+        _: Request<pb::ClaimSteeringMessagesRequestV1>,
+    ) -> Result<Response<pb::ClaimSteeringMessagesResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
+    }
     async fn observe_desired_state(
         &self,
         _: Request<pb::ObserveDesiredStateRequestV1>,

@@ -2,7 +2,8 @@
  * The live transcript of one turn: streamed text (Markdown, as in chat), each step's reasoning as a
  * folded "Thinking" block (`ThinkingBlock`), tool rows (local or remote, with a collapsible result),
  * each `spawn_agent` call's sub-agents under its row (`SubAgentLanes`), a background process's output under its
- * `run_command` row (`ToolProcessOutput`), the status line and the cancel button.
+ * `run_command` row (`ToolProcessOutput`), a message sent while the turn ran (`SteerMessage`), the status line and
+ * the cancel button.
  */
 import { useState, type MouseEvent } from 'react';
 
@@ -26,6 +27,7 @@ import { Markdown } from '@/shared/ui/Markdown';
 
 import { lanesOf } from '../model/subAgentEvents';
 import { isTerminalPhase, type TranscriptItem, type TurnView } from '../model/turnReducer';
+import { SteerMessage } from './SteerMessage';
 import { SubAgentLanes } from './SubAgentLanes';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ToolProcessOutput } from './ToolProcessOutput';
@@ -264,6 +266,8 @@ export function TurnTranscript({ view, busy, onCancel, onRetryCommit, onTextCont
           </Box>
         ) : item.type === 'thinking' ? (
           <ThinkingBlock key={item.key} item={item} />
+        ) : item.type === 'steer' ? (
+          <SteerMessage key={item.key} text={item.text} />
         ) : (
           <Box key={item.key}>
             <ToolRow item={item} />

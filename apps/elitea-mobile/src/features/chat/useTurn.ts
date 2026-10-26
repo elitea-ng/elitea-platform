@@ -1,5 +1,5 @@
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
 import { queryKeys } from '@/api/queries/keys';
 import type { components } from '@/api/generated/elitea.gen';
@@ -26,6 +26,9 @@ import {
   subscribeLiveTurns,
   turnKey,
   type LiveTurn,
+  type SteerOutcome,
+  type SteeringOffer,
+  type StopOptions,
 } from '@/features/chat/turnController';
 
 const noopSubscribe = () => () => {};
@@ -44,7 +47,32 @@ export interface UseTurnArgs {
   participantId: number | null;
   /** The model of a plain model conversation (adhoc turn); null for an agent. */
   model?: TurnModel | null;
+  /**
+   * The workspace speaks client contract 1.27: a message sent while the
+   * answer runs steers it (it is queued and read at the next safe point).
+   */
+  steering?: boolean;
 }
+
+/** What the composer says when a message could not steer the running answer; null when it was taken. */
+export function steerOutcomeText(outcome: SteerOutcome): string | null {
+  switch (outcome) {
+    case 'queued':
+    case 'after_turn':
+      return null;
+    case 'not_supported':
+      return STEERING_NOT_SUPPORTED_TEXT;
+    case 'queue_full':
+      return 'The agent already has the most waiting messages. Wait for the answer to finish.';
+    case 'rate_limited':
+      return 'Too many messages at once. Wait a moment and send again.';
+    default:
+      return "Couldn't send the message to the running answer. Try again.";
+  }
+}
+
+/** The notice while a turn that cannot take messages runs (a pipeline). */
+export const STEERING_NOT_SUPPORTED_TEXT = "This agent can't read new messages while it works. Send yours when the answer is finished.";
 
 /** What a message carries besides its text. */
 export interface SendExtras {
@@ -82,12 +110,30 @@ export interface UseTurn {
   reconnect: () => void;
   /** Forget a failed or settled turn. */
   dismiss: () => void;
+  /**
+   * A message sent now steers the running answer (client contract 1.27):
+   * the workspace speaks 1.27 and the answer streams and is admitted.
+   */
+  canSteer: boolean;
+  /** Changes the text of a pending steering message. Resolves to an error text, or null. */
+  editSteering: (id: string, text: string) => Promise<string | null>;
+  /** Removes a pending steering message. Resolves to an error text, or null. */
+  removeSteering: (id: string) => Promise<string | null>;
+  /**
+   * The leftover texts of a stopped or failed turn (client contract 1.27),
+   * or null. The server does not send them: the user chooses.
+   */
+  steeringOffer: string | null;
+  /** "Send": hands the texts off and sends them as the next message. Resolves to an error text, or null. */
+  sendSteeringOffer: () => Promise<string | null>;
+  /** "Dismiss": the texts stay on the server, and the offer goes. */
+  dismissSteeringOffer: () => void;
   busy: boolean;
   /**
    * Stops the streaming answer on the server (client contract 1.3; the
    * caller checks the contract). See `StopResult`.
    */
-  stop: () => Promise<StopResult>;
+  stop: (options?: StopOptions) => Promise<StopResult>;
   /** The answer streams and is admitted, so it can be stopped now. */
   canStop: boolean;
   /**
@@ -183,9 +229,35 @@ export function freshConversation<T>(queryClient: QueryClient, projectId: number
  * body, stream replayed from the start); unmounting stops its network work
  * but keeps the turn for the next mount.
  */
-export function useTurn({ projectId, conversationRef, conversationUuid, participantId, model = null }: UseTurnArgs): UseTurn {
+export function useTurn({ projectId, conversationRef, conversationUuid, participantId, model = null, steering = false }: UseTurnArgs): UseTurn {
   const queryClient = useQueryClient();
+  // The end-of-turn rule of steering (contract 1.27) sends the leftover texts as ONE normal message, through `send`,
+  // with the question id that the hand-off named (when there was a hand-off).
+  const sendRef = useRef<(text: string, extras?: SendExtras) => Promise<string | null>>(async () => null);
+  const onLeftover = useCallback((text: string, questionId?: string) => {
+    void sendRef.current(text, questionId === undefined ? {} : { questionId }).then((problem) => {
+      if (problem !== null) log.warn('could not send the waiting messages', { problem });
+    });
+  }, []);
   const key = projectId !== null && conversationUuid ? turnKey(projectId, conversationUuid) : null;
+  // The leftover texts of a stopped or failed turn of this thread: the user sends or dismisses them.
+  const keyRef = useRef(key);
+  useEffect(() => {
+    keyRef.current = key;
+  }, [key]);
+  const [offer, setOffer] = useState<{ key: string | null; offer: SteeringOffer } | null>(null);
+  const onSteeringOffer = useCallback((next: SteeringOffer) => setOffer({ key: keyRef.current, offer: next }), []);
+  const steeringOffer = offer !== null && offer.key === key ? offer.offer.text : null;
+  const dismissSteeringOffer = useCallback(() => setOffer(null), []);
+  const sendSteeringOffer = useCallback(async (): Promise<string | null> => {
+    const current = offer;
+    if (current === null) return null;
+    setOffer(null);
+    const problem = await current.offer.send();
+    // A failed hand-off keeps its keys: the offer comes back, and Send tries again with them.
+    if (problem !== null) setOffer(current);
+    return problem;
+  }, [offer]);
 
   const getController = useCallback(() => (key ? (getLiveTurn(key) ?? null) : null), [key]);
   const controller = useSyncExternalStore(subscribeLiveTurns, getController, getController);
@@ -220,6 +292,14 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
       };
       if (projectId === null || !conversationUuid || participantId === null || key === null) {
         return 'This conversation cannot be messaged from mobile.';
+      }
+      const running = getLiveTurn(key);
+      if (steering && running?.isActive) {
+        // Steering (contract 1.27): the text goes to the running answer, not to a new turn.
+        if (fields.attachments) return 'Send files when the answer is finished.';
+        if (running.getSnapshot().steeringUnsupported === true) return STEERING_NOT_SUPPORTED_TEXT;
+        if (!running.canSteer) return 'The answer has not started yet. Try again in a moment.';
+        return steerOutcomeText(await running.steer(text));
       }
       if (shouldQueue() || (await mustQueueBehindOutbox(projectId, conversationUuid))) {
         // Offline with the encrypted store open, or an earlier message of this
@@ -264,6 +344,8 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
               if (queued && getLiveTurn(key) === next) setLiveTurn(key, null);
               return queued;
             },
+            onLeftover,
+            onSteeringOffer,
           },
         );
       } catch (error) {
@@ -274,8 +356,11 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
       setLiveTurn(key, next);
       return null;
     },
-    [projectId, conversationUuid, participantId, model, key, queryClient, conversationRef],
+    [projectId, conversationUuid, participantId, model, key, queryClient, conversationRef, steering, onLeftover, onSteeringOffer],
   );
+  useEffect(() => {
+    sendRef.current = send;
+  }, [send]);
 
   const continueWith = useCallback(
     async (contract: ContinueContract, body: components['schemas']['ChatContinueRequest']): Promise<string | null> => {
@@ -289,11 +374,13 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
         onRefreshNeeded: () => void refetch(),
         // Someone answered it first: the transcript shows what happened.
         onAlreadyResolved: () => void refetch(),
+        onLeftover,
+        onSteeringOffer,
       });
       setLiveTurn(key, next);
       return null;
     },
-    [projectId, conversationUuid, key, queryClient, conversationRef],
+    [projectId, conversationUuid, key, queryClient, conversationRef, onLeftover, onSteeringOffer],
   );
 
   const regenerate = useCallback(
@@ -316,6 +403,8 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
               if (regeneration) onSettled?.(detail === null ? null : answerRegenerated(detail, regeneration.answerUuid, regeneration.regenerationId));
             },
             onRefreshNeeded: () => void refetch(),
+            onLeftover,
+            onSteeringOffer,
           },
         );
       } catch (error) {
@@ -325,16 +414,19 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
       setLiveTurn(key, next);
       return null;
     },
-    [projectId, conversationUuid, key, model, queryClient, conversationRef],
+    [projectId, conversationUuid, key, model, queryClient, conversationRef, onLeftover, onSteeringOffer],
   );
 
   const retry = useCallback(() => void controller?.reattach(), [controller]);
   const reconnect = useCallback(() => controller?.reconnect(), [controller]);
+  // Only the turn this render shows: the end-of-turn rule of steering can start the next turn first.
   const dismiss = useCallback(() => {
-    if (key) setLiveTurn(key, null);
-  }, [key]);
+    if (key && (controller === null || getLiveTurn(key) === controller)) setLiveTurn(key, null);
+  }, [key, controller]);
+  const editSteering = useCallback(async (id: string, text: string) => (controller ? controller.editSteering(id, text) : null), [controller]);
+  const removeSteering = useCallback(async (id: string) => (controller ? controller.removeSteering(id) : null), [controller]);
 
-  const stop = useCallback(async (): Promise<StopResult> => {
+  const stop = useCallback(async (options?: StopOptions): Promise<StopResult> => {
     const result = (problem: string | null, restoreText: string | null = null, lostAttachments: string[] = []): StopResult => ({
       problem,
       restoreText,
@@ -345,7 +437,7 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
     const before = controller.getSnapshot();
     const since = Date.now();
     try {
-      const outcome = await controller.stop();
+      const outcome = await controller.stop(options);
       if (outcome === 'not_ready') return result('The answer has not started yet. Try again in a moment.');
       if (outcome !== 'stopped' || projectId === null) return result(null);
       // The transcript was read again by the stop: is the question still there?
@@ -384,5 +476,12 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
     },
     [key],
   );
-  return { live, send, continueWith, retry, reconnect, dismiss, busy, stop, canStop, isRunning, regenerate };
+  const canSteer =
+    steering &&
+    live !== null &&
+    !live.queued &&
+    live.turn.phase === 'streaming' &&
+    (live.execution?.responseMessageId ?? null) !== null &&
+    live.steeringUnsupported !== true;
+  return { live, send, continueWith, retry, reconnect, dismiss, busy, stop, canStop, isRunning, regenerate, canSteer, editSteering, removeSteering, steeringOffer, sendSteeringOffer, dismissSteeringOffer };
 }

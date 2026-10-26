@@ -61,6 +61,17 @@ export const EXECUTION_EVENT_INDEX_INGEST_COMPLETED = EXECUTION_EVENT.indexInges
  * transcript with a hole in the middle that nothing on screen discloses.
  */
 export const EXECUTION_EVENT_REPLAY_RESET = EXECUTION_EVENT.replayReset;
+/**
+ * Client contract 1.27: the steering events of a running chat turn. The
+ * `data` of each is one `SteeringMessage`. They are registered for the same
+ * reason as `replay_reset`: `EventSource` drops an unregistered name silently.
+ */
+export const EXECUTION_EVENT_STEER_QUEUED = EXECUTION_EVENT.steerQueued;
+export const EXECUTION_EVENT_STEER_INJECTED = EXECUTION_EVENT.steerInjected;
+export const EXECUTION_EVENT_STEER_DROPPED = EXECUTION_EVENT.steerDropped;
+
+/** The SSE `event:` name of a steering frame. */
+type SteerEventName = typeof EXECUTION_EVENT_STEER_QUEUED | typeof EXECUTION_EVENT_STEER_INJECTED | typeof EXECUTION_EVENT_STEER_DROPPED;
 
 /**
  * A parsed frame body. Deliberately a loose record: every consumer reads it
@@ -148,6 +159,8 @@ export interface ExecutionEventCallbacks {
   readonly onFailed?: ((frame: ExecutionEventData) => void) | undefined;
   /** Progress frames were pruned before this client could read them; the frame carries `reason`. */
   readonly onReplayReset?: ((frame: ExecutionEventData) => void) | undefined;
+  /** A steering frame (`steer.queued`, `steer.injected` or `steer.dropped`) and its event name. */
+  readonly onSteer?: ((event: SteerEventName, frame: ExecutionEventData) => void) | undefined;
   /**
    * The durable cursor of the frame just delivered — `events.go` writes an
    * `id: <cursor>` line before every event, and that is what a resume has to
@@ -184,14 +197,14 @@ export interface ExecutionEventCallbacks {
  * returned (issue #93's chat surface). Prefer this over re-deriving the
  * path: the server owns that shape.
  *
- * All four event names are ALWAYS registered, whether or not the caller
+ * All seven event names are ALWAYS registered, whether or not the caller
  * passed the matching callback: the registered name set is what
  * `useEventSource` keys its connection on, so a conditional map would
  * reopen the HTTP stream whenever a caller's callback appeared or
  * disappeared. Frames with no callback are parsed and dropped.
  */
 export function useExecutionEventStream(eventsUrl: string | null | undefined, callbacks: ExecutionEventCallbacks): void {
-  const { onNodeEvent, onIndexIngestCompleted, onFailed, onReplayReset, onCursor, onError, onOpen } = callbacks;
+  const { onNodeEvent, onIndexIngestCompleted, onFailed, onReplayReset, onSteer, onCursor, onError, onOpen } = callbacks;
   const config = getConfig();
   const serverUrl = config.status === 'ok' ? config.config.vite_server_url : null;
   const url = useMemo(() => resolveExecutionEventsUrl(serverUrl, eventsUrl), [serverUrl, eventsUrl]);
@@ -215,6 +228,9 @@ export function useExecutionEventStream(eventsUrl: string | null | undefined, ca
     [EXECUTION_EVENT_INDEX_INGEST_COMPLETED]: deliver(onIndexIngestCompleted),
     [EXECUTION_EVENT_FAILED]: deliver(onFailed),
     [EXECUTION_EVENT_REPLAY_RESET]: deliver(onReplayReset),
+    [EXECUTION_EVENT_STEER_QUEUED]: deliver(onSteer && ((frame) => { onSteer(EXECUTION_EVENT_STEER_QUEUED, frame); })),
+    [EXECUTION_EVENT_STEER_INJECTED]: deliver(onSteer && ((frame) => { onSteer(EXECUTION_EVENT_STEER_INJECTED, frame); })),
+    [EXECUTION_EVENT_STEER_DROPPED]: deliver(onSteer && ((frame) => { onSteer(EXECUTION_EVENT_STEER_DROPPED, frame); })),
   }, { onError, onOpen });
 }
 
@@ -227,14 +243,14 @@ export interface UseExecutionEventsParams extends ExecutionEventCallbacks {
 /**
  * Subscribe to one execution's durable event stream.
  *
- * All four event names are ALWAYS registered, whether or not the caller
+ * All seven event names are ALWAYS registered, whether or not the caller
  * passed the matching callback: the registered name set is what
  * `useEventSource` keys its connection on, so a conditional map would
  * reopen the HTTP stream whenever a caller's callback appeared or
  * disappeared. Frames with no callback are parsed and dropped.
  */
 export function useExecutionEvents(params: UseExecutionEventsParams): void {
-  const { projectId, executionId, onNodeEvent, onIndexIngestCompleted, onFailed, onReplayReset, onCursor, onError, onOpen } = params;
+  const { projectId, executionId, onNodeEvent, onIndexIngestCompleted, onFailed, onReplayReset, onSteer, onCursor, onError, onOpen } = params;
   const config = getConfig();
   const serverUrl = config.status === 'ok' ? config.config.vite_server_url : null;
 
@@ -254,5 +270,5 @@ export function useExecutionEvents(params: UseExecutionEventsParams): void {
   // Already absolute against `vite_server_url` ⇒ `useExecutionEventStream`'s
   // own resolution is a no-op for it (same-origin prefix returns the path
   // unchanged; an absolute origin was already baked in above).
-  useExecutionEventStream(eventsUrl, { onNodeEvent, onIndexIngestCompleted, onFailed, onReplayReset, onCursor, onError, onOpen });
+  useExecutionEventStream(eventsUrl, { onNodeEvent, onIndexIngestCompleted, onFailed, onReplayReset, onSteer, onCursor, onError, onOpen });
 }

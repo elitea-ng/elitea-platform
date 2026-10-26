@@ -858,6 +858,38 @@ pub fn agent_turn_cancel(state: State<'_, LocalState>, turn_id: String) -> Resul
     Ok(state.agents.cancel(&turn_id)?)
 }
 
+/// `agent_turn_steer`'s answer: the queued message's id.
+#[derive(Serialize)]
+pub struct SteerQueued {
+    pub steer_id: String,
+}
+
+/// Queue a message against a running turn; the agent gets it at its next
+/// safe point (IPC.md, "Steering").
+#[tauri::command(rename_all = "snake_case")]
+pub fn agent_turn_steer(
+    state: State<'_, LocalState>,
+    turn_id: String,
+    text: String,
+) -> Result<SteerQueued, IpcError> {
+    Ok(SteerQueued {
+        steer_id: state.agents.steer(&turn_id, &text)?,
+    })
+}
+
+/// Change a message that still waits (`text`), or remove it (`text: null`).
+#[tauri::command(rename_all = "snake_case")]
+pub fn agent_turn_steer_update(
+    state: State<'_, LocalState>,
+    turn_id: String,
+    steer_id: String,
+    text: Option<String>,
+) -> Result<(), IpcError> {
+    Ok(state
+        .agents
+        .steer_update(&turn_id, &steer_id, text.as_deref())?)
+}
+
 /// Where a turn is (`running`, `committing`, `done` with the `done`
 /// payload): the UI re-syncs with it when it may have missed an event.
 #[tauri::command(rename_all = "snake_case")]

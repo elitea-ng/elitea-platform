@@ -3,8 +3,9 @@
 //! schema's own examples, the framing's bounds, and whole prompt turns on
 //! the real agent host.
 
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -17,6 +18,7 @@ use super::agent::{self, AcpConfig, Defaults, EventRouter, Mapper};
 use super::rpc::{self, Incoming, Line};
 use super::types::{self, ToolKind};
 use crate::d0::api::{ApiError, Bearer, Credentials, PlatformApi};
+use crate::d0::events::{AgentEvent, EventEmitter};
 use crate::d0::remote_tools::RetryPolicy;
 use crate::d0::turn::{AgentHost, HostDeps, PolicySource};
 use crate::testutil::{MockServer, Req, Res, serve};
@@ -434,6 +436,8 @@ struct Client {
     writer: tokio::io::WriteHalf<tokio::io::DuplexStream>,
     lines: tokio::io::Lines<BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>>,
     next_id: i64,
+    /// Answers read while waiting for another request's answer.
+    answers: HashMap<i64, Value>,
 }
 
 /// What the agent sent while a call ran: notifications and its requests.
@@ -489,6 +493,9 @@ impl Client {
         seen: &mut Seen,
         permission: &dyn Fn(&Value) -> Option<String>,
     ) -> Value {
+        if let Some(answer) = self.answers.remove(&id) {
+            return answer;
+        }
         loop {
             let message = self.next().await;
             if message["method"] == "session/update" {
@@ -505,6 +512,8 @@ impl Client {
                 .await;
             } else if message["id"] == id {
                 return message;
+            } else if let Some(other) = message["id"].as_i64() {
+                self.answers.insert(other, message);
             }
         }
     }
@@ -517,8 +526,23 @@ impl Client {
     }
 }
 
+/// The host's events, kept for the test, then routed as in ACP mode.
+struct Tee {
+    router: Arc<EventRouter>,
+    kinds: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl EventEmitter for Tee {
+    fn emit(&self, event: AgentEvent) {
+        self.kinds.lock().unwrap().push(event.kind);
+        self.router.emit(event);
+    }
+}
+
 struct Acp {
     server: MockServer,
+    /// The kind of each event the host sent, in order.
+    kinds: Arc<Mutex<Vec<&'static str>>>,
     client: Client,
     host: Arc<AgentHost>,
     folder: tempfile::TempDir,
@@ -535,6 +559,11 @@ async fn acp(server: MockServer, policy: Value) -> Acp {
     let policy = Arc::new(Policy(policy));
     let credentials: Arc<dyn Credentials> = Arc::new(StaticCredentials(server.origin.clone()));
     let router = Arc::new(EventRouter::default());
+    let kinds = Arc::new(Mutex::new(Vec::new()));
+    let tee = Arc::new(Tee {
+        router: router.clone(),
+        kinds: kinds.clone(),
+    });
     let app_dirs = crate::d0::turn::app_dirs_for_sandbox([
         Some(app.path().join("config")),
         Some(app.path().to_owned()),
@@ -553,7 +582,7 @@ async fn acp(server: MockServer, policy: Value) -> Acp {
             client_version: "0.1.0".into(),
             policy,
             workspaces: workspaces.clone(),
-            emitter: router.clone(),
+            emitter: tee,
             retry: RetryPolicy {
                 attempts: 3,
                 delay: Duration::from_millis(10),
@@ -603,7 +632,9 @@ async fn acp(server: MockServer, policy: Value) -> Acp {
             writer,
             lines: BufReader::new(read).lines(),
             next_id: 0,
+            answers: HashMap::new(),
         },
+        kinds,
         host,
         folder,
         _app: app,
@@ -655,6 +686,24 @@ impl Acp {
             .into_iter()
             .filter(|req| req.path.ends_with(path_end))
             .collect()
+    }
+
+    /// Wait until the host sent `count` events of `kind`.
+    async fn events_of(&self, kind: &str, count: usize) {
+        for _ in 0..3_000 {
+            let seen = self
+                .kinds
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|seen| **seen == kind)
+                .count();
+            if seen >= count {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("the host did not send {count} {kind} event(s)");
     }
 
     async fn commits_settled(&self) {
@@ -961,12 +1010,13 @@ async fn cancel_commits_nothing() {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    // A second prompt on the session while one runs is refused.
-    let (busy, _) = acp
+    // A second prompt on the session while one runs waits in the turn's
+    // steering queue; the cancel answers it `cancelled` too.
+    let queued = acp
         .client
-        .call("session/prompt", prompt(&session_id, "More"))
+        .start("session/prompt", prompt(&session_id, "More"))
         .await;
-    assert_eq!(busy["error"]["data"]["code"], "busy", "{busy}");
+    acp.events_of("steer_queued", 1).await;
     acp.client
         .notify("session/cancel", json!({"sessionId": session_id}))
         .await;
@@ -975,6 +1025,13 @@ async fn cancel_commits_nothing() {
     let mut seen = Seen::default();
     let answer = acp.client.until(id, &mut seen, &|_| None).await;
     assert_eq!(answer["result"]["stopReason"], "cancelled", "{answer}");
+    let queued = acp.client.until(queued, &mut seen, &|_| None).await;
+    assert_eq!(queued["result"]["stopReason"], "cancelled", "{queued}");
+    // It never ran as a turn of its own.
+    assert_eq!(
+        acp.seen(&format!("/local_turn/prompt_lib/1/{UUID}")).len(),
+        1
+    );
     acp.commits_settled().await;
     assert!(
         acp.seen(&format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"))
@@ -986,6 +1043,220 @@ async fn cancel_commits_nothing() {
         .call("session/prompt", prompt(&session_id, "Again"))
         .await;
     assert_eq!(next["result"]["stopReason"], "end_turn", "{next}");
+}
+
+/// A model whose first call waits until the gate opens; `answers` gives
+/// the answer of each call.
+struct Gate {
+    asked: Arc<AtomicBool>,
+    open: Arc<AtomicBool>,
+}
+
+impl Gate {
+    fn new(answers: impl Fn(usize) -> Res + Send + Sync + 'static) -> (Model, Self) {
+        let asked = Arc::new(AtomicBool::new(false));
+        let open = Arc::new(AtomicBool::new(false));
+        let model: Model = {
+            let (asked, open) = (asked.clone(), open.clone());
+            Box::new(move |n| {
+                if n == 0 {
+                    asked.store(true, Ordering::SeqCst);
+                    tokio::task::block_in_place(|| {
+                        for _ in 0..1_500 {
+                            if open.load(Ordering::SeqCst) {
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                    });
+                }
+                answers(n)
+            })
+        };
+        (model, Self { asked, open })
+    }
+
+    /// Until the model's first call waits at the gate.
+    async fn asked(&self) {
+        for _ in 0..3_000 {
+            if self.asked.load(Ordering::SeqCst) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("the model was not asked");
+    }
+
+    fn open(&self) {
+        self.open.store(true, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_prompt_during_a_turn_steers_it() {
+    let (model, gate) = Gate::new(|n| match n {
+        0 => tool_call(
+            "call-write",
+            "write_file",
+            &json!({"path": "notes.txt", "content": "hello\n"}),
+        ),
+        _ => answer("Done."),
+    });
+    let mut acp = acp(platform(model).await, allowed()).await;
+    let (session_id, _) = acp.session().await;
+    let first = acp
+        .client
+        .start("session/prompt", prompt(&session_id, "Write notes"))
+        .await;
+    gate.asked().await;
+    let second = acp
+        .client
+        .start(
+            "session/prompt",
+            prompt(&session_id, "Also say hello in the notes"),
+        )
+        .await;
+    acp.events_of("steer_queued", 1).await;
+    gate.open();
+    let mut seen = Seen::default();
+    let first = acp.client.until(first, &mut seen, &|_| None).await;
+    let second = acp.client.until(second, &mut seen, &|_| None).await;
+    // Both prompts are answered with the turn's stop reason.
+    assert_eq!(first["result"]["stopReason"], "end_turn", "{first}");
+    assert_eq!(second["result"]["stopReason"], "end_turn", "{second}");
+    acp.events_of("steer_injected", 1).await;
+    // The agent took the message after the tool result, in the same turn:
+    // the model's second request has it, the first does not.
+    let calls = acp.seen("/llm/v1/chat/completions");
+    assert_eq!(calls.len(), 2);
+    assert!(!calls[0].body.contains("Also say hello"));
+    assert!(calls[1].body.contains("Also say hello in the notes"));
+    assert_eq!(
+        acp.seen(&format!("/local_turn/prompt_lib/1/{UUID}")).len(),
+        1
+    );
+    // The output after the message streamed as part of the running turn.
+    let text: String = seen
+        .updates_of("agent_message_chunk")
+        .iter()
+        .map(|update| update["content"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(text, "Done.");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_prompt_the_turn_did_not_take_runs_as_the_next_turn() {
+    // The first turn has no tool call: no safe point, so the message waits
+    // until the turn ends.
+    let (model, gate) = Gate::new(|n| match n {
+        0 => answer("First."),
+        _ => answer("Second."),
+    });
+    let mut acp = acp(platform(model).await, allowed()).await;
+    let (session_id, _) = acp.session().await;
+    let first = acp
+        .client
+        .start("session/prompt", prompt(&session_id, "Say first"))
+        .await;
+    gate.asked().await;
+    let second = acp
+        .client
+        .start("session/prompt", prompt(&session_id, "Then say second"))
+        .await;
+    acp.events_of("steer_queued", 1).await;
+    gate.open();
+    let mut seen = Seen::default();
+    let first = acp.client.until(first, &mut seen, &|_| None).await;
+    assert_eq!(first["result"]["stopReason"], "end_turn", "{first}");
+    let second = acp.client.until(second, &mut seen, &|_| None).await;
+    assert_eq!(second["result"]["stopReason"], "end_turn", "{second}");
+    acp.events_of("steer_dropped", 1).await;
+    assert_eq!(
+        acp.kinds
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|kind| **kind == "steer_injected")
+            .count(),
+        0
+    );
+    // Two turns: the second one's prompt is the message.
+    assert_eq!(
+        acp.seen(&format!("/local_turn/prompt_lib/1/{UUID}")).len(),
+        2
+    );
+    let calls = acp.seen("/llm/v1/chat/completions");
+    assert_eq!(calls.len(), 2);
+    assert!(!calls[0].body.contains("Then say second"));
+    assert!(calls[1].body.contains("Then say second"));
+    let text: String = seen
+        .updates_of("agent_message_chunk")
+        .iter()
+        .map(|update| update["content"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(text, "First.Second.");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_full_steering_queue_still_refuses() {
+    let (model, gate) = Gate::new(|_| answer("Done."));
+    let mut acp = acp(platform(model).await, allowed()).await;
+    let (session_id, _) = acp.session().await;
+    let first = acp
+        .client
+        .start("session/prompt", prompt(&session_id, "Long work"))
+        .await;
+    gate.asked().await;
+    let mut queued = Vec::new();
+    for n in 0..crate::d0::steering::MAX_PENDING {
+        queued.push(
+            acp.client
+                .start("session/prompt", prompt(&session_id, &format!("m{n}")))
+                .await,
+        );
+    }
+    acp.events_of("steer_queued", crate::d0::steering::MAX_PENDING)
+        .await;
+    // One more is refused as before: nothing is lost without an answer.
+    let (full, _) = acp
+        .client
+        .call("session/prompt", prompt(&session_id, "one more"))
+        .await;
+    assert_eq!(full["error"]["data"]["code"], "busy", "{full}");
+    // So is a text over the steering bound.
+    let long = "x".repeat(crate::d0::steering::MAX_TEXT_BYTES + 1);
+    let (long, _) = acp
+        .client
+        .call("session/prompt", prompt(&session_id, &long))
+        .await;
+    assert_eq!(long["error"]["data"]["code"], "busy", "{long}");
+    // What cannot steer a turn is refused as invalid.
+    let (image, _) = acp
+        .client
+        .call(
+            "session/prompt",
+            json!({"sessionId": session_id, "prompt": [
+                {"type": "image", "data": "aGk=", "mimeType": "image/png"}
+            ]}),
+        )
+        .await;
+    assert_eq!(image["error"]["code"], rpc::INVALID_PARAMS, "{image}");
+    let (command, _) = acp
+        .client
+        .call("session/prompt", prompt(&session_id, "/compact"))
+        .await;
+    assert_eq!(command["error"]["code"], rpc::INVALID_PARAMS, "{command}");
+    acp.client
+        .notify("session/cancel", json!({"sessionId": session_id}))
+        .await;
+    gate.open();
+    let mut seen = Seen::default();
+    let first = acp.client.until(first, &mut seen, &|_| None).await;
+    assert_eq!(first["result"]["stopReason"], "cancelled", "{first}");
+    for id in queued {
+        let answer = acp.client.until(id, &mut seen, &|_| None).await;
+        assert_eq!(answer["result"]["stopReason"], "cancelled", "{answer}");
+    }
 }
 
 /// Every event the router parks is bounded: a start refused before any

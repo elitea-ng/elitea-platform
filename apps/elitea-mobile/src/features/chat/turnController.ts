@@ -17,13 +17,15 @@ import {
   type StartedTurn,
   type TurnRequest,
 } from '@/api/queries/sendMessage';
+import { editSteering, handOffSteeringWithRetry, listSteering, newSteeringKey, queueSteeringWithRetry, removeSteering, type SteeringHandoff } from '@/api/queries/steering';
 import { stopTurn, type StopOutcome } from '@/api/queries/stopTurn';
 import { backoffDelay, ResumableStream, type ResumableStreamOptions, type StreamStatus } from '@/api/sse/stream';
 import type { StreamTransport } from '@/api/sse/transport';
 import { projectScope } from '@/lib/abortRegistry';
 import { log } from '@/lib/log';
 import { parseFrame } from '@/features/chat/frames';
-import { INITIAL_TURN, isTurnTerminal, reduceTurn, type TurnState } from '@/features/chat/turnReducer';
+import { INITIAL_TURN, isTurnTerminal, reduceTurn, withSteering, type TurnState } from '@/features/chat/turnReducer';
+import { STEERING_ERROR, STEERING_STATE, isSteeringCarryOver, joinSteeringTexts, leftoverSteering, type SteeringItem } from '@elitea/client-core/stream';
 import { registerWipeHook } from '@/security/endSession';
 import { getSession } from '@/state/session';
 
@@ -77,7 +79,34 @@ export interface LiveTurn {
    * checks that the answer's `generation` is this `regenerationId`.
    */
   regeneration: { answerUuid: string; regenerationId: string } | null;
+  /**
+   * The steering messages that THIS device queued against the answer
+   * (client contract 1.27). Only these are sent again as the next message
+   * when the turn ends before the worker injects them. A message that the
+   * server carried from an older answer of this device to this answer is
+   * here too.
+   */
+  ownSteering?: string[];
+  /** The server refused steering for this turn (`steering_not_supported`, a pipeline). */
+  steeringUnsupported?: boolean;
+  /** A rate-limited steering message goes again at this time (epoch ms); null when none waits. */
+  steeringRetryAt?: number | null;
 }
+
+/** What a message sent while the answer runs came to (client contract 1.27). */
+export type SteerOutcome =
+  /** Queued against the running answer; the worker reads it at the next safe point. */
+  | 'queued'
+  /** The turn ended first; the text goes as the next message once it settles. */
+  | 'after_turn'
+  /** This turn cannot take messages while it runs (a pipeline). The text is not sent. */
+  | 'not_supported'
+  /** The turn already has the most waiting messages. The text is not sent. */
+  | 'queue_full'
+  /** The server refused too many messages in a short time, also after the retries. The text is not sent. */
+  | 'rate_limited'
+  /** The answer is not admitted yet, or the request failed. The text is not sent. */
+  | 'failed';
 
 /**
  * The persisted answer a live regeneration rewrites, which the thread hides
@@ -123,6 +152,34 @@ export interface TurnDeps {
   stopOnServer?: (projectId: number, responseMessageId: string) => Promise<StopOutcome>;
   /** The pause was answered elsewhere (409 `*_already_resolved`). */
   onAlreadyResolved?: () => void;
+  /**
+   * The turn ended with steering messages of this device that it did not
+   * read (client contract 1.27), and the hand-off returned them (or a text
+   * came too late for the turn): send `text` (the texts joined with a blank
+   * line) as ONE normal next message. With `questionId`, that send MUST use
+   * it as its `question_id`: the hand-off named it to the server.
+   */
+  onLeftover?: (text: string, questionId?: string) => void;
+  /**
+   * The turn was stopped, or it failed, with steering messages of this
+   * device that it did not read. The server does not continue such a turn,
+   * and the controller does not send them by itself: it offers them.
+   */
+  onSteeringOffer?: (offer: SteeringOffer) => void;
+}
+
+/** How `TurnController.stop` ends the turn. */
+export interface StopOptions {
+  /** "Stop and send": send the steering messages that the turn did not read, as after a normal end. */
+  sendSteering?: boolean;
+}
+
+/** The leftover texts of a stopped or failed turn (client contract 1.27): the user chooses. */
+export interface SteeringOffer {
+  /** The texts, joined with a blank line. */
+  text: string;
+  /** "Send": hands the texts off and sends them as the next message. Resolves to an error text, or null. */
+  send: () => Promise<string | null>;
 }
 
 export interface HandOffHint {
@@ -155,6 +212,34 @@ function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 /** Answers from a gateway in front of a workspace that is down (DEF-R3). */
+/**
+ * The steering messages that THIS device queued, by id: the answer that holds
+ * each one now. In memory only. A carry-over moves a message to the author's
+ * newer answer, which is another `TurnController`; this map tells the newer
+ * one that the message is this device's own, also when the older turn
+ * already settled.
+ */
+const ownSteeringAnswers = new Map<string, string>();
+const MAX_OWN_STEERING = 200;
+
+function rememberOwnSteering(id: string, answer: string): void {
+  ownSteeringAnswers.delete(id);
+  ownSteeringAnswers.set(id, answer);
+  for (const oldest of ownSteeringAnswers.keys()) {
+    if (ownSteeringAnswers.size <= MAX_OWN_STEERING) break;
+    ownSteeringAnswers.delete(oldest);
+  }
+}
+
+/** False when the server carried the message to another answer than `answer`. */
+function ownsSteeringHere(id: string, answer: string | null): boolean {
+  const holder = ownSteeringAnswers.get(id);
+  return holder === undefined || answer === null || holder === answer;
+}
+
+/** The waits before the steering list is read again while own messages still show `pending` at the turn end. */
+const SETTLE_RETRY_MS = [1_500, 4_000] as const;
+
 const GATEWAY_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
 
 /**
@@ -219,6 +304,8 @@ export class TurnController {
       continuation: deps.start !== undefined,
       attachmentNames: (prepared.request.attachments ?? []).map((a) => a.name),
       regeneration: deps.regeneration ?? null,
+      ownSteering: [],
+      steeringUnsupported: false,
     };
   }
 
@@ -317,6 +404,7 @@ export class TurnController {
   /** Sends (first time) or re-sends the stored body and streams the execution. */
   start(): Promise<void> {
     this.stopNetwork();
+    this.steeringSettled = false;
     const generation = ++this.generation;
     this.update({
       turn: { ...INITIAL_TURN },
@@ -343,9 +431,10 @@ export class TurnController {
    * 'not_running': the answer had already ended; its own stream settles it.
    * Throws StopError when the stop could not be recorded.
    */
-  async stop(): Promise<StopOutcome | 'not_ready'> {
+  async stop(options: StopOptions = {}): Promise<StopOutcome | 'not_ready'> {
     const responseMessageId = this.state.execution?.responseMessageId ?? null;
     if (!this.isActive || this.state.turn.phase !== 'streaming' || responseMessageId === null) return 'not_ready';
+    this.sendSteeringOnStop = options.sendSteering === true;
     const stopOnServer = this.deps.stopOnServer ?? ((projectId: number, id: string) => stopTurn(projectId, id, this.deps.client));
     const outcome = await stopOnServer(this.prepared.request.projectId, responseMessageId);
     if (outcome !== 'stopped') return outcome;
@@ -359,7 +448,242 @@ export class TurnController {
       log.warn('refetch after the stop failed', { error });
     }
     if (generation === this.generation) this.update({ settled: true });
+    void this.settleSteering();
     return 'stopped';
+  }
+
+  /**
+   * The answer streams and is admitted, so a message can steer it now
+   * (client contract 1.27), unless the server refused steering for this turn.
+   */
+  get canSteer(): boolean {
+    return (
+      this.isActive &&
+      this.state.turn.phase === 'streaming' &&
+      (this.state.execution?.responseMessageId ?? null) !== null &&
+      this.state.steeringUnsupported !== true
+    );
+  }
+
+  /**
+   * Sends `text` as a steering message of the running answer. A network
+   * failure is tried once more with the SAME `Idempotency-Key` (the server
+   * then answers the first message again). A `rate_limited` refusal is tried
+   * again after its wait, with the same key; `steeringRetryAt` shows the
+   * wait meanwhile.
+   */
+  async steer(text: string): Promise<SteerOutcome> {
+    const responseMessageId = this.state.execution?.responseMessageId ?? null;
+    if (!this.canSteer || responseMessageId === null) return 'failed';
+    const projectId = this.prepared.request.projectId;
+    const key = newSteeringKey();
+    const sleep = this.deps.sleep ?? defaultSleep;
+    const result = await queueSteeringWithRetry(projectId, responseMessageId, text, key, {
+      client: this.deps.client,
+      sleep: (ms) => sleep(ms, new AbortController().signal),
+      onWait: (ms) => this.update({ steeringRetryAt: Date.now() + ms }),
+    });
+    if (this.state.steeringRetryAt != null) this.update({ steeringRetryAt: null });
+    if (result.ok) {
+      const item = result.item;
+      if (item) {
+        rememberOwnSteering(item.id, responseMessageId);
+        this.update({ ownSteering: [...(this.state.ownSteering ?? []), item.id], turn: withSteering(this.state.turn, [item]) });
+      }
+      // The turn settled while the POST was on its way: the end-of-turn rule must still see this message.
+      if (item && this.steeringSettled) void this.settleSteering(true);
+      return 'queued';
+    }
+    switch (result.code) {
+      case STEERING_ERROR.turnNotRunning:
+        this.queueAfterTurn(text);
+        return 'after_turn';
+      case STEERING_ERROR.notSupported:
+        this.update({ steeringUnsupported: true });
+        return 'not_supported';
+      case STEERING_ERROR.queueFull:
+        return 'queue_full';
+      case STEERING_ERROR.rateLimited:
+        return 'rate_limited';
+      default:
+        return 'failed';
+    }
+  }
+
+  /** Changes the text of a pending steering message. Resolves to an error text, or null. */
+  async editSteering(id: string, text: string): Promise<string | null> {
+    const responseMessageId = this.state.execution?.responseMessageId ?? null;
+    if (responseMessageId === null) return null;
+    const result = await editSteering(this.prepared.request.projectId, responseMessageId, id, text, this.deps.client);
+    if (result.ok) {
+      if (result.item) this.update({ turn: withSteering(this.state.turn, [result.item]) });
+      return null;
+    }
+    // `steering_not_pending`: the turn read it first; the list shows it as delivered.
+    if (result.code === STEERING_ERROR.notPending) {
+      await this.refreshSteering();
+      return 'The agent already read this message.';
+    }
+    return "Couldn't change the message. Try again.";
+  }
+
+  /** Removes a pending steering message. Resolves to an error text, or null. */
+  async removeSteering(id: string): Promise<string | null> {
+    const responseMessageId = this.state.execution?.responseMessageId ?? null;
+    const item = this.state.turn.steering.find((candidate) => candidate.id === id);
+    if (responseMessageId === null || item === undefined) return null;
+    const result = await removeSteering(this.prepared.request.projectId, responseMessageId, id, this.deps.client);
+    if (result.ok) {
+      this.update({
+        turn: withSteering(this.state.turn, [{ ...item, state: STEERING_STATE.Removed }]),
+        ownSteering: (this.state.ownSteering ?? []).filter((own) => own !== id),
+      });
+      return null;
+    }
+    if (result.code === STEERING_ERROR.notPending) {
+      await this.refreshSteering();
+      return 'The agent already read this message.';
+    }
+    return "Couldn't remove the message. Try again.";
+  }
+
+  /**
+   * A carry-over (client contract 1.27): the user sent a newer message before
+   * the hand-off of an older answer, so the server moved the leftover messages
+   * to this (newer) answer. A message that this device queued under the older
+   * answer stays this device's own: the end-of-turn rule of THIS answer hands
+   * it off, and the rule of the older answer does not (`ownsSteeringHere`).
+   */
+  private adoptCarriedSteering(item: SteeringItem): void {
+    const answer = this.state.execution?.responseMessageId ?? null;
+    if (answer === null || item.responseMessageId !== answer || (this.state.ownSteering ?? []).includes(item.id)) return;
+    const from = ownSteeringAnswers.get(item.id);
+    if (from === undefined || !isSteeringCarryOver(from, item)) return;
+    rememberOwnSteering(item.id, answer);
+    this.update({ ownSteering: [...(this.state.ownSteering ?? []), item.id] });
+    // This turn already ended: the end-of-turn rule must still see the message.
+    if (this.steeringSettled) void this.settleSteering(true);
+  }
+
+  /** Reads the answer's steering list again (after a lost race with the injection). */
+  private async refreshSteering(): Promise<SteeringItem[]> {
+    const responseMessageId = this.state.execution?.responseMessageId ?? null;
+    if (responseMessageId === null) return this.state.turn.steering;
+    try {
+      const items = await listSteering(this.prepared.request.projectId, responseMessageId, this.deps.client);
+      this.update({ turn: withSteering(this.state.turn, items) });
+    } catch (error) {
+      log.info('could not read the steering list', { error });
+    }
+    return this.state.turn.steering;
+  }
+
+  /** The texts that wait for the turn end (`turn_not_running`). */
+  private readonly afterTurn: string[] = [];
+  /** The end-of-turn rule ran (the turn is over). */
+  private steeringSettled = false;
+
+  /** Sends `text` as the next message once this turn is over (now, when it is over already). */
+  private queueAfterTurn(text: string): void {
+    if (this.steeringSettled || !this.isActive) {
+      this.deps.onLeftover?.(text);
+      return;
+    }
+    this.afterTurn.push(text);
+  }
+
+  /** "Stop and send": the stop sends the leftover texts, it does not offer them. */
+  private sendSteeringOnStop = false;
+
+  /** The keys of the hand-off that is not done yet; a retry sends them again. */
+  private handoff: SteeringHandoff | null = null;
+
+  /**
+   * The end-of-turn rule (client contract 1.27). Reads the server list (it
+   * reads again a little later while own messages still show `pending`: the
+   * server marks them `turn_ended` a moment after the terminal frame). When
+   * own messages are `turn_ended`, calls the hand-off, which takes them in
+   * one step. ONLY the texts that the hand-off returns, plus the texts that
+   * came too late (`turn_not_running`), become ONE next message, joined with
+   * a blank line. An empty hand-off means that the server took them first
+   * (it then starts the next turn itself): nothing of them is sent. The
+   * question id of that message is made BEFORE the hand-off, which names it
+   * to the server. A turn that was stopped or that failed is not continued
+   * by the server: its texts are offered (`onSteeringOffer`), not sent. Runs
+   * after a detach too: the next message must not be lost when the thread
+   * closes.
+   */
+  private async settleSteering(again = false): Promise<void> {
+    if (this.steeringSettled && !again) return;
+    this.steeringSettled = true;
+    const late = this.afterTurn.splice(0);
+    const responseMessageId = this.state.execution?.responseMessageId ?? null;
+    // A message that the server carried to a newer answer is not this answer's any more.
+    const own = new Set((this.state.ownSteering ?? []).filter((id) => ownsSteeringHere(id, responseMessageId)));
+    const items = own.size > 0 ? await this.settledSteeringList(own) : this.state.turn.steering;
+    const leftovers = leftoverSteering(items, own, false).filter((item) => ownsSteeringHere(item.id, responseMessageId));
+    this.update({ ownSteering: (this.state.ownSteering ?? []).filter((id) => !own.has(id)) });
+    const lateItems = late.map((content) => ({ content }));
+    const held = (this.state.turn.stopped && !this.sendSteeringOnStop) || this.state.turn.phase === 'failed';
+    if (held && this.handoff === null && this.deps.onSteeringOffer) {
+      const text = joinSteeringTexts([...leftovers, ...lateItems]);
+      if (text !== '') this.deps.onSteeringOffer({ text, send: () => this.sendOffered(responseMessageId, late) });
+      return;
+    }
+    const result = responseMessageId !== null && (leftovers.length > 0 || this.handoff !== null) ? await this.handOff(responseMessageId) : null;
+    this.sendLeftover(joinSteeringTexts([...(result?.handed ?? []), ...lateItems]), result);
+  }
+
+  /** Sends `text` as ONE next message; with a hand-off that took messages, with its question id. */
+  private sendLeftover(text: string, result: { handed: SteeringItem[]; questionId: string } | null): void {
+    if (text === '') return;
+    if (result !== null && result.handed.length > 0) this.deps.onLeftover?.(text, result.questionId);
+    else this.deps.onLeftover?.(text);
+  }
+
+  /**
+   * Calls the hand-off with the open keys (new keys when none is open).
+   * Resolves to the messages it took and the question id that it named, or
+   * null when it failed: the keys then stay, and the next try sends them
+   * again and gets the same messages.
+   */
+  private async handOff(responseMessageId: string): Promise<{ handed: SteeringItem[]; questionId: string } | null> {
+    const handoff = (this.handoff ??= { key: newSteeringKey(), questionId: newQuestionId() });
+    const sleep = this.deps.sleep ?? defaultSleep;
+    try {
+      const handed = await handOffSteeringWithRetry(this.prepared.request.projectId, responseMessageId, handoff, {
+        client: this.deps.client,
+        sleep: (ms) => sleep(ms, new AbortController().signal),
+      });
+      // The answer is used: the next hand-off needs new keys.
+      this.handoff = null;
+      this.update({ turn: withSteering(this.state.turn, handed) });
+      return { handed, questionId: handoff.questionId };
+    } catch (error) {
+      log.info('could not hand off the steering messages', { error });
+      return null;
+    }
+  }
+
+  /** "Send" of an offer: the hand-off, then ONE next message with the hand-off's question id. */
+  private async sendOffered(responseMessageId: string | null, late: readonly string[]): Promise<string | null> {
+    const lateItems = late.map((content) => ({ content }));
+    const result = responseMessageId === null ? null : await this.handOff(responseMessageId);
+    if (responseMessageId !== null && result === null) return 'The waiting messages could not be sent. Try again.';
+    this.sendLeftover(joinSteeringTexts([...(result?.handed ?? []), ...lateItems]), result);
+    return null;
+  }
+
+  /** The server list, read again after each wait of `SETTLE_RETRY_MS` while an own message is still `pending`. */
+  private async settledSteeringList(own: ReadonlySet<string>): Promise<SteeringItem[]> {
+    const sleep = this.deps.sleep ?? defaultSleep;
+    let items = await this.refreshSteering();
+    for (const wait of SETTLE_RETRY_MS) {
+      if (!items.some((item) => own.has(item.id) && item.state === STEERING_STATE.Pending)) break;
+      await sleep(wait, new AbortController().signal);
+      items = await this.refreshSteering();
+    }
+    return items;
   }
 
   /** After the stream gave up: try again now. */
@@ -524,6 +848,7 @@ export class TurnController {
         const before = this.state.turn;
         const turn = reduceTurn(before, frame);
         if (turn !== before) this.update({ turn });
+        if (frame.kind === 'steer') this.adoptCarriedSteering(frame.item);
         if (turn.refreshRequests > before.refreshRequests) this.deps.onRefreshNeeded?.();
         if (isTurnTerminal(frame)) {
           ended = true;
@@ -549,6 +874,7 @@ export class TurnController {
     } catch (error) {
       log.warn('refetch after the turn failed', { error });
     }
+    void this.settleSteering();
     if (generation !== this.generation) return;
     const phase = this.state.turn.phase;
     if (phase === 'done' || phase === 'paused') this.update({ settled: true });
@@ -598,6 +924,7 @@ export function setLiveTurn(key: string, controller: TurnController | null): voi
 export function clearLiveTurns(): void {
   for (const controller of liveTurns.values()) controller.detach();
   liveTurns.clear();
+  ownSteeringAnswers.clear();
   notifyRegistry();
 }
 

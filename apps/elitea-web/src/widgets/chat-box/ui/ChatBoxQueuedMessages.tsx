@@ -38,13 +38,14 @@ import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import type { Theme } from '@mui/material/styles';
 import CloseIcon from '@mui/icons-material/Close';
 
-import type { ChatMessage } from '@/features/chat-messages';
+import type { ChatMessage, SteeringOffer } from '@/features/chat-messages';
 import { t } from '@/shared/i18n';
 
 import {
@@ -72,7 +73,7 @@ export interface UseChatBoxQueuedMessagesParams {
   /** The ordinary composer send, used when nothing is running. */
   readonly onSendNow: (question: string) => void;
   /** The ORDINARY send path (`useChatBoxHandlers`' `sendQuestion`) a queued message is delivered down — never a second transport. */
-  readonly send: (params: { readonly question: string }) => Promise<QueuedSendOutcome>;
+  readonly send: (params: { readonly question: string; readonly questionId?: string | undefined }) => Promise<QueuedSendOutcome>;
   /** Announced when a delivery is what finally committed the conversation row — the same contract the typed send has. */
   readonly onConversationCreated?: ((conversation: { readonly id?: string | number; readonly uuid?: string }) => void) | undefined;
 }
@@ -81,6 +82,14 @@ export interface ChatBoxQueuedMessagesModel {
   readonly items: readonly QueuedChatMessage[];
   /** What `NewChatInput` calls: queue while a run is open, send otherwise. */
   readonly onSend: (question: string) => void;
+  /**
+   * Queues a text for after the turn whatever the run state is. Steering
+   * (contract 1.27) uses it for a refused steering message and for the
+   * leftover messages that a turn did not inject: they go as a normal message
+   * when the composer settles. With `questionId`, that send uses it as its
+   * `question_id`.
+   */
+  readonly enqueue: (question: string, questionId?: string) => void;
   readonly onRemove: (id: string) => void;
   /** Stamps `interjected` on the transcript rows delivered from this queue. */
   readonly decorate: (messages: readonly ChatMessage[]) => readonly ChatMessage[];
@@ -128,6 +137,13 @@ export function useChatBoxQueuedMessages(params: UseChatBoxQueuedMessagesParams)
     [conversationKey],
   );
 
+  const enqueue = useCallback(
+    (question: string, questionId?: string) => {
+      useQueuedMessagesStore.getState().enqueue(conversationKey, question, questionId);
+    },
+    [conversationKey],
+  );
+
   const onRemove = useCallback(
     (id: string) => {
       useQueuedMessagesStore.getState().remove(conversationKey, id);
@@ -143,7 +159,7 @@ export function useChatBoxQueuedMessages(params: UseChatBoxQueuedMessagesParams)
     if (next === undefined) return;
     setSending(true);
     void sendRef
-      .current({ question: next.text })
+      .current(next.questionId === undefined ? { question: next.text } : { question: next.text, questionId: next.questionId })
       .then((outcome) => {
         if (outcome.questionId) {
           useQueuedMessagesStore.getState().markInterjected(conversationKey, outcome.questionId);
@@ -173,7 +189,7 @@ export function useChatBoxQueuedMessages(params: UseChatBoxQueuedMessagesParams)
     };
   }, [interjectedIds]);
 
-  return { items, onSend, onRemove, decorate };
+  return { items, onSend, enqueue, onRemove, decorate };
 }
 
 /* ── the strip ───────────────────────────────────────────────────────────── */
@@ -266,6 +282,62 @@ export function ChatBoxQueuedMessages({ queue }: ChatBoxQueuedMessagesProps): Re
           </Tooltip>
         </Box>
       ))}
+    </Box>
+  );
+}
+
+export interface ChatBoxSteeringNoticeProps {
+  /** A short text about a refused steering message (contract 1.27), or `null`. */
+  readonly notice: string | null;
+  readonly onDismiss: () => void;
+}
+
+/** One line above the composer when a steering message went to the waiting list instead. */
+export function ChatBoxSteeringNotice({ notice, onDismiss }: ChatBoxSteeringNoticeProps): ReactNode {
+  if (notice === null) return null;
+  const closeLabel = t('widgets.chatBox.steeringNoticeClose', 'Close');
+  return (
+    <Box sx={stripSx} data-testid="chat-steering-notice" aria-live="polite">
+      <Box sx={rowSx}>
+        <Typography variant="bodyMedium" color="text.secondary" sx={{ flex: 1 }}>{notice}</Typography>
+        <IconButton size="small" aria-label={closeLabel} onClick={onDismiss}>
+          <CloseIcon fontSize="small" />
+        </IconButton>
+      </Box>
+    </Box>
+  );
+}
+
+export interface ChatBoxSteeringOfferProps {
+  /** The leftover texts of a stopped or failed turn (contract 1.27), or `null`. */
+  readonly offer: SteeringOffer | null;
+  readonly onSend: () => void;
+  readonly onDismiss: () => void;
+}
+
+/**
+ * Above the composer when a stopped or failed turn did not read some of the
+ * user's steering messages. The server does not send them, and the client
+ * does not send them by itself: the user chooses.
+ */
+export function ChatBoxSteeringOffer({ offer, onSend, onDismiss }: ChatBoxSteeringOfferProps): ReactNode {
+  if (offer === null) return null;
+  return (
+    <Box sx={stripSx} data-testid="chat-steering-offer" aria-live="polite">
+      <Typography variant="labelMedium" color="text.secondary">
+        {t('widgets.chatBox.steeringOfferHeading', 'The turn ended before it read these messages. Send them as the next message?')}
+      </Typography>
+      <Typography variant="bodyMedium" color="text.primary" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'break-word' }} data-testid="chat-steering-offer-text">
+        {offer.text}
+      </Typography>
+      <Box sx={{ ...rowSx, justifyContent: 'flex-end' }}>
+        <Button size="small" variant="outlined" data-testid="chat-steering-offer-dismiss" onClick={onDismiss}>
+          {t('widgets.chatBox.steeringOfferDismiss', 'Dismiss')}
+        </Button>
+        <Button size="small" variant="contained" data-testid="chat-steering-offer-send" onClick={onSend}>
+          {t('widgets.chatBox.steeringOfferSend', 'Send')}
+        </Button>
+      </Box>
     </Box>
   );
 }

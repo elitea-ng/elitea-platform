@@ -103,6 +103,9 @@ type Server struct {
 	// wrapUps answers whether a running cloud turn's thread is being taken
 	// back (ADR-0034); nil when the cloud executor is not composed.
 	wrapUps WorkspaceWrapUps
+	// steering hands a live agent claim its queued steering messages;
+	// nil when steering is not composed.
+	steering SteeringClaimer
 }
 
 // WorkspaceWrapUps answers whether execution executionID is a running cloud

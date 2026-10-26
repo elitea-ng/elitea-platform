@@ -4973,5 +4973,22 @@
   "pages.admin.llmProxy.tools.provider": "Provider",
   "pages.admin.llmProxy.tools.price": "Price (USD)",
   "pages.admin.llmProxy.tools.source": "Source",
-  "pages.admin.llmProxy.tab.tools": "Tools"
+  "pages.admin.llmProxy.tab.tools": "Tools",
+  "chatMessages.steering.cancel": "Cancel",
+  "chatMessages.steering.delivered": "Delivered",
+  "chatMessages.steering.edit": "Edit",
+  "chatMessages.steering.editFailed": "The message could not be changed. Try again.",
+  "chatMessages.steering.editLabel": "Edit the waiting message",
+  "chatMessages.steering.failed": "Your message could not reach the running turn. It is sent after the turn.",
+  "chatMessages.steering.pending": "Waiting for the next step",
+  "chatMessages.steering.queueFull": "This turn has too many waiting messages. Your message is sent after the turn.",
+  "chatMessages.steering.rateLimited": "Too many messages at once. You can send again in {{seconds}} s. Your message goes again then.",
+  "chatMessages.steering.remove": "Remove",
+  "chatMessages.steering.removeFailed": "The message could not be removed. Try again.",
+  "chatMessages.steering.save": "Save",
+  "chatMessages.steering.stopAndSend": "Stop and send",
+  "widgets.chatBox.steeringNoticeClose": "Close",
+  "widgets.chatBox.steeringOfferDismiss": "Dismiss",
+  "widgets.chatBox.steeringOfferHeading": "The turn ended before it read these messages. Send them as the next message?",
+  "widgets.chatBox.steeringOfferSend": "Send"
 }

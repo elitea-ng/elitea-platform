@@ -29,6 +29,8 @@ fn main() {
             "turn_commit_retry",
             "agent_turn_cancel",
             "agent_turn_status",
+            "agent_turn_steer",
+            "agent_turn_steer_update",
             "approval_respond",
             "turn_changes",
             "thread_history",

@@ -2,19 +2,23 @@
  * MESSAGE QUEUING (INTERJECTIONS) — what the composer does while a turn is
  * still running. Feature A17, folder `chat-interface/queued-text`.
  *
- * ── WHAT THIS PLATFORM ACTUALLY SUPPORTS, AND WHY THE QUEUE IS CLIENT-SIDE ──
+ * ── WHAT THE COMPOSER DOES DURING A RUN: STEERING (client contract 1.27) ───
  *
- * There is no mid-run interjection channel. `agent_start.go`'s
- * `resolveAfterCurrentResponseSettles` refuses a second start while the
- * conversation still holds a response row being written, waits out a three-
- * second settle budget and re-reads — so a second turn fired during the first
- * is a 422, not an interjection. The product behaviour the cases describe is
- * therefore built where it can be built: the composer stays live, what is typed
- * during a run goes into a visible "Waiting messages" queue, and the queue
- * drains FIFO through the ORDINARY send path once the run settles. Every
- * server-side rule (admission, budget, guardrails, participant resolution)
- * still applies to a queued message, because it is sent the same way a typed
- * one is.
+ * A message typed while the turn this tab started is still running is sent to
+ * the server as a STEERING message (`POST .../steering`). It shows under the
+ * running answer as `chat-steering-item` (state `pending`, "Waiting for the
+ * next step"). The worker injects it at a safe point of the same turn, and the
+ * only safe point is after a tool step. The mock model calls no tool, so
+ * nothing here is ever injected: the turn ends, the server marks the messages
+ * `turn_ended`, and the end-of-turn rule of the tab hands them off and sends
+ * ALL of them as ONE ordinary follow-up message (texts joined by a blank line,
+ * in the order they were typed). After a STOP or a failure nothing is sent by
+ * itself: the tab OFFERS the leftovers (`chat-steering-offer`) and the reader
+ * chooses.
+ *
+ * The old client-side "Waiting messages" strip (A17) still exists, but only as
+ * the fallback for a refused steering message, so it is not asserted as the
+ * main surface any more. The delivery that ends the journey uses it.
  *
  * ── WHY THESE ASSERTIONS AND NOT THE OBVIOUS ONES ───────────────────────────
  *
@@ -26,11 +30,10 @@
  *     turns the server actually admitted, in which order, and with which
  *     answers.
  *
- *  2. THE INTERJECTIONS MUST GET SEPARATE ANSWERS. The failure the cases name
- *     (ELITEA-2864/2866) is not "the messages were lost" but "they were merged
- *     into one response". A count of assistant rows cannot see that; each
- *     queued message's own text has to appear in its OWN answer, which the
- *     offline mock makes checkable because it echoes the prompt it was given.
+ *  2. ONE FOLLOW-UP, WITH EVERY TEXT, IN ORDER. Steering hands the leftovers
+ *     off as one message, so the stored user rows must be exactly the opener
+ *     and one follow-up that carries all the texts in typing order, and the
+ *     answer to it (the mock echoes the prompt) must carry them as well.
  *
  *  3. THE RUN MUST STILL BE OPEN WHEN THE QUEUEING HAPPENS. Every assertion
  *     below is worthless if the turn finished first, so the queueing steps are
@@ -184,6 +187,33 @@ async function questionOrder(
     .map((row) => tokens.find((token) => row.content.includes(token)) ?? `unmatched:${row.content.slice(0, 60)}`);
 }
 
+/**
+ * The stored user rows after the opener, oldest first. Steering sends the
+ * leftovers as ONE follow-up, so a correct run gives exactly one row here.
+ */
+async function followUps(
+  page: import('@playwright/test').Page,
+  projectId: string,
+  conversationId: string,
+  opener: string,
+): Promise<readonly string[]> {
+  const rows = await readStoredTranscript(page, projectId, conversationId);
+  return rows.filter((row) => row.role === 'user' && !row.content.includes(opener)).map((row) => row.content);
+}
+
+/** True when every token appears in `text`, in the given order. */
+function inOrder(text: string, tokens: readonly string[]): boolean {
+  let from = 0;
+  for (const token of tokens) {
+    const at = text.indexOf(token, from);
+    if (at < 0) return false;
+    from = at + token.length;
+  }
+  return true;
+}
+
+const steeringItems = (page: import('@playwright/test').Page) => page.getByTestId('chat-steering-item');
+
 /* onetest: ELITEA-2864 — basic interjection queuing and sequential processing */
 /* onetest: ELITEA-2865 — queued messages are processed in FIFO order */
 /* onetest: ELITEA-2866 — PARTIAL: interjections raised during a nested-agent hop get their own request/response pairs; there is no runtime handle for addressing the CHILD run, so they are delivered once the parent settles */
@@ -193,7 +223,7 @@ async function questionOrder(
 /* onetest: ELITEA-2872 — Enter queues, Shift+Enter opens a new line */
 /* onetest: ELITEA-2873 — an empty or whitespace-only message cannot be queued */
 /* onetest: ELITEA-2874 — rapid sequential interjections are all kept, in order, exactly once */
-test('messages typed during a run queue, and are delivered in order once it settles', async ({ page }) => {
+test('messages typed during a run are steered, and are delivered in order once it settles', async ({ page }) => {
   // The slow turn alone is ~20s of open stream, and three follow-up turns run
   // after it; every step below carries its own tighter bound, so a real hang
   // fails on its own step rather than here.
@@ -221,11 +251,11 @@ test('messages typed during a run queue, and are delivered in order once it sett
   ).toBeEditable({ timeout: 10_000 });
   await expect(
     page.getByRole('button', { name: 'Stop generating' }),
-    'Stop must still be offered: queueing does not replace cancelling',
+    'Stop must still be offered: steering does not replace cancelling',
   ).toBeVisible({ timeout: 10_000 });
   // ELITEA-2871, first row: an empty composer offers no send control at all.
   await expect(sendButton(page)).toHaveCount(0);
-  await expect(page.getByTestId('chat-queued-messages')).toHaveCount(0);
+  await expect(steeringItems(page)).toHaveCount(0);
 
   // ── ELITEA-2873: whitespace is not a message ────────────────────────────
   // Pressed rather than clicked, for the reason `chat.composer.spec.ts` uses
@@ -236,8 +266,8 @@ test('messages typed during a run queue, and are delivered in order once it sett
   await input(page).fill('   \t  ');
   await input(page).press('Enter');
   await expect(
-    page.getByTestId('chat-queued-messages'),
-    'a whitespace-only message must not reach the waiting list',
+    steeringItems(page),
+    'a whitespace-only message must not be steered',
   ).toHaveCount(0);
   await input(page).fill('');
 
@@ -245,16 +275,16 @@ test('messages typed during a run queue, and are delivered in order once it sett
   await input(page).fill('a draft line');
   await input(page).press('Shift+Enter');
   await expect(
-    page.getByTestId('chat-queued-messages'),
+    steeringItems(page),
     'Shift+Enter must not send',
   ).toHaveCount(0);
   await input(page).fill('');
 
   await input(page).fill(queued[0] as string);
   await input(page).press('Enter');
-  await expect(page.getByTestId('chat-queued-count')).toHaveText(/Waiting messages · 1/, { timeout: 10_000 });
+  await expect(steeringItems(page)).toHaveCount(1, { timeout: 10_000 });
   // ELITEA-2871: the composer clears, and with it the send control disappears —
-  // which is also why a second click cannot queue a duplicate (see header, 4).
+  // which is also why a second click cannot steer a duplicate (see header, 4).
   await expect(input(page)).toHaveValue('');
   await expect(sendButton(page)).toHaveCount(0);
 
@@ -263,70 +293,72 @@ test('messages typed during a run queue, and are delivered in order once it sett
   await input(page).fill(queued[1] as string);
   await expect(sendButton(page)).toBeEnabled({ timeout: 5_000 });
   await sendButton(page).click();
-  await expect(page.getByTestId('chat-queued-count')).toHaveText(/Waiting messages · 2/, { timeout: 10_000 });
+  await expect(steeringItems(page)).toHaveCount(2, { timeout: 10_000 });
 
   await input(page).fill(queued[2] as string);
   await input(page).press('Enter');
-  await expect(page.getByTestId('chat-queued-count')).toHaveText(/Waiting messages · 3/, { timeout: 10_000 });
+  await expect(steeringItems(page)).toHaveCount(3, { timeout: 10_000 });
 
   // ── ELITEA-2869: the list itself ────────────────────────────────────────
-  const rows = page.getByTestId('chat-queued-item');
-  await expect(rows).toHaveCount(3);
+  const rows = steeringItems(page);
   // Chronological, first at top: the order they will be delivered in.
   await expect(rows.nth(0)).toContainText(queued[0] as string);
   await expect(rows.nth(1)).toContainText(queued[1] as string);
   await expect(rows.nth(2)).toContainText(queued[2] as string);
-  await expect(page.getByTestId('chat-queued-status')).toHaveCount(3);
-  // Still exactly three, and still nothing sent: a queue that leaked a message
-  // onto the wire here would be refused by the settle gate, not interjected.
+  await expect(page.getByTestId('chat-steering-status')).toHaveCount(3);
+  await expect(page.getByTestId('chat-steering-status').first()).toHaveText('Waiting for the next step');
+  await expect(rows.first()).toHaveAttribute('data-state', 'pending');
+  // Steering messages are not turns: nothing may reach the transcript store
+  // while they wait.
   expect(
     await questionOrder(page, projectId, conversationId, order),
-    'nothing may reach the store while the queue is waiting',
+    'nothing may reach the store while the messages are waiting',
   ).toEqual([opener]);
 
-  // ── The queue drains ────────────────────────────────────────────────────
-  // The strip disappearing is the client saying "all delivered"; the store
-  // below is what says they were ADMITTED, in order, each with its own answer.
-  await expect(page.getByTestId('chat-queued-messages'), 'the queue area must hide once it is empty').toHaveCount(0, {
+  // ── The messages are handed off ─────────────────────────────────────────
+  // The waiting rows going away is the client saying "handed off"; the store
+  // below is what says they were ADMITTED, in order, as one follow-up.
+  await expect(steeringItems(page), 'the waiting rows must hide once the turn has ended').toHaveCount(0, {
     timeout: 180_000,
   });
 
   await expect
-    .poll(async () => questionOrder(page, projectId, conversationId, order), {
-      timeout: 180_000,
-      message: 'the queued messages were never delivered, or not in the order they were typed',
-    })
-    .toEqual(order);
+    .poll(
+      async () => {
+        const rows = await followUps(page, projectId, conversationId, opener);
+        return rows.length === 1 && inOrder(rows[0] as string, queued);
+      },
+      {
+        timeout: 180_000,
+        message: 'the steered messages were never delivered as one follow-up, or not in the order they were typed',
+      },
+    )
+    .toBe(true);
 
-  // ── ELITEA-2864/2866: each interjection got its OWN answer ──────────────
+  // ── ELITEA-2864/2866: the follow-up got its own answer ──────────────────
   await expect
     .poll(
       async () => {
         const transcript = await readStoredTranscript(page, projectId, conversationId);
-        return queued.filter((text) =>
-          transcript.some((row) => row.role === 'assistant' && !row.isError && row.content.includes(text)),
-        ).length;
+        return transcript.some(
+          (row) => row.role === 'assistant' && !row.isError && inOrder(row.content, queued),
+        );
       },
       {
         timeout: 180_000,
-        message:
-          'at least one interjection has no answer of its own — the failure this case names is three ' +
-          'questions collapsing into a single merged response, which a row COUNT cannot see',
+        message: 'the follow-up that carries the steered messages has no answer of its own',
       },
     )
-    .toBe(queued.length);
+    .toBe(true);
 
-  // ── ELITEA-2870: the label, and its survival ────────────────────────────
-  await expect(page.getByTestId('chat-message-interjected')).toHaveCount(3, { timeout: 30_000 });
-  await page.reload();
-  await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 30_000 });
-  await expect(
-    page.getByTestId('chat-message-interjected'),
-    'the "Sent while running" label must survive a reload — it is keyed on the question id the server persisted',
-  ).toHaveCount(3, { timeout: 60_000 });
+  // ELITEA-2870: the "Sent while running" label belongs to a message that the
+  // A17 queue sent. When the server starts the hand-off turn itself (the tab
+  // closed, or ~10 s passed) there is no such label, so it is not asserted
+  // here; `ChatBoxQueuedMessages.test.tsx` covers the label.
 
-  // Terminal state: the composer is free and the queue is gone.
+  // Terminal state: the composer is free and nothing waits.
   await expect(input(page)).toBeEditable({ timeout: 30_000 });
+  await expect(steeringItems(page)).toHaveCount(0);
   await expect(page.getByTestId('chat-queued-messages')).toHaveCount(0);
 });
 
@@ -345,27 +377,40 @@ test('Stop does not discard the waiting messages', async ({ page }) => {
   for (const [index, text] of queued.entries()) {
     await input(page).fill(text);
     await input(page).press('Enter');
-    await expect(page.getByTestId('chat-queued-count')).toHaveText(
-      new RegExp(`Waiting messages · ${String(index + 1)}`),
-      { timeout: 10_000 },
-    );
+    await expect(steeringItems(page)).toHaveCount(index + 1, { timeout: 10_000 });
   }
 
-  // Stop is not a special case for the queue, and that is the design: it
-  // settles the run exactly as a completed turn does, so the waiting messages
-  // become ordinary turns instead of being thrown away with the run.
+  // After a Stop the server never continues the turn, and the tab does not
+  // send the leftovers by itself: it OFFERS them. The messages are kept, and
+  // the reader chooses (ELITEA-2868).
   await page.getByRole('button', { name: 'Stop generating' }).click();
 
-  await expect
-    .poll(async () => questionOrder(page, projectId, conversationId, order), {
-      timeout: 180_000,
-      message: 'the queue was discarded when the run was stopped, or delivered out of order',
-    })
-    .toEqual(order);
+  const offer = page.getByTestId('chat-steering-offer');
+  await expect(offer, 'the stopped turn must offer the messages it did not read').toBeVisible({ timeout: 60_000 });
+  const offerText = page.getByTestId('chat-steering-offer-text');
+  await expect(offerText).toContainText(queued[0] as string);
+  await expect(offerText).toContainText(queued[1] as string);
+  expect(
+    await questionOrder(page, projectId, conversationId, order),
+    'a stopped turn must not start the waiting messages by itself',
+  ).toEqual([opener]);
 
-  await expect(page.getByTestId('chat-queued-messages'), 'the queue area must hide once it is empty').toHaveCount(0, {
-    timeout: 60_000,
-  });
+  await page.getByTestId('chat-steering-offer-send').click();
+
+  await expect
+    .poll(
+      async () => {
+        const rows = await followUps(page, projectId, conversationId, opener);
+        return rows.length === 1 && inOrder(rows[0] as string, queued);
+      },
+      {
+        timeout: 180_000,
+        message: 'the offered messages were discarded when the run was stopped, or delivered out of order',
+      },
+    )
+    .toBe(true);
+
+  await expect(offer).toHaveCount(0, { timeout: 60_000 });
   // The chat continues normally afterwards — the case's last step.
   await expect(input(page)).toBeEditable({ timeout: 60_000 });
 });
@@ -420,11 +465,12 @@ test('attachments are blocked while a turn is running', async ({ page }) => {
     'a file dropped during a run must not be staged',
   ).toHaveCount(0);
 
-  // ── A plain-text interjection still queues ──────────────────────────────
+  // ── A plain-text interjection is still steered ──────────────────────────
   const text = `attach-blocked-${stamp}`;
   await input(page).fill(text);
   await input(page).press('Enter');
-  await expect(page.getByTestId('chat-queued-count')).toHaveText(/Waiting messages · 1/, { timeout: 10_000 });
+  await expect(steeringItems(page)).toHaveCount(1, { timeout: 10_000 });
+  await expect(steeringItems(page).first()).toContainText(text);
 
   // ── And the capability comes back when the run ends ─────────────────────
   await expect

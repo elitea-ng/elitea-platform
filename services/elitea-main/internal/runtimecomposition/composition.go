@@ -1227,6 +1227,26 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// The take-back signal rides the lease poll, as cancellation does.
 		controlServer.WithWorkspaceWrapUps(dependencies.Workspace.Lifecycle)
 	}
+	// Steering during execution (client contract 1.27): it exists exactly
+	// when the stop does, because both act on the same running chat turn.
+	// The worker claims the queue over this control plane; the routes and
+	// the claim wake the execution event stream after commit.
+	var steering *agentexecutionapp.SteeringService
+	if agentCancel != nil {
+		steeringStore, steeringErr := repos.NewSteeringRepository(dependencies.AdmissionPool)
+		if steeringErr != nil {
+			return nil, fmt.Errorf("construct steering repository: %w", steeringErr)
+		}
+		var waker agentexecutionapp.SteeringWaker
+		if replayWake != nil {
+			waker = replayWake
+		}
+		steering, steeringErr = agentexecutionapp.NewSteeringService(steeringStore, waker)
+		if steeringErr != nil {
+			return nil, fmt.Errorf("construct steering service: %w", steeringErr)
+		}
+		controlServer.WithSteeringMessages(steering)
+	}
 	workspaceServer, err := newWorkspaceStoreServer(controlPeerAuthorizer, controlClaims, dependencies)
 	if err != nil {
 		return nil, err
@@ -2166,6 +2186,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	if agentCancel != nil {
 		publicRoutes.AgentCancel = agentCancel
+	}
+	if steering != nil {
+		publicRoutes.Steering = steering
 	}
 	if toolkitExecute != nil {
 		publicRoutes.ToolkitExecuteRead = toolkitExecute

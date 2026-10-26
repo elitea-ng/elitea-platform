@@ -321,12 +321,67 @@ names instead of retrying. A rule imported from a repository leaves the
 | `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
+| `agent_turn_steer` | `{turn_id, text}` | `{steer_id}` — queues `text` against the running turn: the agent gets it as a user message of the same turn at the next safe point (**Steering**, below). Rejects `turn_not_running` once the turn is cancelled or its run ended (send the text as the next turn), `steer_invalid` (empty, only whitespace, or more than 16 KiB of UTF-8), `steer_queue_full` (10 messages wait already), `steer_turn_full` (the turn has 10 steering messages already, taken and waiting together: the most its commit carries; the UI shows the message and the person sends the text as the next turn), `turn_unknown` / `turn_expired`. |
+| `agent_turn_steer_update` | `{turn_id, steer_id, text: string \| null}` | `null` — changes a waiting message (`text`), or removes it (`null`). Rejects `steer_not_pending` (the agent has it already, or it was removed), `turn_not_running`, `steer_invalid`, `turn_unknown` / `turn_expired`. |
 | `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny" \| "deny_with_feedback" \| "continue" \| "cancel" \| "accept" \| "decline", feedback?: string}` (`continue` is `allow_once` and `cancel` is `deny`, the MCP sign-in card's answers; `accept` and `decline` answer a `plan_proposed` card, where only `accept` accepts, and on any other card both deny; `deny_with_feedback` denies any card (declines a plan card) and tells the agent why. `feedback`, taken by `decline` and `deny_with_feedback`, is the person's text for the model, kept to 2 KiB of UTF-8 (the UI's box stops there too), control characters other than newlines and tabs dropped; it travels only with a denial, never an approval, and `deny_with_feedback` without any is `deny`) | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
 | `turn_changes` | `{turn_id}` | `{files: FileChange[], latest: boolean, undone: boolean}` |
 | `checkpoint_preview` | `{turn_id}` | `{restored: string[], deleted: string[]}` — a dry run of restoring the folder to before the turn |
 | `checkpoint_restore` | `{turn_id, path?: string, confirm_older?: boolean}` | `{restored: string[]}` |
 | `checkpoint_after` | `{turn_id}` | `{turn_id: string \| null}` — the turn whose checkpoint is the folder as `turn_id` left it: the first later turn of the same workspace (any thread) that changed files and was not undone. `null` when no later turn changed the folder (it is already as that turn left it, the person's own edits aside). A fork from a turn offers "Restore files to this point" with it: `checkpoint_preview` of the answered turn, then `checkpoint_restore` with `confirm_older` (Thread history, "Fork point"). Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep. Changes nothing. |
 | `turn_commit_retry` | `{execution_id}` | `null` once the turn's failed commit (`commit_failed`) is saved: sent again with the same execution id and body, in its conversation's order. Rejects `commit_unknown` when the host keeps no failed commit of that execution (it was saved, the app restarted, or the session signed out), or with the commit's refusal, which is also sent as another `commit_failed`. |
+
+**Steering.** While a turn runs, the composer stays open. A message sent
+then is a steering message (`agent_turn_steer`): the host queues it
+against the turn (each at most 16 KiB) and sends `steer_queued`. One
+turn takes at most 10 steering messages, the taken and the waiting ones
+together: the commit carries each taken text as one item, and the
+server keeps at most 10. The 11th is refused (`steer_turn_full`); no text
+is joined into another or cut. The person can change it (`steer_queued` again, with the
+next `revision`) or remove it (`steer_dropped` `removed`) while it waits
+(`agent_turn_steer_update`). At the next safe point of the run (after
+the tool results of a step, before the next model request) the agent
+loop takes every waiting message, oldest first: each becomes a user
+message of the same turn, the host sends `steer_injected` and appends
+the message to the session as a `user` event, so the next turns' history
+has it. The thread history records the events like every other event, and
+a reloaded thread shows an injected message as a user message at the
+point of the turn where `steer_injected` is. When the turn ends first
+(answered, failed, cancelled, stopped at a limit), each message that
+still waits is sent as `steer_dropped` with reason `turn_ended`, before
+`usage_total` and `done`; the UI then sends their texts, joined with a
+blank line, as the next turn. The commit of the turn keeps its own prompt
+as the user message and carries the injected messages, in order, as
+`steering_messages` (`{content}` each, a NUL as a space): the server stores
+them after the question, as the session has them.
+
+ACP (`src/acp/`) steers with the same queue. A `session/prompt` that
+arrives while a turn of its session runs is not refused: its text goes into
+that turn's steering queue, and the agent takes it at the next safe point,
+as above. Each `session/prompt` request still gets exactly one response:
+
+- The turn took it (`steer_injected`): the output after it streams as
+  `session/update`s of the running turn (no `user_message_chunk` is sent
+  for it: the client shows the prompt it sent). Its `PromptResponse` is
+  sent when the turn ends, with the turn's `stopReason` (or the turn's
+  JSON-RPC error, when the turn failed).
+- The turn ended first (`steer_dropped` `turn_ended`, or the turn could not
+  take it any more): it runs as the next prompt turn of the session, as if
+  it had arrived then, and is answered when that turn ends. Several such
+  prompts keep their order: the oldest runs as the turn, the others steer
+  it.
+- A `session/cancel` while it waits: it is answered `stopReason:
+  "cancelled"` (one the turn already took gets the turn's answer, which is
+  `cancelled` when the cancel stopped the turn).
+
+A prompt that steers is text blocks only: an image, audio, a resource or a
+resource link, or a slash command (`/compact`, a custom command) is refused
+with `-32602` invalid params (send it when the turn ends). Beyond the
+queue's bounds (10 prompts waiting, 16 KiB of text) the prompt is refused
+with the refusal ACP used before for a running session (`data.code`
+`busy`), so no prompt is lost without an answer. A prompt past the 10
+steering messages that one turn takes (`steer_turn_full`) is not refused:
+it runs as the next prompt turn. `session/load` of a
+session that runs a turn is still refused with `busy`.
 
 **One round trip before the first token.** The host keeps, for the app's
 session only (never on disk; dropped on sign-out, a new sign-in or another
@@ -2183,13 +2238,16 @@ order. Kinds and payloads:
 | `process_exited` | `{process_id, call_id, status: "exited" \| "killed" \| "timed_out", exit_code?}` — it ended while this turn runs (the turn's end stops the ones it does not keep) |
 | `approval_closed` | `{request_id, reason: "timeout"}` — the host closed an open `approval_request` nobody answered within its wait (today: an MCP sign-in, 10 minutes); the card goes, the turn's `hitl_exchanges` record it with `decision: "timeout"`, and an `approval_respond` for it answers `approval_closed` |
 | `model_retry` | `{attempt, max_attempts, code, message, delay_ms, text_units, thinking_units}` — a failed model call is made again after `delay_ms` (**Model retries**). `attempt` counts from 1 to `max_attempts` (25). `text_units` and `thinking_units` are what the failed call streamed, in UTF-16 code units. The transcript drops them from its end, never past a tool row. It shows the retry until the model, a sub-agent or the compaction moves on |
+| `steer_queued` | `{steer_id, text, revision: number}` — a steering message waits for the next safe point (**Steering**); sent again with the next `revision` when the person changes it |
+| `steer_injected` | `{steer_id, text}` — the agent loop took the message: it is a user message of the turn from this point |
+| `steer_dropped` | `{steer_id, text, reason: "removed" \| "turn_ended"}` — the message does not wait any more: the person removed it, or the turn ended before a safe point (the UI sends it as the next turn) |
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
-`running` → (`thinking_delta`, `thinking_end`, `text_delta`, `model_retry`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`, `subagent_started`, `subagent_event`, `subagent_finished`, `process_started`, `tool_output_delta`, `process_exited`)* →
-`usage_total` → `status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
+`running` → (`thinking_delta`, `thinking_end`, `text_delta`, `model_retry`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`, `subagent_started`, `subagent_event`, `subagent_finished`, `process_started`, `tool_output_delta`, `process_exited`, `steer_queued`, `steer_injected`, `steer_dropped`)* →
+(`steer_dropped` `turn_ended`)* → `usage_total` → `status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
 ends `usage_total` → `status` `cancelled` → `done` with `commit: "none"`; nothing is
 committed and its execution expires on the server. A run that fails after
 the start is still committed, as a failed answer (`is_error`), and its

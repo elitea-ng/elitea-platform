@@ -1,5 +1,5 @@
 use std::future::pending;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -18,9 +18,10 @@ use crate::protocol::control::{
 use crate::protocol::elitea::runtime::v1::{
     AuthorizeInvocationRequestV1, AuthorizeInvocationResponseV1, BeginExecutionRequestV1,
     BeginExecutionResponseV1, ClaimCommandRequestV1, ClaimCommandResponseV1,
-    DesiredExecutionStateV1, ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1,
-    PrepareSettlementRequestV1, PrepareSettlementResponseV1, RenewLeaseRequestV1,
-    RenewLeaseResponseV1, RuntimeErrorCodeV1, RuntimeErrorV1,
+    ClaimSteeringMessagesRequestV1, ClaimSteeringMessagesResponseV1, DesiredExecutionStateV1,
+    ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
+    PrepareSettlementResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1, RuntimeErrorCodeV1,
+    RuntimeErrorV1, SteeringMessageV1,
 };
 use crate::transport::{ControlGrpcConfig, ControlRpc};
 
@@ -35,6 +36,11 @@ struct FakeState {
     stall_renew: AtomicBool,
     renew_started: Notify,
     renew_active: AtomicBool,
+    /// `None`: this Main does not serve `ClaimSteeringMessages`.
+    steering: Mutex<Option<ClaimSteeringMessagesResponseV1>>,
+    steering_requests: Mutex<Vec<ClaimSteeringMessagesRequestV1>>,
+    /// The next steering calls that Main refuses (not confirmed).
+    steering_failures: AtomicUsize,
 }
 
 impl Default for FakeState {
@@ -57,6 +63,9 @@ impl Default for FakeState {
             stall_renew: AtomicBool::new(false),
             renew_started: Notify::new(),
             renew_active: AtomicBool::new(false),
+            steering: Mutex::new(None),
+            steering_requests: Mutex::new(Vec::new()),
+            steering_failures: AtomicUsize::new(0),
         }
     }
 }
@@ -93,6 +102,42 @@ impl ControlRpc for FakeRpc {
         _request: Request<AuthorizeInvocationRequestV1>,
     ) -> Result<Response<AuthorizeInvocationResponseV1>, Status> {
         panic!("the lease monitor must not authorize invocation")
+    }
+
+    async fn claim_steering_messages(
+        &self,
+        request: Request<ClaimSteeringMessagesRequestV1>,
+    ) -> Result<Response<ClaimSteeringMessagesResponseV1>, Status> {
+        self.0.calls.lock().expect("calls").push("steer");
+        self.0
+            .steering_requests
+            .lock()
+            .expect("steering requests")
+            .push(request.into_inner());
+        if self
+            .0
+            .steering_failures
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Ok(Response::new(ClaimSteeringMessagesResponseV1 {
+                messages: Vec::new(),
+                rejection: Some(RuntimeErrorV1 {
+                    code: RuntimeErrorCodeV1::DependencyUnavailable as i32,
+                    retryable: true,
+                    ..RuntimeErrorV1::default()
+                }),
+            }));
+        }
+        self.0
+            .steering
+            .lock()
+            .expect("steering")
+            .clone()
+            .map(Response::new)
+            .ok_or_else(|| Status::unimplemented("steering"))
     }
 
     async fn renew_lease(
@@ -680,5 +725,311 @@ async fn the_take_back_signal_is_latched_and_the_lease_stays_running() {
     state.renew.lock().expect("renew").workspace_wrap_up = false;
     monitor.check_now().await.expect("running");
     assert!(*probe.wrap_up_signal().borrow(), "the signal stays latched");
+    monitor.close().await.expect("close");
+}
+
+fn steering_message(id: &str, content: &str) -> SteeringMessageV1 {
+    SteeringMessageV1 {
+        steering_id: id.to_owned(),
+        content: content.to_owned(),
+        queued_at_unix_millis: NOW,
+    }
+}
+
+fn steer_calls(state: &FakeState) -> usize {
+    state
+        .calls
+        .lock()
+        .expect("calls")
+        .iter()
+        .filter(|call| **call == "steer")
+        .count()
+}
+
+// Client contract 1.27: the probe claims through the lease actor and gets the
+// texts in queue order; a refusal gives nothing and keeps asking later.
+#[tokio::test(flavor = "current_thread")]
+async fn state_probe_claims_steering_in_queue_order_and_survives_a_refusal() {
+    let state = Arc::new(FakeState::default());
+    *state.steering.lock().expect("steering") = Some(ClaimSteeringMessagesResponseV1 {
+        messages: vec![
+            steering_message("s-1", "skip the tests"),
+            steering_message("s-2", "use main"),
+        ],
+        rejection: None,
+    });
+    let monitor = ClaimLeaseMonitor::start(
+        client(Arc::clone(&state)),
+        test_lease_starting_execution(NOW + 60_000),
+        Arc::new(|| NOW),
+        config(Duration::from_secs(10)),
+    );
+    let probe = monitor.state_probe();
+    assert_eq!(probe.claim_steering().await, ["skip the tests", "use main"]);
+
+    *state.steering.lock().expect("steering") = Some(ClaimSteeringMessagesResponseV1 {
+        messages: Vec::new(),
+        rejection: Some(RuntimeErrorV1 {
+            code: RuntimeErrorCodeV1::StaleFence as i32,
+            retryable: false,
+            ..RuntimeErrorV1::default()
+        }),
+    });
+    assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    // The claim, its acknowledgement (no checkpoint is bound), then two
+    // refused claims.
+    assert_eq!(
+        steer_calls(&state),
+        4,
+        "a refusal does not turn steering off"
+    );
+    monitor.close().await.expect("close");
+}
+
+// A Main without the RPC is asked once per claim, never again.
+#[tokio::test(flavor = "current_thread")]
+async fn state_probe_stops_asking_a_main_without_steering() {
+    let state = Arc::new(FakeState::default());
+    let monitor = ClaimLeaseMonitor::start(
+        client(Arc::clone(&state)),
+        test_lease_starting_execution(NOW + 60_000),
+        Arc::new(|| NOW),
+        config(Duration::from_secs(10)),
+    );
+    let probe = monitor.state_probe();
+    assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    assert_eq!(steer_calls(&state), 1);
+    monitor.close().await.expect("close");
+    assert_eq!(
+        probe.claim_steering().await,
+        Vec::<String>::new(),
+        "a closed monitor claims nothing"
+    );
+}
+
+fn steering_acks(state: &FakeState) -> Vec<(Vec<String>, bool)> {
+    state
+        .steering_requests
+        .lock()
+        .expect("steering requests")
+        .iter()
+        .map(|request| {
+            (
+                request.acknowledged_steering_ids.clone(),
+                request.acknowledge_only,
+            )
+        })
+        .collect()
+}
+
+fn serve_steering(state: &FakeState, messages: Vec<SteeringMessageV1>) {
+    *state.steering.lock().expect("steering") = Some(ClaimSteeringMessagesResponseV1 {
+        messages,
+        rejection: None,
+    });
+}
+
+// Without a model checkpoint the model request that follows is the only
+// proof: the probe acknowledges the taken messages at once.
+#[tokio::test(flavor = "current_thread")]
+async fn steering_without_a_checkpoint_is_acknowledged_when_taken() {
+    let state = Arc::new(FakeState::default());
+    serve_steering(&state, vec![steering_message("s-1", "skip the tests")]);
+    let monitor = ClaimLeaseMonitor::start(
+        client(Arc::clone(&state)),
+        test_lease_starting_execution(NOW + 60_000),
+        Arc::new(|| NOW),
+        config(Duration::from_secs(10)),
+    );
+    let probe = monitor.state_probe();
+    assert_eq!(probe.claim_steering().await, ["skip the tests"]);
+    assert_eq!(
+        steering_acks(&state),
+        [(Vec::new(), false), (vec!["s-1".to_owned()], true)]
+    );
+    monitor.close().await.expect("close");
+}
+
+// With a checkpoint, a message is acknowledged only after the checkpoint
+// that holds it is persisted. An acknowledgement Main did not confirm goes
+// again with the next claim, and a restored checkpoint's ids are
+// acknowledged by the replacement claim.
+#[tokio::test(flavor = "current_thread")]
+async fn steering_is_acknowledged_after_the_checkpoint_and_again_until_confirmed() {
+    use crate::state::TurnSteering as _;
+    let state = Arc::new(FakeState::default());
+    serve_steering(&state, vec![steering_message("s-1", "skip the tests")]);
+    let monitor = ClaimLeaseMonitor::start(
+        client(Arc::clone(&state)),
+        test_lease_starting_execution(NOW + 60_000),
+        Arc::new(|| NOW),
+        config(Duration::from_secs(10)),
+    );
+    let probe = monitor.state_probe();
+    probe.bind_checkpoint();
+    assert_eq!(probe.claim_steering().await, ["skip the tests"]);
+    assert_eq!(steering_acks(&state), [(Vec::new(), false)]);
+    assert_eq!(probe.checkpoint_ids(), ["s-1"]);
+
+    // The acknowledgement after the persist is refused (not confirmed).
+    *state.steering.lock().expect("steering") = Some(ClaimSteeringMessagesResponseV1 {
+        messages: Vec::new(),
+        rejection: Some(RuntimeErrorV1 {
+            code: RuntimeErrorCodeV1::DependencyUnavailable as i32,
+            retryable: true,
+            ..RuntimeErrorV1::default()
+        }),
+    });
+    probe.persisted(&["s-1".to_owned()]).await;
+    // The next safe point sends it again, and Main confirms it.
+    serve_steering(&state, Vec::new());
+    assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    // Confirmed: no third acknowledgement.
+    assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    assert_eq!(
+        steering_acks(&state),
+        [
+            (Vec::new(), false),
+            (vec!["s-1".to_owned()], true),
+            (vec!["s-1".to_owned()], false),
+            (Vec::new(), false),
+        ]
+    );
+    monitor.close().await.expect("close");
+
+    // A replacement claim restores a checkpoint that holds "s-9".
+    let state = Arc::new(FakeState::default());
+    serve_steering(&state, Vec::new());
+    let monitor = ClaimLeaseMonitor::start(
+        client(Arc::clone(&state)),
+        test_lease_starting_execution(NOW + 60_000),
+        Arc::new(|| NOW),
+        config(Duration::from_secs(10)),
+    );
+    let probe = monitor.state_probe();
+    probe.bind_checkpoint();
+    probe.restored(&["s-9".to_owned()]);
+    assert_eq!(probe.checkpoint_ids(), ["s-9"]);
+    assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    assert_eq!(steering_acks(&state), [(vec!["s-9".to_owned()], false)]);
+    monitor.close().await.expect("close");
+}
+
+fn steering_monitor(state: &Arc<FakeState>) -> ClaimLeaseMonitor {
+    ClaimLeaseMonitor::start(
+        client(Arc::clone(state)),
+        test_lease_starting_execution(NOW + 60_000),
+        Arc::new(|| NOW),
+        config(Duration::from_secs(10)),
+    )
+}
+
+// An acknowledgement lost after the last checkpoint gets no later safe
+// point: the turn sends it again before it settles, until Main confirms it.
+#[tokio::test(flavor = "current_thread")]
+async fn an_unconfirmed_acknowledgement_is_sent_again_when_the_turn_ends() {
+    use crate::state::TurnSteering as _;
+    let state = Arc::new(FakeState::default());
+    serve_steering(&state, vec![steering_message("s-1", "skip the tests")]);
+    let monitor = steering_monitor(&state);
+    let probe = monitor.state_probe();
+    probe.bind_checkpoint();
+    assert_eq!(probe.claim_steering().await, ["skip the tests"]);
+    // The last checkpoint persists; its acknowledgement is refused.
+    state.steering_failures.store(1, Ordering::SeqCst);
+    probe.persisted(&["s-1".to_owned()]).await;
+    // At the end of the turn the first try fails too, the second is confirmed.
+    state.steering_failures.store(1, Ordering::SeqCst);
+    assert!(probe.flush_steering_acknowledgements().await);
+    let s1 = vec!["s-1".to_owned()];
+    assert_eq!(
+        steering_acks(&state),
+        [
+            (Vec::new(), false),
+            (s1.clone(), true),
+            (s1.clone(), true),
+            (s1, true),
+        ]
+    );
+    // Nothing stays: a second flush sends nothing.
+    assert!(probe.flush_steering_acknowledgements().await);
+    assert_eq!(steer_calls(&state), 4);
+    monitor.close().await.expect("close");
+}
+
+// The flush gives up after a fixed number of tries.
+#[tokio::test(flavor = "current_thread")]
+async fn the_end_of_turn_acknowledgement_gives_up_after_bounded_tries() {
+    use crate::state::TurnSteering as _;
+    let state = Arc::new(FakeState::default());
+    serve_steering(&state, vec![steering_message("s-1", "skip the tests")]);
+    let monitor = steering_monitor(&state);
+    let probe = monitor.state_probe();
+    probe.bind_checkpoint();
+    assert_eq!(probe.claim_steering().await, ["skip the tests"]);
+    state.steering_failures.store(usize::MAX, Ordering::SeqCst);
+    probe.persisted(&["s-1".to_owned()]).await;
+    let before = steer_calls(&state);
+    assert!(!probe.flush_steering_acknowledgements().await);
+    assert_eq!(
+        steer_calls(&state) - before,
+        usize::try_from(super::agent_lease::STEERING_ACK_FLUSH_ATTEMPTS).expect("attempts")
+    );
+    monitor.close().await.expect("close");
+}
+
+// Main gives again the rows that this epoch claimed and that are not
+// acknowledged (a lost reply loses nothing). The turn gives the model only
+// the ids that it does not hold yet: taken, persisted, acknowledged or
+// restored ids are not injected again.
+#[tokio::test(flavor = "current_thread")]
+async fn a_claim_that_gives_a_held_id_again_does_not_inject_it_again() {
+    use crate::state::TurnSteering as _;
+    let state = Arc::new(FakeState::default());
+    let monitor = steering_monitor(&state);
+    let probe = monitor.state_probe();
+    probe.bind_checkpoint();
+    probe.restored(&["s-0".to_owned()]);
+    serve_steering(
+        &state,
+        vec![
+            steering_message("s-0", "restored"),
+            steering_message("s-1", "skip the tests"),
+        ],
+    );
+    assert_eq!(probe.claim_steering().await, ["skip the tests"]);
+    // Taken, not persisted: given again, not injected again.
+    serve_steering(
+        &state,
+        vec![
+            steering_message("s-1", "skip the tests"),
+            steering_message("s-2", "use main"),
+        ],
+    );
+    assert_eq!(probe.claim_steering().await, ["use main"]);
+    assert_eq!(probe.checkpoint_ids(), ["s-0", "s-1", "s-2"]);
+    // Persisted and acknowledged: still not injected again.
+    probe.persisted(&["s-1".to_owned(), "s-2".to_owned()]).await;
+    serve_steering(&state, vec![steering_message("s-2", "use main")]);
+    assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    monitor.close().await.expect("close");
+
+    // Without a checkpoint a held id is not acknowledged a second time.
+    let state = Arc::new(FakeState::default());
+    serve_steering(&state, vec![steering_message("s-1", "skip the tests")]);
+    let monitor = steering_monitor(&state);
+    let probe = monitor.state_probe();
+    assert_eq!(probe.claim_steering().await, ["skip the tests"]);
+    assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    assert_eq!(
+        steering_acks(&state),
+        [
+            (Vec::new(), false),
+            (vec!["s-1".to_owned()], true),
+            (Vec::new(), false),
+        ]
+    );
     monitor.close().await.expect("close");
 }

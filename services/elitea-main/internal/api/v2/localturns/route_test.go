@@ -119,7 +119,8 @@ func TestCommitDecodesTheBody(t *testing.T) {
 	h := &handler{useCase: useCase}
 	response := serve(t, h.commit, tokenUser(),
 		"/api/v2/elitea_core/local_turn_commit/prompt_lib/1/0123456789abcdef0123456789abcdef", CommitPath,
-		`{"user_message":{"content":"q"},"assistant_message":{"content":"a","is_error":false},
+		`{"user_message":{"content":"q"},"steering_messages":[{"content":"s1"},{"content":"s2"}],
+		  "assistant_message":{"content":"a","is_error":false},
 		  "tool_calls":{"r":{"tool_name":"shell"}},"thinking_steps":[{"type":"thinking"}],
 		  "hitl_exchanges":[{"interrupt_id":"i","kind":"k","prompt":"p","decision":"approve"}],
 		  "local_work":{"sandbox_mode":"read-only","commands":[{"command":"ls"}],"paths_touched":["a"]}}`)
@@ -129,7 +130,8 @@ func TestCommitDecodesTheBody(t *testing.T) {
 	got := useCase.committed
 	if got.ExecutionID != "0123456789abcdef0123456789abcdef" || got.UserMessage != "q" || got.AssistantMessage != "a" ||
 		len(got.ThinkingSteps) != 1 || len(got.HITLExchanges) != 1 || got.Report.SandboxMode != "read-only" ||
-		len(got.Report.Commands) != 1 || len(got.Report.Paths) != 1 || !strings.Contains(string(got.ToolCalls), "shell") {
+		len(got.Report.Commands) != 1 || len(got.Report.Paths) != 1 || !strings.Contains(string(got.ToolCalls), "shell") ||
+		strings.Join(got.SteeringMessages, ",") != "s1,s2" {
 		t.Fatalf("commit request = %+v", got)
 	}
 	// The commit carries the caller's credential family, which the store

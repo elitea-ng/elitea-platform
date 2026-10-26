@@ -4,17 +4,19 @@
  * `usage_total`, `context`, #1227) and a model step's reasoning
  * (`thinking_delta`, `thinking_end`, issue 1228), a model call's retry
  * (`model_retry`, `modelRetry.ts`) and a `run_command` row's background
- * process (`processEvents.ts`, #1223).
+ * process (`processEvents.ts`, #1223), and the steering queue
+ * (`steeringEvents.ts`).
  */
 import type { AgentEvent, ContextMeter } from '@/shared/desktop/workspaceIpc';
 
 import { onModelRetry } from './modelRetry';
 import { applyProcessEvent, isProcessEvent, type ProcessEvent } from './processEvents';
+import { applySteeringEvent, isSteeringEvent, type SteerView } from './steeringEvents';
 import type { TranscriptItem } from './transcriptItem';
 import { addCall, settle, type TurnUsage } from './turnUsage';
 
-/** The part of a turn's view these events change: its transcript, its meter and its usage. */
-interface SideView {
+/** The part of a turn's view these events change: its transcript, its meter, its usage and its steering queue. */
+interface SideView extends SteerView {
   items: TranscriptItem[];
   context?: ContextMeter | undefined;
   usage?: TurnUsage | undefined;
@@ -24,7 +26,7 @@ type EventOf<K extends AgentEvent['kind']> = Extract<AgentEvent, { kind: K }>;
 
 type MeterEvent = EventOf<'usage'> | EventOf<'usage_total'> | EventOf<'context'>;
 type ThinkingEvent = EventOf<'thinking_delta'> | EventOf<'thinking_end'>;
-type SideEvent = MeterEvent | ThinkingEvent | EventOf<'model_retry'> | ProcessEvent;
+type SideEvent = MeterEvent | ThinkingEvent | EventOf<'model_retry'> | ProcessEvent | Parameters<typeof applySteeringEvent>[1];
 
 /** `usage` (a call that ended, with its meter), `usage_total` (the run ended) or `context` (a phase change, sent at once). */
 function isMeterEvent(event: AgentEvent): event is MeterEvent {
@@ -59,11 +61,12 @@ function isThinkingEvent(event: AgentEvent): event is ThinkingEvent {
 }
 
 export function isSideEvent(event: AgentEvent): event is SideEvent {
-  return isMeterEvent(event) || isThinkingEvent(event) || event.kind === 'model_retry' || isProcessEvent(event);
+  return isMeterEvent(event) || isThinkingEvent(event) || event.kind === 'model_retry' || isProcessEvent(event) || isSteeringEvent(event);
 }
 
 export function applySideEvent<V extends SideView>(view: V, event: SideEvent): V {
   if (isProcessEvent(event)) return applyProcessEvent(view, event);
+  if (isSteeringEvent(event)) return applySteeringEvent(view, event);
   if (event.kind === 'model_retry') return onModelRetry(view, event);
   return isMeterEvent(event) ? onMeter(view, event) : onThinking(view, event);
 }

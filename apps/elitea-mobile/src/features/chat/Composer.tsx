@@ -63,6 +63,11 @@ export interface ComposerProps {
    * Send stays, disabled, until the answer ends.
    */
   onStop?: (() => Promise<{ problem: string | null; restoreText: string | null; lostAttachments?: string[]; restoredAttachments?: string[] }>) | null;
+  /**
+   * While an answer streams, a message steers it (client contract 1.27): Send
+   * stays live, and shows instead of Stop while the input holds text.
+   */
+  steer?: boolean;
   /** Offer on-device dictation (the screen checks the device can). */
   dictation?: boolean;
   /** Start dictating once, on open (Home's "Dictate a message"). */
@@ -131,6 +136,7 @@ export function Composer({
   leading,
   allowEmptyText = false,
   onStop = null,
+  steer = false,
   dictation = false,
   autoDictate = false,
   initialText = null,
@@ -265,8 +271,9 @@ export function Composer({
     );
   }
 
-  const canSend = !busy && !submitting && !picking && (text.trim() !== '' || allowEmptyText);
-  const showStop = busy && onStop !== null;
+  const steering = busy && steer;
+  const canSend = (!busy || steering) && !submitting && !picking && (text.trim() !== '' || allowEmptyText);
+  const showStop = busy && onStop !== null && !(steering && text.trim() !== '');
   const stop = () => {
     if (!onStop || stopping) return;
     setStopping(true);

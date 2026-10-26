@@ -25,4 +25,6 @@ export type TranscriptItem =
       remote: boolean;
       result?: { ok: boolean; summary: string; truncated: boolean };
       process?: ToolProcess;
-    };
+    }
+  /** A message the person sent while the turn ran (`steer_injected`): the agent got it at this point of the turn. */
+  | { type: 'steer'; key: string; steerId: string; text: string };

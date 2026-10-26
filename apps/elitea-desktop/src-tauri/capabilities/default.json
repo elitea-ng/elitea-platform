@@ -29,6 +29,8 @@
     "allow-turn-commit-retry",
     "allow-agent-turn-cancel",
     "allow-agent-turn-status",
+    "allow-agent-turn-steer",
+    "allow-agent-turn-steer-update",
     "allow-approval-respond",
     "allow-turn-changes",
     "allow-thread-history",

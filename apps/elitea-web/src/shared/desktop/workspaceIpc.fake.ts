@@ -41,6 +41,8 @@ type FailableCommand =
   | 'deleteThreadHistory'
   | 'forkThreadHistory'
   | 'restorePointAfter'
+  | 'steerTurn'
+  | 'updateSteer'
   | 'retryCommit';
 
 export interface FakeWorkspaceIpc extends WorkspaceIpc {
@@ -59,6 +61,9 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
     attachedFiles: { workspaceId: string; path: string }[];
     attachedBytes: { workspaceId: string; mime: string; length: number; name?: string }[];
     removedAttachments: { workspaceId: string; token: string }[];
+    /** `agent_turn_steer` calls, then `agent_turn_steer_update` calls (`text` `null`: removed), in order. */
+    steers: { turnId: string; text: string }[];
+    steerUpdates: { turnId: string; steerId: string; text: string | null }[];
   };
   /** What `turn_changes` answers; `latest` defaults to true, `undone` to false. */
   setChanges(turnId: string, changes: Pick<TurnChanges, 'files'> & Partial<TurnChanges>): void;
@@ -104,13 +109,14 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
   const statuses = new Map<string, TurnStatus>();
   const history = new Map<string, StoredTurn[]>();
   const historyKey = (workspaceId: string, conversationId: string): string => `${workspaceId}\u0000${conversationId}`;
-  const calls: FakeWorkspaceIpc['calls'] = { started: [], prewarmed: [], commitRetries: [], cancelled: [], approvals: [], restores: [], fileQueries: [], forks: [], attachedFiles: [], attachedBytes: [], removedAttachments: [] };
+  const calls: FakeWorkspaceIpc['calls'] = { started: [], prewarmed: [], commitRetries: [], cancelled: [], approvals: [], restores: [], fileQueries: [], forks: [], attachedFiles: [], attachedBytes: [], removedAttachments: [], steers: [], steerUpdates: [] };
   let attachments = 0;
   const attached = (name: string, mime: string): AttachedImage => {
     attachments += 1;
     return { token: `att-${String(attachments)}`, name, mime, bytes: 1234, width: 40, height: 30, thumbnail: 'data:image/jpeg;base64,AAAA' };
   };
   let turnCounter = 0;
+  let steerCounter = 0;
   const failures = new Map<FailableCommand, WorkspaceIpcError>();
   const failure = (command: FailableCommand): Promise<never> | undefined => {
     const error = failures.get(command);
@@ -185,6 +191,17 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       const failed = failure('cancelTurn');
       if (failed !== undefined) return failed;
       return Promise.resolve();
+    },
+    steerTurn(turnId, text) {
+      calls.steers.push({ turnId, text });
+      const failed = failure('steerTurn');
+      if (failed !== undefined) return failed;
+      steerCounter += 1;
+      return Promise.resolve(`steer-${String(steerCounter)}`);
+    },
+    updateSteer(turnId, steerId, text) {
+      calls.steerUpdates.push({ turnId, steerId, text });
+      return failure('updateSteer') ?? Promise.resolve();
     },
     turnStatus(turnId) {
       const failed = failure('turnStatus');

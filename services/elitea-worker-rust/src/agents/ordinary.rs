@@ -299,6 +299,9 @@ impl OrdinaryNativeAgentAssembler {
             session: session_authority,
             state_writer_lease,
         } = redeemed;
+        // Client contract 1.27: the claim's live lease also fences the
+        // steering queue of this turn.
+        let steering = state_writer_lease.steering_source();
         let (sessions, model_scopes) = self
             .sessions
             .open_with_model_scopes(session_authority, state_writer_lease, &plan)
@@ -378,6 +381,7 @@ impl OrdinaryNativeAgentAssembler {
                 attachment_library,
             )
             .await?;
+        let runtime = runtime.with_steering(steering);
         // The workspace's tools: the local tool names, run in the sandbox.
         let runtime = match (&workspace, context.workspace()) {
             (Some(turn), Some(field)) => {

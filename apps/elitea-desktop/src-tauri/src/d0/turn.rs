@@ -85,6 +85,7 @@ use super::remote_tools::{
 use super::session::{AGENT_AUTHOR, Refusal, SessionError, SessionPlan};
 use super::skills::{self, InvokedSkill};
 use super::slash_commands::{self, CommandPick, ExpandedCommand, ListedCommand};
+use super::steering::{self, SteeringInjector, TurnSteering};
 use super::subagents::DesktopSubAgents;
 use super::tools::{AcceptedPlanNote, ObservedToolset, PlanGatedToolset, ToolObserver};
 use crate::history::{
@@ -663,6 +664,8 @@ struct TurnEntry {
     /// Its changes were undone: by its own undo, or by restoring the
     /// folder to before an earlier turn.
     undone: std::sync::atomic::AtomicBool,
+    /// The messages the person sent while the turn runs (`steering.rs`).
+    steering: Arc<TurnSteering>,
 }
 
 impl TurnEntry {
@@ -1745,6 +1748,7 @@ impl AgentHost {
                     state: Mutex::new(RunState::Running),
                     done: Mutex::new(None),
                     undone: std::sync::atomic::AtomicBool::new(false),
+                    steering: Arc::new(TurnSteering::new(events.clone())),
                 });
                 if let Ok(mut turns) = self.turns.lock() {
                     turns.insert(turn_id.clone(), entry.clone());
@@ -2487,6 +2491,7 @@ impl AgentHost {
             &mentioned,
             models.as_deref(),
             &images,
+            &entry.steering,
         );
         let outcome = tokio::select! {
             result = run => Some(result),
@@ -2504,6 +2509,10 @@ impl AgentHost {
                 outcome
             }
         };
+        // The run ended: a message that still waits never reaches the model
+        // now. Each is dropped as `turn_ended` (before `done`), and the UI
+        // sends them as the next turn.
+        entry.steering.end();
         *entry
             .checkpoint
             .lock()
@@ -2606,6 +2615,7 @@ impl AgentHost {
         }
         let body = CommitBody {
             user_message: user_message(&request.prompt, &images),
+            steering_messages: entry.steering.commit_messages(),
             assistant_message: assistant,
             tool_calls: recorder.tool_calls(),
             thinking_steps: recorder.thinking_steps(),
@@ -2928,6 +2938,7 @@ impl AgentHost {
         mentioned: &[String],
         models: Option<&Catalogue>,
         images: &[Arc<Attachment>],
+        steering: &Arc<TurnSteering>,
     ) -> Result<AgentAnswer, TurnError> {
         let failed = |code: &str, message: &str| TurnError::new(code, message);
         // The thread's framing nonce: the untrusted blocks end only at a
@@ -3332,6 +3343,13 @@ impl AgentHost {
         builder = ToolResultElision::for_limits(execution.payload.model_context_limits)
             .with_fixed_tokens(instruction_tokens)
             .bind_builder(builder);
+        // The messages the person sends while the turn runs: the loop takes
+        // them after a step's tool results, before the next model request.
+        builder = builder.steering_source(Arc::new(SteeringInjector {
+            steering: steering.clone(),
+            service: memory.service.clone(),
+            session_id: memory.session_id.clone(),
+        }));
         for toolset in toolsets {
             // The local tools and the index tools run here; only the
             // toolkits' tools are remote.
@@ -3495,6 +3513,7 @@ impl AgentHost {
         match *state {
             RunState::Running => {
                 *state = RunState::Cancelling;
+                entry.steering.close();
                 entry.stop.stop();
                 self.broker.forget_turn(turn_id);
                 Ok(())
@@ -3505,6 +3524,46 @@ impl AgentHost {
                 "The agent has already finished this turn; it can no longer be stopped.",
             )),
         }
+    }
+
+    /// `agent_turn_steer`: queue `text` against a running turn; the agent
+    /// gets it at the next safe point (`steering.rs`). Returns its id.
+    ///
+    /// # Errors
+    ///
+    /// `turn_unknown` / `turn_expired`, `turn_not_running` once the turn is
+    /// cancelled or its run ended, `steer_invalid`, `steer_queue_full`,
+    /// `steer_turn_full` once the turn has the most steering messages that
+    /// its commit carries.
+    pub fn steer(&self, turn_id: &str, text: &str) -> Result<String, TurnError> {
+        let entry = self.entry(turn_id)?;
+        let state = entry.state();
+        if *state != RunState::Running {
+            return Err(steering::not_running());
+        }
+        entry.steering.queue(text)
+    }
+
+    /// `agent_turn_steer_update`: change a waiting message (`Some`) or
+    /// remove it (`None`).
+    ///
+    /// # Errors
+    ///
+    /// `turn_unknown` / `turn_expired`, `turn_not_running`,
+    /// `steer_not_pending` (the agent has it already, or it was removed),
+    /// `steer_invalid`.
+    pub fn steer_update(
+        &self,
+        turn_id: &str,
+        steer_id: &str,
+        text: Option<&str>,
+    ) -> Result<(), TurnError> {
+        let entry = self.entry(turn_id)?;
+        let state = entry.state();
+        if *state != RunState::Running {
+            return Err(steering::not_running());
+        }
+        entry.steering.update(steer_id, text)
     }
 
     /// `agent_turn_status`: where a turn is, for a UI that may have missed
@@ -3541,6 +3600,7 @@ impl AgentHost {
             let mut state = entry.state();
             if *state == RunState::Running {
                 *state = RunState::Cancelling;
+                entry.steering.close();
                 entry.stop.stop();
                 self.broker.forget_turn(turn_id);
             }
@@ -4526,6 +4586,10 @@ fn check_vision(
 #[derive(serde::Serialize)]
 struct CommitBody {
     user_message: Value,
+    /// The steering messages the agent took, in order (`steering.rs`):
+    /// the server stores them after the question.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    steering_messages: Vec<Value>,
     assistant_message: Value,
     tool_calls: ToolCalls,
     /// Each model step's reasoning (#1228), bounded (`recorder`).

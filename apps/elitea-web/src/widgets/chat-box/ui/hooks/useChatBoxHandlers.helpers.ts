@@ -50,6 +50,7 @@ export interface SendQuestionParams {
   readonly isMentioningEveryone?: boolean;
   /** The ids of the project skills the message mentions (`~Name`), for `payload.skills`. The server reads each skill itself; only ids travel. */
   readonly projectSkillIds?: readonly string[];
+  /** The `question_id` to send; a new one when absent. A steering hand-off names it to the server first. */ readonly questionId?: string | undefined;
 }
 /** One uploaded attachment's outcome (structurally matches `entities/conversation`'s `UploadedAttachment`). */
 interface UploadedAttachmentOutcome { readonly filepath?: string | undefined; readonly sanitizedName: string; }

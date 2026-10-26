@@ -78,12 +78,13 @@ desktop host must do the same (a library cannot carry a patch for its
 consumers). Keep the exact version (`=2.2.0`) in every manifest that patches
 them; `cargo tree -i adk-agent` must show the path source, never the registry.
 
-**The compile-time guard.** `elitea-agent-runtime` names both patched-only
+**The compile-time guard.** `elitea-agent-runtime` names three patched-only
 builders (`LlmAgentBuilder::retain_prepared_history`,
-`Runner::with_session_event_refresh`) in two `const _` items in `src/lib.rs`
+`LlmAgentBuilder::steering_source`, `Runner::with_session_event_refresh`) in
+three `const _` items in `src/lib.rs`
 that are part of every build, not a test. A host that depends on the runtime
 but forgets the `[patch.crates-io]` lines resolves the registry 2.2.0 crates,
-which have neither function, so its build fails with "no function or
+which have none of them, so its build fails with "no function or
 associated item named ..." in `elitea-agent-runtime` rather than running the
 unpatched agent loop. Keep those constants when the patches change; remove
 them only with the patches.
@@ -114,6 +115,15 @@ pre-dispatch confirmation pass, for a call the name-based
 exactly as a policy-confirmed one does, and a recorded decision for that call id
 and argument fingerprint answers it. Unset, nothing changes. The worker uses it
 to ask before a destructive `run_command` of a cloud workspace.
+
+`steering_source` (steering during execution) adds a `SteeringSource` to
+`LlmAgentBuilder`. The loop asks it at each safe point: after the tool results
+of a step are in the history and before the next model request. Each returned
+`Content` (role `user`) is appended to the history, so the next request, its
+`before_model` callbacks (the model checkpoint among them) and every later step
+see it. The source never fails the turn. Unset, nothing changes. The cloud
+worker takes messages through `ClaimSteeringMessages`; the desktop takes them
+from the turn's local queue.
 
 `ToolExecutionStrategy::Auto` keeps the model's order across writes (#1213):
 only a run of adjacent read-only, concurrency-safe calls overlaps, and any other

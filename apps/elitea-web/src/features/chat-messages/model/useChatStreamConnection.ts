@@ -45,6 +45,8 @@ export interface ChatStreamConnectionHandlers {
    * stream uses it (#6654). Omitted or `false` keeps the retry loop.
    */
   readonly onNeverOpened?: (() => boolean) | undefined;
+  /** A steering frame (client contract 1.27): its SSE event name and its data. */
+  readonly onSteer?: ((event: string, frame: ExecutionEventData) => void) | undefined;
 }
 
 /** @public The connection half of the chat transport. */
@@ -133,6 +135,11 @@ export function useChatStreamConnection(
     handlersRef.current.onFailed(frame);
   }, []);
 
+  const onSteer = useCallback((event: string, frame: ExecutionEventData) => {
+    openedRef.current = true;
+    handlersRef.current.onSteer?.(event, frame);
+  }, []);
+
   const onError = useCallback(() => {
     // Transport-level: the stream never opened, or dropped mid-answer.
     if (doneRef.current) {
@@ -187,6 +194,7 @@ export function useChatStreamConnection(
   useExecutionEventStream(connection?.url ?? null, {
     onNodeEvent,
     onFailed,
+    onSteer,
     onCursor,
     onError,
     onOpen,

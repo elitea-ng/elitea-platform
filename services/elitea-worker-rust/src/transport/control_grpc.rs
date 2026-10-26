@@ -20,10 +20,10 @@ use crate::protocol::elitea::runtime::v1::{
     AuthorizeRustCompiledSnapshotRequestV1, AuthorizeRustCompiledSnapshotResponseV1,
     AuthorizeSandboxJobRequestV1, AuthorizeSandboxJobResponseV1, BeginExecutionRequestV1,
     BeginExecutionResponseV1, ClaimCommandRequestV1, ClaimCommandResponseV1,
-    ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
-    PrepareSettlementResponseV1, RemoveIndexRequestV1, RemoveIndexResponseV1, RenewLeaseRequestV1,
-    RenewLeaseResponseV1, RustCompiledSnapshotPurposeV1,
-    runtime_control_service_client::RuntimeControlServiceClient,
+    ClaimSteeringMessagesRequestV1, ClaimSteeringMessagesResponseV1, ObserveDesiredStateRequestV1,
+    ObserveDesiredStateResponseV1, PrepareSettlementRequestV1, PrepareSettlementResponseV1,
+    RemoveIndexRequestV1, RemoveIndexResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1,
+    RustCompiledSnapshotPurposeV1, runtime_control_service_client::RuntimeControlServiceClient,
 };
 
 const MAX_CONTROL_REQUEST_BYTES: usize = 64 * 1024;
@@ -128,6 +128,20 @@ pub trait ControlRpc: Send + Sync {
         Err(Status::unimplemented("index removal is unavailable"))
     }
 
+    /// `ClaimSteeringMessages` (client contract 1.27): acknowledge the given
+    /// ids, then return the steering messages queued against the running
+    /// turn, plus the rows that this or an older lease epoch claimed and that
+    /// are not acknowledged. The worker ignores an id that it already holds.
+    /// The worker calls it at a safe point. A transport
+    /// that does not serve it answers `Unimplemented`; the turn then runs
+    /// without steering.
+    async fn claim_steering_messages(
+        &self,
+        _request: Request<ClaimSteeringMessagesRequestV1>,
+    ) -> Result<Response<ClaimSteeringMessagesResponseV1>, Status> {
+        Err(Status::unimplemented("steering is unavailable"))
+    }
+
     async fn renew_lease(
         &self,
         request: Request<RenewLeaseRequestV1>,
@@ -215,6 +229,13 @@ impl ControlRpc for TonicControlRpc {
         request: Request<RemoveIndexRequestV1>,
     ) -> Result<Response<RemoveIndexResponseV1>, Status> {
         self.client.clone().remove_index(request).await
+    }
+
+    async fn claim_steering_messages(
+        &self,
+        request: Request<ClaimSteeringMessagesRequestV1>,
+    ) -> Result<Response<ClaimSteeringMessagesResponseV1>, Status> {
+        self.client.clone().claim_steering_messages(request).await
     }
 
     async fn renew_lease(
@@ -502,6 +523,39 @@ impl<R: ControlRpc> ControlGrpcClient<R> {
                 _ => unavailable(),
             })?
             .into_inner();
+        validate_response(&response)?;
+        Ok(response)
+    }
+
+    /// Acknowledge the given steering ids (Main then writes them as
+    /// messages), then claim, once and without retry, the steering messages
+    /// of the live claim. The claim returns the waiting rows and also the
+    /// rows that this or an older lease epoch claimed and that are not
+    /// acknowledged, so a lost answer loses nothing: the next call gets those
+    /// rows again. The worker ignores an id that its turn already holds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable size, configuration, or availability error; a Main
+    /// that does not serve the RPC is an `InvalidConfiguration`.
+    pub async fn claim_steering_messages(
+        &self,
+        message: ClaimSteeringMessagesRequestV1,
+    ) -> Result<ClaimSteeringMessagesResponseV1, ControlGrpcError> {
+        let request = self.request(message)?;
+        let response = timeout(
+            self.config.deadline,
+            self.rpc.claim_steering_messages(request),
+        )
+        .await
+        .map_err(|_| unavailable())?
+        .map_err(|status| match status.code() {
+            tonic::Code::Unimplemented => ControlGrpcError::InvalidConfiguration(
+                "Main does not serve steering on its control plane",
+            ),
+            _ => unavailable(),
+        })?
+        .into_inner();
         validate_response(&response)?;
         Ok(response)
     }

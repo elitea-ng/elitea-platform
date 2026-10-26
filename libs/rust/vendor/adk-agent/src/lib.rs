@@ -95,8 +95,8 @@ pub use compaction::LlmEventSummarizer;
 pub use custom_agent::{CustomAgent, CustomAgentBuilder};
 pub use guardrails::GuardrailSet;
 pub use llm_agent::{
-    DEFAULT_MAX_ITERATIONS, DEFAULT_TOOL_TIMEOUT, LlmAgent, LlmAgentBuilder, ToolCallConfirmation,
-    extract_typed,
+    DEFAULT_MAX_ITERATIONS, DEFAULT_TOOL_TIMEOUT, LlmAgent, LlmAgentBuilder, SteeringSource,
+    ToolCallConfirmation, extract_typed,
 };
 pub use team::{
     BlackboardHistoryPolicy, BlackboardPolicy, BlackboardSchedule, BlackboardSpec,

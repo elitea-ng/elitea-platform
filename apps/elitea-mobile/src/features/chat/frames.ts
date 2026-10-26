@@ -1,6 +1,14 @@
 import { z } from 'zod';
 
-import { EXECUTION_EVENT, parseEventData, type SseEvent } from '@elitea/client-core/stream';
+import {
+  EXECUTION_EVENT,
+  STEERING_EVENTS,
+  STEERING_STATE,
+  parseEventData,
+  parseSteeringMessage,
+  type SseEvent,
+  type SteeringItem,
+} from '@elitea/client-core/stream';
 
 /**
  * Execution event-stream frames, validated at the boundary (the wire is not
@@ -41,6 +49,12 @@ export type Frame =
   | { kind: 'node'; node: NodeEvent }
   | { kind: 'failed'; failure: ExecutionFailed }
   | { kind: 'replay_reset'; reason: string | null }
+  /**
+   * A steering message of this turn (client contract 1.27): `steer.queued`,
+   * `steer.injected` or `steer.dropped`. A dropped message has the state
+   * `removed`.
+   */
+  | { kind: 'steer'; event: string; item: SteeringItem }
   /** Another event name (index ingest, configuration validation, future ones). */
   | { kind: 'other'; event: string }
   /** Data that is not valid JSON or does not match the schema. */
@@ -60,7 +74,15 @@ export function parseFrame(event: SseEvent): Frame {
       const parsed = ReplayResetSchema.safeParse(parseEventData(event.data));
       return { kind: 'replay_reset', reason: parsed.success ? (parsed.data.reason ?? null) : null };
     }
-    default:
-      return { kind: 'other', event: event.event };
+    default: {
+      if (!STEERING_EVENTS.has(event.event)) return { kind: 'other', event: event.event };
+      const item = parseSteeringMessage(parseEventData(event.data));
+      if (item === undefined) return { kind: 'invalid', event: event.event };
+      return {
+        kind: 'steer',
+        event: event.event,
+        item: event.event === EXECUTION_EVENT.steerDropped ? { ...item, state: STEERING_STATE.Removed } : item,
+      };
+    }
   }
 }
