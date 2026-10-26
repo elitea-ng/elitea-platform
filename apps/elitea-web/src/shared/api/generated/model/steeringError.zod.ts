@@ -46,9 +46,10 @@ export const SteeringError = zod
   .object({
     error: zod.string(),
     message: zod.string().optional(),
+    retry_after_ms: zod.int().min(1).optional(),
   })
   .describe(
-    "A refused steering call. `error` is a machine code (`steering_invalid`, `idempotency_key_required`, `turn_not_running`, `steering_not_supported`, `steering_queue_full`, `idempotency_conflict`, `steering_not_found`, `steering_not_pending`, `rate_limited`) or, for 401/403/502, a message. NOTE(W2): internal/api/v2/agentexecution/steering.go:316 (`writeSteeringError`).\n",
+    "A refused steering call. `error` is a machine code (`steering_invalid`, `idempotency_key_required`, `turn_not_running`, `steering_not_supported`, `steering_queue_full`, `idempotency_conflict`, `steering_not_found`, `steering_not_pending`, `rate_limited`) or, for 401/403/502, a message. `retry_after_ms` is set on a 429 `rate_limited` only: the wait before the next try, in milliseconds. NOTE(W2): internal/api/v2/agentexecution/steering.go:319 (`writeSteeringError`).\n",
   );
 
 export type SteeringError = zod.input<typeof SteeringError>;

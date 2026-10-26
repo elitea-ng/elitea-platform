@@ -20,9 +20,30 @@ pub(crate) trait StateWriterLease: Send + Sync {
     /// the live lease that permits state work also permits claiming the
     /// user messages queued against the turn. `None` (the default) binds no
     /// steering, as for a test lease.
-    fn steering_source(&self) -> Option<std::sync::Arc<dyn adk_rust::agent::SteeringSource>> {
+    fn steering_source(&self) -> Option<std::sync::Arc<dyn TurnSteering>> {
         None
     }
+}
+
+/// The steering queue of one turn, as the agent loop and the model checkpoint
+/// see it (client contract 1.26). The loop takes messages at its safe points
+/// (`SteeringSource`). Main records them as claimed; it writes them as
+/// conversation messages only when the worker acknowledges them, after the
+/// model checkpoint that holds them is persisted. So a worker that stops in
+/// between loses nothing: the replacement claim gets them again, or
+/// acknowledges them when its restored checkpoint holds them.
+#[async_trait::async_trait]
+pub(crate) trait TurnSteering: adk_rust::agent::SteeringSource {
+    /// A model checkpoint is bound: acknowledge after each persist. Without
+    /// one, the messages are acknowledged as soon as they are taken.
+    fn bind_checkpoint(&self);
+    /// Every steering id this turn took, in order, for the checkpoint.
+    fn checkpoint_ids(&self) -> Vec<String>;
+    /// The ids of a restored checkpoint: the model request holds them.
+    fn restored(&self, ids: &[String]);
+    /// A checkpoint that holds `ids` is persisted. It never fails: an
+    /// acknowledgement that is not confirmed is sent again on the next call.
+    async fn persisted(&self, ids: &[String]);
 }
 
 #[cfg(test)]

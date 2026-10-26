@@ -3530,12 +3530,14 @@ export interface components {
             static_decisions: components["schemas"]["StaticPipelineLeafDecision"][];
             thread_id?: string;
         };
-        /** @description A refused steering call. `error` is a machine code (`steering_invalid`, `idempotency_key_required`, `turn_not_running`, `steering_not_supported`, `steering_queue_full`, `idempotency_conflict`, `steering_not_found`, `steering_not_pending`, `rate_limited`) or, for 401/403/502, a message. NOTE(W2): internal/api/v2/agentexecution/steering.go:316 (`writeSteeringError`). */
+        /** @description A refused steering call. `error` is a machine code (`steering_invalid`, `idempotency_key_required`, `turn_not_running`, `steering_not_supported`, `steering_queue_full`, `idempotency_conflict`, `steering_not_found`, `steering_not_pending`, `rate_limited`) or, for 401/403/502, a message. `retry_after_ms` is set on a 429 `rate_limited` only: the wait before the next try, in milliseconds. NOTE(W2): internal/api/v2/agentexecution/steering.go:319 (`writeSteeringError`). */
         SteeringError: {
             error: string;
             message?: string;
+            /** Format: int64 */
+            retry_after_ms?: number;
         };
-        /** @description One steering message of a running turn (client contract 1.26). NOTE(W2): internal/api/v2/agentexecution/steering.go:269 (`steeringView`). */
+        /** @description One steering message of a running turn (client contract 1.26). NOTE(W2): internal/api/v2/agentexecution/steering.go:272 (`steeringView`). */
         SteeringMessage: {
             /**
              * Format: int64
@@ -3566,7 +3568,7 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
-        /** @description The steering messages of one turn, oldest first. NOTE(W2): internal/api/v2/agentexecution/steering.go:169 (`list`). */
+        /** @description The steering messages of one turn, oldest first. NOTE(W2): internal/api/v2/agentexecution/steering.go:172 (`list`). */
         SteeringMessageList: {
             items: components["schemas"]["SteeringMessage"][];
         };
@@ -6284,13 +6286,20 @@ export interface operations {
                 };
             };
             426: components["responses"]["ClientUpgradeRequired"];
-            /** @description Too many queued messages (`rate_limited`); retry after `Retry-After`. */
+            /** @description Too many queued messages (`rate_limited`). Retry after `retry_after_ms` in the body (the same wait as `Retry-After`, in milliseconds), with the same Idempotency-Key. */
             429: {
                 headers: {
                     "Retry-After"?: string;
                     [name: string]: unknown;
                 };
                 content: {
+                    /**
+                     * @example {
+                     *       "error": "rate_limited",
+                     *       "message": "Too many steering messages. Retry after the interval in Retry-After.",
+                     *       "retry_after_ms": 2000
+                     *     }
+                     */
                     "application/json": components["schemas"]["SteeringError"];
                 };
             };

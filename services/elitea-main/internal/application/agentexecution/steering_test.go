@@ -35,7 +35,7 @@ func (s *steeringStoreStub) RemoveSteering(context.Context, SteeringRemoveReques
 	return s.effects, s.err
 }
 
-func (s *steeringStoreStub) ClaimSteering(context.Context, runtimedomain.Fence) ([]ClaimedSteeringMessage, []SteeringEffect, error) {
+func (s *steeringStoreStub) ClaimSteering(context.Context, SteeringClaimRequest) ([]ClaimedSteeringMessage, []SteeringEffect, error) {
 	s.calls++
 	return nil, s.effects, s.err
 }
@@ -106,7 +106,14 @@ func TestSteeringServiceWakesTheStreamAndHidesRawErrors(t *testing.T) {
 	store.err = runtimedomain.ErrStaleFence
 	fence := runtimedomain.Fence{CommandID: "c", ExecutionID: "e", Generation: 1, WorkloadIdentity: "w", WorkloadSessionID: "s", ProducerID: "p", ClaimAttempt: 1, LeaseEpoch: 1}
 	fence.Token[0] = 1
-	if _, err := service.Claim(context.Background(), fence); !errors.Is(err, runtimedomain.ErrStaleFence) {
+	if _, err := service.Claim(context.Background(), SteeringClaimRequest{Fence: fence}); !errors.Is(err, runtimedomain.ErrStaleFence) {
 		t.Fatalf("claim err=%v", err)
+	}
+	calls := store.calls
+	if _, err := service.Claim(context.Background(), SteeringClaimRequest{Fence: fence, Acknowledged: []string{"not-a-uuid"}}); !errors.Is(err, ErrInvalidSteering) {
+		t.Fatalf("bad ack err=%v", err)
+	}
+	if store.calls != calls {
+		t.Fatal("a malformed acknowledgement reached the store")
 	}
 }

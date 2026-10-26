@@ -234,9 +234,51 @@ enum MonitorCommand {
     CheckNow(oneshot::Sender<Result<(), ClaimLeaseError>>),
 }
 
-/// One steering claim (client contract 1.26): the reply carries the texts
-/// Main marked injected, oldest first, or nothing.
-struct SteeringClaim(oneshot::Sender<Vec<String>>);
+/// One steering call (client contract 1.26): the acknowledgements, whether
+/// it only acknowledges, and the reply. The reply is `None` when Main did not
+/// answer (the acknowledgements are not confirmed), else the claimed
+/// `(id, text)` pairs, oldest first.
+struct SteeringClaim {
+    acknowledged: Vec<String>,
+    acknowledge_only: bool,
+    reply: oneshot::Sender<Option<Vec<(String, String)>>>,
+}
+
+/// What one claim's turn did with its steering messages. Shared by every
+/// probe of the monitor.
+#[derive(Default)]
+struct SteeringLedger {
+    /// Every id the turn took or restored, in order.
+    taken: Vec<String>,
+    /// The ids a persisted checkpoint holds (or, without a checkpoint, every
+    /// taken id).
+    persisted: Vec<String>,
+    /// The ids Main confirmed as acknowledged.
+    acknowledged: std::collections::HashSet<String>,
+    /// A model checkpoint acknowledges; without it `take` does.
+    checkpointed: bool,
+}
+
+impl SteeringLedger {
+    fn unacknowledged(&self) -> Vec<String> {
+        self.persisted
+            .iter()
+            .filter(|id| !self.acknowledged.contains(*id))
+            .cloned()
+            .collect()
+    }
+
+    fn add_persisted(&mut self, ids: &[String]) {
+        for id in ids {
+            if !self.taken.contains(id) {
+                self.taken.push(id.clone());
+            }
+            if !self.persisted.contains(id) {
+                self.persisted.push(id.clone());
+            }
+        }
+    }
+}
 
 /// Result of the mandatory first lease poll after `BeginExecution`.
 pub enum ClaimLeaseActivation {
@@ -256,6 +298,7 @@ pub enum ClaimLeaseActivation {
 pub struct ClaimLeaseMonitor {
     commands: mpsc::Sender<MonitorCommand>,
     steering: mpsc::Sender<SteeringClaim>,
+    steering_ledger: Arc<std::sync::Mutex<SteeringLedger>>,
     state: watch::Receiver<MonitorState>,
     /// ADR-0034 take back: latched true once a renewal says
     /// `workspace_wrap_up`.
@@ -285,6 +328,7 @@ pub(crate) struct ClaimLeaseStateProbe {
     margin_millis: i64,
     supervision_live: Arc<AtomicBool>,
     steering: mpsc::Sender<SteeringClaim>,
+    steering_ledger: Arc<std::sync::Mutex<SteeringLedger>>,
 }
 
 #[allow(dead_code)] // Consumed by the capability-disabled native invocation lifecycle.
@@ -297,6 +341,7 @@ impl Clone for ClaimLeaseStateProbe {
             margin_millis: self.margin_millis,
             supervision_live: Arc::clone(&self.supervision_live),
             steering: self.steering.clone(),
+            steering_ledger: Arc::clone(&self.steering_ledger),
         }
     }
 }
@@ -338,19 +383,74 @@ impl ClaimLeaseStateProbe {
     }
 
     /// Take the steering messages queued against this claim's turn, through
-    /// the lease actor, so the claim never overlaps a renewal. It never
-    /// fails: a stopped or lost lease, a closed actor or a refused claim
-    /// gives no messages, and the queued ones stay pending for the next safe
-    /// point (or for the client, once the turn ends).
+    /// the lease actor, so the claim never overlaps a renewal. The call
+    /// also acknowledges what persisted checkpoints hold. It never fails: a
+    /// stopped or lost lease, a closed actor or a refused claim gives no
+    /// messages, and the queued ones wait for the next safe point (or for the
+    /// next turn, once this one ends).
     pub(crate) async fn claim_steering(&self) -> Vec<String> {
-        if self.ensure_running().is_err() {
+        let acknowledged = self.ledger(|ledger| ledger.unacknowledged());
+        let Some(claimed) = self.steering_call(acknowledged.clone(), false).await else {
             return Vec::new();
+        };
+        let ids: Vec<String> = claimed.iter().map(|(id, _)| id.clone()).collect();
+        let checkpointed = self.ledger(|ledger| {
+            ledger.acknowledged.extend(acknowledged);
+            for id in &ids {
+                if !ledger.taken.contains(id) {
+                    ledger.taken.push(id.clone());
+                }
+            }
+            ledger.checkpointed
+        });
+        if !checkpointed && !ids.is_empty() {
+            // No checkpoint will hold them: the model request that follows
+            // is the only proof, so acknowledge now.
+            self.ledger(|ledger| ledger.add_persisted(&ids));
+            self.acknowledge().await;
         }
+        claimed.into_iter().map(|(_, text)| text).collect()
+    }
+
+    /// Acknowledge, without a claim, what persisted checkpoints hold.
+    async fn acknowledge(&self) {
+        let acknowledged = self.ledger(|ledger| ledger.unacknowledged());
+        if acknowledged.is_empty() {
+            return;
+        }
+        if self
+            .steering_call(acknowledged.clone(), true)
+            .await
+            .is_some()
+        {
+            self.ledger(|ledger| ledger.acknowledged.extend(acknowledged));
+        }
+    }
+
+    async fn steering_call(
+        &self,
+        acknowledged: Vec<String>,
+        acknowledge_only: bool,
+    ) -> Option<Vec<(String, String)>> {
+        self.ensure_running().ok()?;
         let (reply, answer) = oneshot::channel();
-        if self.steering.send(SteeringClaim(reply)).await.is_err() {
-            return Vec::new();
-        }
-        answer.await.unwrap_or_default()
+        self.steering
+            .send(SteeringClaim {
+                acknowledged,
+                acknowledge_only,
+                reply,
+            })
+            .await
+            .ok()?;
+        answer.await.ok().flatten()
+    }
+
+    fn ledger<T>(&self, use_ledger: impl FnOnce(&mut SteeringLedger) -> T) -> T {
+        let mut ledger = self
+            .steering_ledger
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use_ledger(&mut ledger)
     }
 
     fn ensure_live_margin(&self) -> Result<(), ClaimLeaseError> {
@@ -393,8 +493,28 @@ impl StateWriterLease for ClaimLeaseStateProbe {
         self.ensure_live_margin().map_err(|_| StateWriterLeaseLost)
     }
 
-    fn steering_source(&self) -> Option<Arc<dyn adk_rust::agent::SteeringSource>> {
+    fn steering_source(&self) -> Option<Arc<dyn crate::state::TurnSteering>> {
         Some(Arc::new(self.clone()))
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::state::TurnSteering for ClaimLeaseStateProbe {
+    fn bind_checkpoint(&self) {
+        self.ledger(|ledger| ledger.checkpointed = true);
+    }
+
+    fn checkpoint_ids(&self) -> Vec<String> {
+        self.ledger(|ledger| ledger.taken.clone())
+    }
+
+    fn restored(&self, ids: &[String]) {
+        self.ledger(|ledger| ledger.add_persisted(ids));
+    }
+
+    async fn persisted(&self, ids: &[String]) {
+        self.ledger(|ledger| ledger.add_persisted(ids));
+        self.acknowledge().await;
     }
 }
 
@@ -561,6 +681,7 @@ impl ClaimLeaseMonitor {
         Self {
             commands: command_sender,
             steering: steering_sender,
+            steering_ledger: Arc::default(),
             state: state_receiver,
             wrap_up: wrap_up_receiver,
             shutdown: shutdown_sender,
@@ -631,6 +752,7 @@ impl ClaimLeaseMonitor {
             margin_millis: self.margin_millis,
             supervision_live: Arc::clone(&self.supervision_live),
             steering: self.steering.clone(),
+            steering_ledger: Arc::clone(&self.steering_ledger),
         }
     }
 
@@ -836,22 +958,24 @@ async fn run_lease_actor<R, K>(
                     return;
                 }
             }
-            Some(SteeringClaim(reply)) = steering.recv() => {
-                let texts = if steering_served {
+            Some(call) = steering.recv() => {
+                let claimed = if steering_served {
                     tokio::select! {
                         biased;
                         changed = shutdown.changed() => {
                             let _ = changed;
                             return;
                         }
-                        claimed = control.claim_steering(&lease) => {
-                            steering_claim_texts(claimed, &mut steering_served)
-                        }
+                        claimed = control.claim_steering(
+                            &lease,
+                            call.acknowledged,
+                            call.acknowledge_only,
+                        ) => steering_claim_result(claimed, &mut steering_served),
                     }
                 } else {
-                    Vec::new()
+                    None
                 };
-                let _ = reply.send(texts);
+                let _ = call.reply.send(claimed);
             }
             _ = ticker.tick() => {
                 let Some(result) = poll_or_shutdown(
@@ -877,15 +1001,15 @@ async fn run_lease_actor<R, K>(
     }
 }
 
-/// The texts of one steering claim, or none. A refusal never ends the turn:
-/// the messages stay pending. Only a Main that does not serve the RPC turns
+/// The answer of one steering call, or `None`. A refusal never ends the
+/// turn: the messages wait. Only a Main that does not serve the RPC turns
 /// steering off for the rest of the claim.
-fn steering_claim_texts(
-    claimed: Result<Vec<String>, AgentControlError>,
+fn steering_claim_result(
+    claimed: Result<Vec<(String, String)>, AgentControlError>,
     served: &mut bool,
-) -> Vec<String> {
+) -> Option<Vec<(String, String)>> {
     match claimed {
-        Ok(texts) => texts,
+        Ok(messages) => Some(messages),
         Err(error) => {
             let unsupported = match &error {
                 AgentControlError::Transport(
@@ -900,7 +1024,7 @@ fn steering_claim_texts(
                 *served = false;
             }
             tracing::warn!(error = %error, unsupported, "the steering claim was refused");
-            Vec::new()
+            None
         }
     }
 }

@@ -14,11 +14,11 @@ import (
 type steeringClaimerStub struct {
 	messages []agentexecutionapp.ClaimedSteeringMessage
 	err      error
-	fences   []runtimedomain.Fence
+	requests []agentexecutionapp.SteeringClaimRequest
 }
 
-func (s *steeringClaimerStub) Claim(_ context.Context, fence runtimedomain.Fence) ([]agentexecutionapp.ClaimedSteeringMessage, error) {
-	s.fences = append(s.fences, fence)
+func (s *steeringClaimerStub) Claim(_ context.Context, request agentexecutionapp.SteeringClaimRequest) ([]agentexecutionapp.ClaimedSteeringMessage, error) {
+	s.requests = append(s.requests, request)
 	return s.messages, s.err
 }
 
@@ -47,15 +47,18 @@ func TestClaimSteeringMessagesVerifiesTheFenceAndKeepsTheOrder(t *testing.T) {
 		{ID: "7f0c3c9a-2d4e-4b8f-9a51-0d6c2f1e8b12", Content: "second", QueuedAt: queued.Add(time.Second)},
 	}}
 	server := newSteeringTestServer(t, &calls, lease).WithSteeringMessages(claimer)
-	response, err := server.ClaimSteeringMessages(context.Background(), steeringRequestFor(lease.Fence))
+	request := steeringRequestFor(lease.Fence)
+	request.AcknowledgedSteeringIds = []string{"7f0c3c9a-2d4e-4b8f-9a51-0d6c2f1e8b10"}
+	response, err := server.ClaimSteeringMessages(context.Background(), request)
 	if err != nil || response.GetRejection() != nil {
 		t.Fatalf("err=%v rejection=%v", err, response.GetRejection())
 	}
 	if len(calls) != 2 || calls[0] != "authorize-peer" || calls[1] != "verify-fence" {
 		t.Fatalf("calls=%v", calls)
 	}
-	if len(claimer.fences) != 1 || claimer.fences[0] != lease.Fence {
-		t.Fatalf("fences=%+v", claimer.fences)
+	if len(claimer.requests) != 1 || claimer.requests[0].Fence != lease.Fence ||
+		len(claimer.requests[0].Acknowledged) != 1 || claimer.requests[0].AcknowledgeOnly {
+		t.Fatalf("requests=%+v", claimer.requests)
 	}
 	messages := response.GetMessages()
 	if len(messages) != 2 || messages[0].GetContent() != "first" || messages[1].GetContent() != "second" ||
@@ -80,6 +83,7 @@ func TestClaimSteeringMessagesRefusals(t *testing.T) {
 		{name: "malformed", claimer: &steeringClaimerStub{}, request: &runtimev1.ClaimSteeringMessagesRequestV1{}, code: runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION},
 		{name: "stale fence", claimer: &steeringClaimerStub{}, request: steeringRequestFor(stale), code: runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_STALE_FENCE},
 		{name: "claim lost the lease", claimer: &steeringClaimerStub{err: runtimedomain.ErrStaleFence}, request: steeringRequestFor(lease.Fence), code: runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_STALE_FENCE},
+		{name: "bad acknowledgement", claimer: &steeringClaimerStub{err: agentexecutionapp.ErrInvalidSteering}, request: steeringRequestFor(lease.Fence), code: runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION},
 		{name: "store unavailable", claimer: &steeringClaimerStub{err: errors.New("database down")}, request: steeringRequestFor(lease.Fence), code: runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE, retryable: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {

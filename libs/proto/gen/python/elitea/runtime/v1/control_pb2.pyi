@@ -295,12 +295,16 @@ class RemoveIndexResponseV1(_message.Message):
     def __init__(self, disposition: _Optional[_Union[RemoveIndexDispositionV1, str]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
 
 class ClaimSteeringMessagesRequestV1(_message.Message):
-    __slots__ = ("identity", "fence")
+    __slots__ = ("identity", "fence", "acknowledged_steering_ids", "acknowledge_only")
     IDENTITY_FIELD_NUMBER: _ClassVar[int]
     FENCE_FIELD_NUMBER: _ClassVar[int]
+    ACKNOWLEDGED_STEERING_IDS_FIELD_NUMBER: _ClassVar[int]
+    ACKNOWLEDGE_ONLY_FIELD_NUMBER: _ClassVar[int]
     identity: _common_pb2.ExecutionIdentityV1
     fence: _common_pb2.ExecutionFenceV1
-    def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ...) -> None: ...
+    acknowledged_steering_ids: _containers.RepeatedScalarFieldContainer[str]
+    acknowledge_only: bool
+    def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., acknowledged_steering_ids: _Optional[_Iterable[str]] = ..., acknowledge_only: bool = ...) -> None: ...
 
 class SteeringMessageV1(_message.Message):
     __slots__ = ("steering_id", "content", "queued_at_unix_millis")

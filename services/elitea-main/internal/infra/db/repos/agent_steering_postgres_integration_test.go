@@ -148,10 +148,25 @@ func TestPostgresSteeringInjectionWritesTheMessageAfterTheQuestion(t *testing.T)
 		}
 	}
 
-	var claimed []agentexecutionapp.ClaimedSteeringMessage
+	// An old activity time, so the injection's move is visible.
 	err := repository.projects.WithinProjectTx(t.Context(), 1, steeringWriteTx, func(tx sqlExecutor) error {
+		_, err := tx.Exec(t.Context(), `
+UPDATE chat_conversations SET updated_at = now() - interval '1 day'
+WHERE id = (SELECT conversation_id FROM chat_message_group WHERE uuid = $1::uuid)`, response)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claimed []agentexecutionapp.ClaimedSteeringMessage
+	err = repository.projects.WithinProjectTx(t.Context(), 1, steeringWriteTx, func(tx sqlExecutor) error {
 		var err error
-		claimed, _, err = injectPendingSteering(t.Context(), tx, 1, "execution-steer-inject", 1)
+		claimed, err = claimWaitingSteering(t.Context(), tx, "execution-steer-inject", 1, 1)
+		if err != nil {
+			return err
+		}
+		_, err = injectAcknowledgedSteering(t.Context(), tx, 1, "execution-steer-inject", 1,
+			[]string{claimed[0].ID, claimed[1].ID})
 		return err
 	})
 	if err != nil {
@@ -211,6 +226,36 @@ ORDER BY message_group.created_at, message_group.id`, response)
 		if order[index] != want[index] {
 			t.Fatalf("order=%q want=%q", order, want)
 		}
+	}
+
+	// The injection moved the conversation's activity time.
+	var recent bool
+	err = repository.projects.WithinProjectTx(t.Context(), 1, steeringWriteTx, func(tx sqlExecutor) error {
+		return tx.QueryRow(t.Context(), `
+SELECT updated_at > now() - interval '1 minute' FROM chat_conversations
+WHERE id = (SELECT conversation_id FROM chat_message_group WHERE uuid = $1::uuid)`, response).Scan(&recent)
+	})
+	if err != nil || !recent {
+		t.Fatalf("activity moved=%v err=%v", recent, err)
+	}
+
+	// A stop before any output deletes the turn: its steering goes with it.
+	err = repository.projects.WithinProjectTx(t.Context(), 1, steeringWriteTx, func(tx sqlExecutor) error {
+		return DiscardTurnSteering(t.Context(), tx, 1, response)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if listed, err := repository.ListSteering(t.Context(), target); err != nil || len(listed) != 0 {
+		t.Fatalf("after discard listed=%+v err=%v", listed, err)
+	}
+	var steeringGroups int
+	err = repository.projects.WithinProjectTx(t.Context(), 1, steeringWriteTx, func(tx sqlExecutor) error {
+		return tx.QueryRow(t.Context(), `
+SELECT count(*) FROM chat_message_group WHERE meta -> 'steering' ->> 'response_message_id' = $1`, response).Scan(&steeringGroups)
+	})
+	if err != nil || steeringGroups != 0 {
+		t.Fatalf("steering groups=%d err=%v", steeringGroups, err)
 	}
 }
 
@@ -300,16 +345,116 @@ INSERT INTO elitea_runtime.execution_claims (
 
 	stale := fence
 	copy(stale.Token[:], strings.Repeat("e", 32))
-	if _, _, err := repository.ClaimSteering(t.Context(), stale); !errors.Is(err, runtimedomain.ErrStaleFence) {
+	claim := func(f runtimedomain.Fence, acknowledged []string, only bool) ([]agentexecutionapp.ClaimedSteeringMessage, []agentexecutionapp.SteeringEffect, error) {
+		return repository.ClaimSteering(t.Context(), agentexecutionapp.SteeringClaimRequest{
+			Fence: f, Acknowledged: acknowledged, AcknowledgeOnly: only,
+		})
+	}
+	if _, _, err := claim(stale, nil, false); !errors.Is(err, runtimedomain.ErrStaleFence) {
 		t.Fatalf("stale err=%v", err)
 	}
-	claimed, effects, err := repository.ClaimSteering(t.Context(), fence)
-	if err != nil || len(claimed) != 1 || claimed[0].Content != "use the staging database" || len(effects) != 1 {
+	claimed, effects, err := claim(fence, nil, false)
+	if err != nil || len(claimed) != 1 || claimed[0].Content != "use the staging database" || len(effects) != 0 {
 		t.Fatalf("claimed=%+v effects=%+v err=%v", claimed, effects, err)
 	}
-	// The queue is empty now: a second safe point takes nothing.
-	claimed, _, err = repository.ClaimSteering(t.Context(), fence)
-	if err != nil || len(claimed) != 0 {
-		t.Fatalf("second claim=%+v err=%v", claimed, err)
+	// Claimed, not injected: the client still reads pending, but cannot edit.
+	listed, err := repository.ListSteering(t.Context(), steeringTarget(response))
+	if err != nil || len(listed) != 1 || listed[0].State != agentexecutionapp.SteeringPending {
+		t.Fatalf("listed=%+v err=%v", listed, err)
+	}
+	if _, _, err := repository.EditSteering(t.Context(), agentexecutionapp.SteeringEditRequest{
+		SteeringTarget: steeringTarget(response), SteeringID: claimed[0].ID, Content: "late",
+	}); !errors.Is(err, agentexecutionapp.ErrSteeringNotPending) {
+		t.Fatalf("edit claimed err=%v", err)
+	}
+	// The same epoch does not get its unacknowledged message twice.
+	if again, _, err := claim(fence, nil, false); err != nil || len(again) != 0 {
+		t.Fatalf("second claim=%+v err=%v", again, err)
+	}
+
+	// The worker stops before its checkpoint is persisted. The replacement
+	// claim (lease epoch 2) gets the message again.
+	replacement := fence
+	replacement.ClaimAttempt, replacement.LeaseEpoch = 2, 2
+	copy(replacement.Token[:], strings.Repeat("g", 32))
+	if _, err := pool.Exec(t.Context(), `
+UPDATE elitea_runtime.execution_claims SET released_at = clock_timestamp() WHERE execution_id = $1`, executionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO elitea_runtime.execution_claims (
+    claim_id, execution_id, generation, workload_session_id, workload_identity, producer_id,
+    claim_attempt, lease_epoch, fence_token, claimed_at, lease_expires_at
+) VALUES ('claim-2-' || $3, $3, 1, $1, $2, 'rust-worker-1', 2, 2, $4, clock_timestamp(), clock_timestamp() + interval '10 minutes')`,
+		replacement.WorkloadSessionID, replacement.WorkloadIdentity, executionID, replacement.Token[:]); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := claim(fence, nil, false); !errors.Is(err, runtimedomain.ErrStaleFence) {
+		t.Fatalf("released claim err=%v", err)
+	}
+	reclaimed, _, err := claim(replacement, nil, false)
+	if err != nil || len(reclaimed) != 1 || reclaimed[0].ID != claimed[0].ID {
+		t.Fatalf("reclaimed=%+v err=%v", reclaimed, err)
+	}
+
+	// Its checkpoint is persisted: the acknowledgement injects it once.
+	_, effects, err = claim(replacement, []string{reclaimed[0].ID}, true)
+	if err != nil || len(effects) != 1 || effects[0].Cursor == 0 {
+		t.Fatalf("ack effects=%+v err=%v", effects, err)
+	}
+	if _, effects, err = claim(replacement, []string{reclaimed[0].ID}, true); err != nil || len(effects) != 0 {
+		t.Fatalf("repeated ack effects=%+v err=%v", effects, err)
+	}
+	listed, err = repository.ListSteering(t.Context(), steeringTarget(response))
+	if err != nil || len(listed) != 1 || listed[0].State != agentexecutionapp.SteeringInjected {
+		t.Fatalf("listed=%+v err=%v", listed, err)
+	}
+}
+
+// A replacement claim whose restored checkpoint holds the message
+// acknowledges it in the same call: it is injected, never returned again.
+func TestPostgresSteeringReplacementClaimAcknowledgesItsCheckpoint(t *testing.T) {
+	repository, pool := newSteeringIntegrationRepository(t)
+	const executionID = "execution-steer-recover"
+	response := seedSteeringTurn(t, pool, "06", executionID, "RUNNING")
+	queued, _, err := repository.QueueSteering(t.Context(), agentexecutionapp.SteeringQueueRequest{
+		SteeringTarget: steeringTarget(response), IdempotencyKey: "recover-1", Content: "keep the old API",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An earlier epoch claimed it, then stopped after its checkpoint.
+	err = repository.projects.WithinProjectTx(t.Context(), 1, steeringWriteTx, func(tx sqlExecutor) error {
+		_, err := claimWaitingSteering(t.Context(), tx, executionID, 1, 1)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fence := runtimedomain.Fence{
+		CommandID: "command-" + executionID, ExecutionID: executionID, Generation: 1,
+		WorkloadIdentity: "spiffe://elitea.test/runtime/rust-worker", WorkloadSessionID: "session-" + executionID,
+		ProducerID: "rust-worker-1", ClaimAttempt: 2, LeaseEpoch: 2,
+	}
+	copy(fence.Token[:], strings.Repeat("h", 32))
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO elitea_runtime.workload_sessions (workload_session_id, workload_identity, producer_id, issued_at, expires_at)
+VALUES ($1, $2, 'rust-worker-1', clock_timestamp() - interval '1 minute', clock_timestamp() + interval '1 hour')`,
+		fence.WorkloadSessionID, fence.WorkloadIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO elitea_runtime.execution_claims (
+    claim_id, execution_id, generation, workload_session_id, workload_identity, producer_id,
+    claim_attempt, lease_epoch, fence_token, claimed_at, lease_expires_at
+) VALUES ('claim-' || $3, $3, 1, $1, $2, 'rust-worker-1', 2, 2, $4, clock_timestamp(), clock_timestamp() + interval '10 minutes')`,
+		fence.WorkloadSessionID, fence.WorkloadIdentity, executionID, fence.Token[:]); err != nil {
+		t.Fatal(err)
+	}
+	claimed, effects, err := repository.ClaimSteering(t.Context(), agentexecutionapp.SteeringClaimRequest{
+		Fence: fence, Acknowledged: []string{queued.ID},
+	})
+	if err != nil || len(claimed) != 0 || len(effects) != 1 {
+		t.Fatalf("claimed=%+v effects=%+v err=%v", claimed, effects, err)
 	}
 }

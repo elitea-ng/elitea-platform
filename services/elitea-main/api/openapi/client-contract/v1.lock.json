@@ -1268,6 +1268,11 @@
                 },
                 "message": {
                   "type": "string"
+                },
+                "retry_after_ms": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
                 }
               }
             }
@@ -1316,6 +1321,11 @@
                 },
                 "message": {
                   "type": "string"
+                },
+                "retry_after_ms": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
                 }
               }
             }
@@ -1334,6 +1344,11 @@
                 },
                 "message": {
                   "type": "string"
+                },
+                "retry_after_ms": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
                 }
               }
             }
@@ -1379,6 +1394,11 @@
                 },
                 "message": {
                   "type": "string"
+                },
+                "retry_after_ms": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
                 }
               }
             }
@@ -8671,6 +8691,11 @@
                 },
                 "message": {
                   "type": "string"
+                },
+                "retry_after_ms": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
                 }
               }
             }
@@ -8746,6 +8771,11 @@
                 },
                 "message": {
                   "type": "string"
+                },
+                "retry_after_ms": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
                 }
               }
             }
@@ -13204,6 +13234,11 @@
                 },
                 "message": {
                   "type": "string"
+                },
+                "retry_after_ms": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
                 }
               }
             }
@@ -13252,6 +13287,11 @@
                 },
                 "message": {
                   "type": "string"
+                },
+                "retry_after_ms": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
                 }
               }
             }
@@ -13270,6 +13310,11 @@
                 },
                 "message": {
                   "type": "string"
+                },
+                "retry_after_ms": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
                 }
               }
             }
@@ -13315,6 +13360,11 @@
                 },
                 "message": {
                   "type": "string"
+                },
+                "retry_after_ms": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
                 }
               }
             }
@@ -16370,6 +16420,22 @@
                   }
                 }
               },
+              "steering_messages": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "content"
+                  ],
+                  "properties": {
+                    "content": {
+                      "type": "string",
+                      "min_length": 1
+                    }
+                  }
+                },
+                "max_items": 10
+              },
               "thinking_steps": {
                 "type": "array",
                 "items": {
@@ -19350,6 +19416,11 @@
                 },
                 "message": {
                   "type": "string"
+                },
+                "retry_after_ms": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
                 }
               }
             }
@@ -19398,6 +19469,11 @@
                 },
                 "message": {
                   "type": "string"
+                },
+                "retry_after_ms": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
                 }
               }
             }
@@ -19443,6 +19519,11 @@
                 },
                 "message": {
                   "type": "string"
+                },
+                "retry_after_ms": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
                 }
               }
             }
@@ -19466,6 +19547,11 @@
                 },
                 "message": {
                   "type": "string"
+                },
+                "retry_after_ms": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
                 }
               }
             }

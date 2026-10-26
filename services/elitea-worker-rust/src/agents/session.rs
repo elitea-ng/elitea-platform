@@ -306,7 +306,7 @@ pub(crate) struct OrdinaryRuntimeBindings {
     /// Client contract 1.26: the user messages queued against the running
     /// turn, taken by the root agent at each safe point. Only the ordinary
     /// root agent takes them; a pipeline or a child agent never does.
-    steering: Option<Arc<dyn adk_rust::agent::SteeringSource>>,
+    steering: Option<Arc<dyn crate::state::TurnSteering>>,
 }
 
 impl OrdinaryRuntimeBindings {
@@ -338,7 +338,7 @@ impl OrdinaryRuntimeBindings {
     #[must_use]
     pub(crate) fn with_steering(
         mut self,
-        steering: Option<Arc<dyn adk_rust::agent::SteeringSource>>,
+        steering: Option<Arc<dyn crate::state::TurnSteering>>,
     ) -> Self {
         self.steering = steering;
         self
@@ -2573,7 +2573,8 @@ where
     )
     .with_request_budget(model.request_budget())
     .with_context_compaction(durable_context)
-    .with_step_compaction(step_compaction);
+    .with_step_compaction(step_compaction)
+    .with_steering(runtime.steering.clone());
     let checkpoint = if checkpoint_recovery {
         let restored = checkpoint
             .restore(session.as_ref())
@@ -2649,12 +2650,13 @@ where
 fn bind_turn_hooks(
     mut builder: LlmAgentBuilder,
     tool_call_confirmation: Option<Arc<dyn adk_rust::agent::ToolCallConfirmation>>,
-    steering: Option<Arc<dyn adk_rust::agent::SteeringSource>>,
+    steering: Option<Arc<dyn crate::state::TurnSteering>>,
 ) -> LlmAgentBuilder {
     if let Some(gate) = tool_call_confirmation {
         builder = builder.tool_call_confirmation(gate);
     }
     if let Some(source) = steering {
+        let source: Arc<dyn adk_rust::agent::SteeringSource> = source;
         builder = builder.steering_source(source);
     }
     builder

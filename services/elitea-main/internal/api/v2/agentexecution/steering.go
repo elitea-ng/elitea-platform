@@ -147,8 +147,11 @@ func (handler *steeringHandler) queue(writer http.ResponseWriter, request *http.
 	limitKey := "actor:" + strconv.FormatInt(target.ActorUserID, 10)
 	if admitted, retry := handler.limiter.Take(limitKey); !admitted {
 		writer.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retry.Seconds()))))
-		writeSteeringCode(writer, http.StatusTooManyRequests, "rate_limited",
-			"Too many steering messages. Retry after the interval in Retry-After.")
+		writeJSON(writer, http.StatusTooManyRequests, map[string]any{
+			"error":          "rate_limited",
+			"message":        "Too many steering messages. Retry after the interval in Retry-After.",
+			"retry_after_ms": max(retry.Milliseconds(), 1),
+		})
 		return
 	}
 	message, err := handler.steering.Queue(request.Context(), agentexecutionapp.SteeringQueueRequest{

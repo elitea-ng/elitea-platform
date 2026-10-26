@@ -63,7 +63,7 @@ export const SteeringMessage = zod
       .describe("The conversation message that holds the text, once injected."),
   })
   .describe(
-    "One steering message of a running turn (client contract 1.26). NOTE(W2): internal/api/v2/agentexecution/steering.go:269 (`steeringView`).\n",
+    "One steering message of a running turn (client contract 1.26). NOTE(W2): internal/api/v2/agentexecution/steering.go:272 (`steeringView`).\n",
   );
 
 export type SteeringMessage = zod.input<typeof SteeringMessage>;

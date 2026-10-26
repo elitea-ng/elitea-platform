@@ -142,7 +142,8 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 					return errors.New("current agent cancellation deleted an incomplete pair")
 				}
 				outcome.Deleted = true
-				return nil
+				// The steering of the deleted turn goes with it, now.
+				return DiscardTurnSteering(ctx, tx, int64(projectID), request.ResponseMessageID)
 			}
 			if !projection.Deleted && !projection.Retained && !projection.Salvaged &&
 				!projection.QuestionDeleted {

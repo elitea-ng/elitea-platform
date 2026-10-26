@@ -2,10 +2,10 @@ package control
 
 import (
 	"context"
+	"errors"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
 // SteeringClaimer hands a live claim the steering messages queued against its
@@ -13,7 +13,7 @@ import (
 // not serve steering, and the RPC answers UNSUPPORTED_CAPABILITY; the worker
 // then stops asking for the rest of the turn.
 type SteeringClaimer interface {
-	Claim(ctx context.Context, fence runtimedomain.Fence) ([]agentexecutionapp.ClaimedSteeringMessage, error)
+	Claim(ctx context.Context, request agentexecutionapp.SteeringClaimRequest) ([]agentexecutionapp.ClaimedSteeringMessage, error)
 }
 
 // WithSteeringMessages lets the worker claim steering messages at its safe
@@ -47,8 +47,15 @@ func (s *Server) ClaimSteeringMessages(ctx context.Context, request *runtimev1.C
 		code, message, retryable := safeRuntimeError(err)
 		return steeringRejection(code, message, retryable), nil
 	}
-	messages, err := s.steering.Claim(ctx, fence)
+	messages, err := s.steering.Claim(ctx, agentexecutionapp.SteeringClaimRequest{
+		Fence:           fence,
+		Acknowledged:    request.GetAcknowledgedSteeringIds(),
+		AcknowledgeOnly: request.GetAcknowledgeOnly(),
+	})
 	if err != nil {
+		if errors.Is(err, agentexecutionapp.ErrInvalidSteering) {
+			return steeringRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION, "The steering acknowledgements are malformed.", false), nil
+		}
 		code, message, retryable := safeRuntimeError(err)
 		if code == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL {
 			// The queue keeps the messages; the next safe point asks again.

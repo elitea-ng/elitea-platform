@@ -1584,20 +1584,34 @@ func (x *RemoveIndexResponseV1) GetRejection() *RuntimeErrorV1 {
 }
 
 // ClaimSteeringMessages hands the worker the steering messages queued
-// against the running turn of this claim, oldest first, and records them as
-// injected in the same transaction. The worker calls it at each safe point of
-// an ordinary agent loop: after the tool results of a step and before the
-// next model request. It adds the messages to the model request as user
-// messages; the model checkpoint of that request makes them durable on the
-// worker side. Main writes each message as a conversation message and emits
-// `steer.injected` on the execution event stream. An empty list is the
-// ordinary answer. A pipeline turn never calls it.
+// against the running turn of this claim, oldest first. The worker calls it at
+// each safe point of an ordinary agent loop: after the tool results of a step
+// and before the next model request. It adds the messages to the model
+// request as user messages. A pipeline turn never calls it.
+//
+// It has two steps, so a worker that stops between them loses nothing:
+//   - CLAIM: Main records the returned messages as claimed by this lease epoch.
+//     It also returns again the messages that an earlier lease epoch claimed
+//     and never acknowledged.
+//   - ACKNOWLEDGE: when the model checkpoint that holds a message is persisted,
+//     the worker names it in `acknowledged_steering_ids` (on its next call, or
+//     at once with `acknowledge_only`). Main then writes it as a conversation
+//     message, marks it injected and emits `steer.injected`. A replacement claim
+//     acknowledges the ids of its restored checkpoint, so they are not returned
+//     again. An id that is not claimed is ignored.
+//
+// An empty list is the ordinary answer.
 type ClaimSteeringMessagesRequestV1 struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Identity      *ExecutionIdentityV1   `protobuf:"bytes,1,opt,name=identity,proto3" json:"identity,omitempty"`
-	Fence         *ExecutionFenceV1      `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Identity *ExecutionIdentityV1   `protobuf:"bytes,1,opt,name=identity,proto3" json:"identity,omitempty"`
+	Fence    *ExecutionFenceV1      `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
+	// At most 64 steering ids (canonical lowercase UUIDs), handled before the
+	// claim.
+	AcknowledgedSteeringIds []string `protobuf:"bytes,3,rep,name=acknowledged_steering_ids,json=acknowledgedSteeringIds,proto3" json:"acknowledged_steering_ids,omitempty"`
+	// Acknowledge only: claim no new message.
+	AcknowledgeOnly bool `protobuf:"varint,4,opt,name=acknowledge_only,json=acknowledgeOnly,proto3" json:"acknowledge_only,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ClaimSteeringMessagesRequestV1) Reset() {
@@ -1642,6 +1656,20 @@ func (x *ClaimSteeringMessagesRequestV1) GetFence() *ExecutionFenceV1 {
 		return x.Fence
 	}
 	return nil
+}
+
+func (x *ClaimSteeringMessagesRequestV1) GetAcknowledgedSteeringIds() []string {
+	if x != nil {
+		return x.AcknowledgedSteeringIds
+	}
+	return nil
+}
+
+func (x *ClaimSteeringMessagesRequestV1) GetAcknowledgeOnly() bool {
+	if x != nil {
+		return x.AcknowledgeOnly
+	}
+	return false
 }
 
 type SteeringMessageV1 struct {
@@ -1857,10 +1885,12 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"\bindex_id\x18\x06 \x01(\tR\aindexIdJ\x04\b\a\x10\x10\"\xad\x01\n" +
 	"\x15RemoveIndexResponseV1\x12M\n" +
 	"\vdisposition\x18\x01 \x01(\x0e2+.elitea.runtime.v1.RemoveIndexDispositionV1R\vdisposition\x12?\n" +
-	"\trejection\x18\x02 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x03\x10\x10\"\xa5\x01\n" +
+	"\trejection\x18\x02 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x03\x10\x10\"\x8c\x02\n" +
 	"\x1eClaimSteeringMessagesRequestV1\x12B\n" +
 	"\bidentity\x18\x01 \x01(\v2&.elitea.runtime.v1.ExecutionIdentityV1R\bidentity\x129\n" +
-	"\x05fence\x18\x02 \x01(\v2#.elitea.runtime.v1.ExecutionFenceV1R\x05fenceJ\x04\b\x03\x10\x10\"\x87\x01\n" +
+	"\x05fence\x18\x02 \x01(\v2#.elitea.runtime.v1.ExecutionFenceV1R\x05fence\x12:\n" +
+	"\x19acknowledged_steering_ids\x18\x03 \x03(\tR\x17acknowledgedSteeringIds\x12)\n" +
+	"\x10acknowledge_only\x18\x04 \x01(\bR\x0facknowledgeOnlyJ\x04\b\x05\x10\x10\"\x87\x01\n" +
 	"\x11SteeringMessageV1\x12\x1f\n" +
 	"\vsteering_id\x18\x01 \x01(\tR\n" +
 	"steeringId\x12\x18\n" +

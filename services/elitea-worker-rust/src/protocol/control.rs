@@ -1918,10 +1918,16 @@ impl ClaimLeaseHandle {
         }
     }
 
-    fn steering_request(&self) -> ClaimSteeringMessagesRequestV1 {
+    fn steering_request(
+        &self,
+        acknowledged: Vec<String>,
+        acknowledge_only: bool,
+    ) -> ClaimSteeringMessagesRequestV1 {
         ClaimSteeringMessagesRequestV1 {
             identity: Some(self.identity.clone()),
             fence: Some(self.fence.clone()),
+            acknowledged_steering_ids: acknowledged,
+            acknowledge_only,
         }
     }
 
@@ -2434,9 +2440,10 @@ impl<R: ControlRpc> AgentControlClient<R> {
         parse_observe_desired_state_response(&response).map_err(Into::into)
     }
 
-    /// Take the steering messages queued against the running turn of one
-    /// unchanged accepted claim. Main marks them injected when it answers,
-    /// so the caller must put the texts into the next model request.
+    /// Acknowledge the steering messages that persisted checkpoints hold,
+    /// then (unless `acknowledge_only`) take the messages queued against the
+    /// running turn of one unchanged accepted claim, as `(id, text)` in queue
+    /// order. Main records the taken ones as claimed by this lease epoch.
     ///
     /// # Errors
     ///
@@ -2444,10 +2451,12 @@ impl<R: ControlRpc> AgentControlClient<R> {
     pub(crate) async fn claim_steering(
         &self,
         lease: &ClaimLeaseHandle,
-    ) -> Result<Vec<String>, AgentControlError> {
+        acknowledged: Vec<String>,
+        acknowledge_only: bool,
+    ) -> Result<Vec<(String, String)>, AgentControlError> {
         let response = self
             .control
-            .claim_steering_messages(lease.steering_request())
+            .claim_steering_messages(lease.steering_request(acknowledged, acknowledge_only))
             .await?;
         parse_claim_steering_response(response).map_err(Into::into)
     }
@@ -3340,7 +3349,7 @@ fn parse_observe_desired_state_response(
 /// message has an id and a non-blank text. The texts keep the queue order.
 fn parse_claim_steering_response(
     response: ClaimSteeringMessagesResponseV1,
-) -> Result<Vec<String>, ControlSemanticError> {
+) -> Result<Vec<(String, String)>, ControlSemanticError> {
     if let Some(rejection) = response.rejection.as_ref() {
         if !response.messages.is_empty() {
             return Err(ControlSemanticError::InvalidInput(
@@ -3358,7 +3367,7 @@ fn parse_claim_steering_response(
                     "the steering response carries a malformed message",
                 ))
             } else {
-                Ok(message.content)
+                Ok((message.steering_id, message.content))
             }
         })
         .collect()

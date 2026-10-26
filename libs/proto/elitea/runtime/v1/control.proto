@@ -272,18 +272,31 @@ message RemoveIndexResponseV1 {
 }
 
 // ClaimSteeringMessages hands the worker the steering messages queued
-// against the running turn of this claim, oldest first, and records them as
-// injected in the same transaction. The worker calls it at each safe point of
-// an ordinary agent loop: after the tool results of a step and before the
-// next model request. It adds the messages to the model request as user
-// messages; the model checkpoint of that request makes them durable on the
-// worker side. Main writes each message as a conversation message and emits
-// `steer.injected` on the execution event stream. An empty list is the
-// ordinary answer. A pipeline turn never calls it.
+// against the running turn of this claim, oldest first. The worker calls it at
+// each safe point of an ordinary agent loop: after the tool results of a step
+// and before the next model request. It adds the messages to the model
+// request as user messages. A pipeline turn never calls it.
+//
+// It has two steps, so a worker that stops between them loses nothing:
+// - CLAIM: Main records the returned messages as claimed by this lease epoch.
+//   It also returns again the messages that an earlier lease epoch claimed
+//   and never acknowledged.
+// - ACKNOWLEDGE: when the model checkpoint that holds a message is persisted,
+//   the worker names it in `acknowledged_steering_ids` (on its next call, or
+//   at once with `acknowledge_only`). Main then writes it as a conversation
+//   message, marks it injected and emits `steer.injected`. A replacement claim
+//   acknowledges the ids of its restored checkpoint, so they are not returned
+//   again. An id that is not claimed is ignored.
+// An empty list is the ordinary answer.
 message ClaimSteeringMessagesRequestV1 {
   ExecutionIdentityV1 identity = 1;
   ExecutionFenceV1 fence = 2;
-  reserved 3 to 15;
+  // At most 64 steering ids (canonical lowercase UUIDs), handled before the
+  // claim.
+  repeated string acknowledged_steering_ids = 3;
+  // Acknowledge only: claim no new message.
+  bool acknowledge_only = 4;
+  reserved 5 to 15;
 }
 
 message SteeringMessageV1 {

@@ -17,7 +17,9 @@ import (
 // while a cloud turn runs. The message waits in a durable queue until the
 // worker reaches its next safe point, after the tool results of a step and
 // before the next model request. The worker claims it over gRPC and adds it to
-// the model request as a user message of the same turn.
+// the model request as a user message of the same turn. When the model
+// checkpoint that holds the request is persisted, the worker acknowledges the
+// message, and only then is it a conversation message (injected).
 
 // MaxSteeringContentBytes is the bound of one steering message (UTF-8 bytes).
 const MaxSteeringContentBytes = 16 << 10
@@ -33,6 +35,10 @@ const MaxClaimedSteeringMessages = MaxPendingSteeringMessages
 // inside the worker's 80 KiB control response bound. A claim always takes
 // at least the oldest message (at most MaxSteeringContentBytes).
 const MaxClaimedSteeringBytes = 48 << 10
+
+// MaxAcknowledgedSteeringIDs bounds the acknowledgements of one call. A turn
+// holds at most a few queues of MaxPendingSteeringMessages each.
+const MaxAcknowledgedSteeringIDs = 64
 
 // SteeringState is the state of one steering message on the wire.
 type SteeringState string
@@ -122,6 +128,15 @@ type SteeringEffect struct {
 	Cursor      uint64
 }
 
+// SteeringClaimRequest is one call of the worker at a safe point: the
+// messages its persisted checkpoints hold (Acknowledged), then, unless
+// AcknowledgeOnly, a claim of the messages that wait.
+type SteeringClaimRequest struct {
+	Fence           runtimedomain.Fence
+	Acknowledged    []string
+	AcknowledgeOnly bool
+}
+
 // ClaimedSteeringMessage is one message the worker injects now.
 type ClaimedSteeringMessage struct {
 	ID       string
@@ -135,10 +150,11 @@ type SteeringStore interface {
 	ListSteering(context.Context, SteeringTarget) ([]SteeringMessage, error)
 	EditSteering(context.Context, SteeringEditRequest) (SteeringMessage, []SteeringEffect, error)
 	RemoveSteering(context.Context, SteeringRemoveRequest) ([]SteeringEffect, error)
-	// ClaimSteering takes the pending messages of a live claim, writes each
-	// as a conversation message and marks it injected. It locks the claim
-	// named by the fence and refuses a stale one (runtime.ErrStaleFence).
-	ClaimSteering(ctx context.Context, fence runtimedomain.Fence) ([]ClaimedSteeringMessage, []SteeringEffect, error)
+	// ClaimSteering first injects the acknowledged messages (writes each as
+	// a conversation message), then claims the messages that wait for this
+	// lease epoch. It locks the claim named by the fence and refuses a stale
+	// one (runtime.ErrStaleFence).
+	ClaimSteering(ctx context.Context, request SteeringClaimRequest) ([]ClaimedSteeringMessage, []SteeringEffect, error)
 }
 
 // SteeringWaker wakes the event stream readers of one execution. It never
@@ -228,11 +244,17 @@ func (service *SteeringService) Remove(ctx context.Context, request SteeringRemo
 
 // Claim is the worker's half: the gRPC control server calls it after it has
 // authenticated the peer and verified the claim fence.
-func (service *SteeringService) Claim(ctx context.Context, fence runtimedomain.Fence) ([]ClaimedSteeringMessage, error) {
-	if service == nil || service.store == nil || ctx == nil || fence.Validate() != nil {
+func (service *SteeringService) Claim(ctx context.Context, request SteeringClaimRequest) ([]ClaimedSteeringMessage, error) {
+	if service == nil || service.store == nil || ctx == nil || request.Fence.Validate() != nil ||
+		len(request.Acknowledged) > MaxAcknowledgedSteeringIDs {
 		return nil, ErrInvalidSteering
 	}
-	messages, effects, err := service.store.ClaimSteering(ctx, fence)
+	for _, id := range request.Acknowledged {
+		if !validUUID(id) {
+			return nil, ErrInvalidSteering
+		}
+	}
+	messages, effects, err := service.store.ClaimSteering(ctx, request)
 	if err != nil {
 		if errors.Is(err, runtimedomain.ErrStaleFence) {
 			return nil, runtimedomain.ErrStaleFence

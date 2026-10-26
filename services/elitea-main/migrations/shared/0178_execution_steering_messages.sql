@@ -3,16 +3,28 @@
 -- WHY. A user can send a message while a cloud chat turn runs. The message is
 -- a STEERING message: it waits here until the worker reaches its next safe
 -- point (after the tool results of a step, before the next model request).
--- The worker claims it over gRPC (RuntimeControlService.ClaimSteeringMessages)
--- and adds it to the model request. In the same transaction Main writes it as
--- a normal user message of the conversation (`message_id`) and marks it
--- injected. A worker restart or a client reconnect loses nothing: the row is
--- the authority until it is injected.
+-- A worker restart or a client reconnect loses nothing: the row is the
+-- authority until it is injected.
 --
--- STATES. `pending` waits for a safe point. `injected` is final and names the
+-- TWO STEPS. The worker CLAIMS the message over gRPC
+-- (RuntimeControlService.ClaimSteeringMessages) and adds it to the next model
+-- request: the row is `claimed` by that lease epoch. When the model
+-- checkpoint that holds the request is persisted, the worker ACKNOWLEDGES it:
+-- in one transaction Main writes it as a normal user message of the
+-- conversation (`message_id`) and marks it `injected`. A worker that stops
+-- between the two steps loses nothing: the replacement claim (a larger lease
+-- epoch) acknowledges what its restored checkpoint holds and gets the other
+-- claimed messages again.
+--
+-- STATES. `pending` waits for a safe point. `claimed` is in the hands of the
+-- claim of `claim_lease_epoch`. `injected` is final and names the
 -- conversation message. `removed` is final (the author removed it). There is
--- no stored `turn_ended`: a pending row whose execution is terminal is read as
--- `turn_ended`, because no claim can reach it after the claim fence is gone.
+-- no stored `turn_ended`: a pending or claimed row whose execution no longer
+-- runs is read as `turn_ended`, because no acknowledgement can reach it after
+-- the claim fence is gone. A claimed row reads as `pending` to the client.
+--
+-- A turn stopped before any output is deleted with its question; its rows
+-- here are deleted in the same transaction (agent_cancel.go).
 --
 -- The content is the user's text. It is product data in PostgreSQL, like the
 -- question. It never enters the command bus.
@@ -36,12 +48,16 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.execution_steering_messages (
     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     injected_at TIMESTAMPTZ,
+    claim_lease_epoch BIGINT CHECK (claim_lease_epoch > 0),
     FOREIGN KEY (execution_id, generation)
         REFERENCES elitea_runtime.execution_jobs (execution_id, generation)
         ON DELETE CASCADE,
     UNIQUE (execution_id, author_user_id, idempotency_key),
     CONSTRAINT execution_steering_messages_state CHECK (
-        state IN ('pending', 'injected', 'removed')
+        state IN ('pending', 'claimed', 'injected', 'removed')
+    ),
+    CONSTRAINT execution_steering_messages_claimed CHECK (
+        state <> 'claimed' OR claim_lease_epoch IS NOT NULL
     ),
     CONSTRAINT execution_steering_messages_content CHECK (
         octet_length(content) BETWEEN 1 AND 16384

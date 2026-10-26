@@ -94,18 +94,20 @@ WHERE response.uuid = $1::uuid
   )
 FOR SHARE OF job`
 
-// steeringColumns is the projection every read returns. A pending row of an
-// execution that no longer runs reads as turn_ended.
+// steeringColumns is the projection every read returns. A pending or claimed
+// row of an execution that no longer runs reads as turn_ended; a claimed row
+// of a running one reads as pending (the client cannot see the claim).
 const steeringColumns = `
        message.steering_id::text,
        message.response_message_id::text,
        message.author_user_id,
        message.content,
        CASE
-           WHEN message.state = 'pending'
+           WHEN message.state IN ('pending', 'claimed')
             AND NOT (job.desired_state = 'RUNNING'
                      AND job.state IN ('PENDING', 'DISPATCHED', 'CLAIMED', 'RUNNING'))
            THEN 'turn_ended'
+           WHEN message.state = 'claimed' THEN 'pending'
            ELSE message.state
        END,
        message.revision,
@@ -197,7 +199,7 @@ WHERE message.project_id = $1 AND message.response_message_id = $2::uuid
 		var pending int
 		if err := tx.QueryRow(ctx, `
 SELECT count(*) FROM elitea_runtime.execution_steering_messages
-WHERE execution_id = $1 AND generation = $2 AND state = 'pending'`,
+WHERE execution_id = $1 AND generation = $2 AND state IN ('pending', 'claimed')`,
 			target.executionID, target.generation).Scan(&pending); err != nil {
 			return fmt.Errorf("count pending steering: %w", err)
 		}
@@ -282,18 +284,21 @@ LIMIT 64`, target.ProjectID, target.ResponseMessageID, target.ActorUserID)
 }
 
 // lockOwnSteering locks one message of its author, with its execution's state.
+// A claimed message is in the worker's hands: it reads as pending but cannot
+// be edited, and it can be removed only after its turn ended.
 func lockOwnSteering(ctx context.Context, tx sqlExecutor, target agentexecutionapp.SteeringTarget, steeringID string) (agentexecutionapp.SteeringMessage, string, int64, error) {
 	var executionID string
 	var generation int64
+	var stored string
 	row := tx.QueryRow(ctx, `
-SELECT message.execution_id, message.generation,`+steeringColumns+steeringFrom+`
+SELECT message.execution_id, message.generation, message.state,`+steeringColumns+steeringFrom+`
 WHERE message.steering_id = $1::uuid AND message.project_id = $2
   AND message.response_message_id = $3::uuid AND message.author_user_id = $4
 FOR UPDATE OF message`, steeringID, target.ProjectID, target.ResponseMessageID, target.ActorUserID)
 	var message agentexecutionapp.SteeringMessage
 	var state string
 	var injectedAt *time.Time
-	err := row.Scan(&executionID, &generation,
+	err := row.Scan(&executionID, &generation, &stored,
 		&message.ID, &message.ResponseMessageID, &message.AuthorUserID, &message.Content,
 		&state, &message.Revision, &message.CreatedAt, &message.UpdatedAt, &injectedAt, &message.MessageID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -303,8 +308,15 @@ FOR UPDATE OF message`, steeringID, target.ProjectID, target.ResponseMessageID, 
 		return agentexecutionapp.SteeringMessage{}, "", 0, fmt.Errorf("lock steering message: %w", err)
 	}
 	message.State = agentexecutionapp.SteeringState(state)
+	if stored == "claimed" && message.State == agentexecutionapp.SteeringPending {
+		message.State = steeringClaimed
+	}
 	return message, executionID, generation, nil
 }
+
+// steeringClaimed is the internal state of a claimed message of a running
+// turn. It never leaves this file.
+const steeringClaimed agentexecutionapp.SteeringState = "claimed"
 
 func (r *SteeringRepository) EditSteering(
 	ctx context.Context,
@@ -366,13 +378,13 @@ func (r *SteeringRepository) RemoveSteering(
 		switch current.State {
 		case agentexecutionapp.SteeringRemoved:
 			return nil
-		case agentexecutionapp.SteeringInjected:
+		case agentexecutionapp.SteeringInjected, steeringClaimed:
 			return agentexecutionapp.ErrSteeringNotPending
 		}
 		if _, err := tx.Exec(ctx, `
 UPDATE elitea_runtime.execution_steering_messages
 SET state = 'removed', updated_at = clock_timestamp()
-WHERE steering_id = $1::uuid AND state = 'pending'`, request.SteeringID); err != nil {
+WHERE steering_id = $1::uuid AND state IN ('pending', 'claimed')`, request.SteeringID); err != nil {
 			return fmt.Errorf("remove steering message: %w", err)
 		}
 		if current.State == agentexecutionapp.SteeringTurnEnded {
@@ -413,11 +425,14 @@ WHERE j.execution_id = $1 AND j.generation = $2
                  WHERE terminal.execution_id = j.execution_id AND terminal.generation = j.generation)
 FOR UPDATE OF j, c`
 
-// ClaimSteering injects the pending messages of one verified claim fence.
+// ClaimSteering serves one worker call of a verified claim fence: first the
+// acknowledged messages become conversation messages, then the messages that
+// wait are claimed for this lease epoch.
 func (r *SteeringRepository) ClaimSteering(
 	ctx context.Context,
-	fence runtimedomain.Fence,
+	request agentexecutionapp.SteeringClaimRequest,
 ) ([]agentexecutionapp.ClaimedSteeringMessage, []agentexecutionapp.SteeringEffect, error) {
+	fence := request.Fence
 	var projectID int64
 	// The project selects the tenant schema; it is the job's, never the caller's.
 	err := r.shared.QueryRow(ctx, `
@@ -450,7 +465,11 @@ WHERE execution_id = $1 AND generation = $2`, fence.ExecutionID, int64(fence.Gen
 			return runtimedomain.ErrStaleFence
 		}
 		var err error
-		claimed, effects, err = injectPendingSteering(ctx, tx, projectID, fence.ExecutionID, int64(fence.Generation))
+		effects, err = injectAcknowledgedSteering(ctx, tx, projectID, fence.ExecutionID, int64(fence.Generation), request.Acknowledged)
+		if err != nil || request.AcknowledgeOnly {
+			return err
+		}
+		claimed, err = claimWaitingSteering(ctx, tx, fence.ExecutionID, int64(fence.Generation), int64(fence.LeaseEpoch))
 		return err
 	})
 	if err != nil {
@@ -468,47 +487,111 @@ type pendingSteering struct {
 	createdAt         time.Time
 }
 
-// injectPendingSteering writes each pending message of the execution as a
-// user message of the conversation and marks it injected. The message is
-// placed directly after the turn's question (the same created_at, a larger
-// id), so the transcript and the next turn's history read the question, the
-// steering messages, then the answer that took them into account.
-func injectPendingSteering(ctx context.Context, tx sqlExecutor, projectID int64, executionID string, generation int64) ([]agentexecutionapp.ClaimedSteeringMessage, []agentexecutionapp.SteeringEffect, error) {
+// claimWaitingSteering claims, in queue order and inside the byte bound, the
+// pending messages and the messages an earlier lease epoch claimed and never
+// acknowledged (its worker stopped before the checkpoint was persisted). The
+// messages of this epoch that wait for their acknowledgement stay with it.
+func claimWaitingSteering(ctx context.Context, tx sqlExecutor, executionID string, generation, leaseEpoch int64) ([]agentexecutionapp.ClaimedSteeringMessage, error) {
+	rows, err := tx.Query(ctx, `
+SELECT steering_id::text, content, created_at
+FROM elitea_runtime.execution_steering_messages
+WHERE execution_id = $1 AND generation = $2
+  AND (state = 'pending' OR (state = 'claimed' AND claim_lease_epoch < $3))
+ORDER BY queue_order
+LIMIT $4
+FOR UPDATE`, executionID, generation, leaseEpoch, agentexecutionapp.MaxClaimedSteeringMessages)
+	if err != nil {
+		return nil, fmt.Errorf("read waiting steering: %w", err)
+	}
+	var claimed []agentexecutionapp.ClaimedSteeringMessage
+	claimedBytes := 0
+	for rows.Next() {
+		var message agentexecutionapp.ClaimedSteeringMessage
+		if err := rows.Scan(&message.ID, &message.Content, &message.QueuedAt); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan waiting steering: %w", err)
+		}
+		// One answer stays inside the worker's control response bound: the
+		// rest wait for the next safe point, in order.
+		if len(claimed) > 0 && claimedBytes+len(message.Content) > agentexecutionapp.MaxClaimedSteeringBytes {
+			break
+		}
+		message.QueuedAt = message.QueuedAt.UTC()
+		claimed = append(claimed, message)
+		claimedBytes += len(message.Content)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read waiting steering: %w", err)
+	}
+	if len(claimed) == 0 {
+		return claimed, nil
+	}
+	ids := make([]string, 0, len(claimed))
+	for _, message := range claimed {
+		ids = append(ids, message.ID)
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE elitea_runtime.execution_steering_messages
+SET state = 'claimed', claim_lease_epoch = $2, updated_at = clock_timestamp()
+WHERE steering_id = ANY($1::uuid[])`, ids, leaseEpoch); err != nil {
+		return nil, fmt.Errorf("claim steering messages: %w", err)
+	}
+	return claimed, nil
+}
+
+// injectAcknowledgedSteering writes each acknowledged claimed message of the
+// execution as a user message of the conversation and marks it injected. Any
+// lease epoch's claim counts: a replacement claim acknowledges what its
+// restored checkpoint holds. An id that is not claimed is ignored.
+//
+// The message is placed directly after the turn's question (the same
+// created_at, a larger id), so the transcript and the next turn's history
+// read the question, the steering messages, then the answer that took them
+// into account. The insert moves the conversation's activity time (tenant
+// trigger chat_conversation_activity, 0145).
+func injectAcknowledgedSteering(ctx context.Context, tx sqlExecutor, projectID int64, executionID string, generation int64, acknowledged []string) ([]agentexecutionapp.SteeringEffect, error) {
+	if len(acknowledged) == 0 {
+		return nil, nil
+	}
 	rows, err := tx.Query(ctx, `
 SELECT steering_id::text, response_message_id::text, author_user_id, content, revision, created_at
 FROM elitea_runtime.execution_steering_messages
-WHERE execution_id = $1 AND generation = $2 AND state = 'pending'
+WHERE execution_id = $1 AND generation = $2 AND state = 'claimed'
+  AND steering_id = ANY($3::uuid[])
 ORDER BY queue_order
-LIMIT $3
-FOR UPDATE`, executionID, generation, agentexecutionapp.MaxClaimedSteeringMessages)
+FOR UPDATE`, executionID, generation, acknowledged)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read pending steering: %w", err)
+		return nil, fmt.Errorf("read acknowledged steering: %w", err)
 	}
 	var pending []pendingSteering
 	for rows.Next() {
 		var item pendingSteering
 		if err := rows.Scan(&item.id, &item.responseMessageID, &item.authorUserID, &item.content, &item.revision, &item.createdAt); err != nil {
 			rows.Close()
-			return nil, nil, fmt.Errorf("scan pending steering: %w", err)
+			return nil, fmt.Errorf("scan acknowledged steering: %w", err)
 		}
 		pending = append(pending, item)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("read pending steering: %w", err)
+		return nil, fmt.Errorf("read acknowledged steering: %w", err)
 	}
-	claimed := make([]agentexecutionapp.ClaimedSteeringMessage, 0, len(pending))
 	var effects []agentexecutionapp.SteeringEffect
-	claimedBytes := 0
 	for _, item := range pending {
-		// One answer stays inside the worker's control response bound: the
-		// rest wait for the next safe point, in order.
-		if len(claimed) > 0 && claimedBytes+len(item.content) > agentexecutionapp.MaxClaimedSteeringBytes {
-			break
+		effect, err := injectSteeringMessage(ctx, tx, projectID, executionID, generation, item)
+		if err != nil {
+			return nil, err
 		}
-		messageID := uuid.NewString()
-		var injectedAt time.Time
-		err := tx.QueryRow(ctx, `
+		effects = append(effects, effect)
+	}
+	return effects, nil
+}
+
+func injectSteeringMessage(ctx context.Context, tx sqlExecutor, projectID int64, executionID string, generation int64, item pendingSteering) (agentexecutionapp.SteeringEffect, error) {
+	messageID := uuid.NewString()
+	var injectedAt time.Time
+	err := tx.QueryRow(ctx, `
 WITH turn AS MATERIALIZED (
     SELECT question.conversation_id, question.sent_to_id, question.created_at,
            (SELECT author.id
@@ -549,50 +632,66 @@ UPDATE elitea_runtime.execution_steering_messages AS message
 SET state = 'injected', message_id = $1::uuid, injected_at = clock_timestamp(),
     updated_at = clock_timestamp()
 FROM steering_text
-WHERE message.steering_id = $4::uuid AND message.state = 'pending'
+WHERE message.steering_id = $4::uuid AND message.state = 'claimed'
 RETURNING message.injected_at`,
-			messageID, item.responseMessageID, item.authorUserID, item.id, item.content, executionID).Scan(&injectedAt)
-		if errors.Is(err, pgx.ErrNoRows) {
-			// The author is no longer in the conversation: the message cannot
-			// become theirs, so it is removed and the stream says so.
-			if _, err := tx.Exec(ctx, `
+		messageID, item.responseMessageID, item.authorUserID, item.id, item.content, executionID).Scan(&injectedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// The author is no longer in the conversation: the message cannot
+		// become theirs, so it is removed and the stream says so.
+		if _, err := tx.Exec(ctx, `
 UPDATE elitea_runtime.execution_steering_messages
 SET state = 'removed', updated_at = clock_timestamp()
-WHERE steering_id = $1::uuid AND state = 'pending'`, item.id); err != nil {
-				return nil, nil, fmt.Errorf("drop steering message: %w", err)
-			}
-			effect, err := appendSteeringEvent(ctx, tx, projectID, executionID, generation,
-				agentexecutionapp.SteeringEventDropped, agentexecutionapp.SteeringMessage{
-					ID: item.id, ResponseMessageID: item.responseMessageID, AuthorUserID: item.authorUserID,
-					Content: item.content, State: agentexecutionapp.SteeringRemoved, Revision: item.revision,
-					CreatedAt: item.createdAt.UTC(), UpdatedAt: time.Now().UTC(),
-				}, "removed")
-			if err != nil {
-				return nil, nil, err
-			}
-			effects = append(effects, effect)
-			continue
+WHERE steering_id = $1::uuid AND state = 'claimed'`, item.id); err != nil {
+			return agentexecutionapp.SteeringEffect{}, fmt.Errorf("drop steering message: %w", err)
 		}
-		if err != nil {
-			return nil, nil, fmt.Errorf("inject steering message: %w", err)
-		}
-		injectedAt = injectedAt.UTC()
-		effect, err := appendSteeringEvent(ctx, tx, projectID, executionID, generation,
-			agentexecutionapp.SteeringEventInjected, agentexecutionapp.SteeringMessage{
+		return appendSteeringEvent(ctx, tx, projectID, executionID, generation,
+			agentexecutionapp.SteeringEventDropped, agentexecutionapp.SteeringMessage{
 				ID: item.id, ResponseMessageID: item.responseMessageID, AuthorUserID: item.authorUserID,
-				Content: item.content, State: agentexecutionapp.SteeringInjected, Revision: item.revision,
-				CreatedAt: item.createdAt.UTC(), UpdatedAt: injectedAt, InjectedAt: &injectedAt, MessageID: messageID,
-			}, "")
-		if err != nil {
-			return nil, nil, err
-		}
-		effects = append(effects, effect)
-		claimed = append(claimed, agentexecutionapp.ClaimedSteeringMessage{
-			ID: item.id, Content: item.content, QueuedAt: item.createdAt.UTC(),
-		})
-		claimedBytes += len(item.content)
+				Content: item.content, State: agentexecutionapp.SteeringRemoved, Revision: item.revision,
+				CreatedAt: item.createdAt.UTC(), UpdatedAt: time.Now().UTC(),
+			}, "removed")
 	}
-	return claimed, effects, nil
+	if err != nil {
+		return agentexecutionapp.SteeringEffect{}, fmt.Errorf("inject steering message: %w", err)
+	}
+	injectedAt = injectedAt.UTC()
+	return appendSteeringEvent(ctx, tx, projectID, executionID, generation,
+		agentexecutionapp.SteeringEventInjected, agentexecutionapp.SteeringMessage{
+			ID: item.id, ResponseMessageID: item.responseMessageID, AuthorUserID: item.authorUserID,
+			Content: item.content, State: agentexecutionapp.SteeringInjected, Revision: item.revision,
+			CreatedAt: item.createdAt.UTC(), UpdatedAt: injectedAt, InjectedAt: &injectedAt, MessageID: messageID,
+		}, "")
+}
+
+// DiscardTurnSteering deletes the steering of a turn that a stop deleted
+// before any output (agent_cancel.go): the queue rows and the conversation
+// messages of the injected ones, in the transaction that deletes the
+// question and the answer. The turn never happened, so nothing of it stays.
+func DiscardTurnSteering(ctx context.Context, tx sqlExecutor, projectID int64, responseMessageID string) error {
+	if _, err := tx.Exec(ctx, `
+WITH steering_groups AS (
+    SELECT steering_group.id
+    FROM chat_message_group AS steering_group
+    WHERE steering_group.meta -> 'steering' ->> 'response_message_id' = $1::text
+      AND steering_group.reply_to_id IS NULL
+), deleted_items AS (
+    DELETE FROM chat_message_items AS item
+    USING steering_groups
+    WHERE item.message_group_id = steering_groups.id
+    RETURNING item.id
+)
+DELETE FROM chat_message_group AS steering_group
+USING steering_groups
+WHERE steering_group.id = steering_groups.id
+  AND (SELECT count(*) FROM deleted_items) >= 0`, responseMessageID); err != nil {
+		return fmt.Errorf("discard injected steering: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+DELETE FROM elitea_runtime.execution_steering_messages
+WHERE project_id = $1 AND response_message_id = $2::uuid`, projectID, responseMessageID); err != nil {
+		return fmt.Errorf("discard steering queue: %w", err)
+	}
+	return nil
 }
 
 // SteeringEventData is the `data` of a steering event: the API's

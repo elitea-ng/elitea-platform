@@ -38,6 +38,7 @@ struct FakeState {
     renew_active: AtomicBool,
     /// `None`: this Main does not serve `ClaimSteeringMessages`.
     steering: Mutex<Option<ClaimSteeringMessagesResponseV1>>,
+    steering_requests: Mutex<Vec<ClaimSteeringMessagesRequestV1>>,
 }
 
 impl Default for FakeState {
@@ -61,6 +62,7 @@ impl Default for FakeState {
             renew_started: Notify::new(),
             renew_active: AtomicBool::new(false),
             steering: Mutex::new(None),
+            steering_requests: Mutex::new(Vec::new()),
         }
     }
 }
@@ -101,9 +103,14 @@ impl ControlRpc for FakeRpc {
 
     async fn claim_steering_messages(
         &self,
-        _request: Request<ClaimSteeringMessagesRequestV1>,
+        request: Request<ClaimSteeringMessagesRequestV1>,
     ) -> Result<Response<ClaimSteeringMessagesResponseV1>, Status> {
         self.0.calls.lock().expect("calls").push("steer");
+        self.0
+            .steering_requests
+            .lock()
+            .expect("steering requests")
+            .push(request.into_inner());
         self.0
             .steering
             .lock()
@@ -750,9 +757,11 @@ async fn state_probe_claims_steering_in_queue_order_and_survives_a_refusal() {
     });
     assert_eq!(probe.claim_steering().await, Vec::<String>::new());
     assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    // The claim, its acknowledgement (no checkpoint is bound), then two
+    // refused claims.
     assert_eq!(
         steer_calls(&state),
-        3,
+        4,
         "a refusal does not turn steering off"
     );
     monitor.close().await.expect("close");
@@ -778,4 +787,112 @@ async fn state_probe_stops_asking_a_main_without_steering() {
         Vec::<String>::new(),
         "a closed monitor claims nothing"
     );
+}
+
+fn steering_acks(state: &FakeState) -> Vec<(Vec<String>, bool)> {
+    state
+        .steering_requests
+        .lock()
+        .expect("steering requests")
+        .iter()
+        .map(|request| {
+            (
+                request.acknowledged_steering_ids.clone(),
+                request.acknowledge_only,
+            )
+        })
+        .collect()
+}
+
+fn serve_steering(state: &FakeState, messages: Vec<SteeringMessageV1>) {
+    *state.steering.lock().expect("steering") = Some(ClaimSteeringMessagesResponseV1 {
+        messages,
+        rejection: None,
+    });
+}
+
+// Without a model checkpoint the model request that follows is the only
+// proof: the probe acknowledges the taken messages at once.
+#[tokio::test(flavor = "current_thread")]
+async fn steering_without_a_checkpoint_is_acknowledged_when_taken() {
+    let state = Arc::new(FakeState::default());
+    serve_steering(&state, vec![steering_message("s-1", "skip the tests")]);
+    let monitor = ClaimLeaseMonitor::start(
+        client(Arc::clone(&state)),
+        test_lease_starting_execution(NOW + 60_000),
+        Arc::new(|| NOW),
+        config(Duration::from_secs(10)),
+    );
+    let probe = monitor.state_probe();
+    assert_eq!(probe.claim_steering().await, ["skip the tests"]);
+    assert_eq!(
+        steering_acks(&state),
+        [(Vec::new(), false), (vec!["s-1".to_owned()], true)]
+    );
+    monitor.close().await.expect("close");
+}
+
+// With a checkpoint, a message is acknowledged only after the checkpoint
+// that holds it is persisted. An acknowledgement Main did not confirm goes
+// again with the next claim, and a restored checkpoint's ids are
+// acknowledged by the replacement claim.
+#[tokio::test(flavor = "current_thread")]
+async fn steering_is_acknowledged_after_the_checkpoint_and_again_until_confirmed() {
+    use crate::state::TurnSteering as _;
+    let state = Arc::new(FakeState::default());
+    serve_steering(&state, vec![steering_message("s-1", "skip the tests")]);
+    let monitor = ClaimLeaseMonitor::start(
+        client(Arc::clone(&state)),
+        test_lease_starting_execution(NOW + 60_000),
+        Arc::new(|| NOW),
+        config(Duration::from_secs(10)),
+    );
+    let probe = monitor.state_probe();
+    probe.bind_checkpoint();
+    assert_eq!(probe.claim_steering().await, ["skip the tests"]);
+    assert_eq!(steering_acks(&state), [(Vec::new(), false)]);
+    assert_eq!(probe.checkpoint_ids(), ["s-1"]);
+
+    // The acknowledgement after the persist is refused (not confirmed).
+    *state.steering.lock().expect("steering") = Some(ClaimSteeringMessagesResponseV1 {
+        messages: Vec::new(),
+        rejection: Some(RuntimeErrorV1 {
+            code: RuntimeErrorCodeV1::DependencyUnavailable as i32,
+            retryable: true,
+            ..RuntimeErrorV1::default()
+        }),
+    });
+    probe.persisted(&["s-1".to_owned()]).await;
+    // The next safe point sends it again, and Main confirms it.
+    serve_steering(&state, Vec::new());
+    assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    // Confirmed: no third acknowledgement.
+    assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    assert_eq!(
+        steering_acks(&state),
+        [
+            (Vec::new(), false),
+            (vec!["s-1".to_owned()], true),
+            (vec!["s-1".to_owned()], false),
+            (Vec::new(), false),
+        ]
+    );
+    monitor.close().await.expect("close");
+
+    // A replacement claim restores a checkpoint that holds "s-9".
+    let state = Arc::new(FakeState::default());
+    serve_steering(&state, Vec::new());
+    let monitor = ClaimLeaseMonitor::start(
+        client(Arc::clone(&state)),
+        test_lease_starting_execution(NOW + 60_000),
+        Arc::new(|| NOW),
+        config(Duration::from_secs(10)),
+    );
+    let probe = monitor.state_probe();
+    probe.bind_checkpoint();
+    probe.restored(&["s-9".to_owned()]);
+    assert_eq!(probe.checkpoint_ids(), ["s-9"]);
+    assert_eq!(probe.claim_steering().await, Vec::<String>::new());
+    assert_eq!(steering_acks(&state), [(vec!["s-9".to_owned()], false)]);
+    monitor.close().await.expect("close");
 }

@@ -4499,6 +4499,27 @@ components:
               type: string
               minLength: 1
               description: The question as the user sent it, at most 256 KiB.
+        steering_messages:
+          type: array
+          maxItems: 10
+          description: >-
+            Client contract 1.26. The steering messages the turn took while it
+            ran (the person sent them mid-turn and the agent read them at a
+            safe point), in the order the agent took them; absent or empty when
+            none. Each one is stored as a user message of the conversation
+            directly after the question (the question's `created_at`, a larger
+            id), with `meta.steering` `{origin: local, response_message_id}`,
+            in the same transaction as the turn. They are part of the commit
+            body, so a retry must send them again; the audit holds their
+            SHA-256, never the text.
+          items:
+            type: object
+            required: [content]
+            properties:
+              content:
+                type: string
+                minLength: 1
+                description: The message as the person sent it, 1 to 16384 bytes of UTF-8, not blank.
         assistant_message:
           type: object
           required: [content]
@@ -5034,7 +5055,7 @@ components:
       type: object
       description: >
         One steering message of a running turn (client contract 1.26).
-        NOTE(W2): internal/api/v2/agentexecution/steering.go:269
+        NOTE(W2): internal/api/v2/agentexecution/steering.go:272
         (`steeringView`).
       required: [id, response_message_id, author_id, content, state, revision, created_at, updated_at, injected_at, message_id]
       properties:
@@ -5073,7 +5094,7 @@ components:
       type: object
       description: >
         The steering messages of one turn, oldest first. NOTE(W2):
-        internal/api/v2/agentexecution/steering.go:169 (`list`).
+        internal/api/v2/agentexecution/steering.go:172 (`list`).
       required: [items]
       properties:
         items:
@@ -5089,12 +5110,18 @@ components:
         `turn_not_running`, `steering_not_supported`,
         `steering_queue_full`, `idempotency_conflict`,
         `steering_not_found`, `steering_not_pending`, `rate_limited`) or,
-        for 401/403/502, a message. NOTE(W2):
-        internal/api/v2/agentexecution/steering.go:316 (`writeSteeringError`).
+        for 401/403/502, a message. `retry_after_ms` is set on a 429
+        `rate_limited` only: the wait before the next try, in milliseconds.
+        NOTE(W2):
+        internal/api/v2/agentexecution/steering.go:319 (`writeSteeringError`).
       required: [error]
       properties:
         error: { type: string }
         message: { type: string }
+        retry_after_ms:
+          type: integer
+          format: int64
+          minimum: 1
 
     ChatExecutionError:
       type: object
@@ -19373,6 +19400,14 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/LocalTurnCommitRequest'
+            example:
+              user_message:
+                content: Fix the failing build.
+              steering_messages:
+                - content: Skip the tests for now and only fix the build.
+              assistant_message:
+                content: The build passes now. I did not run the tests.
+                model_name: gpt-5
       responses:
         '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
@@ -21788,7 +21823,10 @@ paths:
                 $ref: '#/components/schemas/SteeringError'
         '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '429':
-          description: Too many queued messages (`rate_limited`); retry after `Retry-After`.
+          description: >
+            Too many queued messages (`rate_limited`). Retry after
+            `retry_after_ms` in the body (the same wait as `Retry-After`, in
+            milliseconds), with the same Idempotency-Key.
           headers:
             Retry-After:
               schema: { type: string }
@@ -21796,6 +21834,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SteeringError'
+              example:
+                error: rate_limited
+                message: Too many steering messages. Retry after the interval in Retry-After.
+                retry_after_ms: 2000
         '502':
           description: The message could not be recorded. Retry with the same key.
           content:
