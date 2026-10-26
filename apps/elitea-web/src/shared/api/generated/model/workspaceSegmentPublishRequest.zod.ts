@@ -46,7 +46,11 @@ import { WorkspaceRefUpdate } from "./workspaceRefUpdate.zod";
 export const WorkspaceSegmentPublishRequest = zod
   .object({
     epoch: zod.int(),
-    kind: zod.string().describe("`COMPACT` in this version."),
+    kind: zod
+      .string()
+      .describe(
+        "`COMPACT` (a full segment, no prerequisites; it supersedes every earlier segment) or `PUSH` (incremental, on the live COMPACT; 1 to 8 sha1 `prerequisites`, each a current ref value of the thread).",
+      ),
     segment_sha256: zod.string(),
     bytes: zod.int(),
     prerequisites: zod.array(zod.string()).optional(),

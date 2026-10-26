@@ -407,7 +407,7 @@ func (x *WorkspaceRefusalV1) GetCurrent() []*WorkspaceRefV1 {
 type WorkspaceSegmentV1 struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Seq   uint64                 `protobuf:"varint,1,opt,name=seq,proto3" json:"seq,omitempty"`
-	// "COMPACT" in Phase 1.
+	// "COMPACT" (full, no prerequisites) or "PUSH" (incremental).
 	Kind string `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
 	// The content address: lowercase hex SHA-256 of the file bytes.
 	Sha256        string   `protobuf:"bytes,3,opt,name=sha256,proto3" json:"sha256,omitempty"`
@@ -548,7 +548,8 @@ type WorkspaceFetchPlanV1 struct {
 	HeadSeq uint64                 `protobuf:"varint,1,opt,name=head_seq,json=headSeq,proto3" json:"head_seq,omitempty"`
 	// The thread's live refs.
 	Refs []*WorkspaceRefV1 `protobuf:"bytes,2,rep,name=refs,proto3" json:"refs,omitempty"`
-	// Phase 1: the newest COMPACT only.
+	// The minimal chain, oldest first: the newest COMPACT, then every later
+	// PUSH; only PUSH segments when since_seq is past the COMPACT.
 	Segments      []*WorkspaceSegmentV1 `protobuf:"bytes,3,rep,name=segments,proto3" json:"segments,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

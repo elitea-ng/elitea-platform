@@ -381,3 +381,24 @@ describe('TakeBackDialog diffs', () => {
     expect(await screen.findByTestId('takeback-diffs-truncated')).toHaveTextContent('too large to show here');
   });
 });
+
+describe('TakeBackDialog remaining turns', () => {
+  it('reclaims the remaining turns, previews them without a turn picker, and applies them all', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc({ status: { state: 'LOCAL', executor: 'local', read_only: false, sent_from_here: true, rest_pending: true, rest_turns: 2 } });
+    ipc.setPreflight({ cloud_turns: 3, from_turn: 1 });
+    renderWithClient(<TakeBackDialog open rest ipc={ipc} conversationUuid="u1" onClose={vi.fn()} onSettled={vi.fn()} />);
+
+    expect(screen.getByRole('heading', { name: 'Take back the remaining turns' })).toBeInTheDocument();
+    expect(await screen.findByTestId('takeback-remaining-scope')).toHaveTextContent('Changes 2 to 3: what the cloud changed after change 1');
+    expect(ipc.calls.reclaimRests).toEqual([true]);
+    expect(ipc.calls.preflightTurns).toEqual([undefined]);
+    expect(screen.queryByTestId('takeback-turn')).toBeNull();
+    expect(screen.queryByTestId('takeback-turns-after')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Apply to my folder' }));
+    await screen.findByTestId('takeback-result');
+    // Every remaining turn: no turn is sent along.
+    expect(ipc.calls.applies).toEqual([{ preflightId: 'pf-1', mode: 'apply' }]);
+  });
+});

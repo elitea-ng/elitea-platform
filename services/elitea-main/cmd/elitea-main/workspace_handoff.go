@@ -84,7 +84,15 @@ type workspaceHandoffInputs struct {
 	EncryptionAttested bool
 	// ExecutorConfigured is workspaceExecutorConfiguredEnv, nil when unset.
 	ExecutorConfigured *bool
+	// MaxPushChain is workspaceMaxPushChainEnv: the hard cap of live PUSH
+	// segments after a thread's COMPACT, 0 for the default.
+	MaxPushChain int
 }
+
+// workspaceMaxPushChainEnv lowers the store's hard cap of live PUSH segments
+// after a thread's COMPACT (1 to workspacestore.DefaultMaxPushChain; the
+// worker's fetch plan frame is sized for the default).
+const workspaceMaxPushChainEnv = "ELITEA_WORKSPACE_MAX_PUSH_CHAIN"
 
 // composeWorkspaceHandoff builds the desktop ⇄ cloud handoff (ADR-0034). It
 // needs a database, an object store and the credential plane; without any of
@@ -160,6 +168,7 @@ func composeWorkspaceHandoff(
 	if err != nil {
 		return workspaceHandoffComposition{}, err
 	}
+	store.WithMaxPushChain(inputs.MaxPushChain)
 	handoffRepo, err := dbrepos.NewWorkspaceHandoffsRepository(pool)
 	if err != nil {
 		return workspaceHandoffComposition{}, err
@@ -330,6 +339,13 @@ func workspaceStorageFromEnv(ctx context.Context, cfg storage.Config, lookup fun
 			return inputs, fmt.Errorf("%s must be true or false", workspaceExecutorConfiguredEnv)
 		}
 		inputs.ExecutorConfigured = &configured
+	}
+	if raw, ok := lookup(workspaceMaxPushChainEnv); ok && raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > workspacestore.DefaultMaxPushChain {
+			return inputs, fmt.Errorf("%s must be an integer from 1 to %d", workspaceMaxPushChainEnv, workspacestore.DefaultMaxPushChain)
+		}
+		inputs.MaxPushChain = limit
 	}
 	dedicated, _ := lookup("STORAGE_WORKSPACE_BUCKET")
 	if dedicated == "" || dedicated == cfg.Container {

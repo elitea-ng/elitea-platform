@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.24
+ * client contract:    1.25
  * operations sha256:  a753925f91525937cdcdec96aaae8881104e5c4a25c7f190ec08bd13581cf8ae
  */
 export interface paths {
@@ -3685,6 +3685,8 @@ export interface components {
             has_upstream?: boolean;
             history_mode?: string;
             reclaim_pending?: boolean;
+            /** @description Contract 1.25. True while the owner's desktop may take back the cloud turns the last release left (LOCAL, within the return grace `delete_after`), and during that take back (RECLAIMING). */
+            rest_pending?: boolean;
             /** @description LOCAL, HANDING_OFF, CLOUD_IDLE, CLOUD_RUNNING or RECLAIMING. */
             state: string;
             stats?: components["schemas"]["WorkspaceHandoffStats"];

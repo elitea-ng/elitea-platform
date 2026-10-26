@@ -27,8 +27,8 @@ pub enum StoreError {
     /// A repository or bundle in another object format than sha1.
     #[error("unsupported object format: {0}")]
     UnsupportedObjectFormat(String),
-    /// Not something Phase 1 handles (an incremental segment, a filtered
-    /// bundle).
+    /// Not something this client handles (an incremental segment read on
+    /// its own, a filtered bundle, an unknown segment kind).
     #[error("unsupported: {0}")]
     Unsupported(String),
     /// A ref the writer may not write.

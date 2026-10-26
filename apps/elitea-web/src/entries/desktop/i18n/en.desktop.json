@@ -943,5 +943,10 @@
   "workspace.handoff.turn.after": "Changes {{from}} to {{to}} are not taken back. The cloud’s answers after change {{last}} are not added to this thread’s history here or to the agent’s context, and their conversation is deleted with the cloud copy when its grace period ends. Their changes are kept as commits on a local branch.",
   "workspace.worktree.applyWithMarkers": "Apply with conflict markers",
   "workspace.worktree.markerPaths": "With conflict markers to resolve",
-  "workspace.handoff.turn.help": "A change is a cloud turn that changed files. The conversation is taken back up to its answer."
+  "workspace.handoff.turn.help": "A change is a cloud turn that changed files. The conversation is taken back up to its answer.",
+  "workspace.handoff.remaining.banner": "{{n}} later cloud changes were not taken back. They are kept with the cloud copy for now.",
+  "workspace.handoff.remaining.scope": "Changes {{from}} to {{to}}: what the cloud changed after change {{last}}, which you took back earlier. Your folder keeps your own edits since then.",
+  "workspace.handoff.remaining.takeBack": "Take back the remaining turns",
+  "workspace.handoff.remaining.title": "Take back the remaining turns",
+  "workspace.handoff.remaining.until": "You can take them back until {{date}}."
 }

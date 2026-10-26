@@ -100,3 +100,23 @@ func TestWorkspaceStorageFromEnvReadsTheExecutorFlag(t *testing.T) {
 }
 
 func boolRef(value bool) *bool { return &value }
+
+func TestWorkspaceStorageFromEnvReadsTheMaxPushChain(t *testing.T) {
+	lookup := func(values map[string]string) func(string) (string, bool) {
+		return func(key string) (string, bool) { value, ok := values[key]; return value, ok }
+	}
+	cfg := storage.Config{Container: "elitea"}
+	for raw, want := range map[string]int{"": 0, "8": 8, "32": 32} {
+		inputs, err := workspaceStorageFromEnv(context.Background(), cfg, lookup(map[string]string{workspaceMaxPushChainEnv: raw}))
+		if err != nil || inputs.MaxPushChain != want {
+			t.Fatalf("%q = %d, %v; want %d", raw, inputs.MaxPushChain, err, want)
+		}
+	}
+	for _, raw := range []string{"0", "33", "many"} {
+		if _, err := workspaceStorageFromEnv(context.Background(), cfg,
+			lookup(map[string]string{workspaceMaxPushChainEnv: raw})); err == nil ||
+			!strings.Contains(err.Error(), workspaceMaxPushChainEnv) {
+			t.Fatalf("%q = %v, want a startup error naming the variable", raw, err)
+		}
+	}
+}

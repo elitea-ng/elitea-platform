@@ -746,7 +746,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// lease_holder and lease_expires_at columns on
 	// elitea_runtime.platform_routines: a routine pass holds a fenced lease on
 	// its row for as long as it runs (#1414). No data, no permission.
-	require.EqualValues(t, 175, Head(shared))
+	//
+	// 176: shared/0176_workspace_handoff_rest_pending.sql, the rest_pending
+	// column on elitea_runtime.workspace_handoffs: a release that left cloud
+	// turns not taken lets the owner's desktop take the rest back within the
+	// return grace (#1187). No data, no permission.
+	require.EqualValues(t, 176, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

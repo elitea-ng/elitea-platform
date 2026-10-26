@@ -6,7 +6,8 @@
  * elsewhere: a clean merge), apply them with conflict markers (when both
  * changed the same lines), open them as a separate worktree, or discard
  * them. With several cloud turns, the person may take back up to an
- * earlier one. Applying keeps a checkpoint; Undo puts the folder back.
+ * earlier one, and later the remaining turns (`rest`) while the cloud copy
+ * is kept. Applying keeps a checkpoint; Undo puts the folder back.
  *
  * The review shows the per-file diffs of what the take back writes, through
  * `renderFiles` (the page passes the Workspace view's changed-files card,
@@ -43,6 +44,8 @@ export interface TakeBackDialogProps {
   onSettled: () => void;
   /** Renders the per-file diffs (read-only); without it, the changed paths are listed. `key` is unique per preflight. */
   renderFiles?: ((files: readonly HandoffChangedFile[], key: string) => ReactNode) | undefined;
+  /** Take back the remaining turns after an earlier take back up to turn k. */
+  rest?: boolean;
 }
 
 function Working({ label }: { label: string }): React.JSX.Element {
@@ -229,8 +232,8 @@ function Actions({ takeBack, confirmingDiscard, onConfirmDiscard, onClose }: Act
   );
 }
 
-export function TakeBackDialog({ open, onClose, ipc, conversationUuid, onSettled, renderFiles }: TakeBackDialogProps): React.JSX.Element {
-  const takeBack = useTakeBack(ipc, conversationUuid, onSettled);
+export function TakeBackDialog({ open, onClose, ipc, conversationUuid, onSettled, renderFiles, rest = false }: TakeBackDialogProps): React.JSX.Element {
+  const takeBack = useTakeBack(ipc, conversationUuid, onSettled, rest);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const { start } = takeBack;
   // Opening the dialog starts the take back: it is what the button asked for.
@@ -240,7 +243,9 @@ export function TakeBackDialog({ open, onClose, ipc, conversationUuid, onSettled
   const busy = takeBack.step.kind === 'applying';
   return (
     <Dialog open={open} onClose={busy ? undefined : onClose} aria-labelledby="handoff-takeback-title" fullWidth maxWidth="sm">
-      <DialogTitle id="handoff-takeback-title">{t('workspace.handoff.takeBackTitle', 'Take this thread back')}</DialogTitle>
+      <DialogTitle id="handoff-takeback-title">
+        {rest ? t('workspace.handoff.remaining.title', 'Take back the remaining turns') : t('workspace.handoff.takeBackTitle', 'Take this thread back')}
+      </DialogTitle>
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         <Body takeBack={takeBack} confirmingDiscard={confirmingDiscard} renderFiles={renderFiles} />
         {takeBack.error !== null && takeBack.error !== undefined && (

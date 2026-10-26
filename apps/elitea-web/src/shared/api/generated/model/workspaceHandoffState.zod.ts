@@ -50,6 +50,12 @@ export const WorkspaceHandoffState = zod
       .describe("LOCAL, HANDING_OFF, CLOUD_IDLE, CLOUD_RUNNING or RECLAIMING."),
     epoch: zod.int(),
     reclaim_pending: zod.boolean().optional(),
+    rest_pending: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Contract 1.25. True while the owner's desktop may take back the cloud turns the last release left (LOCAL, within the return grace `delete_after`), and during that take back (RECLAIMING).",
+      ),
     handoff_id: zod.uuid().optional(),
     device_name: zod.string().optional(),
     history_mode: zod.string().optional(),
