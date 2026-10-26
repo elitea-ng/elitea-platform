@@ -315,3 +315,56 @@ async fn closing_stdin_mid_command_kills_the_command() {
         "a child of the command survived"
     );
 }
+
+/// The runner's tool set has no `git_push` (the worker pushes): the session
+/// does not offer it, and `git push` in `run_command` is not pointed at it.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_runner_neither_offers_nor_points_at_git_push() {
+    if !git_available() {
+        eprintln!("git is not installed; the runner test is skipped");
+        return;
+    }
+    assert!(
+        !elitea_agent_runtime::workspace_tools::WORKSPACE_TOOLS
+            .iter()
+            .any(|spec| spec.name == "git_push")
+    );
+    let checkout = tempfile::tempdir().unwrap();
+    fs::write(checkout.path().join("README.md"), "hello\n").unwrap();
+    let mut archive = Vec::new();
+    workspace_archive::write_tree(checkout.path(), &mut archive, LIMITS).unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    unpack(&mut archive.as_slice(), workspace.path(), LIMITS).unwrap();
+    let config = RunnerConfig {
+        root: workspace.path().to_path_buf(),
+        data_dir: data.path().to_path_buf(),
+        policy: RunnerPolicy {
+            shell: true,
+            network: true,
+            ..RunnerPolicy::default()
+        },
+        env: Vec::new(),
+    };
+    let session = open_session(&config).unwrap();
+    assert!(
+        !session
+            .available_tools()
+            .iter()
+            .any(|tool| tool.name == "git_push")
+    );
+    let answers = serve_one_by_one(
+        &config,
+        &[
+            json!({"tool": "git_push", "call_id": "1", "args": {}}),
+            json!({"tool": "run_command", "call_id": "2", "args": {"command": "git push"}, "approved": true}),
+        ],
+    )
+    .await;
+    assert_eq!(answers[0]["code"], "denied", "{}", answers[0]);
+    assert!(
+        !answers[1].to_string().contains("git_push"),
+        "{}",
+        answers[1]
+    );
+}

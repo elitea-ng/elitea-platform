@@ -176,6 +176,10 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
     // terminal there: `run_command` stays foreground-only, and the
     // `process_*` tools are not offered (#1223).
     shell.background_processes = false;
+    // The worker pushes for a cloud turn: no `git_push` here (it is not in
+    // `WORKSPACE_TOOLS`), and `git push` in `run_command` is not pointed at
+    // it.
+    shell.host_push = false;
     shell.sandbox.container_env =
         elitea_local_tools::sandbox::ContainerEnv::new(config.env.clone());
     // The workspace volume's top directory is not owned by the runner's uid

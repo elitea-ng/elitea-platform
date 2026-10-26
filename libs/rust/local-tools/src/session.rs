@@ -54,6 +54,8 @@ use crate::workspace::{Intent, Workspace, WsPath};
 
 mod hooks;
 mod processes;
+#[cfg(test)]
+mod push_tests;
 
 pub use processes::{PROCESS_TOOLS, RUN_COMMAND_PROCESSES};
 
@@ -449,6 +451,30 @@ pub static DIAGNOSTICS: ToolSpec = ToolSpec {
     },
 };
 
+/// `git_push`, offered after every tool of [`TOOLS`] in a git workspace
+/// while the policy allows the network. The command sandbox keeps `.git`
+/// read-only and hides credentials, so `git push` cannot work in
+/// `run_command`; this pushes through the host's hardened git with the
+/// person's own credentials ([`crate::git::Repo::push`]). Local-only: the
+/// cloud executor's worker pushes for its turns, so it is not in [`TOOLS`]
+/// and not in the workspace tool contract.
+pub static GIT_PUSH: ToolSpec = ToolSpec {
+    name: "git_push",
+    kind: ToolKind::GitPush,
+    description: "Push a local branch to a configured git remote through the host, with the person's own git credentials (credential helper, ssh agent). `git push` in run_command cannot work: the sandbox keeps .git read-only and hides credentials. Never forced; hooks do not run. Asked every time unless the person chose bypass mode; the policy may deny it.",
+    parameters: || {
+        json!({
+            "type": "object",
+            "properties": {
+                "remote": { "type": "string", "description": "A configured remote's name. Default: origin." },
+                "branch": { "type": "string", "description": "A local branch. Default: the current branch." },
+                "set_upstream": { "type": "boolean", "description": "Make the pushed branch the upstream of the local one." }
+            },
+            "additionalProperties": false
+        })
+    },
+};
+
 /// `apply_patch` as [`EditProfile::Patch`] offers it: the same name, kind
 /// and schema, described as the Codex envelope.
 pub static APPLY_PATCH_ENVELOPE: ToolSpec = ToolSpec {
@@ -564,6 +590,17 @@ struct CommitArgs {
     paths: Vec<String>,
 }
 
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct PushArgs {
+    #[serde(default)]
+    remote: Option<String>,
+    #[serde(default)]
+    branch: Option<String>,
+    #[serde(default)]
+    set_upstream: bool,
+}
+
 /// The longest commit message `git_commit` takes.
 const MAX_COMMIT_MESSAGE: usize = 16 * 1024;
 
@@ -579,6 +616,20 @@ struct GitArgs {
     stat: bool,
     #[serde(default)]
     max_count: Option<u32>,
+}
+
+/// `word` as a shell would need it written to read it back as one word:
+/// for showing an argv, never for running it.
+fn shell_word(word: &str) -> String {
+    if !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:@%+=,".contains(c))
+    {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
 }
 
 fn parse<T: for<'de> Deserialize<'de>>(args: Value) -> ToolResult<T> {
@@ -1124,8 +1175,20 @@ impl LocalSession {
                 std::iter::once(&DIAGNOSTICS)
                     .filter(|_| self.lsp.offered(&self.workspace, policy.shell)),
             )
+            // Only where the host serves it (not the cloud runner, whose
+            // worker pushes), and like every tool that starts a process,
+            // only with the shell.
+            .chain(
+                std::iter::once(&GIT_PUSH)
+                    .filter(|_| self.shell.host_push && policy.shell && policy.network),
+            )
             .filter(|tool| !(tool.kind.runs_commands() || tool.kind.is_process()) || policy.shell)
-            .filter(|tool| !matches!(tool.kind, ToolKind::GitRead | ToolKind::GitCommit) || git)
+            .filter(|tool| {
+                !matches!(
+                    tool.kind,
+                    ToolKind::GitRead | ToolKind::GitCommit | ToolKind::GitPush
+                ) || git
+            })
             .filter(|tool| !plan || tool.kind.plan_allows())
             .collect();
         if plan {
@@ -1259,6 +1322,7 @@ impl LocalSession {
             ToolKind::ReadOutput => self.read_output(call_id, args).await,
             ToolKind::GitRead => self.git_read(tool, call_id, args).await,
             ToolKind::GitCommit => self.git_commit(call_id, args).await,
+            ToolKind::GitPush => self.git_push(call_id, args).await,
             ToolKind::WriteFile => self.write_file(call_id, args).await,
             ToolKind::EditFile => self.edit_file(spec, call_id, args).await,
             ToolKind::ApplyPatch => self.apply_patch(call_id, &args).await,
@@ -1718,6 +1782,35 @@ impl LocalSession {
         }
     }
 
+    /// A sandboxed `git push` cannot work (`.git` is read-only, the
+    /// credentials are hidden): the refusal says so and names the tool that
+    /// pushes, instead of a failure the agent reads as "the sandbox blocks
+    /// .git" and hands to the person. Full access with the network is no
+    /// sandbox, so such a command runs as asked.
+    fn sandboxed_push(&self, command: &str, mode: SandboxMode, network: bool) -> Option<ToolError> {
+        if !self.shell.host_push
+            || (mode == SandboxMode::FullAccess && network)
+            || !crate::classify::names_git_push(command)
+        {
+            return None;
+        }
+        let offered = self
+            .available_tools()
+            .iter()
+            .any(|tool| tool.kind == ToolKind::GitPush);
+        Some(ToolError::new(
+            ErrorCode::Unsupported,
+            if offered {
+                "`git push` cannot run in the command sandbox (.git is read-only and git \
+                 credentials are hidden from commands). Push with the git_push tool."
+            } else {
+                "`git push` cannot run in the command sandbox (.git is read-only and git \
+                 credentials are hidden from commands), and git_push is not available here \
+                 (the workspace is not in git, or the policy turns the network off)."
+            },
+        ))
+    }
+
     async fn run_command(self: &Arc<Self>, call_id: &str, args: Value) -> ToolResult<Value> {
         let args: CommandArgs = parse(args)?;
         if args.uses_processes() && !self.shell.background_processes {
@@ -1736,6 +1829,9 @@ impl LocalSession {
         };
         let max = self.engine.policy().max_sandbox_mode;
         let mode = args.sandbox.unwrap_or(SandboxMode::WorkspaceWrite.min(max));
+        if let Some(refusal) = self.sandboxed_push(&args.command, mode, args.network) {
+            return Err(refusal);
+        }
         let spec = CommandSpec {
             command: args.command,
             cwd,
@@ -1768,6 +1864,7 @@ impl LocalSession {
             loopback: args.loopback,
             keep_alive: keep_alive == KeepAlive::Session,
             mcp: None,
+            argv: None,
         };
         let message = match (background, args.tty) {
             (_, true) => "run a command on a terminal",
@@ -2000,6 +2097,75 @@ impl LocalSession {
             Ok(json!({ "commit": id, "subject": subject }))
         })
         .await
+    }
+
+    /// `git_push`: through the host's hardened git, with the person's
+    /// credentials and the network, never forced ([`crate::git::Repo::push`]).
+    /// Asked by default and never remembered; bypass mode allows it, and the
+    /// policy's `network`, `command_deny` and `command_allow` (as
+    /// `git push <remote> <branch>`) and the person's tightening rules still
+    /// hold.
+    async fn git_push(self: &Arc<Self>, call_id: &str, args: Value) -> ToolResult<Value> {
+        let args: PushArgs = if args.is_null() {
+            PushArgs::default()
+        } else {
+            parse(args)?
+        };
+        let remote = args.remote.filter(|remote| !remote.is_empty());
+        let branch = args.branch.filter(|branch| !branch.is_empty());
+        for word in remote.iter().chain(branch.iter()) {
+            if word.starts_with('-') || word.chars().any(|c| c.is_whitespace() || c.is_control()) {
+                return Err(ToolError::invalid(format!(
+                    "`{word}` is not a remote or branch name"
+                )));
+            }
+        }
+        // The remote, the branch and the URLs are resolved before anyone is
+        // asked: the rules judge, and the person sees, the push it will be.
+        let target = self
+            .blocking(move |this| {
+                this.git_repo()?
+                    .push_target(remote.as_deref(), branch.as_deref())
+            })
+            .await?;
+        let words = target.argv();
+        let mut call = ToolCall::new(ToolKind::GitPush);
+        call.command = Some(
+            words
+                .iter()
+                .map(|word| shell_word(word))
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+        call.argv = Some(words);
+        call.network = true;
+        let prompt = format!(
+            "push {} to {} ({})",
+            target.branch,
+            target.remote,
+            target.urls.join(", ")
+        );
+        self.authorize(call_id, call, &prompt).await?;
+        let set_upstream = args.set_upstream;
+        self.blocking(move |this| {
+            let pushed = this.git_repo()?.push(&target, set_upstream)?;
+            Ok(json!({
+                "remote": pushed.target.remote,
+                "branch": pushed.target.branch,
+                "urls": pushed.target.urls,
+                "report": pushed.report,
+            }))
+        })
+        .await
+    }
+
+    /// The session's repository, or why there is none.
+    fn git_repo(&self) -> ToolResult<&crate::git::Repo> {
+        match (self.checkpoints.repo(), self.checkpoints.git_refusal()) {
+            (Some(repo), _) => Ok(repo),
+            (None, Some(refusal)) => Err(refusal.clone()),
+            (None, None) => Err(ToolError::new(ErrorCode::Git, "the folder is not in git")),
+        }
     }
 
     async fn git_read(
