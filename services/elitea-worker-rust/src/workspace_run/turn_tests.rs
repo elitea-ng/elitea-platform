@@ -62,6 +62,8 @@ struct StoreState {
     /// The change sets recorded; answer this many records with a failure.
     changes: Vec<super::changes::ChangeSet>,
     changes_failing: u32,
+    /// Main never answers this many records.
+    changes_hanging: u32,
 }
 
 struct FakeStore(Mutex<StoreState>);
@@ -229,12 +231,20 @@ impl WorkspaceStore for FakeStore {
         _claim: &WorkspaceClaimV1,
         changes: &super::changes::ChangeSet,
     ) -> Result<(), StoreCallError> {
-        let mut state = self.state();
-        if state.changes_failing > 0 {
-            state.changes_failing -= 1;
-            return Err(StoreCallError::Transport { retryable: false });
+        let hang = {
+            let mut state = self.state();
+            if state.changes_failing > 0 {
+                state.changes_failing -= 1;
+                return Err(StoreCallError::Transport { retryable: false });
+            }
+            let hang = state.changes_hanging > 0;
+            state.changes_hanging = state.changes_hanging.saturating_sub(1);
+            hang
+        };
+        if hang {
+            std::future::pending::<()>().await;
         }
-        state.changes.push(changes.clone());
+        self.state().changes.push(changes.clone());
         Ok(())
     }
 }
@@ -1458,4 +1468,33 @@ async fn a_failed_turn_records_no_changes() {
         .expect("hydrated");
     assert_eq!(turn.finish(TurnEnd::Failed).await.expect("none"), None);
     assert_eq!(harness.store.state().changes.len(), 0);
+}
+
+#[tokio::test]
+async fn a_record_main_never_answers_delays_the_turn_by_its_deadline_only() {
+    let harness = harness(CLOUD_REFS, &[("src/main.rs", "fn main() {}\n")]);
+    harness.store.state().changes_hanging = 1;
+    let turn = harness
+        .factory
+        .begin(
+            &later_turn(),
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
+        .await
+        .expect("hydrated");
+    tokio::time::pause();
+    let started = tokio::time::Instant::now();
+    let stamp = turn
+        .finish(TurnEnd::Completed)
+        .await
+        .expect("published")
+        .expect("a stamp");
+    assert_eq!(stamp.workspace_epoch, 2);
+    assert!(started.elapsed() >= super::turn::CHANGES_DEADLINE);
+    assert!(started.elapsed() < super::turn::CHANGES_DEADLINE * 2);
+    let state = harness.store.state();
+    assert_eq!(state.publishes.len(), 1);
+    assert_eq!(state.changes.len(), 0);
 }

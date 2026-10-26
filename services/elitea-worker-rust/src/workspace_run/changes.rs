@@ -11,7 +11,8 @@
 //! Bounds, per scope (every one keeps the work and the wire bounded; none
 //! fails the record):
 //! * at most [`MAX_FILES`] files listed, sorted by path; the rest, and any
-//!   path over [`MAX_PATH_BYTES`], are counted as omitted;
+//!   path Main would refuse ([`valid_path`]: over [`MAX_PATH_BYTES`], a
+//!   `.git` segment, ...), are counted as omitted;
 //! * a blob over [`MAX_BLOB_BYTES`], a trimmed middle over
 //!   [`MAX_MIDDLE_LINES`] lines (Myers' trace is O(D·(N+M))), or a file past
 //!   [`MAX_DIFFED_BYTES`] read in the scope is `too_large`: no counts;
@@ -21,7 +22,8 @@
 //!
 //! A symlink on either side, or a NUL in either side's first 8000 bytes, is
 //! `binary`. Submodule commits are not listed. A rename is exact: a deleted
-//! and an added file with the same blob, paired in path order.
+//! and an added file with the same blob, paired in path order; as in git,
+//! empty files are never paired.
 
 use std::collections::BTreeMap;
 
@@ -44,6 +46,8 @@ pub(crate) const MAX_MIDDLE_LINES: usize = 3_000;
 pub(crate) const MAX_DIFFED_BYTES: u64 = 8 << 20;
 pub(crate) const MAX_FILE_DIFF_BYTES: usize = 48 * 1_024;
 pub(crate) const MAX_SCOPE_DIFF_BYTES: usize = 256 * 1_024;
+/// The longest first-parent walk from a commit back to the snapshot.
+pub(crate) const MAX_DEPTH_WALK: usize = 10_000;
 const BINARY_SNIFF_BYTES: usize = 8_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -81,6 +85,9 @@ pub(crate) struct ChangeSet {
     pub(crate) commit: String,
     pub(crate) parent: String,
     pub(crate) base: String,
+    /// The commit's turn number: the first-parent steps from it back to
+    /// `base` (1 when its parent is the snapshot); 0 when unknown.
+    pub(crate) depth: u32,
     pub(crate) turn: Vec<ChangedFile>,
     pub(crate) turn_omitted: u32,
     pub(crate) cumulative: Vec<ChangedFile>,
@@ -113,11 +120,25 @@ pub(crate) fn compute(
         commit: commit.to_owned(),
         parent: parent.to_owned(),
         base: base.to_owned(),
+        depth: depth(db, base, commit),
         turn,
         turn_omitted,
         cumulative,
         cumulative_omitted,
     })
+}
+
+/// The first-parent steps from `commit` back to `base`, at most
+/// [`MAX_DEPTH_WALK`]; 0 (unknown) when `base` is not reached or a commit
+/// cannot be read.
+fn depth(db: &ObjectDb, base: &str, commit: &str) -> u32 {
+    let (Ok(tip), Ok(stop)) = (oid(commit), oid(base)) else {
+        return 0;
+    };
+    match db.first_parent_chain(&tip, &stop, MAX_DEPTH_WALK) {
+        Ok(Some(chain)) => u32::try_from(chain.len()).unwrap_or(0),
+        _ => 0,
+    }
 }
 
 /// A listed change before its content is read.
@@ -142,12 +163,12 @@ fn scope(
     let mut budget = Budget::default();
     let mut out = Vec::new();
     for change in listed {
-        let too_long = change.path.len() > MAX_PATH_BYTES
+        let invalid = !valid_path(&change.path)
             || change
                 .from_path
-                .as_ref()
-                .is_some_and(|from| from.len() > MAX_PATH_BYTES);
-        if too_long || out.len() >= MAX_FILES {
+                .as_deref()
+                .is_some_and(|from| !valid_path(from));
+        if invalid || out.len() >= MAX_FILES {
             omitted = omitted.saturating_add(1);
             continue;
         }
@@ -155,6 +176,25 @@ fn scope(
     }
     Ok((out, omitted))
 }
+
+/// Main's `ValidChangedPath`: a workspace-relative, slash-separated path of
+/// at most [`MAX_PATH_BYTES`], with no empty, `.` or `..` segment, no NUL and
+/// no `.git` segment (any case). A path Main would refuse is counted as
+/// omitted, so one bad path never costs the whole record.
+pub(crate) fn valid_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= MAX_PATH_BYTES
+        && !path.contains('\0')
+        && path.split('/').all(|segment| {
+            !segment.is_empty()
+                && segment != "."
+                && segment != ".."
+                && !segment.eq_ignore_ascii_case(".git")
+        })
+}
+
+/// The empty blob's id: git leaves empty files out of rename detection.
+const EMPTY_BLOB: &str = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
 
 fn pair_renames(changes: Vec<elitea_workspace_store::objects::Change>) -> Vec<Listed> {
     let mut listed = Vec::new();
@@ -190,8 +230,14 @@ fn pair_renames(changes: Vec<elitea_workspace_store::objects::Change>) -> Vec<Li
         paths.reverse();
     }
     added.sort_by(|a, b| a.0.cmp(&b.0));
+    let empty = oid(EMPTY_BLOB).ok();
     for (path, new) in added {
-        if let Some(from) = deleted.get_mut(&new.oid).and_then(Vec::pop) {
+        let pairable = Some(new.oid) != empty;
+        if let Some(from) = deleted
+            .get_mut(&new.oid)
+            .filter(|_| pairable)
+            .and_then(Vec::pop)
+        {
             listed.push(Listed {
                 path,
                 from_path: Some(from),
@@ -261,6 +307,15 @@ fn content(db: &ObjectDb, change: &Listed, budget: &mut Budget) -> Result<Change
         file.too_large = true;
         return Ok(file);
     }
+    // The sizes come from the object headers: a blob over the bound is never
+    // read into memory.
+    let size = |entry: Option<FileEntry>| -> Result<u64, StoreError> {
+        entry.map_or(Ok(0), |entry| db.blob_size(&entry.oid))
+    };
+    if size(change.old)? > MAX_BLOB_BYTES as u64 || size(change.new)? > MAX_BLOB_BYTES as u64 {
+        file.too_large = true;
+        return Ok(file);
+    }
     let mut read = |entry: Option<FileEntry>| -> Result<Vec<u8>, StoreError> {
         let bytes = match entry {
             Some(entry) => db.blob(&entry.oid)?,
@@ -272,6 +327,7 @@ fn content(db: &ObjectDb, change: &Listed, budget: &mut Budget) -> Result<Change
     let old = read(change.old)?;
     let new = read(change.new)?;
     if old.len() > MAX_BLOB_BYTES || new.len() > MAX_BLOB_BYTES {
+        // A header that understated the blob.
         file.too_large = true;
         return Ok(file);
     }
@@ -391,6 +447,7 @@ pub(crate) fn frames(claim: &WorkspaceClaimV1, set: &ChangeSet) -> Vec<Workspace
             commit: set.commit.clone(),
             parent: set.parent.clone(),
             base: set.base.clone(),
+            depth: set.depth,
             turn_omitted: set.turn_omitted,
             cumulative_omitted: set.cumulative_omitted,
         })),

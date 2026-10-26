@@ -353,6 +353,7 @@ fn record_frames_are_a_header_then_turn_then_cumulative_files_under_the_request_
         commit: "1".repeat(40),
         parent: "2".repeat(40),
         base: "3".repeat(40),
+        depth: 6,
         turn: vec![largest.clone()],
         turn_omitted: 4,
         cumulative: vec![ChangedFile {
@@ -369,6 +370,7 @@ fn record_frames_are_a_header_then_turn_then_cumulative_files_under_the_request_
     };
     assert_eq!(header.claim.as_ref(), Some(&claim));
     assert_eq!((header.turn_omitted, header.cumulative_omitted), (4, 5));
+    assert_eq!(header.depth, 6);
     assert_eq!(header.commit, set.commit);
     let Some(workspace_changes_frame_v1::Frame::File(turn)) = &frames[1].frame else {
         panic!("a file");
@@ -437,4 +439,98 @@ fn the_handoff_snapshot_is_the_single_handoff_ref() {
     let mut two = refs.clone();
     two.insert("refs/elitea/handoff/2".to_owned(), "c".repeat(40));
     assert_eq!(handoff_snapshot(&two), None);
+}
+
+#[test]
+fn empty_files_are_never_paired_as_a_rename() {
+    let mut repo = Repo::new();
+    let base = repo.commit(
+        &[
+            ("pkg/__init__.py", Entry::Text("")),
+            ("keep.txt", Entry::Text("k\n")),
+        ],
+        None,
+    );
+    let commit = repo.commit(
+        &[
+            ("lib/__init__.py", Entry::Text("")),
+            ("keep.txt", Entry::Text("k\n")),
+        ],
+        Some(&base),
+    );
+    let set = compute(&repo.db(), &base, &base, &commit).expect("changes");
+    assert_eq!(set.turn.len(), 2);
+    assert_eq!(
+        find(&set.turn, "lib/__init__.py").status,
+        ChangeStatus::Added
+    );
+    assert_eq!(
+        find(&set.turn, "pkg/__init__.py").status,
+        ChangeStatus::Deleted
+    );
+    assert!(set.turn.iter().all(|file| file.from_path.is_none()));
+}
+
+#[test]
+fn a_path_main_would_refuse_is_omitted_alone() {
+    for path in [
+        "a/.GIT/config",
+        ".git",
+        "a//b",
+        "a/./b",
+        "a/../b",
+        "/abs",
+        "trailing/",
+        "nul\0byte",
+        "",
+    ] {
+        assert!(!valid_path(path), "{path:?} is refused");
+    }
+    assert!(valid_path("src/.gitignore"));
+    assert!(valid_path(&"a".repeat(MAX_PATH_BYTES)));
+    assert!(!valid_path(&"a".repeat(MAX_PATH_BYTES + 1)));
+
+    let mut repo = Repo::new();
+    let base = repo.commit(&[("x.txt", Entry::Text("x\n"))], None);
+    let db = repo.db();
+    let blob = db
+        .flatten(&db.commit(&oid(&base).expect("oid")).expect("commit").tree)
+        .expect("tree")
+        .remove("x.txt")
+        .expect("blob");
+    let after: BTreeMap<String, FileEntry> = [
+        ("ok.txt".to_owned(), blob),
+        ("vendor/.Git/HEAD".to_owned(), blob),
+        ("a/../escape".to_owned(), blob),
+    ]
+    .into_iter()
+    .collect();
+    let (files, omitted) = scope(&db, &BTreeMap::new(), &after).expect("scope");
+    assert_eq!(omitted, 2);
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, "ok.txt");
+    assert_eq!(files[0].additions, Some(1));
+}
+
+#[test]
+fn the_depth_is_the_turn_number_from_the_snapshot() {
+    let mut repo = Repo::new();
+    let snapshot = repo.commit(&[("a.txt", Entry::Text("one\n"))], None);
+    let first = repo.commit(&[("a.txt", Entry::Text("two\n"))], Some(&snapshot));
+    let second = repo.commit(&[("a.txt", Entry::Text("three\n"))], Some(&first));
+    // A regenerate of the first turn: its parent is the snapshot again.
+    let regenerated = repo.commit(&[("a.txt", Entry::Text("deux\n"))], Some(&snapshot));
+    let db = repo.db();
+    let depth_of = |parent: &str, commit: &str| {
+        compute(&db, &snapshot, parent, commit)
+            .expect("changes")
+            .depth
+    };
+    assert_eq!(depth_of(&snapshot, &first), 1);
+    assert_eq!(depth_of(&first, &second), 2);
+    assert_eq!(depth_of(&snapshot, &regenerated), 1);
+    // The snapshot not on the commit's first-parent chain: unknown.
+    let unrelated = repo.commit(&[("z.txt", Entry::Text("z\n"))], None);
+    let set = compute(&repo.db(), &snapshot, &unrelated, &unrelated).expect("changes");
+    assert_eq!(set.depth, 0);
 }
