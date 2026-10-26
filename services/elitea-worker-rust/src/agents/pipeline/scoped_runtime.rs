@@ -12,7 +12,7 @@ use crate::agents::events::{
 };
 use crate::agents::graph::{
     PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PipelineNodeEventScope, PipelineNodeEventSender,
-    scoped_pipeline_tool_context,
+    ScopedCallKind, scoped_pipeline_tool_context,
 };
 use crate::agents::session::ApplicationRuntimeProjection;
 use adk_rust::graph::{Checkpointer, GraphError, NodeContext};
@@ -195,6 +195,15 @@ impl PipelineApplicationNodeRuntime {
             &branch,
         )
         .await?;
+        let fanout = self.events.has_parallel_event_scope();
+        // D2 (T-2A §8): a fixed Parallel child an earlier claim started runs
+        // again and resumes from its own model checkpoint; only a tool that
+        // may have started without a receipt ends it "may have started".
+        let kind = match (fanout, receipt.outcome(), fresh) {
+            (false, ..) => ScopedCallKind::Node,
+            (true, GraphCallOutcome::Started, false) => ScopedCallKind::FanoutChildRecovery,
+            (true, ..) => ScopedCallKind::FanoutChild,
+        };
         match receipt.outcome().clone() {
             GraphCallOutcome::Completed { result, terminal } => {
                 self.forward(
@@ -255,7 +264,7 @@ impl PipelineApplicationNodeRuntime {
                     return Ok((result, receipt.activation().call_id().to_owned()));
                 }
             }
-            GraphCallOutcome::Started if !fresh => {
+            GraphCallOutcome::Started if !fresh && !fanout => {
                 // An interrupted unpaused provider/tool has no graph-level replay authority.
                 // The child may have started an effect: it is never dispatched again.
                 return Err(may_have_started());
@@ -269,6 +278,7 @@ impl PipelineApplicationNodeRuntime {
             receipt.invocation_id(),
             receipt.author(),
             receipt.branch(),
+            kind,
         )?;
         let receiver_owner = self.applications.event_receiver().ok_or_else(failure)?;
         let mut receiver = receiver_owner.take().await.map_err(|_| failure())?;
@@ -335,6 +345,13 @@ impl PipelineApplicationNodeRuntime {
             // registered reason, as an unscoped Agent node does
             // (`graph/application.rs` `child_failure`).
             ChildFailure::ApprovedCallStop(code) => {
+                // In a fixed Parallel branch a call that may have started ends
+                // that child typed; the join's On Error decides the run.
+                if code == crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE
+                    && self.events.has_parallel_event_scope()
+                {
+                    return may_have_started();
+                }
                 return self
                     .events
                     .approved_call_stop(code, &self.node_name)

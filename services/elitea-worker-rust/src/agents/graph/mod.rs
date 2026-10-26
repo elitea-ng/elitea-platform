@@ -154,7 +154,7 @@ pub(crate) use application::{
 };
 pub(crate) use direct_tool::{
     DirectToolExecutionError, DirectToolNodeKind, DirectToolSelection, PipelineDirectToolResolver,
-    ResolvedDirectTool, scoped_pipeline_tool_context,
+    ResolvedDirectTool, ScopedCallKind, scoped_pipeline_tool_context,
 };
 pub(crate) use llm::{
     LlmExecutionError, LlmExecutionInput, LlmNodeDefinition, LlmToolkitSelection,

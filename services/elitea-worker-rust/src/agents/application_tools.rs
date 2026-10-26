@@ -3873,6 +3873,20 @@ impl LazyNestedAgent {
     ) -> adk_rust::Result<Arc<dyn Agent>> {
         let (model, toolsets) =
             crate::toolkits::bind_authorization_model_tools(model, toolsets, &mut authorization)?;
+        let toolsets = match &checkpoint {
+            Some(checkpoint) => {
+                let guarded = self
+                    .sensitive_tool_names
+                    .iter()
+                    .map(String::as_str)
+                    .chain(authorization.tool_names())
+                    .chain([ASK_USER_TOOL_NAME])
+                    .map(str::to_owned)
+                    .collect();
+                checkpoint.record_read_only(toolsets, &guarded)
+            }
+            None => toolsets,
+        };
         let model = checkpoint.as_ref().map_or_else(
             || model.clone(),
             |checkpoint| checkpoint.clone().delegation_model(model.clone()),
@@ -4169,6 +4183,7 @@ impl ApplicationAgentTool {
             Arc::new(agent)
         };
         let pipeline_container = pipeline_application_container(ctx.as_ref(), self.name())?;
+        let local_agent = fanout_child_agent(local_agent, ctx.as_ref())?;
         if pipeline_container {
             self.send_container_call(ctx.as_ref(), &arguments).await?;
         }
@@ -5092,16 +5107,68 @@ fn pipeline_application_container(
     else {
         return Ok(false);
     };
-    let object = marker
-        .as_object()
-        .filter(|object| object.len() == 2)
-        .ok_or_else(application_event_channel_error)?;
-    if object.get("call_id").and_then(Value::as_str) != Some(ctx.function_call_id())
-        || object.get("tool_name").and_then(Value::as_str) != Some(tool_name)
-    {
+    if !pipeline_call_marker_valid(marker, ctx.function_call_id(), tool_name) {
         return Err(application_event_channel_error());
     }
     Ok(true)
+}
+
+/// The pipeline's call marker names exactly this call; a fixed Parallel child
+/// adds `fanout`, and a re-run of a started one also `recover_started`.
+fn pipeline_call_marker_valid(marker: &Value, call_id: &str, tool_name: &str) -> bool {
+    let Some(object) = marker.as_object() else {
+        return false;
+    };
+    (2..=4).contains(&object.len())
+        && object.get("call_id").and_then(Value::as_str) == Some(call_id)
+        && object.get("tool_name").and_then(Value::as_str) == Some(tool_name)
+        && object.iter().all(|(key, value)| {
+            matches!(key.as_str(), "call_id" | "tool_name")
+                || (matches!(key.as_str(), "fanout" | "recover_started")
+                    && value == &Value::Bool(true))
+        })
+        && (!object.contains_key("recover_started") || object.contains_key("fanout"))
+}
+
+/// D2 (T-2A §8): a fan-out child replays an interrupted read-only batch; a
+/// call an earlier claim started resumes from the child's own checkpoint.
+/// Without one it could only start over, so it is refused.
+fn fanout_child_agent(
+    agent: Arc<LazyNestedAgent>,
+    ctx: &dyn ToolContext,
+) -> adk_rust::Result<Arc<LazyNestedAgent>> {
+    let (fanout, recover_started) = fanout_child_call(ctx);
+    if !fanout {
+        return Ok(agent);
+    }
+    let mut agent = agent.as_ref().clone();
+    let scopes = agent.model_scopes.take();
+    if recover_started && scopes.is_none() {
+        return Err(super::model_checkpoint::tool_may_have_started());
+    }
+    agent.model_scopes = scopes.map(|scopes| {
+        let scopes = scopes.with_read_only_replay();
+        if recover_started {
+            scopes.with_pending_model_recovery()
+        } else {
+            scopes
+        }
+    });
+    Ok(Arc::new(agent))
+}
+
+/// A fixed Parallel child call (`fanout`), and whether it re-runs a call an
+/// earlier claim started (`recover_started`), from the validated marker.
+fn fanout_child_call(ctx: &dyn ToolContext) -> (bool, bool) {
+    let actions = ctx.actions();
+    let flag = |key: &str| {
+        actions
+            .state_delta
+            .get(PIPELINE_APPLICATION_NODE_METADATA_KEY)
+            .and_then(|marker| marker.get(key))
+            == Some(&Value::Bool(true))
+    };
+    (flag("fanout"), flag("recover_started"))
 }
 
 fn pipeline_application_event(ctx: &dyn ToolContext) -> Event {
@@ -5609,6 +5676,30 @@ fn resource_exhausted() -> NativeAgentAssemblyError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pipeline_call_marker_admits_only_the_fanout_flags() {
+        let valid = |marker: Value| pipeline_call_marker_valid(&marker, "call-1", "agent");
+        assert!(valid(json!({"call_id": "call-1", "tool_name": "agent"})));
+        assert!(valid(
+            json!({"call_id": "call-1", "tool_name": "agent", "fanout": true})
+        ));
+        assert!(valid(json!({"call_id": "call-1", "tool_name": "agent",
+            "fanout": true, "recover_started": true})));
+        // Recovery without a fan-out child, a false flag, an unknown key, or
+        // another call is refused.
+        assert!(!valid(
+            json!({"call_id": "call-1", "tool_name": "agent", "recover_started": true})
+        ));
+        assert!(!valid(
+            json!({"call_id": "call-1", "tool_name": "agent", "fanout": false})
+        ));
+        assert!(!valid(
+            json!({"call_id": "call-1", "tool_name": "agent", "replay": true})
+        ));
+        assert!(!valid(json!({"call_id": "call-2", "tool_name": "agent"})));
+        assert!(!valid(json!({"call_id": "call-1"})));
+    }
 
     // These fixtures exercise only the retained envelope's local integrity checks.
     // Typed checkpoint-family/scope validation is separately required before projection.

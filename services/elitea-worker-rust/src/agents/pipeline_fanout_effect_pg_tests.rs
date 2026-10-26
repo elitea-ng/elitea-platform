@@ -21,6 +21,10 @@
 //! (`graph.fanout.may_have_started`) with zero tool calls and zero model calls,
 //! and `third` runs. On Error `continue` lands a failed join entry; `stop` fails
 //! the node.
+//!
+//! The D2 narrowing (T-2A §8) on the same harness: when `second` dies in its
+//! model call it resumes from its own model checkpoint (R), and when it dies
+//! in a read-only tool that tool runs again (I); both complete all three.
 
 use super::restart_pg_tests::{CHECKPOINT_MIGRATION, connect, model_requests, run_phase};
 use super::*;
@@ -33,6 +37,8 @@ const CHILD_TEST: &str =
 const DATABASE_ENV: &str = "ELITEA_FANOUT_EFFECT_PG_DATABASE";
 const ON_ERROR_ENV: &str = "ELITEA_FANOUT_EFFECT_PG_ON_ERROR";
 const PHASE_ENV: &str = "ELITEA_FANOUT_EFFECT_PG_PHASE";
+/// `effect` (effectful tool in flight), `read_only` (I) or `mid_model` (R).
+const MODE_ENV: &str = "ELITEA_FANOUT_EFFECT_PG_MODE";
 const EXECUTION: &str = "execution-fanout-effect";
 const GENERATION: u64 = 3;
 /// The tool saw its own boundary in `PostgreSQL`, then the process died.
@@ -80,24 +86,33 @@ fn effectful_agent() -> Value {
 /// Child model-scope sessions (`elitea-model-*`) holding a durable
 /// `tool_may_have_started` boundary written by `claim`.
 async fn tool_boundaries(pool: &sqlx::PgPool, claim: &str) -> Vec<String> {
+    phase_boundaries(pool, claim, "tool_may_have_started").await
+}
+
+/// Child model-scope sessions holding a durable checkpoint `phase` written by `claim`.
+async fn phase_boundaries(pool: &sqlx::PgPool, claim: &str, phase: &str) -> Vec<String> {
     sqlx::query_scalar::<_, String>(
         "SELECT DISTINCT session_id FROM elitea_runtime.agent_session_events \
          WHERE session_id LIKE 'elitea-model-%' \
-           AND event_payload LIKE '%tool_may_have_started%' \
+           AND event_payload LIKE '%' || $4 || '%' \
            AND writer_claim_id = $1 AND writer_execution_id = $2 AND writer_generation = $3",
     )
     .bind(claim)
     .bind(EXECUTION)
     .bind(i64::try_from(GENERATION).expect("generation"))
+    .bind(phase)
     .fetch_all(pool)
     .await
-    .expect("read child tool boundaries")
+    .expect("read child checkpoint boundaries")
 }
 
-/// The effectful tool of the crash process. Inside its own execution it
-/// proves the boundary is already durable, then dies with the call in flight.
+/// The crash process's tool. Inside its own execution it proves the boundary
+/// is already durable, then dies with the call in flight: an effectful tool
+/// behind `tool_may_have_started`, a read-only one behind a replayable
+/// `delegation_pending` batch.
 struct CrashingMcpConnector {
     pool: sqlx::PgPool,
+    read_only: bool,
 }
 
 #[async_trait]
@@ -111,7 +126,7 @@ impl McpConnector for CrashingMcpConnector {
             vec![Arc::new(CrashingMcpTool {
                 inner: PipelineMcpTool {
                     calls: Arc::new(AtomicUsize::new(0)),
-                    read_only: false,
+                    read_only: self.read_only,
                 },
                 pool: self.pool.clone(),
             })],
@@ -136,15 +151,23 @@ impl Tool for CrashingMcpTool {
         self.inner.parameters_schema()
     }
     fn is_read_only(&self) -> bool {
-        false
+        self.inner.is_read_only()
     }
     async fn execute(
         &self,
         _context: Arc<dyn ToolContext>,
         _arguments: Value,
     ) -> adk_rust::Result<Value> {
-        let boundaries = tool_boundaries(&self.pool, "claim-1").await;
-        std::process::exit(if boundaries.len() == 1 {
+        let effectful = tool_boundaries(&self.pool, "claim-1").await.len();
+        let replayable = phase_boundaries(&self.pool, "claim-1", "delegation_pending")
+            .await
+            .len();
+        let durable = if self.inner.is_read_only() {
+            (effectful, replayable) == (0, 1)
+        } else {
+            effectful == 1
+        };
+        std::process::exit(if durable {
             CRASH_EXIT_CODE
         } else {
             MARKER_MISSING_EXIT_CODE
@@ -282,7 +305,7 @@ async fn joined(pool: &sqlx::PgPool) -> Option<Vec<Value>> {
     state["joined"].as_array().cloned()
 }
 
-async fn scenario(url: &str, on_error: &str) {
+async fn scenario(url: &str, mode: &str, on_error: &str) {
     let db = IsolatedPostgres::create(url).await;
     install_schema(&db.pool).await;
     sqlx::raw_sql(CHECKPOINT_MIGRATION)
@@ -295,6 +318,7 @@ async fn scenario(url: &str, on_error: &str) {
             .args(["--exact", CHILD_TEST, "--nocapture", "--test-threads=1"])
             .env(DATABASE_ENV, &db.database_name)
             .env(ON_ERROR_ENV, on_error)
+            .env(MODE_ENV, mode)
             .env(PHASE_ENV, phase);
         let output = run_phase(phase, command);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -305,8 +329,12 @@ async fn scenario(url: &str, on_error: &str) {
             String::from_utf8_lossy(&output.stderr)
         );
         if phase == "crash" {
-            // (a) the boundary of exactly the effectful child, fenced to claim 1.
-            assert_eq!(tool_boundaries(&db.pool, "claim-1").await.len(), 1);
+            // (a) the boundary of exactly the effectful child, fenced to claim 1;
+            // a read-only batch or a model call leaves a replayable one instead.
+            assert_eq!(
+                tool_boundaries(&db.pool, "claim-1").await.len(),
+                usize::from(mode == "effect")
+            );
             // (c) two branches of the same saved Agent: two model-scope sessions.
             let sessions = sqlx::query_scalar::<_, String>(
                 "SELECT DISTINCT session_id FROM elitea_runtime.agent_session_events \
@@ -333,7 +361,7 @@ async fn postgres_effectful_fanout_child_may_have_started_continues_with_a_faile
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
         return;
     };
-    scenario(&url, "continue").await;
+    scenario(&url, "effect", "continue").await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -342,7 +370,27 @@ async fn postgres_effectful_fanout_child_may_have_started_stops_the_node() {
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
         return;
     };
-    scenario(&url, "stop").await;
+    scenario(&url, "effect", "stop").await;
+}
+
+/// R: `second` dies in its model call and resumes from its model checkpoint.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_fanout_child_caught_mid_model_resumes_from_its_checkpoint() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    scenario(&url, "mid_model", "stop").await;
+}
+
+/// I: `second` dies in a read-only tool, which runs again.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_fanout_child_read_only_tool_in_flight_runs_again() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    scenario(&url, "read_only", "stop").await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -358,17 +406,26 @@ async fn postgres_fanout_effect_child() {
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_')
     );
     let on_error = std::env::var(ON_ERROR_ENV).expect("on_error");
+    let mode = std::env::var(MODE_ENV).expect("mode");
     let pool = connect(&database).await;
     let request = request(&on_error);
     match std::env::var(PHASE_ENV).expect("phase").as_str() {
         "crash" => {
+            let second = if mode == "mid_model" {
+                TestModelGatewayOutcome::ExitProcess(CRASH_EXIT_CODE)
+            } else {
+                TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response())
+            };
             let (assembler, _) = assembler(
                 &pool,
                 vec![
                     TestModelGatewayOutcome::Response(pipeline_text_response("first done")),
-                    TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
+                    second,
                 ],
-                Arc::new(CrashingMcpConnector { pool: pool.clone() }),
+                Arc::new(CrashingMcpConnector {
+                    pool: pool.clone(),
+                    read_only: mode == "read_only",
+                }),
             );
             let invocation = assembler
                 .assemble(claim(&request, 1))
@@ -381,9 +438,53 @@ async fn postgres_fanout_effect_child() {
                         )
                     )
                 });
-            // The effectful tool exits this process; reaching the end is the failure.
+            // The tool or the model call exits this process; reaching the end is the failure.
             let outcome = run_to_end(invocation).await;
-            panic!("crash: the effectful tool never ran: {outcome:?}");
+            panic!("crash: the process outlived its crash point: {outcome:?}");
+        }
+        "recover" if mode != "effect" => {
+            let tool_calls = Arc::new(AtomicUsize::new(0));
+            let (assembler, captured) = assembler(
+                &pool,
+                vec![
+                    TestModelGatewayOutcome::Response(pipeline_text_response("second done")),
+                    TestModelGatewayOutcome::Response(pipeline_text_response("third done")),
+                ],
+                Arc::new(PipelineMcpConnector {
+                    connections: Arc::new(AtomicUsize::new(0)),
+                    tool_calls: Arc::clone(&tool_calls),
+                    // The same tool declarations as the crashed process offered.
+                    read_only: mode == "read_only",
+                }),
+            );
+            let invocation = assembler
+                .assemble(claim(&request, 2))
+                .await
+                .expect("recover: the replacement Worker assembles the reclaim");
+            run_to_end(invocation)
+                .await
+                .expect("recover: the resumed child completes the pipeline");
+            // R resumes the saved model request; I replays the saved call
+            // batch without a model call and runs the read-only tool again.
+            assert_eq!(
+                tool_calls.load(Ordering::Acquire),
+                usize::from(mode == "read_only")
+            );
+            assert_eq!(
+                model_requests(&captured),
+                2,
+                "recover: `second` once (after its tool or its saved request) and `third`"
+            );
+            let entries = joined(&pool).await.expect("joined entries");
+            assert_eq!(entries.len(), 3, "{entries:?}");
+            for (entry, id) in entries.iter().zip(["first", "second", "third"]) {
+                assert_eq!(entry["branch_id"], id);
+                assert_eq!(entry["status"], "succeeded", "{entries:?}");
+            }
+            assert_eq!(
+                tool_boundaries(&pool, "claim-2").await,
+                Vec::<String>::new()
+            );
         }
         "recover" => {
             let tool_calls = Arc::new(AtomicUsize::new(0));

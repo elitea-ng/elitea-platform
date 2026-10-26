@@ -87,7 +87,7 @@ impl ModelCheckpointWriter {
         identity: AdkIdentity,
     ) -> adk_rust::Result<()> {
         if let Some(name) = ctx.tool_name()
-            && self.application_tools.contains(name)
+            && self.replayable(name)
             && self
                 .persist_pending_application(ctx, identity.clone())
                 .await?
@@ -162,7 +162,7 @@ impl ModelCheckpointWriter {
             }
             _ => return Err(invalid_checkpoint()),
         };
-        if validate_calls(&content, |name| self.application_tools.contains(name)).is_err() {
+        if validate_calls(&content, |name| self.replayable(name)).is_err() {
             return Ok(false);
         }
         if !content.parts.iter().any(|part| {
