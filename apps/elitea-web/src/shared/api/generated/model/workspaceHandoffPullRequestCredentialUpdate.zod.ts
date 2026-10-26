@@ -47,7 +47,7 @@ export const WorkspaceHandoffPullRequestCredentialUpdate = zod.object({
   credential: zod
     .union([WorkspaceForgeCredential, zod.null()])
     .describe(
-      "The configuration to open pull requests through; null clears the choice.",
+      "The configuration to push and open pull requests through; null clears the choice.",
     ),
 });
 

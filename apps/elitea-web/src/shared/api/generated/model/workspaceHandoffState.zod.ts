@@ -70,7 +70,7 @@ export const WorkspaceHandoffState = zod
       .union([WorkspaceForgeCredential, zod.null()])
       .optional()
       .describe(
-        "Contract 1.29. The GitHub configuration the owner chose for the cloud executor's pull requests; null when none.",
+        "Contract 1.29. The GitHub or GitLab configuration the owner chose for the cloud executor's pushes and pull requests; null when none.",
       ),
   })
   .describe(

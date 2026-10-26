@@ -1295,6 +1295,7 @@ export const getGetWorkspaceHandoffResponseMock = (
   pull_request_credential: faker.helpers.arrayElement([
     faker.helpers.arrayElement([
       {
+        type: faker.helpers.arrayElement(["github", "gitlab"] as const),
         elitea_title: faker.string.alpha({ length: { min: 1, max: 256 } }),
         private: faker.datatype.boolean(),
       },
@@ -1354,6 +1355,7 @@ export const getSetWorkspaceHandoffPullRequestCredentialResponseMock = (
 ): WorkspaceHandoffPullRequestCredential => ({
   pull_request_credential: faker.helpers.arrayElement([
     {
+      type: faker.helpers.arrayElement(["github", "gitlab"] as const),
       elitea_title: faker.string.alpha({ length: { min: 1, max: 256 } }),
       private: faker.datatype.boolean(),
     },

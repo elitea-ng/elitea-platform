@@ -115,8 +115,12 @@ const (
 	WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED WorkspaceExecutorEventKindV1 = 0
 	// handoff.scan_blocked: the hydrated tree held credential-shaped content.
 	WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED WorkspaceExecutorEventKindV1 = 1
-	// pull_request.opened: open_pull_request opened one.
+	// pull_request.opened: open_pull_request opened one (a GitHub pull
+	// request or a GitLab merge request).
 	WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED WorkspaceExecutorEventKindV1 = 2
+	// branch.pushed: git_push (or open_pull_request) pushed the thread's
+	// commits to a new branch of the upstream remote.
+	WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_BRANCH_PUSHED WorkspaceExecutorEventKindV1 = 3
 )
 
 // Enum value maps for WorkspaceExecutorEventKindV1.
@@ -125,11 +129,13 @@ var (
 		0: "WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED",
 		1: "WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED",
 		2: "WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED",
+		3: "WORKSPACE_EXECUTOR_EVENT_KIND_V1_BRANCH_PUSHED",
 	}
 	WorkspaceExecutorEventKindV1_value = map[string]int32{
 		"WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED":         0,
 		"WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED":        1,
 		"WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED": 2,
+		"WORKSPACE_EXECUTOR_EVENT_KIND_V1_BRANCH_PUSHED":       3,
 	}
 )
 
@@ -1590,22 +1596,25 @@ func (x *WorkspaceForgeCredentialRequestV1) GetClaim() *WorkspaceClaimV1 {
 	return nil
 }
 
-// The thread's pull-request credential (ADR-0034 decision 10, amended
-// 2026-10-26): the GitHub configuration its owner chose, redeemed. Main
-// answers it only for the running cloud turn of the thread, and only while
-// the policy allows pull requests. The worker keeps it in memory for one
-// open_pull_request call, outside the sandbox, and never logs it.
+// The thread's forge credential (ADR-0034 decision 10, amended
+// 2026-10-26): the GitHub or GitLab configuration its owner chose, redeemed.
+// Main answers it only for the running cloud turn of the thread, and only
+// while the policy allows pull requests. The worker keeps it in memory for
+// one git_push or open_pull_request call, outside the sandbox, uses it only
+// in that call's own HTTPS requests, and never logs it.
 type WorkspaceForgeCredentialResponseV1 struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The configuration's data as one JSON object (base_url and its auth
-	// fields, exactly as a GitHub toolkit's `github_configuration` setting
-	// holds them after expansion), at most 32 KiB. Empty on a refusal or a
+	// The configuration's data as one JSON object (exactly as a toolkit's
+	// `github_configuration` or `gitlab_configuration` setting holds it after
+	// expansion), at most 32 KiB. Empty on a refusal or a rejection.
+	ConfigurationJson string              `protobuf:"bytes,1,opt,name=configuration_json,json=configurationJson,proto3" json:"configuration_json,omitempty"`
+	Refusal           *WorkspaceRefusalV1 `protobuf:"bytes,2,opt,name=refusal,proto3" json:"refusal,omitempty"`
+	Rejection         *RuntimeErrorV1     `protobuf:"bytes,3,opt,name=rejection,proto3" json:"rejection,omitempty"`
+	// The configuration's type: `github` or `gitlab`. Empty on a refusal or a
 	// rejection.
-	GithubConfigurationJson string              `protobuf:"bytes,1,opt,name=github_configuration_json,json=githubConfigurationJson,proto3" json:"github_configuration_json,omitempty"`
-	Refusal                 *WorkspaceRefusalV1 `protobuf:"bytes,2,opt,name=refusal,proto3" json:"refusal,omitempty"`
-	Rejection               *RuntimeErrorV1     `protobuf:"bytes,3,opt,name=rejection,proto3" json:"rejection,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	Forge         string `protobuf:"bytes,4,opt,name=forge,proto3" json:"forge,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WorkspaceForgeCredentialResponseV1) Reset() {
@@ -1638,9 +1647,9 @@ func (*WorkspaceForgeCredentialResponseV1) Descriptor() ([]byte, []int) {
 	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{19}
 }
 
-func (x *WorkspaceForgeCredentialResponseV1) GetGithubConfigurationJson() string {
+func (x *WorkspaceForgeCredentialResponseV1) GetConfigurationJson() string {
 	if x != nil {
-		return x.GithubConfigurationJson
+		return x.ConfigurationJson
 	}
 	return ""
 }
@@ -1659,6 +1668,13 @@ func (x *WorkspaceForgeCredentialResponseV1) GetRejection() *RuntimeErrorV1 {
 	return nil
 }
 
+func (x *WorkspaceForgeCredentialResponseV1) GetForge() string {
+	if x != nil {
+		return x.Forge
+	}
+	return ""
+}
+
 type WorkspaceRecordEventRequestV1 struct {
 	state protoimpl.MessageState       `protogen:"open.v1"`
 	Claim *WorkspaceClaimV1            `protobuf:"bytes,1,opt,name=claim,proto3" json:"claim,omitempty"`
@@ -1667,13 +1683,16 @@ type WorkspaceRecordEventRequestV1 struct {
 	Findings uint32   `protobuf:"varint,3,opt,name=findings,proto3" json:"findings,omitempty"`
 	Rules    []string `protobuf:"bytes,4,rep,name=rules,proto3" json:"rules,omitempty"`
 	// pull_request.opened: the toolkit, the branches, the number, its URL and
-	// how many files it changes.
+	// how many files it changes. branch.pushed: the toolkit, the new branch,
+	// the upstream branch it starts from, the branch's URL and how many
+	// commits it carries.
 	Toolkit       string `protobuf:"bytes,5,opt,name=toolkit,proto3" json:"toolkit,omitempty"`
 	Branch        string `protobuf:"bytes,6,opt,name=branch,proto3" json:"branch,omitempty"`
 	Base          string `protobuf:"bytes,7,opt,name=base,proto3" json:"base,omitempty"`
 	Number        uint64 `protobuf:"varint,8,opt,name=number,proto3" json:"number,omitempty"`
 	Url           string `protobuf:"bytes,9,opt,name=url,proto3" json:"url,omitempty"`
 	Files         uint32 `protobuf:"varint,10,opt,name=files,proto3" json:"files,omitempty"`
+	Commits       uint32 `protobuf:"varint,11,opt,name=commits,proto3" json:"commits,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1774,6 +1793,13 @@ func (x *WorkspaceRecordEventRequestV1) GetUrl() string {
 func (x *WorkspaceRecordEventRequestV1) GetFiles() uint32 {
 	if x != nil {
 		return x.Files
+	}
+	return 0
+}
+
+func (x *WorkspaceRecordEventRequestV1) GetCommits() uint32 {
+	if x != nil {
+		return x.Commits
 	}
 	return 0
 }
@@ -2284,11 +2310,12 @@ const file_elitea_runtime_v1_workspace_proto_rawDesc = "" +
 	"\x12WorkspaceEnvVarsV1\x128\n" +
 	"\x04vars\x18\x01 \x03(\v2$.elitea.runtime.v1.WorkspaceEnvVarV1R\x04varsJ\x04\b\x02\x10\x10\"d\n" +
 	"!WorkspaceForgeCredentialRequestV1\x129\n" +
-	"\x05claim\x18\x01 \x01(\v2#.elitea.runtime.v1.WorkspaceClaimV1R\x05claimJ\x04\b\x02\x10\x10\"\xe8\x01\n" +
-	"\"WorkspaceForgeCredentialResponseV1\x12:\n" +
-	"\x19github_configuration_json\x18\x01 \x01(\tR\x17githubConfigurationJson\x12?\n" +
+	"\x05claim\x18\x01 \x01(\v2#.elitea.runtime.v1.WorkspaceClaimV1R\x05claimJ\x04\b\x02\x10\x10\"\xf1\x01\n" +
+	"\"WorkspaceForgeCredentialResponseV1\x12-\n" +
+	"\x12configuration_json\x18\x01 \x01(\tR\x11configurationJson\x12?\n" +
 	"\arefusal\x18\x02 \x01(\v2%.elitea.runtime.v1.WorkspaceRefusalV1R\arefusal\x12?\n" +
-	"\trejection\x18\x03 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x04\x10\x10\"\xdd\x02\n" +
+	"\trejection\x18\x03 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejection\x12\x14\n" +
+	"\x05forge\x18\x04 \x01(\tR\x05forgeJ\x04\b\x05\x10\x10\"\xf7\x02\n" +
 	"\x1dWorkspaceRecordEventRequestV1\x129\n" +
 	"\x05claim\x18\x01 \x01(\v2#.elitea.runtime.v1.WorkspaceClaimV1R\x05claim\x12C\n" +
 	"\x04kind\x18\x02 \x01(\x0e2/.elitea.runtime.v1.WorkspaceExecutorEventKindV1R\x04kind\x12\x1a\n" +
@@ -2300,7 +2327,8 @@ const file_elitea_runtime_v1_workspace_proto_rawDesc = "" +
 	"\x06number\x18\b \x01(\x04R\x06number\x12\x10\n" +
 	"\x03url\x18\t \x01(\tR\x03url\x12\x14\n" +
 	"\x05files\x18\n" +
-	" \x01(\rR\x05filesJ\x04\b\v\x10\x10\"\xc4\x01\n" +
+	" \x01(\rR\x05files\x12\x18\n" +
+	"\acommits\x18\v \x01(\rR\acommitsJ\x04\b\f\x10\x10\"\xc4\x01\n" +
 	"\x1eWorkspaceRecordEventResponseV1\x12\x1a\n" +
 	"\brecorded\x18\x01 \x01(\bR\brecorded\x12?\n" +
 	"\arefusal\x18\x02 \x01(\v2%.elitea.runtime.v1.WorkspaceRefusalV1R\arefusal\x12?\n" +
@@ -2349,11 +2377,12 @@ const file_elitea_runtime_v1_workspace_proto_rawDesc = "" +
 	"(WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED\x10\t\x121\n" +
 	"-WORKSPACE_REFUSAL_CODE_V1_NO_FORGE_CREDENTIAL\x10\x0e\x124\n" +
 	"0WORKSPACE_REFUSAL_CODE_V1_PULL_REQUESTS_DISABLED\x10\x0f\"\x04\b\n" +
-	"\x10\r*%WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM*(WORKSPACE_REFUSAL_CODE_V1_DIFF_TOO_LARGE*%WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY*$WORKSPACE_REFUSAL_CODE_V1_DIFF_EMPTY*\xbd\x01\n" +
+	"\x10\r*%WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM*(WORKSPACE_REFUSAL_CODE_V1_DIFF_TOO_LARGE*%WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY*$WORKSPACE_REFUSAL_CODE_V1_DIFF_EMPTY*\xf1\x01\n" +
 	"\x1cWorkspaceExecutorEventKindV1\x120\n" +
 	",WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED\x10\x00\x121\n" +
 	"-WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED\x10\x01\x128\n" +
-	"4WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED\x10\x02*\xe4\x01\n" +
+	"4WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED\x10\x02\x122\n" +
+	".WORKSPACE_EXECUTOR_EVENT_KIND_V1_BRANCH_PUSHED\x10\x03*\xe4\x01\n" +
 	"\x17WorkspaceChangeStatusV1\x12*\n" +
 	"&WORKSPACE_CHANGE_STATUS_V1_UNSPECIFIED\x10\x00\x12$\n" +
 	" WORKSPACE_CHANGE_STATUS_V1_ADDED\x10\x01\x12'\n" +

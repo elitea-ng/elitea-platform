@@ -46,6 +46,11 @@ export const workspaceForgeCredentialEliteaTitleMax = 256;
 
 export const WorkspaceForgeCredential = zod
   .object({
+    type: zod
+      .enum(["github", "gitlab"])
+      .describe(
+        "The configuration's type, which is the forge the cloud pushes to.",
+      ),
     elitea_title: zod
       .string()
       .min(1)
@@ -53,7 +58,7 @@ export const WorkspaceForgeCredential = zod
     private: zod.boolean(),
   })
   .describe(
-    "Contract 1.29. A reference to a GitHub configuration, the way a toolkit setting holds one: a configuration of the project (or a shared one), or with `private` one of the caller's own. Never a secret. NOTE(W2): internal/application/workspacehandoff/forge_credential.go:23.",
+    "Contract 1.29. A reference to a GitHub or GitLab configuration, the way a toolkit setting holds one, with its type: a configuration of the project (or a shared one), or with `private` one of the caller's own. Never a secret. NOTE(W2): internal/application/workspacehandoff/forge_credential.go:25.",
   );
 
 export type WorkspaceForgeCredential = zod.input<

@@ -3982,13 +3982,18 @@ components:
     WorkspaceForgeCredential:
       type: object
       description: >-
-        Contract 1.29. A reference to a GitHub configuration, the way a
-        toolkit setting holds one: a configuration of the project (or a shared
-        one), or with `private` one of the caller's own. Never a secret.
-        NOTE(W2): internal/application/workspacehandoff/forge_credential.go:23.
-      required: [elitea_title, private]
+        Contract 1.29. A reference to a GitHub or GitLab configuration, the
+        way a toolkit setting holds one, with its type: a configuration of the
+        project (or a shared one), or with `private` one of the caller's own.
+        Never a secret.
+        NOTE(W2): internal/application/workspacehandoff/forge_credential.go:25.
+      required: [type, elitea_title, private]
       additionalProperties: false
       properties:
+        type:
+          type: string
+          enum: [github, gitlab]
+          description: The configuration's type, which is the forge the cloud pushes to.
         elitea_title: { type: string, minLength: 1, maxLength: 256 }
         private: { type: boolean }
     WorkspaceHandoffPullRequestCredentialUpdate:
@@ -4000,10 +4005,10 @@ components:
           allOf:
             - $ref: '#/components/schemas/WorkspaceForgeCredential'
           nullable: true
-          description: The configuration to open pull requests through; null clears the choice.
+          description: The configuration to push and open pull requests through; null clears the choice.
     WorkspaceHandoffPullRequestCredential:
       type: object
-      description: 'Contract 1.29. NOTE(W2): internal/api/v2/workspacehandoff/route.go:831 (`setPullRequestCredential`).'
+      description: 'Contract 1.29. NOTE(W2): internal/api/v2/workspacehandoff/route.go:832 (`setPullRequestCredential`).'
       required: [pull_request_credential]
       properties:
         pull_request_credential:
@@ -4103,8 +4108,8 @@ components:
             - $ref: '#/components/schemas/WorkspaceForgeCredential'
           nullable: true
           description: >-
-            Contract 1.29. The GitHub configuration the owner chose for the
-            cloud executor's pull requests; null when none.
+            Contract 1.29. The GitHub or GitLab configuration the owner chose for the
+            cloud executor's pushes and pull requests; null when none.
     WorkspaceHandoffChanges:
       type: object
       description: >-
@@ -20401,14 +20406,16 @@ paths:
         description: The Local work thread's conversation UUID, lowercase canonical.
     put:
       operationId: setWorkspaceHandoffPullRequestCredential
-      summary: Choose the GitHub configuration a cloud thread opens pull requests through
+      summary: Choose the GitHub or GitLab configuration a cloud thread pushes and opens pull requests through
       description: |
         Client contract 1.29 (ADR-0034 decision 10, amended 2026-10-26). The
-        cloud executor's `open_pull_request` writes through this
-        configuration: Main expands it as the owner only for a running cloud
-        turn of the thread, over the claim-bound runtime plane, and the token
-        never reaches the sandbox. The worker refuses a configuration whose
-        host is not the host of the folder's upstream remote. The thread's
+        cloud executor's `git_push` and `open_pull_request` (a merge request
+        on GitLab) write through this configuration: Main expands it as the
+        owner only for a running cloud turn of the thread, over the
+        claim-bound runtime plane, and the token never reaches the sandbox;
+        the worker sends it only to the configuration's own host over HTTPS.
+        The worker refuses a configuration whose host or repository is not
+        the folder's upstream remote's. The thread's
         owner only, cookie or token, while the thread has a cloud copy; a
         choice (not `null`) only while the policy allows pull requests.
       tags: [chat, client]
@@ -20464,7 +20471,7 @@ paths:
         '422':
           description: >-
             `invalid_handoff` (no `credential` key, or not a reference) or
-            `pull_request_credential_invalid` (not a GitHub configuration the
+            `pull_request_credential_invalid` (not a configuration of that type the
             caller can use).
           content:
             application/json:

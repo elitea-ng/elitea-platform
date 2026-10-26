@@ -226,20 +226,23 @@ message WorkspaceForgeCredentialRequestV1 {
   reserved 2 to 15;
 }
 
-// The thread's pull-request credential (ADR-0034 decision 10, amended
-// 2026-10-26): the GitHub configuration its owner chose, redeemed. Main
-// answers it only for the running cloud turn of the thread, and only while
-// the policy allows pull requests. The worker keeps it in memory for one
-// open_pull_request call, outside the sandbox, and never logs it.
+// The thread's forge credential (ADR-0034 decision 10, amended
+// 2026-10-26): the GitHub or GitLab configuration its owner chose, redeemed.
+// Main answers it only for the running cloud turn of the thread, and only
+// while the policy allows pull requests. The worker keeps it in memory for
+// one git_push or open_pull_request call, outside the sandbox, uses it only
+// in that call's own HTTPS requests, and never logs it.
 message WorkspaceForgeCredentialResponseV1 {
-  // The configuration's data as one JSON object (base_url and its auth
-  // fields, exactly as a GitHub toolkit's `github_configuration` setting
-  // holds them after expansion), at most 32 KiB. Empty on a refusal or a
-  // rejection.
-  string github_configuration_json = 1;
+  // The configuration's data as one JSON object (exactly as a toolkit's
+  // `github_configuration` or `gitlab_configuration` setting holds it after
+  // expansion), at most 32 KiB. Empty on a refusal or a rejection.
+  string configuration_json = 1;
   WorkspaceRefusalV1 refusal = 2;
   RuntimeErrorV1 rejection = 3;
-  reserved 4 to 15;
+  // The configuration's type: `github` or `gitlab`. Empty on a refusal or a
+  // rejection.
+  string forge = 4;
+  reserved 5 to 15;
 }
 
 // The audit events only the executor observes (ADR-0034 decision 12). The
@@ -249,8 +252,12 @@ enum WorkspaceExecutorEventKindV1 {
   WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED = 0;
   // handoff.scan_blocked: the hydrated tree held credential-shaped content.
   WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED = 1;
-  // pull_request.opened: open_pull_request opened one.
+  // pull_request.opened: open_pull_request opened one (a GitHub pull
+  // request or a GitLab merge request).
   WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED = 2;
+  // branch.pushed: git_push (or open_pull_request) pushed the thread's
+  // commits to a new branch of the upstream remote.
+  WORKSPACE_EXECUTOR_EVENT_KIND_V1_BRANCH_PUSHED = 3;
 }
 
 message WorkspaceRecordEventRequestV1 {
@@ -260,14 +267,17 @@ message WorkspaceRecordEventRequestV1 {
   uint32 findings = 3;
   repeated string rules = 4;
   // pull_request.opened: the toolkit, the branches, the number, its URL and
-  // how many files it changes.
+  // how many files it changes. branch.pushed: the toolkit, the new branch,
+  // the upstream branch it starts from, the branch's URL and how many
+  // commits it carries.
   string toolkit = 5;
   string branch = 6;
   string base = 7;
   uint64 number = 8;
   string url = 9;
   uint32 files = 10;
-  reserved 11 to 15;
+  uint32 commits = 11;
+  reserved 12 to 15;
 }
 
 message WorkspaceRecordEventResponseV1 {

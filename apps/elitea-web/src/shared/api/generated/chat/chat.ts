@@ -10446,14 +10446,16 @@ export const getSetWorkspaceHandoffPullRequestCredentialUrl = (
 
 /**
  * Client contract 1.29 (ADR-0034 decision 10, amended 2026-10-26). The
- * cloud executor's `open_pull_request` writes through this
- * configuration: Main expands it as the owner only for a running cloud
- * turn of the thread, over the claim-bound runtime plane, and the token
- * never reaches the sandbox. The worker refuses a configuration whose
- * host is not the host of the folder's upstream remote. The thread's
+ * cloud executor's `git_push` and `open_pull_request` (a merge request
+ * on GitLab) write through this configuration: Main expands it as the
+ * owner only for a running cloud turn of the thread, over the
+ * claim-bound runtime plane, and the token never reaches the sandbox;
+ * the worker sends it only to the configuration's own host over HTTPS.
+ * The worker refuses a configuration whose host or repository is not
+ * the folder's upstream remote's. The thread's
  * owner only, cookie or token, while the thread has a cloud copy; a
  * choice (not `null`) only while the policy allows pull requests.
- * @summary Choose the GitHub configuration a cloud thread opens pull requests through
+ * @summary Choose the GitHub or GitLab configuration a cloud thread pushes and opens pull requests through
  */
 export const setWorkspaceHandoffPullRequestCredential = async (
   projectId: string,
@@ -10672,7 +10674,7 @@ export function useSetWorkspaceHandoffPullRequestCredential<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary Choose the GitHub configuration a cloud thread opens pull requests through
+ * @summary Choose the GitHub or GitLab configuration a cloud thread pushes and opens pull requests through
  */
 
 export function useSetWorkspaceHandoffPullRequestCredential<

@@ -48,7 +48,7 @@ export const WorkspaceHandoffPullRequestCredential = zod
     pull_request_credential: zod.union([WorkspaceForgeCredential, zod.null()]),
   })
   .describe(
-    "Contract 1.29. NOTE(W2): internal/api/v2/workspacehandoff/route.go:831 (`setPullRequestCredential`).",
+    "Contract 1.29. NOTE(W2): internal/api/v2/workspacehandoff/route.go:832 (`setPullRequestCredential`).",
   );
 
 export type WorkspaceHandoffPullRequestCredential = zod.input<
