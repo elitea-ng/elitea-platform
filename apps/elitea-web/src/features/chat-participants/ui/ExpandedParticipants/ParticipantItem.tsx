@@ -17,7 +17,7 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import { t } from '@/shared/i18n';
 
 import { ChatParticipantType } from '../../model/constants';
-import { canParticipantBeActiveInChat } from '../../lib/helpers';
+import { canParticipantBeActiveInChat, isSkippedContainerParticipant } from '../../lib/helpers';
 import { useParticipantEntityIcon } from '../../lib/hooks/useParticipantEntityIcon';
 import { DEFAULT_PARTICIPANT_NAME } from '@/entities/participant';
 
@@ -97,21 +97,6 @@ function resolveParticipantDisplayName(participant: Record<string, unknown> | un
 }
 
 /**
- * Local port of `isSkippedContainerParticipant` (`participants.helpers.js:55-62`)
- * — NOT `entities/participant`'s same-named export, which reads camelCase
- * `meta.isContainer` against this feature's snake_case `meta.is_container`
- * and so always resolves `false` against real data.
- */
-function resolveIsSkippedContainer(participant: Record<string, unknown> | undefined): boolean {
-  const meta = participant?.meta as Record<string, unknown> | undefined;
-  if (meta?.is_container !== true) return false;
-  if (participant?.entity_name !== 'application') return false;
-  const entitySettings = participant?.entity_settings as Record<string, unknown> | undefined;
-  const isPipeline = entitySettings?.agent_type === 'pipeline' || participant?.agent_type === 'pipeline';
-  return !isPipeline;
-}
-
-/**
  * ParticipantItem component — per-participant card (normal or attention state).
  * Memo'd for performance.
  */
@@ -164,7 +149,7 @@ const ParticipantItem = memo((props: ParticipantItemProps): React.ReactElement |
 
   // Skipped container agent (issue #5680)
   const isSkippedContainer = useMemo(
-    () => !isActive && resolveIsSkippedContainer(participant),
+    () => !isActive && isSkippedContainerParticipant(participant),
     [isActive, participant],
   );
 
@@ -238,7 +223,10 @@ const ParticipantItem = memo((props: ParticipantItemProps): React.ReactElement |
         <InfoIcon />
       </Box>
       <Typography variant="bodySmall" color="text.secondary" sx={s.attentionMessage}>
-        {t('chat-participants.warning.skippedContainer', "Uses other agents — runs only as the active agent. Select it to run; it won't be used as a tool.")}
+        {t(
+          'chat-participants.warning.skippedContainer',
+          'Its sub-agent chain is at the nesting limit (3 tiers), so it runs only as the active agent here — select it to run.',
+        )}
       </Typography>
     </Box>
   ) : null;

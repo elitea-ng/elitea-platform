@@ -6,6 +6,7 @@ import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import type { ApplicationDetail, ApplicationVersionDetail } from '@/shared/api/generated/model';
+import { applicationServerErrorMessage } from '@/features/agents';
 import { t } from '@/shared/i18n';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 
@@ -55,7 +56,9 @@ export function EditPipelineActions({ applicationId, detail, activeVersion, proj
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const handleChatError = useCallback(
-    () => setError(t('pages.pipelines.editPipeline.chatError', 'Failed to open a chat with this pipeline.')),
+    // The server's own refusal when it gave one (an agent or pipeline whose
+    // attachments break the composition rule, FU-244), else the generic text.
+    (error?: unknown) => setError(applicationServerErrorMessage(error, t('pages.pipelines.editPipeline.chatError', 'Failed to open a chat with this pipeline.'))),
     [],
   );
   const handleExportError = useCallback(

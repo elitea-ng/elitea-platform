@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -157,6 +158,11 @@ func TestValidateCurrentApplicationNestingMatchesCurrentTierRules(t *testing.T) 
 			if test.wantErr && !errors.Is(err, errInvalidCurrentApplicationNesting) {
 				t.Fatalf("error=%v", err)
 			}
+			// FU-244: every one of these refusals is a composition bound, which
+			// the start answers with the typed composition refusal.
+			if test.wantErr && !errors.Is(err, errCurrentApplicationCompositionBound) {
+				t.Fatalf("not marked as a composition bound: %v", err)
+			}
 			if !test.wantErr && err != nil {
 				t.Fatal(err)
 			}
@@ -169,9 +175,11 @@ func TestValidateCurrentApplicationNestingEnforcesRawHopBackstop(t *testing.T) {
 	for versionID := int32(1); versionID <= currentMaxApplicationNestingHops+2; versionID++ {
 		children := []currentApplicationNestingReference(nil)
 		if versionID <= currentMaxApplicationNestingHops+1 {
+			// The child's own application id: the fixture used the parent's,
+			// which a mismatch refusal caught before the hop bound did.
 			children = append(children, currentApplicationNestingTestReference(
 				versionID+100,
-				versionID+1000,
+				versionID+1+1000,
 				versionID+1,
 			))
 		}
@@ -189,7 +197,7 @@ func TestValidateCurrentApplicationNestingEnforcesRawHopBackstop(t *testing.T) {
 		1,
 		1,
 	)
-	if !errors.Is(err, errInvalidCurrentApplicationNesting) {
+	if !errors.Is(err, errInvalidCurrentApplicationNesting) || !errors.Is(err, errCurrentApplicationCompositionBound) {
 		t.Fatalf("error=%v", err)
 	}
 }
@@ -206,7 +214,7 @@ func TestFilterCurrentAdhocApplicationNestingSkipsOnlyInvalidApplication(t *test
 		3: currentApplicationNestingTestNode(t, 3, 103, "agent", currentApplicationNestingTestReference(24, 104, 4)),
 		4: currentApplicationNestingTestNode(t, 4, 104, "agent"),
 	}}
-	filtered, err := filterCurrentAdhocApplicationNesting(context.Background(), stub, tools)
+	filtered, err := filterCurrentAdhocApplicationNesting(context.Background(), stub, compositionFixture{}, tools)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +235,7 @@ func TestFilterCurrentAdhocApplicationNestingFreezesCompactChildSkills(t *testin
 		&currentApplicationNestingQuerierStub{
 			nodes: map[int32]sqlcgen.ResolveCurrentApplicationNestingNodeRow{1: node},
 		},
+		compositionFixture{},
 		json.RawMessage(`[
   {"id":null,"type":"application","name":"child-agent","settings":{"application_id":101,"application_version_id":1}}
 ]`),
@@ -263,5 +272,52 @@ func TestValidateCurrentApplicationNestingPropagatesQueryFailure(t *testing.T) {
 	)
 	if !errors.Is(err, databaseErr) || errors.Is(err, errInvalidCurrentApplicationNesting) {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+// compositionFixture is the saved composition by version id; a version it does
+// not hold is unreadable, which leaves the tool to the nesting resolution.
+type compositionFixture map[int64]applicationcomposition.Version
+
+func (f compositionFixture) Version(_ context.Context, id applicationcomposition.Identity) (applicationcomposition.Version, bool, error) {
+	version, ok := f[id.VersionID]
+	return version, ok, nil
+}
+
+// PLAN §8.8 (ad-hoc): a participant that is valid as a root but breaks a bound
+// one level below the chat model is not offered to it; the others still are.
+func TestFilterCurrentAdhocApplicationNestingOffersOnlyWhatFitsBelowTheChatModel(t *testing.T) {
+	agentVersion := func(name string, attached ...int64) applicationcomposition.Version {
+		version := applicationcomposition.Version{Kind: applicationcomposition.KindAgent, Name: name}
+		for _, n := range attached {
+			version.Attachments = append(version.Attachments, applicationcomposition.Attachment{
+				Identity: applicationcomposition.Identity{ApplicationID: 100 + n, VersionID: n},
+			})
+		}
+		return version
+	}
+	composition := compositionFixture{
+		1: agentVersion("Leaf"),
+		2: agentVersion("Orchestrator", 3), 3: agentVersion("Sub-orchestrator", 4), 4: agentVersion("Leaf"),
+	}
+	// The nesting resolution alone would offer both (its rows are leaves).
+	stub := &currentApplicationNestingQuerierStub{nodes: map[int32]sqlcgen.ResolveCurrentApplicationNestingNodeRow{
+		1: currentApplicationNestingTestNode(t, 1, 101, "agent"),
+		2: currentApplicationNestingTestNode(t, 2, 102, "agent"),
+	}}
+	tools := json.RawMessage(`[
+  {"id":null,"type":"application","name":"leaf","settings":{"application_id":101,"application_version_id":1}},
+  {"id":null,"type":"application","name":"three-levels","settings":{"application_id":102,"application_version_id":2}}
+]`)
+	filtered, err := filterCurrentAdhocApplicationNesting(context.Background(), stub, composition, tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded []map[string]any
+	if err := json.Unmarshal(filtered, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded) != 1 || decoded[0]["name"] != "leaf" {
+		t.Fatalf("filtered=%s", filtered)
 	}
 }

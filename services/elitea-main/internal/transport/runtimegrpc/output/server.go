@@ -13,6 +13,7 @@ import (
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	configurationdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/configurations"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
@@ -1121,6 +1122,13 @@ type runtimeFailurePolicy struct {
 // data-free.
 const nodeTypeNotAvailableSafeMessage = "This pipeline uses a node type that is not available on this deployment. Open the pipeline to see which node, then remove or replace it."
 
+// A saved composition of agents and pipelines breaks a bound the Worker
+// enforces (FU-244). Main's attach and pipeline-save checks
+// (applicationcomposition) name the attachment, so this text stays data-free;
+// it is libs/proto/contracts/application-composition-limits-v1.json
+// runtime_message.
+const applicationCompositionInvalidSafeMessage = applicationcomposition.RuntimeMessage
+
 const childInputTypeSafeMessage = "The pipeline stopped because a mapped child input has the wrong type. Compare the Agent node's input mapping with the child pipeline's state types. The child and later nodes did not run. Review earlier completed actions before restarting."
 
 // The budget scope that refused a model call (#6732). The gateway names the
@@ -1160,6 +1168,12 @@ func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFai
 	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY && payload.GetSafeMessage() == nodeTypeNotAvailableSafeMessage {
 		return runtimeFailurePolicy{Code: "PIPELINE_NODE_TYPE_NOT_AVAILABLE", SafeMessage: nodeTypeNotAvailableSafeMessage}, true
+	}
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY && payload.GetSafeMessage() == applicationCompositionInvalidSafeMessage {
+		return runtimeFailurePolicy{Code: applicationcomposition.Code, SafeMessage: applicationCompositionInvalidSafeMessage}, true
+	}
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY && payload.GetSafeMessage() == applicationcomposition.SizeRuntimeMessage {
+		return runtimeFailurePolicy{Code: applicationcomposition.Code, SafeMessage: applicationcomposition.SizeRuntimeMessage}, true
 	}
 	// The run's own credentials or context refused on the tool-run path: a
 	// fixed sentence of its own, so a caller can tell it from a refused tool.

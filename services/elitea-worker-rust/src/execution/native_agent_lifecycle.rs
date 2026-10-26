@@ -1553,6 +1553,14 @@ where
 }
 
 pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailureKind {
+    // FU-244: a composition bound violation keeps its own readable terminal whatever coarse
+    // code the bound reported (a cycle is InvalidConfiguration, a depth ResourceExhausted).
+    if crate::agents::application_tools::is_composition_bound(error) {
+        return RuntimeFailureKind::ApplicationCompositionInvalid;
+    }
+    if crate::agents::application_tools::is_composition_size(error) {
+        return RuntimeFailureKind::ApplicationCompositionTooLarge;
+    }
     match error.code() {
         NativeAgentAssemblyErrorCode::UnsupportedCapability
             if error.cause().is_some_and(|cause| {
@@ -1772,6 +1780,84 @@ mod taxonomy_tests {
         );
         assert_eq!(message, PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE);
         assert!(!retryable);
+    }
+
+    /// FU-244: every composition bound violation ends as the one registered, data-free
+    /// composition message, whatever coarse code the bound reported; an unrelated
+    /// unsupported capability keeps the generic terminal.
+    #[test]
+    fn composition_bound_violations_end_as_the_registered_composition_message() {
+        use crate::agents::application_tools::{bound, composition_bound};
+        use crate::protocol::output::{
+            APPLICATION_COMPOSITION_INVALID_MESSAGE, runtime_error_policy,
+        };
+
+        for (code, detail) in [
+            (
+                NativeAgentAssemblyErrorCode::InvalidConfiguration,
+                bound::CYCLE,
+            ),
+            (
+                NativeAgentAssemblyErrorCode::ResourceExhausted,
+                bound::AGENT_TIERS,
+            ),
+            (
+                NativeAgentAssemblyErrorCode::ResourceExhausted,
+                bound::PIPELINE_DEPTH,
+            ),
+            (
+                NativeAgentAssemblyErrorCode::UnsupportedCapability,
+                bound::ORDINARY_GRAPH_SCOPES,
+            ),
+            (
+                NativeAgentAssemblyErrorCode::ResourceExhausted,
+                bound::APPLICATION_HOPS,
+            ),
+            (
+                NativeAgentAssemblyErrorCode::ResourceExhausted,
+                bound::CHECKPOINT_PATHS,
+            ),
+            (
+                NativeAgentAssemblyErrorCode::UnsupportedCapability,
+                bound::STATIC_PAUSE_UNDER_GRAPH_ROOT,
+            ),
+        ] {
+            let error = composition_bound(NativeAgentAssemblyError::new(code, "bound"), detail);
+            let kind = assembly_failure(&error);
+            assert_eq!(
+                kind,
+                RuntimeFailureKind::ApplicationCompositionInvalid,
+                "{detail}"
+            );
+            let (wire, message, retryable) = runtime_error_policy(kind);
+            assert_eq!(
+                wire,
+                crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::UnsupportedCapability
+            );
+            assert_eq!(message, APPLICATION_COMPOSITION_INVALID_MESSAGE);
+            // Main refuses a terminal whose safe message exceeds 256 bytes.
+            assert!(message.len() <= 256);
+            assert!(!retryable);
+        }
+        // The byte budget has its own terminal: Main cannot check it at save time.
+        let too_large = crate::agents::application_tools::composition_size();
+        let kind = assembly_failure(&too_large);
+        assert_eq!(kind, RuntimeFailureKind::ApplicationCompositionTooLarge);
+        let (_, message, retryable) = runtime_error_policy(kind);
+        assert_eq!(
+            message,
+            crate::protocol::output::APPLICATION_COMPOSITION_TOO_LARGE_MESSAGE
+        );
+        assert!(message.len() <= 256);
+        assert!(!retryable);
+        let unavailable = NativeAgentAssemblyError::new(
+            NativeAgentAssemblyErrorCode::UnsupportedCapability,
+            "unavailable",
+        );
+        assert_eq!(
+            assembly_failure(&unavailable),
+            RuntimeFailureKind::UnsupportedCapability
+        );
     }
 
     #[test]

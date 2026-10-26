@@ -1014,6 +1014,22 @@ describe('talking to the agent', () => {
     });
   }, 15_000);
 
+  it('a participant the server refuses for its composition shows the server\'s reason (FU-244)', async () => {
+    const reason = 'These attachments would create a circular agent reference: "Agent" → "Flow" → "Agent". Remove the circular dependency first.';
+    server.use(
+      getGetApplicationMockHandler(detail()),
+      http.post('*/elitea_core/conversations/prompt_lib/:projectId', () => HttpResponse.json({ id: 7, uuid: 'c-7', name: 'Agent' }, { status: 201 })),
+      http.post('*/elitea_core/participants/prompt_lib/:projectId/:conversationId', () => HttpResponse.json({ error: reason }, { status: 400 })),
+    );
+    const user = userEvent.setup();
+    const { router } = renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+
+    await user.click(await screen.findByTestId('chat-with-agent-button', {}, { timeout: 5_000 }));
+
+    expect(await screen.findByText(reason)).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/agents/all/42');
+  }, 15_000);
+
   it('a failed conversation create surfaces an error and stays on the page', async () => {
     server.use(
       getGetApplicationMockHandler(detail()),

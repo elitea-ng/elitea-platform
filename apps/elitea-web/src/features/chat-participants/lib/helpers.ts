@@ -106,6 +106,32 @@ const DEFAULT_TEMPERATURE = 0.7;
 const DEFAULT_REASONING_EFFORT = 'medium';
 
 // ---------------------------------------------------------------------------
+// isSkippedContainerParticipant — ported from EliteaUI participants.helpers.js
+// ---------------------------------------------------------------------------
+
+/**
+ * participants.helpers.js `isSkippedContainerParticipant` (EliteaUI, issue
+ * #5778), on this feature's snake_case shape: an agent the chat model is not
+ * offered on an ad-hoc turn, because nesting it one level below the chat model
+ * would exceed `max_agent_nesting_tiers`. Main sends `is_container`,
+ * `agent_subtree_tiers` and `max_agent_nesting_tiers` on the participant meta
+ * from the same check its ad-hoc start applies (FU-244, PLAN §8.8). Without
+ * the tier fields it falls back to the blunt `is_container` ban, as EliteaUI does.
+ * Callers gate on `!isActive`: selected directly, it runs as the root.
+ */
+export function isSkippedContainerParticipant(participant: Record<string, unknown> | undefined): boolean {
+  const meta = participant?.meta as Record<string, unknown> | undefined;
+  if (meta?.is_container !== true) return false;
+  if (participant?.entity_name !== ChatParticipantType.Applications) return false;
+  const subtreeTiers = meta.agent_subtree_tiers;
+  const maxTiers = meta.max_agent_nesting_tiers;
+  if (typeof subtreeTiers === 'number' && typeof maxTiers === 'number') {
+    return 1 + subtreeTiers > maxTiers;
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // isParticipantOKForChat — ported verbatim from old-app line 8-13
 // ---------------------------------------------------------------------------
 

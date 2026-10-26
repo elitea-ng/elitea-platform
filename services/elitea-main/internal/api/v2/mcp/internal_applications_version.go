@@ -14,7 +14,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 type internalVersionState struct {
@@ -75,6 +78,19 @@ func (executor *postgresInternalApplicationExecutor) updateVersion(
 	update, problem := parseInternalVersionUpdate(arguments, state)
 	if problem != nil {
 		return *problem, nil
+	}
+	// FU-244: a kind switch walks the stored composition as the new kind; a
+	// switch to a pipeline first bounds the stored text it will run, as the
+	// REST write does (checkStoredPipelineInstructions).
+	if agentType, _ := arguments["agent_type"].(string); agentType != "" && agentType != state.agentType {
+		if agentType == "pipeline" {
+			if err := pipelinelimits.Check(state.instructions); err != nil {
+				return internalApplicationBadRequest(err.Error())
+			}
+		}
+		if refused, err := refuseInternalComposition(ctx, tx, schema, applicationID, versionID, agentType, state.instructions, false); refused != nil || err != nil {
+			return *refused, err
+		}
 	}
 	backup, err := cloneInternalVersion(ctx, tx, schema, projectID, state, actorID, time.Now().UTC())
 	if err != nil {
@@ -175,6 +191,10 @@ func (executor *postgresInternalApplicationExecutor) patchInstructions(
 	if state.agentType == "pipeline" {
 		if err := pipelinelimits.Check(updatedInstructions); err != nil {
 			return internalApplicationBadRequest(err.Error())
+		}
+		// FU-244: and the same composition check as the REST write.
+		if refused, err := refuseInternalComposition(ctx, tx, schema, applicationID, versionID, "", updatedInstructions, true); refused != nil || err != nil {
+			return *refused, err
 		}
 	}
 
@@ -700,6 +720,23 @@ func validInternalAgentType(value string) bool {
 	default:
 		return false
 	}
+}
+
+// refuseInternalComposition answers the 400 a write whose result breaks a
+// composition bound gets (FU-244), the same body as the REST relation route.
+func refuseInternalComposition(ctx context.Context, tx pgx.Tx, schema string, applicationID, versionID int64,
+	agentType, instructions string, instructionsWritten bool,
+) (*internalApplicationExecution, error) {
+	err := repos.CheckVersionComposition(ctx, tx, schema, applicationID, versionID, agentType, instructions, instructionsWritten)
+	var refusal *apierr.APIError
+	if errors.As(err, &refusal) && refusal.Code == applicationcomposition.Code {
+		refused, encodeErr := jsonExecution(http.StatusBadRequest, map[string]any{"error": refusal.Message, "code": refusal.Code})
+		return &refused, encodeErr
+	}
+	if err != nil {
+		return &internalApplicationExecution{}, fmt.Errorf("internal application composition: %w", err)
+	}
+	return nil, nil
 }
 
 func internalApplicationBadRequest(message string) (internalApplicationExecution, error) {

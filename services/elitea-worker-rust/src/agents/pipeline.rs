@@ -529,6 +529,7 @@ impl PipelineNativeAgentAssembler {
                 nodes: PipelineNodeRuntimes::default().with_events(node_event_sender),
                 applications: ApplicationRuntimeProjection::default(),
                 node_events: Some(node_events),
+                skipped_application_children: Vec::new(),
             });
         }
         // The claim context is redeemed for the nodes that need it: the
@@ -709,6 +710,8 @@ impl PipelineNativeAgentAssembler {
         }
         let toolsets = freeze_toolsets_by_alias(toolsets).await?;
         let direct_tool_resolver = build_direct_tool_resolver(profile, &toolsets)?;
+        // One assembly path for the whole graph: its shared skipped set feeds the notice (FU-243).
+        let materialization = ApplicationMaterializationPath::native_graph(continuation);
         let application_runtime = context
             .clone()
             .zip(model_facade.clone())
@@ -726,7 +729,7 @@ impl PipelineNativeAgentAssembler {
                     tool_policy: Arc::clone(tool_policy),
                     model_scopes: model_scopes.clone(),
                     conversation_thread_id,
-                    materialization: ApplicationMaterializationPath::native_graph(continuation),
+                    materialization: materialization.clone(),
                 },
             );
         let (application_resolver, application_runtime, application_scopes) = match continuation {
@@ -782,6 +785,7 @@ impl PipelineNativeAgentAssembler {
             nodes,
             applications: application_runtime,
             node_events: Some(node_events),
+            skipped_application_children: materialization.skipped(),
         })
     }
 
@@ -842,7 +846,8 @@ impl PipelineNativeAgentAssembler {
         // The pipeline PARENT admits no pipeline CHILD through this path (it
         // builds those itself); what is skipped here is a direct Agent's own
         // unbuildable attachment, which degrades as on an ordinary root (#990).
-        let (direct_runtime, _) = direct_runtime;
+        let (direct_runtime, skipped) = direct_runtime;
+        runtime.materialization.record_skipped(&skipped);
         let (mut participants, mut projection) = direct_runtime.map_or_else(
             || Ok((BTreeMap::new(), ApplicationRuntimeProjection::default())),
             application_participants,
@@ -1853,11 +1858,24 @@ pub(super) async fn materialize_saved_pipeline_tool(
             .ok_or_else(invalid_pipeline_tool_scope)?,
     )?;
     let scoped_proof = scopes.has_ordinary_applications();
+    // FU-244: a static pause beneath a graph root is an authoring error of the composition
+    // (the editor can fix it by removing the pause or the attachment), so it is refused with
+    // the composition terminal, never skipped as unavailable.
+    if graph_root
+        && bound
+            .guarded_interrupt_kinds
+            .contains(&"static continuation")
+    {
+        return Err(crate::agents::application_tools::composition_bound(
+            unsupported_pipeline_child_pauses(&bound.guarded_interrupt_kinds),
+            crate::agents::application_tools::bound::STATIC_PAUSE_UNDER_GRAPH_ROOT,
+        ));
+    }
     if bound
         .guarded_interrupt_kinds
         .iter()
         .any(|kind| match *kind {
-            "static continuation" => graph_root,
+            "static continuation" => false,
             "ordinary child continuation" => !scoped_proof,
             _ => true,
         })
@@ -2150,6 +2168,8 @@ async fn bind_scoped_agent(
             skipped = skipped.len(),
             "a pipeline Agent node runs without its unbuildable attachments"
         );
+        // FU-243: the root (pipeline or ordinary) names them on its skipped notice.
+        runtime.materialization.record_skipped(&skipped);
     }
     let materialized = materialized.ok_or_else(invalid_pipeline_tool_scope)?;
     let fingerprint = materialized

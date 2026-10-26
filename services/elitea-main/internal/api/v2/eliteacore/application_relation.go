@@ -12,22 +12,19 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
 // The agent-as-tool relation, stored where every reader joins it: a row in
 // `elitea_tools` (type='application', settings carrying the child pair) plus a
-// row in `entity_tool_mapping` binding it to the parent version. This file is
-// the ONE place that reads and writes that pair for sub-agent references —
-// the publish/embed/unpublish flows and the PATCH route all go through it,
-// because the previous arrangement (each site hand-writing statements against
-// `application_tools`, a table that exists in no schema) made every one of
-// them a silently-swallowed no-op.
-type applicationToolReference struct {
-	ToolID        int64
-	Name          string
-	ApplicationID string
-	VersionID     string
-}
+// row in `entity_tool_mapping` binding it to the parent version. The reader
+// lives in repos (repos.ListApplicationToolReferences) so the save-time
+// composition check (FU-244) reads the same rows; this file is the one place
+// that WRITES the pair, and the publish/embed/unpublish flows and the PATCH
+// route all go through it.
+type applicationToolReference = repos.ApplicationToolReference
 
 // relationQuerier is satisfied by both *pgxpool.Pool and pgx.Tx, so the same
 // statements serve the transactional attach and the best-effort embed copies.
@@ -38,83 +35,15 @@ type relationQuerier interface {
 }
 
 // applicationToolSettingsVersionSQL reads the child version id out of a tool
-// row's settings. Two spellings exist in the wild: this branch writes
-// `application_version_id` (the key the freeze admits), and rows written by
-// the legacy runtime carry `version_id`. Readers accept both; writers emit
-// only the new one.
-const applicationToolSettingsVersionSQL = `COALESCE(tool.settings->>'application_version_id', tool.settings->>'version_id')`
+// row's settings (see repos.ApplicationToolSettingsVersionSQL).
+const applicationToolSettingsVersionSQL = repos.ApplicationToolSettingsVersionSQL
 
-// legacyApplicationToolsExists probes for the legacy-owned `application_tools`
-// table. No migration in this repository creates it — it exists only in
-// tenants migrated from the legacy runtime — so every touch of it is
-// probe-guarded, the same arrangement internal/infra/db/repos/applications.go
-// uses for its delete. to_regclass accepts the quoted identifier this package
-// already carries.
 func legacyApplicationToolsExists(ctx context.Context, q relationQuerier, schema string) (bool, error) {
-	var name *string
-	if err := q.QueryRow(ctx, `SELECT to_regclass($1)::text`,
-		schema+".application_tools").Scan(&name); err != nil {
-		return false, fmt.Errorf("probe application_tools: %w", err)
-	}
-	return name != nil, nil
+	return repos.LegacyApplicationToolsExists(ctx, q, schema)
 }
 
-// listApplicationToolReferences returns the sub-agent references attached to
-// one parent version: the canonical rows (`elitea_tools` +
-// `entity_tool_mapping`, what this service writes) first, then — on a
-// legacy-migrated tenant only — the rows the legacy runtime left in
-// `application_tools`.
 func listApplicationToolReferences(ctx context.Context, q relationQuerier, schema, parentVersionID string) ([]applicationToolReference, error) {
-	rows, err := q.Query(ctx, fmt.Sprintf(`
-		SELECT tool.id, tool.name,
-		       COALESCE(tool.settings->>'application_id', ''),
-		       COALESCE(%s, '')
-		FROM %s.entity_tool_mapping AS mapping
-		JOIN %s.elitea_tools AS tool ON tool.id = mapping.tool_id
-		WHERE mapping.entity_version_id = $1
-		  AND mapping.entity_type = 'agent'
-		  AND tool.type = 'application'
-		ORDER BY tool.id`, applicationToolSettingsVersionSQL, schema, schema), parentVersionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var refs []applicationToolReference
-	for rows.Next() {
-		var ref applicationToolReference
-		if err := rows.Scan(&ref.ToolID, &ref.Name, &ref.ApplicationID, &ref.VersionID); err != nil {
-			return nil, err
-		}
-		refs = append(refs, ref)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	hasLegacy, err := legacyApplicationToolsExists(ctx, q, schema)
-	if err != nil || !hasLegacy {
-		return refs, err
-	}
-	legacyRows, err := q.Query(ctx, fmt.Sprintf(`
-		SELECT tool.id, tool.name,
-		       COALESCE(tool.settings->>'application_id', ''),
-		       COALESCE(%s, '')
-		FROM %s.application_tools AS tool
-		WHERE tool.application_version_id = $1
-		  AND tool.type = 'application'
-		ORDER BY tool.id`, applicationToolSettingsVersionSQL, schema), parentVersionID)
-	if err != nil {
-		return nil, err
-	}
-	defer legacyRows.Close()
-	for legacyRows.Next() {
-		var ref applicationToolReference
-		if err := legacyRows.Scan(&ref.ToolID, &ref.Name, &ref.ApplicationID, &ref.VersionID); err != nil {
-			return nil, err
-		}
-		refs = append(refs, ref)
-	}
-	return refs, legacyRows.Err()
+	return repos.ListApplicationToolReferences(ctx, q, schema, parentVersionID)
 }
 
 // insertApplicationToolReference writes one sub-agent reference: the tool row
@@ -364,13 +293,16 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 		// The child's name and author, read rather than synthesised: the
 		// resolver projection serves `name`/`toolkit_name` straight from
 		// this row, and the freeze refuses a reference whose names disagree.
+		// FOR SHARE: a re-point of this version (delete with a replacement)
+		// locks it FOR UPDATE, so it cannot move a reference it never walked.
 		var childName string
 		var childAuthorID int
 		err = transaction.QueryRow(ctx, fmt.Sprintf(`
 			SELECT app.name, version.author_id
 			FROM %s.applications AS app
 			JOIN %s.application_versions AS version ON version.application_id = app.id
-			WHERE app.id = $1 AND version.id = $2`, s, s),
+			WHERE app.id = $1 AND version.id = $2
+			FOR SHARE OF version`, s, s),
 			childAppID, childVersionID).Scan(&childName, &childAuthorID)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "the selected agent version does not exist"})
@@ -385,6 +317,20 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 		childVersionNumber, err := strconv.ParseInt(childVersionID, 10, 64)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid agent version id"})
+			return
+		}
+
+		// FU-244: refuse an attach that breaks a composition bound the Worker
+		// enforces (a circular reference, nesting past its tier, depth or scope
+		// bounds, the hop budget, a pausing pipeline under a pipeline's Agent
+		// node), naming the path, instead of letting every run fail later. The
+		// parent is walked as it would be stored, with the new attachment, before
+		// anything is written, under the parent row lock taken above.
+		if refused := h.refuseComposition(ctx, w, transaction, s, parentApplicationID, parentVersionID,
+			applicationcomposition.Attachment{
+				Alias:    childName,
+				Identity: applicationcomposition.Identity{ApplicationID: childAppNumber, VersionID: childVersionNumber},
+			}); refused {
 			return
 		}
 
@@ -423,6 +369,31 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 		"version_id":     childVersionID,
 		"has_relation":   body.HasRelation,
 	})
+}
+
+// refuseComposition writes the composition refusal (or a lookup failure) and
+// answers true when the parent version with attachment added breaks a bound.
+func (h *Handler) refuseComposition(ctx context.Context, w http.ResponseWriter, q relationQuerier, schema string,
+	parentApplicationID, parentVersionID int64, attachment applicationcomposition.Attachment,
+) bool {
+	source := repos.NewCompositionSource(q, schema)
+	root := applicationcomposition.Identity{ApplicationID: parentApplicationID, VersionID: parentVersionID}
+	parent, ok, err := source.Version(ctx, root)
+	if err == nil && ok {
+		parent.Attachments = append(parent.Attachments, attachment)
+		// Every version that attaches the parent must still fit too.
+		err = applicationcomposition.CheckWithAncestors(ctx, source, root, &parent)
+	}
+	if refusal := applicationcomposition.Refusal(err); refusal != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": refusal.Message, "code": refusal.Code})
+		return true
+	}
+	if err != nil {
+		slog.ErrorContext(ctx, "application relation: composition check failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "relation lookup failed"})
+		return true
+	}
+	return false
 }
 
 // jsonNumberIfNumeric turns a stored id string into the NUMBER the freeze's

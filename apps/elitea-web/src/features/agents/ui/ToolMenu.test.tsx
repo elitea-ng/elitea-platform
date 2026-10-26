@@ -538,6 +538,45 @@ describe('ToolMenu — saved entity', () => {
     await waitFor(() => expect(onToolsChangedCalls).toBe(1));
   });
 
+  it('shows a server refusal of the attach (FU-244: a circular reference), closes the menu and sends the write once', async () => {
+    server.use(getGetApplicationMockHandler(applicationDetail()));
+    server.use(
+      getListApplicationsMockHandler((info) => {
+        const url = new URL(info.request.url);
+        if (url.searchParams.get('agents_type') !== 'pipeline') return { rows: [], total: 0, page: 0, page_size: 20, total_pages: 0 };
+        return {
+          rows: [{ id: '9', name: 'Other Pipeline', owner_id: 'user-1', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', is_forked: false, meta: {}, has_interrupt: false, tags: [] }],
+          total: 1,
+          page: 0,
+          page_size: 20,
+          total_pages: 1,
+        };
+      }),
+    );
+    let updateRelationCalls = 0;
+    server.use(
+      http.patch('*/elitea_core/application_relation/prompt_lib/:projectId/:selectedApplicationId/:selectedVersionId', () => {
+        updateRelationCalls += 1;
+        return HttpResponse.json(
+          { code: 'APPLICATION_COMPOSITION_INVALID', error: 'These attachments would create a circular agent reference: "Parent" → "Other Pipeline" → "Parent". Remove the circular dependency first.' },
+          { status: 400 },
+        );
+      }),
+    );
+
+    let onToolsChangedCalls = 0;
+    renderToolMenu({ applicationId: 42, onToolsChanged: () => (onToolsChangedCalls += 1) });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Pipeline' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Pipeline' }));
+    fireEvent.click(await screen.findByText('Other Pipeline'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Cannot add "Other Pipeline": this would create a circular agent reference. Remove the circular dependency first.');
+    expect(screen.queryByText('Other Pipeline')).not.toBeInTheDocument();
+    expect(updateRelationCalls).toBe(1);
+    expect(onToolsChangedCalls).toBe(0);
+  });
+
   it('does not call onToolsChanged when the association is rejected by a guard (e.g. the candidate is a swarm agent)', async () => {
     let candidateDetailFetched = false;
     server.use(
