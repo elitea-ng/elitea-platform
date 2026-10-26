@@ -12,7 +12,7 @@ export interface UseReattachSeededTurnParams {
   readonly messages: readonly ChatMessage[];
   readonly conversationUuid: string | undefined;
   readonly reattach: (turn: ReattachableTurn) => boolean;
-  /** The reattach opened the stream (steering reads the answer's list again, contract 1.26). */
+  /** The reattach opened the stream (steering reads the answer's list again, contract 1.27). */
   readonly onReattached?: (() => void) | undefined;
 }
 

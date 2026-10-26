@@ -62,7 +62,7 @@ export const EXECUTION_EVENT_INDEX_INGEST_COMPLETED = EXECUTION_EVENT.indexInges
  */
 export const EXECUTION_EVENT_REPLAY_RESET = EXECUTION_EVENT.replayReset;
 /**
- * Client contract 1.26: the steering events of a running chat turn. The
+ * Client contract 1.27: the steering events of a running chat turn. The
  * `data` of each is one `SteeringMessage`. They are registered for the same
  * reason as `replay_reset`: `EventSource` drops an unregistered name silently.
  */

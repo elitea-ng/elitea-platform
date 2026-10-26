@@ -64,7 +64,7 @@ export interface ComposerProps {
    */
   onStop?: (() => Promise<{ problem: string | null; restoreText: string | null; lostAttachments?: string[]; restoredAttachments?: string[] }>) | null;
   /**
-   * While an answer streams, a message steers it (client contract 1.26): Send
+   * While an answer streams, a message steers it (client contract 1.27): Send
    * stays live, and shows instead of Stop while the input holds text.
    */
   steer?: boolean;

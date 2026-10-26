@@ -25,7 +25,7 @@ import { projectScope } from '@/lib/abortRegistry';
 import { log } from '@/lib/log';
 import { parseFrame } from '@/features/chat/frames';
 import { INITIAL_TURN, isTurnTerminal, reduceTurn, withSteering, type TurnState } from '@/features/chat/turnReducer';
-import { STEERING_ERROR, STEERING_STATE, joinSteeringTexts, leftoverSteering, type SteeringItem } from '@elitea/client-core/stream';
+import { STEERING_DROP_REASON, STEERING_ERROR, STEERING_STATE, joinSteeringTexts, leftoverSteering, type SteeringItem } from '@elitea/client-core/stream';
 import { registerWipeHook } from '@/security/endSession';
 import { getSession } from '@/state/session';
 
@@ -81,7 +81,7 @@ export interface LiveTurn {
   regeneration: { answerUuid: string; regenerationId: string } | null;
   /**
    * The steering messages that THIS device queued against the answer
-   * (client contract 1.26). Only these are sent again as the next message
+   * (client contract 1.27). Only these are sent again as the next message
    * when the turn ends before the worker injects them.
    */
   ownSteering?: string[];
@@ -89,9 +89,15 @@ export interface LiveTurn {
   steeringUnsupported?: boolean;
   /** A rate-limited steering message goes again at this time (epoch ms); null when none waits. */
   steeringRetryAt?: number | null;
+  /**
+   * Steering messages that the server did not send, because the user sent a
+   * newer message first (`steer.dropped`, `reason: superseded`). The thread
+   * shows their texts until the user closes the note. Nothing sends them.
+   */
+  steeringSuperseded?: { id: string; content: string }[];
 }
 
-/** What a message sent while the answer runs came to (client contract 1.26). */
+/** What a message sent while the answer runs came to (client contract 1.27). */
 export type SteerOutcome =
   /** Queued against the running answer; the worker reads it at the next safe point. */
   | 'queued'
@@ -152,7 +158,7 @@ export interface TurnDeps {
   onAlreadyResolved?: () => void;
   /**
    * The turn ended with steering messages of this device that it did not
-   * read (client contract 1.26), and the hand-off returned them (or a text
+   * read (client contract 1.27), and the hand-off returned them (or a text
    * came too late for the turn): send `text` (the texts joined with a blank
    * line) as ONE normal next message.
    */
@@ -405,7 +411,7 @@ export class TurnController {
 
   /**
    * The answer streams and is admitted, so a message can steer it now
-   * (client contract 1.26), unless the server refused steering for this turn.
+   * (client contract 1.27), unless the server refused steering for this turn.
    */
   get canSteer(): boolean {
     return (
@@ -495,6 +501,29 @@ export class TurnController {
     return "Couldn't remove the message. Try again.";
   }
 
+  /** Ids that were superseded before, so a replayed event does not show a closed note again. */
+  private readonly supersededSeen = new Set<string>();
+
+  /**
+   * A steering message that the server did not send: the user sent a newer
+   * message first. The event comes on the stream of the newer turn and names
+   * the OLD answer, so it is taken whatever answer it names. It is final, so
+   * this device does not hand it off.
+   */
+  private addSuperseded(item: SteeringItem): void {
+    if (this.supersededSeen.has(item.id)) return;
+    this.supersededSeen.add(item.id);
+    this.update({
+      ownSteering: (this.state.ownSteering ?? []).filter((id) => id !== item.id),
+      ...(item.content.trim() === '' ? {} : { steeringSuperseded: [...(this.state.steeringSuperseded ?? []), { id: item.id, content: item.content }] }),
+    });
+  }
+
+  /** The user closed the note of the superseded messages. */
+  dismissSuperseded(): void {
+    if ((this.state.steeringSuperseded ?? []).length > 0) this.update({ steeringSuperseded: [] });
+  }
+
   /** Reads the answer's steering list again (after a lost race with the injection). */
   private async refreshSteering(): Promise<SteeringItem[]> {
     const responseMessageId = this.state.execution?.responseMessageId ?? null;
@@ -526,7 +555,7 @@ export class TurnController {
   private handoffKey: string | null = null;
 
   /**
-   * The end-of-turn rule (client contract 1.26). Reads the server list (it
+   * The end-of-turn rule (client contract 1.27). Reads the server list (it
    * reads again a little later while own messages still show `pending`: the
    * server marks them `turn_ended` a moment after the terminal frame). When
    * own messages are `turn_ended`, calls the hand-off, which takes them in
@@ -741,6 +770,7 @@ export class TurnController {
         const before = this.state.turn;
         const turn = reduceTurn(before, frame);
         if (turn !== before) this.update({ turn });
+        if (frame.kind === 'steer' && frame.reason === STEERING_DROP_REASON.Superseded) this.addSuperseded(frame.item);
         if (turn.refreshRequests > before.refreshRequests) this.deps.onRefreshNeeded?.();
         if (isTurnTerminal(frame)) {
           ended = true;

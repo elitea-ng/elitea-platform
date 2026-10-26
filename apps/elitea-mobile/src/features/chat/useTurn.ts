@@ -46,7 +46,7 @@ export interface UseTurnArgs {
   /** The model of a plain model conversation (adhoc turn); null for an agent. */
   model?: TurnModel | null;
   /**
-   * The workspace speaks client contract 1.26: a message sent while the
+   * The workspace speaks client contract 1.27: a message sent while the
    * answer runs steers it (it is queued and read at the next safe point).
    */
   steering?: boolean;
@@ -67,6 +67,17 @@ export function steerOutcomeText(outcome: SteerOutcome): string | null {
     default:
       return "Couldn't send the message to the running answer. Try again.";
   }
+}
+
+/**
+ * The note for steering messages that the server did not send because the
+ * user sent a newer message first (`steer.dropped`, `reason: superseded`):
+ * the texts, so the user can copy them or send them again. Null when there
+ * are none.
+ */
+export function supersededSteeringText(items: readonly { content: string }[] | undefined): string | null {
+  if (items === undefined || items.length === 0) return null;
+  return ['Not sent: you sent a newer message first.', ...items.map((item) => item.content)].join('\n\n');
 }
 
 /** The notice while a turn that cannot take messages runs (a pipeline). */
@@ -109,14 +120,17 @@ export interface UseTurn {
   /** Forget a failed or settled turn. */
   dismiss: () => void;
   /**
-   * A message sent now steers the running answer (client contract 1.26):
-   * the workspace speaks 1.26 and the answer streams and is admitted.
+   * A message sent now steers the running answer (client contract 1.27):
+   * the workspace speaks 1.27 and the answer streams and is admitted.
    */
   canSteer: boolean;
   /** Changes the text of a pending steering message. Resolves to an error text, or null. */
   editSteering: (id: string, text: string) => Promise<string | null>;
   /** Removes a pending steering message. Resolves to an error text, or null. */
   removeSteering: (id: string) => Promise<string | null>;
+  /** The note of the steering messages that a newer message superseded (`supersededSteeringText`), or null. */
+  steeringNotice: string | null;
+  dismissSteeringNotice: () => void;
   busy: boolean;
   /**
    * Stops the streaming answer on the server (client contract 1.3; the
@@ -220,7 +234,7 @@ export function freshConversation<T>(queryClient: QueryClient, projectId: number
  */
 export function useTurn({ projectId, conversationRef, conversationUuid, participantId, model = null, steering = false }: UseTurnArgs): UseTurn {
   const queryClient = useQueryClient();
-  // The end-of-turn rule of steering (contract 1.26) sends the leftover texts as ONE normal message, through `send`.
+  // The end-of-turn rule of steering (contract 1.27) sends the leftover texts as ONE normal message, through `send`.
   const sendRef = useRef<(text: string) => Promise<string | null>>(async () => null);
   const onLeftover = useCallback((text: string) => {
     void sendRef.current(text).then((problem) => {
@@ -265,7 +279,7 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
       }
       const running = getLiveTurn(key);
       if (steering && running?.isActive) {
-        // Steering (contract 1.26): the text goes to the running answer, not to a new turn.
+        // Steering (contract 1.27): the text goes to the running answer, not to a new turn.
         if (fields.attachments) return 'Send files when the answer is finished.';
         if (running.getSnapshot().steeringUnsupported === true) return STEERING_NOT_SUPPORTED_TEXT;
         if (!running.canSteer) return 'The answer has not started yet. Try again in a moment.';
@@ -392,6 +406,7 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
   }, [key, controller]);
   const editSteering = useCallback(async (id: string, text: string) => (controller ? controller.editSteering(id, text) : null), [controller]);
   const removeSteering = useCallback(async (id: string) => (controller ? controller.removeSteering(id) : null), [controller]);
+  const dismissSteeringNotice = useCallback(() => controller?.dismissSuperseded(), [controller]);
 
   const stop = useCallback(async (): Promise<StopResult> => {
     const result = (problem: string | null, restoreText: string | null = null, lostAttachments: string[] = []): StopResult => ({
@@ -450,5 +465,6 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
     live.turn.phase === 'streaming' &&
     (live.execution?.responseMessageId ?? null) !== null &&
     live.steeringUnsupported !== true;
-  return { live, send, continueWith, retry, reconnect, dismiss, busy, stop, canStop, isRunning, regenerate, canSteer, editSteering, removeSteering };
+  const steeringNotice = supersededSteeringText(live?.steeringSuperseded);
+  return { live, send, continueWith, retry, reconnect, dismiss, busy, stop, canStop, isRunning, regenerate, canSteer, editSteering, removeSteering, steeringNotice, dismissSteeringNotice };
 }

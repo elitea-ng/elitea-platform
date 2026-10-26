@@ -31,7 +31,7 @@ describe('useReattachSeededTurn (#6654)', () => {
     expect(reattach).not.toHaveBeenCalled();
   });
 
-  it('tells steering (contract 1.26) only when the reattach opened the stream', () => {
+  it('tells steering (contract 1.27) only when the reattach opened the stream', () => {
     const onReattached = vi.fn();
     renderHook(() => useReattachSeededTurn({ messages: [question, inFlight], conversationUuid: 'uuid-1', reattach: () => false, onReattached }));
     expect(onReattached).not.toHaveBeenCalled();

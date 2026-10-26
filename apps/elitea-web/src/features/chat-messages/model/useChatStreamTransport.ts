@@ -74,7 +74,7 @@ export function useChatStreamTransport(
   onAgentEventRef.current = onAgentEvent;
   const onStreamErrorRef = useRef(onStreamError);
   onStreamErrorRef.current = onStreamError;
-  const onSteerRef = useRef(params.onSteerEvent); // contract 1.26 steering frames of the owned run
+  const onSteerRef = useRef(params.onSteerEvent); // contract 1.27 steering frames of the owned run
   onSteerRef.current = params.onSteerEvent;
   // The conversation on screen NOW, and the one the open stream was started
   // for. `start` is async and resolves outside React's render, so the current

@@ -7,7 +7,7 @@ const TICK_MS = 250;
 
 /**
  * The composer hint while a rate-limited steering message waits for its
- * next try (client contract 1.26); null when the wait is over or none waits.
+ * next try (client contract 1.27); null when the wait is over or none waits.
  */
 export function steeringWaitText(retryAt: number | null | undefined, now: number): string | null {
   if (retryAt == null || retryAt <= now) return null;

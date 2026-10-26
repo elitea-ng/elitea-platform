@@ -7,7 +7,7 @@ import { Button } from '@/ui';
 import { STEERING_STATE, isSteeringTextValid, visibleSteering, type SteeringItem } from '@elitea/client-core/stream';
 
 /**
- * The steering messages of the live answer (client contract 1.26): the
+ * The steering messages of the live answer (client contract 1.27): the
  * messages sent while the answer runs. Pending ones say "Waiting for the next
  * step"; the author can edit or remove them, or stop the answer and send
  * them at once ("Stop and send": the end-of-turn rule then sends them as the

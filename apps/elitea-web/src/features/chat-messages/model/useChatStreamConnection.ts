@@ -45,7 +45,7 @@ export interface ChatStreamConnectionHandlers {
    * stream uses it (#6654). Omitted or `false` keeps the retry loop.
    */
   readonly onNeverOpened?: (() => boolean) | undefined;
-  /** A steering frame (client contract 1.26): its SSE event name and its data. */
+  /** A steering frame (client contract 1.27): its SSE event name and its data. */
   readonly onSteer?: ((event: string, frame: ExecutionEventData) => void) | undefined;
 }
 

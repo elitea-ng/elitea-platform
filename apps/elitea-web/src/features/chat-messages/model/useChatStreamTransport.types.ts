@@ -34,7 +34,7 @@ export interface UseChatStreamTransportParams {
   /** The run itself failed server-side, or its stream dropped. */
   readonly onStreamError?: ((reason: string) => void) | undefined;
   /**
-   * A steering frame of the run this transport owns (client contract 1.26):
+   * A steering frame of the run this transport owns (client contract 1.27):
    * the SSE event name (`steer.queued`, `steer.injected`, `steer.dropped`)
    * and its `SteeringMessage` data.
    */

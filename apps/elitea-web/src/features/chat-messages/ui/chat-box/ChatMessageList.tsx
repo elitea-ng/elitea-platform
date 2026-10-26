@@ -154,7 +154,7 @@ export function ChatMessageList({
   // user, while nothing is streaming. `isLoading` isn't in this component's
   // props yet (ChatBox.tsx doesn't supply it) so it's omitted here rather
   // than invented.
-  // Steering (contract 1.26): an injected message that the transcript already holds is not shown two times.
+  // Steering (contract 1.27): an injected message that the transcript already holds is not shown two times.
   const transcriptIds = useMemo(() => new Set(chatHistory.map((message) => message.id)), [chatHistory]);
   const lastUserMessageIndex = useMemo(
     () => chatHistory.reduce((last, msg, i) => (msg.role === 'user' ? i : last), -1),

@@ -1,5 +1,5 @@
 /**
- * Steering messages (client contract 1.26): pure helpers that the web and the
+ * Steering messages (client contract 1.27): pure helpers that the web and the
  * mobile clients share.
  *
  * A message that the user sends while a cloud turn runs goes to the server as
@@ -9,7 +9,7 @@
  * events. These helpers do the folding, so that both clients apply the same
  * rules.
  */
-import { STEERING_STATE, type SteeringState } from './frameTypes';
+import { STEERING_DROP_REASON, STEERING_STATE, type SteeringDropReason, type SteeringState } from './frameTypes';
 
 /** One steering message, as the clients keep it. */
 export interface SteeringItem {
@@ -79,6 +79,18 @@ export function parseSteeringMessage(raw: unknown): SteeringItem | undefined {
     createdAt: typeof row['created_at'] === 'string' ? row['created_at'] : '',
     messageId: text(row['message_id']) ?? null,
   };
+}
+
+const DROP_REASONS: ReadonlySet<string> = new Set<string>(Object.values(STEERING_DROP_REASON));
+
+/**
+ * The `reason` of a `steer.dropped` event's `data`. An unknown or missing
+ * value is `removed`: the item is hidden, and the client says nothing more.
+ */
+export function steeringDropReason(raw: unknown): SteeringDropReason {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return STEERING_DROP_REASON.Removed;
+  const reason = (raw as Record<string, unknown>)['reason'];
+  return typeof reason === 'string' && DROP_REASONS.has(reason) ? (reason as SteeringDropReason) : STEERING_DROP_REASON.Removed;
 }
 
 /** Reads the `items` of a `SteeringMessageList`. Bad rows are skipped. */

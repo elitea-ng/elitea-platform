@@ -29,7 +29,7 @@ export const EXECUTION_EVENT = {
   /** An index ingest finished. */
   indexIngestCompleted: 'index.ingest.completed',
   /**
-   * Client contract 1.26: a steering message is queued, or its pending text
+   * Client contract 1.27: a steering message is queued, or its pending text
    * was edited. `data` is one `SteeringMessage` (state `pending`).
    */
   steerQueued: 'steer.queued',
@@ -39,14 +39,13 @@ export const EXECUTION_EVENT = {
    */
   steerInjected: 'steer.injected',
   /**
-   * A pending steering message left the queue without injection. `data` is
-   * the `SteeringMessage` plus `reason` (`removed`, or `handed_off` when the
-   * server took a `turn_ended` message as the next turn).
+   * A steering message left the queue without injection. `data` is the
+   * `SteeringMessage` plus `reason` (`STEERING_DROP_REASON`).
    */
   steerDropped: 'steer.dropped',
 } as const;
 
-/** The steering states of client contract 1.26 (`SteeringMessage.state`). */
+/** The steering states of client contract 1.27 (`SteeringMessage.state`). */
 export const STEERING_STATE = {
   Pending: 'pending',
   Injected: 'injected',
@@ -57,6 +56,23 @@ export const STEERING_STATE = {
 } as const;
 
 export type SteeringState = (typeof STEERING_STATE)[keyof typeof STEERING_STATE];
+
+/**
+ * The `reason` of a `steer.dropped` event (client contract 1.27).
+ *
+ * - `removed`: the author removed the pending message.
+ * - `superseded`: the turn ended before injection, and the author sent a
+ *   newer message in the conversation first. The server does not send the
+ *   message. The event comes on the stream of the author's newer turn, but
+ *   its `response_message_id` names the OLD answer. A client hides the item
+ *   and tells the user that the text was not sent.
+ */
+export const STEERING_DROP_REASON = {
+  Removed: 'removed',
+  Superseded: 'superseded',
+} as const;
+
+export type SteeringDropReason = (typeof STEERING_DROP_REASON)[keyof typeof STEERING_DROP_REASON];
 
 /** The steering SSE event names: a client folds these into its queue view. */
 export const STEERING_EVENTS: ReadonlySet<string> = new Set<string>([

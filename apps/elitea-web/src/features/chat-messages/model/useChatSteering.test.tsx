@@ -1,5 +1,5 @@
 /**
- * Steering during execution (client contract 1.26): where a send goes while a
+ * Steering during execution (client contract 1.27): where a send goes while a
  * cloud turn runs, the fallbacks of each refusal, and the end-of-turn rule
  * (the hand-off takes the leftover own messages; ONLY the texts that it
  * returns become ONE next message). The bodies come from the v2.yaml examples through the generated
@@ -318,5 +318,52 @@ describe('SteeringMessages', () => {
     expect(useChatSteeringStore.getState().items[RESPONSE]?.[0]?.state).toBe('removed');
     render(<Harness live transcript={ids()} />);
     expect(screen.queryByTestId('chat-steering-messages')).toBeNull();
+  });
+});
+
+describe('useChatSteering — superseded (the user sent a newer message first)', () => {
+  // The frame comes on the stream of the NEWER turn, but its response_message_id names the OLD answer.
+  const superseded = { ...row({ state: 'removed' }), reason: 'superseded' };
+
+  it('hides the item, drops the own record and shows the text in the notice of this conversation only', () => {
+    useChatSteeringStore.getState().addOwn(RESPONSE, { projectId: '7', conversationKey: KEY }, EXAMPLE.id);
+    act(() => { applySteeringEvent('steer.queued', EXAMPLE); });
+    const here = setup();
+    const other = setup({ conversationKey: 'conv-other' });
+    act(() => { applySteeringEvent('steer.dropped', superseded, 'conv-other'); });
+    expect(useChatSteeringStore.getState().items[RESPONSE]?.[0]?.state).toBe('removed');
+    expect(useChatSteeringStore.getState().own[RESPONSE]).toBeUndefined();
+    // The own record names the conversation that queued the message; it wins over the stream's key.
+    expect(here.result.current.superseded).toEqual([{ id: EXAMPLE.id, content: EXAMPLE.content, conversationKey: KEY }]);
+    expect(other.result.current.superseded).toEqual([]);
+    expect(here.send).not.toHaveBeenCalled();
+    expect(here.queueAfterTurn).not.toHaveBeenCalled();
+  });
+
+  it('uses the key of the stream for a message of another tab, and reason removed shows no notice', () => {
+    const { result } = setup();
+    act(() => { applySteeringEvent('steer.dropped', { ...superseded, id: 'r', reason: 'removed' }, KEY); });
+    expect(result.current.superseded).toEqual([]);
+    act(() => { applySteeringEvent('steer.dropped', superseded, KEY); });
+    expect(result.current.superseded.map((entry) => entry.content)).toEqual([EXAMPLE.content]);
+  });
+
+  it('a closed notice does not come back when the stream replays the event', () => {
+    const { result } = setup();
+    act(() => { applySteeringEvent('steer.dropped', superseded, KEY); });
+    act(() => { result.current.dismissSuperseded(); });
+    expect(result.current.superseded).toEqual([]);
+    act(() => { applySteeringEvent('steer.dropped', superseded, KEY); });
+    expect(result.current.superseded).toEqual([]);
+  });
+
+  it('sends a text again only when the user asks, and takes it off the notice', () => {
+    const { result, send } = setup({ isStreaming: false });
+    act(() => { applySteeringEvent('steer.dropped', superseded, KEY); });
+    const [entry] = result.current.superseded;
+    if (entry === undefined) throw new Error('no superseded entry');
+    act(() => { result.current.resendSuperseded(entry); });
+    expect(send).toHaveBeenCalledWith(EXAMPLE.content);
+    expect(result.current.superseded).toEqual([]);
   });
 });

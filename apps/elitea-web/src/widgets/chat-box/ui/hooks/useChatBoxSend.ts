@@ -94,7 +94,7 @@ export interface UseChatBoxSendParams {
   readonly userAvatar?: string | undefined;
   /** Graph frames, for a host that also renders a run timeline (the pipeline editor's canvas). Passed straight to `useChatStreamTransport`, which owns the WHICH-frames filter (`shouldForwardAgentEvent`); no second gate here, which would only be a copy that could drift. */
   readonly onAgentEvent?: ((frame: ExecutionEventData) => void) | undefined;
-  /** Steering frames of the owned run (contract 1.26), passed to the transport. */
+  /** Steering frames of the owned run (contract 1.27), passed to the transport. */
   readonly onSteerEvent?: ((event: string, frame: ExecutionEventData) => void) | undefined;
 }
 

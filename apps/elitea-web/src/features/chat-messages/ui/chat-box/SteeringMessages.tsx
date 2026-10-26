@@ -1,5 +1,5 @@
 /**
- * The steering messages of one answer (client contract 1.26), shown in the
+ * The steering messages of one answer (client contract 1.27), shown in the
  * transcript right under that answer.
  *
  * - `pending`: shown only while the answer runs, with "Waiting for the next

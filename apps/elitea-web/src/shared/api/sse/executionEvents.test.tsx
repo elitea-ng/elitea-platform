@@ -110,7 +110,7 @@ describe('useExecutionEvents', () => {
     expect(onReplayReset).toHaveBeenCalledWith({ reason: 'progress_retention_window_elapsed' });
   });
 
-  it('dispatches the three steering events (contract 1.26) with their names', () => {
+  it('dispatches the three steering events (contract 1.27) with their names', () => {
     const onSteer = vi.fn();
     render(
       <Probe

@@ -13,7 +13,7 @@ import {
 } from '@elitea/client-core/stream';
 
 /**
- * Steering of a running answer (client contract 1.26):
+ * Steering of a running answer (client contract 1.27):
  *
  *   POST   /elitea_core/task/prompt_lib/{project_id}/{response_message_id}/steering        steerChatExecution
  *   GET    /elitea_core/task/prompt_lib/{project_id}/{response_message_id}/steering        listChatExecutionSteering

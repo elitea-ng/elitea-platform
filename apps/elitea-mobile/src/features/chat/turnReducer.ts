@@ -68,7 +68,7 @@ export interface TurnState {
    */
   stopped: boolean;
   /**
-   * The steering messages of this turn (client contract 1.26), in queue
+   * The steering messages of this turn (client contract 1.27), in queue
    * order: from the `steer.*` frames and from the steering calls' answers.
    */
   steering: SteeringItem[];

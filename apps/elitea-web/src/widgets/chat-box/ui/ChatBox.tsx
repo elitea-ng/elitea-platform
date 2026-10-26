@@ -43,7 +43,7 @@ export type { ChatBoxProps } from './ChatBox.types';
 import { buildChatBoxContinuationProps } from './ChatBoxContinuation';
 import { useChatBoxLlmSettingsDialog } from './ChatBoxLlmSettingsDialog';
 import { buildChatBoxAttachmentProps, buildChatBoxInputSlots, useChatBoxVoiceFeedback } from './ChatBoxInputSlots';
-import { ChatBoxQueuedMessages, ChatBoxSteeringNotice, chatBoxQueueKey, useChatBoxQueuedMessages } from './ChatBoxQueuedMessages';
+import { ChatBoxQueuedMessages, ChatBoxSteeringNotice, ChatBoxSupersededNotice, chatBoxQueueKey, useChatBoxQueuedMessages } from './ChatBoxQueuedMessages';
 import { ChatBoxVoicePlayer } from './ChatBoxVoicePlayer';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
 import { ChatBoxWithdrawnNotice } from './ChatBoxWithdrawnNotice';
@@ -164,7 +164,8 @@ const ChatBoxInner = memo(function ChatBox({
     deps: { createConversation: lifecycle.createConversation, uploadAttachments: data.attachments.upload.uploadAttachments },
     setChatHistory: data.setChatHistory, projectId, projectIdString, isAgentsPage, conversationUuid,
     activeParticipant, participants: conversationParticipants, userName, userAvatar,
-    llmSettings, model: data.selectedModel, configuredModelProjectId, userId, onAgentEvent, getInternalToolsForSend, editorTest, onSteerEvent: applySteeringEvent,
+    llmSettings, model: data.selectedModel, configuredModelProjectId, userId, onAgentEvent, getInternalToolsForSend, editorTest,
+    onSteerEvent: (event, frame) => { applySteeringEvent(event, frame, chatBoxQueueKey(conversationUuid, conversationId)); }, // a superseded message shows in this conversation
   });
   // After `useChatBoxSend`: a "+" pick on a chat with no conversation has to create one first, and it reuses the adapter the first send would have used, so an eagerly created conversation is seeded exactly like a send-created one.
   const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), ...(onConversationCreated ? { onConversationCreated } : {}) });
@@ -290,7 +291,7 @@ const ChatBoxInner = memo(function ChatBox({
   const stopGeneration = useCallback(() => {
     stopChatGeneration(stopStreamRef.current, () => streamingRef.current.stopStreaming(), editorTest);
   }, [stopStreamRef, streamingRef, editorTest]);
-  // Contract 1.26: a send while the owned cloud turn runs STEERS it; a refusal or a leftover goes through the A17 queue.
+  // Contract 1.27: a send while the owned cloud turn runs STEERS it; a refusal or a leftover goes through the A17 queue.
   const steering = useChatSteering({ conversationKey: chatBoxQueueKey(conversationUuid, conversationId), isStreaming, streamTarget, send: queued.onSend, queueAfterTurn: queued.enqueue });
   useReattachSeededTurn({ messages, conversationUuid, reattach: reattachStreamedExecution, onReattached: steering.onReattached }); // #6654: a reload mid-turn observes the run again
   // MUST target the host `ref`, never `chatInputRef` — see `ChatBox.types.ts`.
@@ -336,6 +337,7 @@ const ChatBoxInner = memo(function ChatBox({
         {readOnlyNotice ?? <>
         <ChatBoxVoicePlayer showPlayer={readAloud.showPlayer} voicePlayerProps={readAloud.voicePlayerProps} />
         <ChatBoxQueuedMessages queue={queued} /><ChatBoxSteeringNotice notice={steering.notice} onDismiss={steering.dismissNotice} />
+        <ChatBoxSupersededNotice items={steering.superseded} onResend={steering.resendSuperseded} onDismiss={steering.dismissSuperseded} />
         <ChatBoxPopups
           {...buildChatBoxPopupsProps({
             state,

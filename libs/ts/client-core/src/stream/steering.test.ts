@@ -11,6 +11,7 @@ import {
   mergeSteeringAll,
   parseSteeringList,
   parseSteeringMessage,
+  steeringDropReason,
   steeringErrorCode,
   steeringRetryAfterMs,
   steeringStateOf,
@@ -135,6 +136,19 @@ describe('joinSteeringTexts', () => {
     assert.equal(isSteeringTextValid('ok'), true);
     assert.equal(isSteeringTextValid(' '), false);
     assert.equal(isSteeringTextValid('x'.repeat(16 * 1024 + 1)), false);
+  });
+});
+
+describe('steeringDropReason', () => {
+  it('reads removed and superseded', () => {
+    assert.equal(steeringDropReason({ ...WIRE, state: 'removed', reason: 'removed' }), 'removed');
+    assert.equal(steeringDropReason({ ...WIRE, state: 'removed', reason: 'superseded' }), 'superseded');
+  });
+
+  it('reads an unknown, missing or bad reason as removed', () => {
+    for (const raw of [{ ...WIRE, reason: 'handed_off' }, WIRE, { ...WIRE, reason: 7 }, null, 'superseded', [WIRE]]) {
+      assert.equal(steeringDropReason(raw), 'removed');
+    }
   });
 });
 

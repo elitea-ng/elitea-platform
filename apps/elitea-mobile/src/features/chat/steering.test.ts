@@ -6,7 +6,7 @@ import { editSteering, handOffSteering, listSteering, queueSteering, removeSteer
 import { parseFrame } from '@/features/chat/frames';
 import { steeringRows } from '@/features/chat/SteeringRows';
 import { TurnController } from '@/features/chat/turnController';
-import { steerOutcomeText } from '@/features/chat/useTurn';
+import { steerOutcomeText, supersededSteeringText } from '@/features/chat/useTurn';
 import { steeringWaitText } from '@/features/chat/useSteeringWaitText';
 import { abortAll } from '@/lib/abortRegistry';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
@@ -90,7 +90,7 @@ beforeEach(() => {
 });
 afterEach(() => jest.restoreAllMocks());
 
-describe('steering calls (client contract 1.26)', () => {
+describe('steering calls (client contract 1.27)', () => {
   it('POST sends the Idempotency-Key and the content; refusals answer their error code', async () => {
     const answers = [json(EXAMPLE, 202), json({ error: 'turn_not_running' }, 409), json({ error: 'rate_limited' }, 429)];
     const { client, seen } = workspace(() => answers.shift()!);
@@ -145,9 +145,10 @@ describe('steer frames', () => {
       kind: 'steer',
       item: { state: 'removed' },
     });
-    expect(parseFrame({ event: 'steer.dropped', data: JSON.stringify({ ...HANDED, reason: 'handed_off' }), id: '4' })).toMatchObject({
+    expect(parseFrame({ event: 'steer.dropped', data: JSON.stringify({ ...EXAMPLE, state: 'removed', reason: 'superseded' }), id: '4' })).toMatchObject({
       kind: 'steer',
       item: { state: 'removed' },
+      reason: 'superseded',
     });
     expect(parseFrame({ event: 'steer.injected', data: '{}', id: '3' })).toEqual({ kind: 'invalid', event: 'steer.injected' });
   });
@@ -317,6 +318,27 @@ describe('TurnController steering', () => {
     expect(new Set(keys).size).toBe(1);
     expect(steerOutcomeText('rate_limited')).toMatch(/Too many messages/);
     t.c.detach();
+  });
+
+  it('superseded: a newer message came first, so the text shows in a note, the item hides, and nothing is sent', async () => {
+    // The newer turn's stream carries the event; its response_message_id is the OLD answer.
+    const old = { ...EXAMPLE, id: '6a7b8c9d-0e1f-4a2b-8c3d-4e5f6a7b8c9d', response_message_id: '1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f', state: 'removed' as const };
+    const { c, stream, seen, onLeftover } = await streaming(() => json({ items: [] }));
+    stream.connections[0].push(sse('steer.dropped', { ...old, reason: 'superseded' }, 1));
+    stream.connections[0].push(sse('steer.dropped', { ...old, id: '0f1e2d3c-4b5a-4968-8776-655443322110', reason: 'removed' }, 2));
+    await flush();
+    expect(c.getSnapshot().turn.steering.map((s) => s.state)).toEqual(['removed', 'removed']);
+    expect(steeringRows(c.getSnapshot().turn.steering, new Set())).toEqual([]);
+    expect(c.getSnapshot().steeringSuperseded).toEqual([{ id: old.id, content: old.content }]);
+    expect(supersededSteeringText(c.getSnapshot().steeringSuperseded)).toBe(`Not sent: you sent a newer message first.\n\n${old.content}`);
+    // Closed: a replay of the same event does not show the note again.
+    c.dismissSuperseded();
+    stream.connections[0].push(sse('steer.dropped', { ...old, reason: 'superseded' }, 1));
+    await flush();
+    expect(supersededSteeringText(c.getSnapshot().steeringSuperseded)).toBeNull();
+    expect(onLeftover).not.toHaveBeenCalled();
+    expect(seen.filter((s) => s.path.endsWith('/steering') || s.path.endsWith('/handoff'))).toEqual([]);
+    c.detach();
   });
 
   it('the composer hint counts the wait down in whole seconds', () => {

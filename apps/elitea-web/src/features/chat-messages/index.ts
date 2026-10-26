@@ -56,10 +56,11 @@ export { useSyncChatMessage } from './model/useSyncChatMessage';
 export { useChatStreamTransport } from './model/useChatStreamTransport';
 export type { UseChatStreamTransportParams, UseChatStreamTransportResult } from './model/useChatStreamTransport';
 export type { ChatStreamContext } from './lib/chatStreamReducer';
-// Steering during execution (client contract 1.26): send while a cloud turn runs.
+// Steering during execution (client contract 1.27): send while a cloud turn runs.
 export { useChatSteering } from './model/useChatSteering';
 export type { ChatSteeringModel, UseChatSteeringParams } from './model/useChatSteering';
 export { applySteeringEvent } from './model/chatSteering.store';
+export type { SupersededSteering } from './model/chatSteering.store';
 // Reload mid-turn: observe the seeded in-flight turn again (#6654).
 export { findReattachableTurn } from './lib/chatStreamReattach';
 export type { ReattachableTurn } from './lib/chatStreamReattach';

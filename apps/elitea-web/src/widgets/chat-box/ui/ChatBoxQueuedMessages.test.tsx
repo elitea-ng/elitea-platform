@@ -28,6 +28,7 @@ import type { ChatMessage } from '@/features/chat-messages';
 import { DRAFT_CONVERSATION_KEY, useQueuedMessagesStore } from '../model/queuedMessages.store';
 import {
   ChatBoxQueuedMessages,
+  ChatBoxSupersededNotice,
   chatBoxQueueKey,
   useChatBoxQueuedMessages,
   type ChatBoxQueuedMessagesModel,
@@ -304,5 +305,33 @@ describe('ChatBoxQueuedMessages', () => {
     );
     await userEvent.click(screen.getAllByTestId('chat-queued-remove')[1] as HTMLElement);
     expect(onRemove).toHaveBeenCalledWith('b');
+  });
+});
+
+describe('ChatBoxSupersededNotice', () => {
+  const items = [
+    { id: 's1', content: 'Skip the tests for now and only fix the build.', conversationKey: KEY },
+    { id: 's2', content: 'And keep the logs.', conversationKey: KEY },
+  ];
+
+  it('renders nothing when no message was superseded', () => {
+    render(<ThemeProvider theme={theme}><ChatBoxSupersededNotice items={[]} onResend={vi.fn()} onDismiss={vi.fn()} /></ThemeProvider>);
+    expect(screen.queryByTestId('chat-steering-superseded')).toBeNull();
+  });
+
+  it('says the texts were not sent, shows each text, and sends one again or closes only on a click', async () => {
+    const onResend = vi.fn();
+    const onDismiss = vi.fn();
+    render(<ThemeProvider theme={theme}><ChatBoxSupersededNotice items={items} onResend={onResend} onDismiss={onDismiss} /></ThemeProvider>);
+    expect(screen.getByText('Not sent: you sent a newer message first.')).toBeTruthy();
+    expect(screen.getAllByTestId('chat-steering-superseded-item').map((node) => node.textContent)).toEqual([
+      'Skip the tests for now and only fix the build.Send again',
+      'And keep the logs.Send again',
+    ]);
+    expect(onResend).not.toHaveBeenCalled();
+    await userEvent.click(screen.getAllByTestId('chat-steering-superseded-resend')[1] as HTMLElement);
+    expect(onResend).toHaveBeenCalledWith(items[1]);
+    await userEvent.click(screen.getByTestId('chat-steering-superseded-close'));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });

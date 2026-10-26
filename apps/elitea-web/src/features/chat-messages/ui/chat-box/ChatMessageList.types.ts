@@ -124,7 +124,7 @@ export interface ChatMessageListProps {
    * A persisted authorName takes precedence over the composer selection.
    */
   readonly assistantName?: string | undefined;
-  /** Steering during execution (contract 1.26): shows each answer's steering messages under it. */
+  /** Steering during execution (contract 1.27): shows each answer's steering messages under it. */
   readonly steering?: ChatMessageListSteering | undefined;
 }
 

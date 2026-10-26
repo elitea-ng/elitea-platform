@@ -1,5 +1,5 @@
 /**
- * Steering during execution (client contract 1.26) for the cloud chat.
+ * Steering during execution (client contract 1.27) for the cloud chat.
  *
  * WHERE A SEND GOES. While a turn of this chat runs and the transport owns
  * it, the composer text goes to `POST .../steering` as a steering message.
@@ -32,8 +32,15 @@
  * tab reads the server list first, never only the local view: the SSE has
  * no `turn_ended` event, and a switch to another conversation also closes
  * the stream while the turn runs on.
+ *
+ * A NEWER MESSAGE FIRST. When the user sends a newer message before the
+ * hand-off, the server does not send the leftover messages: it marks them
+ * `removed` and sends `steer.dropped` with `reason: superseded`. The model
+ * then shows their texts in a notice above the composer
+ * (`superseded`). The user can send a text again or close the notice; the
+ * client never sends it by itself.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   STEERING_ERROR,
@@ -57,7 +64,7 @@ import {
 } from '@/entities/conversation/api/steeringApi';
 import { t } from '@/shared/i18n';
 
-import { useChatSteeringStore } from './chatSteering.store';
+import { useChatSteeringStore, type SupersededSteering } from './chatSteering.store';
 
 /** The answer that the owned run writes, as the transport reports it. */
 export interface ChatSteeringRunTarget {
@@ -88,6 +95,16 @@ export interface ChatSteeringModel {
   /** A short text about the last refused send, or `null`. */
   readonly notice: string | null;
   readonly dismissNotice: () => void;
+  /**
+   * Steering messages of this conversation that the server did not send,
+   * because the user sent a newer message first (`steer.dropped`,
+   * `reason: superseded`). The client never sends them by itself.
+   */
+  readonly superseded: readonly SupersededSteering[];
+  /** Sends one superseded text again (the user asked for it) and takes it off the notice. */
+  readonly resendSuperseded: (entry: SupersededSteering) => void;
+  /** Closes the notice of the superseded messages. */
+  readonly dismissSuperseded: () => void;
 }
 
 /** The waits before the list is read again while own messages still show `pending`. */
@@ -324,5 +341,15 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
     if (target) void refresh({ projectId: target.projectId, responseMessageId: target.messageGroupUuid });
   }, [refresh]);
 
-  return { onSend, edit, remove, onReattached, notice: countdownText ?? notice, dismissNotice };
+  const allSuperseded = useChatSteeringStore((state) => state.superseded);
+  const superseded = useMemo(() => allSuperseded.filter((entry) => entry.conversationKey === conversationKey), [allSuperseded, conversationKey]);
+  const dismissSuperseded = useCallback(() => {
+    useChatSteeringStore.getState().dismissSuperseded(superseded.map((entry) => entry.id));
+  }, [superseded]);
+  const resendSuperseded = useCallback((entry: SupersededSteering) => {
+    useChatSteeringStore.getState().dismissSuperseded([entry.id]);
+    onSend(entry.content);
+  }, [onSend]);
+
+  return { onSend, edit, remove, onReattached, notice: countdownText ?? notice, dismissNotice, superseded, resendSuperseded, dismissSuperseded };
 }

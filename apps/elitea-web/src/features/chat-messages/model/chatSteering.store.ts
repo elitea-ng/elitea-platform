@@ -1,5 +1,5 @@
 /**
- * Steering messages of running chat turns (client contract 1.26), by answer.
+ * Steering messages of running chat turns (client contract 1.27), by answer.
  *
  * The store keys each list by the answer's `response_message_id`, because
  * every `SteeringMessage` carries that id. So an SSE frame can go into the
@@ -16,7 +16,7 @@
  */
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 
-import { EXECUTION_EVENT, STEERING_STATE, mergeSteeringAll, parseSteeringMessage, type SteeringItem } from '@elitea/client-core/stream';
+import { EXECUTION_EVENT, STEERING_DROP_REASON, STEERING_STATE, mergeSteeringAll, parseSteeringMessage, steeringDropReason, type SteeringItem } from '@elitea/client-core/stream';
 
 import type { ExecutionEventData } from '@/shared/api/sse';
 import { createStorage } from '@/shared/lib/storage';
@@ -31,6 +31,14 @@ export interface OwnSteeringRecord {
   readonly handoffKey?: string;
 }
 
+/** A steering message that the server did not send: the author sent a newer message first. */
+export interface SupersededSteering {
+  readonly id: string;
+  readonly content: string;
+  /** The A17 queue key of the conversation that shows the notice. */
+  readonly conversationKey: string;
+}
+
 interface ChatSteeringState {
   readonly items: Readonly<Record<string, readonly SteeringItem[]>>;
   readonly own: Readonly<Record<string, OwnSteeringRecord>>;
@@ -43,6 +51,13 @@ interface ChatSteeringState {
   /** Removes items from the view (they became the next message). */
   readonly forget: (responseMessageId: string, ids: readonly string[]) => void;
   readonly markUnsupported: (responseMessageId: string) => void;
+  /** Superseded messages (`steer.dropped`, `reason: superseded`) that the notice shows. */
+  readonly superseded: readonly SupersededSteering[];
+  /** Ids that were superseded before, so a replayed event does not show a closed notice again. */
+  readonly supersededSeen: readonly string[];
+  readonly addSuperseded: (entry: SupersededSteering) => void;
+  /** Closes the notice of these ids. */
+  readonly dismissSuperseded: (ids: readonly string[]) => void;
   /** Keeps (a string) or forgets (`undefined`) the key of the open hand-off of the answer. */
   readonly setHandoffKey: (responseMessageId: string, key: string | undefined) => void;
 }
@@ -50,6 +65,7 @@ interface ChatSteeringState {
 const STORAGE_KEY = 'chat.steeringOwn';
 const MAX_RECORDS = 50;
 const MAX_IDS = 30;
+const MAX_SEEN = 200;
 
 function session(): ReturnType<typeof createStorage> | undefined {
   try {
@@ -132,6 +148,16 @@ export function createChatSteeringStore(): ChatSteeringStore {
       markUnsupported: (responseMessageId) => {
         set({ unsupported: { ...get().unsupported, [responseMessageId]: true } });
       },
+      superseded: [],
+      supersededSeen: [],
+      addSuperseded: (entry) => {
+        const { superseded, supersededSeen } = get();
+        if (supersededSeen.includes(entry.id)) return;
+        set({ superseded: [...superseded, entry].slice(-MAX_IDS), supersededSeen: [...supersededSeen, entry.id].slice(-MAX_SEEN) });
+      },
+      dismissSuperseded: (ids) => {
+        set({ superseded: get().superseded.filter((entry) => !ids.includes(entry.id)) });
+      },
     };
   });
 }
@@ -158,12 +184,26 @@ export const useChatSteeringStore = Object.assign(useChatSteeringStoreHook, {
 
 /**
  * Folds one steering SSE frame into the store. `steer.dropped` carries the
- * message plus `reason` (`removed` or `handed_off`); it is shown as removed
+ * message plus `reason` (`removed` or `superseded`); it is shown as removed
  * whatever state the frame names. A frame that is not a `SteeringMessage` is skipped.
+ *
+ * `superseded`: the turn ended first, and the author sent a newer message
+ * before the hand-off, so the server did not send this one. The frame comes
+ * on the stream of the NEWER turn, but its `response_message_id` names the
+ * OLD answer. The item goes to the list of that old answer (hidden), and the
+ * text goes to the notice of `conversationKey` (the conversation of the
+ * stream), so the user can send it again. The message is final, so this tab
+ * no longer owns it.
  */
-export function applySteeringEvent(event: string, frame: ExecutionEventData): void {
+export function applySteeringEvent(event: string, frame: ExecutionEventData, conversationKey?: string): void {
   const parsed = parseSteeringMessage(frame);
   if (parsed === undefined) return;
-  const item = event === EXECUTION_EVENT.steerDropped ? { ...parsed, state: STEERING_STATE.Removed } : parsed;
-  useChatSteeringStore.getState().apply(item.responseMessageId, [item]);
+  const dropped = event === EXECUTION_EVENT.steerDropped;
+  const item = dropped ? { ...parsed, state: STEERING_STATE.Removed } : parsed;
+  const store = useChatSteeringStore.getState();
+  store.apply(item.responseMessageId, [item]);
+  if (!dropped || steeringDropReason(frame) !== STEERING_DROP_REASON.Superseded) return;
+  const key = store.own[item.responseMessageId]?.conversationKey ?? conversationKey;
+  store.dropOwn(item.responseMessageId, [item.id]);
+  if (key !== undefined && item.content.trim() !== '') store.addSuperseded({ id: item.id, content: item.content, conversationKey: key });
 }

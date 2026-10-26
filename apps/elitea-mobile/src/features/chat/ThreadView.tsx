@@ -102,7 +102,7 @@ type Row =
   | { kind: 'outbox'; key: string; item: OutboxItem }
   | { kind: 'live_user'; key: string; text: string; files: string[] }
   | { kind: 'live_reply'; key: string; live: LiveTurn }
-  /** A message sent while the live answer runs (client contract 1.26). */
+  /** A message sent while the live answer runs (client contract 1.27). */
   | { kind: 'steer'; key: string; item: SteeringItem; own: boolean };
 
 /**
@@ -154,8 +154,8 @@ export function ThreadView({
   const forkAvailable = speaksContract(workspace?.discovery, 1, 11);
   // Client contract 1.12: read markers (markConversationRead).
   const contract112 = speaksContract(workspace?.discovery, 1, 12);
-  // Client contract 1.26: a message sent while the answer runs steers it.
-  const contract126 = speaksContract(workspace?.discovery, 1, 26);
+  // Client contract 1.27: a message sent while the answer runs steers it.
+  const contract127 = speaksContract(workspace?.discovery, 1, 27);
   const { policy } = usePolicy();
   const [actionsFor, setActionsFor] = useState<{ message: ChatMessage; dislike: boolean } | null>(null);
   // On-device speech: dictation into the composer, and reading an answer aloud.
@@ -199,7 +199,7 @@ export function ThreadView({
     conversationUuid,
     participantId: target.ok && addressable ? target.participantId : null,
     model: target.ok && target.kind === 'model' ? model : null,
-    steering: contract126,
+    steering: contract127,
   });
   const { live, dismiss } = turn;
   const steeringWait = useSteeringWaitText(live?.steeringRetryAt);
@@ -282,6 +282,9 @@ export function ThreadView({
    */
   const [threadNote, setNote] = useState<{ text: string; kind: 'error' | 'info' } | null>(null);
   const setThreadNote = useCallback((text: string | null) => setNote(text === null ? null : { text, kind: 'error' }), []);
+  // Steering messages that a newer message superseded (contract 1.27): their texts show until closed, after any other note.
+  const shownNote = threadNote ?? (turn.steeringNotice !== null ? { text: turn.steeringNotice, kind: 'info' as const } : null);
+  const dismissNote = () => (threadNote ? setThreadNote(null) : turn.dismissSteeringNotice());
   // A Local work thread (a desktop agent's): where it runs decides what the composer may do.
   const { toast, show: showToast, hide: hideToast } = useToast();
   const localWork = useLocalWork({
@@ -913,16 +916,17 @@ export function ThreadView({
                 onErase={localWork.erase}
               />
             ) : null}
-            {threadNote ? (
-              <Pressable accessibilityRole="button" accessibilityHint="Dismisses the note" onPress={() => setThreadNote(null)} style={styles.noteWrap}>
-                <GlassSurface radius={design.radius.md} floating style={styles.note} testID={`thread-note-${threadNote.kind}`}>
-                  <Icon name={threadNote.kind === 'error' ? 'error' : 'info'} size={18} tone={threadNote.kind === 'error' ? 'danger' : 'secondary'} />
+            {shownNote ? (
+              <Pressable accessibilityRole="button" accessibilityHint="Dismisses the note" onPress={dismissNote} style={styles.noteWrap}>
+                <GlassSurface radius={design.radius.md} floating style={styles.note} testID={`thread-note-${shownNote.kind}`}>
+                  <Icon name={shownNote.kind === 'error' ? 'error' : 'info'} size={18} tone={shownNote.kind === 'error' ? 'danger' : 'secondary'} />
                   <Text
                     variant="footnote"
-                    tone={threadNote.kind === 'error' ? 'danger' : 'secondary'}
-                    accessibilityRole={threadNote.kind === 'error' ? 'alert' : undefined}
+                    tone={shownNote.kind === 'error' ? 'danger' : 'secondary'}
+                    accessibilityRole={shownNote.kind === 'error' ? 'alert' : undefined}
+                    selectable
                     style={styles.flex}>
-                    {threadNote.text}
+                    {shownNote.text}
                   </Text>
                   <Icon name="close" size={14} tone="secondary" />
                 </GlassSurface>

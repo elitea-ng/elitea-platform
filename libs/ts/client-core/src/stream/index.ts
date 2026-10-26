@@ -4,6 +4,7 @@ export {
   EXECUTION_EVENT,
   FRAME_TYPE,
   PAUSE_FINISH_REASONS,
+  STEERING_DROP_REASON,
   STEERING_EVENTS,
   STEERING_STATE,
   TOOL_CALL_TYPES,
@@ -11,6 +12,7 @@ export {
   parseEventData,
   type EventData,
   type FrameType,
+  type SteeringDropReason,
   type SteeringState,
 } from './frameTypes';
 export {
@@ -27,6 +29,7 @@ export {
   mergeSteeringAll,
   parseSteeringList,
   parseSteeringMessage,
+  steeringDropReason,
   steeringErrorCode,
   steeringRetryAfterMs,
   steeringStateOf,

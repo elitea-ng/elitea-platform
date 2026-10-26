@@ -1,5 +1,5 @@
 /**
- * Steering of a running chat turn (client contract 1.26).
+ * Steering of a running chat turn (client contract 1.27).
  *
  * A message that the user sends while a cloud turn runs is queued against the
  * running answer. The worker injects it at the next safe point. These
