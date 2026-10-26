@@ -1268,6 +1268,7 @@ impl NativePipelineStateBackend {
     ) -> Result<PipelineStateServices, NativeAgentAssemblyError> {
         let paths = pipeline_definition
             .application_node_ids()
+            .chain(pipeline_definition.parallel_llm_branch_ids())
             .map(str::to_owned)
             .collect::<Vec<_>>();
         self.open_with_application_paths(
@@ -1986,16 +1987,16 @@ fn fanout_deadline_passed() -> NativeAgentAssemblyError {
 pub(super) const PIPELINE_RESUME_MARKER: &str = "[elitea:pipeline-resume:v1]";
 
 /// How a pipeline's fixed Parallel nodes are composed with the turn boundary.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub(super) enum FanoutComposition {
     /// Production: a pipeline that holds a fixed Parallel node (its own or a
     /// saved child's) binds it through `FanoutTurnAuthority` with the claim's
     /// fenced decision ledger.
     Bound,
-    /// Test-only: bind Parallel with the test binding (the claim's ledger
-    /// when the backend lends one).
+    /// Test-only: bind Parallel with the test binding and this decision
+    /// source (else the claim's ledger when the backend lends one).
     #[cfg(test)]
-    BoundForTests,
+    BoundForTests(Option<Arc<dyn elitea_agent_runtime::graph::fanout::runner::DecisionSource>>),
 }
 
 /// The root checkpointer, the node runtimes it binds, and the run's fan-out
@@ -2008,7 +2009,7 @@ type PipelineTurn = (
 
 /// The root graph's turn boundary, and the node runtimes it binds.
 fn pipeline_turn(
-    fanout: FanoutComposition,
+    fanout: &FanoutComposition,
     state: &PipelineStateServices,
     plan: &OrdinaryNativeAgentPlan,
     is_resume: bool,
@@ -2052,11 +2053,11 @@ fn pipeline_turn(
             decisions.ok_or_else(fanout_decisions_unavailable)?,
         ),
         #[cfg(test)]
-        FanoutComposition::BoundForTests => {
+        FanoutComposition::BoundForTests(source) => {
             super::graph::compiler::ParallelCompilerBinding::for_tests(
                 Arc::clone(&authority),
                 plan.fanout_deadline()?,
-                decisions,
+                source.clone().or(decisions),
             )
         }
     };
@@ -2136,7 +2137,7 @@ pub(super) async fn assemble_pipeline_native(
                     .any(PipelineDefinition::has_parallel_nodes)
             });
     let (turn_checkpointer, node_runtimes, fanout_stop) = pipeline_turn(
-        fanout,
+        &fanout,
         &state,
         &plan,
         is_resume,

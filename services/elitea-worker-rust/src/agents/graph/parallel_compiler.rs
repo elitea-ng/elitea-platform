@@ -13,7 +13,10 @@ use crate::agents::graph::application::{
 use crate::agents::graph::direct_tool::DIRECT_TOOL_RESUME_STATE_KEY;
 use crate::agents::graph::fanout_control::FanoutCancellation;
 use crate::agents::graph::hitl::HITL_RESUME_STATE_KEY;
-use crate::agents::graph::llm::LLM_TOOL_RESUME_STATE_KEY;
+use crate::agents::graph::llm::{
+    LLM_TOOL_RESUME_STATE_KEY, LlmNode, LlmNodeDefinition, PARALLEL_LLM_INPUTS_STATE_KEY,
+    PipelineLlmAgentFactory,
+};
 use crate::agents::graph::node_events::{
     PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PipelineNodeEventSender,
 };
@@ -142,6 +145,12 @@ impl crate::agents::graph::llm::PipelineLlmAgentFactory for ParallelLlmEvents {
     fn event_sender(&self) -> Option<PipelineNodeEventSender> {
         self.inner.event_sender().map(|_| self.events.clone())
     }
+
+    fn for_fanout_branch(
+        &self,
+    ) -> Option<Arc<dyn crate::agents::graph::llm::PipelineLlmAgentFactory>> {
+        self.inner.for_fanout_branch()
+    }
 }
 
 impl PipelineDefinition {
@@ -208,13 +217,7 @@ impl PipelineDefinition {
             .ok_or(PipelineConfigurationError::Unsupported(
                 "the fixed Parallel authority was not composed",
             ))?;
-        let resolver =
-            runtimes
-                .application
-                .clone()
-                .ok_or(PipelineConfigurationError::Unsupported(
-                    "the fixed Parallel Agent resolver is unavailable",
-                ))?;
+        let resolver = runtimes.application.clone();
         let owned = definition
             .branches()
             .iter()
@@ -223,31 +226,56 @@ impl PipelineDefinition {
                     .iter()
                     .find_map(|node| match node {
                         PipelineNodeDefinition::Application(node) if node.id() == branch.node() => {
-                            Some((branch.id().to_owned(), node.clone()))
+                            Some((branch.id().to_owned(), OwnedBranch::Agent(node.clone())))
+                        }
+                        PipelineNodeDefinition::Llm(node) if node.id() == branch.node() => {
+                            Some((branch.id().to_owned(), OwnedBranch::Llm(node.clone())))
                         }
                         _ => None,
                     })
                     .ok_or(PipelineConfigurationError::Invalid(
-                        "the fixed Parallel owned Agent is missing",
+                        "the fixed Parallel owned node is missing",
                     ))
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
         reject_nested_parallel(&owned, runtimes)?;
-        // The member tier shows the participant the branch's Agent node selects.
+        if resolver.is_none()
+            && owned
+                .values()
+                .any(|branch| matches!(branch, OwnedBranch::Agent(_)))
+        {
+            return Err(PipelineConfigurationError::Unsupported(
+                "the fixed Parallel Agent resolver is unavailable",
+            ));
+        }
+        if owned
+            .values()
+            .any(|branch| matches!(branch, OwnedBranch::Llm(_)))
+            && runtimes
+                .llm
+                .as_ref()
+                .is_none_or(|factory| factory.for_fanout_branch().is_none())
+        {
+            return Err(PipelineConfigurationError::Unsupported(
+                "the fixed Parallel LLM branch runtime is not bound to this compiler",
+            ));
+        }
+        // The member tier shows the participant an Agent branch selects, and
+        // the node id of an LLM branch (contract §3.3).
         let member_names = definition
             .branches()
             .iter()
-            .map(|branch| {
-                owned.get(branch.id()).map_or_else(
-                    || branch.node().to_owned(),
-                    |node| node.selection().alias().to_owned(),
-                )
+            .map(|branch| match owned.get(branch.id()) {
+                Some(OwnedBranch::Agent(node)) => node.selection().alias().to_owned(),
+                Some(OwnedBranch::Llm(node)) => node.id().to_owned(),
+                None => branch.node().to_owned(),
             })
             .collect();
         let factory = Arc::new(CompilerParallelBranches {
             owned,
             state_types: self.state.clone(),
             resolver,
+            llm: runtimes.llm.clone(),
             events: runtimes.events.clone(),
         });
         let runtime = Arc::new(AdkParallelBranchRuntime::new(
@@ -274,9 +302,17 @@ impl PipelineDefinition {
 }
 
 fn reject_nested_parallel(
-    owned: &BTreeMap<String, ApplicationNodeDefinition>,
+    owned: &BTreeMap<String, OwnedBranch>,
     runtimes: &PipelineNodeRuntimes,
 ) -> Result<(), PipelineConfigurationError> {
+    // Only an Agent branch runs a saved composition; an LLM branch has none.
+    let owned = owned
+        .iter()
+        .filter_map(|(key, branch)| match branch {
+            OwnedBranch::Agent(node) => Some((key.clone(), node)),
+            OwnedBranch::Llm(_) => None,
+        })
+        .collect::<BTreeMap<_, _>>();
     if let Some(definitions) = runtimes.composition_definitions() {
         for node in owned.values() {
             let path = if runtimes.application_scope_path.is_empty() {
@@ -327,10 +363,11 @@ pub(super) fn validate_parallel_ownership(
         _ => None,
     }) {
         for branch in parallel.branches() {
-            let node = match nodes.iter().find(|node| node.id() == branch.node()) {
-                Some(PipelineNodeDefinition::Application(node)) => node,
-                // Only saved Agent and saved Pipeline children run as branches
-                // until Wave 3 admits the other kinds one by one.
+            let (id, transition) = match nodes.iter().find(|node| node.id() == branch.node()) {
+                Some(PipelineNodeDefinition::Application(node)) => (node.id(), node.transition()),
+                // An inline LLM node runs as a branch too (T-2A D1).
+                Some(PipelineNodeDefinition::Llm(node)) => (node.id(), node.transition()),
+                // Other kinds run as branches once Wave 3 admits them one by one.
                 Some(other) => {
                     return Err(PipelineConfigurationError::FanoutChildUnsupported {
                         node: other.id().to_owned(),
@@ -343,10 +380,10 @@ pub(super) fn validate_parallel_ownership(
                     ));
                 }
             };
-            if node.transition().is_some()
-                || node.id() == entry
-                || !owned.insert(node.id().to_owned())
-                || before.iter().chain(after).any(|id| id == node.id())
+            if transition.is_some()
+                || id == entry
+                || !owned.insert(id.to_owned())
+                || before.iter().chain(after).any(|other| other == id)
             {
                 return Err(PipelineConfigurationError::Invalid(
                     "a fixed Parallel owned Agent has conflicting topology",
@@ -366,18 +403,105 @@ pub(super) fn validate_parallel_ownership(
     Ok(owned)
 }
 
+/// The node a fixed Parallel branch owns: a saved Agent or Pipeline, or an
+/// inline LLM node.
+#[derive(Clone)]
+enum OwnedBranch {
+    Agent(ApplicationNodeDefinition),
+    Llm(LlmNodeDefinition),
+}
+
+impl OwnedBranch {
+    fn id(&self) -> &str {
+        match self {
+            Self::Agent(node) => node.id(),
+            Self::Llm(node) => node.id(),
+        }
+    }
+
+    fn output_keys(&self) -> &[String] {
+        match self {
+            Self::Agent(node) => node.output_keys(),
+            Self::Llm(node) => node.output_keys(),
+        }
+    }
+}
+
 struct CompilerParallelBranches {
-    owned: BTreeMap<String, ApplicationNodeDefinition>,
+    owned: BTreeMap<String, OwnedBranch>,
     state_types: BTreeMap<String, String>,
-    resolver: Arc<dyn PipelineApplicationResolver>,
+    /// Present whenever an Agent branch exists (checked at compile time).
+    resolver: Option<Arc<dyn PipelineApplicationResolver>>,
+    llm: Option<Arc<dyn PipelineLlmAgentFactory>>,
     events: Option<PipelineNodeEventSender>,
 }
 
 impl CompilerParallelBranches {
+    fn resolver(&self) -> Result<&Arc<dyn PipelineApplicationResolver>, GraphError> {
+        self.resolver.as_ref().ok_or_else(|| {
+            GraphError::InvalidGraph("the fixed Parallel Agent resolver is unavailable".to_owned())
+        })
+    }
+
+    /// An inline LLM branch: the owned LLM node alone, with its input frozen
+    /// with the branch and a factory that keeps its events, failures and D2
+    /// recovery inside the branch.
+    fn compile_llm_branch(
+        &self,
+        definition: &LlmNodeDefinition,
+        execution: &ParallelBranchExecution,
+    ) -> Result<CompiledGraph, GraphError> {
+        let factory = self
+            .llm
+            .as_ref()
+            .and_then(|factory| factory.for_fanout_branch())
+            .ok_or_else(|| {
+                GraphError::InvalidGraph(
+                    "the fixed Parallel LLM branch runtime is unavailable".to_owned(),
+                )
+            })?;
+        let checkpointer = execution.checkpointer();
+        let node = LlmNode::new(definition.clone(), self.state_types.clone(), factory)
+            .with_parallel_inputs();
+        let mut channels = BTreeSet::from([
+            "input".to_owned(),
+            "messages".to_owned(),
+            "session_id".to_owned(),
+            LLM_TOOL_RESUME_STATE_KEY.to_owned(),
+            PARALLEL_LLM_INPUTS_STATE_KEY.to_owned(),
+            PIPELINE_NODE_EVENT_SCOPE_STATE_KEY.to_owned(),
+        ]);
+        channels.extend(definition.input_keys().iter().cloned());
+        channels.extend(definition.output_keys().iter().cloned());
+        let mut schema = StateSchema::new();
+        for channel in channels {
+            schema
+                .channels
+                .insert(channel.clone(), Channel::new(&channel));
+        }
+        schema
+            .channels
+            .insert("messages".to_owned(), Channel::list("messages"));
+        StateGraph::new(schema)
+            .add_node(execution.wrap_node(BranchFrontierNode {
+                node: Box::new(node),
+                checkpointer: Arc::clone(&checkpointer),
+            }))
+            .add_edge(START, definition.id())
+            .add_edge(definition.id(), END)
+            .compile()
+            .map(|graph| {
+                graph
+                    .with_checkpointer_arc(checkpointer)
+                    .with_max_concurrency(1)
+                    .with_strict_channels()
+            })
+    }
+
     fn definition(
         &self,
         branch: &crate::agents::graph::ParallelBranchDefinition,
-    ) -> Result<&ApplicationNodeDefinition, GraphError> {
+    ) -> Result<&OwnedBranch, GraphError> {
         self.owned
             .get(branch.id())
             .filter(|node| node.id() == branch.node())
@@ -402,9 +526,19 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         &self,
         branch: &crate::agents::graph::ParallelBranchDefinition,
     ) -> Result<[u8; 32], GraphError> {
-        let declared = self.definition(branch)?;
+        let declared = match self.definition(branch)? {
+            OwnedBranch::Agent(node) => node,
+            OwnedBranch::Llm(node) => {
+                let mut digest = digest::Context::new(&digest::SHA256);
+                digest.update(b"elitea.graph.parallel.owned-llm.v1\0");
+                digest.update(&node.config_digest());
+                let mut result = [0; 32];
+                result.copy_from_slice(digest.finish().as_ref());
+                return Ok(result);
+            }
+        };
         let participant = self
-            .resolver
+            .resolver()?
             .fixed_parallel_definition_digest(declared.id())
             .map_err(|_| {
                 GraphError::InvalidGraph(
@@ -430,7 +564,10 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         branch: &crate::agents::graph::ParallelBranchDefinition,
         parent: &State,
     ) -> Result<State, GraphError> {
-        self.definition(branch)?.freeze_parallel_input(parent)
+        match self.definition(branch)? {
+            OwnedBranch::Agent(node) => node.freeze_parallel_input(parent),
+            OwnedBranch::Llm(node) => node.freeze_parallel_input(parent),
+        }
     }
 
     fn compile_branch(
@@ -438,7 +575,10 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         branch: &crate::agents::graph::ParallelBranchDefinition,
         execution: ParallelBranchExecution,
     ) -> Result<CompiledGraph, GraphError> {
-        let definition = self.definition(branch)?.clone();
+        let definition = match self.definition(branch)? {
+            OwnedBranch::Agent(node) => node.clone(),
+            OwnedBranch::Llm(node) => return self.compile_llm_branch(node, &execution),
+        };
         let mut failure_events = None;
         let resolver = match self.events.as_ref() {
             Some(events) => {
@@ -459,13 +599,13 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
                     })?;
                 // A branch's typed refusal reaches the run's terminal (RECOVERY_REFUSED).
                 failure_events = Some(events.clone());
-                self.resolver.for_parallel_events(events).map_err(|_| {
+                self.resolver()?.for_parallel_events(events).map_err(|_| {
                     GraphError::InvalidGraph(
                         "the fixed Parallel event resolver is unavailable".to_owned(),
                     )
                 })?
             }
-            None => Arc::clone(&self.resolver),
+            None => Arc::clone(self.resolver()?),
         };
         // A continued authored `after` pause re-arms only its proven checkpoint.
         let checkpointer = if execution.static_after_checkpoints().is_empty() {
@@ -521,7 +661,7 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
             .insert("messages".to_owned(), Channel::list("messages"));
         StateGraph::new(schema)
             .add_node(execution.wrap_node(BranchFrontierNode {
-                node,
+                node: Box::new(node),
                 checkpointer: frontier,
             }))
             .add_edge(START, definition.id())
@@ -587,11 +727,14 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         pause: &ParallelBranchPause,
         decisions: &[ParallelDecision],
     ) -> Result<State, GraphError> {
-        let definition = self.definition(branch)?;
+        let OwnedBranch::Agent(definition) = self.definition(branch)? else {
+            // An LLM branch's pause is its own node's card: no authored catalog.
+            return super::super::parallel_cards::child_resume(pause, None, decisions).await;
+        };
         // The child participant's own authored pause catalog proves a static
         // pause; it is resolved from frozen saved versions, not from state.
         let participant = self
-            .resolver
+            .resolver()?
             .resolve(definition.selection(), Arc::clone(&pause.checkpointer))
             .map_err(|_| {
                 GraphError::InvalidGraph(
@@ -614,7 +757,7 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
 /// nothing yet, so save the frontier the call is admitted at before the node
 /// runs, as the root graph does for its entry (`with_initial_checkpoint`).
 struct BranchFrontierNode {
-    node: ApplicationNode,
+    node: Box<dyn Node>,
     checkpointer: Arc<dyn Checkpointer>,
 }
 

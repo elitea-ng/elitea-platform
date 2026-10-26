@@ -16,21 +16,23 @@ function validateOwnedAgentTopology(document: YamlPipelineDocument, agent: YamlP
     check.issue(field, 'A parent route cannot target the owned Agent.');
   }
 }
+/** An Agent (saved Agent or Pipeline) or an inline LLM node (T-2A D1). */
+const BRANCH_NODE_TYPES: ReadonlySet<string | undefined> = new Set(['agent', 'llm']);
 /** yaml.rs::RawParallelBranchDefinition and parallel_compiler.rs::validate_parallel_ownership. */
 function validateOwnedAgent(document: YamlPipelineDocument, owner: YamlPipelineNode, value: unknown, field: string, check: ExtensionValidator): void {
   if (typeof value !== 'string' || !isValidGraphId(value) || value === owner.id) {
-    check.issue(field, 'Select a different declared Agent node id.');
+    check.issue(field, 'Select a different declared Agent or LLM node id.');
     return;
   }
   const matches = (document.nodes ?? []).filter((node) => node.id === value);
   const agent = matches[0];
-  if (matches.length !== 1 || agent?.type !== 'agent') {
-    check.issue(field, 'Select one exact declared Agent node id.');
+  if (matches.length !== 1 || agent === undefined || !BRANCH_NODE_TYPES.has(agent.type)) {
+    check.issue(field, 'Select one exact declared Agent or LLM node id.');
     return;
   }
   if (parallelAgentReferenceCounts(document).get(value) !== 1
     || document.nodes?.some((node) => node.type === 'map' && node['worker'] === value)) {
-    check.issue(field, 'The Agent must belong to exactly one fixed Parallel branch.');
+    check.issue(field, 'The node must belong to exactly one fixed Parallel branch.');
   }
   validateOwnedAgentTopology(document, agent, field, check);
 }

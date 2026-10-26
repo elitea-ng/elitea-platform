@@ -10,7 +10,7 @@ describe('the fixed Parallel card', () => {
   it('renders all stored settings and exact result identities with editable controls, leaving YAML unchanged until an edit', async () => {
     const screen = renderExtensionCard(ParallelNode, parallelYaml);
     expect(await screen.findByLabelText('Branch 1 result key')).toHaveValue('stable_left');
-    expect(screen.getByLabelText('Branch 2 Agent node')).toHaveValue('Agent_right');
+    expect(screen.getByLabelText('Branch 2 Agent or LLM node')).toHaveValue('Agent_right');
     expect(screen.getByLabelText('Ordered list output')).toHaveValue('10');
     expect(screen.queryByText(/authoring is not enabled/u)).toBeNull();
     for (const field of screen.getAllByRole('textbox')) expect(field).toBeEnabled();

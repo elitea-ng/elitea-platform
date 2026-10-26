@@ -376,6 +376,10 @@ pub(crate) struct PipelineNativeAgentAssembler {
     /// Test-only: compose fixed Parallel with scoped Agent participants.
     #[cfg(test)]
     fixed_parallel_for_tests: bool,
+    /// Test-only: the decision source the test binding fetches from.
+    #[cfg(test)]
+    fanout_decisions_for_tests:
+        Option<Arc<dyn elitea_agent_runtime::graph::fanout::runner::DecisionSource>>,
     /// The web families' runtime (#1238).
     web_runtime: Option<Arc<crate::transport::metering::WebRuntime>>,
     /// Test seam: the continuation a fresh start takes, so a conversation an older worker
@@ -392,9 +396,11 @@ impl PipelineNativeAgentAssembler {
     }
 
     #[cfg(test)]
-    const fn fanout_composition(&self) -> super::session::FanoutComposition {
+    fn fanout_composition(&self) -> super::session::FanoutComposition {
         if self.fixed_parallel_for_tests {
-            super::session::FanoutComposition::BoundForTests
+            super::session::FanoutComposition::BoundForTests(
+                self.fanout_decisions_for_tests.clone(),
+            )
         } else {
             super::session::FanoutComposition::Bound
         }
@@ -406,6 +412,17 @@ impl PipelineNativeAgentAssembler {
     #[must_use]
     pub(crate) fn with_fixed_parallel_for_tests(mut self) -> Self {
         self.fixed_parallel_for_tests = true;
+        self
+    }
+
+    /// Test-only: the test binding fetches decisions from `source`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_fanout_decisions_for_tests(
+        mut self,
+        source: Arc<dyn elitea_agent_runtime::graph::fanout::runner::DecisionSource>,
+    ) -> Self {
+        self.fanout_decisions_for_tests = Some(source);
         self
     }
 
@@ -470,6 +487,8 @@ impl PipelineNativeAgentAssembler {
             #[cfg(test)]
             fixed_parallel_for_tests: false,
             #[cfg(test)]
+            fanout_decisions_for_tests: None,
+            #[cfg(test)]
             fresh_start_continuation: ApplicationContinuation::Scoped,
         }
     }
@@ -496,6 +515,8 @@ impl PipelineNativeAgentAssembler {
             web_runtime: None,
             #[cfg(test)]
             fixed_parallel_for_tests: false,
+            #[cfg(test)]
+            fanout_decisions_for_tests: None,
             #[cfg(test)]
             fresh_start_continuation: ApplicationContinuation::Scoped,
         }
@@ -797,6 +818,7 @@ impl PipelineNativeAgentAssembler {
         };
         let llm_factory = context.zip(model_facade).map(|(context, model_facade)| {
             Arc::new(NativePipelineLlmAgentFactory {
+                fanout_branch: false,
                 profile: profile.shell().clone(),
                 context,
                 model_facade,
@@ -1260,8 +1282,12 @@ impl PipelineNativeAgentAssembler {
                 .await?
             } else {
                 AdmittedPipelineComposition {
+                    // Inline LLM Parallel branches still own checkpoint families.
+                    checkpoint_paths: composition::composition_paths(
+                        profile.definition(),
+                        &BTreeMap::new(),
+                    )?,
                     children: BTreeMap::new(),
-                    checkpoint_paths: Vec::new(),
                 }
             };
             tracing::Span::current().record("stage", "state");
@@ -1370,7 +1396,10 @@ impl PipelineNativeAgentAssembler {
     }
 }
 
+#[derive(Clone)]
 struct NativePipelineLlmAgentFactory {
+    /// An inline fixed Parallel LLM branch (`for_fanout_branch`).
+    fanout_branch: bool,
     profile: OrdinaryNoToolProfile,
     context: Arc<ClaimScopedEliteaContext>,
     model_facade: Arc<ModelFacade>,
@@ -1668,9 +1697,16 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
             ContextManagementPlan::Disabled => None,
             ContextManagementPlan::Summarize(plan) => Some(plan),
         };
-        let checkpoint = self
-            .model_scopes
-            .for_node(scope.identity())
+        // D2 (T-2A §8): an inline Parallel branch re-run (no decision replay)
+        // resumes its own model step and replays a read-only batch; a tool
+        // past its boundary is refused typed.
+        let scopes = self.model_scopes.for_node(scope.identity());
+        let scopes = if self.fanout_branch && replay.is_none() {
+            scopes.with_pending_model_recovery().with_read_only_replay()
+        } else {
+            scopes
+        };
+        let checkpoint = scopes
             .checkpoint(
                 plan,
                 model.request_budget(),
@@ -1730,6 +1766,8 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
             // that failed authorization into a model-visible tool error.
             return Err(LlmExecutionError::Unavailable);
         }
+        let guarded = guards.keys().cloned().collect();
+        let selected_toolsets = checkpoint.record_read_only(selected_toolsets, &guarded);
         let mut builder = LlmAgentBuilder::new(definition.id())
             .description("Elitea stored-pipeline LLM node")
             .model(checkpoint.clone().delegation_model(model))
@@ -1771,7 +1809,15 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
     }
 
     fn event_sender(&self) -> Option<PipelineNodeEventSender> {
-        Some(self.node_events.clone())
+        // An inline Parallel branch reports through its member frames and its
+        // join entry; nothing of it ends the run.
+        (!self.fanout_branch).then(|| self.node_events.clone())
+    }
+
+    fn for_fanout_branch(&self) -> Option<Arc<dyn PipelineLlmAgentFactory>> {
+        let mut factory = self.clone();
+        factory.fanout_branch = true;
+        Some(Arc::new(factory))
     }
 }
 
@@ -2289,6 +2335,7 @@ async fn bind_saved_pipeline_runtimes(
     let guarded_interrupt_kinds = guarded_interrupt_kinds(profile, &delegated_authorization);
     let llm_factory = profile.definition().has_llm_nodes().then(|| {
         Arc::new(NativePipelineLlmAgentFactory {
+            fanout_branch: false,
             profile: profile.shell().clone(),
             context: Arc::clone(&runtime.context),
             model_facade: Arc::clone(&runtime.model_facade),

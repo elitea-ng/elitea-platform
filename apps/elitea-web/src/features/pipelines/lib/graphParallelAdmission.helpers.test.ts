@@ -83,9 +83,12 @@ describe('strict fixed Parallel admission', () => {
     expect(graphParallelIssues(conflicting).some((issue) => issue.message.includes('exactly one'))).toBe(true);
     expect(parallelOwnedAgent(conflicting, 'extension', 0)).toBeUndefined();
   });
-  it('rejects a declared sibling with the correct identity but a non-Agent type', () => {
+  it('admits an inline LLM node as a branch and rejects any other kind (T-2A D1)', () => {
     const value = document();
-    expect(graphParallelIssues({ ...value, nodes: value.nodes?.map((node) => node.id === 'Agent_left' ? { ...node, type: 'llm' } : node) ?? [] }).length).toBeGreaterThan(0);
+    const withType = (type: string) => ({ ...value, nodes: value.nodes?.map((node) => node.id === 'Agent_left' ? { ...node, type } : node) ?? [] });
+    expect(graphParallelIssues(withType('llm'))).toEqual([]);
+    expect(parallelOwnedAgent(withType('llm'), 'extension', 0)?.type).toBe('llm');
+    expect(graphParallelIssues(withType('printer')).length).toBeGreaterThan(0);
   });
   it('withholds child mutation when another node reuses the selected exact Agent identity', () => {
     const value = document();
