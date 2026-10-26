@@ -812,6 +812,14 @@ impl LocalSession {
         // ephemeral), else under the data directory.
         let spill = SpillStore::new(&spill_base, &config.session_id);
         spill.sweep();
+        // Spills an earlier build left under the data directory are no
+        // longer readable (the ids resolve under the cache directory now):
+        // they go at once instead of staying on disk forever.
+        if spill_base != config.data_dir {
+            SpillStore::new(&config.data_dir, &config.session_id)
+                .with_retention(Duration::ZERO)
+                .sweep();
+        }
         Ok(Arc::new(Self {
             workspace,
             ledger: ReadLedger::new(),

@@ -570,7 +570,8 @@ impl LocalDoctor {
     /// The thread-history retention (`threads.prune`): the threads idle past
     /// the retention's cutoff (the last finished turn older than it).
     /// Offered only when retention is on and the history counts idle
-    /// threads; the repair is refused without the app's confirm.
+    /// threads; the repair is refused without the app's confirm. Old threads
+    /// are not a fault, so the check stays `Ok` and only offers the repair.
     fn threads_prune_check(&self) -> Check {
         const ID: &str = "threads.prune";
         const TITLE: &str = "Thread history retention";
@@ -610,15 +611,15 @@ impl LocalDoctor {
             Ok(idle) => Check::new(
                 ID,
                 TITLE,
-                Status::Warn,
+                Status::Ok,
                 format!(
-                    "{idle} thread(s) sat idle more than {days} days; their last finished turn is past the retention. The server keeps their messages."
+                    "{idle} thread(s) sat idle more than {days} days. Forgetting them keeps their messages on the server, but deletes what only this device recorded: their tool activity, approvals and file changes."
                 ),
             )
-            .fix(
-                "threads.prune",
-                "Forget the idle threads",
-            ),
+            .fix("threads.prune", "Forget the idle threads")
+            .confirming(format!(
+                "This deletes the local record of {idle} thread(s) idle more than {days} days: their tool activity, approvals and file changes. Their messages stay on the server. It cannot be undone."
+            )),
             Err(error) => Check::new(
                 ID,
                 TITLE,
@@ -631,9 +632,9 @@ impl LocalDoctor {
     /// What is eating the app's data directory (`data.space`): the size of
     /// the data dir and of its two databases, each database's free-page
     /// fraction (trimmed space not yet returned to the disk), and the
-    /// cache dir's spilled outputs. It warns, and offers the vacuum repair,
-    /// when a database holds half or more of itself free and is at least
-    /// 100 MiB, or when the data dir is large.
+    /// spilled outputs in the cache dir. It warns, and offers the vacuum
+    /// repair, when a database holds half or more of itself free and is at
+    /// least 100 MiB.
     fn data_space_check(&self) -> Check {
         const ID: &str = "data.space";
         const TITLE: &str = "What the data directory holds";
@@ -654,10 +655,12 @@ impl LocalDoctor {
             .as_ref()
             .map(|store| store.free_page_fraction())
             .unwrap_or(0.0);
+        // Only the spills (`<cache>/sessions`): the rest of the cache dir is
+        // the webview's, not the app's to count.
         let spill = self
             .cache_dir
             .as_ref()
-            .map(|dir| dir_bytes(dir))
+            .map(|dir| dir_bytes(&dir.join("sessions")))
             .unwrap_or(0);
         let message = format!(
             "The data directory holds {data} ({} session memory, {} thread history); {} of spilled outputs in the cache dir. {:.0}% of the session memory and {:.0}% of the history are free pages.",
@@ -772,20 +775,24 @@ impl LocalDoctor {
                 ),
             ),
             Ok(_) => {
-                // The store is a cache the server rebuilds. Trimmed and
-                // deleted rows free space the file cannot give back on its
-                // own (files before schema 2), so a large file offers the
-                // shrink.
+                // Trimmed and deleted rows free pages; a file not yet under
+                // incremental vacuum (its switch failed at open) keeps them.
+                // A large file that is mostly free pages offers the shrink;
+                // one that uses what it holds does not (a VACUUM would give
+                // nothing back).
                 let bytes = fs::symlink_metadata(path)
                     .map(|meta| meta.len())
                     .unwrap_or_default();
-                if db.reclaims && bytes >= 100 * 1024 * 1024 {
+                if db.reclaims
+                    && bytes >= 100 * 1024 * 1024
+                    && sessions::database_free_page_fraction(&self.data_dir, db.file_name) >= 0.5
+                {
                     return Check::new(
                         id,
                         title,
                         Status::Ok,
                         format!(
-                            "Opens and passes its integrity check. The file holds {bytes} bytes; the server rebuilds the {}, and the shrink gives that space back to the disk.",
+                            "Opens and passes its integrity check. The file holds {bytes} bytes, half or more of it free pages; the shrink gives that space back to the disk and keeps the {}.",
                             db.noun
                         ),
                     )

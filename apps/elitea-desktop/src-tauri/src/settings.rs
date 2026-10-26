@@ -28,9 +28,10 @@ pub struct Settings {
     pub client_id: Option<String>,
     /// How many days the thread history keeps a thread before the
     /// `threads.prune` repair may forget it: the last finished turn of an
-    /// idle thread is older than the cutoff, and the server keeps the
-    /// messages (the UI re-builds the thread). `None`: the default (90
-    /// days). `0`: keep forever (retention off).
+    /// idle thread is older than the cutoff. The server keeps the messages;
+    /// the repair deletes what only this device recorded (tool rows,
+    /// approvals, file changes), and only on the person's confirm. `None`:
+    /// the default (90 days). `0`: keep forever (retention off).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_retention_days: Option<u32>,
 }
