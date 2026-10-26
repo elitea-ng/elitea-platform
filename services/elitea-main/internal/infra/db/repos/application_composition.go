@@ -372,8 +372,10 @@ func participantSchema(ctx context.Context, q relationReader, conversationSchema
 	if err != nil {
 		return "", errParticipantNotFound
 	}
+	// Membership admits a platform administrator to any project id, so the
+	// project must also exist (the HTTP gate pairs the two the same way).
 	var member bool
-	if err := q.QueryRow(ctx, "SELECT "+projectaccess.Membership(1, 2), owner, actor).Scan(&member); err != nil {
+	if err := q.QueryRow(ctx, "SELECT "+projectaccess.Membership(1, 2)+" AND "+projectaccess.ProjectExists(1), owner, actor).Scan(&member); err != nil {
 		return "", fmt.Errorf("conversations: participant project access: %w", err)
 	}
 	if member {

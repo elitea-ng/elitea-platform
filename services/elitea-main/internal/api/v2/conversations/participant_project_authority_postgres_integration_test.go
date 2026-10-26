@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS centry.project(id integer PRIMARY KEY, suspended bool
 INSERT INTO centry.project (id) VALUES (1), (2), (3) ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS public.auth_core__role(id integer PRIMARY KEY, name text, mode text);
 CREATE TABLE IF NOT EXISTS public.auth_core__user_role(user_id integer, role_id integer);
+-- Actor 9 is a platform administrator: membership admits it everywhere, but a
+-- project that does not exist is still not found.
+INSERT INTO public.auth_core__role VALUES (100, 'super_admin', 'administration') ON CONFLICT DO NOTHING;
+INSERT INTO public.auth_core__user_role VALUES (9, 100);
 INSERT INTO p_1.applications (id, name) VALUES (1, 'Leaf');
 INSERT INTO p_1.application_versions (id, application_id, agent_type, instructions) VALUES (1, 1, 'agent', '');
 CREATE SCHEMA p_2;
@@ -64,9 +68,14 @@ INSERT INTO p_3.entity_tool_mapping (entity_version_id, entity_type, tool_id) VA
 	if err != nil {
 		t.Fatal(err)
 	}
+	adminConv, err := repo.Create(chatActor("9"), "1", conversations.Conversation{Name: "Administrator participants"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	router := chatAuthorityRouter(pool)
 	path := "/1/conversations/" + conv.ID + "/participants"
 	memberPath := "/1/conversations/" + memberConv.ID + "/participants"
+	adminPath := "/1/conversations/" + adminConv.ID + "/participants"
 	body := func(project string, application, version int) string {
 		meta := fmt.Sprintf(`"id": %d, "name": "agent"`, application)
 		if project != "" {
@@ -96,6 +105,7 @@ INSERT INTO p_3.entity_tool_mapping (entity_version_id, entity_type, tool_id) VA
 		// as on every other surface of that project; not another project's.
 		{"a member of the catalogue project: an unpublished version", "8", body("2", 51, 51), http.StatusOK, memberPath},
 		{"a member of the catalogue project: a project it is not in", "8", body("3", 1, 1), http.StatusNotFound, memberPath},
+		{"a platform administrator: a project that does not exist", "9", body("99", 1, 1), http.StatusNotFound, adminPath},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			target := path
