@@ -6709,10 +6709,20 @@ components:
         agent_definition:
           type: object
           additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the AgentDefinition component is itself a JSON Schema document,
+            decoded from this spec and served verbatim by
+            internal/api/v2/drafts/schema.go:78, so its keys are the schema
+            language's, not fields of this contract.
           description: The AgentDefinition component, as JSON Schema.
         local_agent_definition:
           type: object
           additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the LocalAgentDefinition component is itself a JSON Schema document,
+            decoded from this spec and served verbatim by
+            internal/api/v2/drafts/schema.go:78, so its keys are the schema
+            language's, not fields of this contract.
           description: The LocalAgentDefinition component, as JSON Schema.
       example:
         schema_version: 3f2a9c0d41be
