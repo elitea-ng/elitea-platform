@@ -17,12 +17,12 @@ type forgeHandoffs struct {
 	seen []workspacehandoff.Handoff
 }
 
-func (f *forgeHandoffs) ForgeCredentialForTurn(_ context.Context, handoff workspacehandoff.Handoff) (map[string]any, error) {
+func (f *forgeHandoffs) ForgeCredentialForTurn(_ context.Context, handoff workspacehandoff.Handoff) (workspacehandoff.RedeemedForgeCredential, error) {
 	f.seen = append(f.seen, handoff)
 	if f.err != nil {
-		return nil, f.err
+		return workspacehandoff.RedeemedForgeCredential{}, f.err
 	}
-	return map[string]any{"access_token": "ghp_x"}, nil
+	return workspacehandoff.RedeemedForgeCredential{Type: "gitlab", Configuration: map[string]any{"access_token": "ghp_x"}}, nil
 }
 
 func TestForgeCredentialIsBoundToTheRunningTurnAndMapsItsRefusals(t *testing.T) {
@@ -34,7 +34,7 @@ func TestForgeCredentialIsBoundToTheRunningTurnAndMapsItsRefusals(t *testing.T) 
 		t.Fatal(err)
 	}
 	ref := workspaceruntime.ClaimRef{ExecutionID: "exec", ThreadUUID: conversation, Epoch: 2}
-	if credential, err := adapter.ForgeCredential(context.Background(), ref); err != nil || credential["access_token"] != "ghp_x" ||
+	if credential, err := adapter.ForgeCredential(context.Background(), ref); err != nil || credential.Configuration["access_token"] != "ghp_x" || credential.Forge != "gitlab" ||
 		len(handoffs.seen) != 1 || handoffs.seen[0].ConversationUUID != conversation {
 		t.Fatalf("credential = %v %v", credential, err)
 	}

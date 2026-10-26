@@ -35,10 +35,11 @@ func TestPullRequestCredentialIsSetAndClearedByTheOwnerFromAnyClient(t *testing.
 	h := &handler{handoff: handoff, store: &fakeStore{}, conversations: fakeConversations{}}
 	browser := &auth.User{ID: "7", UserID: "7", AuthType: "session"}
 	response := serve(t, h.setPullRequestCredential, browser, []string{SendPermission}, http.MethodPut,
-		PullRequestCredentialPath, pullRequestCredentialURL, `{"credential":{"elitea_title":"gh-team","private":true}}`)
+		PullRequestCredentialPath, pullRequestCredentialURL, `{"credential":{"type":"gitlab","elitea_title":"gh-team","private":true}}`)
 	answer := decode(t, response)
 	credential, _ := answer["pull_request_credential"].(map[string]any)
-	if response.Code != http.StatusOK || credential["elitea_title"] != "gh-team" || credential["private"] != true {
+	if response.Code != http.StatusOK || credential["elitea_title"] != "gh-team" || credential["private"] != true ||
+		credential["type"] != "gitlab" {
 		t.Fatalf("set = %d %v", response.Code, answer)
 	}
 	if len(handoff.set) != 1 || handoff.set[0].ActorUserID != 7 || handoff.set[0].Credential == nil ||
@@ -85,7 +86,7 @@ func TestPolicyAndStateCarryThePullRequestFields(t *testing.T) {
 	handoff := &fakeForgeHandoff{available: true}
 	handoff.policy = handoffapp.Policy{Enabled: true, PullRequests: true, PullRequestApproval: true}
 	handoff.view = handoffapp.View{Present: true, Handoff: handoffapp.Handoff{
-		OwnerUserID: 7, ForgeCredential: &handoffapp.ForgeCredential{EliteaTitle: "gh-team"},
+		OwnerUserID: 7, ForgeCredential: &handoffapp.ForgeCredential{Type: "github", EliteaTitle: "gh-team"},
 	}}
 	h := &handler{handoff: handoff, store: &fakeStore{}, conversations: fakeConversations{}}
 	response := serve(t, h.policy, nativeUser(), []string{SendPermission}, http.MethodGet, PolicyPath,

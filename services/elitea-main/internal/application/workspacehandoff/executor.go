@@ -36,6 +36,7 @@ func (s *Service) ResolveRunningTurn(ctx context.Context, executionID string) (H
 const (
 	EventScanBlocked        = "handoff.scan_blocked"
 	EventPullRequestOpened  = "pull_request.opened"
+	EventBranchPushed       = "branch.pushed"
 	maxExecutorEventAttrs   = 16
 	maxExecutorEventValueRn = 200
 )
@@ -49,6 +50,9 @@ var executorEventKeys = map[string]map[string]func(string) bool{
 	EventPullRequestOpened: {
 		"toolkit": isPrintable, "branch": isPrintable, "base": isPrintable, "number": isCount,
 		"url": isPrintable, "files": isCount,
+	},
+	EventBranchPushed: {
+		"toolkit": isPrintable, "branch": isPrintable, "base": isPrintable, "url": isPrintable, "commits": isCount,
 	},
 }
 
@@ -78,7 +82,8 @@ func isRuleList(value string) bool {
 func isPrintable(value string) bool { return value != "" && utf8.ValidString(value) }
 
 // RecordExecutorEvent writes an audit event the worker observed in the
-// running turn: handoff.scan_blocked or pull_request.opened. Only allowlisted
+// running turn: handoff.scan_blocked, pull_request.opened or branch.pushed.
+// Only allowlisted
 // attributes are recorded, bounded; anything else is dropped.
 func (s *Service) RecordExecutorEvent(
 	ctx context.Context, thread Thread, epoch int64, executionID, kind string, attrs map[string]string,

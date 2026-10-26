@@ -18,11 +18,11 @@ type forgeStore struct {
 	err        error
 }
 
-func (f *forgeStore) ForgeCredential(_ context.Context, claim workspaceruntime.ClaimRef) (map[string]any, error) {
+func (f *forgeStore) ForgeCredential(_ context.Context, claim workspaceruntime.ClaimRef) (workspaceruntime.ForgeCredential, error) {
 	if err := f.check(claim); err != nil {
-		return nil, err
+		return workspaceruntime.ForgeCredential{}, err
 	}
-	return f.credential, f.err
+	return workspaceruntime.ForgeCredential{Forge: "github", Configuration: f.credential}, f.err
 }
 
 func TestForgeCredentialIsAClaimBoundSecret(t *testing.T) {
@@ -35,18 +35,18 @@ func TestForgeCredentialIsAClaimBoundSecret(t *testing.T) {
 		t.Fatalf("answer = %v %v", response, err)
 	}
 	var credential map[string]any
-	if err := json.Unmarshal([]byte(response.GetGithubConfigurationJson()), &credential); err != nil ||
-		credential["access_token"] != "ghp_secret" {
-		t.Fatalf("credential = %q", response.GetGithubConfigurationJson())
+	if err := json.Unmarshal([]byte(response.GetConfigurationJson()), &credential); err != nil ||
+		credential["access_token"] != "ghp_secret" || response.GetForge() != "github" {
+		t.Fatalf("credential = %q", response.GetConfigurationJson())
 	}
 	// A stale epoch gets nothing.
 	response, _ = client.WorkspaceForgeCredential(context.Background(), &runtimev1.WorkspaceForgeCredentialRequestV1{Claim: claim(1)})
 	if response.GetRefusal().GetCode() != runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_STALE_EPOCH ||
-		response.GetGithubConfigurationJson() != "" {
+		response.GetConfigurationJson() != "" {
 		t.Fatalf("stale = %v", response)
 	}
 	for code, err := range map[runtimev1.WorkspaceRefusalCodeV1]error{
-		runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_NO_FORGE_CREDENTIAL:     workspaceruntime.Refuse(workspaceruntime.RefusalNoForgeCredential),
+		runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_NO_FORGE_CREDENTIAL:    workspaceruntime.Refuse(workspaceruntime.RefusalNoForgeCredential),
 		runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_PULL_REQUESTS_DISABLED: workspaceruntime.Refuse(workspaceruntime.RefusalPullRequestsDisabled),
 	} {
 		store.err = err
@@ -58,7 +58,7 @@ func TestForgeCredentialIsAClaimBoundSecret(t *testing.T) {
 	// Over the bound: refused, not sent.
 	store.err, store.credential = nil, map[string]any{"app_private_key": strings.Repeat("k", workspaceruntime.MaxForgeCredentialBytes)}
 	response, _ = client.WorkspaceForgeCredential(context.Background(), &runtimev1.WorkspaceForgeCredentialRequestV1{Claim: claim(2)})
-	if response.GetRejection() == nil || response.GetGithubConfigurationJson() != "" {
+	if response.GetRejection() == nil || response.GetConfigurationJson() != "" {
 		t.Fatalf("oversized = %v", response.GetRejection())
 	}
 }
@@ -74,7 +74,7 @@ func TestForgeCredentialRefusesAStaleFenceAndAStoreWithoutIt(t *testing.T) {
 	// A Store without the call (an older composition) is unavailable.
 	plain := dial(t, newStore(), verifier{})
 	response, _ = plain.WorkspaceForgeCredential(context.Background(), &runtimev1.WorkspaceForgeCredentialRequestV1{Claim: claim(2)})
-	if response.GetRejection() == nil || response.GetGithubConfigurationJson() != "" {
+	if response.GetRejection() == nil || response.GetConfigurationJson() != "" {
 		t.Fatalf("plain = %v", response)
 	}
 }

@@ -528,5 +528,21 @@ func TestRecordEventIsClaimBoundAndCarriesNoPath(t *testing.T) {
 	if len(store.events) != 2 || store.events[0].Attrs["rules"] != "aws-access-key,private-key" || store.events[0].Attrs["findings"] != "2" ||
 		store.events[1].Attrs["files"] != "3" || store.events[1].Attrs["number"] != "42" || len(store.events[1].Attrs) != 5 {
 		t.Fatalf("recorded = %+v", store.events)
+	}	// branch.pushed (amendment 2026-10-26): the new branch and its commit
+	// count; a push of nothing is not an event.
+	pushed, err := client.WorkspaceRecordEvent(context.Background(), &runtimev1.WorkspaceRecordEventRequestV1{
+		Claim: claim(2), Kind: runtimev1.WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_BRANCH_PUSHED,
+		Toolkit: "@thread", Branch: "cloud-change", Base: "main", Url: "https://gitlab.example.com/g/p/-/tree/cloud-change", Commits: 4,
+	})
+	if err != nil || !pushed.GetRecorded() || len(store.events) != 3 || store.events[2].Kind != workspaceruntime.EventBranchPushed ||
+		store.events[2].Attrs["commits"] != "4" || store.events[2].Attrs["url"] == "" {
+		t.Fatalf("branch.pushed = %v %v %+v", pushed, err, store.events)
+	}
+	empty, _ := client.WorkspaceRecordEvent(context.Background(), &runtimev1.WorkspaceRecordEventRequestV1{
+		Claim: claim(2), Kind: runtimev1.WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_BRANCH_PUSHED,
+		Toolkit: "@thread", Branch: "cloud-change", Base: "main",
+	})
+	if empty.GetRecorded() {
+		t.Fatalf("a push of no commits was recorded: %v", empty)
 	}
 }

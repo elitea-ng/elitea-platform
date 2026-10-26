@@ -80,7 +80,7 @@ var pullRequestsOn = Policy{Enabled: true, PullRequests: true, PullRequestApprov
 func TestSetForgeCredentialChecksTheReferenceAndAuditsNoSecret(t *testing.T) {
 	service, store, resolver, recorder := forgeService(t, cloudRow(), true, pullRequestsOn)
 	thread := Thread{ProjectID: 1, ConversationUUID: forgeThread}
-	credential := &ForgeCredential{EliteaTitle: "gh-team", Private: true}
+	credential := &ForgeCredential{Type: "github", EliteaTitle: "gh-team", Private: true}
 	updated, err := service.SetForgeCredential(context.Background(), SetForgeCredentialRequest{
 		Thread: thread, ActorUserID: 7, Credential: credential, AuditRoute: "/route",
 	})
@@ -104,7 +104,7 @@ func TestSetForgeCredentialChecksTheReferenceAndAuditsNoSecret(t *testing.T) {
 
 func TestSetForgeCredentialRefusals(t *testing.T) {
 	thread := Thread{ProjectID: 1, ConversationUUID: forgeThread}
-	credential := &ForgeCredential{EliteaTitle: "gh"}
+	credential := &ForgeCredential{Type: "github", EliteaTitle: "gh"}
 	local := cloudRow()
 	local.State = workspacestore.StateLocal
 	erased := cloudRow()
@@ -124,9 +124,10 @@ func TestSetForgeCredentialRefusals(t *testing.T) {
 		"erased":              {row: erased, found: true, policy: pullRequestsOn, actor: 7, credential: credential, want: ErrErased},
 		"pull requests off":   {row: cloudRow(), found: true, policy: Policy{Enabled: true}, actor: 7, credential: credential, want: ErrPullRequestsDisabled},
 		"not a github config": {row: cloudRow(), found: true, policy: pullRequestsOn, actor: 7, credential: credential, resolveErr: ErrForgeCredentialInvalid, want: ErrForgeCredentialInvalid},
-		"a blank title":       {row: cloudRow(), found: true, policy: pullRequestsOn, actor: 7, credential: &ForgeCredential{EliteaTitle: " "}, want: ErrInvalid},
-		"a control character": {row: cloudRow(), found: true, policy: pullRequestsOn, actor: 7, credential: &ForgeCredential{EliteaTitle: "a\nb"}, want: ErrInvalid},
-		"an over-long title":  {row: cloudRow(), found: true, policy: pullRequestsOn, actor: 7, credential: &ForgeCredential{EliteaTitle: strings.Repeat("a", 257)}, want: ErrInvalid},
+		"a blank title":       {row: cloudRow(), found: true, policy: pullRequestsOn, actor: 7, credential: &ForgeCredential{Type: "github", EliteaTitle: " "}, want: ErrInvalid},
+		"a control character": {row: cloudRow(), found: true, policy: pullRequestsOn, actor: 7, credential: &ForgeCredential{Type: "github", EliteaTitle: "a\nb"}, want: ErrInvalid},
+		"an over-long title":  {row: cloudRow(), found: true, policy: pullRequestsOn, actor: 7, credential: &ForgeCredential{Type: "github", EliteaTitle: strings.Repeat("a", 257)}, want: ErrInvalid},
+		"an unknown forge":    {row: cloudRow(), found: true, policy: pullRequestsOn, actor: 7, credential: &ForgeCredential{Type: "bitbucket", EliteaTitle: "bb"}, want: ErrInvalid},
 	} {
 		t.Run(name, func(t *testing.T) {
 			service, store, resolver, _ := forgeService(t, tc.row, tc.found, tc.policy)
@@ -151,10 +152,10 @@ func TestSetForgeCredentialRefusals(t *testing.T) {
 
 func TestForgeCredentialForTurnRedeemsAsTheOwnerUnderTheCurrentPolicy(t *testing.T) {
 	row := cloudRow()
-	row.ForgeCredential = &ForgeCredential{EliteaTitle: "gh-team"}
+	row.ForgeCredential = &ForgeCredential{Type: "github", EliteaTitle: "gh-team"}
 	service, _, resolver, _ := forgeService(t, row, true, pullRequestsOn)
 	credential, err := service.ForgeCredentialForTurn(context.Background(), row)
-	if err != nil || credential["access_token"] != "ghp_x" || len(resolver.calls) != 1 ||
+	if err != nil || credential.Configuration["access_token"] != "ghp_x" || credential.Type != "github" || len(resolver.calls) != 1 ||
 		resolver.calls[0].user != 7 || !resolver.calls[0].unsecret {
 		t.Fatalf("redeem = %v %v %+v", credential, err, resolver.calls)
 	}

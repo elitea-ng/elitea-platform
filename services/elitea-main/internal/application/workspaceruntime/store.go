@@ -221,7 +221,14 @@ type Store interface {
 // resolves) and RefusalPullRequestsDisabled when the policy is off. The
 // values are a credential: never logged, audited or cached.
 type ForgeCredentialSource interface {
-	ForgeCredential(ctx context.Context, claim ClaimRef) (map[string]any, error)
+	ForgeCredential(ctx context.Context, claim ClaimRef) (ForgeCredential, error)
+}
+
+// ForgeCredential is a redeemed forge credential: the forge (`github` or
+// `gitlab`) and the configuration's data. A credential: never logged.
+type ForgeCredential struct {
+	Forge         string
+	Configuration map[string]any
 }
 
 // MaxForgeCredentialBytes bounds the encoded credential the worker receives.
@@ -232,11 +239,13 @@ const MaxForgeCredentialBytes = 32 << 10
 const (
 	EventScanBlocked       = "handoff.scan_blocked"
 	EventPullRequestOpened = "pull_request.opened"
+	EventBranchPushed      = "branch.pushed"
 )
 
 // ExecutorEvent is one executor audit event: its kind and its attributes
 // (scan_blocked: findings, rules; pull_request.opened: toolkit, branch,
-// base, number, url, files).
+// base, number, url, files; branch.pushed: toolkit, branch, base, url,
+// commits).
 type ExecutorEvent struct {
 	Kind  string
 	Attrs map[string]string

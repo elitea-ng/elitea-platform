@@ -366,7 +366,7 @@ func (a *Adapter) EnvSecret(ctx context.Context, claim workspaceruntime.ClaimRef
 // forgeCredentials is the optional Handoffs call behind
 // WorkspaceForgeCredential (*workspacehandoff.Service).
 type forgeCredentials interface {
-	ForgeCredentialForTurn(ctx context.Context, handoff workspacehandoff.Handoff) (map[string]any, error)
+	ForgeCredentialForTurn(ctx context.Context, handoff workspacehandoff.Handoff) (workspacehandoff.RedeemedForgeCredential, error)
 }
 
 var _ workspaceruntime.ForgeCredentialSource = (*Adapter)(nil)
@@ -374,27 +374,27 @@ var _ workspaceruntime.ForgeCredentialSource = (*Adapter)(nil)
 // ForgeCredential redeems the running turn's pull-request credential
 // (ADR-0034 decision 10, amended 2026-10-26). The claim is bound to the
 // thread first, as every Store call is.
-func (a *Adapter) ForgeCredential(ctx context.Context, claim workspaceruntime.ClaimRef) (map[string]any, error) {
+func (a *Adapter) ForgeCredential(ctx context.Context, claim workspaceruntime.ClaimRef) (workspaceruntime.ForgeCredential, error) {
 	handoff, _, err := a.running(ctx, claim)
 	if err != nil {
-		return nil, err
+		return workspaceruntime.ForgeCredential{}, err
 	}
 	forge, ok := a.handoffs.(forgeCredentials)
 	if !ok {
-		return nil, workspaceruntime.ErrUnavailable
+		return workspaceruntime.ForgeCredential{}, workspaceruntime.ErrUnavailable
 	}
 	credential, err := forge.ForgeCredentialForTurn(ctx, handoff)
 	switch {
 	case errors.Is(err, workspacehandoff.ErrNoForgeCredential), errors.Is(err, workspacehandoff.ErrForgeCredentialInvalid):
-		return nil, workspaceruntime.Refuse(workspaceruntime.RefusalNoForgeCredential)
+		return workspaceruntime.ForgeCredential{}, workspaceruntime.Refuse(workspaceruntime.RefusalNoForgeCredential)
 	case errors.Is(err, workspacehandoff.ErrPullRequestsDisabled):
-		return nil, workspaceruntime.Refuse(workspaceruntime.RefusalPullRequestsDisabled)
+		return workspaceruntime.ForgeCredential{}, workspaceruntime.Refuse(workspaceruntime.RefusalPullRequestsDisabled)
 	case errors.Is(err, workspacehandoff.ErrUnavailable):
-		return nil, workspaceruntime.ErrUnavailable
+		return workspaceruntime.ForgeCredential{}, workspaceruntime.ErrUnavailable
 	case err != nil:
-		return nil, storeError(err)
+		return workspaceruntime.ForgeCredential{}, storeError(err)
 	}
-	return credential, nil
+	return workspaceruntime.ForgeCredential{Forge: credential.Type, Configuration: credential.Configuration}, nil
 }
 
 // RecordEvent writes the running turn's executor audit event.

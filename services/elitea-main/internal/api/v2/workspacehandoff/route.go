@@ -817,7 +817,7 @@ func forgeCredentialView(credential *handoffapp.ForgeCredential) any {
 	if credential == nil {
 		return nil
 	}
-	return map[string]any{"elitea_title": credential.EliteaTitle, "private": credential.Private}
+	return map[string]any{"type": credential.Type, "elitea_title": credential.EliteaTitle, "private": credential.Private}
 }
 
 type pullRequestCredentialBody struct {
@@ -825,8 +825,9 @@ type pullRequestCredentialBody struct {
 	Credential *handoffapp.ForgeCredential `json:"credential"`
 }
 
-// setPullRequestCredential chooses (or, with null, clears) the GitHub
-// configuration a cloud turn of the thread opens pull requests through. Only
+// setPullRequestCredential chooses (or, with null, clears) the GitHub or
+// GitLab configuration a cloud turn of the thread pushes and opens pull
+// requests through. Only
 // the thread's owner, from any client.
 func (h *handler) setPullRequestCredential(writer http.ResponseWriter, request *http.Request) {
 	target, ok := thread(writer, request)

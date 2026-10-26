@@ -387,7 +387,8 @@ func (s *Server) WorkspaceEnvSecret(request *runtimev1.WorkspaceEnvSecretRequest
 
 // WorkspaceForgeCredential answers the running turn's pull-request
 // credential (ADR-0034 decision 10, amended 2026-10-26): the GitHub
-// configuration the thread's owner chose, redeemed, as one JSON object. Like
+// or GitLab configuration the thread's owner chose, redeemed, as one JSON
+// object, with its type. Like
 // the env it is a claim-bound runtime secret: never logged.
 func (s *Server) WorkspaceForgeCredential(ctx context.Context, request *runtimev1.WorkspaceForgeCredentialRequestV1) (*runtimev1.WorkspaceForgeCredentialResponseV1, error) {
 	if request == nil {
@@ -408,12 +409,13 @@ func (s *Server) WorkspaceForgeCredential(ctx context.Context, request *runtimev
 		}
 		return &runtimev1.WorkspaceForgeCredentialResponseV1{Rejection: s.storeRejection(ctx, "forge_credential", err)}, nil
 	}
-	encoded, err := json.Marshal(credential)
-	if err != nil || len(encoded) > workspaceruntime.MaxForgeCredentialBytes || credential == nil {
+	encoded, err := json.Marshal(credential.Configuration)
+	if err != nil || len(encoded) > workspaceruntime.MaxForgeCredentialBytes || credential.Configuration == nil ||
+		(credential.Forge != "github" && credential.Forge != "gitlab") {
 		s.logger.ErrorContext(ctx, "the thread's pull-request credential is outside the contract limits", "execution_id", claim.ExecutionID)
 		return &runtimev1.WorkspaceForgeCredentialResponseV1{Rejection: rejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL, "The pull-request credential is unavailable.", false)}, nil
 	}
-	return &runtimev1.WorkspaceForgeCredentialResponseV1{GithubConfigurationJson: string(encoded)}, nil
+	return &runtimev1.WorkspaceForgeCredentialResponseV1{ConfigurationJson: string(encoded), Forge: credential.Forge}, nil
 }
 
 // Bounds of an executor audit event's attributes.
@@ -477,6 +479,20 @@ func executorEvent(request *runtimev1.WorkspaceRecordEventRequestV1) (workspacer
 			attrs["url"] = request.GetUrl()
 		}
 		return workspaceruntime.ExecutorEvent{Kind: workspaceruntime.EventPullRequestOpened, Attrs: attrs}, true
+	case runtimev1.WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_BRANCH_PUSHED:
+		if request.GetCommits() == 0 || !boundedText(request.GetToolkit(), maxEventStringBytes) ||
+			!boundedText(request.GetBranch(), maxEventStringBytes) || !boundedText(request.GetBase(), maxEventStringBytes) ||
+			(request.GetUrl() != "" && !boundedText(request.GetUrl(), maxEventStringBytes)) {
+			return workspaceruntime.ExecutorEvent{}, false
+		}
+		attrs := map[string]string{
+			"toolkit": request.GetToolkit(), "branch": request.GetBranch(), "base": request.GetBase(),
+			"commits": strconv.FormatUint(uint64(request.GetCommits()), 10),
+		}
+		if request.GetUrl() != "" {
+			attrs["url"] = request.GetUrl()
+		}
+		return workspaceruntime.ExecutorEvent{Kind: workspaceruntime.EventBranchPushed, Attrs: attrs}, true
 	}
 	return workspaceruntime.ExecutorEvent{}, false
 }

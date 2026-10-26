@@ -15,11 +15,11 @@ type forgeExpander interface {
 	Expand(ctx context.Context, request configurationapp.CurrentExpansionRequest) (map[string]any, error)
 }
 
-// forgeCredentialResolver expands a thread's pull-request credential
-// reference (ADR-0034 decision 10, amended 2026-10-26) exactly as a GitHub
-// toolkit's `github_configuration` setting is expanded: the project's
+// forgeCredentialResolver expands a thread's forge credential reference
+// (ADR-0034 decision 10, amended 2026-10-26) exactly as a GitHub or GitLab
+// toolkit's `<type>_configuration` setting is expanded: the project's
 // configuration, the user's private one, or a shared one of the public
-// project, and only of type github.
+// project, and only of the reference's type.
 type forgeCredentialResolver struct {
 	expander forgeExpander
 }
@@ -43,8 +43,9 @@ func (r forgeCredentialResolver) ResolveForgeCredential(ctx context.Context, pro
 		return nil, workspacehandoff.ErrForgeCredentialInvalid
 	}
 	user := int32(userID)
+	key := credential.Type + "_configuration"
 	expanded, err := r.expander.Expand(ctx, configurationapp.CurrentExpansionRequest{
-		Payload: map[string]any{"github_configuration": map[string]any{
+		Payload: map[string]any{key: map[string]any{
 			"elitea_title": credential.EliteaTitle, "private": credential.Private,
 		}},
 		CurrentProjectID: int32(projectID),
@@ -58,8 +59,8 @@ func (r forgeCredentialResolver) ResolveForgeCredential(ctx context.Context, pro
 		}
 		return nil, errors.Join(workspacehandoff.ErrUnavailable, err)
 	}
-	configuration, ok := expanded["github_configuration"].(map[string]any)
-	if !ok || configuration["configuration_type"] != workspacehandoff.ForgeCredentialType {
+	configuration, ok := expanded[key].(map[string]any)
+	if !ok || configuration["configuration_type"] != credential.Type {
 		return nil, workspacehandoff.ErrForgeCredentialInvalid
 	}
 	for _, key := range forgeCredentialMetadata {

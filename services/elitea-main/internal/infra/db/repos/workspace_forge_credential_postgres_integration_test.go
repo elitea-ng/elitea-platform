@@ -23,7 +23,7 @@ func TestPostgresWorkspaceHandoffForgeCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credential := &workspacehandoff.ForgeCredential{EliteaTitle: "gh-team", Private: true}
+	credential := &workspacehandoff.ForgeCredential{Type: "github", EliteaTitle: "gh-team", Private: true}
 
 	// No handoff row yet: nothing to set.
 	if _, err := repo.SetForgeCredential(ctx, thread, owner, credential); !errors.Is(err, workspacehandoff.ErrNotFound) {
@@ -48,8 +48,9 @@ func TestPostgresWorkspaceHandoffForgeCredential(t *testing.T) {
 		t.Fatalf("clear = %+v, %v", cleared.ForgeCredential, err)
 	}
 	// The column holds a reference, never anything else (a token, say).
-	for _, value := range []string{`{"elitea_title":"gh","private":true,"token":"ghp_x"}`,
-		`{"elitea_title":"","private":false}`, `{"elitea_title":"gh"}`, `"gh"`} {
+	for _, value := range []string{`{"type":"github","elitea_title":"gh","private":true,"token":"ghp_x"}`,
+		`{"type":"github","elitea_title":"","private":false}`, `{"type":"github","elitea_title":"gh"}`, `"gh"`,
+		`{"elitea_title":"gh","private":true}`, `{"type":"bitbucket","elitea_title":"gh","private":true}`} {
 		if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.workspace_handoffs SET forge_credential = $3::jsonb
 WHERE project_id = $1 AND conversation_uuid = $2::uuid`, thread.ProjectID, thread.ConversationUUID, value); err == nil {
 			t.Fatalf("the column took %s", value)
