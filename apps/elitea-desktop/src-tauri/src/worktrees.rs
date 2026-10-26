@@ -285,7 +285,7 @@ fn tool_error(error: &ToolError) -> TurnError {
         ErrorCode::Unsupported => "not_a_git_repository",
         _ => "worktree_failed",
     };
-    TurnError::new(code, error.message())
+    TurnError::new(code, error.person_message())
 }
 
 async fn blocking<T: Send + 'static>(

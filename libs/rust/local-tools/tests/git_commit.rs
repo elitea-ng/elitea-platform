@@ -166,6 +166,43 @@ async fn commit(fixture: &Fixture, args: Value) -> Value {
     fixture.session.call("git_commit", "c", args).await
 }
 
+/// A repository's `core.hooksPath` (husky's `.husky`) is accepted, and
+/// its hooks never run on a commit: host git forces `/dev/null`.
+#[tokio::test]
+async fn commits_in_a_repository_with_a_hooks_path_and_runs_none_of_its_hooks() {
+    let fixture = fixture("approve", |root| {
+        let hooks = root.join(".husky");
+        std::fs::create_dir_all(&hooks).expect("hooks");
+        let marker = root.parent().expect("base").join("hook-ran");
+        for hook in [
+            "pre-commit",
+            "prepare-commit-msg",
+            "commit-msg",
+            "post-commit",
+            "reference-transaction",
+            "post-index-change",
+        ] {
+            let path = hooks.join(hook);
+            std::fs::write(&path, format!("#!/bin/sh\ntouch {}\n", marker.display()))
+                .expect("hook");
+            Command::new("chmod")
+                .arg("+x")
+                .arg(&path)
+                .status()
+                .expect("chmod");
+        }
+        git(root, &["config", "core.hooksPath", ".husky"]);
+    });
+    std::fs::write(fixture.root.join("a.txt"), "changed\n").expect("edit");
+    let result = commit(
+        &fixture,
+        json!({ "message": "Agent change", "paths": ["a.txt"] }),
+    )
+    .await;
+    assert_eq!(result["status"], "ok", "{result}");
+    assert!(!fixture.marker.exists(), "the repository's hook ran");
+}
+
 #[tokio::test]
 async fn commits_selected_files_with_the_global_identity_and_no_hooks() {
     let fixture = fixture("approve", |_| {});

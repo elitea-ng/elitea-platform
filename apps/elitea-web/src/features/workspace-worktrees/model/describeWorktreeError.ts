@@ -11,7 +11,6 @@ const MESSAGES: Readonly<Record<string, () => string>> = {
   worktree_unknown: () => t('workspace.worktree.error.unknown', 'This parallel task is gone. Its list is refreshed.'),
   worktree_exists: () => t('workspace.worktree.error.exists', 'A parallel task for this thread already exists.'),
   not_a_git_repository: () => t('workspace.worktree.error.notGit', 'Parallel tasks need a folder that is a git repository.'),
-  unsafe_repository: () => t('workspace.worktree.error.unsafe', 'Git does not trust this repository (it belongs to another user), so no parallel task can be made in it.'),
   workspace_busy: () => t('workspace.error.busy', 'An agent is still working in this folder. Wait for it to finish, or stop it, and try again.'),
   workspace_unknown: () => t('workspace.worktree.error.workspaceUnknown', 'This folder is no longer in your workspaces.'),
   preflight_expired: () => t('workspace.worktree.error.expired', 'The preview is out of date. Check again before merging back.'),
@@ -21,6 +20,14 @@ const MESSAGES: Readonly<Record<string, () => string>> = {
 
 export function describeWorktreeError(error: unknown): string {
   const { code, message } = toWorkspaceIpcError(error);
+  // The host refuses a repository for one of many reasons (a hooks path, a
+  // submodule, another user's worktree file…), each naming the path: say
+  // which, never a guess.
+  if (code === 'unsafe_repository') {
+    return message === ''
+      ? t('workspace.worktree.error.unsafeUnknown', 'Parallel tasks cannot use this repository.')
+      : t('workspace.worktree.error.unsafe', 'Parallel tasks cannot use this repository: {{reason}}', { reason: message });
+  }
   const known = MESSAGES[code];
   if (known !== undefined) return known();
   return message === '' ? t('workspace.failed', 'That did not work. Try again.') : message;

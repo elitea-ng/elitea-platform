@@ -218,18 +218,17 @@ async fn a_core_worktree_elsewhere_is_refused() {
 }
 
 #[tokio::test]
-async fn includes_aliases_hooks_and_fsmonitor_in_the_config_are_refused() {
+async fn includes_aliases_and_fsmonitor_in_the_config_are_refused() {
     for snippet in [
         "[include]\n\tpath = ../evil.cfg\n",
         "[includeIf \"gitdir:/\"]\n\tpath = ../evil.cfg\n",
         "[alias]\n\tst = !touch x\n",
         "[core]\n\tfsmonitor = touch x\n",
-        "[core]\n\thooksPath = hooks\n",
         "[core]\n\tsshCommand = touch x\n",
         "[diff \"x\"]\n\ttextconv = touch x\n",
         "[merge \"x\"]\n\tdriver = touch x\n",
         "[credential]\n\thelper = touch x\n",
-        "[submodule \"m\"]\n\turl = ../m\n",
+        "[submodule \"m\"]\n\tupdate = !touch x\n",
         "[url \"x\"]\n\tinsteadOf = y\n",
         "[core]\n\tpager = touch x\n",
         "[this is not a config line\n",
@@ -275,6 +274,7 @@ async fn commondir_and_submodule_git_dirs_are_refused() {
     let (checkpoints, results) = exercise(&planted).await;
     assert_refused(&checkpoints, &results);
 
+    // A submodule git directory with a gitlink that uses it: refused.
     let planted = repository();
     let module = planted.root.join(".git/modules/m");
     std::fs::create_dir_all(&module).expect("module");
@@ -283,8 +283,114 @@ async fn commondir_and_submodule_git_dirs_are_refused() {
         format!("[core]\n\tfsmonitor = {}\n", payload(&planted.marker)),
     )
     .expect("module config");
+    git(
+        &planted.root,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{},m", "1".repeat(40)),
+        ],
+    );
     let (checkpoints, results) = exercise(&planted).await;
     assert_refused(&checkpoints, &results);
+}
+
+/// A git directory left behind by a submodule since removed (no gitlink,
+/// no `.gitmodules`), as git writes it, with its `[submodule]` section:
+/// accepted.
+#[tokio::test]
+async fn a_stale_submodule_git_dir_is_accepted() {
+    let planted = repository();
+    let module = planted.root.join(".git/modules/m");
+    std::fs::create_dir_all(&module).expect("module");
+    std::fs::write(
+        module.join("config"),
+        "[core]\n\tbare = false\n\tworktree = ../../../m\n",
+    )
+    .expect("module config");
+    append(
+        &planted.root.join(".git/config"),
+        "[submodule \"m\"]\n\turl = ../m\n\tactive = true\n",
+    );
+    let (checkpoints, results) = exercise(&planted).await;
+    assert_eq!(checkpoints.kind(), "git", "{:?}", checkpoints.git_refusal());
+    for result in results.as_array().expect("results") {
+        assert_eq!(result["status"], "ok", "{result}");
+    }
+}
+
+/// A stale submodule git directory whose config carries an fsmonitor
+/// payload, and a work-tree `.git` file pointing into it: the agent's tools
+/// cannot write that file (`.git` is protected at any depth), the
+/// repository is refused for the module's config, and the payload never
+/// runs through any host git path.
+#[tokio::test]
+async fn a_gitfile_into_a_stale_module_with_a_payload_never_runs_it() {
+    let planted = repository();
+    let module = planted.root.join(".git/modules/m");
+    std::fs::create_dir_all(&module).expect("module");
+    std::fs::write(
+        module.join("config"),
+        format!("[core]\n\tfsmonitor = {}\n", payload(&planted.marker)),
+    )
+    .expect("module config");
+    let workspace = Workspace::open(&planted.root, &[]).expect("workspace");
+    let gitfile =
+        elitea_local_tools::workspace::WsPath::from_relative(Path::new("m/.git")).expect("path");
+    assert!(
+        workspace
+            .write(&gitfile, b"gitdir: ../.git/modules/m\n", None)
+            .is_err(),
+        "the agent's tools must not write a .git file"
+    );
+    // Planted from outside the agent's reach (the person's own folder).
+    std::fs::create_dir_all(planted.root.join("m")).expect("m");
+    std::fs::write(planted.root.join("m/.git"), "gitdir: ../.git/modules/m\n").expect("gitfile");
+    std::fs::write(planted.root.join("m/f.txt"), "f\n").expect("file");
+    let (checkpoints, results) = exercise(&planted).await;
+    assert_refused(&checkpoints, &results);
+    assert!(!planted.marker.exists());
+}
+
+/// `core.hooksPath` is accepted, and no hook in it (or in `.git/hooks`)
+/// ever runs through the host's git: checkpoints, a restore, the git
+/// tools, and making a task worktree (`worktree add`, `read-tree`,
+/// `checkout-index`, ref updates) and using it.
+#[tokio::test]
+async fn a_hooks_path_is_accepted_and_its_hooks_never_run() {
+    for hooks_path in ["hooks", ".git/hooks"] {
+        let planted = repository();
+        let hooks = planted.root.join(hooks_path);
+        std::fs::create_dir_all(&hooks).expect("hooks");
+        for hook in [
+            "reference-transaction",
+            "post-checkout",
+            "post-index-change",
+            "pre-commit",
+            "post-commit",
+            "pre-auto-gc",
+        ] {
+            let path = hooks.join(hook);
+            std::fs::write(&path, format!("#!/bin/sh\n{}\n", payload(&planted.marker)))
+                .expect("hook");
+            std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .expect("chmod");
+        }
+        append(
+            &planted.root.join(".git/config"),
+            &format!("[core]\n\thooksPath = {hooks_path}\n"),
+        );
+        let (checkpoints, results) = exercise(&planted).await;
+        assert_eq!(checkpoints.kind(), "git", "{:?}", checkpoints.git_refusal());
+        for result in results.as_array().expect("results") {
+            assert_eq!(result["status"], "ok", "{result}");
+        }
+        let entry = task_worktree(&planted, "hooks1");
+        let (checkpoints, _) = exercise_at(&entry.worktree, &planted).await;
+        assert_eq!(checkpoints.kind(), "git");
+        assert!(!planted.marker.exists(), "a hook ran ({hooks_path})");
+    }
 }
 
 /// A task worktree of the planted repository, created by the host under
