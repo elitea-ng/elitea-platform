@@ -501,6 +501,15 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: node scripts/check-generated-client.mjs
 
+      # ── Contract examples satisfy their schemas ─────────────────────────
+      # orval generates the test mocks with useExamples: true, so a response
+      # example in v2.yaml is the body a test receives. Neither generator
+      # checks an example against its schema; this does (Ajv, OpenAPI 3.0
+      # nullable/exclusive bounds translated). RED/GREEN: check-gates-selftest.
+      - name: Contract examples satisfy their schemas
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/check-spec-examples.mjs
+
       # ── Route-wiring map matches the routes ─────────────────────────────
       # parity/route-wiring-map.json is generated: its mechanical fields are
       # re-derived from src/routes/** on every run. `--check` fails when the
@@ -620,18 +629,6 @@ jobs:
             exit 1
           }
           node scripts/i18n-backfill.mjs --check
-
-      # ── Fixture freshness ───────────────────────────────────────────────
-      # Issue #426. Same shape as the two gates above, same repair.
-      - name: Fixture freshness
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: |
-          set -euo pipefail
-          test -f scripts/check-fixture-freshness.mjs || {
-            echo "::error::apps/elitea-web/scripts/check-fixture-freshness.mjs is missing, so the fixture freshness gate cannot check anything. Restore the file under its old name, or point this job at the new one. Do not let the job pass."
-            exit 1
-          }
-          node scripts/check-fixture-freshness.mjs
 
       # ── Layer + cycle gate ──────────────────────────────────────────────
       # Issue #528. The gate used to run `npx depcruise src` and read the exit

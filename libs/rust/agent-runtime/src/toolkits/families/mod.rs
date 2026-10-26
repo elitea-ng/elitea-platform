@@ -69,6 +69,7 @@ pub(crate) mod sql;
 pub(crate) mod testio;
 pub(crate) mod testrail;
 pub(crate) mod vcs_text;
+pub(crate) mod web;
 #[cfg(feature = "toolkit-office")]
 pub(crate) mod xlsx;
 pub(crate) mod xray_cloud;
@@ -147,8 +148,8 @@ impl UnsupportedSetting {
 
 /// The Office families' tools as elitea-main's `rust_only_toolkit_tools.json`
 /// carries them (ADR-0032 P3, P4): the `pptx` tools the SDK does not declare
-/// under `types`, and the whole `docx` and `xlsx` types (they have no SDK
-/// counterpart) under `new_types`. The Go catalogue merges both into its pinned
+/// under `types`, and the whole `docx`, `xlsx`, `web` and `host_intel` types
+/// (they have no SDK counterpart) under `new_types`. The Go catalogue merges both into its pinned
 /// SDK snapshot; the test that compares this document with the file there
 /// (`ELITEA_WRITE_RUST_ONLY_TOOLS=1` rewrites it) is what keeps the two equal.
 #[cfg(all(test, feature = "toolkit-office"))]
@@ -156,6 +157,11 @@ pub(crate) fn rust_only_catalogue_document() -> serde_json::Value {
     serde_json::json!({
         "schema_version": "elitea.rust-only-toolkit-tools.v1",
         "types": {"pptx": serde_json::Value::Object(pptx::schema::rust_only_catalogue_tools())},
-        "new_types": {"docx": docx::schema::type_entry(), "xlsx": xlsx::schema::type_entry()},
+        "new_types": {
+            "docx": docx::schema::type_entry(),
+            "xlsx": xlsx::schema::type_entry(),
+            "web": web::catalogue::web_type_entry(),
+            "host_intel": web::catalogue::host_intel_type_entry(),
+        },
     })
 }

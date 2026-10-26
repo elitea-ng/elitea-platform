@@ -12,8 +12,8 @@ package eliteacore
 // JSON export to every request, so the product's "Export to Markdown" control
 // downloaded a `.md` file containing an export DOCUMENT. Nothing failed: the
 // download succeeded, the file had the right name, and only opening it showed
-// JSON. Found by the R-M4 fixture-freshness gate, whose whole purpose is to
-// force a periodic re-read of what the backend actually returns.
+// JSON. Found by the R-M4 fixture-freshness gate (retired 2026-10-23), which
+// forced a periodic re-read of what the backend actually returns.
 //
 // ## What it is a port of
 //

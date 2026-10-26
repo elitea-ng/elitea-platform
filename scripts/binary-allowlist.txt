@@ -115,3 +115,12 @@ apps/elitea-mobile/assets/elitea.icon/Assets/*.png
 # Development-only document scan samples the scanner preview loads in __DEV__
 # builds (src/features/chat/attachments/scan/scanSamples.ts).
 apps/elitea-mobile/assets/dev/scan/*.jpg
+
+# Desktop document sidecar fixtures (#1220): small real EPUB/OOXML/ODF files
+# (each under 4 KB) that the sidecar's tests extract page by page; zip
+# containers, so they cannot be text.
+apps/elitea-desktop/doc-extract-sidecar/tests/fixtures/*.epub
+apps/elitea-desktop/doc-extract-sidecar/tests/fixtures/*.xlsx
+apps/elitea-desktop/doc-extract-sidecar/tests/fixtures/*.pptx
+apps/elitea-desktop/doc-extract-sidecar/tests/fixtures/*.docx
+apps/elitea-desktop/doc-extract-sidecar/tests/fixtures/*.odt

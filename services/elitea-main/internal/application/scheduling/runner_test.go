@@ -122,6 +122,27 @@ func (s *memoryStore) MaterializeAndAdvance(
 	return nil
 }
 
+func (s *memoryStore) DisableAndAdvance(_ context.Context, claim PlanningClaim, through time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cursor := s.cursors[claim.JobID]
+	if cursor == nil || cursor.revision != claim.ScheduleRevision ||
+		cursor.epoch != claim.LeaseEpoch || cursor.fence != claim.ClaimFence {
+		return ErrStaleFence
+	}
+	for _, occurrence := range s.occurrences {
+		if occurrence.seed.JobID == claim.JobID && occurrence.state == "PENDING" &&
+			!occurrence.expires.After(through) {
+			occurrence.state = "SUPERSEDED"
+		}
+	}
+	cursor.through = through
+	cursor.owner = ""
+	cursor.fence = [32]byte{}
+	cursor.expires = time.Time{}
+	return nil
+}
+
 func (s *memoryStore) ClaimPage(
 	_ context.Context,
 	registered []RegisteredJob,

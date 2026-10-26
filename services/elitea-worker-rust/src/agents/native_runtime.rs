@@ -148,6 +148,18 @@ impl NativeRuntimeAssembler<OrdinaryNativeAgentAssembler, PipelineNativeAgentAss
         self
     }
 
+    /// Lend the web families' runtime (#1238) to direct agents and pipeline
+    /// nodes.
+    #[must_use]
+    pub(crate) fn with_web_runtime(
+        mut self,
+        web_runtime: Option<Arc<crate::transport::metering::WebRuntime>>,
+    ) -> Self {
+        self.direct = self.direct.with_web_runtime(web_runtime.clone());
+        self.pipeline = self.pipeline.with_web_runtime(web_runtime);
+        self
+    }
+
     /// The MCP connector of both modes: production's carries the platform
     /// client identity for the internal MCP builders.
     #[must_use]

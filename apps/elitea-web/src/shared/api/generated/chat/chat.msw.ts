@@ -61,6 +61,9 @@ import type {
   CreatedConversation,
   ExecutionInterruptDecisionResult,
   ExecutionInterruptList,
+  GeneratedConversationName,
+  LocalChildTurnStarted,
+  LocalChildTurnState,
   LocalTurnCommitted,
   LocalTurnStarted,
   MemoryEntry,
@@ -79,6 +82,8 @@ import type {
   UpdatedConversation,
   WorkspaceFetchPlan,
   WorkspaceHandoffBegun,
+  WorkspaceHandoffChanges,
+  WorkspaceHandoffDiff,
   WorkspaceHandoffEmpty,
   WorkspaceHandoffErased,
   WorkspaceHandoffPolicy,
@@ -370,6 +375,18 @@ export const getForkConversationResponseMock = (
         faker.string.uuid(),
         undefined,
       ]),
+      mode: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      cut_message_uuid: faker.helpers.arrayElement([
+        faker.string.uuid(),
+        undefined,
+      ]),
+      branch_summary: faker.helpers.arrayElement([
+        { version: faker.number.int() },
+        undefined,
+      ]),
       name: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
@@ -495,6 +512,18 @@ export const getListConversationsResponseMock = (
         message_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
         message_uuid: faker.helpers.arrayElement([
           faker.string.uuid(),
+          undefined,
+        ]),
+        mode: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        cut_message_uuid: faker.helpers.arrayElement([
+          faker.string.uuid(),
+          undefined,
+        ]),
+        branch_summary: faker.helpers.arrayElement([
+          { version: faker.number.int() },
           undefined,
         ]),
         name: faker.helpers.arrayElement([
@@ -640,6 +669,14 @@ export const getCreateConversationResponseMock = (
   ...overrideResponse,
 });
 
+export const getGenerateConversationNameResponseMock = (
+  overrideResponse: Partial<Extract<GeneratedConversationName, object>> = {},
+): GeneratedConversationName => ({
+  name: "Gateway TLS certificate rotation",
+  renamed: true,
+  ...overrideResponse,
+});
+
 export const getGetConversationResponseMock = (
   overrideResponse: Partial<Extract<ConversationDetail, object>> = {},
 ): ConversationDetail => ({
@@ -685,6 +722,18 @@ export const getGetConversationResponseMock = (
       message_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
       message_uuid: faker.helpers.arrayElement([
         faker.string.uuid(),
+        undefined,
+      ]),
+      mode: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      cut_message_uuid: faker.helpers.arrayElement([
+        faker.string.uuid(),
+        undefined,
+      ]),
+      branch_summary: faker.helpers.arrayElement([
+        { version: faker.number.int() },
         undefined,
       ]),
       name: faker.helpers.arrayElement([
@@ -1169,6 +1218,10 @@ export const getGetWorkspaceHandoffResponseMock = (
     faker.datatype.boolean(),
     undefined,
   ]),
+  rest_pending: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
+    undefined,
+  ]),
   handoff_id: faker.helpers.arrayElement([faker.string.uuid(), undefined]),
   device_name: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -1259,13 +1312,9 @@ export const getReclaimWorkspaceHandoffResponseMock = (
 ): WorkspaceHandoffReclaimed | WorkspaceHandoffReclaimPending =>
   faker.helpers.arrayElement([
     {
-      state: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      epoch: faker.number.int(),
-      cloud_sha: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        null,
-      ]),
-      ...overrideResponse,
+      state: "RECLAIMING",
+      epoch: 5,
+      cloud_sha: "0123456789abcdef0123456789abcdef01234567",
     },
     {
       state: faker.string.alpha({ length: { min: 10, max: 20 } }),
@@ -1282,17 +1331,115 @@ export const getRequestWorkspaceHandoffReclaimResponseMock = (
   overrideResponse: Partial<Extract<WorkspaceHandoffEmpty, object>> = {},
 ): WorkspaceHandoffEmpty => ({ ...overrideResponse });
 
-export const getReleaseWorkspaceHandoffResponseMock = (
-  overrideResponse: Partial<Extract<WorkspaceHandoffReleased, object>> = {},
-): WorkspaceHandoffReleased => ({
-  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  epoch: faker.number.int(),
-  cloud_copy_delete_after: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    null,
-  ]),
-  ...overrideResponse,
-});
+export const getReleaseWorkspaceHandoffResponseMock =
+  (): WorkspaceHandoffReleased => ({
+    state: "LOCAL",
+    epoch: 4,
+    cloud_copy_delete_after: "2026-11-01T12:00:00Z",
+  });
+
+export const getGetWorkspaceHandoffChangesResponseMock =
+  (): WorkspaceHandoffChanges => ({
+    handoff_id: "6b1f3f0e-6a52-4d0b-9a55-7f3c2f2f7a10",
+    base_sha: "3f2c1b0a9e8d7c6b5a493827161504f3e2d1c0b9",
+    head_sha: "9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3",
+    complete: true,
+    cumulative_commit: "9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3",
+    cumulative: {
+      additions: 14,
+      deletions: 3,
+      omitted_files: 0,
+      hidden_files: 0,
+      files: [
+        {
+          path: "src/parser.rs",
+          from_path: null,
+          status: "modified",
+          additions: 12,
+          deletions: 3,
+          binary: false,
+          too_large: false,
+          has_diff: true,
+        },
+        {
+          path: "docs/parser.md",
+          from_path: null,
+          status: "added",
+          additions: 2,
+          deletions: 0,
+          binary: false,
+          too_large: false,
+          has_diff: true,
+        },
+        {
+          path: "assets/logo.png",
+          from_path: null,
+          status: "modified",
+          additions: null,
+          deletions: null,
+          binary: true,
+          too_large: false,
+          has_diff: false,
+        },
+      ],
+    },
+    turns: [
+      {
+        commit: "9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3",
+        parent_sha: "3f2c1b0a9e8d7c6b5a493827161504f3e2d1c0b9",
+        seq: 2,
+        number: 1,
+        response_message_id: "0b5d2f6e-3c1a-4e8b-9f7d-2a6c4e8b1d3f",
+        created_at: "2026-10-25T12:00:00Z",
+        changes: {
+          additions: 14,
+          deletions: 3,
+          omitted_files: 0,
+          hidden_files: 0,
+          files: [
+            {
+              path: "src/parser.rs",
+              from_path: null,
+              status: "modified",
+              additions: 12,
+              deletions: 3,
+              binary: false,
+              too_large: false,
+              has_diff: true,
+            },
+            {
+              path: "docs/parser.md",
+              from_path: null,
+              status: "added",
+              additions: 2,
+              deletions: 0,
+              binary: false,
+              too_large: false,
+              has_diff: true,
+            },
+            {
+              path: "assets/logo.png",
+              from_path: null,
+              status: "modified",
+              additions: null,
+              deletions: null,
+              binary: true,
+              too_large: false,
+              has_diff: false,
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+export const getGetWorkspaceHandoffDiffResponseMock =
+  (): WorkspaceHandoffDiff => ({
+    commit: "9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3",
+    scope: "turn",
+    path: "docs/parser.md",
+    diff: "diff --git a/docs/parser.md b/docs/parser.md\nnew file mode 100644\n--- /dev/null\n+++ b/docs/parser.md\n@@ -0,0 +1,2 @@\n+# Parser\n+The parser reads one token at a time.\n",
+  });
 
 export const getRequestWorkspaceSegmentUploadResponseMock = (
   overrideResponse: Partial<Extract<WorkspaceSegmentUploadGrant, object>> = {},
@@ -1375,6 +1522,26 @@ export const getGetWorkspaceFetchPlanResponseMock = (
 
 export const getGetWorkspaceSegmentObjectResponseMock = (): ArrayBuffer =>
   new ArrayBuffer(faker.number.int({ min: 1, max: 64 }));
+
+export const getStartLocalChildTurnResponseMock =
+  (): LocalChildTurnStarted => ({
+    child_execution_id: "9b2f6c1e4d8a4f7b8c3e5a1d2f6b7c90",
+    response_message_id: "3f1c2a4e-8b7d-4c6a-9e1f-2d3b4a5c6e7f",
+    conversation_uuid: "7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d",
+    created: true,
+  });
+
+export const getReadLocalChildTurnResponseMock = (): LocalChildTurnState => ({
+  status: "completed",
+  child_execution_id: "9b2f6c1e4d8a4f7b8c3e5a1d2f6b7c90",
+  response_message_id: "3f1c2a4e-8b7d-4c6a-9e1f-2d3b4a5c6e7f",
+  conversation_uuid: "7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d",
+  output:
+    "PROJ-142 is open: the login page times out behind the proxy; assigned to the platform team.",
+  output_truncated: false,
+  tool_calls_summary: [{ tool_name: "jira_get_issue", is_error: false }],
+  usage: { llm_calls: 2, prompt_tokens: 1840, completion_tokens: 212 },
+});
 
 export const getListExecutionInterruptsResponseMock = (
   overrideResponse: Partial<Extract<ExecutionInterruptList, object>> = {},
@@ -2443,6 +2610,32 @@ export const getCreateConversationMockHandler = (
   );
 };
 
+export const getGenerateConversationNameMockHandler = (
+  overrideResponse?:
+    | GeneratedConversationName
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<GeneratedConversationName> | GeneratedConversationName),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/conversation_name/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGenerateConversationNameResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetConversationMockHandler = (
   overrideResponse?:
     | ConversationDetail
@@ -2907,6 +3100,58 @@ export const getReleaseWorkspaceHandoffMockHandler = (
   );
 };
 
+export const getGetWorkspaceHandoffChangesMockHandler = (
+  overrideResponse?:
+    | WorkspaceHandoffChanges
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<WorkspaceHandoffChanges> | WorkspaceHandoffChanges),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/workspace_handoff_changes/prompt_lib/:projectId/:conversationUuid",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetWorkspaceHandoffChangesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetWorkspaceHandoffDiffMockHandler = (
+  overrideResponse?:
+    | WorkspaceHandoffDiff
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<WorkspaceHandoffDiff> | WorkspaceHandoffDiff),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/workspace_handoff_diff/prompt_lib/:projectId/:conversationUuid",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetWorkspaceHandoffDiffResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getRequestWorkspaceSegmentUploadMockHandler = (
   overrideResponse?:
     | WorkspaceSegmentUploadGrant
@@ -3054,6 +3299,58 @@ export const getGetWorkspaceSegmentObjectMockHandler = (
           status: 200,
           headers: { "Content-Type": "application/octet-stream" },
         },
+      );
+    },
+    options,
+  );
+};
+
+export const getStartLocalChildTurnMockHandler = (
+  overrideResponse?:
+    | LocalChildTurnStarted
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<LocalChildTurnStarted> | LocalChildTurnStarted),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/local_child_turn/prompt_lib/:projectId/:executionId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getStartLocalChildTurnResponseMock(),
+        { status: 202 },
+      );
+    },
+    options,
+  );
+};
+
+export const getReadLocalChildTurnMockHandler = (
+  overrideResponse?:
+    | LocalChildTurnState
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<LocalChildTurnState> | LocalChildTurnState),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/local_child_turn/prompt_lib/:projectId/:executionId/:childExecutionId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getReadLocalChildTurnResponseMock(),
+        { status: 200 },
       );
     },
     options,
@@ -3583,6 +3880,7 @@ export const getChatMock = () => [
   getExportConversationMockHandler(),
   getListConversationsMockHandler(),
   getCreateConversationMockHandler(),
+  getGenerateConversationNameMockHandler(),
   getGetConversationMockHandler(),
   getUpdateConversationMockHandler(),
   getDeleteConversationMockHandler(),
@@ -3601,12 +3899,16 @@ export const getChatMock = () => [
   getReclaimWorkspaceHandoffMockHandler(),
   getRequestWorkspaceHandoffReclaimMockHandler(),
   getReleaseWorkspaceHandoffMockHandler(),
+  getGetWorkspaceHandoffChangesMockHandler(),
+  getGetWorkspaceHandoffDiffMockHandler(),
   getRequestWorkspaceSegmentUploadMockHandler(),
   getCompleteWorkspaceSegmentUploadMockHandler(),
   getPublishWorkspaceSegmentMockHandler(),
   getGetWorkspaceFetchPlanMockHandler(),
   getPutWorkspaceSegmentObjectMockHandler(),
   getGetWorkspaceSegmentObjectMockHandler(),
+  getStartLocalChildTurnMockHandler(),
+  getReadLocalChildTurnMockHandler(),
   getCancelChatExecutionMockHandler(),
   getListExecutionInterruptsMockHandler(),
   getDecideExecutionInterruptMockHandler(),

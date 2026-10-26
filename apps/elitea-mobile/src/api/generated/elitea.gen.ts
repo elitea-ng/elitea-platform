@@ -4,8 +4,8 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.17
- * operations sha256:  a3030f8415c02eae93cf271dec7ea12bb87198aaac3192ca70ea9ff3f6678270
+ * client contract:    1.26
+ * operations sha256:  a753925f91525937cdcdec96aaae8881104e5c4a25c7f190ec08bd13581cf8ae
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -645,8 +645,60 @@ export interface paths {
          *     reply of the copy that is; without
          *     `message_id`, the newest message is the fork point. An editor Test
          *     conversation answers 409 `fork_not_supported`.
+         *
+         *     A rewind (`mode: rewind`, issue 1234) is a fork at an answer that
+         *     also records what the turns after it tried: `forked_from` names the
+         *     mode and the copy's fork point (`cut_message_uuid`), and
+         *     getConversation's `forked_from.branch_summary` is the request's
+         *     `branch_summary` or, without one, a summary the server builds from
+         *     the text of the turns it did not copy. The source is not changed: a
+         *     client lists it under the rewound conversation as the earlier
+         *     attempt. A Local work thread the cloud executor owns (ADR-0034)
+         *     answers 409 `thread_executor_is_cloud`; a fork of more than 1000
+         *     message groups answers 413 `fork_too_large`. Nothing is created
+         *     when the fork is refused. With `fork_id`, a retry answers the fork
+         *     the first request made. The audit trail records
+         *     `conversation.fork` or `conversation.rewind`.
          */
         post: operations["forkConversation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/conversation_name/prompt_lib/{project_id}/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Name a conversation from its first exchange
+         * @description Client contract 1.24. Asks the project's default model for a short
+         *     title of the conversation, from its first question and first answer, and renames
+         *     the conversation to it. Needs `models.chat.conversation.update` and
+         *     access to the conversation, as a rename does. The call is billed to
+         *     the caller, like `predict_llm`.
+         *
+         *     `expected_name` is the name the client gave the conversation (a cut
+         *     of the first message). The route renames only while the stored name
+         *     is still that one, so it never overwrites a person's own rename: it
+         *     reads the name again after the model call. The answer is the name
+         *     the conversation has then, and whether this call set it. A
+         *     conversation without a question yet keeps its name. Other devices
+         *     get the new name through the `changes_since` delta, as with any
+         *     rename.
+         */
+        post: operations["generateConversationName"];
         delete?: never;
         options?: never;
         head?: never;
@@ -815,7 +867,15 @@ export interface paths {
          */
         get: operations["listMemories"];
         put?: never;
-        post?: never;
+        /**
+         * Save a new persistent, cross-conversation memory
+         * @description internal/api/v2/memories/handler.go's Create (#870). Used both by
+         *     Settings > Memory's "Add memory" control and by the chat message
+         *     "Remember this" action (which additionally sends
+         *     `source_conversation_id`). Client contract 1.20: the desktop's
+         *     `save_memory` tool (#1233) writes through it.
+         */
+        post: operations["createMemory"];
         /**
          * Delete every one of the caller's own memories in this project
          * @description internal/api/v2/memories/handler.go's ClearAll (#870). Settings >
@@ -2007,7 +2067,7 @@ export interface components {
             user_declined_mcp_servers?: string[];
             user_input?: string;
         };
-        /** @description A refused send, regenerate or continue. NOTE(W2): internal/api/v2/agentexecution/route.go:558 (`writeStartError`) and :601 (`writeUnsupported`). `error` is a machine code for 409 and 422 (`agent_regeneration_pending`, `agent_hitl_already_resolved`, `agent_authorization_already_resolved`, `agent_output_limit_already_resolved`, `unsupported_agent_execution`) and a message otherwise; the idempotency conflict is a 409 whose `error` is the message "Agent execution request conflicts with an existing turn". */
+        /** @description A refused send, regenerate or continue. NOTE(W2): internal/api/v2/agentexecution/route.go:558 (`writeStartError`) and :601 (`writeUnsupported`). `error` is a machine code for 409 and 422 (`agent_regeneration_pending`, `agent_hitl_already_resolved`, `project_skills_limit`, `project_skills_too_large`, `project_skill_name_conflict`, `project_skill_unknown`, `project_skills_forbidden`, `agent_authorization_already_resolved`, `agent_output_limit_already_resolved`, `unsupported_agent_execution`) and a message otherwise; the idempotency conflict is a 409 whose `error` is the message "Agent execution request conflicts with an existing turn". */
         ChatExecutionError: {
             error: string;
             message?: string;
@@ -2025,6 +2085,16 @@ export interface components {
             response_message_id: string;
             /** @description Equal to `execution_id` (legacy name). */
             task_id: string;
+        };
+        /** @description A project skill picked for one turn, by id. */
+        ChatProjectSkillPick: {
+            /**
+             * Format: int64
+             * @description The skill's id (`listSkills`), at most 2147483647.
+             */
+            id: number;
+            /** @enum {string} */
+            source: "project";
         };
         /** @description NOTE(W2): internal/api/v2/agentexecution/route.go:183 (`currentRegenerationBody`). `message_id` and `stream_id` must both equal the path's message id. */
         ChatRegenerateRequest: {
@@ -2096,6 +2166,8 @@ export interface components {
             participant_id?: number;
             payload: {
                 attachments?: components["schemas"]["ChatStartAttachment"][];
+                /** @description Project skills picked in the composer's `~` menu (client contract 1.19): skills of the path's project that the answering agent version does not carry. Each entry names the skill by id only. The server reads the skill's `base` version itself under the caller's permissions (`models.applications.skills.details` and folder access); no skill text is accepted from the client. A picked skill is applied to this turn, counts toward the five skills a turn may invoke (with the `~name` skills of the version) and toward their 64 KiB of instructions, and is not added to the agent's `load_skill` catalogue. For `agent.execute.application.v1` only. A repeated id, more than five entries or another `source` answers 400. */
+                skills?: components["schemas"]["ChatProjectSkillPick"][];
                 user_input: string;
             };
             /**
@@ -2191,12 +2263,16 @@ export interface components {
         };
         /** @description NOTE(W2): the union of internal/api/v2/configurations/handler.go's Model (compat) and internal/application/configurations/models.go's CurrentModelCatalogItem (reviewed). */
         ConfigurationModelItem: {
+            /** @description `reviewed` only, and section=llm only. What the gateway charges per 1M cached input tokens, in USD; it applies no cache discount today, so it equals the input price. Absent or null when unknown or when the caller may not see amounts (the budget routes' can_see_amounts rule). */
+            cached_input_cost_per_1m_tokens?: number | null;
             /** @description `compat` only. A copy of `id`. */
             config_id?: number;
             /** @description `compat` only. A copy of `name`. */
             config_name?: string;
             /** @description `reviewed` only. */
             context_window?: number | null;
+            /** @description `reviewed` only. The currency of the three cost fields, always "USD". Present exactly when they are. */
+            currency?: string | null;
             data?: {
                 [key: string]: unknown;
             };
@@ -2210,6 +2286,8 @@ export interface components {
             high_tier?: boolean | null;
             /** @description `compat` only, and it is the CONFIGURATION row id, not a model id. `reviewed` emits no id at all, and the shipped client synthesises one from `project_id` and `name`. */
             id?: number;
+            /** @description `reviewed` only, and section=llm only. USD per 1M input tokens from the gateway's price catalogue (gateway.gateway_models, the table the budget gate prices with). Absent or null when the price is unknown or when the caller may not see amounts (the budget routes' can_see_amounts rule: the caller's personal project, or the project admin role). */
+            input_cost_per_1m_tokens?: number | null;
             /** @description `compat` only, and it is ALWAYS false: that handler does not read the project default. Read `default_model_name` on the envelope instead. */
             is_default?: boolean;
             /** @description `reviewed` only. */
@@ -2222,6 +2300,8 @@ export interface components {
             name: string;
             /** @description `reviewed` only. */
             openai_compatible?: boolean | null;
+            /** @description `reviewed` only, and section=llm only. USD per 1M output tokens from the gateway's price catalogue. Absent or null when unknown or when the caller may not see amounts (the budget routes' can_see_amounts rule). */
+            output_cost_per_1m_tokens?: number | null;
             /** @description BOTH, and a NUMBER on both, for the reason ConfigurationRow gives. */
             project_id: number;
             /** @description `compat` only. */
@@ -2377,6 +2457,13 @@ export interface components {
         };
         /** @description Client contract 1.11. The conversation this conversation was forked from (forkConversation), and the fork point. Absent when the conversation is not a fork. The source can be deleted, or become invisible to the reader, later; then the ids stay and `name` is absent. */
         ConversationForkedFrom: {
+            /** @description getConversation of a rewind only. What the abandoned turns after the fork point tried, in the runtime's shared v1 context summary record (`version` 1, at most 32 KiB): the request's `branch_summary`, or one the server built from those turns' text. */
+            branch_summary?: {
+                /** @description Always 1. */
+                version: number;
+            } & {
+                [key: string]: unknown;
+            };
             /** @description The source conversation's numeric id. */
             conversation_id: number;
             /**
@@ -2384,6 +2471,11 @@ export interface components {
              * @description The source conversation's UUID.
              */
             conversation_uuid?: string;
+            /**
+             * Format: uuid
+             * @description The UUID of this conversation's copy of the fork point message group, when there is one: the turns up to it are the copied history. A desktop places a rewind's branch summary after it when it rebuilds its session from the server.
+             */
+            cut_message_uuid?: string;
             /** @description The numeric id of the fork point message group. Absent when the whole conversation was forked. */
             message_id?: number;
             /**
@@ -2391,6 +2483,8 @@ export interface components {
              * @description The UUID of the fork point message group, when there is one.
              */
             message_uuid?: string;
+            /** @description `fork` or `rewind` (forkConversation's `mode`). A fork made before rewinds existed reads `fork`. A client lists the source of a rewind under it as the earlier attempt. */
+            mode?: string;
             /** @description getConversation only. The source conversation's current name. Present only when the source still exists and the reader can see it; a client shows the "Forked from" link only then. */
             name?: string;
         };
@@ -2687,10 +2781,43 @@ export interface components {
         };
         /** @description Client contract 1.11. The body of forkConversation. An absent body forks the whole conversation with the default name. */
         ForkConversationRequest: {
+            /** @description A rewind's summary of the abandoned turns, in the runtime's shared v1 context summary record (`version` 1, exactly its keys, at most 24 entries per array, 2048 bytes per string and 32 KiB in all). Absent: the server builds one from those turns' text. With another mode, or not a valid record, it answers 400. */
+            branch_summary?: {
+                /** @description Always 1. */
+                version: number;
+            } & {
+                [key: string]: unknown;
+            };
+            /**
+             * Format: uuid
+             * @description An idempotency key. A request whose `fork_id` already made a fork of the caller answers that fork (201, its row now, with an empty `forked_messages`) and copies nothing; one that made a fork of another source, fork point or mode answers 409 `fork_id_conflict`.
+             */
+            fork_id?: string;
             /** @description The fork point: the numeric id or the UUID of a message group of the source conversation, a user message or an assistant message. Absent: the whole conversation. */
             message_id?: string;
+            /** @description `fork` (the default) or `rewind`. A rewind is a fork that also records the abandoned turns after the fork point as `forked_from.branch_summary`; it needs `message_id`. Any other value answers 400. */
+            mode?: string;
             /** @description The new conversation's name. Absent: the source name with " (fork)" added ("New conversation (fork)" when the source name is blank). Trimmed; blank, longer than 256 characters or with a control character answers 400. */
             name?: string;
+        };
+        GenerateConversationNameRequest: {
+            /**
+             * @description The name the client gave the conversation; the route renames only while the stored name is this one.
+             * @example how do I rotate the gateway's TLS
+             */
+            expected_name: string;
+        };
+        GeneratedConversationName: {
+            /**
+             * @description The conversation's name after the call (the generated title, or the name it kept).
+             * @example Gateway TLS certificate rotation
+             */
+            name: string;
+            /**
+             * @description This call set the name.
+             * @example true
+             */
+            renamed: boolean;
         };
         /** @description The 400 answer to a native client whose `X-Client-Version` does not parse (ADR-0025 decision 5). NOTE(W2): internal/api/middleware/client_version.go:190 (`WriteInvalidClientVersion`). */
         InvalidClientVersionError: {
@@ -2729,6 +2856,8 @@ export interface components {
             command_allow: string[];
             /** @description Command patterns that never run. A deny wins over an allow. Same bounds. */
             command_deny: string[];
+            /** @description Client contract 1.22. Local turns may use the host_intel toolkit (internet host search and lookup through Shodan). Absent or false is off (the default); the server refuses a remote host_intel call while it is false. */
+            host_intel?: boolean;
             /** @description Client contract 1.9. The user may add vectors to a local index with an embedding model that runs on the device (nothing leaves it). Default true. Embeddings stay off per workspace until the user turns them on and picks a model. */
             index_local_embeddings: boolean;
             /** @description Client contract 1.9. Where the app downloads the on-device embedding models from instead of Hugging Face: an https base URL laid out as the Hugging Face CDN (<base>/<repo>/resolve/<revision>/<file>). Empty (the default) is Hugging Face. Every file is checked against the SHA-256 the app pins. */
@@ -2749,6 +2878,8 @@ export interface components {
             path_deny: string[];
             /** @description Local turns may run shell commands. Default true. */
             shell: boolean;
+            /** @description Client contract 1.22. Local turns may use the web toolkit (web_search, web_fetch), which sends the turn's queries and URLs to third-party providers. Absent or false is off (the default); the server also refuses a remote web call of a turn while it is false (403 local_work_policy_refused). */
+            web?: boolean;
         };
         /** @description Client contract 1.12. The body of markConversationRead. An absent body, or an absent `message_id`, reads the conversation up to now. */
         MarkConversationReadRequest: {
@@ -2790,6 +2921,14 @@ export interface components {
         MemoryEntryList: {
             items: components["schemas"]["MemoryEntry"][];
             total: number;
+        };
+        /** @description The body for both `createMemory` and `updateMemory`. `updateMemory` is a FULL-RECORD replace (matches the settings panel's edit dialog and its per-row enable/disable Switch, which both send the whole record), so `content` is required on both. */
+        MemoryEntryWriteRequest: {
+            content: string;
+            /** @description Defaults to `true` when omitted on create; on update it is a full-record field like the rest. */
+            enabled?: boolean;
+            source_conversation_id?: string;
+            tags?: string[];
         };
         /** @description The user's default summarization settings, stored in centry.social_users.default_summarization (jsonb) and edited by Settings > Memory. The legacy runtime's SummarizationModel, field for field. Three of these flatten into a conversation's `context_strategy.summary_llm_settings` when one is resolved: summary_model_name -> model_name, summary_model_project_id -> model_project_id, target_summary_tokens -> max_tokens. */
         MemorySummarization: {
@@ -3421,14 +3560,32 @@ export interface components {
             api_requests: number;
             /** Format: int64 */
             completion_tokens: number;
+            /** @description The model, or for a tool row the operation (`web_search`). */
             model: string;
+            /**
+             * @description `tool` for a metered tool operation, which bills per unit and has
+             *     no tokens; `llm` for a model call.
+             * @enum {string}
+             */
+            operation?: "llm" | "tool";
             /** Format: int64 */
             prompt_tokens: number;
+            /** @description The model provider, or for a tool row the vendor (`tavily`). */
             provider: string;
             /** @description USD for the model. REMOVED for a caller who may not see amounts. */
             spend?: number | null;
             /** Format: int64 */
             total_tokens: number;
+            /**
+             * @description What `units` counts. Absent on an llm row.
+             * @enum {string}
+             */
+            unit?: "request" | "credit" | "page";
+            /**
+             * Format: int64
+             * @description Units a tool row consumed. Absent on an llm row.
+             */
+            units?: number;
         };
         UsageReport: {
             /**
@@ -3528,6 +3685,8 @@ export interface components {
             has_upstream?: boolean;
             history_mode?: string;
             reclaim_pending?: boolean;
+            /** @description Contract 1.25. True while the owner's desktop may take back the cloud turns the last release left (LOCAL, within the return grace `delete_after`), and during that take back (RECLAIMING). */
+            rest_pending?: boolean;
             /** @description LOCAL, HANDING_OFF, CLOUD_IDLE, CLOUD_RUNNING or RECLAIMING. */
             state: string;
             stats?: components["schemas"]["WorkspaceHandoffStats"];
@@ -4507,7 +4666,7 @@ export interface operations {
                     "application/json": components["schemas"]["ConversationSummary"];
                 };
             };
-            /** @description A body that is not a JSON object, an invalid `name` (blank, longer than 256 characters or with a control character), a `message_id` that is not a string, or a native client version that does not parse (invalid_client_version). */
+            /** @description A body that is not a JSON object, an invalid `name` (blank, longer than 256 characters or with a control character), a `message_id` that is not a string, an unknown `mode`, a rewind without `message_id`, an invalid `branch_summary` (or one on a plain fork), a `fork_id` that is not a UUID, or a native client version that does not parse (invalid_client_version). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -4520,8 +4679,81 @@ export interface operations {
             403: components["responses"]["403"];
             404: components["responses"]["404"];
             409: components["responses"]["409"];
+            /** @description `fork_too_large`: the fork would copy more than 1000 message groups. Fork from an earlier message. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
+        };
+    };
+    generateConversationName: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GenerateConversationNameRequest"];
+            };
+        };
+        responses: {
+            /** @description The conversation's name now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratedConversationName"];
+                };
+            };
+            /** @description A body without `expected_name`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+            /** @description The model gave no title. The name is not changed. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No LLM gateway is configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     markConversationRead: {
@@ -4812,6 +5044,49 @@ export interface operations {
                 };
             };
             400: components["responses"]["InvalidClientVersion"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    createMemory: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryEntryWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description The created memory. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryEntry"];
+                };
+            };
+            /** @description content was blank or exceeded the length limit, or tags exceeded their limits. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             401: components["responses"]["401"];
             403: components["responses"]["403"];
             426: components["responses"]["ClientUpgradeRequired"];
@@ -5217,7 +5492,24 @@ export interface operations {
                 };
             };
             401: components["responses"]["401"];
-            403: components["responses"]["403"];
+            /** @description No permission to send in this project, or (`project_skills_forbidden`) the body picks project skills and the caller may not read the project's skills. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
+            /** @description `project_skill_unknown`: a picked project skill does not exist in this project or is hidden from the caller. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
             /** @description The `question_id` was already used with a different body. */
             409: {
                 headers: {
@@ -5245,7 +5537,7 @@ export interface operations {
                     "application/json": components["schemas"]["ChatExecutionError"];
                 };
             };
-            /** @description `unsupported_agent_execution`: this turn cannot run on the current execution path. */
+            /** @description `unsupported_agent_execution`: this turn cannot run on the current execution path; or a refused skill pick: `project_skills_limit` (more than five skills in the turn), `project_skills_too_large` (more than 64 KiB of skill instructions) or `project_skill_name_conflict` (a picked skill shares its name with a different skill of the agent). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -6380,6 +6672,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
+                    /**
+                     * @example {
+                     *       "id": "42",
+                     *       "name": "Example User",
+                     *       "email": "example.user@example.test",
+                     *       "avatar": "",
+                     *       "description": "",
+                     *       "personal_project_id": "42"
+                     *     }
+                     */
                     "application/json": components["schemas"]["SocialAuthorProfile"];
                 };
             };

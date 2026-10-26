@@ -65,6 +65,7 @@ var Methods = []struct{ Method, Pattern string }{
 	{http.MethodPost, PublishPath}, {http.MethodGet, FetchPath},
 	{http.MethodPut, ObjectPath}, {http.MethodGet, ObjectPath},
 	{http.MethodGet, PolicyPath},
+	{http.MethodGet, ChangesPath}, {http.MethodGet, DiffPath},
 }
 
 var ErrInvalidRoute = errors.New("invalid workspace handoff route dependencies")
@@ -111,11 +112,14 @@ type Route struct {
 }
 
 func NewRoute(handoff Handoff, store Store, conversations ConversationReader, authConfig apimw.AuthConfig,
-	permissions auth.PermissionResolver) (*Route, error) {
+	permissions auth.PermissionResolver, options ...RouteOption) (*Route, error) {
 	if handoff == nil || store == nil || conversations == nil || authConfig.PrincipalValidator == nil || permissions == nil {
 		return nil, ErrInvalidRoute
 	}
 	h := &handler{handoff: handoff, store: store, conversations: conversations}
+	for _, option := range options {
+		option(h)
+	}
 	gate := func(endpoint http.HandlerFunc, required ...string) http.Handler {
 		wrapped := apimw.RequireResolvedPermissionsForProject(
 			permissions, Mode,
@@ -143,6 +147,8 @@ func NewRoute(handoff Handoff, store Store, conversations ConversationReader, au
 	router.Method(http.MethodPut, ObjectPath, gate(h.putObject, SendPermission))
 	router.Method(http.MethodGet, ObjectPath, gate(h.getObject, SendPermission))
 	router.Method(http.MethodGet, PolicyPath, gate(h.policy, SendPermission))
+	router.Method(http.MethodGet, ChangesPath, gate(h.changesView, ReadPermission))
+	router.Method(http.MethodGet, DiffPath, gate(h.diff, ReadPermission))
 	return &Route{handler: router}, nil
 }
 
@@ -158,6 +164,7 @@ type handler struct {
 	handoff       Handoff
 	store         Store
 	conversations ConversationReader
+	changes       Changes
 }
 
 // caller answers the authenticated owning user. nativeOnly refuses every
@@ -319,6 +326,7 @@ func (h *handler) state(writer http.ResponseWriter, request *http.Request) {
 		"state":           string(view.Handoff.State),
 		"epoch":           view.Handoff.Epoch,
 		"reclaim_pending": view.Handoff.ReclaimPending,
+		"rest_pending":    view.RestPending,
 		"handoff_id":      view.Handoff.HandoffID,
 		"device_name":     view.Handoff.DeviceName,
 		"history_mode":    view.Handoff.HistoryMode,
@@ -410,6 +418,8 @@ func (h *handler) complete(writer http.ResponseWriter, request *http.Request) {
 type reclaimBody struct {
 	Epoch    int64  `json:"epoch"`
 	DeviceID string `json:"device_id"`
+	// Rest takes back the turns the last release left (contract 1.25).
+	Rest bool `json:"rest"`
 }
 
 func (h *handler) reclaim(writer http.ResponseWriter, request *http.Request) {
@@ -426,7 +436,8 @@ func (h *handler) reclaim(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	handoff, err := h.handoff.Reclaim(request.Context(), handoffapp.ReclaimRequest{
-		Thread: target, ActorUserID: actor, Epoch: body.Epoch, DeviceID: body.DeviceID, AuditRoute: ReclaimPath,
+		Thread: target, ActorUserID: actor, Epoch: body.Epoch, DeviceID: body.DeviceID, Rest: body.Rest,
+		AuditRoute: ReclaimPath,
 	})
 	if err != nil {
 		writeError(request.Context(), writer, "reclaim", err)
@@ -464,6 +475,8 @@ type releaseBody struct {
 	Epoch      int64   `json:"epoch"`
 	Outcome    string  `json:"outcome"`
 	AppliedSHA *string `json:"applied_sha"`
+	// TurnsNotTaken is how many cloud turns the take back left (contract 1.25).
+	TurnsNotTaken *int `json:"turns_not_taken"`
 }
 
 func (h *handler) release(writer http.ResponseWriter, request *http.Request) {
@@ -481,7 +494,7 @@ func (h *handler) release(writer http.ResponseWriter, request *http.Request) {
 	}
 	handoff, err := h.handoff.Release(request.Context(), handoffapp.ReleaseRequest{
 		Thread: target, ActorUserID: actor, Epoch: body.Epoch, Outcome: body.Outcome,
-		AppliedSHA: body.AppliedSHA, AuditRoute: ReleasePath,
+		AppliedSHA: body.AppliedSHA, TurnsNotTaken: body.TurnsNotTaken, AuditRoute: ReleasePath,
 	})
 	if err != nil {
 		writeError(request.Context(), writer, "release", err)
@@ -840,6 +853,12 @@ func writeError(ctx context.Context, writer http.ResponseWriter, operation strin
 			"The project's cloud copies would pass their storage ceiling.")
 	case errors.Is(err, workspacestore.ErrSegmentTooLarge):
 		desktopwire.WriteError(writer, http.StatusRequestEntityTooLarge, "segment_too_large", "The segment is over the size cap.")
+	case errors.Is(err, workspacestore.ErrPrerequisiteUnknown):
+		desktopwire.WriteError(writer, http.StatusConflict, "prerequisite_unknown",
+			"A prerequisite of the PUSH segment is not a commit the store holds as a ref, or the thread has no COMPACT to build on. Publish a COMPACT.")
+	case errors.Is(err, workspacestore.ErrChainTooLong):
+		desktopwire.WriteError(writer, http.StatusConflict, "segment_chain_too_long",
+			"The thread's segment chain is at its cap. Publish a COMPACT segment instead.")
 	case errors.Is(err, workspacestore.ErrRefNotAllowed):
 		desktopwire.WriteError(writer, http.StatusForbidden, "ref_not_allowed", "This writer may not move that ref now.")
 	case errors.Is(err, workspacestore.ErrSegmentMissing):

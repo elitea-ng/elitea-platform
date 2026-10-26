@@ -26,6 +26,21 @@
 //! a pass under way takes them up at its next batch. Each status carries an
 //! ETA from the pass's own throughput.
 //!
+//! **What it may cost.** A remote embedder is paid from the project's
+//! budget ([`crate::embed_caps`]): a run stops at the per-run cap or the
+//! per-day cap ([`EmbedState::Capped`]), and at a `402` from the gateway
+//! ([`EmbedState::BudgetExhausted`]). Neither a run cap nor a `402` is
+//! retried until the person asks again (embed now, choosing the embedder
+//! anew, or — for a run cap — changing the caps): a build, a wake or the
+//! ten-minute sweep does not restart paid work, and a spent budget does not
+//! come back by waiting ten minutes. A day cap is looked at again hourly
+//! and goes on the next UTC day. A text larger than the smaller cap is
+//! never sent (no run could hold it) and does not hold the others back. A
+//! `429` is backed off inside the embedder, bounded and cancellable; when
+//! the bound is passed the run ends in `Error` and is tried again after the
+//! service's `Retry-After`, which only the person's own action cuts short.
+//! Every run is recorded in `runs` with the tokens it used.
+//!
 //! Vectors are keyed by the chunk text's hash within a [`VectorSet`]
 //! stamp (`origin:model:dim`): a refresh that keeps a chunk keeps its
 //! vector, a chunk that changed gets a new one on the next pass, and the
@@ -34,8 +49,9 @@
 //! for.
 
 use crate::dense::QueryEmbedder;
+use crate::embed_caps::{self, Cap, EmbedCaps};
 use crate::service::IndexService;
-use crate::sqlite_store::VectorSet;
+use crate::sqlite_store::{StoreError, VectorSet};
 use elitea_local_embed::{EmbedError, Embedder, vector};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -123,8 +139,16 @@ pub enum EmbedState {
     Paused,
     /// Every chunk has a vector.
     Done,
-    /// The last attempt failed; retried after [`EmbedConfig::poll`].
+    /// The last attempt failed; retried after [`EmbedConfig::poll`] (or
+    /// the rate limit's `Retry-After`).
     Error,
+    /// A token cap stopped the run ([`EmbedStatus::cap`]); what it embedded
+    /// is kept. A day cap goes on the next day; a run cap when the person
+    /// asks again.
+    Capped,
+    /// The deployment's budget is spent (HTTP 402): nothing more is sent
+    /// until the person asks again.
+    BudgetExhausted,
 }
 
 /// A workspace's embedding progress.
@@ -143,6 +167,11 @@ pub struct EmbedStatus {
     pub forced: bool,
     /// Seconds left at this pass's throughput (while it runs).
     pub eta_seconds: Option<u64>,
+    /// Estimated tokens this run has embedded (zero for a state that is not
+    /// a run's).
+    pub tokens: u64,
+    /// The cap that stopped it (`run` or `day`) when [`EmbedState::Capped`].
+    pub cap: Option<&'static str>,
 }
 
 /// The most recent paths kept per workspace for [`Embedding::prioritise`].
@@ -150,6 +179,24 @@ pub const MAX_PRIORITY_PATHS: usize = 200;
 
 /// Where status changes go (`index://event` on the desktop).
 pub type OnStatus = Arc<dyn Fn(&str, &EmbedStatus) + Send + Sync>;
+
+/// When a workspace may be tried again.
+#[derive(Debug, Clone, Copy)]
+struct Retry {
+    at: Instant,
+    /// The gateway's `Retry-After`: only the person's own action (embed
+    /// now, choosing the embedder) cuts it short, not a build or a wake.
+    rate_limited: bool,
+}
+
+/// Why a workspace waits for the person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Halt {
+    /// The budget is spent (HTTP 402).
+    Budget,
+    /// The run cap stopped the last run.
+    RunCap,
+}
 
 struct Loaded {
     choice: String,
@@ -162,12 +209,17 @@ struct State {
     services: BTreeMap<String, Weak<IndexService>>,
     forced: HashSet<String>,
     statuses: HashMap<String, EmbedStatus>,
-    /// Not retried before this (after an error).
-    retry_at: HashMap<String, Instant>,
+    /// Not retried before this (after an error, a rate limit, the day cap).
+    retry_at: HashMap<String, Retry>,
     /// The paths to embed first, most recent first, per workspace.
     priorities: HashMap<String, Vec<String>>,
     /// Workspaces whose priorities changed since their pass was planned.
     reprioritised: HashSet<String>,
+    /// Workspaces waiting for the person (a spent budget, a run cap):
+    /// skipped, even by the sweep and a build's wake, until the person
+    /// forces them or chooses an embedder again (a run cap: or changes the
+    /// caps).
+    halted: HashMap<String, Halt>,
     /// Workspaces to look at: added, woken (a build committed, a setting
     /// changed), forced, reprioritised, or with a pass under way or to
     /// retry. One that is done or off is not looked at again (no prune, no
@@ -315,7 +367,11 @@ struct Job {
     dim: usize,
     missing: Vec<(i64, String)>,
     done: u64,
+    /// Texts larger than the smaller cap: never sent, counted in the total.
+    skipped: u64,
     forced: bool,
+    /// Paid for per token (a remote embedder): held to the caps.
+    metered: bool,
 }
 
 /// The background embedder of every workspace; dropping it stops it.
@@ -414,15 +470,17 @@ impl Embedding {
         state.retry_at.remove(workspace_id);
         state.priorities.remove(workspace_id);
         state.reprioritised.remove(workspace_id);
+        state.halted.remove(workspace_id);
         state.dirty.remove(workspace_id);
     }
 
     /// Look at every workspace again now (a build committed, a setting
-    /// changed).
+    /// changed). A workspace waiting for the person, or for the gateway's
+    /// `Retry-After`, keeps waiting.
     pub fn wake(&self) {
         {
             let mut state = self.shared.state();
-            state.retry_at.clear();
+            state.retry_at.retain(|_, retry| retry.rate_limited);
             let all: Vec<String> = state.services.keys().cloned().collect();
             state.dirty.extend(all);
             state.marks += 1;
@@ -430,12 +488,54 @@ impl Embedding {
         self.shared.notify();
     }
 
-    /// Look at one workspace again now (its build committed, its setting
-    /// changed).
+    /// Look at one workspace again now (its build committed). One waiting
+    /// for the person ([`EmbedState::BudgetExhausted`], a run cap), or for
+    /// the gateway's `Retry-After`, keeps waiting: a file edit must not
+    /// restart paid embedding.
     pub fn wake_workspace(&self, workspace_id: &str) {
         {
             let mut state = self.shared.state();
+            if state
+                .retry_at
+                .get(workspace_id)
+                .is_some_and(|retry| !retry.rate_limited)
+            {
+                state.retry_at.remove(workspace_id);
+            }
+            state.dirty.insert(workspace_id.to_owned());
+            state.marks += 1;
+        }
+        self.shared.notify();
+    }
+
+    /// The person changed the workspace's caps: a run a cap stopped looks
+    /// again at once (a spent budget and a `Retry-After` still wait).
+    pub fn caps_changed(&self, workspace_id: &str) {
+        {
+            let mut state = self.shared.state();
+            if state.halted.get(workspace_id) == Some(&Halt::RunCap) {
+                state.halted.remove(workspace_id);
+            }
+            if state
+                .retry_at
+                .get(workspace_id)
+                .is_some_and(|retry| !retry.rate_limited)
+            {
+                state.retry_at.remove(workspace_id);
+            }
+            state.dirty.insert(workspace_id.to_owned());
+            state.marks += 1;
+        }
+        self.shared.notify();
+    }
+
+    /// The person chose the workspace's embedder (anew): whatever it waited
+    /// for, it is looked at again now (power conditions still hold it).
+    pub fn ask_again(&self, workspace_id: &str) {
+        {
+            let mut state = self.shared.state();
             state.retry_at.remove(workspace_id);
+            state.halted.remove(workspace_id);
             state.dirty.insert(workspace_id.to_owned());
             state.marks += 1;
         }
@@ -475,6 +575,7 @@ impl Embedding {
             let mut state = self.shared.state();
             state.forced.insert(workspace_id.to_owned());
             state.retry_at.remove(workspace_id);
+            state.halted.remove(workspace_id);
             state.dirty.insert(workspace_id.to_owned());
             state.marks += 1;
         }
@@ -583,11 +684,13 @@ fn candidates(shared: &Shared) -> (u64, Vec<(String, Weak<IndexService>, bool)>)
     let retry_at = state.retry_at.clone();
     let forced = state.forced.clone();
     let dirty = state.dirty.clone();
+    let halted = state.halted.clone();
     let services = state
         .services
         .iter()
         .filter(|(id, _)| dirty.contains(*id))
-        .filter(|(id, _)| retry_at.get(*id).is_none_or(|at| *at <= now))
+        .filter(|(id, _)| !halted.contains_key(*id))
+        .filter(|(id, _)| retry_at.get(*id).is_none_or(|retry| retry.at <= now))
         .map(|(id, service)| (id.clone(), service.clone(), forced.contains(id)))
         .collect();
     (state.marks, services)
@@ -622,21 +725,9 @@ fn pick(shared: &Shared) -> Option<Job> {
             continue;
         };
         let stamp = set.stamp();
-        let prepared = service
-            .store()
-            .prune_vectors(Some(&stamp))
-            .and_then(|_| service.store().ensure_vector_set(&set))
-            .and_then(|()| service.store().chunks_missing_vectors(&stamp))
-            .and_then(|missing| {
-                let done = service
-                    .store()
-                    .vector_sets()?
-                    .into_iter()
-                    .find(|(known, _)| known.stamp() == stamp)
-                    .map_or(0, |(_, count)| count);
-                Ok((missing, done))
-            });
-        let (mut missing, done) = match prepared {
+        let metered = set.origin == REMOTE_ORIGIN;
+        let prepared = prepare(&service, &set, &stamp, metered);
+        let (mut missing, done, skipped) = match prepared {
             Ok(found) => found,
             Err(error) => {
                 fail(
@@ -651,6 +742,11 @@ fn pick(shared: &Shared) -> Option<Job> {
                 continue;
             }
         };
+        if skipped > 0 {
+            log::info!(
+                "{skipped} index texts are larger than the embedding token cap and are not sent"
+            );
+        }
         put_first(shared, &service, &workspace_id, &mut missing);
         if missing.is_empty() {
             {
@@ -666,13 +762,19 @@ fn pick(shared: &Shared) -> Option<Job> {
                     choice,
                     state: EmbedState::Done,
                     done,
-                    total: done,
+                    total: done + skipped,
                     held: None,
                     error: None,
                     forced: false,
                     eta_seconds: None,
+                    tokens: 0,
+                    cap: None,
                 },
             );
+            continue;
+        }
+        let total = done + missing.len() as u64 + skipped;
+        if metered && day_cap_reached(shared, &service, &workspace_id, &choice, done, total) {
             continue;
         }
         return Some(Job {
@@ -683,10 +785,49 @@ fn pick(shared: &Shared) -> Option<Job> {
             dim: set.dim,
             missing,
             done,
+            skipped,
             forced,
+            metered,
         });
     }
     None
+}
+
+/// A planned pass: the chunk texts without a vector, the vectors the set
+/// has, and how many texts are too large to ever send.
+type Plan = (Vec<(i64, String)>, u64, u64);
+
+/// A workspace's pass, planned: the vectors of other sets pruned, and its
+/// chunk texts without a vector in `stamp`, the vectors it has, and how many
+/// texts are too large to ever send.
+fn prepare(
+    service: &IndexService,
+    set: &VectorSet,
+    stamp: &str,
+    metered: bool,
+) -> Result<Plan, StoreError> {
+    let store = service.store();
+    store.prune_vectors(Some(stamp))?;
+    store.ensure_vector_set(set)?;
+    let mut missing = store.chunks_missing_vectors(stamp)?;
+    // A text larger than the smaller cap could never be sent: a fresh run
+    // would stop at it with nothing embedded, every time, and hold back
+    // every text after it. It is left without a vector until the caps are
+    // raised.
+    let mut skipped = 0;
+    if metered {
+        let caps = EmbedCaps::load(store);
+        let over = store.chunk_hashes_over(caps.run.min(caps.day))?;
+        let before = missing.len();
+        missing.retain(|(_, hash)| !over.contains(hash));
+        skipped = (before - missing.len()) as u64;
+    }
+    let done = store
+        .vector_sets()?
+        .into_iter()
+        .find(|(known, _)| known.stamp() == stamp)
+        .map_or(0, |(_, count)| count);
+    Ok((missing, done, skipped))
 }
 
 fn fail(
@@ -698,11 +839,33 @@ fn fail(
     total: u64,
     error: &str,
 ) {
+    fail_after(
+        shared,
+        (workspace_id, choice, forced),
+        (done, total),
+        error,
+        None,
+    );
+}
+
+/// [`fail`], tried again after [`EmbedConfig::poll`], or after the
+/// gateway's `Retry-After` (at least the poll) when `rate_limit` names one.
+fn fail_after(
+    shared: &Shared,
+    (workspace_id, choice, forced): (&str, &str, bool),
+    (done, total): (u64, u64),
+    error: &str,
+    rate_limit: Option<Duration>,
+) {
     log::warn!("embedding the index of a workspace failed: {error}");
-    shared
-        .state()
-        .retry_at
-        .insert(workspace_id.to_owned(), Instant::now() + shared.config.poll);
+    let delay = rate_limit.unwrap_or(shared.config.poll);
+    shared.state().retry_at.insert(
+        workspace_id.to_owned(),
+        Retry {
+            at: Instant::now() + delay.max(shared.config.poll),
+            rate_limited: rate_limit.is_some(),
+        },
+    );
     shared.set_status(
         workspace_id,
         &EmbedStatus {
@@ -714,8 +877,59 @@ fn fail(
             error: Some(error.to_owned()),
             forced,
             eta_seconds: None,
+            tokens: 0,
+            cap: None,
         },
     );
+}
+
+/// The origin of the vector sets a remote embedder makes (the deployment's
+/// route, paid per token).
+const REMOTE_ORIGIN: &str = "remote";
+
+/// How long a workspace that reached today's cap waits before it looks at
+/// the day again (the counter starts over at 00:00 UTC).
+const DAY_CAP_RECHECK: Duration = Duration::from_hours(1);
+
+/// A metered workspace that has already used its day: reported `Capped`
+/// and looked at again in an hour, without a run being started. The
+/// person's "Embed now" does not get around it (raise the cap instead).
+fn day_cap_reached(
+    shared: &Shared,
+    service: &IndexService,
+    workspace_id: &str,
+    choice: &str,
+    done: u64,
+    total: u64,
+) -> bool {
+    let caps = EmbedCaps::load(service.store());
+    let used = service.store().embed_tokens_today().unwrap_or(0);
+    if used < caps.day {
+        return false;
+    }
+    shared.state().retry_at.insert(
+        workspace_id.to_owned(),
+        Retry {
+            at: Instant::now() + DAY_CAP_RECHECK.max(shared.config.poll),
+            rate_limited: false,
+        },
+    );
+    shared.set_status(
+        workspace_id,
+        &EmbedStatus {
+            choice: choice.to_owned(),
+            state: EmbedState::Capped,
+            done,
+            total,
+            held: None,
+            error: None,
+            forced: false,
+            eta_seconds: None,
+            tokens: 0,
+            cap: Some(Cap::Day.name()),
+        },
+    );
+    true
 }
 
 /// Put the chunks of the workspace's priority paths first (in their
@@ -757,17 +971,109 @@ fn seconds_left(left: u64, embedded: u64, busy: Duration) -> Option<u64> {
     (embedded > 0 && seconds > 0.0).then(|| (left as f64 * seconds / embedded as f64).ceil() as u64)
 }
 
+/// Why a batch ended the run.
+enum Stop {
+    /// A token cap: nothing more may be spent now.
+    Capped(Cap),
+    /// HTTP 402.
+    Exhausted(String),
+    /// HTTP 429 past the embedder's bounded backoff.
+    RateLimited(Duration, String),
+    /// A turn started or the index closed while the embedder waited.
+    Paused,
+    Failed(String),
+}
+
+impl From<EmbedError> for Stop {
+    fn from(error: EmbedError) -> Self {
+        match error {
+            EmbedError::BudgetExhausted(message) => Self::Exhausted(message),
+            EmbedError::RateLimited { retry_after } => Self::RateLimited(
+                retry_after,
+                EmbedError::RateLimited { retry_after }.to_string(),
+            ),
+            EmbedError::Paused => Self::Paused,
+            other => Self::Failed(other.to_string()),
+        }
+    }
+}
+
+/// What one batch embedded.
+struct Batch {
+    vectors: u64,
+    tokens: u64,
+    /// The budget cut the batch short: the rest is for a later run.
+    cut: Option<Cap>,
+}
+
+/// One pass's row in `runs`: created when its first batch is stored, grows
+/// with every batch, and ends however the pass does (`stopped` unless the
+/// pass says otherwise).
+struct RunLog<'a> {
+    job: &'a Job,
+    id: Option<i64>,
+    tokens: u64,
+    ending: &'static str,
+    error: Option<String>,
+}
+
+impl<'a> RunLog<'a> {
+    const fn new(job: &'a Job) -> Self {
+        Self {
+            job,
+            id: None,
+            tokens: 0,
+            ending: "stopped",
+            error: None,
+        }
+    }
+
+    /// A batch of `tokens` is stored.
+    fn batch(&mut self, tokens: u64) {
+        self.tokens += tokens;
+        match self
+            .job
+            .service
+            .store()
+            .embedding_batch_done(self.id, tokens, self.job.metered)
+        {
+            Ok(id) => self.id = Some(id),
+            Err(error) => log::warn!("an embedding run could not be recorded: {error}"),
+        }
+    }
+
+    fn end(&mut self, ending: &'static str, error: Option<String>) {
+        self.ending = ending;
+        self.error = error;
+    }
+}
+
+impl Drop for RunLog<'_> {
+    fn drop(&mut self) {
+        if let Some(id) = self.id
+            && let Err(error) = self.job.service.store().finish_embedding_run(
+                id,
+                self.ending,
+                self.error.as_deref(),
+            )
+        {
+            log::warn!("an embedding run could not be closed: {error}");
+        }
+    }
+}
+
 /// Embed a job's chunks batch by batch, holding for turns and power.
 fn work(shared: &Shared, job: &Job) {
-    let total = job.done + job.missing.len() as u64;
+    let total = job.done + job.missing.len() as u64 + job.skipped;
     let mut done = job.done;
+    let mut run = RunLog::new(job);
     // Throughput of this pass, over the time spent embedding (holds and
     // waits are not counted).
     let (mut embedded, mut busy) = (0_u64, Duration::ZERO);
     let eta = |embedded: u64, busy: Duration, done: u64| {
         seconds_left(total.saturating_sub(done), embedded, busy)
     };
-    let status = |state, held, done, eta_seconds| EmbedStatus {
+    let status = |state, held, done, eta_seconds, tokens| EmbedStatus {
         choice: job.choice.clone(),
         state,
         done,
@@ -776,6 +1082,8 @@ fn work(shared: &Shared, job: &Job) {
         error: None,
         forced: job.forced,
         eta_seconds,
+        tokens,
+        cap: None,
     };
     for batch in job.missing.chunks(shared.config.batch.max(1)) {
         // Between batches: stop, a turn, a build, the setting, power.
@@ -788,7 +1096,7 @@ fn work(shared: &Shared, job: &Job) {
             }
             shared.set_status(
                 &job.workspace_id,
-                &status(EmbedState::Paused, Some("turn"), done, None),
+                &status(EmbedState::Paused, Some("turn"), done, None, run.tokens),
             );
             shared.sleep(Duration::from_millis(500));
         }
@@ -798,7 +1106,7 @@ fn work(shared: &Shared, job: &Job) {
         {
             shared.set_status(
                 &job.workspace_id,
-                &status(EmbedState::Waiting, None, done, None),
+                &status(EmbedState::Waiting, None, done, None, run.tokens),
             );
             return;
         }
@@ -811,48 +1119,178 @@ fn work(shared: &Shared, job: &Job) {
         if !forced && let Some(reason) = shared.conditions.hold() {
             shared.set_status(
                 &job.workspace_id,
-                &status(EmbedState::Paused, Some(reason), done, None),
+                &status(EmbedState::Paused, Some(reason), done, None, run.tokens),
             );
             shared.sleep(shared.config.poll);
             return;
         }
         shared.set_status(
             &job.workspace_id,
-            &status(EmbedState::Running, None, done, eta(embedded, busy, done)),
+            &status(
+                EmbedState::Running,
+                None,
+                done,
+                eta(embedded, busy, done),
+                run.tokens,
+            ),
         );
+        // What the caps leave (a read per batch: a new day, or a cap the
+        // person raised, counts at once).
+        let budget = job.metered.then(|| {
+            let today = job.service.store().embed_tokens_today().unwrap_or(0);
+            EmbedCaps::load(job.service.store()).remaining(run.tokens, today)
+        });
         let started = Instant::now();
-        match embed_batch(shared, job, batch) {
-            Ok(n) => {
-                done += n;
-                embedded += n;
+        match embed_batch(shared, job, batch, budget) {
+            Ok(batch) => {
+                done += batch.vectors;
+                embedded += batch.vectors;
                 busy += started.elapsed();
+                if batch.vectors > 0 {
+                    run.batch(batch.tokens);
+                }
+                if let Some(cap) = batch.cut {
+                    stop_capped(shared, job, &mut run, total, done, cap);
+                    return;
+                }
             }
-            Err(error) => {
-                fail(
-                    shared,
-                    &job.workspace_id,
-                    &job.choice,
-                    job.forced,
-                    done,
-                    total,
-                    &error,
-                );
+            Err(stop) => {
+                stop_for(shared, job, &mut run, (done, total), stop);
                 return;
             }
         }
     }
+    run.end("embedded", None);
     // Looked at again at once: Done, or what changed meanwhile.
     shared.notify();
 }
 
-/// One batch: read the texts, embed, store. Returns the vectors written.
-fn embed_batch(shared: &Shared, job: &Job, batch: &[(i64, String)]) -> Result<u64, String> {
+/// A cap ended the run: reported, and looked at again later. A day cap
+/// hourly (it goes on when the UTC day is over); a run cap not until the
+/// person asks again ("Embed now", or changing the caps): the run cap is
+/// what one unattended run may spend, so the next run is the person's call.
+fn stop_capped(shared: &Shared, job: &Job, run: &mut RunLog<'_>, total: u64, done: u64, cap: Cap) {
+    run.end("capped", None);
+    let forced = {
+        let mut state = shared.state();
+        match cap {
+            Cap::Day => {
+                state.retry_at.insert(
+                    job.workspace_id.clone(),
+                    Retry {
+                        at: Instant::now() + DAY_CAP_RECHECK.max(shared.config.poll),
+                        rate_limited: false,
+                    },
+                );
+                job.forced
+            }
+            Cap::Run => {
+                state.halted.insert(job.workspace_id.clone(), Halt::RunCap);
+                state.forced.remove(&job.workspace_id);
+                false
+            }
+        }
+    };
+    shared.set_status(
+        &job.workspace_id,
+        &EmbedStatus {
+            choice: job.choice.clone(),
+            state: EmbedState::Capped,
+            done,
+            total,
+            held: None,
+            error: None,
+            forced,
+            eta_seconds: None,
+            tokens: run.tokens,
+            cap: Some(cap.name()),
+        },
+    );
+}
+
+/// A batch failed or was refused: what the run does next depends on why.
+fn stop_for(
+    shared: &Shared,
+    job: &Job,
+    run: &mut RunLog<'_>,
+    (done, total): (u64, u64),
+    stop: Stop,
+) {
+    let who = (job.workspace_id.as_str(), job.choice.as_str(), job.forced);
+    match stop {
+        Stop::Capped(cap) => stop_capped(shared, job, run, total, done, cap),
+        Stop::Exhausted(message) => {
+            // Not retried by the clock: a spent budget needs the person (or
+            // an administrator) to act, and "Embed now" tries again. A
+            // forced run is no longer forced: the person's earlier "Embed
+            // now" is answered, and a forced workspace must not loop on 402s.
+            log::warn!("the embeddings budget of a workspace is exhausted: {message}");
+            run.end("budget_exhausted", Some(message.clone()));
+            {
+                let mut state = shared.state();
+                state.halted.insert(job.workspace_id.clone(), Halt::Budget);
+                state.forced.remove(&job.workspace_id);
+            }
+            shared.set_status(
+                &job.workspace_id,
+                &EmbedStatus {
+                    choice: job.choice.clone(),
+                    state: EmbedState::BudgetExhausted,
+                    done,
+                    total,
+                    held: None,
+                    error: Some(message),
+                    forced: false,
+                    eta_seconds: None,
+                    tokens: run.tokens,
+                    cap: None,
+                },
+            );
+        }
+        Stop::RateLimited(retry_after, message) => {
+            run.end("rate_limited", Some(message.clone()));
+            fail_after(shared, who, (done, total), &message, Some(retry_after));
+        }
+        Stop::Paused => {
+            shared.set_status(
+                &job.workspace_id,
+                &EmbedStatus {
+                    choice: job.choice.clone(),
+                    state: EmbedState::Waiting,
+                    done,
+                    total,
+                    held: None,
+                    error: None,
+                    forced: job.forced,
+                    eta_seconds: None,
+                    tokens: run.tokens,
+                    cap: None,
+                },
+            );
+            shared.notify();
+        }
+        Stop::Failed(message) => {
+            run.end("error", Some(message.clone()));
+            fail(shared, who.0, who.1, who.2, done, total, &message);
+        }
+    }
+}
+
+/// One batch: read the texts, embed, store. `budget` is what the caps leave
+/// (the texts that do not fit are left for a later run).
+fn embed_batch(
+    shared: &Shared,
+    job: &Job,
+    batch: &[(i64, String)],
+    budget: Option<(u64, Cap)>,
+) -> Result<Batch, Stop> {
+    let failed = |error: &dyn std::fmt::Display| Stop::Failed(error.to_string());
     let ids: Vec<i64> = batch.iter().map(|(id, _)| *id).collect();
     let texts: HashMap<i64, (String, String)> = job
         .service
         .store()
         .chunks_by_id(&ids)
-        .map_err(|error| error.to_string())?
+        .map_err(|error| failed(&error))?
         .into_iter()
         .map(|chunk| (chunk.id, (chunk.text, chunk.text_hash)))
         .collect();
@@ -860,7 +1298,7 @@ fn embed_batch(shared: &Shared, job: &Job, batch: &[(i64, String)]) -> Result<u6
     // by another text (chunk ids are rowids, reused once the highest are
     // deleted). The next pass sees their successors. A vector is only ever
     // stored under the hash of the text it was made from.
-    let present: Vec<(&str, &str)> = batch
+    let mut present: Vec<(&str, &str)> = batch
         .iter()
         .filter_map(|(id, planned)| {
             let (text, hash) = texts.get(id)?;
@@ -868,38 +1306,65 @@ fn embed_batch(shared: &Shared, job: &Job, batch: &[(i64, String)]) -> Result<u6
         })
         .collect();
     if present.is_empty() {
-        return Ok(0);
+        return Ok(Batch {
+            vectors: 0,
+            tokens: 0,
+            cut: None,
+        });
+    }
+    let mut cut = None;
+    if let Some((left, cap)) = budget {
+        let inputs: Vec<&str> = present.iter().map(|(text, _)| *text).collect();
+        let fits = embed_caps::fit(&inputs, left);
+        if fits == 0 {
+            return Err(Stop::Capped(cap));
+        }
+        if fits < present.len() {
+            present.truncate(fits);
+            cut = Some(cap);
+        }
     }
     let inputs: Vec<&str> = present.iter().map(|(text, _)| *text).collect();
+    let tokens = inputs
+        .iter()
+        .map(|text| embed_caps::estimate_tokens(text))
+        .sum();
     let embedder = shared
         .embedder(&job.choice, &job.workspace_id)
-        .map_err(|error| error.to_string())?;
+        .map_err(Stop::from)?;
+    // A turn that starts while the embedder backs off a rate limit takes
+    // precedence, as it does between batches.
+    let stop = || shared.stop.load(Ordering::SeqCst) || shared.turns.load(Ordering::SeqCst) > 0;
     let vectors = embedder
-        .embed_documents(&inputs)
-        .map_err(|error| error.to_string())?;
+        .embed_documents_until(&inputs, &stop)
+        .map_err(Stop::from)?;
     if vectors.len() != present.len() {
-        return Err(format!(
+        return Err(Stop::Failed(format!(
             "the embedder answered {} vectors for {} texts",
             vectors.len(),
             present.len()
-        ));
+        )));
     }
     let mut rows = Vec::with_capacity(vectors.len());
     for ((_, hash), values) in present.iter().zip(vectors) {
         if values.len() != job.dim {
-            return Err(format!(
+            return Err(Stop::Failed(format!(
                 "the embedder answered {} dimensions, expected {}",
                 values.len(),
                 job.dim
-            ));
+            )));
         }
         rows.push(((*hash).to_owned(), vector::quantize(&values)));
     }
     job.service
         .store()
         .put_vectors(&job.stamp, &rows)
-        .map_err(|error| error.to_string())?;
-    Ok(rows.len() as u64)
+        .map_err(|error| failed(&error))?;
+    Ok(Batch {
+        vectors: rows.len() as u64,
+        tokens,
+        cut,
+    })
 }
 
 #[cfg(test)]

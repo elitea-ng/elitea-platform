@@ -18,8 +18,9 @@
 //! keys on the prefix: [`preamble`] (OS, sandbox, network, mode, tools) is
 //! stable within a thread and follows the agent's instructions, while
 //! [`current`] (the date and the workspace's git line, which change daily
-//! and on most turns) is spliced after the skills and AGENTS.md, just
-//! before the memory recall, so the text before it stays cached.
+//! and on most turns) opens the turn's host message before the person's
+//! message (`turn::volatile_context`, #1227), with the skills picked for the
+//! turn and the memory recall, so the system prompt stays cached.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -279,6 +280,20 @@ fn tool_guidance(tools: &[String]) -> Vec<String> {
         clauses.push(
             "for multi-step work keep a checklist with update_plan (one step in_progress at a \
              time) and mark steps done with complete_step"
+                .to_owned(),
+        );
+    }
+    if has("spawn_agent") {
+        clauses.push(
+            "hand independent investigations that would fill your context to read-only \
+             sub-agents (spawn_agent, several at once; collect their reports with wait_agent)"
+                .to_owned(),
+        );
+    }
+    if has("git_push") {
+        clauses.push(
+            "push with git_push (git push in run_command cannot: the sandbox keeps .git \
+             read-only and hides credentials)"
                 .to_owned(),
         );
     }
@@ -632,6 +647,19 @@ mod tests {
         }
         assert!(!text.contains("- Mode: plan"), "{text}");
         assert_eq!(text.matches("## Environment").count(), 1, "{text}");
+    }
+
+    /// The owner's report: in bypass mode the agent handed `git push` to
+    /// the person ("the sandbox still blocks .git"). Offered `git_push`, it
+    /// is told to push with it; without it, nothing is said about pushing.
+    #[test]
+    fn git_push_is_named_when_it_is_offered() {
+        let mut facts = facts();
+        facts.tools = tools(&["read_file", "write_file", "run_command", "git_push"]);
+        let text = preamble(&facts);
+        assert!(text.contains("push with git_push"), "{text}");
+        facts.tools = tools(&["read_file", "write_file", "run_command"]);
+        assert!(!preamble(&facts).contains("git_push"));
     }
 
     #[test]

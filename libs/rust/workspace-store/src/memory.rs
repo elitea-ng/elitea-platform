@@ -2,7 +2,11 @@
 //! 7, contract §2.2–§2.5), for tests of both writers: the epoch fence, the
 //! ref allowlist, the object checked (size and checksum) before the
 //! transaction, all-or-nothing ref compare-and-set, an identical replay
-//! answered with the original result, and plan URLs that expire.
+//! answered with the original result, and plan URLs that expire. Phase 2:
+//! a `PUSH` names prerequisites that are current ref values and needs a live
+//! `COMPACT`; a `COMPACT` supersedes the chain; at most
+//! [`crate::compaction::SERVER_MAX_PUSH_CHAIN`] live `PUSH` segments; the
+//! fetch plan is the live chain.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -21,6 +25,9 @@ use crate::transport::{
 #[derive(Clone, Debug)]
 struct Segment {
     seq: u64,
+    kind: String,
+    prerequisites: Vec<String>,
+    superseded: bool,
     sha256: String,
     bytes: u64,
     refs: BTreeMap<String, String>,
@@ -132,6 +139,17 @@ impl MemoryStore {
         lock(self).segments.len()
     }
 
+    /// The live segments' kinds, in `seq` order (the chain).
+    #[must_use]
+    pub fn live_kinds(&self) -> Vec<String> {
+        lock(self)
+            .segments
+            .iter()
+            .filter(|segment| !segment.superseded)
+            .map(|segment| segment.kind.clone())
+            .collect()
+    }
+
     #[must_use]
     pub fn object_count(&self) -> usize {
         lock(self).objects.len()
@@ -158,6 +176,93 @@ fn sha_of_url<'a>(url: &'a str, prefix: &str) -> Result<&'a str, StoreError> {
     url.strip_prefix(prefix)
         .map(|rest| rest.split('?').next().unwrap_or_default())
         .ok_or_else(|| StoreError::http(404, "not_found", "no such URL"))
+}
+
+/// Whether `request` is a `PUSH`; a `COMPACT` names no prerequisites, a
+/// `PUSH` 1 to 8, and no other kind exists.
+///
+/// Main's rule is `workspaceruntime.ValidPrerequisites` (the bound is
+/// [`crate::bundle::MAX_PREREQUISITES`], pinned against Main's by
+/// `TestChainBoundsMatchTheRustStore`); keep the two in step.
+fn is_push(request: &PublishRequest) -> Result<bool, StoreError> {
+    match request.kind.as_str() {
+        crate::KIND_COMPACT if request.prerequisites.is_empty() => Ok(false),
+        crate::KIND_PUSH
+            if !request.prerequisites.is_empty()
+                && request.prerequisites.len() <= crate::bundle::MAX_PREREQUISITES =>
+        {
+            Ok(true)
+        }
+        _ => Err(StoreError::http(
+            422,
+            "invalid_request",
+            "a COMPACT has no prerequisites; a PUSH names 1 to 8",
+        )),
+    }
+}
+
+/// Every expected old value holds, or `409 ref_conflict` with the current
+/// values of the named refs.
+fn ref_conflict(inner: &Inner, request: &PublishRequest) -> Result<(), StoreError> {
+    let conflict = request
+        .refs
+        .iter()
+        .any(|update| inner.refs.get(&update.name) != update.old.as_ref());
+    if !conflict {
+        return Ok(());
+    }
+    let current: serde_json::Map<String, serde_json::Value> = request
+        .refs
+        .iter()
+        .map(|update| {
+            (
+                update.name.clone(),
+                inner
+                    .refs
+                    .get(&update.name)
+                    .map_or(serde_json::Value::Null, |sha| json!(sha)),
+            )
+        })
+        .collect();
+    Err(StoreError::Http {
+        status: 409,
+        code: "ref_conflict".into(),
+        message: "a ref moved".into(),
+        details: json!({ "current": current }),
+    })
+}
+
+/// A `PUSH`'s rules inside the transaction: a live `COMPACT` to extend,
+/// prerequisites that are current ref values, and room in the chain.
+fn check_push(inner: &Inner, request: &PublishRequest) -> Result<(), StoreError> {
+    let live_compact = inner
+        .segments
+        .iter()
+        .any(|segment| !segment.superseded && segment.kind == crate::KIND_COMPACT);
+    let known = request
+        .prerequisites
+        .iter()
+        .all(|sha| inner.refs.values().any(|value| value == sha));
+    if !live_compact || !known {
+        return Err(StoreError::http(
+            409,
+            "prerequisite_unknown",
+            "a prerequisite is not a commit the store's refs hold",
+        ));
+    }
+    let pushes = inner
+        .segments
+        .iter()
+        .filter(|segment| !segment.superseded && segment.kind == crate::KIND_PUSH)
+        .count();
+    if pushes >= crate::compaction::SERVER_MAX_PUSH_CHAIN {
+        return Err(StoreError::http(
+            409,
+            "segment_chain_too_long",
+            "publish a COMPACT",
+        ));
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -285,6 +390,7 @@ impl StoreTransport for MemoryStore {
                 "sha1 only",
             ));
         }
+        let push = is_push(request)?;
         // The transaction.
         if let Some(previous) = inner
             .segments
@@ -312,30 +418,18 @@ impl StoreTransport for MemoryStore {
                 "a ref this writer may not write",
             ));
         }
-        let conflict = request
-            .refs
-            .iter()
-            .any(|update| inner.refs.get(&update.name) != update.old.as_ref());
-        if conflict {
-            let current: serde_json::Map<String, serde_json::Value> = request
-                .refs
-                .iter()
-                .map(|update| {
-                    (
-                        update.name.clone(),
-                        inner
-                            .refs
-                            .get(&update.name)
-                            .map_or(serde_json::Value::Null, |sha| json!(sha)),
-                    )
-                })
-                .collect();
-            return Err(StoreError::Http {
-                status: 409,
-                code: "ref_conflict".into(),
-                message: "a ref moved".into(),
-                details: json!({ "current": current }),
-            });
+        ref_conflict(&inner, request)?;
+        if push {
+            check_push(&inner, request)?;
+        }
+        let mut superseded = Vec::new();
+        if !push {
+            for segment in &mut inner.segments {
+                if !segment.superseded {
+                    segment.superseded = true;
+                    superseded.push(json!(segment.seq));
+                }
+            }
         }
         let seq = inner.segments.last().map_or(1, |last| last.seq + 1);
         for update in &request.refs {
@@ -344,11 +438,14 @@ impl StoreTransport for MemoryStore {
         let result = Published {
             seq,
             refs: inner.refs.clone(),
-            superseded: Vec::new(),
+            superseded,
         };
         let refs = inner.refs.clone();
         inner.segments.push(Segment {
             seq,
+            kind: request.kind.clone(),
+            prerequisites: request.prerequisites.clone(),
+            superseded: false,
             sha256: request.segment_sha256.clone(),
             bytes: request.bytes,
             refs,
@@ -361,23 +458,43 @@ impl StoreTransport for MemoryStore {
     async fn fetch_plan(&self, since_seq: u64) -> Result<FetchPlan, StoreError> {
         let inner = lock(self);
         let head_seq = inner.segments.last().map_or(0, |last| last.seq);
-        let segments = inner
+        // The live chain, as Main's `workspacestore.SelectChain` answers
+        // it: the newest live COMPACT unless `since_seq` is past it, then
+        // every live PUSH after both the COMPACT and `since_seq`. The
+        // readers here always ask from 0 (see `chain::check_plan`).
+        let live: Vec<&Segment> = inner
             .segments
             .iter()
-            .rev()
-            .find(|segment| segment.seq >= since_seq)
-            .map(|segment| PlanSegment {
-                seq: segment.seq,
-                kind: crate::KIND_COMPACT.into(),
-                sha256: segment.sha256.clone(),
-                bytes: segment.bytes,
-                prerequisites: Vec::new(),
-                refs: segment.refs.clone(),
-                url: format!("mem://get/{}?g={}", segment.sha256, inner.url_generation),
-                expires_at: None,
-            })
-            .into_iter()
+            .filter(|segment| !segment.superseded)
             .collect();
+        let compact_seq = live
+            .iter()
+            .rev()
+            .find(|segment| segment.kind == crate::KIND_COMPACT)
+            .map(|segment| segment.seq);
+        let segments = match compact_seq {
+            None => Vec::new(),
+            Some(compact) => live
+                .iter()
+                .filter(|segment| {
+                    if segment.seq == compact {
+                        since_seq <= compact
+                    } else {
+                        segment.seq > compact && segment.seq > since_seq
+                    }
+                })
+                .map(|segment| PlanSegment {
+                    seq: segment.seq,
+                    kind: segment.kind.clone(),
+                    sha256: segment.sha256.clone(),
+                    bytes: segment.bytes,
+                    prerequisites: segment.prerequisites.clone(),
+                    refs: segment.refs.clone(),
+                    url: format!("mem://get/{}?g={}", segment.sha256, inner.url_generation),
+                    expires_at: None,
+                })
+                .collect(),
+        };
         Ok(FetchPlan {
             head_seq,
             refs: inner.refs.clone(),

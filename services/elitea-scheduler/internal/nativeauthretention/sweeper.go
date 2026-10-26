@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/routines"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -217,23 +218,7 @@ func (s *Sweeper) Sweep(ctx context.Context) (Stats, error) {
 	return stats, nil
 }
 
-// Run sweeps once now and then every Interval until ctx ends.
-func (s *Sweeper) Run(ctx context.Context) {
-	s.logger.Info("nativeauthretention: sweeper started", "interval", s.cfg.Interval)
-	s.runOnce(ctx)
-	ticker := time.NewTicker(s.cfg.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			s.runOnce(ctx)
-		}
-	}
-}
-
-func (s *Sweeper) runOnce(ctx context.Context) {
+func (s *Sweeper) runOnce(ctx context.Context) (string, error) {
 	timeout := s.cfg.Interval / 2
 	if timeout < time.Minute {
 		timeout = time.Minute
@@ -243,11 +228,16 @@ func (s *Sweeper) runOnce(ctx context.Context) {
 	stats, err := s.Sweep(passCtx)
 	if err != nil {
 		s.logger.Error("nativeauthretention: sweep pass failed", "err", err)
-		return
+		return routines.OutcomeError, err
 	}
 	attributes := make([]any, 0, 2*len(stats))
 	for name, count := range stats {
 		attributes = append(attributes, name, count)
 	}
 	s.logger.Info("nativeauthretention: sweep pass complete", attributes...)
+	return routines.OutcomeOK, nil
 }
+
+// Pass runs one pass and reports its outcome word; the routine registry loop
+// (libs/go/routines) calls it on the operator-configured schedule.
+func (s *Sweeper) Pass(ctx context.Context) (string, error) { return s.runOnce(ctx) }

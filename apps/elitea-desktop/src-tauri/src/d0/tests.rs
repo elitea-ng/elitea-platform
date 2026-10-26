@@ -293,6 +293,7 @@ fn build_host(
             app_id: Some(TEST_APP_ID.to_owned()),
             user_rules_dir: Some(app.join("config")),
             user_commands_dir: Some(app.join("config/commands")),
+            cache_dir: Some(app.join("cache")),
         })
         .unwrap(),
     );
@@ -373,12 +374,14 @@ fn request(workspace_id: &str) -> TurnRequest {
         version_id: 9,
         prompt: "Write notes and file a bug".into(),
         plan_mode: false,
+        bypass: false,
         mentions: Vec::new(),
         skills: Vec::new(),
         compact: false,
         model: None,
         project_skills: Vec::new(),
         command: None,
+        images: Vec::new(),
     }
 }
 
@@ -512,6 +515,7 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
             "tool_result:call-remote",
             "text_delta",
             "text_delta",
+            "usage_total",
             "status:done",
             "done",
         ]
@@ -597,9 +601,12 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
         system.starts_with("Be brief.\n\n## Environment\n"),
         "{system}"
     );
+    // The recall is the turn's: in the host message before the person's,
+    // its text as the server answered it (#1227).
+    assert!(!system.contains("Memory: the user likes tea."), "{system}");
     assert!(
-        system.find("\n\nMemory: the user likes tea.") > system.find("## Environment"),
-        "{system}"
+        host_context(&first).ends_with("\n\nMemory: the user likes tea."),
+        "{first}"
     );
     assert!(system.contains("Available skill: Style."), "{system}");
     let tools: Vec<&str> = first["tools"]
@@ -617,9 +624,22 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
         .iter()
         .map(|m| m["role"].as_str().unwrap())
         .collect();
+    // The turn's host context, then the person's message (#1227).
     assert_eq!(
         roles,
-        ["system", "user", "assistant", "tool", "assistant", "tool"]
+        [
+            "system",
+            "user",
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+            "tool"
+        ]
+    );
+    assert_eq!(
+        third["messages"][1]["name"],
+        crate::d0::model::HOST_CONTEXT_NAME
     );
 
     // The remote call: 409, then the approved call with a new key.
@@ -752,7 +772,7 @@ async fn an_agent_that_needs_secrets_is_refused_locally() {
 }
 
 #[tokio::test]
-async fn a_pipeline_and_nested_agents_are_refused_locally() {
+async fn a_pipeline_and_a_nested_pipeline_are_refused_locally() {
     let (code, _) = refused(
         json!({"agent_type": "pipeline", "tools": []}),
         &[],
@@ -762,7 +782,8 @@ async fn a_pipeline_and_nested_agents_are_refused_locally() {
     assert_eq!(code, "pipeline_unsupported");
     let nested = json!({
         "llm_settings": {"model_name": "m"},
-        "tools": [{"kind": "application", "type": "application", "application_id": 2, "application_version_id": 3}]
+        "tools": [{"kind": "application", "type": "application", "agent_type": "pipeline",
+            "application_id": 2, "application_version_id": 3}]
     });
     let (code, _) = refused(nested, &[], allowed()).await;
     assert_eq!(code, "nested_agents_unsupported");
@@ -1127,6 +1148,188 @@ async fn a_model_refusal_is_committed_as_a_failed_turn() {
     assert_eq!(body["assistant_message"]["content"], "");
 }
 
+/// A model stream cut off before its finish reason: what the model said so
+/// far, then the connection closes.
+fn cut_off(text: &str) -> Res {
+    let chunk = json!({"choices": [{"delta": {"content": text}}]});
+    Res {
+        status: 200,
+        headers: vec![("Content-Type", "text/event-stream".into())],
+        body: format!("data: {chunk}\n\n"),
+        raw: Vec::new(),
+    }
+}
+
+/// A cut stream and a 503 are retried: the turn answers from the third
+/// call, the webview is told to drop what the cut call streamed, and the
+/// commit holds the answer once.
+#[tokio::test]
+async fn a_cut_model_stream_is_retried() {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => cut_off("Half an ansé"),
+                1 => Res::json(503, &json!({"error": {"message": "busy"}})),
+                _ => say("Whole answer."),
+            };
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let retries = of_kind(&events, "model_retry");
+    assert_eq!(retries.len(), 2, "{:?}", h.emitter.kinds());
+    assert_eq!(retries[0]["attempt"], 1);
+    assert_eq!(retries[0]["max_attempts"], 25);
+    assert_eq!(retries[0]["code"], "model_gateway.incomplete_stream");
+    // UTF-16 code units, as the webview counts them.
+    assert_eq!(
+        retries[0]["text_units"],
+        "Half an ansé".encode_utf16().count()
+    );
+    assert_eq!(retries[1]["code"], "model_gateway.unavailable");
+    assert_eq!(retries[1]["text_units"], 0);
+    assert!(of_kind(&events, "error").is_empty());
+    assert_eq!(llm_bodies(&h.server).len(), 3);
+    let commits = commit_bodies(&h.server);
+    assert_eq!(commits[0]["assistant_message"]["content"], "Whole answer.");
+}
+
+/// A 429's `Retry-After` is kept when it asks for longer than the backoff
+/// (capped: 20 ms in tests, 120 s in the app).
+#[tokio::test]
+async fn a_rate_limit_waits_as_long_as_the_gateway_asks() {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                let mut res = Res::json(429, &json!({"error": {"message": "slow down"}}));
+                res.headers.push(("Retry-After", "7".into()));
+                return res;
+            }
+            return say("Done.");
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let retries = of_kind(&events, "model_retry");
+    assert_eq!(retries.len(), 1);
+    assert_eq!(retries[0]["code"], "model_gateway.rate_limited");
+    // 7 s asked, capped at the test's 20 ms: longer than the 1 ms backoff.
+    assert_eq!(retries[0]["delay_ms"], 20);
+    assert!(of_kind(&events, "error").is_empty());
+}
+
+/// A stream cut halfway through an event: before the finish reason the call
+/// is made again (not a malformed answer); after it the answer is kept.
+#[tokio::test]
+async fn a_half_event_at_the_cut_is_a_cut_stream_not_a_malformed_one() {
+    let half = |before: &str| Res {
+        status: 200,
+        headers: vec![("Content-Type", "text/event-stream".into())],
+        body: format!("{before}data: {{\"choices\": [{{\"delta\": {{\"content\": \"Hal"),
+        raw: Vec::new(),
+    };
+    let finished = format!(
+        "data: {}\n\n",
+        json!({"choices": [{"delta": {"content": "Kept."}, "finish_reason": "stop"}]})
+    );
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => half(""),
+                _ => half(&finished),
+            };
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let retries = of_kind(&events, "model_retry");
+    assert_eq!(retries.len(), 1, "{:?}", h.emitter.kinds());
+    assert_eq!(retries[0]["code"], "model_gateway.incomplete_stream");
+    assert!(of_kind(&events, "error").is_empty());
+    assert_eq!(llm_bodies(&h.server).len(), 2);
+    let commits = commit_bodies(&h.server);
+    assert_eq!(commits[0]["assistant_message"]["content"], "Kept.");
+}
+
+/// A 409 is about this execution: another identical call meets it again.
+#[tokio::test]
+async fn a_conflict_is_not_retried() {
+    let inner = platform(agent_details(), &[]);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return Res::json(409, &json!({"error": {"message": "conflict"}}));
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    assert!(of_kind(&events, "model_retry").is_empty());
+    assert_eq!(llm_bodies(&h.server).len(), 1);
+}
+
+/// After 25 retries the turn fails, and its error names `/retry`.
+#[tokio::test]
+async fn a_model_call_gives_up_after_25_retries() {
+    let inner = platform(agent_details(), &[]);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return cut_off("never");
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    assert_eq!(of_kind(&events, "model_retry").len(), 25);
+    assert_eq!(llm_bodies(&h.server).len(), 26);
+    let error = &of_kind(&events, "error")[0];
+    assert_eq!(error["code"], "model_gateway.incomplete_stream");
+    assert!(
+        error["message"].as_str().unwrap().contains("/retry"),
+        "{error}"
+    );
+}
+
+/// A refusal no other call can mend is not retried.
+#[tokio::test]
+async fn a_final_model_refusal_is_not_retried() {
+    let inner = platform(agent_details(), &[]);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return Res::json(403, &json!({"error": {"message": "no"}}));
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    assert!(of_kind(&events, "model_retry").is_empty());
+    assert_eq!(llm_bodies(&h.server).len(), 1);
+    assert_eq!(
+        of_kind(&events, "error")[0]["code"],
+        "model_gateway.forbidden"
+    );
+}
+
 #[tokio::test]
 async fn a_remote_retry_reuses_its_idempotency_key() {
     let attempts = Arc::new(AtomicUsize::new(0));
@@ -1166,6 +1369,8 @@ async fn a_remote_retry_reuses_its_idempotency_key() {
             delay: Duration::from_millis(5),
         },
         authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
+        rules: None,
+        nonce: "0123456789abcdef0123456789abcdef".into(),
     };
     let spec = jira_spec();
     let result = remote_tools::call(&context, &spec, "c1", "search", json!({"q": 1})).await;
@@ -1190,6 +1395,79 @@ fn jira_spec() -> RemoteToolSpec {
         tool_name: None,
         tools: Vec::new(),
     }
+}
+
+fn typed_spec(toolkit_type: &str) -> RemoteToolSpec {
+    RemoteToolSpec {
+        toolkit_type: toolkit_type.into(),
+        ..jira_spec()
+    }
+}
+
+#[test]
+fn web_tools_absent_when_policy_off() {
+    use elitea_local_tools::policy::LocalWorkPolicy;
+    let off = LocalWorkPolicy {
+        allowed: true,
+        ..LocalWorkPolicy::default()
+    };
+    assert!(!remote_tools::offered(&typed_spec("web"), &off));
+    assert!(remote_tools::offered(&typed_spec("jira"), &off));
+    let on = LocalWorkPolicy { web: true, ..off };
+    assert!(remote_tools::offered(&typed_spec("web"), &on));
+    assert!(!remote_tools::offered(&typed_spec("host_intel"), &on));
+}
+
+#[test]
+fn host_intel_tools_absent_when_policy_off() {
+    use elitea_local_tools::policy::LocalWorkPolicy;
+    let web_only = LocalWorkPolicy {
+        allowed: true,
+        web: true,
+        ..LocalWorkPolicy::default()
+    };
+    assert!(!remote_tools::offered(&typed_spec("host_intel"), &web_only));
+    let on = LocalWorkPolicy {
+        host_intel: true,
+        ..web_only
+    };
+    assert!(remote_tools::offered(&typed_spec("host_intel"), &on));
+}
+
+/// A web toolkit's call with no approval rules is refused before any
+/// request: the server is never asked.
+#[tokio::test]
+async fn web_call_without_rules_is_refused_locally() {
+    let context = RemoteContext {
+        api: Arc::new(
+            PlatformApi::new(
+                Arc::new(StaticCredentials::new("http://127.0.0.1:9".into())),
+                "0.1.0",
+            )
+            .unwrap(),
+        ),
+        project_id: 1,
+        execution_id: EXECUTION.into(),
+        application_id: 5,
+        version_id: 9,
+        prompt: Arc::new(super::approvals::UiPrompt::new(Arc::default())),
+        retry: RetryPolicy {
+            attempts: 1,
+            delay: Duration::from_millis(1),
+        },
+        authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
+        rules: None,
+        nonce: "0123456789abcdef0123456789abcdef".into(),
+    };
+    let result = remote_tools::call(
+        &context,
+        &typed_spec("web"),
+        "c1",
+        "web_search",
+        json!({"query": "tokio"}),
+    )
+    .await;
+    assert_eq!(result["code"], "local_work_policy_refused");
 }
 
 /// A token-shaped value the 409 carries in every field a careless host
@@ -1273,6 +1551,8 @@ async fn remote_context(
             delay: Duration::from_millis(5),
         },
         authorization_wait,
+        rules: None,
+        nonce: "0123456789abcdef0123456789abcdef".into(),
     }
 }
 
@@ -1444,6 +1724,8 @@ fn a_platform_servers_generic_tool_names_its_tools() {
         prompt: Arc::new(super::approvals::UiPrompt::new(Arc::default())),
         retry: RetryPolicy::default(),
         authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
+        rules: None,
+        nonce: "0123456789abcdef0123456789abcdef".into(),
     });
     let tool = remote_tools::RemoteToolkitTool::new(spec, context);
     assert!(
@@ -1480,6 +1762,8 @@ fn a_platform_servers_generic_tool_names_its_tools() {
             prompt: Arc::new(super::approvals::UiPrompt::new(Arc::default())),
             retry: RetryPolicy::default(),
             authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
+            rules: None,
+            nonce: "0123456789abcdef0123456789abcdef".into(),
         }),
     );
     assert!(
@@ -1846,16 +2130,19 @@ async fn a_picked_skill_is_applied_to_the_turn_after_the_agents_instructions() {
     let llm = seen(&h.server, "/llm/v1/chat/completions");
     let first: Value = serde_json::from_str(&llm[0].body).unwrap();
     let system = first["messages"][0]["content"].as_str().unwrap();
+    // The system prompt is the thread's; the skill and the recall are this
+    // turn's, in the host message before the person's (#1227).
     let agent = system.find("Be brief.").unwrap();
-    let skill = system
+    let project = system.find("Run task test.").unwrap();
+    assert!(agent < project, "{system}");
+    let tail = host_context(&first);
+    let skill = tail
         .find("name=\"Style\">\nWrite tersely.\n</invoked_skill nonce=\"")
         .unwrap();
-    let project = system.find("Run task test.").unwrap();
-    let memory = system.find("Memory: the user likes tea.").unwrap();
-    assert!(
-        agent < skill && skill < project && project < memory,
-        "{system}"
-    );
+    let memory = tail.find("Memory: the user likes tea.").unwrap();
+    assert!(skill < memory, "{tail}");
+    assert!(!system.contains("Write tersely."), "{system}");
+    assert!(!system.contains("Memory: the user likes tea."), "{system}");
     // It stays in the runtime's catalogue as well; the prompt is as typed.
     assert!(system.contains("Available skill: Style."), "{system}");
     let start = &seen(
@@ -1914,24 +2201,30 @@ async fn system_prompt_order_env_before_untrusted() {
     let llm = seen(&h.server, "/llm/v1/chat/completions");
     let first: Value = serde_json::from_str(&llm[0].body).unwrap();
     let system = first["messages"][0]["content"].as_str().unwrap();
-    let at = |needle: &str| {
-        system
-            .find(needle)
-            .unwrap_or_else(|| panic!("{needle}: {system}"))
+    let tail = host_context(&first);
+    let at = |text: &str, needle: &str| {
+        text.find(needle)
+            .unwrap_or_else(|| panic!("{needle}: {text}"))
     };
     let order = [
-        at("Be brief."),
-        at("## Environment\n"),
-        at("name=\"Style\">\nWrite tersely."),
-        at("Run task test."),
-        at("## Environment (this turn)\n"),
-        at("Memory: the user likes tea."),
+        at(system, "Be brief."),
+        at(system, "## Environment\n"),
+        at(system, "Run task test."),
     ];
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{system}");
+    let tail_order = [
+        at(&tail, "## Environment (this turn)\n"),
+        at(&tail, "name=\"Style\">\nWrite tersely."),
+        at(&tail, "Memory: the user likes tea."),
+    ];
+    assert!(tail_order.windows(2).all(|w| w[0] < w[1]), "{tail}");
     let environment = &system[order[1]..];
     let environment = &environment[..environment.find("\n\n## ").unwrap()];
-    // The volatile lines (date, git) come last, after AGENTS.md (#1314).
-    let current = &system[order[4]..order[5]];
+    // The volatile lines (date, git) are the turn's, out of the system
+    // prompt (#1314, #1227).
+    let current = &tail[tail_order[0]..];
+    let current = &current[..current.find("\n\n## ").unwrap()];
+    assert!(!system.contains(environment::CURRENT_HEADING), "{system}");
     let folder = h.workspaces.get(&h.workspace_id).unwrap().unwrap().name;
     assert!(
         current.contains(&format!(
@@ -2189,9 +2482,10 @@ async fn project_skill_is_fetched_by_host_not_ui() {
     let llm = seen(&h.server, "/llm/v1/chat/completions");
     let first: Value = serde_json::from_str(&llm[0].body).unwrap();
     let system = first["messages"][0]["content"].as_str().unwrap();
+    let tail = host_context(&first);
     assert!(
-        system.contains("name=\"Deploy\">\nDeploy with care.\n</invoked_skill nonce=\""),
-        "{system}"
+        tail.contains("name=\"Deploy\">\nDeploy with care.\n</invoked_skill nonce=\""),
+        "{tail}"
     );
     // Applied to this turn only: the load_skill catalogue stays the version's.
     assert!(system.contains("Available skill: Style."), "{system}");
@@ -2761,6 +3055,8 @@ async fn the_doctor_removes_a_vanished_workspace_the_way_the_app_does() {
         workspaces: workspaces.clone(),
         history: None,
         sessions: None,
+        cache_dir: None,
+        history_retention_days: 0,
     };
     let message = doctor.fix("workspaces.drop_missing", true).unwrap();
     assert!(message.contains("Not removed"), "{message}");
@@ -2878,6 +3174,38 @@ async fn undo_is_for_the_newest_turn_and_an_older_one_restores_the_folder_only_w
             "already_undone"
         );
     }
+}
+
+#[tokio::test]
+async fn fork_restore_point_is_the_next_writing_turn_and_restores_only_when_confirmed() {
+    let h = harness(writing_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let first = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h, &first.turn_id).await;
+    let second = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h, &second.turn_id).await;
+    let folder = h.folder.path();
+    // The folder as the first turn left it is the second turn's checkpoint.
+    assert_eq!(
+        h.host
+            .restore_point_after(&first.turn_id)
+            .unwrap()
+            .as_deref(),
+        Some(second.turn_id.as_str())
+    );
+    // Nothing changed the folder after the newest turn.
+    assert_eq!(h.host.restore_point_after(&second.turn_id).unwrap(), None);
+    assert_eq!(
+        h.host.restore_point_after("nope").unwrap_err().code,
+        "turn_unknown"
+    );
+    // A fork's restore is the older turn's: previewed, then confirmed.
+    let preview = h.host.restore_preview(&second.turn_id).unwrap();
+    assert_eq!(preview.deleted, ["turn1.txt"]);
+    assert_eq!(files_in(folder), ["turn0.txt", "turn1.txt"]);
+    h.host.restore(&second.turn_id, None, true).unwrap();
+    assert_eq!(files_in(folder), ["turn0.txt"]);
+    // An undone turn is no restore point any more.
+    assert_eq!(h.host.restore_point_after(&first.turn_id).unwrap(), None);
 }
 
 #[tokio::test]
@@ -3450,13 +3778,37 @@ fn seed_requests(server: &MockServer) -> usize {
         .count()
 }
 
-/// `(role, content text, tool names)` of a request body, without the system message.
+/// The turn's host context message of a request body (#1227): the
+/// environment's volatile part, the turn's skills and the recall.
+fn host_context(body: &Value) -> String {
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == crate::d0::model::HOST_CONTEXT_NAME)
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// The person's messages of a request body (not the host's context).
+fn person_messages(body: &Value) -> Vec<&Value> {
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "user" && m["name"] != crate::d0::model::HOST_CONTEXT_NAME)
+        .collect()
+}
+
+/// `(role, content text, tool names)` of a request body, without the system
+/// message and the turn's host context message.
 fn shape(body: &Value) -> Vec<(String, String, Vec<String>)> {
     body["messages"]
         .as_array()
         .unwrap()
         .iter()
-        .filter(|m| m["role"] != "system")
+        .filter(|m| m["role"] != "system" && m["name"] != crate::d0::model::HOST_CONTEXT_NAME)
         .map(|m| {
             (
                 m["role"].as_str().unwrap().to_owned(),
@@ -3942,6 +4294,7 @@ fn no_store_host(h: &Harness) -> Arc<AgentHost> {
             app_id: Some(TEST_APP_ID.to_owned()),
             user_rules_dir: None,
             user_commands_dir: None,
+            cache_dir: None,
         })
         .unwrap(),
     )
@@ -4231,11 +4584,25 @@ async fn a_second_turn_is_refused_before_it_can_wipe_a_running_seed() {
     );
 }
 
-/// The agent of the step-limit tests: two model steps per run.
+/// An agent whose `meta.step_limit` is two: not read locally, so the
+/// default applies unless the workspace sets its own.
 fn two_step_details() -> Value {
     let mut details = agent_details();
     details["meta"] = json!({"step_limit": 2});
     details
+}
+
+/// The step-limit tests' workspace: two model steps per run.
+fn two_steps(h: &Harness) {
+    h.workspaces
+        .set_agent_settings(
+            &h.workspace_id,
+            crate::workspaces::AgentSettings {
+                step_limit: Some(crate::workspaces::StepLimit::Steps(2)),
+                ..crate::workspaces::AgentSettings::default()
+            },
+        )
+        .unwrap();
 }
 
 /// The platform of [`platform`] with a model that calls `list_tree` for its
@@ -4282,6 +4649,7 @@ async fn step_limit_asks_to_continue_and_continues_same_session() {
         UiDecision::AllowOnce,
     )
     .await;
+    two_steps(&h);
     h.host.start(request(&h.workspace_id)).await.unwrap();
     let events = until_done(&h).await;
 
@@ -4369,6 +4737,7 @@ async fn continue_is_capped() {
         UiDecision::AllowOnce,
     )
     .await;
+    two_steps(&h);
     h.host.start(request(&h.workspace_id)).await.unwrap();
     let events = until_done(&h).await;
     // Asked three times, each time anew; a fourth limit is not asked.
@@ -4394,6 +4763,7 @@ async fn continue_is_capped() {
 #[tokio::test]
 async fn stop_here_commits_the_turn_at_its_limit() {
     let h = harness(looping_platform(None).await, allowed(), UiDecision::Deny).await;
+    two_steps(&h);
     h.host.start(request(&h.workspace_id)).await.unwrap();
     let events = until_done(&h).await;
     assert_eq!(of_kind(&events, "approval_request").len(), 1);
@@ -4456,7 +4826,8 @@ async fn a_turn_stops_at_the_tool_calls_a_commit_may_carry() {
     assert!(of_kind(&events, "commit_failed").is_empty());
 }
 
-/// The workspace's own step limit wins over the agent's `meta.step_limit`.
+/// The workspace's own step limit wins over the default and the agent's
+/// `meta.step_limit`.
 #[tokio::test]
 async fn the_workspace_step_limit_wins_over_the_agents() {
     let inner = platform(two_step_details(), &[]);
@@ -4472,7 +4843,7 @@ async fn the_workspace_step_limit_wins_over_the_agents() {
         .set_agent_settings(
             &h.workspace_id,
             crate::workspaces::AgentSettings {
-                step_limit: Some(10),
+                step_limit: Some(crate::workspaces::StepLimit::Steps(10)),
                 ..crate::workspaces::AgentSettings::default()
             },
         )
@@ -5656,6 +6027,65 @@ async fn a_forbidden_rule_reaches_the_model_with_its_justification() {
     );
 }
 
+/// A bypass turn asks nothing: a command a rule would ask about runs, and
+/// a forbidden one is still refused inline.
+#[tokio::test]
+async fn a_bypass_turn_asks_nothing_and_keeps_forbidden_rules() {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-reset",
+                    "run_command",
+                    &json!({"command": "git reset --hard"}),
+                ),
+                1 => tool_call(
+                    "call-publish",
+                    "run_command",
+                    &json!({"command": "npm publish"}),
+                ),
+                _ => sse(&[
+                    json!({"choices": [{"delta": {"content": "Done."}, "finish_reason": "stop"}]}),
+                ]),
+            };
+        }
+        inner(req)
+    })
+    .await;
+    // Were anything asked, the person would deny it.
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    write_rules(
+        &h.workspaces.data_dir(&h.workspace_id).join("rules.json"),
+        r#"{"version":1,"rules":[{"pattern":["npm","publish"],"decision":"forbidden"},
+            {"pattern":["git","reset"],"decision":"prompt"}]}"#,
+    );
+    h.host
+        .start(TurnRequest {
+            bypass: true,
+            ..request(&h.workspace_id)
+        })
+        .await
+        .unwrap();
+    let events = until_done(&h).await;
+    assert!(
+        of_kind(&events, "approval_request").is_empty(),
+        "{:?}",
+        h.emitter.kinds()
+    );
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies.len(), 3);
+    assert!(!bodies[1].to_string().contains("forbidden_by_rule"));
+    assert!(bodies[2].to_string().contains("forbidden_by_rule"));
+    // The folder's session leaves bypass mode with the turn.
+    let (session, _) = h.host.process_session(&h.workspace_id).expect("session");
+    assert_eq!(
+        session.profile(),
+        elitea_local_tools::approvals::PermissionProfile::Build
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Context compaction (#1217)
 // ---------------------------------------------------------------------------
@@ -5844,10 +6274,11 @@ async fn long_session_compacts_under_small_window() {
 async fn compaction_marker_reused_next_turn() {
     let convo = Arc::new(Mutex::new(Convo::default()));
     let summaries = Arc::new(AtomicUsize::new(0));
-    // 12k, not 8k: with the planner's tools (#1225) offered every turn, the
-    // schemas alone are ~2.7k tokens, so a compacted 8k request no longer
-    // leaves room for the next turn's prompt and it would compact again.
-    let server = small_window_platform(12_288, convo, reading_script(summaries.clone())).await;
+    // 16k, not 8k: with the planner's tools (#1225) and the background
+    // process tools (#1223) offered every turn, the schemas alone are ~4k
+    // tokens, so a compacted 8k request no longer leaves room for the next
+    // turn's prompt and it would compact again.
+    let server = small_window_platform(16_384, convo, reading_script(summaries.clone())).await;
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
     write_big(&h);
     run_turn(&h, "read big.txt 8 times").await;
@@ -6957,4 +7388,2046 @@ async fn a_model_that_cannot_reason_gets_no_effort_and_keeps_the_temperature() {
     assert_eq!(bodies[1]["reasoning_effort"], "high");
     assert!(bodies[1].get("temperature").is_none());
     assert_eq!(running_models(&h)[0]["chosen"], true);
+}
+
+// ---- Image input (#1229) ----
+
+/// A 1x1 PNG.
+const PIXEL_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+/// The platform with `gpt-test` marked as seeing images (or not), and the
+/// model answering with `script`.
+fn vision_platform(
+    vision: Option<bool>,
+    script: impl Fn(&Value) -> Res + Send + Sync + 'static,
+) -> impl Fn(&Req) -> Res {
+    let inner = platform(agent_details(), &[]);
+    move |req: &Req| {
+        if req.path.starts_with("/api/v2/configurations/models/1?") {
+            let mut row = json!({
+                "name": "gpt-test", "project_id": 1, "section": "llm",
+                "context_window": 200_000, "max_output_tokens": 4096,
+            });
+            if let Some(vision) = vision {
+                row["supports_vision"] = json!(vision);
+            }
+            return Res::json(200, &json!({"total": 1, "items": [row]}));
+        }
+        if req.path == "/llm/v1/chat/completions" {
+            return script(&serde_json::from_str(&req.body).unwrap_or_default());
+        }
+        inner(req)
+    }
+}
+
+fn pasted(h: &Harness) -> super::attachments::ImagePick {
+    let added = h
+        .host
+        .attachment_add_bytes(&h.workspace_id, None, PIXEL_PNG)
+        .unwrap();
+    super::attachments::ImagePick {
+        source: super::attachments::ImageSource::Clipboard,
+        token: added.token,
+    }
+}
+
+#[tokio::test]
+async fn user_image_is_sent_as_image_url_data_uri() {
+    let server = serve(vision_platform(Some(true), |_| say("A single pixel."))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let pick = pasted(&h);
+    let mut asked = request(&h.workspace_id);
+    asked.prompt = "what is wrong in this dialog?".into();
+    asked.images = vec![pick];
+    let started = h.host.start(asked).await.unwrap();
+    until_done_of(&h, &started.turn_id).await;
+
+    let bodies = llm_bodies(&h.server);
+    let user = person_messages(&bodies[0])[0];
+    let parts = user["content"].as_array().expect("text and image parts");
+    assert_eq!(parts.len(), 2, "{parts:?}");
+    assert_eq!(parts[0]["type"], "text");
+    assert!(
+        parts[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("what is wrong in this dialog?")
+    );
+    assert_eq!(parts[1]["type"], "image_url");
+    assert_eq!(
+        parts[1]["image_url"]["url"],
+        format!("data:image/png;base64,{PIXEL_PNG}")
+    );
+
+    // The commit notes the attachment (name, type, size), never the bytes.
+    let commit = seen(
+        &h.server,
+        &format!("/api/v2/elitea_core/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    );
+    let body: Value = serde_json::from_str(&commit[0].body).unwrap();
+    let note = &body["user_message"]["images"];
+    assert_eq!(note[0]["mime"], "image/png");
+    assert_eq!(note[0]["name"], "pasted-image");
+    assert!(!commit[0].body.contains(PIXEL_PNG));
+
+    // The thread history keeps the thumbnail, not the image.
+    let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+    let stored = &turns[0].images;
+    assert_eq!(stored.len(), 1);
+    assert!(
+        stored[0]
+            .thumbnail
+            .as_deref()
+            .unwrap()
+            .starts_with("data:image/jpeg;base64,")
+    );
+    // The token is used up by the turn that carried it.
+    assert_eq!(h.host.attachments_held(), 0);
+}
+
+#[tokio::test]
+async fn text_only_body_is_unchanged() {
+    let server = serve(vision_platform(Some(true), |_| say("ok"))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    let bodies = llm_bodies(&h.server);
+    let user = person_messages(&bodies[0])[0];
+    // A plain string, as before images existed: prompt caches key on it.
+    assert_eq!(user["content"], "Write notes and file a bug");
+    assert_eq!(
+        user.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["content", "role"]
+    );
+    let commit = seen(
+        &h.server,
+        &format!("/api/v2/elitea_core/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    );
+    let body: Value = serde_json::from_str(&commit[0].body).unwrap();
+    assert_eq!(
+        body["user_message"],
+        json!({"content": "Write notes and file a bug"})
+    );
+}
+
+#[tokio::test]
+async fn non_vision_model_refuses_images_before_start() {
+    // A model the catalogue marks without vision, or does not describe.
+    for vision in [Some(false), None] {
+        let server = serve(vision_platform(vision, |_| say("ok"))).await;
+        let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+        let started = |h: &Harness| {
+            seen(
+                &h.server,
+                "/api/v2/elitea_core/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555",
+            )
+            .len()
+        };
+        // The person chose the model: known before anything starts.
+        let pick = pasted(&h);
+        let mut asked = request(&h.workspace_id);
+        asked.images = vec![pick];
+        asked.model = Some(crate::d0::definition::ModelChoice::parse("gpt-test", None).unwrap());
+        let error = h.host.start(asked).await.unwrap_err();
+        assert_eq!(error.code, "model_no_vision", "{vision:?}");
+        assert_eq!(started(&h), 0, "no local turn was started");
+        // The image stays attached: the person may switch model and send again.
+        assert_eq!(h.host.attachments_held(), 1);
+        // The agent's own (or the thread's kept) model is known under the
+        // session: refused before the model is asked.
+        let pick = pasted(&h);
+        let mut asked = request(&h.workspace_id);
+        asked.images = vec![pick];
+        let error = h.host.start(asked).await.unwrap_err();
+        assert_eq!(error.code, "model_no_vision", "{vision:?}");
+        assert!(llm_bodies(&h.server).is_empty());
+        assert_eq!(h.host.attachments_held(), 2);
+    }
+}
+
+#[tokio::test]
+async fn an_unread_catalogue_leaves_images_to_the_gateway() {
+    // The catalogue fails (a 503): nothing says the model cannot see, so
+    // the image goes and the gateway decides.
+    let inner = vision_platform(Some(false), |_| say("ok"));
+    let server = serve(move |req: &Req| {
+        if req.path.starts_with("/api/v2/configurations/models/1?") {
+            return Res::json(503, &json!({"error": "unavailable"}));
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    for chosen in [false, true] {
+        let mut asked = request(&h.workspace_id);
+        asked.images = vec![pasted(&h)];
+        if chosen {
+            asked.model =
+                Some(crate::d0::definition::ModelChoice::parse("gpt-test", None).unwrap());
+        }
+        let started = h.host.start(asked).await.unwrap();
+        until_done_of(&h, &started.turn_id).await;
+    }
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies.len(), 2);
+    for body in &bodies {
+        let user = *person_messages(body).last().unwrap();
+        assert_eq!(user["content"][1]["type"], "image_url", "{user}");
+    }
+}
+
+#[tokio::test]
+async fn an_attachment_belongs_to_one_workspace_and_a_turn_takes_five() {
+    let server = serve(vision_platform(Some(true), |_| say("ok"))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let mut asked = request(&h.workspace_id);
+    asked.images = vec![super::attachments::ImagePick {
+        source: super::attachments::ImageSource::File,
+        token: "no-such-token".into(),
+    }];
+    assert_eq!(
+        h.host.start(asked).await.unwrap_err().code,
+        "attachment_unknown"
+    );
+    let mut asked = request(&h.workspace_id);
+    asked.images = (0..6).map(|_| pasted(&h)).collect();
+    assert_eq!(
+        h.host.start(asked).await.unwrap_err().code,
+        "too_many_images"
+    );
+    // Not an image: refused when attached, not when sent.
+    let error = h
+        .host
+        .attachment_add_bytes(&h.workspace_id, None, "aGVsbG8=")
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_request");
+}
+
+#[tokio::test]
+async fn attachment_add_refuses_denied_paths() {
+    let server = serve(vision_platform(Some(true), |_| say("ok"))).await;
+    let policy = json!({
+        "allowed": true, "shell": true, "max_sandbox_mode": "workspace-write",
+        "path_deny": ["private/**"],
+    });
+    let h = harness(server, Some(policy), UiDecision::AllowOnce).await;
+    let png =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, PIXEL_PNG).unwrap();
+    let write = |path: std::path::PathBuf| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &png).unwrap();
+        path.to_string_lossy().into_owned()
+    };
+    // The app's own data (the harness passes its config dir as a host dir).
+    let app_file = write(h.app.path().join("config").join("secret.png"));
+    let error = h
+        .host
+        .attachment_add(&h.workspace_id, &app_file)
+        .unwrap_err();
+    assert_eq!(error.code, "path_denied", "{error:?}");
+    // Inside the workspace, matching path_deny.
+    let denied = write(h.folder.path().join("private").join("x.png"));
+    assert_eq!(
+        h.host
+            .attachment_add(&h.workspace_id, &denied)
+            .unwrap_err()
+            .code,
+        "path_denied"
+    );
+    // A link is not followed: a link to a denied file does not get it in.
+    let link = h.folder.path().join("innocent.png");
+    std::os::unix::fs::symlink(&app_file, &link).unwrap();
+    assert!(
+        h.host
+            .attachment_add(&h.workspace_id, &link.to_string_lossy())
+            .is_err()
+    );
+    // A relative path is not a drop.
+    assert_eq!(
+        h.host
+            .attachment_add(&h.workspace_id, "x.png")
+            .unwrap_err()
+            .code,
+        "invalid_request"
+    );
+    // A file in the workspace, and one elsewhere, are taken.
+    let inside = write(h.folder.path().join("shots").join("ok.png"));
+    let added = h.host.attachment_add(&h.workspace_id, &inside).unwrap();
+    assert_eq!(
+        (added.name.as_str(), added.mime.as_str()),
+        ("ok.png", "image/png")
+    );
+    let elsewhere = tempfile::tempdir().unwrap();
+    let outside = write(elsewhere.path().join("drop.png"));
+    assert!(h.host.attachment_add(&h.workspace_id, &outside).is_ok());
+    let text = elsewhere.path().join("a.txt");
+    std::fs::write(&text, "not an image").unwrap();
+    assert!(
+        h.host
+            .attachment_add(&h.workspace_id, &text.to_string_lossy())
+            .is_err(),
+        "text is not an image"
+    );
+}
+
+/// The model reads `img.png` with `read_file`, then answers.
+fn reads_the_image(body: &Value) -> Res {
+    let last = body["messages"].as_array().and_then(|m| m.last()).unwrap();
+    if last["role"] == "user" && last["name"] == "tool_image" || last["role"] == "tool" {
+        return say("It is a pixel.");
+    }
+    tool_call("call-img", "read_file", &json!({"path": "img.png"}))
+}
+
+#[tokio::test]
+async fn read_file_returns_the_image_to_a_vision_model_and_a_hint_to_another() {
+    for vision in [true, false] {
+        let server = serve(vision_platform(Some(vision), reads_the_image)).await;
+        let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+        let png =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, PIXEL_PNG).unwrap();
+        std::fs::write(h.folder.path().join("img.png"), png).unwrap();
+        let mut asked = request(&h.workspace_id);
+        asked.prompt = "look at img.png".into();
+        let started = h.host.start(asked).await.unwrap();
+        until_done_of(&h, &started.turn_id).await;
+        let bodies = llm_bodies(&h.server);
+        assert_eq!(bodies.len(), 2, "{vision}");
+        let messages = bodies[1]["messages"].as_array().unwrap();
+        let tool = messages.iter().find(|m| m["role"] == "tool").unwrap();
+        let tool_text = tool["content"].as_str().unwrap();
+        assert!(!tool_text.contains("image_base64"), "{tool_text}");
+        assert!(!tool_text.contains(PIXEL_PNG), "{tool_text}");
+        let image = messages.iter().find(|m| m["name"] == "tool_image");
+        if vision {
+            let image = image.expect("the image follows the tool message");
+            assert_eq!(image["role"], "user");
+            assert_eq!(
+                image["content"][1]["image_url"]["url"],
+                format!("data:image/png;base64,{PIXEL_PNG}")
+            );
+            assert!(tool_text.contains("\"kind\":\"image\""), "{tool_text}");
+        } else {
+            assert!(image.is_none());
+            assert!(tool_text.contains("cannot view images"), "{tool_text}");
+        }
+        // The thread history and the session never keep the bytes.
+        let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+        assert!(
+            !serde_json::to_string(&turns[0].events)
+                .unwrap()
+                .contains(PIXEL_PNG)
+        );
+    }
+}
+
+/// Whether a model request is a sub-agent's (#1226): its system prompt
+/// starts with the runtime's child preamble.
+fn is_child_request(body: &Value) -> bool {
+    body["messages"][0]["content"]
+        .as_str()
+        .is_some_and(|system| system.starts_with(elitea_agent_runtime::subagents::CHILD_PREAMBLE))
+}
+
+/// The sub-agent ids the tool results in `body` carry (`a_` + 8 hex).
+fn spawned_ids(body: &Value) -> Vec<String> {
+    let text = body["messages"].to_string();
+    let mut ids = Vec::new();
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find("a_") {
+        let candidate = rest.get(at + 2..at + 10).unwrap_or_default();
+        if candidate.len() == 8 && candidate.chars().all(|c| c.is_ascii_hexdigit()) {
+            let id = format!("a_{candidate}");
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        rest = &rest[at + 2..];
+    }
+    ids
+}
+
+/// The platform of [`platform`] whose parent model spawns one sub-agent,
+/// waits for it and answers; the sub-agent reads a file and reports. While
+/// `hang` is set the sub-agent's model never answers (for at most 5 s).
+async fn subagent_platform(hang: Arc<AtomicBool>) -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    let parent_calls = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            let body: Value = serde_json::from_str(&req.body).unwrap();
+            if is_child_request(&body) {
+                if hang.load(Ordering::SeqCst) {
+                    tokio::task::block_in_place(|| {
+                        for _ in 0..250 {
+                            if !hang.load(Ordering::SeqCst) {
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                    });
+                }
+                let answered = body["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m["role"] == "tool");
+                return if answered {
+                    say("notes.txt says hello.")
+                } else {
+                    tool_call("child-read", "read_file", &json!({"path": "notes.txt"}))
+                };
+            }
+            return match parent_calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-spawn",
+                    "spawn_agent",
+                    &json!({"task": "Summarise notes.txt", "label": "notes"}),
+                ),
+                1 => tool_call(
+                    "call-wait",
+                    "wait_agent",
+                    &json!({"agent_ids": spawned_ids(&body)}),
+                ),
+                _ => say("The notes say hello."),
+            };
+        }
+        inner(req)
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn subagent_spend_uses_the_turn_execution_id() {
+    let h = harness(
+        subagent_platform(Arc::new(AtomicBool::new(false))).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    std::fs::write(h.folder.path().join("notes.txt"), "hello\n").unwrap();
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+
+    // Every model call, the sub-agent's included, is the turn's spend.
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let child: Vec<&Req> = llm
+        .iter()
+        .filter(|req| is_child_request(&serde_json::from_str(&req.body).unwrap()))
+        .collect();
+    assert_eq!(child.len(), 2, "the sub-agent read, then reported");
+    for req in &llm {
+        assert_eq!(req.headers["x-elitea-execution-id"], EXECUTION);
+    }
+    // The sub-agent's prompt holds the environment, never the agent's own
+    // instructions, and it is offered read-only tools only.
+    let body: Value = serde_json::from_str(&child[0].body).unwrap();
+    let system = body["messages"][0]["content"].as_str().unwrap();
+    assert!(!system.contains("Be brief."), "{system}");
+    assert!(system.contains("## Environment"), "{system}");
+    let offered: Vec<&str> = body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap())
+        .collect();
+    assert!(offered.contains(&"read_file"), "{offered:?}");
+    for writer in [
+        "write_file",
+        "edit_file",
+        "apply_patch",
+        "run_command",
+        "spawn_agent",
+        "Jira_create_issue",
+    ] {
+        assert!(!offered.contains(&writer), "{offered:?}");
+    }
+
+    // The lane's events: started under the spawn call, the child's own
+    // tool call, and its end.
+    let started = of_kind(&events, "subagent_started");
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0]["parent_call_id"], "call-spawn");
+    assert_eq!(started[0]["label"], "notes");
+    let agent_id = started[0]["agent_id"].as_str().unwrap().to_owned();
+    let inner: Vec<Value> = of_kind(&events, "subagent_event")
+        .into_iter()
+        .map(|event| event["inner"].clone())
+        .collect();
+    assert!(
+        inner
+            .iter()
+            .any(|e| e["kind"] == "tool_call" && e["tool"] == "read_file"),
+        "{inner:?}"
+    );
+    let finished = of_kind(&events, "subagent_finished");
+    assert_eq!(finished[0]["agent_id"], agent_id.as_str());
+    assert_eq!(finished[0]["status"], "completed");
+    assert_eq!(finished[0]["result"], "notes.txt says hello.");
+    // The child's read is no `tool_call` of the turn's own.
+    assert!(
+        of_kind(&events, "tool_call")
+            .iter()
+            .all(|call| call["tool"] != "read_file")
+    );
+
+    // The commit carries the child's call under the spawn call.
+    let commit = &commit_bodies(&h.server)[0];
+    let calls = commit["tool_calls"].as_object().unwrap();
+    // Keyed under the child: a model's call ids are unique only per agent.
+    assert!(!calls.contains_key("child-read"));
+    let read = &calls[&format!("{agent_id}:child-read")];
+    assert_eq!(read["parent_agent_call_id"], "call-spawn");
+    assert_eq!(read["sibling_ordinal"], 1);
+    assert_eq!(read["parent_agent_name"], "notes");
+    assert_eq!(
+        read["parent_agent_path"],
+        json!([{"name": "notes", "call_id": "call-spawn", "sibling_ordinal": 1}])
+    );
+    assert!(calls["call-spawn"].get("parent_agent_call_id").is_none());
+    let order: Vec<&String> = calls.keys().collect();
+    assert!(order.contains(&&"call-wait".to_owned()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn turn_cancel_stops_children() {
+    let hang = Arc::new(AtomicBool::new(true));
+    let h = harness(
+        subagent_platform(hang.clone()).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+    // Until the child runs and the parent waits for it.
+    for _ in 0..500 {
+        if h.emitter.kinds().contains(&"subagent_started")
+            && seen(&h.server, "/llm/v1/chat/completions").len() >= 3
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let cancelled_at = std::time::Instant::now();
+    h.host.cancel(&started.turn_id).unwrap();
+    let events = done_event(&h.emitter).await;
+    assert!(cancelled_at.elapsed() < Duration::from_secs(2));
+    hang.store(false, Ordering::SeqCst);
+    let finished = of_kind(&events, "subagent_finished");
+    assert_eq!(finished.len(), 1, "{:?}", h.emitter.kinds());
+    assert_eq!(finished[0]["status"], "cancelled");
+    assert_eq!(events.last().unwrap().payload["committed"], false);
+}
+
+/// The thread's framing nonce, as the system prompt's AGENTS.md block carries it.
+fn framing_nonce(body: &Value) -> String {
+    let system = body["messages"][0]["content"].as_str().unwrap();
+    let at = system
+        .find("<agents_md nonce=\"")
+        .unwrap_or_else(|| panic!("{system}"))
+        + "<agents_md nonce=\"".len();
+    system[at..at + 32].to_owned()
+}
+
+/// #1227: with nothing stable changed, every turn of a thread sends the same
+/// system message and tools (the cacheable prefix); before the per-thread
+/// nonce each turn's AGENTS.md block carried a fresh one.
+#[tokio::test]
+async fn system_prefix_is_stable_across_turns_of_a_thread() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("AGENTS.md"), "Run task test.").unwrap();
+    run_turn(&h, "create hello.txt with hi").await;
+    run_turn(&h, "what file did you just create?").await;
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies.len(), 3);
+    let (first, last) = (&bodies[0], &bodies[2]);
+    assert_eq!(first["messages"][0], last["messages"][0]);
+    assert_eq!(first["tools"], last["tools"]);
+    // The turns differ after the prefix: the history, the tail, the message.
+    assert_ne!(first["messages"], last["messages"]);
+    assert!(!host_context(last).is_empty());
+}
+
+#[tokio::test]
+async fn nonce_is_per_thread_and_not_in_workspace() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("AGENTS.md"), "Run task test.").unwrap();
+    run_turn(&h, "create hello.txt with hi").await;
+    run_turn(&h, "what file did you just create?").await;
+    let bodies = llm_bodies(&h.server);
+    let nonce = framing_nonce(&bodies[0]);
+    assert_eq!(nonce.len(), 32);
+    assert!(nonce.bytes().all(|b| b.is_ascii_hexdigit()));
+    assert_eq!(framing_nonce(&bodies[2]), nonce, "one nonce per thread");
+    // Only the prompt to /llm carries it: no other request, no file of the
+    // workspace (the store keeps it as bytes in the app's data).
+    for req in h.server.seen() {
+        if req.path != "/llm/v1/chat/completions" {
+            assert!(!req.body.contains(&nonce), "{}", req.path);
+        }
+    }
+    let mut dirs = vec![h.folder.path().to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                let bytes = std::fs::read(&path).unwrap();
+                assert!(
+                    !String::from_utf8_lossy(&bytes).contains(&nonce),
+                    "{}",
+                    path.display()
+                );
+            }
+        }
+    }
+    // A session re-seeded from the server draws a new one.
+    h.host.mark_session_stale(CONVERSATION_UUID).await;
+    run_turn(&h, "and what was in it?").await;
+    let bodies = llm_bodies(&h.server);
+    assert_ne!(framing_nonce(bodies.last().unwrap()), nonce);
+}
+
+/// The memory recall moves from the end of the system prompt to the end of
+/// the turn's host message, its text exactly as the server answered it.
+#[tokio::test]
+async fn recall_moves_to_the_tail_with_identical_text() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h).await;
+    let bodies = llm_bodies(&h.server);
+    const RECALL: &str = "Memory: the user likes tea.";
+    for body in &bodies {
+        let system = body["messages"][0]["content"].as_str().unwrap();
+        assert!(!system.contains(RECALL), "{system}");
+        let tail = host_context(body);
+        assert_eq!(tail.matches(RECALL).count(), 1, "{tail}");
+        assert!(tail.ends_with(&format!("\n\n{RECALL}")), "{tail}");
+        // Right before the person's message, every step of the turn.
+        let messages = body["messages"].as_array().unwrap();
+        let at = messages
+            .iter()
+            .position(|m| m["name"] == crate::d0::model::HOST_CONTEXT_NAME)
+            .unwrap();
+        assert_eq!(messages[at + 1]["content"], "Write notes and file a bug");
+    }
+}
+
+#[tokio::test]
+async fn usage_event_carries_cached_and_reasoning_tokens() {
+    let usage = |prompt: u64, cached: u64| {
+        json!({"choices": [], "usage": {"prompt_tokens": prompt, "completion_tokens": 12,
+            "total_tokens": prompt + 12,
+            "prompt_tokens_details": {"cached_tokens": cached, "cache_write_tokens": 40},
+            "completion_tokens_details": {"reasoning_tokens": 3}}})
+    };
+    let script: Script = Box::new(move |body: &Value| {
+        if last_message(body)["role"] == "tool" {
+            sse(&[
+                json!({"choices": [{"delta": {"content": "Done."}}]}),
+                json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+                usage(2_100, 1_536),
+            ])
+        } else {
+            sse(&[
+                json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call-u",
+                    "type": "function", "function": {"name": "write_file",
+                    "arguments": json!({"path": "u.txt", "content": "u"}).to_string()}}]}}]}),
+                json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+                usage(2_000, 0),
+            ])
+        }
+    });
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, script)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let turn_id = run_turn(&h, "write u.txt").await;
+    let events = events_of(&h, &turn_id);
+    let usage = of_kind(&events, "usage");
+    assert_eq!(usage.len(), 2);
+    assert_eq!(usage[0]["step"], 1);
+    assert_eq!(usage[0]["model"], "gpt-test");
+    assert!(usage[0].get("cached_tokens").is_none(), "{:?}", usage[0]);
+    assert_eq!(usage[1]["step"], 2);
+    assert_eq!(usage[1]["prompt_tokens"], 2_100);
+    assert_eq!(usage[1]["cached_tokens"], 1_536);
+    assert_eq!(usage[1]["cache_write_tokens"], 40);
+    assert_eq!(usage[1]["reasoning_tokens"], 3);
+    assert!(usage[1]["context"]["percent"].is_u64(), "{:?}", usage[1]);
+    // The turn's total, before its `done`, which the thread history keeps.
+    let total = of_kind(&events, "usage_total");
+    assert_eq!(
+        total,
+        [json!({"prompt": 4_100, "completion": 24, "cached": 1_536,
+            "cache_write": 80, "reasoning": 6, "calls": 2})]
+    );
+    let kinds: Vec<&str> = events.iter().map(|e| e.kind).collect();
+    let at = |kind: &str| kinds.iter().position(|k| *k == kind).unwrap();
+    assert!(at("usage_total") < at("done"));
+}
+
+/// The local MCP fixture server (`libs/rust/local-tools/tests/fixtures`),
+/// copied executable into a folder of its own: outside the workspace and
+/// the app's directories (the sandbox hides those from every server).
+fn mcp_fixture_program() -> (tempfile::TempDir, String) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let bin = tempfile::tempdir().unwrap();
+    let path = bin.path().join("mcp-fixture.sh");
+    std::fs::write(
+        &path,
+        include_str!("../../../../../libs/rust/local-tools/tests/fixtures/mcp/server.sh"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = path.canonicalize().unwrap().display().to_string();
+    (bin, path)
+}
+
+/// The agent calls `mcp__fx__echo` first when it is offered, then answers.
+fn mcp_platform() -> impl Fn(&Req) -> Res {
+    let inner = platform(agent_details(), &[]);
+    move |req: &Req| {
+        if req.path != "/llm/v1/chat/completions" {
+            return inner(req);
+        }
+        let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
+        let offered = body["tools"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|tool| tool["function"]["name"] == "mcp__fx__echo");
+        let answered = req.body.contains("call-mcp");
+        if offered && !answered {
+            return tool_call("call-mcp", "mcp__fx__echo", &json!({}));
+        }
+        sse(&[json!({"choices": [{"delta": {"content": "Done."}, "finish_reason": "stop"}]})])
+    }
+}
+
+fn mcp_allowed() -> Option<Value> {
+    Some(json!({"allowed": true, "shell": true, "local_mcp": true}))
+}
+
+/// Each `/llm` request's tool names.
+fn offered_per_request(server: &MockServer) -> Vec<Vec<String>> {
+    llm_bodies(server)
+        .iter()
+        .map(|body| {
+            body["tools"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .collect()
+}
+
+/// The person's MCP server is offered only while the policy allows local
+/// MCP servers: off, nothing starts; on, the server starts under the
+/// sandbox, its tool is asked on first use and runs, the report names the
+/// call (not its arguments), and turning the policy off stops it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn turn_offers_mcp_tools_only_when_policy_allows() {
+    let server = serve(mcp_platform()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let (_bin, program) = mcp_fixture_program();
+    h.host
+        .mcp_files()
+        .save_server(
+            elitea_local_tools::mcp::config::Scope::User,
+            None,
+            "fx",
+            elitea_local_tools::mcp::config::ServerConfig::new(program),
+        )
+        .unwrap();
+
+    run_turn(&h, "hello").await;
+    let offered = offered_per_request(&h.server);
+    assert!(
+        offered
+            .iter()
+            .flatten()
+            .all(|name| !name.starts_with("mcp__")),
+        "{offered:?}"
+    );
+    let (session, _) = h.host.process_session(&h.workspace_id).unwrap();
+    assert!(
+        session.mcp().status().is_empty(),
+        "nothing configured, nothing started"
+    );
+
+    h.policy.set(mcp_allowed());
+    let before = offered.len();
+    run_turn(&h, "hello again").await;
+    let offered = offered_per_request(&h.server);
+    assert!(
+        offered[before].iter().any(|name| name == "mcp__fx__echo"),
+        "{:?}",
+        offered[before]
+    );
+    let events = h.emitter.all();
+    let asked: Vec<&AgentEvent> = events
+        .iter()
+        .filter(|e| e.kind == "approval_request" && e.payload["tool"] == "mcp_call")
+        .collect();
+    assert_eq!(asked.len(), 1, "first use is asked");
+    assert_eq!(asked[0].payload["mcp"]["server"], "fx");
+    assert_eq!(asked[0].payload["mcp"]["tool"], "echo");
+    let result = events
+        .iter()
+        .find(|e| e.kind == "tool_result" && e.payload["call_id"] == "call-mcp")
+        .unwrap();
+    assert_eq!(result.payload["ok"], true, "{:?}", result.payload);
+    // The model read the server's answer, framed under the thread's nonce.
+    let bodies = llm_bodies(&h.server);
+    let last = bodies.last().unwrap().to_string();
+    assert!(last.contains("hello pid="), "{last}");
+    assert!(last.contains("mcp_result nonce="), "{last}");
+    let commits = local_commits(&h.server);
+    let commands = &commits.last().unwrap()["local_work"]["commands"];
+    assert_eq!(commands[0]["command"], "mcp fx echo", "{commands}");
+    // The server runs in the session until the policy turns MCP off.
+    let (session, _) = h.host.process_session(&h.workspace_id).unwrap();
+    assert_eq!(
+        session.mcp().status()[0].state,
+        elitea_local_tools::mcp::ServerState::Ready
+    );
+    h.policy.set(allowed());
+    run_turn(&h, "and again").await;
+    let offered = offered_per_request(&h.server);
+    assert!(
+        offered
+            .last()
+            .unwrap()
+            .iter()
+            .all(|name| !name.starts_with("mcp__")),
+        "{offered:?}"
+    );
+    let (replaced, _) = h.host.process_session(&h.workspace_id).unwrap();
+    assert!(
+        replaced.mcp().status().is_empty(),
+        "the old session stopped with it"
+    );
+}
+
+/// A repository's `.mcp.json` is a proposal: no server starts from it
+/// until the person accepts it, and accepting copies it into host data.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repo_mcp_json_is_proposed_not_started() {
+    let server = serve(mcp_platform()).await;
+    let h = harness(server, mcp_allowed(), UiDecision::AllowOnce).await;
+    let (_bin, program) = mcp_fixture_program();
+    std::fs::write(
+        h.folder.path().join(".mcp.json"),
+        json!({"mcpServers": {"fx": {"command": program, "env": {"API_TOKEN": "repo-secret-1"}}}})
+            .to_string(),
+    )
+    .unwrap();
+
+    run_turn(&h, "hello").await;
+    let offered = offered_per_request(&h.server);
+    assert!(
+        offered
+            .iter()
+            .flatten()
+            .all(|name| !name.starts_with("mcp__")),
+        "{offered:?}"
+    );
+    let (session, _) = h.host.process_session(&h.workspace_id).unwrap();
+    assert!(
+        session.mcp().status().is_empty(),
+        "the repository configured nothing"
+    );
+
+    let (root, deny) = h.host.rules_folder(&h.workspace_id).unwrap();
+    let files = h.host.mcp_files();
+    let pending = files.pending_proposals(&h.workspace_id, &root, &deny);
+    assert_eq!(pending.len(), 1);
+    assert!(
+        !serde_json::to_string(&pending[0])
+            .unwrap()
+            .contains("repo-secret-1")
+    );
+    let digest = pending[0].file_sha256.clone();
+    files
+        .answer(&h.workspace_id, &root, &deny, &digest, &["fx".to_owned()])
+        .unwrap();
+    h.host.mcp_reconfigure(Some(&h.workspace_id));
+    assert!(
+        files
+            .pending_proposals(&h.workspace_id, &root, &deny)
+            .is_empty()
+    );
+
+    let before = offered.len();
+    run_turn(&h, "hello again").await;
+    let offered = offered_per_request(&h.server);
+    assert!(
+        offered[before].iter().any(|name| name == "mcp__fx__echo"),
+        "accepted, it runs: {:?}",
+        offered[before]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Memory tools (#1233)
+// ---------------------------------------------------------------------------
+
+/// A policy with local work on and `memory_write` as given.
+fn memory_policy(memory_write: bool) -> Option<Value> {
+    Some(json!({"allowed": true, "shell": true, "memory_write": memory_write}))
+}
+
+/// The person's memories on the mock platform: `(id, content, enabled)`.
+type Memories = Arc<Mutex<Vec<(u64, String, bool)>>>;
+
+/// [`platform`] with the memory routes over `memories` and a model that
+/// makes `calls` one per step, then says "Done.".
+async fn memories_platform(calls: Vec<(String, String, Value)>, memories: Memories) -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    let steps = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        let path = req.path.as_str();
+        if path == "/llm/v1/chat/completions" {
+            return match calls.get(steps.fetch_add(1, Ordering::SeqCst)) {
+                Some((id, name, args)) => tool_call(id, name, args),
+                None => say("Done."),
+            };
+        }
+        let list = "/api/v2/elitea_core/memories/prompt_lib/1";
+        let item = |(id, content, enabled): &(u64, String, bool)| {
+            json!({"id": id.to_string(), "project_id": "1", "content": content, "tags": [],
+                "enabled": enabled, "created_at": "2026-10-01T00:00:00Z",
+                "updated_at": "2026-10-01T00:00:00Z"})
+        };
+        if path == list && req.method == "POST" {
+            let body: Value = serde_json::from_str(&req.body).unwrap();
+            let mut memories = memories.lock().unwrap();
+            let id = memories.len() as u64 + 1;
+            memories.push((id, body["content"].as_str().unwrap().to_owned(), true));
+            return Res::json(201, &item(memories.last().unwrap()));
+        }
+        if (path == list || path.starts_with(&format!("{list}?"))) && req.method == "GET" {
+            let query = path
+                .split_once("?q=")
+                .map(|(_, q)| {
+                    url::form_urlencoded::parse(format!("q={q}").as_bytes())
+                        .next()
+                        .unwrap()
+                        .1
+                        .to_lowercase()
+                })
+                .unwrap_or_default();
+            let items: Vec<Value> = memories
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, content, _)| content.to_lowercase().contains(&query))
+                .rev()
+                .map(item)
+                .collect();
+            return Res::json(200, &json!({"total": items.len(), "items": items}));
+        }
+        if let Some(id) = path.strip_prefix("/api/v2/elitea_core/memory/prompt_lib/1/")
+            && req.method == "DELETE"
+        {
+            let id: u64 = id.parse().unwrap();
+            memories
+                .lock()
+                .unwrap()
+                .retain(|(known, _, _)| *known != id);
+            return Res {
+                status: 204,
+                headers: Vec::new(),
+                body: String::new(),
+                raw: Vec::new(),
+            };
+        }
+        inner(req)
+    })
+    .await
+}
+
+fn memory_call(id: &str, name: &str, args: Value) -> (String, String, Value) {
+    (id.to_owned(), name.to_owned(), args)
+}
+
+/// The committed tool result of call `run_id`, as JSON.
+fn committed_output(server: &MockServer, run_id: &str) -> Value {
+    let commit = commit_bodies(server).pop().expect("a commit");
+    let output = commit["tool_calls"][run_id]["tool_output"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no output for {run_id}: {commit}"));
+    serde_json::from_str(output).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn memory_tools_absent_when_memory_write_is_off() {
+    for (policy, offered) in [
+        (allowed(), vec!["search_memory"]),
+        (memory_policy(false), vec!["search_memory"]),
+        // The host sends its tools sorted by name (a stable prompt prefix).
+        (
+            memory_policy(true),
+            vec!["delete_memory", "save_memory", "search_memory"],
+        ),
+    ] {
+        let server = serve(platform(agent_details(), &[])).await;
+        let h = harness(server, policy.clone(), UiDecision::AllowOnce).await;
+        run_turn(&h, "hello").await;
+        let tools = offered_tools(&h.server);
+        let memory: Vec<&str> = tools
+            .iter()
+            .map(String::as_str)
+            .filter(|name| elitea_agent_runtime::memory_tools::TOOL_NAMES.contains(name))
+            .collect();
+        assert_eq!(memory, offered, "{policy:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plan_mode_offers_search_memory_only() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, memory_policy(true), UiDecision::AllowOnce).await;
+    let mut req = request(&h.workspace_id);
+    req.plan_mode = true;
+    h.host.start(req).await.unwrap();
+    until_done(&h).await;
+    let tools = offered_tools(&h.server);
+    assert!(tools.iter().any(|t| t == "search_memory"), "{tools:?}");
+    assert!(
+        !tools
+            .iter()
+            .any(|t| t == "save_memory" || t == "delete_memory"),
+        "{tools:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn save_memory_posts_to_create_memory_with_the_turn_project() {
+    let memories = Memories::default();
+    let server = memories_platform(
+        vec![memory_call(
+            "call-save",
+            "save_memory",
+            json!({"content": "This repo uses pnpm."}),
+        )],
+        memories.clone(),
+    )
+    .await;
+    let h = harness(server, memory_policy(true), UiDecision::Deny).await;
+    let events = {
+        h.host.start(request(&h.workspace_id)).await.unwrap();
+        until_done(&h).await
+    };
+    // Allowed by default: nobody was asked (the UI would have denied it).
+    assert!(of_kind(&events, "approval_request").is_empty());
+    let posts: Vec<Req> = seen(&h.server, "/api/v2/elitea_core/memories/prompt_lib/1")
+        .into_iter()
+        .filter(|req| req.method == "POST")
+        .collect();
+    assert_eq!(posts.len(), 1);
+    let body: Value = serde_json::from_str(&posts[0].body).unwrap();
+    assert_eq!(body, json!({"content": "This repo uses pnpm."}));
+    assert_eq!(
+        committed_output(&h.server, "call-save"),
+        json!({"status": "ok", "id": 1})
+    );
+    let commit = commit_bodies(&h.server).pop().unwrap();
+    assert_eq!(commit["local_work"]["memories_saved"], json!([1]));
+    assert!(commit["local_work"].get("memories_deleted").is_none());
+    // The call is in the transcript with what it saved.
+    assert_eq!(
+        commit["tool_calls"]["call-save"]["tool_inputs"]["content"],
+        "This repo uses pnpm."
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delete_memory_is_asked_by_default() {
+    for (decision, deleted) in [(UiDecision::Deny, false), (UiDecision::AllowOnce, true)] {
+        let memories = Memories::default();
+        memories
+            .lock()
+            .unwrap()
+            .push((1, "uses npm".to_owned(), true));
+        let server = memories_platform(
+            vec![memory_call(
+                "call-delete",
+                "delete_memory",
+                json!({"id": 1}),
+            )],
+            memories.clone(),
+        )
+        .await;
+        let h = harness(server, memory_policy(true), decision.clone()).await;
+        h.host.start(request(&h.workspace_id)).await.unwrap();
+        let events = until_done(&h).await;
+        let asked = of_kind(&events, "approval_request");
+        assert_eq!(asked.len(), 1, "{decision:?}");
+        assert_eq!(asked[0]["tool"], "delete_memory");
+        assert_eq!(asked[0]["detail"], "memory 1: uses npm");
+        assert_eq!(asked[0]["can_remember"], false);
+        let deletes = seen(&h.server, "/api/v2/elitea_core/memory/prompt_lib/1/1");
+        assert_eq!(deletes.len(), usize::from(deleted), "{decision:?}");
+        assert_eq!(memories.lock().unwrap().is_empty(), deleted);
+        let commit = commit_bodies(&h.server).pop().unwrap();
+        if deleted {
+            assert_eq!(commit["local_work"]["memories_deleted"], json!([1]));
+        } else {
+            assert_eq!(
+                committed_output(&h.server, "call-delete")["code"],
+                "rejected"
+            );
+            assert!(commit["local_work"].get("memories_deleted").is_none());
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delete_memory_of_an_unknown_id_is_not_asked() {
+    let memories = Memories::default();
+    memories
+        .lock()
+        .unwrap()
+        .push((1, "uses npm".to_owned(), true));
+    let server = memories_platform(
+        vec![memory_call(
+            "call-delete",
+            "delete_memory",
+            json!({"id": 9}),
+        )],
+        memories.clone(),
+    )
+    .await;
+    let h = harness(server, memory_policy(true), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    assert!(of_kind(&events, "approval_request").is_empty());
+    assert_eq!(
+        committed_output(&h.server, "call-delete")["code"],
+        "not_found"
+    );
+    assert!(seen(&h.server, "/api/v2/elitea_core/memory/prompt_lib/1/9").is_empty());
+    assert_eq!(memories.lock().unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_memory_write_the_policy_turned_off_is_refused_and_nothing_is_sent() {
+    let memories = Memories::default();
+    let server = memories_platform(
+        vec![memory_call(
+            "call-save",
+            "save_memory",
+            json!({"content": "uses pnpm"}),
+        )],
+        memories.clone(),
+    )
+    .await;
+    let h = harness(server, memory_policy(false), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h).await;
+    // A tool the turn did not offer is not run.
+    assert!(memories.lock().unwrap().is_empty());
+    assert!(
+        seen(&h.server, "/api/v2/elitea_core/memories/prompt_lib/1")
+            .iter()
+            .all(|req| req.method != "POST")
+    );
+}
+
+/// The shared conformance fixture
+/// (`libs/rust/agent-runtime/tests/fixtures/memory_conformance.json`): the
+/// desktop answers each call exactly as the runtime's in-memory host does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_desktop_answers_the_shared_memory_fixture() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../libs/rust/agent-runtime/tests/fixtures/memory_conformance.json"
+    ))
+    .unwrap();
+    let calls: Vec<(String, String, Value, Value)> = fixture["calls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|call| {
+            (
+                call["id"].as_str().unwrap().to_owned(),
+                call["tool"].as_str().unwrap().to_owned(),
+                call["args"].clone(),
+                call["result"].clone(),
+            )
+        })
+        .collect();
+    let server = memories_platform(
+        calls
+            .iter()
+            .map(|(id, tool, args, _)| (id.clone(), tool.clone(), args.clone()))
+            .collect(),
+        Memories::default(),
+    )
+    .await;
+    let h = harness(server, memory_policy(true), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h).await;
+    for (id, tool, _, expected) in &calls {
+        assert_eq!(&committed_output(&h.server, id), expected, "{tool} ({id})");
+    }
+}
+
+/// The harness's folder as a git repository with one commit, and a
+/// worktree host over it (#1235).
+fn worktree_host(h: &Harness) -> Arc<crate::worktrees::WorktreeHost> {
+    git_in(h.folder.path(), &["init", "-q"]);
+    std::fs::write(h.folder.path().join("a.txt"), "one\n").unwrap();
+    git_in(h.folder.path(), &["add", "."]);
+    git_in(h.folder.path(), &["commit", "-qm", "init"]);
+    let host = Arc::new(crate::worktrees::WorktreeHost::new(
+        h.host.clone(),
+        h.workspaces.clone(),
+    ));
+    h.host.set_worktrees(&host);
+    host
+}
+
+const TWIN_UUID: &str = "99999999-2222-4333-8444-666666666666";
+const TWIN_EXECUTION: &str = "fedcba9876543210fedcba9876543210";
+
+/// [`stalling_platform`] that also answers conversation 43 (its own UUID
+/// and execution), so two turns run in two conversations at once.
+async fn twin_platform(slow: Arc<AtomicBool>) -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    let first = "99999999-2222-4333-8444-555555555555";
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            tokio::task::block_in_place(|| {
+                for _ in 0..250 {
+                    if !slow.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            });
+            return inner(req);
+        }
+        let twin = req.path.ends_with("/prompt_lib/1/43")
+            || req.path.contains(TWIN_UUID)
+            || req.path.contains(TWIN_EXECUTION);
+        if !twin {
+            return inner(req);
+        }
+        let mut mapped = req.clone();
+        mapped.path = req
+            .path
+            .replace("/prompt_lib/1/43", "/prompt_lib/1/42")
+            .replace(TWIN_UUID, first)
+            .replace(TWIN_EXECUTION, EXECUTION);
+        let mut res = inner(&mapped);
+        res.body = res
+            .body
+            .replace(first, TWIN_UUID)
+            .replace(EXECUTION, TWIN_EXECUTION);
+        res
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_worktree_turns_run_concurrently() {
+    let slow = Arc::new(AtomicBool::new(true));
+    let h = harness(
+        twin_platform(slow.clone()).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    let worktrees = worktree_host(&h);
+    let one = worktrees
+        .create(
+            &h.workspace_id,
+            "11111111-1111-4111-8111-111111111111",
+            None,
+        )
+        .await
+        .unwrap();
+    let two = worktrees
+        .create(
+            &h.workspace_id,
+            "22222222-2222-4222-8222-222222222222",
+            None,
+        )
+        .await
+        .unwrap();
+    assert_ne!(one.workspace_id, two.workspace_id);
+    assert_ne!(one.branch, two.branch);
+    assert!(std::path::Path::new(&one.path).join("a.txt").is_file());
+
+    let first = h.host.start(request(&one.workspace_id)).await.unwrap();
+    let mut other = request(&two.workspace_id);
+    other.conversation_id = json!(43);
+    let second = h.host.start(other).await.unwrap();
+    // Both reach the model while the other is still running: neither
+    // worktree's claim, nor the parent's, holds the other back.
+    let mut both = false;
+    for _ in 0..SETTLE_POLLS {
+        if seen(&h.server, "/llm/v1/chat/completions").len() >= 2 {
+            both = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(both, "both turns reach the model: {:?}", h.emitter.kinds());
+    assert!(h.host.status(&first.turn_id).unwrap().done.is_none());
+    assert!(h.host.status(&second.turn_id).unwrap().done.is_none());
+
+    h.host.cancel(&first.turn_id).unwrap();
+    h.host.cancel(&second.turn_id).unwrap();
+    slow.store(false, Ordering::SeqCst);
+    until_done_of(&h, &first.turn_id).await;
+    until_done_of(&h, &second.turn_id).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worktree_remove_refuses_dirty_without_force() {
+    let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let worktrees = worktree_host(&h);
+    let thread = "33333333-3333-4333-8333-333333333333";
+    let entry = worktrees
+        .create(&h.workspace_id, thread, None)
+        .await
+        .unwrap();
+    std::fs::write(std::path::Path::new(&entry.path).join("a.txt"), "two\n").unwrap();
+
+    let listed = worktrees.list(&h.workspace_id).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].dirty, 1);
+
+    let refused = worktrees
+        .remove(&h.workspace_id, thread, false)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, "worktree_dirty");
+    assert!(std::path::Path::new(&entry.path).join("a.txt").is_file());
+    // The parent cannot be removed while it has task worktrees.
+    assert_eq!(
+        h.host
+            .remove_workspace(&h.workspace_id)
+            .await
+            .unwrap_err()
+            .code,
+        "workspace_has_worktrees"
+    );
+
+    worktrees
+        .remove(&h.workspace_id, thread, true)
+        .await
+        .unwrap();
+    assert!(!std::path::Path::new(&entry.path).exists());
+    assert!(worktrees.list(&h.workspace_id).await.unwrap().is_empty());
+    assert!(h.workspaces.get(&entry.workspace_id).unwrap().is_none());
+    assert!(
+        !h.folder
+            .path()
+            .join(".git/worktrees")
+            .join(thread.replace('-', ""))
+            .exists(),
+        "its admin directory goes with it"
+    );
+    // The folder itself is untouched.
+    assert_eq!(
+        std::fs::read_to_string(h.folder.path().join("a.txt")).unwrap(),
+        "one\n"
+    );
+}
+
+/// The `elitea/…` branches of `dir`'s repository.
+fn elitea_branches(dir: &std::path::Path) -> String {
+    let output = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(["branch", "--list", "elitea/*"])
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// #1420: a worktree whose folder is gone cannot tell whether commits are
+/// on its branch, so removing it keeps the branch; and a remove whose
+/// workspace an earlier attempt already removed still finishes.
+#[tokio::test(flavor = "multi_thread")]
+async fn worktree_remove_keeps_the_branch_of_a_worktree_it_cannot_open() {
+    let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let worktrees = worktree_host(&h);
+    let thread = "44444444-4444-4444-8444-444444444444";
+    let entry = worktrees
+        .create(&h.workspace_id, thread, None)
+        .await
+        .unwrap();
+    let path = std::path::Path::new(&entry.path);
+    std::fs::write(path.join("b.txt"), "work\n").unwrap();
+    git_in(path, &["add", "b.txt"]);
+    git_in(path, &["commit", "-qm", "work"]);
+    std::fs::remove_dir_all(path).unwrap();
+    h.host.remove_workspace(&entry.workspace_id).await.unwrap();
+
+    worktrees
+        .remove(&h.workspace_id, thread, false)
+        .await
+        .unwrap();
+    assert!(worktrees.list(&h.workspace_id).await.unwrap().is_empty());
+    assert!(
+        elitea_branches(h.folder.path()).contains(&entry.branch),
+        "the branch and its commit are kept"
+    );
+}
+
+/// #1420: `worktree_merge_undo` restores only the checkpoint a merge took,
+/// once, and asks for `confirm_older` when the folder was checkpointed
+/// since.
+#[tokio::test(flavor = "multi_thread")]
+async fn worktree_merge_undo_takes_only_its_merges_checkpoint() {
+    let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let worktrees = worktree_host(&h);
+    let thread = "55555555-5555-4555-8555-555555555555";
+    let entry = worktrees
+        .create(&h.workspace_id, thread, None)
+        .await
+        .unwrap();
+    std::fs::write(std::path::Path::new(&entry.path).join("b.txt"), "merged\n").unwrap();
+    let preflight = worktrees
+        .merge_preflight(&h.workspace_id, thread)
+        .await
+        .unwrap();
+    let applied = worktrees
+        .merge_apply(
+            &preflight.preflight_id,
+            crate::worktrees::MergeApplyMode::Apply,
+        )
+        .await
+        .unwrap();
+    let checkpoint = applied.checkpoint_id.expect("a checkpoint");
+    assert!(h.folder.path().join("b.txt").is_file());
+
+    let (_, seq) = checkpoint.split_once(':').unwrap();
+    let seq: u64 = seq.parse().unwrap();
+    let other = format!("{}:{}", h.workspace_id, seq + 7);
+    assert_eq!(
+        worktrees.merge_undo(&other, true).await.unwrap_err().code,
+        "invalid_request",
+        "not a checkpoint a merge took"
+    );
+
+    // A later checkpoint of the folder (a turn's): the undo would revert
+    // it too, so it is asked for.
+    h.host
+        .local_session(&h.workspace_id, h.folder.path().to_path_buf())
+        .unwrap()
+        .checkpoints()
+        .create("a later turn")
+        .unwrap();
+    assert_eq!(
+        worktrees
+            .merge_undo(&checkpoint, false)
+            .await
+            .unwrap_err()
+            .code,
+        "undo_not_latest"
+    );
+    let restored = worktrees.merge_undo(&checkpoint, true).await.unwrap();
+    assert!(restored.iter().any(|path| path == "b.txt"), "{restored:?}");
+    assert!(!h.folder.path().join("b.txt").exists());
+    assert_eq!(
+        worktrees
+            .merge_undo(&checkpoint, true)
+            .await
+            .unwrap_err()
+            .code,
+        "invalid_request",
+        "undone once"
+    );
+}
+
+/// The worktree merge-back offers the take-back's markers mode: a conflicts
+/// preview refuses a plain apply (the preview kept), and applying with
+/// markers writes them into the folder, undoably.
+#[tokio::test(flavor = "multi_thread")]
+async fn worktree_merge_back_applies_conflict_markers() {
+    use crate::worktrees::MergeApplyMode;
+    let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let worktrees = worktree_host(&h);
+    let thread = "66666666-6666-4666-8666-666666666666";
+    let entry = worktrees
+        .create(&h.workspace_id, thread, None)
+        .await
+        .unwrap();
+    std::fs::write(
+        std::path::Path::new(&entry.path).join("both.txt"),
+        "from the task\n",
+    )
+    .unwrap();
+    std::fs::write(h.folder.path().join("both.txt"), "from the folder\n").unwrap();
+    let preflight = worktrees
+        .merge_preflight(&h.workspace_id, thread)
+        .await
+        .unwrap();
+    let wire = serde_json::to_value(&preflight).unwrap();
+    assert_eq!(wire["mode"], "conflicts");
+    assert_eq!(wire["modes"], json!(["apply_with_markers"]));
+    assert_eq!(wire["conflict_paths"], json!(["both.txt"]));
+    assert_eq!(
+        worktrees
+            .merge_apply(&preflight.preflight_id, MergeApplyMode::Apply)
+            .await
+            .unwrap_err()
+            .code,
+        "merge_conflicts"
+    );
+    // The folder moved: refused and kept; back as it was, the same preview applies.
+    std::fs::write(h.folder.path().join("late.txt"), "late\n").unwrap();
+    assert_eq!(
+        worktrees
+            .merge_apply(&preflight.preflight_id, MergeApplyMode::ApplyWithMarkers)
+            .await
+            .unwrap_err()
+            .code,
+        elitea_local_tools::apply::FOLDER_CHANGED
+    );
+    std::fs::remove_file(h.folder.path().join("late.txt")).unwrap();
+    let applied = worktrees
+        .merge_apply(&preflight.preflight_id, MergeApplyMode::ApplyWithMarkers)
+        .await
+        .unwrap();
+    assert_eq!(applied.written, ["both.txt"]);
+    let both = std::fs::read_to_string(h.folder.path().join("both.txt")).unwrap();
+    assert!(
+        both.contains("<<<<<<< your folder\n")
+            && both.contains(">>>>>>> task worktree\n")
+            && both.contains("from the folder")
+            && both.contains("from the task"),
+        "{both}"
+    );
+    worktrees
+        .merge_undo(&applied.checkpoint_id.unwrap(), true)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(h.folder.path().join("both.txt")).unwrap(),
+        "from the folder\n"
+    );
+}
+
+/// The person's hooks in a turn (#1237): a `UserPromptSubmit` hook's
+/// context reaches the model framed under the thread's nonce, a `Stop`
+/// hook's text reaches the person as a status note, and a refused message
+/// ends the turn with `hook_denied` before any model call. macOS only: the
+/// hooks run under Seatbelt, and a Linux runner without a sandbox that
+/// hides the deny list runs none.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn hooks_frame_prompt_context_and_report_stop() {
+    use elitea_local_tools::hooks::config::{Hook, HookEvent, Scope};
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let sh = |line: &str| vec!["/bin/sh".to_owned(), "-c".to_owned(), line.to_owned()];
+    h.host
+        .hook_files()
+        .save_hooks(
+            Scope::User,
+            None,
+            vec![
+                Hook::new(
+                    "ctx",
+                    HookEvent::UserPromptSubmit,
+                    sh("if grep -q forbidden; then echo nope >&2; exit 2; fi; echo ticket-ABC"),
+                ),
+                Hook::new("bye", HookEvent::Stop, sh("cat >/dev/null; echo all-done")),
+            ],
+        )
+        .unwrap();
+    run_turn(&h, "hello").await;
+    let first = llm_bodies(&h.server)[0].to_string();
+    assert!(first.contains("ticket-ABC"), "{first}");
+    assert!(first.contains("hook_output nonce="), "{first}");
+    let events = h.emitter.all();
+    assert!(
+        events.iter().any(|e| e.kind == "status"
+            && e.payload["note"] == "hook_stop"
+            && e.payload["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("all-done"))),
+        "{:?}",
+        h.emitter.kinds()
+    );
+    let before = llm_bodies(&h.server).len();
+    run_turn(&h, "forbidden words").await;
+    assert_eq!(
+        llm_bodies(&h.server).len(),
+        before,
+        "a refused message never reaches the model"
+    );
+    assert!(
+        h.emitter
+            .all()
+            .iter()
+            .any(|e| e.kind == "error" && e.payload["code"] == "hook_denied")
+    );
+}
+
+// Issue 1239: a nested agent runs as a cloud child turn.
+
+const CHILD_START: &str =
+    "/api/v2/elitea_core/local_child_turn/prompt_lib/1/0123456789abcdef0123456789abcdef";
+const CHILD_EXECUTION: &str = "fedcba9876543210fedcba9876543210";
+const CHILD_CONVERSATION: &str = "aaaaaaaa-2222-4333-8444-555555555555";
+const CHILD_RESPONSE: &str = "bbbbbbbb-2222-4333-8444-555555555555";
+
+fn child_spec() -> super::definition::ChildAgentSpec {
+    super::definition::ChildAgentSpec {
+        exposed_name: "Researcher".into(),
+        application_id: 2,
+        version_id: 3,
+        name: "Researcher".into(),
+        description: "Looks things up.".into(),
+    }
+}
+
+fn child_started() -> Res {
+    Res::json(
+        202,
+        &json!({"child_execution_id": CHILD_EXECUTION, "response_message_id": CHILD_RESPONSE,
+            "conversation_uuid": CHILD_CONVERSATION, "created": true}),
+    )
+}
+
+fn child_state(status: &str) -> Res {
+    Res::json(
+        200,
+        &json!({"status": status, "conversation_uuid": CHILD_CONVERSATION,
+            "output": "Found it.", "tool_calls_summary": [{"tool_name": "search", "is_error": false}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5}}),
+    )
+}
+
+async fn child_context(
+    server: &MockServer,
+    prompt: Arc<dyn elitea_agent_runtime::host::ApprovalChannel>,
+) -> (super::child_agent::ChildAgentContext, Arc<VecEmitter>) {
+    let emitter = Arc::new(VecEmitter::default());
+    let events = Arc::new(super::events::TurnEvents::new("t1".into(), emitter.clone()));
+    let remote = Arc::new(remote_context(server, prompt, Duration::from_secs(5)).await);
+    let poll = super::child_agent::PollPolicy {
+        first: Duration::from_millis(5),
+        max: Duration::from_millis(10),
+    };
+    (
+        super::child_agent::ChildAgentContext::new(remote, events, poll),
+        emitter,
+    )
+}
+
+/// A start the platform could not take is sent again with the same key and
+/// body, so a retry never starts a second child; the lane opens and closes.
+#[tokio::test]
+async fn child_call_reuses_idempotency_key_on_retry() {
+    let starts = Arc::new(AtomicUsize::new(0));
+    let server = serve({
+        let starts = starts.clone();
+        move |req: &Req| {
+            if req.path == CHILD_START {
+                if starts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Res::json(503, &json!({"error": "unavailable"}));
+                }
+                return child_started();
+            }
+            if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+                return child_state("completed");
+            }
+            Res::json(404, &json!({"error": "not_found"}))
+        }
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: None,
+        asked: Mutex::default(),
+    });
+    let (context, emitter) = child_context(&server, prompt).await;
+    let result = super::child_agent::call(&context, &child_spec(), "c1", "Find the doc").await;
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_eq!(result["result"], "Found it.");
+    assert_eq!(result["child_conversation_uuid"], CHILD_CONVERSATION);
+    assert_eq!(result["tool_calls"][0]["tool"], "search");
+
+    let sent = seen(&server, CHILD_START);
+    assert_eq!(sent.len(), 2, "one retry");
+    assert_eq!(sent[0].body, sent[1].body, "same key, same body");
+    let body: Value = serde_json::from_str(&sent[0].body).unwrap();
+    assert_eq!(body["application_id"], 2);
+    assert_eq!(body["version_id"], 3);
+    assert_eq!(body["input"], "Find the doc");
+    assert!(
+        body["idempotency_key"]
+            .as_str()
+            .is_some_and(|k| !k.is_empty())
+    );
+
+    let lanes: Vec<(&str, Value)> = emitter
+        .all()
+        .iter()
+        .map(|e| (e.kind, e.payload.clone()))
+        .filter(|(kind, _)| kind.starts_with("subagent_"))
+        .collect();
+    assert_eq!(lanes.len(), 2, "{lanes:?}");
+    assert_eq!(lanes[0].0, "subagent_started");
+    assert_eq!(lanes[0].1["agent_id"], "cloud_1");
+    assert_eq!(lanes[1].0, "subagent_finished");
+}
+
+/// The child's approve/reject pause reaches the person's approval card and
+/// their answer resumes the child through the continue route.
+#[tokio::test]
+async fn child_pause_is_answered_through_the_approval_card() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let server = serve({
+        let reads = reads.clone();
+        move |req: &Req| {
+            if req.path == CHILD_START {
+                return child_started();
+            }
+            if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+                if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Res::json(
+                        200,
+                        &json!({"status": "interrupted", "conversation_uuid": CHILD_CONVERSATION,
+                            "interrupt": {"interrupt_id": INTERRUPT, "guardrail_type": "sensitive_tool",
+                                "action_label": "Send the email", "available_actions": ["approve", "reject"],
+                                "tool_name": "send_email"}}),
+                    );
+                }
+                return child_state("completed");
+            }
+            if req.path.starts_with(&format!(
+                "/api/v2/elitea_core/continue_predict/prompt_lib/1/{CHILD_CONVERSATION}?"
+            )) {
+                return Res::json(200, &json!({"ok": true}));
+            }
+            Res::json(404, &json!({"error": "not_found"}))
+        }
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: Some("approve"),
+        asked: Mutex::default(),
+    });
+    let (context, _emitter) = child_context(&server, prompt.clone()).await;
+    let result = super::child_agent::call(&context, &child_spec(), "c1", "Mail Bob").await;
+    assert_eq!(result["status"], "ok", "{result}");
+
+    let asked = prompt.asked.lock().unwrap();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].message, "Send the email");
+    assert_eq!(
+        asked[0].payload[super::approvals::REMOTE_PAYLOAD_KEY]["tool"],
+        "send_email"
+    );
+    let resumed: Vec<Req> = server
+        .seen()
+        .into_iter()
+        .filter(|r| r.path.contains("/continue_predict/"))
+        .collect();
+    assert_eq!(resumed.len(), 1);
+    let body: Value = serde_json::from_str(&resumed[0].body).unwrap();
+    assert_eq!(body["hitl_resume"], true);
+    assert_eq!(body["hitl_action"], "approve");
+    assert_eq!(body["message_id"], CHILD_RESPONSE);
+    assert!(
+        resumed[0]
+            .path
+            .ends_with("execution_contract=agent.continue.hitl.v1")
+    );
+}
+
+/// A child whose state the call could not follow to its end (the reads
+/// failed, or the platform answered a state this app does not know) is
+/// stopped; a child that settled on its own is not.
+#[tokio::test]
+async fn child_follow_failure_stops_the_child() {
+    for (read, stopped) in [
+        ("http_500", true),
+        ("http_503", true),
+        ("mystery", true),
+        ("failed", false),
+        ("completed", false),
+    ] {
+        let server = serve(move |req: &Req| {
+            if req.path == CHILD_START {
+                return child_started();
+            }
+            if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+                return match read {
+                    "http_500" => Res::json(500, &json!({"error": "internal"})),
+                    "http_503" => Res::json(503, &json!({"error": "unavailable"})),
+                    status => child_state(status),
+                };
+            }
+            if req.method == "DELETE" {
+                return Res::json(200, &json!({"ok": true}));
+            }
+            Res::json(404, &json!({"error": "not_found"}))
+        })
+        .await;
+        let prompt = Arc::new(Answering {
+            decision: None,
+            asked: Mutex::default(),
+        });
+        let (context, emitter) = child_context(&server, prompt).await;
+        let result = super::child_agent::call(&context, &child_spec(), "c1", "Run").await;
+        let cancel = format!("/api/v2/elitea_core/task/prompt_lib/1/{CHILD_RESPONSE}");
+        assert_eq!(
+            seen(&server, &cancel).len(),
+            usize::from(stopped),
+            "read {read}: {result}"
+        );
+        let finished: Vec<AgentEvent> = emitter
+            .all()
+            .into_iter()
+            .filter(|e| e.kind == "subagent_finished")
+            .collect();
+        assert_eq!(
+            finished.len(),
+            1,
+            "one lane end, never a second from the guard"
+        );
+    }
+}
+
+/// An answered pause that a read still reports (the resume has not reached
+/// it yet) is not asked again: the call keeps reading until it moves on.
+#[tokio::test]
+async fn child_answered_pause_is_not_asked_again() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let server = serve({
+        let reads = reads.clone();
+        move |req: &Req| {
+            if req.path == CHILD_START {
+                return child_started();
+            }
+            if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+                if reads.fetch_add(1, Ordering::SeqCst) < 3 {
+                    return Res::json(
+                        200,
+                        &json!({"status": "interrupted", "conversation_uuid": CHILD_CONVERSATION,
+                            "interrupt": {"interrupt_id": INTERRUPT, "guardrail_type": "sensitive_tool",
+                                "action_label": "Send the email", "available_actions": ["approve", "reject"],
+                                "tool_name": "send_email"}}),
+                    );
+                }
+                return child_state("completed");
+            }
+            if req.path.starts_with(&format!(
+                "/api/v2/elitea_core/continue_predict/prompt_lib/1/{CHILD_CONVERSATION}?"
+            )) {
+                return Res::json(200, &json!({"ok": true}));
+            }
+            Res::json(404, &json!({"error": "not_found"}))
+        }
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: Some("approve"),
+        asked: Mutex::default(),
+    });
+    let (context, _emitter) = child_context(&server, prompt.clone()).await;
+    let result = super::child_agent::call(&context, &child_spec(), "c1", "Mail Bob").await;
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_eq!(prompt.asked.lock().unwrap().len(), 1, "asked once");
+    let resumed = server
+        .seen()
+        .into_iter()
+        .filter(|r| r.path.contains("/continue_predict/"))
+        .count();
+    assert_eq!(resumed, 1, "resumed once");
+    assert!(
+        reads.load(Ordering::SeqCst) >= 4,
+        "kept reading past the stale pause"
+    );
+}
+
+/// A zero retry delay never polls a child in a tight loop.
+#[test]
+fn child_poll_policy_has_a_floor() {
+    let zero = super::child_agent::PollPolicy::for_retry(RetryPolicy {
+        attempts: 3,
+        delay: Duration::ZERO,
+    });
+    assert_eq!(zero.first, super::child_agent::PollPolicy::FLOOR);
+    assert!(zero.max >= zero.first);
+    let default = super::child_agent::PollPolicy::for_retry(RetryPolicy::default());
+    assert_eq!(default.first, Duration::from_millis(500));
+    assert_eq!(default.max, Duration::from_secs(3));
+}
+
+/// A call dropped mid-run (the turn was stopped) stops the child.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn child_call_dropped_cancels_the_child() {
+    let server = serve(|req: &Req| {
+        if req.path == CHILD_START {
+            return child_started();
+        }
+        if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+            return child_state("running");
+        }
+        if req.method == "DELETE" {
+            return Res::json(200, &json!({"ok": true}));
+        }
+        Res::json(404, &json!({"error": "not_found"}))
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: None,
+        asked: Mutex::default(),
+    });
+    let (context, emitter) = child_context(&server, prompt).await;
+    let context = Arc::new(context);
+    let call = tokio::spawn({
+        let context = context.clone();
+        async move { super::child_agent::call(&context, &child_spec(), "c1", "Run long").await }
+    });
+    // Stop the call once the child runs (its first read arrived).
+    let read = format!("{CHILD_START}/{CHILD_EXECUTION}");
+    for _ in 0..400 {
+        if !seen(&server, &read).is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(!seen(&server, &read).is_empty(), "the child was followed");
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+    let cancel = format!("/api/v2/elitea_core/task/prompt_lib/1/{CHILD_RESPONSE}");
+    let mut cancelled = Vec::new();
+    for _ in 0..200 {
+        cancelled = seen(&server, &cancel);
+        if !cancelled.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(cancelled.len(), 1, "the child was stopped");
+    assert_eq!(cancelled[0].method, "DELETE");
+    let finished: Vec<AgentEvent> = emitter
+        .all()
+        .into_iter()
+        .filter(|e| e.kind == "subagent_finished")
+        .collect();
+    assert_eq!(finished.len(), 1);
+    assert_eq!(finished[0].payload["status"], "cancelled");
+}
+
+/// A call dropped while its start is still in flight (no child id known
+/// yet) still stops the child once the start answers, and never follows it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_call_dropped_during_start_cancels_the_child() {
+    let arrived = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let server = serve({
+        let (arrived, release) = (arrived.clone(), release.clone());
+        move |req: &Req| {
+            if req.path == CHILD_START {
+                arrived.store(true, Ordering::SeqCst);
+                // Hold the answer until the call was dropped.
+                for _ in 0..1000 {
+                    if release.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                return child_started();
+            }
+            if req.path == format!("{CHILD_START}/{CHILD_EXECUTION}") {
+                return child_state("running");
+            }
+            if req.method == "DELETE" {
+                return Res::json(200, &json!({"ok": true}));
+            }
+            Res::json(404, &json!({"error": "not_found"}))
+        }
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: None,
+        asked: Mutex::default(),
+    });
+    let (context, emitter) = child_context(&server, prompt).await;
+    let context = Arc::new(context);
+    let call = tokio::spawn({
+        let context = context.clone();
+        async move { super::child_agent::call(&context, &child_spec(), "c1", "Run long").await }
+    });
+    for _ in 0..400 {
+        if arrived.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(arrived.load(Ordering::SeqCst), "the start was sent");
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+    let finished: Vec<AgentEvent> = emitter
+        .all()
+        .into_iter()
+        .filter(|e| e.kind == "subagent_finished")
+        .collect();
+    assert_eq!(finished.len(), 1, "the lane closes at once");
+    assert_eq!(finished[0].payload["status"], "cancelled");
+    release.store(true, Ordering::SeqCst);
+
+    let cancel = format!("/api/v2/elitea_core/task/prompt_lib/1/{CHILD_RESPONSE}");
+    let mut cancelled = Vec::new();
+    for _ in 0..400 {
+        cancelled = seen(&server, &cancel);
+        if !cancelled.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(cancelled.len(), 1, "the child the start named was stopped");
+    assert_eq!(cancelled[0].method, "DELETE");
+    assert_eq!(seen(&server, CHILD_START).len(), 1, "started once");
+    assert!(
+        seen(&server, &format!("{CHILD_START}/{CHILD_EXECUTION}")).is_empty(),
+        "a dropped call never follows its child"
+    );
+}
+
+/// A nested agent is offered as a tool outside plan mode and hidden in it,
+/// like every tool that acts in the cloud.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_tool_refused_in_plan_mode() {
+    let mut details = agent_details();
+    details["tools"].as_array_mut().unwrap().push(json!({
+        "kind": "application", "type": "application", "agent_type": "agent",
+        "name": "Researcher", "description": "Looks things up.",
+        "application_id": 2, "application_version_id": 3
+    }));
+    for plan_mode in [false, true] {
+        let server = serve(platform(details.clone(), &[])).await;
+        let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+        let mut req = request(&h.workspace_id);
+        req.plan_mode = plan_mode;
+        h.host.start(req).await.unwrap();
+        until_done(&h).await;
+        let tools = offered_tools(&h.server);
+        assert_eq!(
+            tools.iter().any(|t| t == "Researcher"),
+            !plan_mode,
+            "plan_mode={plan_mode}: {tools:?}"
+        );
+    }
 }

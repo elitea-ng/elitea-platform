@@ -768,6 +768,42 @@ async fn a_tool_response_is_cut_and_binary_content_is_not_kept() {
 }
 
 #[tokio::test]
+async fn a_tool_image_is_not_kept_but_its_metadata_is() {
+    let (_dir, state) = open();
+    let sessions = state.store();
+    let me = identity(1, "https://a.example");
+    let key = me.key();
+    sessions.open_session(&me, "fp").await.unwrap();
+    let image = json!({
+        "kind": "image", "path": "a.png", "mime": "image/png", "bytes": 3,
+        "image_base64": "z".repeat(MAX_TOOL_RESPONSE_BYTES * 2),
+    });
+    sessions
+        .seed(
+            &key,
+            vec![
+                new("t", call_event("i", "c")),
+                new("t", response_event("i", "c", image)),
+            ],
+            None,
+            &[],
+        )
+        .await
+        .unwrap();
+    let rows = sessions.rows(&key).await.unwrap();
+    let Part::FunctionResponse {
+        function_response, ..
+    } = &rows[1].event.llm_response.content.as_ref().unwrap().parts[0]
+    else {
+        panic!("a response")
+    };
+    assert_eq!(
+        function_response.response,
+        json!({"kind": "image", "path": "a.png", "mime": "image/png", "bytes": 3})
+    );
+}
+
+#[tokio::test]
 async fn a_path_deny_change_drops_the_tool_response_bodies_and_asks_for_a_seed() {
     let (_dir, state) = open();
     let sessions = state.store();
@@ -882,6 +918,118 @@ async fn move_aside_keeps_the_old_file_and_starts_fresh() {
 }
 
 #[tokio::test]
+async fn reclaim_keeps_the_events_and_reopens() {
+    let (_dir, store) = open();
+    let sessions = store.store();
+    let me = identity(1, "https://a.example");
+    let key = me.key();
+    sessions.open_session(&me, "fp").await.unwrap();
+    sessions
+        .seed(
+            &key,
+            vec![
+                new("i", text_event("i", "user", "user", "hi")),
+                new("i", text_event("i", "agent", "model", "hello")),
+            ],
+            Some("0".into()),
+            &[],
+        )
+        .await
+        .unwrap();
+    let held = sessions.rows(&key).await.unwrap();
+    assert_eq!(held.len(), 2, "the events were stored");
+    // The Doctor's `sessions.vacuum`: close, VACUUM, reopen.
+    let before = sessions.reclaim().unwrap();
+    assert!(before > 0, "the file held bytes");
+    let back = sessions.rows(&key).await.unwrap();
+    assert_eq!(back.len(), 2, "the events survived the shrink");
+}
+
+#[tokio::test]
+async fn new_files_are_vacuumed_incrementally() {
+    let (dir, store) = open();
+    store
+        .store()
+        .open_session(&identity(1, "https://a.example"), "fp")
+        .await
+        .unwrap();
+    let conn = rusqlite::Connection::open(dir.path().join(FILE_NAME)).unwrap();
+    let mode: i64 = conn
+        .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(mode, 2, "2 = INCREMENTAL");
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION);
+}
+
+#[tokio::test]
+async fn an_existing_file_switches_to_incremental_vacuum_and_keeps_its_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(FILE_NAME);
+    {
+        let store = SessionStore::open(dir.path()).unwrap();
+        store
+            .open_session(&identity(1, "https://a.example"), "fp")
+            .await
+            .unwrap();
+    }
+    // A file from before incremental vacuum: mode NONE, same schema.
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("PRAGMA auto_vacuum = NONE; VACUUM;")
+            .unwrap();
+    }
+    let mode = || -> i64 {
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+            .unwrap()
+    };
+    assert_eq!(mode(), 0, "the file starts without it");
+    let store = SessionStore::open(dir.path()).unwrap();
+    assert_eq!(mode(), 2, "the open switched it to INCREMENTAL");
+    let version: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION, "the schema version is untouched");
+    drop(store);
+}
+
+#[tokio::test]
+async fn an_idle_store_folds_its_wal_into_the_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(FILE_NAME);
+    // A short idle interval: the checkpoint runs long before 30 seconds.
+    let store = SessionStore::open_at(dir.path(), Duration::from_millis(200)).unwrap();
+    let me = identity(1, "https://a.example");
+    let key = me.key();
+    store.open_session(&me, "fp").await.unwrap();
+    store
+        .seed(
+            &key,
+            vec![new("i", text_event("i", "user", "user", "hi"))],
+            Some("0".into()),
+            &[],
+        )
+        .await
+        .unwrap();
+    // The turn's bytes are in the WAL now. Let the store sit idle, and its
+    // idle checkpoint folds them back into the main file.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let wal = std::fs::symlink_metadata(path.with_file_name(format!("{FILE_NAME}-wal")))
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    assert!(
+        wal <= 32,
+        "the idle checkpoint leaves no turn bytes in the wal (holds {wal})"
+    );
+    drop(store);
+}
+
+#[tokio::test]
 async fn the_adk_service_creates_lists_and_deletes() {
     let (_dir, state) = open();
     let service = state.sessions();
@@ -980,4 +1128,126 @@ fn an_adk_event_round_trips_through_plain_serde_json() {
         serde_json::to_value(&back.llm_response.content).unwrap(),
         serde_json::to_value(&response.llm_response.content).unwrap()
     );
+}
+
+#[tokio::test]
+async fn a_thread_keeps_its_nonce_until_a_reseed_and_threads_do_not_share_one() {
+    let (_dir, store) = open();
+    let sessions = store.store();
+    let me = identity(1, "https://a.example");
+    let first = sessions.open_session(&me, "fp").await.unwrap().nonce;
+    assert_eq!(first.hex().len(), 32);
+    assert_eq!(sessions.open_session(&me, "fp").await.unwrap().nonce, first);
+    // A changed path policy re-keys the session but is not a re-seed.
+    assert_eq!(
+        sessions.open_session(&me, "fp2").await.unwrap().nonce,
+        first
+    );
+    let reseeded = sessions
+        .seed(&me.key(), Vec::new(), Some("0".into()), &[])
+        .await
+        .unwrap();
+    assert_ne!(reseeded, first);
+    assert_eq!(
+        sessions.open_session(&me, "fp2").await.unwrap().nonce,
+        reseeded
+    );
+    let other = SessionIdentity {
+        conversation_uuid: "aaaaaaaa-2222-4333-8444-555555555555".into(),
+        ..me.clone()
+    };
+    assert_ne!(
+        sessions.open_session(&other, "fp").await.unwrap().nonce,
+        reseeded
+    );
+    // Never printed.
+    assert!(!format!("{reseeded:?}").contains(&reseeded.hex()));
+}
+
+/// #1187: a partial take-back's seed boundary survives a schema-1 store's
+/// upgrade, adds up, and goes with the conversation.
+#[tokio::test]
+async fn the_seed_boundary_is_kept_and_upgraded_from_schema_one() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let store = SessionStore::open(dir.path()).unwrap();
+        store
+            .call_blocking("t", |conn| {
+                conn.execute_batch("DROP TABLE seed_skips; PRAGMA user_version = 1;")
+            })
+            .unwrap();
+    }
+    let store = SessionStore::open(dir.path()).unwrap();
+    let who = identity(7, "https://a.example");
+    let key = who.key();
+    assert_eq!(store.seed_skips(&key).await.unwrap(), Vec::<i64>::new());
+    store
+        .skip_on_seed(&who.deployment, 7, &who.conversation_uuid, vec![21, 20])
+        .await
+        .unwrap();
+    store
+        .skip_on_seed(&who.deployment, 7, &who.conversation_uuid, vec![20, 31])
+        .await
+        .unwrap();
+    assert_eq!(store.seed_skips(&key).await.unwrap(), [20, 21, 31]);
+    let version: i64 = store
+        .call_blocking("t", |conn| {
+            conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+        })
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION);
+    store
+        .delete_conversation(&who.deployment, 7, &who.conversation_uuid)
+        .await
+        .unwrap();
+    assert_eq!(store.seed_skips(&key).await.unwrap(), Vec::<i64>::new());
+}
+
+#[test]
+fn one_shrink_rule_for_both_doctor_checks() {
+    let mib = 1024 * 1024;
+    let space = |bytes: u64, free_fraction: f64, incremental: bool| DbSpace {
+        bytes,
+        free_fraction,
+        incremental,
+    };
+    assert!(
+        space(200 * mib, 0.6, true).shrink_advised(),
+        "large and half free"
+    );
+    assert!(
+        !space(200 * mib, 0.1, true).shrink_advised(),
+        "large but in use"
+    );
+    assert!(!space(10 * mib, 0.9, true).shrink_advised(), "small");
+    assert!(
+        space(80 * mib, 0.0, false).shrink_advised(),
+        "too large to switch at open, not yet incremental: the shrink switches it"
+    );
+    assert!(
+        !space(10 * mib, 0.0, false).shrink_advised(),
+        "the open switches it"
+    );
+}
+
+#[tokio::test]
+async fn the_doctors_shrink_switches_a_file_to_incremental_vacuum() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let store = SessionStore::open(dir.path()).unwrap();
+        store
+            .open_session(&identity(1, "https://a.example"), "fp")
+            .await
+            .unwrap();
+    }
+    // A file too large to switch at open stays in mode NONE; the shrink is
+    // what switches it.
+    {
+        let conn = rusqlite::Connection::open(dir.path().join(FILE_NAME)).unwrap();
+        conn.execute_batch("PRAGMA auto_vacuum = NONE; VACUUM;")
+            .unwrap();
+    }
+    assert!(!database_space(dir.path(), FILE_NAME).incremental);
+    assert!(reclaim_database(dir.path(), FILE_NAME).unwrap() > 0);
+    assert!(database_space(dir.path(), FILE_NAME).incremental);
 }

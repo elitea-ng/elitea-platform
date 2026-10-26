@@ -253,20 +253,7 @@ fn render(changes: &[Change]) -> Result<(String, usize), DiffUnavailable> {
 }
 
 fn write_file_diff(out: &mut String, path: &str, old: Option<&str>, new: Option<&str>) {
-    let _ = writeln!(out, "diff --git a/{path} b/{path}");
-    match (&old, &new) {
-        (None, _) => {
-            out.push_str("new file mode 100644\n");
-            let _ = write!(out, "--- /dev/null\n+++ b/{path}\n");
-        }
-        (_, None) => {
-            out.push_str("deleted file mode 100644\n");
-            let _ = write!(out, "--- a/{path}\n+++ /dev/null\n");
-        }
-        _ => {
-            let _ = write!(out, "--- a/{path}\n+++ b/{path}\n");
-        }
-    }
+    write_file_header(out, path, old.is_none(), new.is_none());
     write_hunks(
         out,
         &split_lines(old.unwrap_or("")),
@@ -274,13 +261,28 @@ fn write_file_diff(out: &mut String, path: &str, old: Option<&str>, new: Option<
     );
 }
 
+/// A file's `diff --git` header: a creation (`added`), a deletion
+/// (`deleted`) or a change.
+pub(super) fn write_file_header(out: &mut String, path: &str, added: bool, deleted: bool) {
+    let _ = writeln!(out, "diff --git a/{path} b/{path}");
+    if added {
+        out.push_str("new file mode 100644\n");
+        let _ = write!(out, "--- /dev/null\n+++ b/{path}\n");
+    } else if deleted {
+        out.push_str("deleted file mode 100644\n");
+        let _ = write!(out, "--- a/{path}\n+++ /dev/null\n");
+    } else {
+        let _ = write!(out, "--- a/{path}\n+++ b/{path}\n");
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct Line<'a> {
+pub(super) struct Line<'a> {
     text: &'a str,
     no_newline: bool,
 }
 
-fn split_lines(content: &str) -> Vec<Line<'_>> {
+pub(super) fn split_lines(content: &str) -> Vec<Line<'_>> {
     if content.is_empty() {
         return Vec::new();
     }
@@ -302,17 +304,17 @@ fn split_lines(content: &str) -> Vec<Line<'_>> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Kind {
+pub(super) enum Kind {
     Equal,
     Delete,
     Insert,
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Op {
-    kind: Kind,
-    old: Option<usize>,
-    new: Option<usize>,
+pub(super) struct Op {
+    pub(super) kind: Kind,
+    pub(super) old: Option<usize>,
+    pub(super) new: Option<usize>,
 }
 
 /// Myers' O(ND) diff.
@@ -323,7 +325,7 @@ struct Op {
     clippy::cast_possible_truncation,
     reason = "Myers' names; indexes bounded by the 1 MiB diff cap"
 )]
-fn diff_lines(a: &[Line<'_>], b: &[Line<'_>]) -> Vec<Op> {
+pub(super) fn diff_lines(a: &[Line<'_>], b: &[Line<'_>]) -> Vec<Op> {
     let (n, m) = (a.len() as isize, b.len() as isize);
     let max = n + m;
     let offset = max + 1;
@@ -422,7 +424,12 @@ fn backtrack(
 }
 
 fn write_hunks(out: &mut String, a: &[Line<'_>], b: &[Line<'_>]) {
-    let ops = diff_lines(a, b);
+    write_hunks_ops(out, &diff_lines(a, b), a, b);
+}
+
+/// The hunks of `ops` (an edit script of `a` into `b` with every line's
+/// index), 3 lines of context.
+pub(super) fn write_hunks_ops(out: &mut String, ops: &[Op], a: &[Line<'_>], b: &[Line<'_>]) {
     let mut index = 0;
     while index < ops.len() {
         while index < ops.len() && ops[index].kind == Kind::Equal {

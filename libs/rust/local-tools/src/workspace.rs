@@ -870,6 +870,37 @@ impl Workspace {
     }
 }
 
+impl Workspace {
+    /// Remove the directory `path` when it is empty (a deletion emptied
+    /// it). `Ok(false)` when it is absent, not empty or not a directory;
+    /// the root is never removed. Checked against the deny rules first.
+    ///
+    /// # Errors
+    ///
+    /// Outside the workspace, denied, or I/O.
+    pub fn remove_empty_dir(&self, path: &WsPath) -> ToolResult<bool> {
+        if path.is_root() {
+            return Ok(false);
+        }
+        self.check(path, Intent::Write)?;
+        let (dir, resolved) = match self.locate(path, false, false) {
+            Ok(found) => found,
+            Err(error) if error.code() == ErrorCode::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        self.check(&resolved, Intent::Write)?;
+        match rustix::fs::unlinkat(
+            &dir,
+            resolved.file_name().unwrap_or_default(),
+            AtFlags::REMOVEDIR,
+        ) {
+            Ok(()) => Ok(true),
+            Err(Errno::NOENT | Errno::NOTEMPTY | Errno::EXIST | Errno::NOTDIR) => Ok(false),
+            Err(errno) => Err(errno.into()),
+        }
+    }
+}
+
 /// Permission and type bits as `u32` (`mode_t` is `u16` on macOS and `u32`
 /// on Linux, where this conversion is the identity).
 #[allow(clippy::useless_conversion)]

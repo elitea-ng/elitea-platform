@@ -103,6 +103,12 @@ impl SensitiveToolCatalog {
             .map(|(name, _)| name.as_ref())
     }
 
+    /// Every name the catalog may confirm, conditional entries included: what
+    /// a sub-agent, which has no way to ask, is never offered (#1226).
+    pub(crate) fn every_tool_name(&self) -> impl Iterator<Item = &str> {
+        self.provider_entries.keys().map(AsRef::as_ref)
+    }
+
     /// Whether an approved call of this tool that an earlier continuation
     /// dispatched without a recorded outcome may run again: a read-only tool
     /// has no effect to repeat, and the workspace command's own run ledger

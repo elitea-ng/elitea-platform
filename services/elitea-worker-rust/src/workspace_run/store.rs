@@ -45,7 +45,21 @@ pub(crate) const REF_CLOUD: &str = "refs/elitea/cloud";
 pub(crate) const REF_HANDOFF_PREFIX: &str = "refs/elitea/handoff/";
 /// The desktop's upstream commit U (decision 6), a pull request's base.
 pub(crate) const REF_UPSTREAM: &str = "refs/elitea/upstream";
-pub(crate) const KIND_COMPACT: &str = "COMPACT";
+pub(crate) const KIND_COMPACT: &str = elitea_workspace_store::KIND_COMPACT;
+pub(crate) const KIND_PUSH: &str = elitea_workspace_store::KIND_PUSH;
+/// The most segments a fetch plan may hold: a `COMPACT` and Main's bound on
+/// the `PUSH` segments after it.
+pub(crate) const MAX_PLAN_SEGMENTS: usize =
+    1 + elitea_workspace_store::compaction::SERVER_MAX_PUSH_CHAIN;
+/// Main's absolute segment bound (`workspaceruntime.MaxSegmentBytes`, the
+/// transport's). A fetch checks the stored chain against it, never against
+/// the claim's current `max_segment_bytes`: a policy lowered after segments
+/// were published must not refuse them for good (the thread would never run
+/// again). The turn then compacts, since its PUSH budget is what the lower
+/// bound leaves past the chain's PUSH bytes (`turn.rs`).
+pub(crate) const MAIN_MAX_SEGMENT_BYTES: u64 = 2 << 30;
+/// The most prerequisites one `PUSH` names.
+pub(crate) const MAX_PREREQUISITES: usize = elitea_workspace_store::bundle::MAX_PREREQUISITES;
 pub(crate) const OBJECT_FORMAT_SHA1: &str = "sha1";
 
 /// A typed business refusal from Main.
@@ -140,25 +154,44 @@ impl StoreCallError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlannedSegment {
     pub(crate) seq: u64,
+    /// [`KIND_COMPACT`] or [`KIND_PUSH`].
+    pub(crate) kind: String,
     pub(crate) sha256: String,
     pub(crate) bytes: u64,
+    /// A `PUSH`'s prerequisite commits; empty for a `COMPACT`.
+    pub(crate) prerequisites: Vec<String>,
+    /// The thread's refs after this segment.
     pub(crate) refs: BTreeMap<String, String>,
 }
 
-/// The fetched thread: its plan; its one COMPACT segment was streamed to
-/// the file the caller named, and checked against the plan on the way.
+/// One fetched segment: its plan entry and the file it was streamed to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FetchedSegment {
+    pub(crate) planned: PlannedSegment,
+    pub(crate) path: std::path::PathBuf,
+}
+
+/// The fetched thread: its plan, the live chain (a `COMPACT`, then the
+/// `PUSH` segments after it, ADR-0034 Phase 2); each segment was streamed
+/// to its own file in the directory the caller named, and checked against
+/// the plan on the way.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FetchedThread {
     pub(crate) head_seq: u64,
     pub(crate) refs: BTreeMap<String, String>,
-    pub(crate) segment: PlannedSegment,
+    pub(crate) segments: Vec<FetchedSegment>,
 }
 
-/// The executor's publish: one COMPACT segment, one move of the cloud ref.
+/// The executor's publish: one segment (a `COMPACT`, or a `PUSH` over the
+/// published head), one move of the cloud ref.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PublishSegment {
+    /// [`KIND_COMPACT`] or [`KIND_PUSH`].
+    pub(crate) kind: &'static str,
     pub(crate) segment_sha256: String,
     pub(crate) bytes: u64,
+    /// A `PUSH`'s prerequisites (published commits); empty for a `COMPACT`.
+    pub(crate) prerequisites: Vec<String>,
     pub(crate) old_cloud: Option<String>,
     pub(crate) new_cloud: String,
 }
@@ -173,8 +206,14 @@ pub(crate) struct PublishedSegment {
 /// The store calls, as the orchestrator uses them.
 #[async_trait]
 pub(crate) trait WorkspaceStore: Send + Sync {
-    /// Fetch the plan and stream its segment into the file `into`, never
-    /// holding more than one chunk of it.
+    /// Fetch the plan and stream its chain into files in the directory
+    /// `into`, one per segment, never holding more than one chunk.
+    ///
+    /// A turn hydrates from nothing, so it always asks with `since_seq` 0
+    /// and the plan starts with the chain's `COMPACT`. Main answers a
+    /// `since_seq` at or past that `COMPACT`'s seq with only the later
+    /// `PUSH` segments (`workspacestore.SelectChain`), which the plan check
+    /// here refuses: there is no incremental reader.
     async fn fetch(
         &self,
         claim: &WorkspaceClaimV1,
@@ -208,6 +247,17 @@ pub(crate) trait WorkspaceStore: Send + Sync {
         claim: &WorkspaceClaimV1,
         event: &super::audit::ExecutorEvent,
     ) -> Result<(), StoreCallError>;
+
+    /// Record the files the turn's published commit changed (the web
+    /// "Files changed" view). Best effort for the caller; a store that
+    /// keeps no record answers `Ok`.
+    async fn record_changes(
+        &self,
+        _claim: &WorkspaceClaimV1,
+        _changes: &super::changes::ChangeSet,
+    ) -> Result<(), StoreCallError> {
+        Ok(())
+    }
 }
 
 /// The wire request of an executor audit event: counts, rule ids, the file
@@ -360,7 +410,7 @@ fn ref_map(refs: &[WorkspaceRefV1]) -> Result<BTreeMap<String, String>, StoreCal
     Ok(map)
 }
 
-fn refused(refusal: &WorkspaceRefusalV1) -> StoreCallError {
+pub(crate) fn refused(refusal: &WorkspaceRefusalV1) -> StoreCallError {
     match RefusalCode::from_wire(refusal.code) {
         Some(code) => StoreCallError::Refused {
             code,
@@ -370,7 +420,7 @@ fn refused(refusal: &WorkspaceRefusalV1) -> StoreCallError {
     }
 }
 
-fn rejected(rejection: &RuntimeErrorV1) -> StoreCallError {
+pub(crate) fn rejected(rejection: &RuntimeErrorV1) -> StoreCallError {
     let code = RuntimeErrorCodeV1::try_from(rejection.code)
         .map_or(RuntimeErrorCodeV1::Unspecified as i32, |code| code as i32);
     StoreCallError::Rejected {
@@ -379,34 +429,106 @@ fn rejected(rejection: &RuntimeErrorV1) -> StoreCallError {
     }
 }
 
-/// Reads a fetch stream frame by frame: exactly one plan, then exactly one
-/// COMPACT segment's chunks (written straight to the segment file, hashed
-/// as they pass) and its end frame, matched against the plan. At most one
-/// chunk is in memory.
+/// Reads a fetch stream frame by frame: exactly one plan (a chain: a
+/// `COMPACT`, then up to [`MAX_PLAN_SEGMENTS`] − 1 `PUSH` segments), then
+/// each segment's chunks in plan order (written straight to that segment's
+/// file, hashed as they pass) and its end frame, matched against the plan.
+/// At most one chunk is in memory.
 pub(crate) struct FetchSink {
-    file: std::io::BufWriter<std::fs::File>,
+    dir: std::path::PathBuf,
     max_segment_bytes: u64,
-    plan: Option<(u64, BTreeMap<String, String>, PlannedSegment)>,
+    plan: Option<(u64, BTreeMap<String, String>, Vec<PlannedSegment>)>,
+    file: Option<std::io::BufWriter<std::fs::File>>,
     hasher: Sha256,
     written: u64,
-    done: Option<FetchedThread>,
+    fetched: Vec<FetchedSegment>,
+}
+
+/// The plan's segments, checked for shape: ascending `seq`, a `COMPACT`
+/// with no prerequisites first, then `PUSH` segments with 1 to
+/// [`MAX_PREREQUISITES`] prerequisites; the last is the head and holds the
+/// plan's refs. Each segment is within `max_segment_bytes` (a turn passes
+/// [`MAIN_MAX_SEGMENT_BYTES`]), and the chain within twice that.
+fn planned_chain(
+    plan: &crate::protocol::elitea::runtime::v1::WorkspaceFetchPlanV1,
+    refs: &BTreeMap<String, String>,
+    max_segment_bytes: u64,
+) -> Result<Vec<PlannedSegment>, StoreCallError> {
+    let shape = StoreCallError::Malformed("the fetch plan is not a segment chain");
+    if plan.segments.is_empty() || plan.segments.len() > MAX_PLAN_SEGMENTS {
+        return Err(shape);
+    }
+    let mut chain = Vec::with_capacity(plan.segments.len());
+    let mut previous = 0;
+    let mut total: u64 = 0;
+    for (index, segment) in plan.segments.iter().enumerate() {
+        let kind_ok = if index == 0 {
+            segment.kind == KIND_COMPACT && segment.prerequisites.is_empty()
+        } else {
+            segment.kind == KIND_PUSH
+                && !segment.prerequisites.is_empty()
+                && segment.prerequisites.len() <= MAX_PREREQUISITES
+                && segment.prerequisites.iter().all(|sha| sha1_hex(sha))
+        };
+        total = total.saturating_add(segment.bytes);
+        if !kind_ok
+            || segment.seq <= previous
+            || !sha256_valid(&segment.sha256)
+            || segment.bytes == 0
+            || segment.bytes > max_segment_bytes
+            || total > max_segment_bytes.saturating_mul(2)
+        {
+            return Err(shape);
+        }
+        previous = segment.seq;
+        chain.push(PlannedSegment {
+            seq: segment.seq,
+            kind: segment.kind.clone(),
+            sha256: segment.sha256.clone(),
+            bytes: segment.bytes,
+            prerequisites: segment.prerequisites.clone(),
+            refs: ref_map(&segment.refs)?,
+        });
+    }
+    let last = &chain[chain.len() - 1];
+    if last.seq != plan.head_seq || &last.refs != refs {
+        return Err(shape);
+    }
+    Ok(chain)
 }
 
 impl FetchSink {
+    /// Segment `index`'s file in `dir`.
+    #[must_use]
+    pub(crate) fn segment_path(dir: &Path, index: usize) -> std::path::PathBuf {
+        dir.join(format!("segment-{index:02}.bundle"))
+    }
+
     /// # Errors
     ///
-    /// The segment file cannot be created.
+    /// The directory cannot be created.
     pub(crate) fn create(into: &Path, max_segment_bytes: u64) -> Result<Self, StoreCallError> {
-        let file = std::fs::File::create(into)
+        std::fs::create_dir_all(into)
             .map_err(|_| StoreCallError::Malformed("the segment file cannot be written"))?;
         Ok(Self {
-            file: std::io::BufWriter::with_capacity(CHUNK_BYTES * 2, file),
+            dir: into.to_path_buf(),
             max_segment_bytes,
             plan: None,
+            file: None,
             hasher: Sha256::new(),
             written: 0,
-            done: None,
+            fetched: Vec::new(),
         })
+    }
+
+    fn open_next(&mut self) -> Result<(), StoreCallError> {
+        let path = Self::segment_path(&self.dir, self.fetched.len());
+        let file = std::fs::File::create(&path)
+            .map_err(|_| StoreCallError::Malformed("the segment file cannot be written"))?;
+        self.file = Some(std::io::BufWriter::with_capacity(CHUNK_BYTES * 2, file));
+        self.hasher = Sha256::new();
+        self.written = 0;
+        Ok(())
     }
 
     /// Take one frame.
@@ -417,44 +539,29 @@ impl FetchSink {
     pub(crate) fn push(&mut self, frame: WorkspaceFetchFrameV1) -> Result<(), StoreCallError> {
         use std::io::Write as _;
         use workspace_fetch_frame_v1::Frame;
-        if self.done.is_some() {
-            return Err(StoreCallError::Malformed(
-                "the fetch stream continues past its segment",
-            ));
-        }
-        let Some((head_seq, refs, planned)) = &self.plan else {
+        let Some(segments) = self.plan.as_ref().map(|(_, _, chain)| chain.len()) else {
             return match frame.frame {
                 Some(Frame::Plan(plan)) => {
                     let refs = ref_map(&plan.refs)?;
-                    let [segment] = plan.segments.as_slice() else {
-                        return Err(StoreCallError::Malformed(
-                            "the fetch plan is not one COMPACT segment",
-                        ));
-                    };
-                    if segment.kind != KIND_COMPACT
-                        || !segment.prerequisites.is_empty()
-                        || !sha256_valid(&segment.sha256)
-                        || segment.bytes == 0
-                        || segment.bytes > self.max_segment_bytes
-                    {
-                        return Err(StoreCallError::Malformed(
-                            "the fetch plan is not one COMPACT segment",
-                        ));
-                    }
-                    let planned = PlannedSegment {
-                        seq: segment.seq,
-                        sha256: segment.sha256.clone(),
-                        bytes: segment.bytes,
-                        refs: ref_map(&segment.refs)?,
-                    };
-                    self.plan = Some((plan.head_seq, refs, planned));
-                    Ok(())
+                    let chain = planned_chain(&plan, &refs, self.max_segment_bytes)?;
+                    self.plan = Some((plan.head_seq, refs, chain));
+                    self.open_next()
                 }
                 Some(Frame::Refusal(refusal)) => Err(refused(&refusal)),
                 Some(Frame::Rejection(rejection)) => Err(rejected(&rejection)),
                 _ => Err(StoreCallError::Malformed("the fetch stream has no plan")),
             };
         };
+        let Some(planned) = self
+            .plan
+            .as_ref()
+            .and_then(|(_, _, chain)| chain.get(self.fetched.len()).cloned())
+        else {
+            return Err(StoreCallError::Malformed(
+                "the fetch stream continues past its segments",
+            ));
+        };
+        let broken = || StoreCallError::Malformed("the segment file cannot be written");
         match frame.frame {
             Some(Frame::SegmentChunk(chunk)) => {
                 if chunk.is_empty()
@@ -464,8 +571,10 @@ impl FetchSink {
                     return Err(StoreCallError::Malformed("a segment chunk is malformed"));
                 }
                 self.file
+                    .as_mut()
+                    .ok_or_else(broken)?
                     .write_all(&chunk)
-                    .map_err(|_| StoreCallError::Malformed("the segment file cannot be written"))?;
+                    .map_err(|_| broken())?;
                 self.hasher.update(&chunk);
                 self.written += chunk.len() as u64;
                 Ok(())
@@ -483,13 +592,15 @@ impl FetchSink {
                     });
                 }
                 self.file
+                    .take()
+                    .ok_or_else(broken)?
                     .flush()
-                    .map_err(|_| StoreCallError::Malformed("the segment file cannot be written"))?;
-                self.done = Some(FetchedThread {
-                    head_seq: *head_seq,
-                    refs: refs.clone(),
-                    segment: planned.clone(),
-                });
+                    .map_err(|_| broken())?;
+                let path = Self::segment_path(&self.dir, self.fetched.len());
+                self.fetched.push(FetchedSegment { planned, path });
+                if self.fetched.len() < segments {
+                    self.open_next()?;
+                }
                 Ok(())
             }
             Some(Frame::Refusal(refusal)) => Err(refused(&refusal)),
@@ -504,10 +615,18 @@ impl FetchSink {
     ///
     /// # Errors
     ///
-    /// It ended before the segment's end frame.
+    /// It ended before the last segment's end frame.
     pub(crate) fn finish(self) -> Result<FetchedThread, StoreCallError> {
-        self.done
-            .ok_or(StoreCallError::Malformed("the fetch stream ended early"))
+        match self.plan {
+            Some((head_seq, refs, chain)) if chain.len() == self.fetched.len() => {
+                Ok(FetchedThread {
+                    head_seq,
+                    refs,
+                    segments: self.fetched,
+                })
+            }
+            _ => Err(StoreCallError::Malformed("the fetch stream ended early")),
+        }
     }
 }
 
@@ -520,7 +639,7 @@ fn hex_digest(hasher: Sha256) -> String {
     out
 }
 
-/// Read a whole fetch stream into the segment file `into`.
+/// Read a whole fetch stream into segment files in the directory `into`.
 #[cfg(test)]
 ///
 /// # Errors
@@ -600,10 +719,10 @@ pub(crate) fn publish_request(
 ) -> WorkspacePublishRequestV1 {
     WorkspacePublishRequestV1 {
         claim: Some(claim.clone()),
-        kind: KIND_COMPACT.to_owned(),
+        kind: request.kind.to_owned(),
         segment_sha256: request.segment_sha256.clone(),
         bytes: request.bytes,
-        prerequisites: Vec::new(),
+        prerequisites: request.prerequisites.clone(),
         refs: vec![WorkspaceRefUpdateV1 {
             name: REF_CLOUD.to_owned(),
             old: request.old_cloud.clone(),
@@ -860,6 +979,21 @@ impl WorkspaceStore for GrpcWorkspaceStore {
         .into_inner();
         read_record_event(&response)
     }
+
+    async fn record_changes(
+        &self,
+        claim: &WorkspaceClaimV1,
+        changes: &super::changes::ChangeSet,
+    ) -> Result<(), StoreCallError> {
+        let mut client = self.client.clone();
+        let frames = tokio_stream::iter(super::changes::frames(claim, changes));
+        let response = timeout(self.deadline, client.workspace_record_changes(frames))
+            .await
+            .map_err(|_| StoreCallError::Transport { retryable: true })?
+            .map_err(|status| status_error(&status))?
+            .into_inner();
+        super::changes::read_record_changes(&response)
+    }
 }
 
 #[cfg(test)]
@@ -871,55 +1005,90 @@ mod tests {
 
     const CLOUD: &str = "1111111111111111111111111111111111111111";
 
-    fn plan_frames(segment: &[u8], corrupt_end: bool) -> Vec<WorkspaceFetchFrameV1> {
-        use workspace_fetch_frame_v1::Frame;
-        let refs = vec![WorkspaceRefV1 {
+    fn cloud_refs(sha: &str) -> Vec<WorkspaceRefV1> {
+        vec![WorkspaceRefV1 {
             name: REF_CLOUD.to_owned(),
-            sha: CLOUD.to_owned(),
-        }];
-        let sha = sha256_hex(segment);
+            sha: sha.to_owned(),
+        }]
+    }
+
+    /// One planned segment of a chain test: (seq, kind, bytes, prereqs).
+    fn wire_segment(
+        seq: u64,
+        kind: &str,
+        bytes: &[u8],
+        prerequisites: &[&str],
+        refs: Vec<WorkspaceRefV1>,
+    ) -> WorkspaceSegmentV1 {
+        WorkspaceSegmentV1 {
+            seq,
+            kind: kind.to_owned(),
+            sha256: sha256_hex(bytes),
+            bytes: bytes.len() as u64,
+            prerequisites: prerequisites.iter().map(|p| (*p).to_owned()).collect(),
+            refs,
+        }
+    }
+
+    /// The frames of a plan and its segments' bodies, in plan order.
+    fn chain_frames(
+        plan: WorkspaceFetchPlanV1,
+        bodies: &[&[u8]],
+        corrupt_end: bool,
+    ) -> Vec<WorkspaceFetchFrameV1> {
+        use workspace_fetch_frame_v1::Frame;
         let mut frames = vec![WorkspaceFetchFrameV1 {
-            frame: Some(Frame::Plan(WorkspaceFetchPlanV1 {
-                head_seq: 3,
-                refs: refs.clone(),
-                segments: vec![WorkspaceSegmentV1 {
-                    seq: 3,
-                    kind: KIND_COMPACT.to_owned(),
-                    sha256: sha.clone(),
-                    bytes: segment.len() as u64,
-                    prerequisites: Vec::new(),
-                    refs,
-                }],
-            })),
+            frame: Some(Frame::Plan(plan)),
         }];
-        frames.extend(
-            segment
-                .chunks(CHUNK_BYTES)
-                .map(|chunk| WorkspaceFetchFrameV1 {
-                    frame: Some(Frame::SegmentChunk(chunk.to_vec())),
-                }),
-        );
-        frames.push(WorkspaceFetchFrameV1 {
-            frame: Some(Frame::SegmentEnd(WorkspaceSegmentEndV1 {
-                sha256: if corrupt_end { "0".repeat(64) } else { sha },
-                bytes: segment.len() as u64,
-            })),
-        });
+        for body in bodies {
+            frames.extend(body.chunks(CHUNK_BYTES).map(|chunk| WorkspaceFetchFrameV1 {
+                frame: Some(Frame::SegmentChunk(chunk.to_vec())),
+            }));
+            frames.push(WorkspaceFetchFrameV1 {
+                frame: Some(Frame::SegmentEnd(WorkspaceSegmentEndV1 {
+                    sha256: if corrupt_end {
+                        "0".repeat(64)
+                    } else {
+                        sha256_hex(body)
+                    },
+                    bytes: body.len() as u64,
+                })),
+            });
+        }
         frames
+    }
+
+    fn plan_frames(segment: &[u8], corrupt_end: bool) -> Vec<WorkspaceFetchFrameV1> {
+        let plan = WorkspaceFetchPlanV1 {
+            head_seq: 3,
+            refs: cloud_refs(CLOUD),
+            segments: vec![wire_segment(
+                3,
+                KIND_COMPACT,
+                segment,
+                &[],
+                cloud_refs(CLOUD),
+            )],
+        };
+        chain_frames(plan, &[segment], corrupt_end)
     }
 
     #[test]
     fn a_fetch_stream_is_read_and_checked_against_its_plan() {
         let dir = tempfile::tempdir().expect("dir");
-        let file = dir.path().join("segment");
+        let into = dir.path().join("fetched");
         let segment = vec![7_u8; 100_000];
         let fetched =
-            read_fetch_frames(plan_frames(&segment, false), 1 << 20, &file).expect("fetched");
-        assert_eq!(std::fs::read(&file).expect("file"), segment);
+            read_fetch_frames(plan_frames(&segment, false), 1 << 20, &into).expect("fetched");
+        assert_eq!(fetched.segments.len(), 1);
+        assert_eq!(
+            std::fs::read(&fetched.segments[0].path).expect("file"),
+            segment
+        );
         assert_eq!(fetched.refs.get(REF_CLOUD).map(String::as_str), Some(CLOUD));
 
         assert!(matches!(
-            read_fetch_frames(plan_frames(&segment, true), 1 << 20, &file),
+            read_fetch_frames(plan_frames(&segment, true), 1 << 20, &into),
             Err(StoreCallError::Refused {
                 code: RefusalCode::ChecksumMismatch,
                 ..
@@ -927,13 +1096,157 @@ mod tests {
         ));
         // Over the policy's segment cap: refused before any byte is used.
         assert!(matches!(
-            read_fetch_frames(plan_frames(&segment, false), 1_000, &file),
+            read_fetch_frames(plan_frames(&segment, false), 1_000, &into),
             Err(StoreCallError::Malformed(_))
         ));
         // A truncated stream is never a usable segment.
         let mut truncated = plan_frames(&segment, false);
         truncated.pop();
-        assert!(read_fetch_frames(truncated, 1 << 20, &file).is_err());
+        assert!(read_fetch_frames(truncated, 1 << 20, &into).is_err());
+    }
+
+    /// Phase 2: a chain (a COMPACT, then PUSH segments) streams to one file
+    /// per segment; a plan out of shape is refused before any byte is used.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one chain and every shape it must not have"
+    )]
+    fn a_chain_is_fetched_segment_by_segment_and_its_shape_is_checked() {
+        let dir = tempfile::tempdir().expect("dir");
+        let into = dir.path().join("fetched");
+        let compact = vec![1_u8; 40_000];
+        let push = vec![2_u8; 50_000];
+        let next = "2222222222222222222222222222222222222222";
+        let plan = |segments: Vec<WorkspaceSegmentV1>, head_seq: u64| WorkspaceFetchPlanV1 {
+            head_seq,
+            refs: cloud_refs(next),
+            segments,
+        };
+        let good = vec![
+            wire_segment(3, KIND_COMPACT, &compact, &[], cloud_refs(CLOUD)),
+            wire_segment(5, KIND_PUSH, &push, &[CLOUD], cloud_refs(next)),
+        ];
+        let fetched = read_fetch_frames(
+            chain_frames(plan(good.clone(), 5), &[&compact, &push], false),
+            1 << 20,
+            &into,
+        )
+        .expect("fetched");
+        assert_eq!(fetched.head_seq, 5);
+        assert_eq!(fetched.segments.len(), 2);
+        assert_eq!(fetched.segments[1].planned.kind, KIND_PUSH);
+        assert_eq!(fetched.segments[1].planned.prerequisites, vec![CLOUD]);
+        assert_eq!(
+            std::fs::read(&fetched.segments[0].path).expect("c"),
+            compact
+        );
+        assert_eq!(std::fs::read(&fetched.segments[1].path).expect("p"), push);
+
+        // The stream ends after the COMPACT: never a usable chain.
+        let mut short = chain_frames(plan(good.clone(), 5), &[&compact, &push], false);
+        short.truncate(short.len() - 3);
+        assert!(read_fetch_frames(short, 1 << 20, &into).is_err());
+
+        let shapes: Vec<(&str, Vec<WorkspaceSegmentV1>, u64)> = vec![
+            (
+                "a PUSH first",
+                vec![wire_segment(
+                    5,
+                    KIND_PUSH,
+                    &push,
+                    &[CLOUD],
+                    cloud_refs(next),
+                )],
+                5,
+            ),
+            (
+                "a PUSH without prerequisites",
+                vec![
+                    good[0].clone(),
+                    wire_segment(5, KIND_PUSH, &push, &[], cloud_refs(next)),
+                ],
+                5,
+            ),
+            (
+                "a malformed prerequisite",
+                vec![
+                    good[0].clone(),
+                    wire_segment(5, KIND_PUSH, &push, &["zz"], cloud_refs(next)),
+                ],
+                5,
+            ),
+            (
+                "out of seq order",
+                vec![
+                    good[0].clone(),
+                    wire_segment(2, KIND_PUSH, &push, &[CLOUD], cloud_refs(next)),
+                ],
+                2,
+            ),
+            (
+                "a second COMPACT",
+                vec![
+                    good[0].clone(),
+                    wire_segment(5, KIND_COMPACT, &push, &[], cloud_refs(next)),
+                ],
+                5,
+            ),
+            (
+                "an unknown kind",
+                vec![
+                    good[0].clone(),
+                    wire_segment(5, "DELTA", &push, &[CLOUD], cloud_refs(next)),
+                ],
+                5,
+            ),
+            ("the head is not the last segment", good.clone(), 6),
+            (
+                "the last segment's refs are not the plan's",
+                vec![
+                    good[0].clone(),
+                    wire_segment(5, KIND_PUSH, &push, &[CLOUD], cloud_refs(CLOUD)),
+                ],
+                5,
+            ),
+        ];
+        for (name, segments, head) in shapes {
+            assert!(
+                matches!(
+                    read_fetch_frames(
+                        chain_frames(plan(segments, head), &[&compact, &push], false),
+                        1 << 20,
+                        &into,
+                    ),
+                    Err(StoreCallError::Malformed(_))
+                ),
+                "{name}"
+            );
+        }
+        // Past Main's chain bound, or past twice the segment cap in all.
+        let mut long = vec![good[0].clone()];
+        for seq in 0..MAX_PLAN_SEGMENTS as u64 {
+            long.push(wire_segment(
+                10 + seq,
+                KIND_PUSH,
+                &push,
+                &[CLOUD],
+                cloud_refs(next),
+            ));
+        }
+        let head = 10 + MAX_PLAN_SEGMENTS as u64 - 1;
+        assert!(
+            read_fetch_frames(chain_frames(plan(long, head), &[], false), 1 << 20, &into).is_err()
+        );
+        assert!(
+            read_fetch_frames(
+                chain_frames(plan(good, 5), &[&compact, &push], false),
+                45_000,
+                &into
+            )
+            .is_err(),
+            "each segment fits 45 000 bytes, the chain does not fit 90 000"
+        );
     }
 
     #[test]
@@ -1028,9 +1341,22 @@ mod tests {
 
     #[test]
     fn a_publish_must_move_the_cloud_ref_to_the_requested_commit() {
-        let request = PublishSegment {
+        let push = PublishSegment {
+            kind: KIND_PUSH,
             segment_sha256: "a".repeat(64),
             bytes: 10,
+            prerequisites: vec![CLOUD.to_owned()],
+            old_cloud: Some(CLOUD.to_owned()),
+            new_cloud: "2".repeat(40),
+        };
+        let wire = publish_request(&WorkspaceClaimV1::default(), &push);
+        assert_eq!(wire.kind, KIND_PUSH);
+        assert_eq!(wire.prerequisites, vec![CLOUD.to_owned()]);
+        let request = PublishSegment {
+            kind: KIND_COMPACT,
+            segment_sha256: "a".repeat(64),
+            bytes: 10,
+            prerequisites: Vec::new(),
             old_cloud: Some(CLOUD.to_owned()),
             new_cloud: "2".repeat(40),
         };

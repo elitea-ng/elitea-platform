@@ -25,6 +25,29 @@ package toolkitcatalogue
 
 import "strings"
 
+// defaultOffTypes are the types a deployment serves to NO project until an
+// operator decides otherwise: the one exception to "absence is not a decision
+// to withhold". `host_intel` (#1238) returns hosts, ports and known CVEs of
+// third-party machines, which is reconnaissance data, so it is granted per
+// project in Admin › Toolkits (a `restricted` policy with project grants, or
+// `enabled`) and is off everywhere before that, including when the policy
+// tables cannot be read.
+var defaultOffTypes = map[string]bool{"host_intel": true}
+
+// DefaultOffReason is the reason a default-off type carries while no row
+// decides it.
+const DefaultOffReason = "Off by default: an administrator grants this toolkit type per project."
+
+// DefaultAllowed reports whether a type is served when no row decides it.
+func DefaultAllowed(toolkitType string) bool { return !defaultOffTypes[strings.TrimSpace(toolkitType)] }
+
+func defaultDecision(toolkitType string) Decision {
+	if DefaultAllowed(toolkitType) {
+		return Decision{ToolkitType: toolkitType, Allowed: true, Source: SourceDefault}
+	}
+	return Decision{ToolkitType: toolkitType, Allowed: false, Source: SourceDefault, Reason: DefaultOffReason}
+}
+
 // Filter answers, for the project it was built for, whether one type is served.
 //
 // It is a VALUE built from one read, not a live query. A catalogue request asks
@@ -44,13 +67,14 @@ func EmptyFilter() Filter { return Filter{} }
 
 // Allows reports whether the type is served.
 //
-// An unknown type is ALLOWED. This filter subtracts from a catalogue it does not
+// An unknown type is ALLOWED, except a default-off type (defaultOffTypes),
+// which is refused until a row allows it. This filter subtracts from a catalogue it does not
 // author: the candidate set comes from the SDK snapshot and the projections, and
 // a type nobody has decided about is one this table has nothing to say about.
 func (f Filter) Allows(toolkitType string) bool {
 	decision, found := f.decisions[strings.TrimSpace(toolkitType)]
 	if !found {
-		return true
+		return DefaultAllowed(toolkitType)
 	}
 	return decision.Allowed
 }
@@ -61,7 +85,7 @@ func (f Filter) Decision(toolkitType string) Decision {
 	key := strings.TrimSpace(toolkitType)
 	decision, found := f.decisions[key]
 	if !found {
-		return Decision{ToolkitType: key, Allowed: true, Source: SourceDefault}
+		return defaultDecision(key)
 	}
 	return decision
 }

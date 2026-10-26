@@ -24,7 +24,7 @@ use elitea_agent_runtime::host::{
 };
 use elitea_agent_runtime::step_limit::{CONTINUE_KIND, CONTINUE_PAYLOAD_KEY};
 use elitea_local_tools::approvals::{
-    ACCEPT, APPROVE_ALWAYS, DECLINE, PAYLOAD_KEY, PLAN_PAYLOAD_KEY, ToolCall,
+    ACCEPT, APPROVE_ALWAYS, APPROVE_SESSION, DECLINE, PAYLOAD_KEY, PLAN_PAYLOAD_KEY, ToolCall,
 };
 use elitea_local_tools::session::{BY_PERSON, DECIDED_BY};
 use serde_json::{Value, json};
@@ -203,6 +203,16 @@ impl ApprovalChannel for UiPrompt {
         }
         let described = describe(&request);
         let can_remember = described["can_remember"] == Value::Bool(true);
+        // A host-intel question (#1238) remembers for the app session only.
+        let remember_action = if request
+            .available_actions
+            .iter()
+            .any(|a| a == APPROVE_SESSION)
+        {
+            APPROVE_SESSION
+        } else {
+            APPROVE_ALWAYS
+        };
         let (request_id, answer) = self.broker.register(binding.events.turn_id());
         let mut payload = described;
         payload["request_id"] = Value::String(request_id.clone());
@@ -268,7 +278,7 @@ impl ApprovalChannel for UiPrompt {
         binding.recorder.hitl_exchange(exchange);
         Ok(match decision {
             UiDecision::AllowAlways if can_remember => ApprovalOutcome::Decided {
-                action: APPROVE_ALWAYS.to_owned(),
+                action: remember_action.to_owned(),
                 value: json!({}),
             },
             UiDecision::AllowOnce | UiDecision::AllowAlways => ApprovalOutcome::Decided {
@@ -375,6 +385,16 @@ fn cut(text: &str, max: usize) -> String {
     elitea_agent_runtime::text::clip_bytes(text, max).to_owned()
 }
 
+/// [`cut`], with an ellipsis when it cut something.
+fn clipped(text: &str, max: usize) -> String {
+    let kept = elitea_agent_runtime::text::clip_bytes(text, max);
+    if kept.len() < text.len() {
+        format!("{kept}…")
+    } else {
+        kept.to_owned()
+    }
+}
+
 /// The `approval_request` payload (without `request_id`).
 fn describe(request: &ApprovalRequest) -> Value {
     let reason = request
@@ -392,10 +412,27 @@ fn describe(request: &ApprovalRequest) -> Value {
             .ok()
             .and_then(|v| v.as_str().map(str::to_owned))
             .unwrap_or_default();
-        let detail = call
+        let mut detail = call
             .command
             .clone()
             .unwrap_or_else(|| call.paths.join(", "));
+        // A runtime memory call (#1233): the text it saves or searches for,
+        // or the memory it deletes and what that memory says (the runtime
+        // looked it up before asking).
+        if let Some(memory) = request
+            .payload
+            .get(elitea_agent_runtime::memory_tools::APPROVAL_PAYLOAD_KEY)
+        {
+            detail = match (
+                memory.get("content").and_then(Value::as_str),
+                memory.get("id"),
+            ) {
+                (Some(text), Some(id)) => format!("memory {id}: {}", clipped(text, 1024)),
+                (Some(text), None) => cut(text, 4096),
+                (None, Some(id)) => format!("memory {id}"),
+                (None, None) => detail,
+            };
+        }
         let mut payload = json!({
             "tool": tool,
             "title": capitalised(&request.message),
@@ -407,6 +444,27 @@ fn describe(request: &ApprovalRequest) -> Value {
         if let Some(command) = &call.command {
             payload["command"] =
                 json!(shlex::split(command).unwrap_or_else(|| vec![command.clone()]));
+        }
+        // A background process that serves on localhost, or lives until
+        // the session ends, says so on the card (#1223).
+        if call.loopback {
+            payload["loopback"] = json!(true);
+        }
+        if call.keep_alive {
+            payload["keep_alive"] = json!(true);
+        }
+        // A local MCP server's start or tool (#1230): which server and tool,
+        // and for a start whether it gets the network or runs unconfined.
+        if let Some(target) = &call.mcp {
+            let mut mcp = json!({ "server": target.server, "read_only": target.read_only });
+            if let Some(tool) = &target.tool {
+                mcp["tool"] = json!(tool);
+            }
+            payload["mcp"] = mcp;
+            if call.tool == elitea_local_tools::approvals::ToolKind::McpStart {
+                payload["network"] = json!(call.network);
+                payload["unconfined"] = json!(call.unconfined);
+            }
         }
         // Which layer asks (`workspace`, `user`, `default`, …) and, for a
         // rule, which one and its justification (the card shows them).
@@ -456,13 +514,21 @@ fn describe(request: &ApprovalRequest) -> Value {
     }
     if let Some(remote) = request.payload.get(REMOTE_PAYLOAD_KEY) {
         let text = |key: &str| remote.get(key).and_then(Value::as_str).unwrap_or_default();
-        return json!({
+        let session = request
+            .available_actions
+            .iter()
+            .any(|a| a == APPROVE_SESSION);
+        let mut payload = json!({
             "tool": text("tool"),
             "title": text("title"),
             "detail": text("detail"),
             "reason": text("reason"),
-            "can_remember": false,
+            "can_remember": session,
         });
+        if session {
+            payload["remember_scope"] = json!("session");
+        }
+        return payload;
     }
     json!({
         "tool": request.subject,

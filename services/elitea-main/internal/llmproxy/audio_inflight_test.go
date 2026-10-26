@@ -39,10 +39,15 @@ func TestAudio_InFlightCapRefusesTheExtraRequestBeforeForwarding(t *testing.T) {
 	unblockOther := make(chan struct{})
 	var sawOther atomic.Bool
 	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The user id is recorded before the arrival is counted: the test
+		// reads sawOther as soon as it sees the count.
+		other := r.Header.Get(HeaderUserID) == "12"
+		if other {
+			sawOther.Store(true)
+		}
 		arrived.Add(1)
 		_, _ = io.Copy(io.Discard, r.Body)
-		if r.Header.Get(HeaderUserID) == "12" {
-			sawOther.Store(true)
+		if other {
 			<-unblockOther
 		} else {
 			<-unblock

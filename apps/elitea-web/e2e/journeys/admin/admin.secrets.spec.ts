@@ -114,6 +114,11 @@ adminTest('J32: the page lists the global vault, which is not any project vault'
 adminTest('J32b: creating a global secret survives a reload, and does not touch the project vault', async ({
   page,
 }, testInfo) => {
+  // Four page loads, three writes and three reloads in one journey: it takes
+  // about 25 s on a green webkit run, so the default 30 s left no headroom and
+  // a slower runner timed it out on its last step (the delete), with no step
+  // ever hanging.
+  adminTest.setTimeout(60_000);
   const PROBE_NAME = probeName(testInfo.project.name);
 
   await openAdminSecrets(page);

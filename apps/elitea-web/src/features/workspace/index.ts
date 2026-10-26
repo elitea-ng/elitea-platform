@@ -7,20 +7,23 @@
  */
 import { lazy } from 'react';
 
-import { customCommandDetail, customCommandSource, customCommandToken, invokedPick, modelCommandName, slashMenu } from './model/composerCommands';
+import { customCommandDetail, customCommandSource, customCommandToken, invokedPick, modelCommandName, slashMenu, stepsCommand } from './model/composerCommands';
 import { matchingSkills, skillToken } from './model/composerSkills';
 import { activeToken, mentionText, referencedPaths } from './model/composerTokens';
+import { useRenameThread, useServerThreadName, useThreadNaming } from './model/threadNames';
 import { readLastLocation, writeLastLocation } from './model/threads';
 import { latestPlan } from './model/turnReducer';
+import { sumUsage } from './model/turnUsage';
 import { ApprovalCard } from './ui/ApprovalCard';
 import { ApprovalDialog } from './ui/ApprovalDialog';
+import { ImageStrip } from './ui/ImageStrip';
 import { ModelChip } from './ui/ModelChip';
 import { PlanCard } from './ui/PlanCard';
+import { ThreadRenameField } from './ui/ThreadRenameField';
 
 export { ChangedFilesCard } from './ui/ChangedFilesCard';
 export { TurnTranscript } from './ui/TurnTranscript';
 export { WorkspaceList } from './ui/WorkspaceList';
-export type { ProjectChoice } from './ui/WorkspaceList';
 export { WorkspaceIpcProvider, useWorkspaceIpc } from './model/ipcContext';
 export { useWorkspaceTurn } from './model/useWorkspaceTurn';
 export { replayView } from './model/turnReducer';
@@ -31,13 +34,14 @@ export { SuggestionMenu } from './ui/SuggestionMenu';
 export type { SuggestionItem } from './ui/SuggestionMenu';
 export type { WorkspaceCommandId } from './model/composerCommands';
 
-/** The composer's text rules ("@"/"/" tokens, referenced paths), its "/" menu (local commands, the custom commands, the agent's skills) and its model chip, as one bundle. */
+/** The composer's text rules ("@"/"/" tokens, referenced paths), its "/" menu (local commands, the custom commands, the agent's skills), its model chip, its image strip (also under a sent prompt) and its usage sum (a thread's tokens), as one bundle. */
 export const composer = {
   activeToken,
   mentionText,
   referencedPaths,
   slashMenu,
   modelCommandName,
+  stepsCommand,
   customCommandToken,
   customCommandSource,
   customCommandDetail,
@@ -45,20 +49,27 @@ export const composer = {
   matchingSkills,
   skillToken,
   ModelChip,
+  ImageStrip,
+  sumUsage,
 };
 
 /** The folder and thread the person was last in (desktop home), read and written as one pair. */
 export const lastLocation = { read: readLastLocation, write: writeLastLocation };
+
+/** A local thread's name: generated after its first turn, read back from the server, renamed by the person. */
+export const threadNames = { useNaming: useThreadNaming, useServerName: useServerThreadName, useRename: useRenameThread, RenameField: ThreadRenameField };
 
 /** A tool's approval: the dialog (local turns) and the inline card (cloud transcripts). */
 export const approval = { Dialog: ApprovalDialog, Card: ApprovalCard };
 
 /**
  * Plan mode and the agent's checklist (#1225): the proposed plan's card, the todo pane (the session's Plan tab,
- * loaded only when the tab is shown) and the latest plan of a thread's turns.
+ * loaded only when the tab is shown) and the latest plan of a thread's turns; and the session's background
+ * processes (#1223): the terminal pane (the Processes tab, loaded only once the folder has a process).
  */
 export const plan = {
   Card: PlanCard,
   TodoPane: lazy(() => import('./ui/TodoPane').then((module) => ({ default: module.TodoPane }))),
   latest: latestPlan,
+  TerminalPane: lazy(() => import('./ui/TerminalPane').then((module) => ({ default: module.TerminalPane }))),
 };

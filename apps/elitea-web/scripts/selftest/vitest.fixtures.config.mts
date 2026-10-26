@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 /**
- * Dedicated vitest config for the R-M3/R-M5 RED/GREEN fixture runs driven by
+ * Dedicated vitest config for the R-M5 RED/GREEN fixture runs driven by
  * scripts/check-gates-selftest.mjs. The fixtures live OUTSIDE src/ (they are
  * deliberately-failing tests and must never run in the real suite), but they
  * boot the REAL src/test/setup.ts so what is proven is the production fence,

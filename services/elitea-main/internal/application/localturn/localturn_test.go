@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -34,6 +35,31 @@ func TestBoundReportCutsAndCounts(t *testing.T) {
 	if len([]rune(action)) > 512 || !strings.Contains(action, "60 commands") || !strings.Contains(action, "210 paths") {
 		t.Fatalf("audit action = %q", action)
 	}
+	if strings.Contains(action, "memories") || got.MemoriesSaved == nil || got.MemoriesDeleted == nil {
+		t.Fatalf("a report without memory ids: action %q, saved %v, deleted %v", action, got.MemoriesSaved, got.MemoriesDeleted)
+	}
+}
+
+func TestBoundReportKeepsMemoryIDs(t *testing.T) {
+	report := LocalWorkReport{MemoriesSaved: []int64{7, 0, -3, 9}, MemoriesDeleted: make([]int64, 0, MaxReportedMemoryIDs+5)}
+	for i := int64(1); i <= MaxReportedMemoryIDs+5; i++ {
+		report.MemoriesDeleted = append(report.MemoriesDeleted, i)
+	}
+	got := boundReport(report)
+	if !reflect.DeepEqual(got.MemoriesSaved, []int64{7, 9}) || got.MemoriesSavedTotal != 4 {
+		t.Fatalf("saved = %v (total %d)", got.MemoriesSaved, got.MemoriesSavedTotal)
+	}
+	if len(got.MemoriesDeleted) != MaxReportedMemoryIDs || got.MemoriesDeletedTotal != MaxReportedMemoryIDs+5 {
+		t.Fatalf("deleted = %d (total %d)", len(got.MemoriesDeleted), got.MemoriesDeletedTotal)
+	}
+	if action := commitAuditAction(got); !strings.Contains(action, "memories 4 saved 205 deleted") {
+		t.Fatalf("audit action = %q", action)
+	}
+	// A report without memory ids digests as it did before the fields existed.
+	encoded, err := json.Marshal(LocalWorkReport{Commands: []CommandRecord{}, Paths: []string{}})
+	if err != nil || strings.Contains(string(encoded), "memories") {
+		t.Fatalf("report JSON = %s (%v)", encoded, err)
+	}
 }
 
 func TestValidCommitRules(t *testing.T) {
@@ -56,6 +82,18 @@ func TestValidCommitRules(t *testing.T) {
 		},
 		"unknown enforcement": func(r *CommitRequest) {
 			r.Report.Enforcement = "maybe"
+		},
+		"summary not an object": func(r *CommitRequest) {
+			r.ContextSummary = json.RawMessage(`"notes"`)
+		},
+		"summary of another version": func(r *CommitRequest) {
+			r.ContextSummary = json.RawMessage(`{"version":2}`)
+		},
+		"summary too large": func(r *CommitRequest) {
+			r.ContextSummary = json.RawMessage(`{"version":1,"objective":"` + strings.Repeat("o", MaxContextSummaryBytes) + `"}`)
+		},
+		"summary with a NUL": func(r *CommitRequest) {
+			r.ContextSummary = json.RawMessage(`{"version":1,"objective":"a\u0000b"}`)
 		},
 		"HITL without id": func(r *CommitRequest) {
 			r.HITLExchanges = []HITLExchange{{Kind: "k", Decision: "approve"}}
@@ -249,5 +287,67 @@ func TestCommitStampsTheTurnsModel(t *testing.T) {
 	named.ModelName = "gpt-other"
 	if digest, _ := commitDigest(named); digest == unnamed {
 		t.Fatal("the digest must see the model")
+	}
+}
+
+// The commit's context summary (#1368) is stored in the answer's meta for the
+// executor that takes the thread over; absent or null leaves the meta and the
+// digest as they were.
+func TestCommitStoresTheContextSummary(t *testing.T) {
+	commit := CommitRequest{
+		ProjectID: 1, ActorUserID: 2, ExecutionID: strings.Repeat("a", 32), Credential: Credential{TokenID: "70"},
+		UserMessage: "hi", AssistantMessage: "hello",
+	}
+	record := `{"version": 1, "objective": "Fix the build", "key_facts": []}`
+	for name, test := range map[string]struct {
+		summary json.RawMessage
+		want    any
+	}{
+		"sent":   {json.RawMessage(record), map[string]any{"version": float64(1), "objective": "Fix the build", "key_facts": []any{}}},
+		"absent": {nil, nil},
+		"null":   {json.RawMessage(`null`), nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := &commitFakeStore{}
+			service, err := NewService(store, commitFakePolicy{allowed: true}, commitFakeMemories{}, commitFakeAudit{},
+				func() (string, error) { return strings.Repeat("b", 32), nil }, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := commit
+			request.ContextSummary = test.summary
+			if _, err := service.Commit(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			var meta map[string]any
+			if err := json.Unmarshal(store.last.ResponseMeta, &meta); err != nil {
+				t.Fatal(err)
+			}
+			got, present := meta["context_summary"]
+			if test.want == nil {
+				if present {
+					t.Fatalf("context_summary = %v, want it absent", got)
+				}
+				return
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("context_summary = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+	plain, _ := commitDigest(commit)
+	null := commit
+	null.ContextSummary = json.RawMessage(`null`)
+	if digest, _ := commitDigest(null); digest != plain {
+		t.Fatal("a null summary digests as an absent one")
+	}
+	spaced := commit
+	spaced.ContextSummary = json.RawMessage(record)
+	compact := commit
+	compact.ContextSummary = json.RawMessage(`{"version":1,"objective":"Fix the build","key_facts":[]}`)
+	first, _ := commitDigest(spaced)
+	second, _ := commitDigest(compact)
+	if first == plain || first != second {
+		t.Fatal("the digest sees the summary, not its whitespace")
 	}
 }

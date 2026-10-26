@@ -8,6 +8,8 @@
 //! * [`retrieval`] — the read tools over a loaded graph;
 //! * [`extract`] — the type tables and normalisers the model stage shares;
 //! * [`embed`] — the texts entities and queries are embedded from;
+//! * [`repo_map`] — a ranked, token-budgeted overview of the files and
+//!   symbols most relevant to a task (personalized `PageRank`, after Aider);
 //! * [`store`] — the `GraphStore` contract and the data a store keeps
 //!   beside the graph (and, with `test-support`, `store_conformance`).
 //!
@@ -23,6 +25,7 @@ pub mod extract;
 pub mod graph;
 pub mod ingest;
 pub mod map;
+pub mod repo_map;
 pub mod retrieval;
 pub mod store;
 #[cfg(feature = "test-support")]

@@ -91,22 +91,61 @@ func (l *Limiter) Fail(keys ...string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
-	if len(l.windows) >= l.maxKeys {
-		for key, window := range l.windows {
-			if now.Sub(window.start) >= l.window {
-				delete(l.windows, key)
-			}
-		}
-		if len(l.windows) >= l.maxKeys {
-			l.windows = map[string]*failureWindow{}
-		}
-	}
+	l.boundLocked(now)
 	for _, key := range keys {
-		window, ok := l.windows[key]
-		if !ok || now.Sub(window.start) >= l.window {
-			l.windows[key] = &failureWindow{start: now, failures: 1}
-			continue
-		}
-		window.failures++
+		l.chargeLocked(key, now)
 	}
+}
+
+// Take is Blocked and Fail as one step for a single key: when the key is
+// under its limit it is charged and Take answers true; otherwise nothing is
+// charged and Take answers false with when to retry. Callers that charge an
+// attempt BEFORE doing the work use it, so concurrent attempts cannot all
+// pass a check made before any of them is charged.
+func (l *Limiter) Take(key string) (bool, time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	if window, ok := l.windows[key]; ok && now.Sub(window.start) < l.window && window.failures >= l.max {
+		return false, l.window - now.Sub(window.start)
+	}
+	l.boundLocked(now)
+	l.chargeLocked(key, now)
+	return true, 0
+}
+
+// Refund gives back one charge Take made, for an attempt that turned out not
+// to count. A window that has ended (or was swept) has nothing to refund.
+func (l *Limiter) Refund(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	window, ok := l.windows[key]
+	if !ok || l.now().Sub(window.start) >= l.window || window.failures == 0 {
+		return
+	}
+	window.failures--
+}
+
+// boundLocked keeps the map under maxKeys (see defaultMaxKeys).
+func (l *Limiter) boundLocked(now time.Time) {
+	if len(l.windows) < l.maxKeys {
+		return
+	}
+	for key, window := range l.windows {
+		if now.Sub(window.start) >= l.window {
+			delete(l.windows, key)
+		}
+	}
+	if len(l.windows) >= l.maxKeys {
+		l.windows = map[string]*failureWindow{}
+	}
+}
+
+func (l *Limiter) chargeLocked(key string, now time.Time) {
+	window, ok := l.windows[key]
+	if !ok || now.Sub(window.start) >= l.window {
+		l.windows[key] = &failureWindow{start: now, failures: 1}
+		return
+	}
+	window.failures++
 }

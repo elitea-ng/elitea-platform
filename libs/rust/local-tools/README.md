@@ -12,8 +12,10 @@ destructive.**
 | Call | Default |
 |---|---|
 | `read_file`, `list_tree`, `search_files`, `find_files`, `read_output`, `read_document`, git reads | allowed |
+| `diagnostics` (local-only, #1236) | allowed (read-only) |
 | `write_file`, `edit_file`, `multi_edit`, `apply_patch` inside the workspace | allowed: the turn's checkpoint undoes them. `path_deny`, `.git` and paths outside the workspace are refused before any rule |
 | `git_commit` | allowed: denied paths (`path_deny`, credentials, the desktop app's data) are never committed: left out of the given paths, and a commit of what is staged is refused, naming them, while the index holds one |
+| `git_push` (local-only: offered in git with the policy's `shell` and `network`, never by the cloud runner) | asked every time, never remembered; bypass mode allows it. The remote, branch and every push URL are resolved first: the question names them, and the policy's `command_deny` / `command_allow` and forbidden/prompt prefix rules judge the argv tokens `git push <remote> <branch>`. Every push URL must be `https` or `ssh`; a rejection is reported with git's `!` lines. It runs the host's hardened git without the file-system sandbox, with the person's credential helper and ssh agent: hooks off, `https`/`ssh` transports only, a configured remote's name and a local branch only, never forced, and a repository config setting `http.*` or a remote's proxy/helper is refused. URL credentials are redacted from its report. `git push` in `run_command` is refused with a pointer to it (the sandbox keeps `.git` read-only and hides credentials) |
 | `run_command`, `read-only` or `workspace-write` sandbox, no network, not destructive | allowed, compound commands included (`cargo test 2>&1 \| tee target/log`, `npm ci && npm test`) |
 | `run_command` that is destructive (below), asks for the network or `full-access`, or would run unconfined: its sandbox cannot hide what it denies (no sandbox on a host that allows unenforced ones, Landlock alone, a bubblewrap walk cut at its cap; decided per command, from the sandbox chosen for it) | asked |
 | `run_tests`, network off | as `run_command` for the test command it runs: allowed unless that command is destructive or would run unconfined |
@@ -193,6 +195,41 @@ changed since is refused, whatever the format.
 The envelope parser and the ladder are adapted from OpenAI Codex
 (Apache-2.0); see `NOTICE`.
 
+## Diagnostics after edits (`lsp`, #1236)
+
+With the host's `LspSettings::enabled` (the desktop turns it on per
+workspace), `write_file`, `edit_file`, `multi_edit` and `apply_patch`
+results gain an additive `diagnostics` field:
+`{"status": "ok" | "timeout" | "unavailable", "new_errors": [{path, line,
+col, severity, code, message}], "total_errors_in_file", "truncated"?,
+"message"?}`: only errors the edit introduced (warnings too while at most
+five are new), compared with the file's diagnostics before the edit by
+severity, code and message; at most 20 entries in 4 KiB. The edit never
+fails because of it. The local-only `diagnostics` tool lists what the
+servers report now for one file, or for every file synced in the session.
+
+* **Servers**: rust-analyzer, typescript-language-server, pyright, gopls,
+  found on `PATH` (or named by the host), never downloaded; a language is
+  served when its marker is at the workspace root (`Cargo.toml`,
+  `package.json`/`tsconfig.json`, `pyproject.toml`/`setup.py`, `go.mod`).
+  One starts on the first edit of one of its files, stops after 10 minutes
+  unused and with the session; at most two run per workspace. A missing one
+  is reported once (`unavailable`, "rust-analyzer not found on PATH;
+  diagnostics off for Rust").
+* **Confinement**: a server runs the project's code, so it always runs
+  under the session's sandbox with the workspace read-only, the network
+  (loopback too) off, the deny list and `path_deny` hidden, in its own
+  process group, with the shell's scrubbed environment; it may write only
+  its own cache under the session's temporary directory. It starts only
+  where that sandbox is fully enforced (never `partial` or `none`), and
+  never while the policy turns commands off.
+* **Sync**: the text a server gets is read through the confined workspace
+  after the write; a denied path is never opened in a server. The wait for
+  an answer is 1.5 s (the first after a start 4 s for rust-analyzer, 3 s
+  for the others), or the host's per-language value.
+* No configuration is read from the workspace; the server's messages are
+  data (control characters removed, cut to 512 bytes).
+
 ## Output budgets and spill files
 
 Every result stays within a per-call budget of estimated tokens
@@ -206,7 +243,7 @@ Every result stays within a per-call budget of estimated tokens
 | `run_tests` | 6k tokens (the `run_command` budget) | counts always; at most 20 failures (or compiler errors), each message at most 2 KiB, first come first kept within the budget, the rest counted in `more_failures` / `more_errors`; the whole log (stdout, then stderr) always spilled: `output_id` |
 | `search_files`, `find_files` | 8k tokens | stops early; `truncated` |
 | `git_diff`, `git_log` | 8k tokens | the head; the whole output spilled: `output_id` |
-| `read_document` | 12k tokens | the head; the whole text spilled: `output_id` |
+| `read_document` | 12k tokens | the head; the rest of the selection spilled: `output_id`; `next_offset` continues it, `next_pages` names the pages it did not reach |
 
 Spill files live under the host's data directory,
 `<data_dir>/sessions/<session id>/out/<conversation>/<output_id>.txt`

@@ -7,7 +7,8 @@
 //!
 //! ```text
 //! # v2 git bundle
-//! -<oid> <comment>        prerequisites (none in a COMPACT)
+//! -<oid> <comment>        prerequisites (none in a COMPACT; a PUSH names
+//!                         the published commits whose closure it leaves out)
 //! <oid> <refname>         one line per ref
 //!                         an empty line
 //! PACK...                 the pack
@@ -22,8 +23,12 @@
 //! quarantine object database of its own (a pack whose checksum or objects
 //! are broken fails here), and runs [`crate::connectivity::reachable`] from
 //! every ref. Only a [`VerifiedBundle`] is something a caller may apply.
+//!
+//! [`write_push`] writes the incremental kind: the objects its refs reach
+//! beyond the closure of its prerequisites. A chain of a `COMPACT` and the
+//! `PUSH` segments after it is read with [`crate::chain::verify_chain_into`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
@@ -40,6 +45,8 @@ const V3: &[u8] = b"# v3 git bundle\n";
 const MAX_HEADER_BYTES: usize = 1024 * 1024;
 /// The most refs one bundle may carry.
 const MAX_REFS: usize = 1000;
+/// The most prerequisites one `PUSH` may name (Main's bound too).
+pub const MAX_PREREQUISITES: usize = 8;
 
 /// What a reader or a writer may handle at most.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -84,7 +91,7 @@ impl Header {
 
 /// A ref name a bundle may carry: `refs/…`, no whitespace, no control
 /// characters, no `..`.
-fn valid_ref(name: &str) -> bool {
+pub(crate) fn valid_ref(name: &str) -> bool {
     name.starts_with("refs/")
         && name.len() <= 255
         && !name.contains("..")
@@ -317,6 +324,77 @@ pub fn write_compact_with_pack(
     })
 }
 
+/// Write a `PUSH` bundle: the objects `refs` reach that the closure of
+/// `prerequisites` does not hold. The prerequisites are the commits the
+/// store already has (the last published head, see
+/// [`crate::chain::push_prerequisites`]): a reader holds their whole closure,
+/// so the pack carries only what is new. The pack is self-contained (whole
+/// objects, no thin deltas), so a reader indexes it without a base.
+///
+/// # Errors
+///
+/// No ref, no prerequisite or more than [`MAX_PREREQUISITES`], a
+/// prerequisite that is not a commit of `db`, a ref name a bundle cannot
+/// carry, nothing new to carry (publish a `COMPACT` instead), or `limits`
+/// exceeded ([`StoreError::Invalid`] naming the limit).
+pub fn write_push(
+    db: &ObjectDb,
+    refs: &[(String, ObjectId)],
+    prerequisites: &[ObjectId],
+    limits: Limits,
+) -> Result<Written, StoreError> {
+    if refs.is_empty() {
+        return Err(StoreError::Invalid(
+            "a bundle needs at least one ref".into(),
+        ));
+    }
+    for (name, _) in refs {
+        if !valid_ref(name) {
+            return Err(StoreError::Invalid(format!(
+                "`{name}` cannot be a bundle ref"
+            )));
+        }
+    }
+    if prerequisites.is_empty() || prerequisites.len() > MAX_PREREQUISITES {
+        return Err(StoreError::Invalid(format!(
+            "a PUSH names 1 to {MAX_PREREQUISITES} prerequisites, not {}",
+            prerequisites.len()
+        )));
+    }
+    let mut unique = HashSet::new();
+    for prerequisite in prerequisites {
+        if !unique.insert(*prerequisite) {
+            return Err(StoreError::Invalid("a prerequisite is named twice".into()));
+        }
+        db.commit(prerequisite)?;
+    }
+    let held = connectivity::reachable(db, prerequisites, limits.max_objects)?;
+    let known: HashSet<ObjectId> = held.objects.iter().copied().collect();
+    let tips: Vec<ObjectId> = refs.iter().map(|(_, id)| *id).collect();
+    let walk = connectivity::reachable_excluding(db, &tips, &known, limits.max_objects)?;
+    if walk.objects.is_empty() {
+        return Err(StoreError::Invalid(
+            "the refs reach nothing the prerequisites do not: publish a COMPACT".into(),
+        ));
+    }
+    if held.blob_bytes.saturating_add(walk.blob_bytes) > limits.max_unpacked_bytes {
+        return Err(StoreError::Invalid(format!(
+            "the files hold more than {} bytes",
+            limits.max_unpacked_bytes
+        )));
+    }
+    let mut bytes = render_header(refs, prerequisites);
+    crate::pack::write(db, &walk.objects, &mut bytes)?;
+    Ok(Written {
+        sha256: sha256_hex(&bytes),
+        bytes,
+        objects: walk.objects.len(),
+        commits: walk.commits,
+        blobs: walk.blobs,
+        unpacked_bytes: walk.blob_bytes,
+    })
+}
+
 /// An empty git directory to read a bundle into, outside any folder the
 /// person or the agent works in.
 ///
@@ -346,6 +424,10 @@ pub struct VerifiedBundle {
     pub quarantine: PathBuf,
     /// Where the pack starts in the segment's bytes (for importing it).
     pub pack_offset: usize,
+    /// For a chain ([`crate::chain::verify_chain_into`]): where each
+    /// segment's pack starts in its bytes, in the chain's order. One entry
+    /// (`pack_offset`) for a single segment.
+    pub pack_offsets: Vec<usize>,
     pub objects: usize,
     pub unpacked_bytes: u64,
 }
@@ -406,7 +488,8 @@ pub fn verify_into(
     let header = parse_header(bytes)?;
     if !header.prerequisites.is_empty() {
         return Err(StoreError::Unsupported(
-            "an incremental segment (it has prerequisites)".into(),
+            "an incremental segment (it has prerequisites): read the chain with chain::verify_chain_into"
+                .into(),
         ));
     }
     if header.refs.is_empty() {
@@ -434,6 +517,7 @@ pub fn verify_into(
     }
     Ok(VerifiedBundle {
         pack_offset: header.pack_offset,
+        pack_offsets: vec![header.pack_offset],
         header,
         db,
         quarantine: quarantine.to_path_buf(),
@@ -444,7 +528,7 @@ pub fn verify_into(
 
 /// Index a pack into `pack_dir` (`.pack` + `.idx`), verifying its checksum
 /// and every object.
-fn index_pack(pack: &[u8], pack_dir: &Path) -> Result<(), StoreError> {
+pub(crate) fn index_pack(pack: &[u8], pack_dir: &Path) -> Result<(), StoreError> {
     let interrupt = AtomicBool::new(false);
     let mut reader: &[u8] = pack;
     let outcome = gix_pack::Bundle::write_to_directory(

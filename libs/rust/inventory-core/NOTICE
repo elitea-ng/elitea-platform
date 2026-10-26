@@ -1,0 +1,19 @@
+elitea-inventory-core
+Copyright (c) 2026 EPAM Systems and Contributors
+
+This crate includes software ported from Aider
+(https://github.com/Aider-AI/aider), licensed under the Apache License,
+Version 2.0 (the text is the repository's LICENSE file, and
+http://www.apache.org/licenses/LICENSE-2.0):
+
+Aider
+Copyright Paul Gauthier and Aider contributors
+
+Ported from aider/repomap.py at commit
+5dc9490bb35f9729ef2c95d00a19ccd30c26339c:
+
+  src/repo_map.rs   RepoMap.get_ranked_tags (the file graph, its weights,
+                    the personalization, the rank spread onto definitions)
+                    and the token-budget cut of get_ranked_tags_map_uncached
+
+The file starts with a notice naming its source and the changes made.

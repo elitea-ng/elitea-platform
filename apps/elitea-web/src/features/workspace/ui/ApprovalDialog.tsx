@@ -228,7 +228,9 @@ function ToolApproval({ request, queued, onRespond }: ApprovalDialogProps & { re
         </Button>
         {request.can_remember && (
           <Button variant="contained" onClick={() => respond('allow_always')}>
-            {t('workspace.approval.allowAlways', 'Always allow')}
+            {request.remember_scope === 'session'
+              ? t('workspace.approval.allowSession', 'Allow for this session')
+              : t('workspace.approval.allowAlways', 'Always allow')}
           </Button>
         )}
       </DialogActions>

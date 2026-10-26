@@ -1205,6 +1205,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			currentConfigurationsConfig.PublicProjectID,
 			currentAuth,
 			currentPermissions,
+			// Gateway catalogue prices on llm items, behind the budget routes'
+			// can_see_amounts rule (#1227).
+			configurationapi.WithModelPrices(dbrepos.NewModelPriceRepository(pool)),
 		)
 		if err != nil {
 			return fmt.Errorf("compose current Configurations model route: %w", err)
@@ -1820,6 +1823,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// guard, so an absent agent plane leaves a NIL interface and the route
 	// answers 501.
 	var remoteToolAuthorizer desktopopsapi.RemoteToolAuthorizer
+	// The cloud child turns of a local turn (issue 1239): the chat start use
+	// case and the same version service, under the same guards and for the
+	// same typed-nil reason.
+	var childAgentStart desktopopsapi.ChildAgentStarter
+	var childAgentAuthorizer desktopopsapi.ChildAgentAuthorizer
 	var mcpToolkitRun v2mcp.ToolkitRunUseCase
 	// The unattended pipeline entry points (issues 192, 193).
 	//
@@ -2023,6 +2031,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			publicRoutes.ClientApplicationVersions.WithPlatformTools(platformMCPTools)
 			clientApplicationVersions = publicRoutes.ClientApplicationVersions
 			remoteToolAuthorizer = publicRoutes.ClientApplicationVersions
+			childAgentAuthorizer = publicRoutes.ClientApplicationVersions
 		}
 		if publicRoutes.AttachmentExtraction != nil {
 			attachmentExtractionWarmer = publicRoutes.AttachmentExtraction
@@ -2055,6 +2064,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if publicRoutes.AgentStart != nil {
 			supportAssistantStart = publicRoutes.AgentStart
 			mcpAgentStart = publicRoutes.AgentStart
+			childAgentStart = publicRoutes.AgentStart
 			// The pipeline trigger and schedule handler. It runs pipelines
 			// through the SAME use case as chat, MCP and the support widget —
 			// see internal/api/v2/pipelinetriggers for why there is one
@@ -2294,6 +2304,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// the inbound execution id, so the edge keeps it only for a live
 			// execution of the caller.
 			ExecutionVerifier: dbrepos.NewExecutionAttributionVerifier(pool).WithLocalWorkPolicy(nativePolicy),
+			// One audit row per metered tool call (#1238): the worker cannot
+			// write the trail itself.
+			Audit: auditRecorder,
 		})
 		if gwErr != nil {
 			return fmt.Errorf("compose llm gateway proxy: %w", gwErr)
@@ -2550,6 +2563,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("compose remote toolkit route: %w", err)
 	}
+	currentChildTurns, err := composeChildTurns(pool, childAgentStart, childAgentAuthorizer, nativePolicy, auditRecorder, apiGroupAuth, logger)
+	if err != nil {
+		return fmt.Errorf("compose local child turn routes: %w", err)
+	}
 
 	// The project-deletion reconciler (#1211) drains the cleanup journal over
 	// the one provisioner the router builds, so it is started from the router's
@@ -2686,6 +2703,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CloudExecutorStorageEncryption: workspaceHandoff.Encryption,
 		CurrentResolvedVersion:         currentResolvedVersion,
 		CurrentRemoteToolkit:           currentRemoteToolkit,
+		CurrentChildTurns:              currentChildTurns,
 		PlatformMCPTools:               platformMCPTools,
 		CurrentNodeRecovery:            currentNodeRecovery,
 		CurrentExecutionInterrupts:     currentExecutionInterrupts,
@@ -3307,6 +3325,10 @@ func startPipelineScheduleRunner(
 		Schedule: cadence,
 		Timeout:  v2pipelinetriggers.ScheduleJobTimeout,
 		Handler:  job,
+
+		Description: "Starts the pipeline runs whose schedules are due.",
+		Cadence:     v2pipelinetriggers.ScheduleJobCadence,
+		MinInterval: time.Minute,
 	})
 	if err != nil {
 		return fmt.Errorf("register pipeline schedule job: %w", err)
@@ -3319,6 +3341,11 @@ func startPipelineScheduleRunner(
 	if err != nil {
 		return fmt.Errorf("construct pipeline schedule runner: %w", err)
 	}
+	controls, err := dbrepos.NewPlatformRoutineControls(pool)
+	if err != nil {
+		return fmt.Errorf("construct pipeline schedule routine controls: %w", err)
+	}
+	runner.WithControls(controls)
 	// Run returns only when ctx is cancelled, which is process shutdown. The
 	// error is logged rather than dropped: a runner that stopped early would
 	// otherwise take every tenant's schedules with it, silently.

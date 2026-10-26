@@ -10,8 +10,19 @@
 //! once more.
 //!
 //! The file holds named slots (`device-session`, `pending-revoke`), each the
-//! raw JSON the slot's owner wrote. It is read ONCE per launch and kept in
-//! memory; every change is written through.
+//! raw JSON the slot's owner wrote. The app serves its reads from memory
+//! after the first; every change is written through.
+//!
+//! Two processes share it: the app and the ACP agent (`elitea-desktop
+//! --acp`, src/acp), and either may rotate the refresh token. So every
+//! change is a read-modify-write of the FILE (never of a cached copy) under
+//! an exclusive advisory lock (`std::fs::File::lock`) on `.credentials.lock`
+//! beside it, and a refresh holds that lock from reading the session to
+//! storing its rotation ([`SecretStore::lock_exclusive`]): one process
+//! refreshes at a time, and the other then reads the rotated token instead
+//! of spending the used one. Taking the lock also drops the app's cached
+//! copy. The lock is held per process and counted, so a write made while
+//! the refresh holds it does not wait on itself.
 //!
 //! Protection, on Unix: the directory is `0700`; the file is created `0600`
 //! from the start (a temp file opened with that mode, never a chmod after a
@@ -34,9 +45,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::error::HostError;
-use crate::store::SecretStore;
+use crate::store::{SecretStore, StoreLock};
 
 pub const FILE_NAME: &str = "credentials.json";
+/// The advisory lock file beside [`FILE_NAME`]. Never the credentials file
+/// itself: a write replaces that by a rename, which a lock would not follow.
+pub const LOCK_FILE_NAME: &str = ".credentials.lock";
 
 type Slots = BTreeMap<String, String>;
 
@@ -44,6 +58,39 @@ pub struct CredentialsFile {
     dir: PathBuf,
     /// `None` until the first access reads the file.
     cache: Mutex<Option<Slots>>,
+    /// Read the file at every access, never from `cache`: the ACP agent
+    /// (src/acp) runs beside the app, which may rotate the refresh token
+    /// at any time.
+    reread: bool,
+    /// This process's hold on the cross-process lock.
+    lock: Mutex<ProcessLock>,
+}
+
+/// The lock file, open and locked while `holders` is above zero.
+#[derive(Default)]
+struct ProcessLock {
+    file: Option<fs::File>,
+    holders: usize,
+}
+
+/// One hold on the cross-process lock; the last one dropped unlocks it.
+pub struct FileLock {
+    file: Arc<CredentialsFile>,
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        let mut state = self
+            .file
+            .lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.holders = state.holders.saturating_sub(1);
+        if state.holders == 0 {
+            // Closing the descriptor releases the lock.
+            state.file = None;
+        }
+    }
 }
 
 fn refuse(path: &Path, why: &str) -> HostError {
@@ -64,6 +111,19 @@ impl CredentialsFile {
         Arc::new(Self {
             dir,
             cache: Mutex::new(None),
+            reread: false,
+            lock: Mutex::new(ProcessLock::default()),
+        })
+    }
+
+    /// The file read again at every access (a second process beside the app).
+    #[must_use]
+    pub fn rereading(dir: PathBuf) -> Arc<Self> {
+        Arc::new(Self {
+            dir,
+            cache: Mutex::new(None),
+            reread: true,
+            lock: Mutex::new(ProcessLock::default()),
         })
     }
 
@@ -143,18 +203,66 @@ impl CredentialsFile {
         sync_dir(&self.dir)
     }
 
-    /// Run `change` on the slots; when it reports a change, write the result
-    /// through. The cache is only updated once the write succeeded.
+    /// Take the cross-process lock (blocking while another process holds
+    /// it). Taken afresh, it drops the cached copy: the other process may
+    /// have changed the file meanwhile.
     ///
-    fn update<T>(&self, change: impl FnOnce(&mut Slots) -> (T, bool)) -> Result<T, HostError> {
+    /// # Errors
+    ///
+    /// The directory or the lock file cannot be created, opened or locked.
+    pub fn hold(self: &Arc<Self>) -> Result<FileLock, HostError> {
+        let fresh = {
+            let mut state = self
+                .lock
+                .lock()
+                .map_err(|_| HostError::Internal("credentials lock poisoned".into()))?;
+            let fresh = state.holders == 0;
+            if fresh {
+                create_private_dir(&self.dir)?;
+                let file = open_lock_file(&self.dir.join(LOCK_FILE_NAME))
+                    .map_err(|e| io_error("could not open the credentials lock", &e))?;
+                file.lock()
+                    .map_err(|e| io_error("could not lock the credentials file", &e))?;
+                state.file = Some(file);
+            }
+            state.holders += 1;
+            fresh
+        };
+        if fresh {
+            self.forget_cache();
+        }
+        Ok(FileLock { file: self.clone() })
+    }
+
+    /// One slot's value: from memory once read (unless `reread`), else read
+    /// under the lock.
+    fn load(self: &Arc<Self>, name: &str) -> Result<Option<String>, HostError> {
+        if !self.reread {
+            let cache = self
+                .cache
+                .lock()
+                .map_err(|_| HostError::Internal("credentials lock poisoned".into()))?;
+            if let Some(slots) = cache.as_ref() {
+                return Ok(slots.get(name).cloned());
+            }
+        }
+        self.update(|slots| (slots.get(name).cloned(), false))
+    }
+
+    /// Run `change` on the slots the FILE holds now, under the cross-process
+    /// lock; when it reports a change, write the result through. The cache
+    /// is only updated once the write succeeded.
+    fn update<T>(
+        self: &Arc<Self>,
+        change: impl FnOnce(&mut Slots) -> (T, bool),
+    ) -> Result<T, HostError> {
+        // Declared first so it is dropped last, after the cache guard.
+        let _held = self.hold()?;
         let mut cache = self
             .cache
             .lock()
             .map_err(|_| HostError::Internal("credentials lock poisoned".into()))?;
-        let mut slots = match cache.as_ref() {
-            Some(slots) => slots.clone(),
-            None => self.read()?,
-        };
+        let mut slots = self.read()?;
         let (value, changed) = change(&mut slots);
         if changed {
             self.write(&slots)?;
@@ -239,6 +347,20 @@ pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
     options.open(path)
 }
 
+/// The lock file: created owner-only when absent, never through a symlink.
+fn open_lock_file(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options
+            .mode(0o600)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
+    }
+    options.open(path)
+}
+
 pub(crate) fn create_private_file(path: &Path) -> std::io::Result<fs::File> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -303,8 +425,7 @@ pub struct FileSlot {
 
 impl SecretStore for FileSlot {
     fn load(&self) -> Result<Option<String>, HostError> {
-        self.file
-            .update(|slots| (slots.get(self.name).cloned(), false))
+        self.file.load(self.name)
     }
 
     fn save(&self, secret: &str) -> Result<(), HostError> {
@@ -318,6 +439,10 @@ impl SecretStore for FileSlot {
     fn clear(&self) -> Result<(), HostError> {
         self.file
             .update(|slots| ((), slots.remove(self.name).is_some()))
+    }
+
+    fn lock_exclusive(&self) -> Result<StoreLock, HostError> {
+        Ok(StoreLock::held(self.file.hold()?))
     }
 }
 
@@ -390,6 +515,7 @@ mod tests {
         let names: Vec<String> = fs::read_dir(&file.dir)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name != LOCK_FILE_NAME)
             .collect();
         assert_eq!(names, [FILE_NAME]);
         let raw = fs::read_to_string(file.path()).unwrap();
@@ -487,5 +613,103 @@ mod tests {
             fs::read_to_string(&target).unwrap(),
             r#"{"device-session":"planted"}"#
         );
+    }
+
+    #[test]
+    fn a_rereading_file_sees_another_process_rotate_the_session() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("ai.elitea.desktop");
+        let app = CredentialsFile::new(dir.clone());
+        let acp = CredentialsFile::rereading(dir.clone());
+        app.slot("device-session").save("first").unwrap();
+        assert_eq!(
+            acp.slot("device-session").load().unwrap().as_deref(),
+            Some("first")
+        );
+        // The app rotates the token; a cached copy would still say "first".
+        CredentialsFile::new(dir)
+            .slot("device-session")
+            .save("second")
+            .unwrap();
+        assert_eq!(
+            acp.slot("device-session").load().unwrap().as_deref(),
+            Some("second")
+        );
+        // A write merges into what the file holds now, not into a stale copy.
+        acp.slot("pending-revoke").save("queued").unwrap();
+        let fresh = CredentialsFile::new(root.path().join("ai.elitea.desktop"));
+        assert_eq!(
+            fresh.slot("device-session").load().unwrap().as_deref(),
+            Some("second")
+        );
+        assert_eq!(
+            fresh.slot("pending-revoke").load().unwrap().as_deref(),
+            Some("queued")
+        );
+    }
+
+    /// Two handles on one file, as the app (cached) and the ACP agent
+    /// (rereading) are: a write never puts back a stale copy, the lock makes
+    /// the app read the other's rotation, and only one holds it at a time.
+    #[test]
+    fn two_handles_share_the_file_under_one_lock() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("ai.elitea.desktop");
+        let app = CredentialsFile::new(dir.clone());
+        let acp = CredentialsFile::rereading(dir.clone());
+        app.slot("device-session").save("r1").unwrap();
+        assert_eq!(
+            app.slot("device-session").load().unwrap().as_deref(),
+            Some("r1")
+        );
+
+        // The agent rotates; the app's next WRITE merges into the file as it
+        // is now, never writing its cached "r1" back.
+        acp.slot("device-session").save("r2").unwrap();
+        app.slot("pending-revoke").save("queued").unwrap();
+        let fresh = CredentialsFile::new(dir.clone());
+        assert_eq!(
+            fresh.slot("device-session").load().unwrap().as_deref(),
+            Some("r2")
+        );
+        assert_eq!(
+            fresh.slot("pending-revoke").load().unwrap().as_deref(),
+            Some("queued")
+        );
+
+        // Taking the lock (as a refresh does) drops the app's cached copy.
+        acp.slot("device-session").save("r3").unwrap();
+        let held = app.slot("device-session").lock_exclusive().unwrap();
+        assert_eq!(
+            app.slot("device-session").load().unwrap().as_deref(),
+            Some("r3")
+        );
+        // The holder's own writes go through while it holds the lock.
+        app.slot("device-session").save("r4").unwrap();
+
+        // The other handle waits for the lock.
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let other = acp.clone();
+        let writer = std::thread::spawn(move || {
+            other.slot("device-session").save("r5").unwrap();
+            done_tx.send(()).unwrap();
+        });
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "the other handle wrote while the lock was held"
+        );
+        drop(held);
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the other handle never got the lock");
+        writer.join().unwrap();
+        let held = app.slot("device-session").lock_exclusive().unwrap();
+        assert_eq!(
+            app.slot("device-session").load().unwrap().as_deref(),
+            Some("r5")
+        );
+        drop(held);
     }
 }

@@ -89,3 +89,93 @@ fn exit_plan_mode_is_local_only() {
     assert!(TOOLS.iter().all(|spec| spec.name != name));
     assert!(WORKSPACE_TOOLS.iter().all(|spec| spec.name != name));
 }
+
+/// #1236: `diagnostics` is local-only (the cloud executor runs no language
+/// server): in neither table, and its name is no other tool's.
+#[test]
+fn diagnostics_is_local_only() {
+    let name = elitea_local_tools::session::DIAGNOSTICS.name;
+    assert!(TOOLS.iter().all(|spec| spec.name != name));
+    assert!(WORKSPACE_TOOLS.iter().all(|spec| spec.name != name));
+}
+
+/// #1223: background processes are local-only. The shared `TOOLS` table
+/// keeps the foreground `run_command` (the cloud executor offers the same
+/// schema); the desktop swaps in `RUN_COMMAND_PROCESSES` and appends
+/// `PROCESS_TOOLS`, none of which the cloud table names.
+#[test]
+fn background_processes_are_local_only() {
+    use elitea_local_tools::session::{PROCESS_TOOLS, RUN_COMMAND_PROCESSES};
+    for spec in PROCESS_TOOLS {
+        assert!(
+            TOOLS.iter().all(|tool| tool.name != spec.name),
+            "{}",
+            spec.name
+        );
+        assert!(
+            WORKSPACE_TOOLS.iter().all(|tool| tool.name != spec.name),
+            "{}",
+            spec.name
+        );
+    }
+    let foreground = TOOLS
+        .iter()
+        .find(|spec| spec.name == RUN_COMMAND_PROCESSES.name)
+        .expect("run_command");
+    let cloud = WORKSPACE_TOOLS
+        .iter()
+        .find(|spec| spec.name == RUN_COMMAND_PROCESSES.name)
+        .expect("run_command");
+    assert_eq!((foreground.parameters)(), (cloud.parameters)());
+    let local = (RUN_COMMAND_PROCESSES.parameters)();
+    for switch in ["background", "tty", "loopback", "keep_alive"] {
+        assert!(local["properties"].get(switch).is_some(), "{switch}");
+        assert!(
+            (cloud.parameters)()["properties"].get(switch).is_none(),
+            "{switch}"
+        );
+    }
+}
+
+/// The person's stdio MCP servers (#1230) are local-only: they run on the
+/// device with the person's own credentials, never in the cloud executor
+/// (the #1187 handoff note lists them as unavailable there). No shared or
+/// cloud tool carries the `mcp__` prefix, and the runner's session has
+/// `local_mcp` off, so no server could start in it.
+#[tokio::test]
+async fn local_mcp_tools_are_local_only() {
+    use elitea_local_tools::mcp::naming::PREFIX;
+    assert!(TOOLS.iter().all(|tool| !tool.name.starts_with(PREFIX)));
+    assert!(
+        WORKSPACE_TOOLS
+            .iter()
+            .all(|tool| !tool.name.starts_with(PREFIX))
+    );
+    let workspace = tempfile::tempdir().expect("workspace");
+    let data = tempfile::tempdir().expect("data");
+    let session = elitea_workspace_runner::open_session(&elitea_workspace_runner::RunnerConfig {
+        root: workspace.path().to_path_buf(),
+        data_dir: data.path().to_path_buf(),
+        policy: elitea_workspace_runner::RunnerPolicy::default(),
+        env: Vec::new(),
+    })
+    .expect("session");
+    assert!(!session.rules().policy().local_mcp);
+    assert_eq!(session.start_mcp_servers("cloud").await.len(), 0);
+}
+
+/// #1233: the memory tools are not workspace tools. Both hosts get the same
+/// three from the runtime's own `memory` toolset over their `MemoryStore`
+/// (`elitea_agent_runtime::memory_tools`), so neither table names them and
+/// no workspace tool takes their names.
+#[test]
+fn memory_tools_are_the_runtimes_not_the_workspaces() {
+    use elitea_agent_runtime::memory_tools::TOOL_NAMES;
+    for name in TOOL_NAMES {
+        assert!(TOOLS.iter().all(|tool| tool.name != name), "{name}");
+        assert!(
+            WORKSPACE_TOOLS.iter().all(|tool| tool.name != name),
+            "{name}"
+        );
+    }
+}

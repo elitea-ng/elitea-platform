@@ -96,6 +96,20 @@ type Record struct {
 	// SUBSETS of PromptToks, not additions to it.
 	CacheReadToks  int64
 	CacheWriteToks int64
+	// Metered is set for a metered tool settlement (#1238): the operation's
+	// units, their unit and the billed cost. Nil for every other request, whose
+	// row the table records as operation "llm". Shared migration 0174.
+	Metered *MeteredFields
+}
+
+// MeteredFields are the request-log columns of a metered tool settlement.
+// CostNanoUSD is the billed amount: the analytics read a tool row's cost from
+// the row, because a row with no tokens prices to zero under the token
+// re-pricing join.
+type MeteredFields struct {
+	Units       int64
+	Unit        string
+	CostNanoUSD int64
 }
 
 // The values CredentialOwner can carry. Shared migration 0139 documents them on

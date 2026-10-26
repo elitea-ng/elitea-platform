@@ -514,9 +514,17 @@ func validatePlan(plan workspaceruntime.FetchPlan) error {
 			return workspaceruntime.ErrInvalidRequest
 		}
 	}
-	for _, segment := range plan.Segments {
-		if segment.Kind != workspaceruntime.KindCompact || !workspaceruntime.ValidSHA256(segment.SHA256) ||
-			segment.Bytes == 0 || segment.Bytes > workspaceruntime.MaxSegmentBytes || len(segment.Prerequisites) != 0 {
+	// A chain: one COMPACT then PUSH segments, or PUSH segments only (a
+	// reader past the COMPACT), ascending, bounded so the plan frame fits.
+	if len(plan.Segments) > workspaceruntime.MaxPlanSegments {
+		return workspaceruntime.ErrInvalidRequest
+	}
+	for index, segment := range plan.Segments {
+		if (segment.Kind == workspaceruntime.KindCompact && index != 0) ||
+			!workspaceruntime.ValidPrerequisites(segment.Kind, segment.Prerequisites) ||
+			!workspaceruntime.ValidSHA256(segment.SHA256) ||
+			segment.Bytes == 0 || segment.Bytes > workspaceruntime.MaxSegmentBytes ||
+			(index > 0 && segment.Seq <= plan.Segments[index-1].Seq) {
 			return workspaceruntime.ErrInvalidRequest
 		}
 		for _, ref := range segment.Refs {

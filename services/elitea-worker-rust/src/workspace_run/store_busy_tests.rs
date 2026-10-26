@@ -85,6 +85,17 @@ async fn the_grpc_store_resends_a_busy_publish_and_it_applies_once() {
         > {
             Err(tonic::Status::unimplemented("record event"))
         }
+        async fn workspace_record_changes(
+            &self,
+            _: tonic::Request<
+                tonic::Streaming<crate::protocol::elitea::runtime::v1::WorkspaceChangesFrameV1>,
+            >,
+        ) -> Result<
+            tonic::Response<crate::protocol::elitea::runtime::v1::WorkspaceRecordChangesResponseV1>,
+            tonic::Status,
+        > {
+            Err(tonic::Status::unimplemented("record changes"))
+        }
         async fn workspace_env_secret(
             &self,
             _: tonic::Request<WorkspaceEnvSecretRequestV1>,
@@ -118,8 +129,10 @@ async fn the_grpc_store_resends_a_busy_publish_and_it_applies_once() {
         .publish(
             &WorkspaceClaimV1::default(),
             &PublishSegment {
+                kind: super::KIND_COMPACT,
                 segment_sha256: "a".repeat(64),
                 bytes: 3,
+                prerequisites: Vec::new(),
                 old_cloud: Some(CLOUD.to_owned()),
                 new_cloud: next.clone(),
             },

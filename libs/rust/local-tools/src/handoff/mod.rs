@@ -9,8 +9,10 @@
 //!   directory ([`shadow`]) for a folder that is not a repository.
 //! * [`exclude`]: what never leaves the laptop; [`scan`]: the secret scan;
 //!   [`caps`]: the size caps.
-//! * [`apply`]: take-back (Phase 1): preflight with no side effects, then
-//!   the fast path, a worktree, or discard.
+//! * [`apply`]: take-back: preflight with no side effects (optionally up
+//!   to turn `k`), then the fast path or a clean merge, conflict markers, a
+//!   worktree, or discard, through the shared apply engine
+//!   ([`crate::apply`]).
 //!
 //! Every git process goes through [`crate::git`]'s hardening (unsafe
 //! repositories refused, overrides, sandboxed, timeouts). Objects are read
@@ -129,7 +131,8 @@ pub fn short_thread(uuid: &str) -> &str {
     &uuid[..uuid.len().min(8)]
 }
 
-pub(crate) fn store_error(error: &elitea_workspace_store::StoreError) -> ToolError {
+#[must_use]
+pub fn store_error(error: &elitea_workspace_store::StoreError) -> ToolError {
     let code = match error {
         elitea_workspace_store::StoreError::Integrity(_) => ErrorCode::Conflict,
         elitea_workspace_store::StoreError::UnsupportedObjectFormat(_)

@@ -151,6 +151,10 @@ type currentApplicationStartBody struct {
 		// row was ever written. Distinct from AttachmentsInfo below, which is
 		// a different, still-unported field kept only as a rejection gate.
 		Attachments []currentStartAttachment `json:"attachments"`
+		// Skills are the project skills the `~` menu picked (client contract
+		// 1.19): `{source: "project", id}` and nothing else. The skill's text
+		// is never accepted from the client; the server reads it by id.
+		Skills json.RawMessage `json:"skills"`
 	} `json:"payload"`
 	ProjectID        int64           `json:"project_id"`
 	ParticipantID    int64           `json:"participant_id"`
@@ -289,6 +293,27 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 		return
 	}
 
+	// Project skills: an application turn only (a model chat has no skills),
+	// and only for a caller who may read the project's skills.
+	projectSkillIDs, ok := parseProjectSkillPicks(body.Payload.Skills)
+	if !ok {
+		writeError(writer, http.StatusBadRequest, "Invalid agent execution request")
+		return
+	}
+	if len(projectSkillIDs) > 0 {
+		if contract != CurrentApplicationStartContract {
+			writeError(writer, http.StatusBadRequest, "Invalid agent execution request")
+			return
+		}
+		if !callerMayReadProjectSkills(request, chi.URLParam(request, "projectID")) {
+			writeJSON(writer, http.StatusForbidden, map[string]string{
+				"error":   "project_skills_forbidden",
+				"message": "You do not have permission to use this project's skills.",
+			})
+			return
+		}
+	}
+
 	origin := startTriggerOrigin(user)
 	var outcome agentexecutionapp.CurrentApplicationStartOutcome
 	switch contract {
@@ -309,6 +334,7 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 				MentionedUserIDs: mentioned,
 				MentionsEveryone: body.SendingToEveryone,
 				TriggerOrigin:    origin,
+				ProjectSkillIDs:  projectSkillIDs,
 			},
 		)
 	case CurrentAdhocStartContract:
@@ -597,6 +623,26 @@ func writeStartError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusBadRequest, "Invalid agent execution request")
 	case pipelinelimits.Refusal(err) != nil:
 		writePipelineLimit(writer, pipelinelimits.Refusal(err))
+	case errors.Is(err, agentexecutionapp.ErrProjectSkillUnknown):
+		writeJSON(writer, http.StatusNotFound, map[string]string{
+			"error":   "project_skill_unknown",
+			"message": "A project skill you picked is not available. Pick it again from the menu.",
+		})
+	case errors.Is(err, agentexecutionapp.ErrProjectSkillsTooMany):
+		writeJSON(writer, http.StatusUnprocessableEntity, map[string]string{
+			"error":   "project_skills_limit",
+			"message": "A message can use at most five skills.",
+		})
+	case errors.Is(err, agentexecutionapp.ErrProjectSkillsTooLarge):
+		writeJSON(writer, http.StatusUnprocessableEntity, map[string]string{
+			"error":   "project_skills_too_large",
+			"message": "The skills picked for this message hold more than 64 KiB of instructions together.",
+		})
+	case errors.Is(err, agentexecutionapp.ErrProjectSkillNameConflict):
+		writeJSON(writer, http.StatusUnprocessableEntity, map[string]string{
+			"error":   "project_skill_name_conflict",
+			"message": "A project skill you picked has the same name as another skill of this agent.",
+		})
 	case errors.Is(err, agentexecutionapp.ErrUnsupportedCurrentAgentStart):
 		writeUnsupported(writer)
 	case errors.Is(err, agentexecutionapp.ErrCurrentAgentRegenerationStillFinalizing):
@@ -974,4 +1020,67 @@ func startTriggerOrigin(user auth.User) executiondomain.TriggerOrigin {
 		return executiondomain.TriggerOriginAPI
 	}
 	return executiondomain.TriggerOriginManual
+}
+
+// CurrentProjectSkillsPermission is what a caller needs, besides sending a
+// message, to put a project skill into a turn: the permission the skills
+// screen's "get one skill" route requires.
+const CurrentProjectSkillsPermission = "models.applications.skills.details"
+
+// maxProjectSkillPicks mirrors the application service's bound (five); a body
+// over it is malformed, not unsupported.
+const maxProjectSkillPicks = 5
+
+// projectSkillPick is one `payload.skills` entry. Unknown keys are refused
+// (DisallowUnknownFields below): in particular a skill's own text can never
+// ride this field.
+type projectSkillPick struct {
+	Source string `json:"source"`
+	ID     int64  `json:"id"`
+}
+
+// parseProjectSkillPicks reads `payload.skills`. Absent or null is no picks.
+// A present value must be an array of at most five `{source: "project", id}`
+// with positive ids and none repeated; anything else is a client that thinks it
+// picked a skill and did not, so the route answers 400 rather than send the
+// turn without it.
+func parseProjectSkillPicks(raw json.RawMessage) ([]int64, bool) {
+	if absentJSON(raw) {
+		return nil, true
+	}
+	var picks []projectSkillPick
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&picks); err != nil || len(picks) > maxProjectSkillPicks {
+		return nil, false
+	}
+	ids := make([]int64, 0, len(picks))
+	seen := make(map[int64]struct{}, len(picks))
+	for _, pick := range picks {
+		if pick.Source != "project" || pick.ID <= 0 || pick.ID > math.MaxInt32 {
+			return nil, false
+		}
+		if _, duplicate := seen[pick.ID]; duplicate {
+			return nil, false
+		}
+		seen[pick.ID] = struct{}{}
+		ids = append(ids, pick.ID)
+	}
+	return ids, true
+}
+
+// callerMayReadProjectSkills answers from the permission set the route's gate
+// already resolved for this project and mode, so it asks the resolver nothing
+// new and cannot disagree with the gate about who the caller is.
+func callerMayReadProjectSkills(request *http.Request, projectID string) bool {
+	permissions, ok := apimw.ResolvedProjectPermissions(request.Context(), CurrentApplicationStartMode, projectID)
+	if !ok {
+		return false
+	}
+	for _, permission := range permissions {
+		if permission == CurrentProjectSkillsPermission {
+			return true
+		}
+	}
+	return false
 }

@@ -75,6 +75,14 @@ service GatewayService {
   rpc ListProviderModels(ListProviderModelsRequest) returns (ListProviderModelsResponse);
   // ListProviderVoices serves POST /llm/v1/list_provider_voices.
   rpc ListProviderVoices(ListProviderVoicesRequest) returns (ListProviderVoicesResponse);
+  // MeteredAdmit serves POST /llm/v1/metered/admit (#1238): one metered tool
+  // operation (a web search, a page fetch, a host query) asks the budget gate
+  // before the worker calls the provider. The answer is a signed admission.
+  rpc MeteredAdmit(MeteredAdmitRequest) returns (MeteredAdmitResponse);
+  // MeteredSettle serves POST /llm/v1/metered/settle: the units the provider
+  // reported for an admitted operation are priced and billed, idempotently by
+  // the caller's event id.
+  rpc MeteredSettle(MeteredSettleRequest) returns (MeteredSettleResponse);
   // GovernanceStatus reports the gateway's enforcement state (the admin LLM
   // Proxy section). It carries no identity.
   rpc GovernanceStatus(GovernanceStatusRequest) returns (GovernanceStatusResponse);
@@ -307,6 +315,22 @@ message ListProviderVoicesRequest {
 }
 
 message ListProviderVoicesResponse {
+  HttpResponse response = 1;
+}
+
+message MeteredAdmitRequest {
+  HttpRequest request = 1;
+}
+
+message MeteredAdmitResponse {
+  HttpResponse response = 1;
+}
+
+message MeteredSettleRequest {
+  HttpRequest request = 1;
+}
+
+message MeteredSettleResponse {
   HttpResponse response = 1;
 }
 

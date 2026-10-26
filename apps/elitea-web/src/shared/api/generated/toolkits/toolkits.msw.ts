@@ -391,7 +391,12 @@ export const getGetRuntimeCapabilitiesResponseMock = (
 ): RuntimeCapabilities => ({
   worker: faker.helpers.arrayElement(["rust", ""] as const),
   internal_tools: {
-    [faker.string.alphanumeric(5)]: faker.datatype.boolean(),
+    image_generation: true,
+    data_analysis: true,
+    internal_mcp: true,
+    planner: true,
+    swarm: true,
+    lazy_tools_mode: true,
   },
   hidden_toolkit_types: Array.from(
     { length: faker.number.int({ min: 1, max: 10 }) },

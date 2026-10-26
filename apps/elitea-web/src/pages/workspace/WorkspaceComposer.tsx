@@ -15,9 +15,18 @@
  *   expands itself) or with that skill (`skills`, applied to the turn).
  *   `/model <name>` sent as the whole message sets the turn model instead
  *   (`onModelCommand`); `/model` alone opens the model chip's menu.
+ *   `/steps <number|unlimited|default>` sets the folder's step limit
+ *   (`onStepsCommand`); `/steps` alone shows it.
  *
  * Both menus are driven from the keyboard without leaving the textarea:
  * ↑/↓ move, Enter or Tab pick, Esc closes until the token changes.
+ *
+ * Images (#1229): a pasted image, or an image file dropped on the window
+ * (the host reports its path; the shell hands it to `attachFiles`), is
+ * registered with the host (`attachBytes` / `attachFile`), which checks and
+ * shrinks it and answers a token and a thumbnail. The thumbnails sit above
+ * the input with a remove button each; Send carries the tokens. The host
+ * enforces the limits (five images, 10 MiB each); this only stops offering.
  */
 import { useMemo, useRef, useState, type ComponentRef, type KeyboardEvent, type ReactNode } from 'react';
 
@@ -29,14 +38,17 @@ import SendIcon from '@mui/icons-material/Send';
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import type { Theme } from '@mui/material/styles';
+import Typography from '@mui/material/Typography';
 
 import { NewChatInput } from '@/features/chat-input';
 import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
 
+import { FooterControls } from './FooterControls';
 import type { ComposerSkill } from './useAgentSkills';
+import { useImageAttachments } from './useImageAttachments';
+import type { SentImages } from './useSendPrompt';
 import type { CustomCommand, TurnCommand, TurnStartRequest, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
-import { Segmented } from '@/widgets/desktop-shell';
 
 type ComposerHandle = ComponentRef<typeof NewChatInput>;
 type Token = ReturnType<typeof composer.activeToken>;
@@ -62,14 +74,18 @@ export interface WorkspaceComposerProps {
   readOnly?: boolean;
   busy: boolean;
   planMode: boolean;
+  /** Bypass mode is on (`useBypassMode`): the mode switch shows Bypass. */
+  bypass?: boolean;
+  /** Offers Bypass in the mode switch (a local thread only): `true` when it is picked, `false` when Act or Plan is. */
+  onBypassChange?: ((on: boolean) => void) | undefined;
   /** The footer's agent·version picker and run-location chip (`ComposerControls`). */
   agentPicker?: ReactNode;
   /** A thread in the cloud: the placeholder says who the message goes to. */
   placeholder?: string | undefined;
-  /** Act | Plan: off for a cloud thread, whose turns have no plan mode. */
+  /** Act | Plan | Bypass: off for a cloud thread, whose turns have no plan mode. */
   showMode?: boolean;
   runLocation?: ReactNode;
-  /** The context meter (`ContextMeter`), after the run location. */
+  /** The meters (the language-server and usage chips), after the run location. */
   contextMeter?: ReactNode;
   /** The model chip (`ModelChip`), after the agent picker. */
   modelPicker?: ReactNode;
@@ -82,14 +98,21 @@ export interface WorkspaceComposerProps {
    * Resolves `true` once the turn started (the input is then cleared). `skills`: the skill names the message invokes;
    * `command`: the custom command it runs, if any (then no skill).
    */
-  onSend: (prompt: string, mentions: string[], skills: TurnStartRequest['skills'], command?: TurnCommand) => Promise<boolean>;
+  onSend: (prompt: string, mentions: string[], skills: TurnStartRequest['skills'], command?: TurnCommand, images?: SentImages) => Promise<boolean>;
+  /** Images can be attached (a local thread; not the cloud copy). Default true. */
+  acceptImages?: boolean;
   onStop: () => void;
   onCommand: (command: WorkspaceCommandId) => void;
   /** `/model <name>` was sent as the whole message: the page sets the model (nothing goes to the agent). */
   onModelCommand?: ((name: string) => void) | undefined;
+  /** `/steps <value>` was sent as the whole message: the page sets the folder's step limit (nothing goes to the agent). */
+  onStepsCommand?: ((command: StepsCommand) => void) | undefined;
   /** The composer got focus: the page lets the host read ahead for the send (#1213). */
   onFocus?: () => void;
 }
+
+/** What `/steps <value>` asks for (`composer.stepsCommand`). */
+export type StepsCommand = NonNullable<ReturnType<typeof composer.stepsCommand>>;
 
 function sendButtonSx(theme: Theme) {
   return {
@@ -141,7 +164,8 @@ function slashItem(entry: SlashEntry): SuggestionItem {
 }
 
 /** What the start request names for the skill a message invokes: a version skill by name, a project skill by id. */
-function skillPicks(skill: ComposerSkill | null): TurnStartRequest['skills'] {
+/** The start request's `skills` for the skill a message invokes. */
+export function skillPicks(skill: ComposerSkill | null): TurnStartRequest['skills'] {
   if (skill === null) return [];
   return [skill.project === true ? { source: 'project', id: skill.id } : skill.name];
 }
@@ -151,41 +175,10 @@ function insertedToken(entry: Exclude<SlashEntry, { kind: 'host' }>): string {
   return entry.kind === 'custom' ? composer.customCommandToken(entry.command) : composer.skillToken(entry.skill);
 }
 
+/** Images can be attached to a local thread that is not read only. */
+const takesImages = (accept: boolean | undefined, locked: boolean): boolean => accept !== false && !locked;
+
 const sameToken = (a: Token, b: Token): boolean => a?.kind === b?.kind && a?.start === b?.start && a?.query === b?.query;
-
-interface FooterControlsProps {
-  planMode: boolean;
-  onPlanModeChange: (planMode: boolean) => void;
-  showMode: boolean;
-  agentPicker: ReactNode;
-  modelPicker: ReactNode;
-  runLocation: ReactNode;
-  contextMeter: ReactNode;
-}
-
-/** The footer's left side: Act | Plan, the agent·version picker, the model, where the thread runs, the context meter. */
-function FooterControls({ planMode, onPlanModeChange, showMode, agentPicker, modelPicker, runLocation, contextMeter }: FooterControlsProps): React.JSX.Element {
-  return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
-      {showMode && (
-        <Segmented
-          ariaLabel={t('workspace.mode', 'Mode')}
-          value={planMode ? 'plan' : 'act'}
-          onChange={(next) => onPlanModeChange(next === 'plan')}
-          testId="mode-segmented"
-          options={[
-            { value: 'act', label: t('workspace.mode.act', 'Act') },
-            { value: 'plan', label: t('workspace.mode.plan', 'Plan'), ariaLabel: t('workspace.planMode', 'Plan mode (no changes)') },
-          ]}
-        />
-      )}
-      {agentPicker}
-      {modelPicker}
-      {runLocation}
-      {contextMeter}
-    </Box>
-  );
-}
 
 export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Element {
   const { ipc, workspaceId, canSend, busy, planMode, onPlanModeChange, skills, customCommands, onSend, onStop, onCommand } = props;
@@ -197,6 +190,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   const [activeIndex, setActiveIndex] = useState(0);
   // What was picked with "@", in pick order (a folder keeps its trailing "/").
   const [picked, setPicked] = useState<string[]>([]);
+  const attachments = useImageAttachments(ipc, workspaceId, takesImages(props.acceptImages, locked));
 
   const open = token !== null && !sameToken(token, dismissed) ? token : null;
   const files = useQuery({
@@ -289,6 +283,12 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   };
 
   const send = (question: string): void => {
+    const steps = props.onStepsCommand === undefined ? null : composer.stepsCommand(question);
+    if (steps !== null) {
+      props.onStepsCommand?.(steps);
+      clearInput();
+      return;
+    }
     const named = props.onModelCommand === undefined ? null : composer.modelCommandName(question);
     if (named !== null) {
       props.onModelCommand?.(named);
@@ -298,14 +298,23 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     const mentions = composer.referencedPaths(question, picked);
     // The longest name the message starts with; a custom command over a skill of its name.
     const { command, skill } = composer.invokedPick(question, customCommands, skills);
-    const sending = command === null ? onSend(question, mentions, skillPicks(skill)) : onSend(question, mentions, [], command);
+    const images = attachments.sent();
+    const sending = command === null ? onSend(question, mentions, skillPicks(skill), undefined, images) : onSend(question, mentions, [], command, images);
     void sending.then((sent) => {
-      if (sent) clearInput();
+      if (!sent) return;
+      clearInput();
+      attachments.clear();
     });
   };
 
   return (
-    <Box data-testid="workspace-composer" onFocus={props.onFocus} sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+    <Box data-testid="workspace-composer" onFocus={props.onFocus} onPasteCapture={attachments.onPaste} sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <composer.ImageStrip images={attachments.images} onRemove={attachments.remove} />
+      {attachments.error !== null && (
+        <Typography variant="bodySmall" role="alert" data-testid="attachment-error" sx={(theme: Theme) => ({ color: theme.vars.palette.error.main })}>
+          {attachments.error}
+        </Typography>
+      )}
       {menuOpen && (
         <SuggestionMenu
           data-testid={open.kind === 'file' ? 'workspace-file-menu' : 'workspace-command-menu'}
@@ -328,7 +337,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
         agentEditor={NO_AGENT_EDITOR}
         slots={{
           modelSelector: null,
-          attachmentButton: <FooterControls planMode={planMode} onPlanModeChange={onPlanModeChange} showMode={props.showMode !== false} agentPicker={props.agentPicker} modelPicker={props.modelPicker} runLocation={props.runLocation} contextMeter={props.contextMeter} />,
+          attachmentButton: <FooterControls planMode={planMode} onPlanModeChange={onPlanModeChange} bypass={props.bypass === true} onBypassChange={props.onBypassChange} showMode={props.showMode !== false} agentPicker={props.agentPicker} modelPicker={props.modelPicker} runLocation={props.runLocation} contextMeter={props.contextMeter} />,
           sendControl: ({ disabledSend, question, onSend: submit }) => (
             <IconButton
               data-testid="workspace-send-button"

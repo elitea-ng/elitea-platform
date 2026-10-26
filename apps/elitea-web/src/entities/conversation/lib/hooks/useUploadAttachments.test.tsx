@@ -4,8 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { server } from '@/test/setup';
 import { HttpResponse, http } from 'msw';
 
-import { smallFileOk, uploadServerError } from '@/test/msw/handlers/upload';
-import smallFile201 from '@/test/msw/fixtures/upload/small-file.201.json';
+import { SMALL_FILE_UPLOADED, smallFileOk, uploadServerError } from '@/test/msw/handlers/upload';
 
 import { useUploadAttachments } from './useUploadAttachments';
 
@@ -46,7 +45,7 @@ describe('useUploadAttachments', () => {
       // this test used to do, and it passed only because the fixture carried
       // no `filepath` at all and every run took the fallback branch.
       expect(outcome.uploaded[0]?.sanitizedName).toBe('small.txt');
-      expect(outcome.uploaded[0]?.filepath).toBe(smallFile201.body[0]?.filepath);
+      expect(outcome.uploaded[0]?.filepath).toBe(SMALL_FILE_UPLOADED[0]?.filepath);
     }
   });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { artifactPreviewKind, isArtifactPreviewableSize, parseDataFile } from './artifactParsers';
+import { artifactImageBlob, artifactPreviewKind, isArtifactPreviewableSize, parseDataFile } from './artifactParsers';
 
 describe('artifact parsers', () => {
   it('parses quoted CSV values, escaped quotes, and line endings', () => {
@@ -29,6 +29,9 @@ describe('artifact parsers', () => {
     ['photo.PNG', 'image'],
     ['data.json', 'text'],
     ['report.docx', 'docx'],
+    ['report.pdf', 'pdf'],
+    ['scans/REPORT.PDF', 'pdf'],
+    ['diagram.SVG', 'image'],
     ['archive.zip', 'unsupported'],
     ['LICENSE', 'text'],
     ['Dockerfile', 'text'],
@@ -43,6 +46,17 @@ describe('artifact parsers', () => {
     ['setup.ps1', 'text'],
   ] as const)('classifies %s as %s', (filename, expected) => {
     expect(artifactPreviewKind(filename)).toBe(expected);
+  });
+
+  describe('artifactImageBlob', () => {
+    it('types an untyped SVG so an <img> shows it, and keeps a typed image as it is', () => {
+      const untyped = new Blob(['<svg/>'], { type: 'application/octet-stream' });
+      expect(artifactImageBlob(untyped, 'icons/Logo.SVG').type).toBe('image/svg+xml');
+      expect(artifactImageBlob(new Blob(['x']), 'photo.jpg').type).toBe('image/jpeg');
+      const typed = new Blob(['x'], { type: 'image/png' });
+      expect(artifactImageBlob(typed, 'photo.svg')).toBe(typed);
+      expect(artifactImageBlob(untyped, 'notes.txt')).toBe(untyped);
+    });
   });
 
   describe('isArtifactPreviewableSize', () => {

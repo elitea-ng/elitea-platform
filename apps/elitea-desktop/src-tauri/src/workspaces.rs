@@ -13,6 +13,8 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
+use elitea_local_tools::lsp::Language;
+
 use crate::error::HostError;
 
 const FILE: &str = "workspaces.json";
@@ -28,10 +30,71 @@ pub struct Workspace {
     /// folder is inside a git work tree. `get` leaves it `false`.
     #[serde(default)]
     pub is_git: bool,
+    /// A task worktree's workspace (#1235, src/worktrees.rs): the workspace
+    /// whose repository it is a linked worktree of. Its folder is in that
+    /// workspace's host data; it is listed with it, never on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// The thread the task worktree was made for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_uuid: Option<String>,
 }
 
-/// The step limits a workspace may set for its turns (inclusive).
-pub const STEP_LIMIT_RANGE: std::ops::RangeInclusive<u32> = 10..=200;
+/// The step limits a workspace may set for its turns (inclusive), beside
+/// [`StepLimit::Unlimited`].
+pub const STEP_LIMIT_RANGE: std::ops::RangeInclusive<u32> = 1..=1_000_000;
+
+/// A workspace's step limit: so many model steps per run, or none
+/// (`"unlimited"` in JSON; a number otherwise).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepLimit {
+    Steps(u32),
+    Unlimited,
+}
+
+impl StepLimit {
+    /// The JSON spelling of [`StepLimit::Unlimited`].
+    pub const UNLIMITED: &'static str = "unlimited";
+
+    /// Whether a workspace may set it: a number in [`STEP_LIMIT_RANGE`],
+    /// or unlimited.
+    #[must_use]
+    pub fn valid(self) -> bool {
+        match self {
+            Self::Steps(steps) => STEP_LIMIT_RANGE.contains(&steps),
+            Self::Unlimited => true,
+        }
+    }
+}
+
+impl Serialize for StepLimit {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Steps(steps) => serializer.serialize_u32(*steps),
+            Self::Unlimited => serializer.serialize_str(Self::UNLIMITED),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for StepLimit {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match serde_json::Value::deserialize(deserializer)? {
+            serde_json::Value::String(text) if text == Self::UNLIMITED => Ok(Self::Unlimited),
+            serde_json::Value::Number(number) => number
+                .as_u64()
+                .and_then(|steps| u32::try_from(steps).ok())
+                .map(Self::Steps)
+                .ok_or_else(|| serde::de::Error::custom("a step limit is a whole number")),
+            _ => Err(serde::de::Error::custom(
+                "a step limit is a number or \"unlimited\"",
+            )),
+        }
+    }
+}
+
+/// The diagnostics waits a person may set per language, in milliseconds
+/// (#1236).
+pub const DIAGNOSTICS_WAIT_RANGE: std::ops::RangeInclusive<u32> = 100..=30_000;
 
 /// The file in a workspace's host data that holds its [`AgentSettings`].
 const AGENT_SETTINGS_FILE: &str = "agent_settings.json";
@@ -41,18 +104,76 @@ const AGENT_SETTINGS_FILE: &str = "agent_settings.json";
 /// remembered choices, never in the folder.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSettings {
-    /// Model steps per run of this workspace's turns, within
-    /// [`STEP_LIMIT_RANGE`]; it wins over the agent's `meta.step_limit`.
-    /// `None`: the agent's value, else the default (100).
+    /// Model steps per run of this workspace's turns: a number within
+    /// [`STEP_LIMIT_RANGE`], or unlimited. `None`: the default (1024).
     #[serde(default)]
-    pub step_limit: Option<u32>,
+    pub step_limit: Option<StepLimit>,
     /// Whether the person may choose another model than the agent's for a
     /// turn of this workspace (#1228). `None`: allowed (the default).
     #[serde(default)]
     pub allow_model_override: Option<bool>,
+    /// Whether edits report the language servers' diagnostics (#1236).
+    /// `None`: on (servers start only when found on `PATH`).
+    #[serde(default)]
+    pub diagnostics: Option<bool>,
+    /// How long an edit waits for each language's diagnostics, within
+    /// [`DIAGNOSTICS_WAIT_RANGE`]; `None`: the language's default.
+    #[serde(default)]
+    pub diagnostics_wait_ms: DiagnosticsWaits,
+}
+
+/// Per-language diagnostics waits in milliseconds (`None`: the default,
+/// 1.5 s, longer on a server's first answer).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiagnosticsWaits {
+    #[serde(default)]
+    pub rust: Option<u32>,
+    #[serde(default)]
+    pub typescript: Option<u32>,
+    #[serde(default)]
+    pub python: Option<u32>,
+    #[serde(default)]
+    pub go: Option<u32>,
+}
+
+impl DiagnosticsWaits {
+    /// Each set wait with its language.
+    #[must_use]
+    pub fn entries(&self) -> [(Language, Option<u32>); 4] {
+        [
+            (Language::Rust, self.rust),
+            (Language::Typescript, self.typescript),
+            (Language::Python, self.python),
+            (Language::Go, self.go),
+        ]
+    }
+
+    /// Whether every set wait is within [`DIAGNOSTICS_WAIT_RANGE`].
+    #[must_use]
+    pub fn valid(&self) -> bool {
+        self.entries()
+            .iter()
+            .all(|(_, wait)| wait.is_none_or(|ms| DIAGNOSTICS_WAIT_RANGE.contains(&ms)))
+    }
+
+    fn within_range(self) -> Self {
+        let keep = |wait: Option<u32>| wait.filter(|ms| DIAGNOSTICS_WAIT_RANGE.contains(ms));
+        Self {
+            rust: keep(self.rust),
+            typescript: keep(self.typescript),
+            python: keep(self.python),
+            go: keep(self.go),
+        }
+    }
 }
 
 impl AgentSettings {
+    /// Edits report diagnostics (the default).
+    #[must_use]
+    pub fn diagnostics_enabled(&self) -> bool {
+        self.diagnostics != Some(false)
+    }
+
     /// A model other than the agent's may be chosen for a turn.
     #[must_use]
     pub fn model_override_allowed(&self) -> bool {
@@ -197,6 +318,8 @@ impl WorkspaceStore {
                 path: path.clone(),
                 project_id: None,
                 is_git: false,
+                parent_id: None,
+                thread_uuid: None,
             };
             all.push(workspace.clone());
             self.write(&all)?;
@@ -206,6 +329,59 @@ impl WorkspaceStore {
             is_git: in_git_tree(&canonical),
             ..workspace
         })
+    }
+
+    /// Add a task worktree's workspace (#1235): `folder` (canonical, in
+    /// `parent`'s host data), bound to `parent`'s project, named after
+    /// `branch`.
+    ///
+    /// # Errors
+    ///
+    /// No such parent, or the file cannot be written.
+    pub fn add_worktree(
+        &self,
+        parent_id: &str,
+        folder: &Path,
+        thread_uuid: &str,
+        branch: &str,
+    ) -> Result<Workspace, HostError> {
+        self.with(|| {
+            let mut all = self.read()?;
+            let parent = all
+                .iter()
+                .find(|w| w.id == parent_id && w.parent_id.is_none())
+                .cloned()
+                .ok_or_else(|| HostError::Storage("no such workspace".into()))?;
+            let path = folder.to_string_lossy().into_owned();
+            if let Some(existing) = all.iter().find(|w| w.path == path) {
+                return Ok(existing.clone());
+            }
+            let workspace = Workspace {
+                id: uuid::Uuid::new_v4().simple().to_string(),
+                name: format!("{} ({branch})", parent.name),
+                path,
+                project_id: parent.project_id,
+                is_git: false,
+                parent_id: Some(parent.id),
+                thread_uuid: Some(thread_uuid.to_owned()),
+            };
+            all.push(workspace.clone());
+            self.write(&all)?;
+            Ok(workspace)
+        })
+    }
+
+    /// The task worktrees' workspaces of `parent_id`.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be read.
+    pub fn worktrees_of(&self, parent_id: &str) -> Result<Vec<Workspace>, HostError> {
+        Ok(self
+            .all()?
+            .into_iter()
+            .filter(|w| w.parent_id.as_deref() == Some(parent_id))
+            .collect())
     }
 
     /// Forget a workspace (the folder itself is untouched) and its host data.
@@ -249,16 +425,16 @@ impl WorkspaceStore {
                 HostError::Storage("the workspace's agent settings are unreadable".into())
             })?;
             Ok(AgentSettings {
-                step_limit: settings
-                    .step_limit
-                    .filter(|limit| STEP_LIMIT_RANGE.contains(limit)),
+                step_limit: settings.step_limit.filter(|limit| limit.valid()),
                 allow_model_override: settings.allow_model_override,
+                diagnostics: settings.diagnostics,
+                diagnostics_wait_ms: settings.diagnostics_wait_ms.within_range(),
             })
         })
     }
 
     /// Store a workspace's agent settings; a step limit outside
-    /// [`STEP_LIMIT_RANGE`] is refused.
+    /// [`STEP_LIMIT_RANGE`] (and not unlimited) is refused.
     ///
     /// # Errors
     ///
@@ -268,14 +444,18 @@ impl WorkspaceStore {
         id: &str,
         settings: AgentSettings,
     ) -> Result<AgentSettings, HostError> {
-        if settings
-            .step_limit
-            .is_some_and(|limit| !STEP_LIMIT_RANGE.contains(&limit))
-        {
+        if settings.step_limit.is_some_and(|limit| !limit.valid()) {
             return Err(HostError::Unsupported(format!(
-                "the step limit must be {} to {}",
+                "the step limit must be {} to {}, or unlimited",
                 STEP_LIMIT_RANGE.start(),
                 STEP_LIMIT_RANGE.end()
+            )));
+        }
+        if !settings.diagnostics_wait_ms.valid() {
+            return Err(HostError::Unsupported(format!(
+                "a diagnostics wait must be {} to {} ms",
+                DIAGNOSTICS_WAIT_RANGE.start(),
+                DIAGNOSTICS_WAIT_RANGE.end()
             )));
         }
         self.with(|| {
@@ -357,6 +537,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_step_limit_is_a_number_or_unlimited_in_json() {
+        let read = |text: &str| serde_json::from_str::<AgentSettings>(text);
+        assert_eq!(
+            read(r#"{"step_limit": 1024}"#).unwrap().step_limit,
+            Some(StepLimit::Steps(1024))
+        );
+        assert_eq!(
+            read(r#"{"step_limit": "unlimited"}"#).unwrap().step_limit,
+            Some(StepLimit::Unlimited)
+        );
+        assert_eq!(read(r#"{"step_limit": null}"#).unwrap().step_limit, None);
+        assert!(read(r#"{"step_limit": "many"}"#).is_err());
+        assert!(read(r#"{"step_limit": -1}"#).is_err());
+        let settings = AgentSettings {
+            step_limit: Some(StepLimit::Unlimited),
+            ..AgentSettings::default()
+        };
+        assert_eq!(
+            serde_json::to_value(settings).unwrap()["step_limit"],
+            "unlimited"
+        );
+    }
+
+    #[test]
     fn agent_settings_are_kept_private_in_the_workspaces_data() {
         let app = tempfile::tempdir().unwrap();
         let folder = tempfile::tempdir().unwrap();
@@ -367,14 +571,27 @@ mod tests {
             .set_agent_settings(
                 &id,
                 AgentSettings {
-                    step_limit: Some(150),
+                    step_limit: Some(StepLimit::Steps(150)),
                     allow_model_override: Some(false),
+                    diagnostics: Some(false),
+                    diagnostics_wait_ms: DiagnosticsWaits {
+                        rust: Some(8_000),
+                        ..DiagnosticsWaits::default()
+                    },
                 },
             )
             .unwrap();
-        assert_eq!(saved.step_limit, Some(150));
-        assert_eq!(store.agent_settings(&id).unwrap().step_limit, Some(150));
+        assert_eq!(saved.step_limit, Some(StepLimit::Steps(150)));
+        assert_eq!(
+            store.agent_settings(&id).unwrap().step_limit,
+            Some(StepLimit::Steps(150))
+        );
         assert!(!store.agent_settings(&id).unwrap().model_override_allowed());
+        assert!(!store.agent_settings(&id).unwrap().diagnostics_enabled());
+        assert_eq!(
+            store.agent_settings(&id).unwrap().diagnostics_wait_ms.rust,
+            Some(8_000)
+        );
         let file = store.data_dir(&id).join(AGENT_SETTINGS_FILE);
         #[cfg(unix)]
         {
@@ -387,24 +604,50 @@ mod tests {
             assert!(store.agent_settings(&id).is_err());
             fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
         }
-        // Outside 10..=200 is refused; `None` goes back to the default.
-        for wrong in [9, 201] {
+        // Unlimited is kept as it is.
+        let unlimited = AgentSettings {
+            step_limit: Some(StepLimit::Unlimited),
+            ..AgentSettings::default()
+        };
+        store.set_agent_settings(&id, unlimited).unwrap();
+        assert_eq!(
+            store.agent_settings(&id).unwrap().step_limit,
+            Some(StepLimit::Unlimited)
+        );
+        // Outside 1..=1000000 is refused; `None` goes back to the default.
+        for wrong in [0, 1_000_001] {
             assert!(
                 store
                     .set_agent_settings(
                         &id,
                         AgentSettings {
-                            step_limit: Some(wrong),
+                            step_limit: Some(StepLimit::Steps(wrong)),
                             ..AgentSettings::default()
                         }
                     )
                     .is_err()
             );
         }
+        // A diagnostics wait outside 100..=30000 ms is refused too.
+        assert!(
+            store
+                .set_agent_settings(
+                    &id,
+                    AgentSettings {
+                        diagnostics_wait_ms: DiagnosticsWaits {
+                            go: Some(50),
+                            ..DiagnosticsWaits::default()
+                        },
+                        ..AgentSettings::default()
+                    }
+                )
+                .is_err()
+        );
         store
             .set_agent_settings(&id, AgentSettings::default())
             .unwrap();
         assert_eq!(store.agent_settings(&id).unwrap().step_limit, None);
+        assert!(store.agent_settings(&id).unwrap().diagnostics_enabled());
         assert!(!folder.path().join(AGENT_SETTINGS_FILE).exists());
         assert!(store.agent_settings("nope").is_err());
         assert!(

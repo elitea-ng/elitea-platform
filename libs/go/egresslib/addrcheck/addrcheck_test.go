@@ -2,8 +2,10 @@ package addrcheck
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
+	"os"
 	"strings"
 	"testing"
 
@@ -232,5 +234,41 @@ func TestDialFirstDialsOnlyTheGivenLiterals(t *testing.T) {
 	_ = conn.Close()
 	if _, err := DialFirst(context.Background(), nil, "tcp", nil, port); err == nil {
 		t.Fatal("an empty address list must be an error, never a resolution")
+	}
+}
+
+// TestClassifyMatchesSharedVectors holds this classifier and the Rust twin in
+// libs/rust/egress-guard to one vector file (#1238): the agent worker's direct
+// web fetch decides addresses there, and the two must never disagree.
+func TestClassifyMatchesSharedVectors(t *testing.T) {
+	raw, err := os.ReadFile("../testdata/classify_vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Vectors []struct {
+			IP       string `json:"ip"`
+			Verdict  string `json:"verdict"`
+			Liftable bool   `json:"liftable"`
+		} `json:"vectors"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Vectors) < 40 {
+		t.Fatalf("only %d vectors", len(file.Vectors))
+	}
+	for _, v := range file.Vectors {
+		ip := net.ParseIP(v.IP)
+		if ip == nil {
+			t.Fatalf("bad vector address %q", v.IP)
+		}
+		got := Classify(ip)
+		if got.String() != v.Verdict {
+			t.Errorf("Classify(%s) = %s, vector says %s", v.IP, got, v.Verdict)
+		}
+		if (got == Private) != v.Liftable {
+			t.Errorf("%s: liftable=%v disagrees with verdict %s", v.IP, v.Liftable, got)
+		}
 	}
 }

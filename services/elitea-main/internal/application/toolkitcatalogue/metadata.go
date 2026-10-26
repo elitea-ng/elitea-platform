@@ -144,9 +144,11 @@ var knownTypeMetadata = map[string]TypeMetadata{
 	// Other.
 	"figma":         {Label: "Figma", Category: CategoryOther},
 	"google_places": {Label: "Google Places", Category: CategoryOther},
+	"host_intel":    {Label: "Host Intelligence", Category: CategoryOther},
 	"memory":        {Label: "Memory", Category: CategoryOther},
 	"postman":       {Label: "Postman", Category: CategoryOther},
 	"salesforce":    {Label: "Salesforce", Category: CategoryOther},
+	"web":           {Label: "Web Search", Category: CategoryOther},
 	"service_now":   {Label: "ServiceNow", Category: CategoryOther},
 	// imagegen (#864): the served catalogue groups it under "media", a
 	// category this admin table does not otherwise carry for one lone type;

@@ -25,6 +25,7 @@ use tokio::sync::OnceCell;
 use super::environment;
 use super::events::TurnEvents;
 use super::recorder::Recorder;
+use super::subagents::ChildLineage;
 
 const SUMMARY_CHARS: usize = 240;
 
@@ -37,6 +38,10 @@ pub struct ToolObserver {
     pub session: Option<Arc<LocalSession>>,
     /// The turn's planner: an accepted `exit_plan_mode` seeds it.
     pub planner: Option<Planner>,
+    /// A sub-agent's tools (#1226): its calls are recorded under its
+    /// `spawn_agent` call and shown in its lane (`subagent_event`), not as
+    /// the turn's own `tool_call`s.
+    pub child: Option<Arc<ChildLineage>>,
 }
 
 /// A toolset offered only outside plan mode (the remote toolkits: a remote
@@ -309,7 +314,15 @@ impl Tool for ObservedTool {
         let observer = &self.observer;
         // Past the most tool calls a commit may carry the call is not run
         // (nor shown): the turn stops after this step (`turn.rs` `run_once`).
-        if !observer.recorder.tool_started(&call_id, &tool, &args) {
+        let hierarchy = observer.child.as_ref().map(|child| child.hierarchy());
+        let run_id = observer
+            .child
+            .as_ref()
+            .map_or_else(|| call_id.clone(), |child| child.run_id(&call_id));
+        if !observer
+            .recorder
+            .tool_started_under(&run_id, &tool, &args, hierarchy)
+        {
             return Ok(json!({
                 "status": "error",
                 "message": format!(
@@ -318,15 +331,13 @@ impl Tool for ObservedTool {
                 ),
             }));
         }
-        observer.events.send(
-            "tool_call",
-            json!({
-                "call_id": call_id,
-                "tool": tool,
-                "args_summary": args_summary(&args),
-                "remote": self.remote,
-            }),
-        );
+        let call = json!({
+            "call_id": call_id,
+            "tool": tool,
+            "args_summary": args_summary(&args),
+            "remote": self.remote,
+        });
+        self.send("tool_call", call);
         if !self.remote
             && let Some(session) = &observer.session
         {
@@ -356,7 +367,13 @@ impl Tool for ObservedTool {
         {
             self.plan_accepted(ctx.as_ref(), plan);
         }
-        let (ok, summary, truncated, error) = match &result {
+        // What the summary, the commit's steps and the history see of the
+        // result: an image's bytes go to the model only (`read_file`).
+        let observed = match &result {
+            Ok(value) => Ok(elitea_agent_runtime::image_result::without_image(value)),
+            Err(error) => Err(error),
+        };
+        let (ok, summary, truncated, error) = match &observed {
             Ok(value) => {
                 let failed = value.get("status").and_then(Value::as_str) == Some("error");
                 let message = value
@@ -379,20 +396,28 @@ impl Tool for ObservedTool {
         };
         // run_tests: the command it planned (and ran) is in its answer.
         let planned = (tool == "run_tests" && !self.remote)
-            .then(|| result.as_ref().ok())
+            .then(|| observed.as_ref().ok())
             .flatten()
             .and_then(|value| value.get("command"))
             .and_then(Value::as_str)
             .map(str::to_owned);
-        if let (Some(command), Ok(value)) = (command.as_ref().or(planned.as_ref()), &result) {
+        if let (Some(command), Ok(value)) = (command.as_ref().or(planned.as_ref()), &observed) {
             observer.recorder.command(command, value);
         }
+        // A local MCP server's tool (#1230): the report names the server and
+        // the tool.
+        if !self.remote
+            && tool.starts_with(elitea_local_tools::mcp::naming::PREFIX)
+            && let Ok(value) = &observed
+        {
+            observer.recorder.mcp_call(value);
+        }
         observer.recorder.tool_finished(
-            &call_id,
-            result.as_ref().unwrap_or(&Value::Null),
+            &run_id,
+            observed.as_ref().map_or(&Value::Null, |value| &**value),
             error.as_deref(),
         );
-        observer.events.send(
+        self.send(
             "tool_result",
             json!({
                 "call_id": call_id,
@@ -402,6 +427,20 @@ impl Tool for ObservedTool {
             }),
         );
         result
+    }
+}
+
+impl ObservedTool {
+    /// A `tool_call` or `tool_result`: the turn's own, or, for a
+    /// sub-agent's tool, inside its `subagent_event`.
+    fn send(&self, kind: &'static str, mut payload: Value) {
+        match &self.observer.child {
+            Some(child) => {
+                payload["kind"] = json!(kind);
+                child.send(&self.observer.events, payload);
+            }
+            None => self.observer.events.send(kind, payload),
+        }
     }
 }
 

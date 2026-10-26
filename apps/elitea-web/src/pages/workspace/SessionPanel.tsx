@@ -4,10 +4,12 @@
  * and for a turn the host still keeps per-file revert and undo; Approvals —
  * the approvals of this thread (the one being asked is a modal dialog; the
  * tab shows the queue behind it and what was decided); Plan — the agent's
- * checklist (offered once it keeps one, or in plan mode); Index — the folder's
- * local code index.
+ * checklist (offered once it keeps one, or in plan mode); Processes — the
+ * folder's background processes and their terminals (offered once it has
+ * one); Index — the folder's local code index; Context — what fills the
+ * model's window (`ContextPanel`, lazy), its chip naming the share in use.
  */
-import { Suspense, useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 
 import FolderOpenOutlinedIcon from '@mui/icons-material/FolderOpenOutlined';
 import LaunchOutlinedIcon from '@mui/icons-material/LaunchOutlined';
@@ -21,12 +23,16 @@ import { ChangedFilesCard, plan } from '@/features/workspace';
 import type { AppIpc } from '@/shared/desktop/appEvents';
 import { InspectorTab } from '@/shared/desktop/inspectorSlot';
 import type { PlanView } from '@/shared/desktop/planIpc';
-import type { ApprovalDecision, ApprovalRequestPayload, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import type { ApprovalDecision, ApprovalRequestPayload, ContextMeter, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { IndexPanelHost } from '@/features/workspace-index';
 import { copyText, useContextMenu } from '@/widgets/desktop-shell';
 
 import type { ChangeSet, DecidedApproval } from './sessionTypes';
+import { contextBreakdown } from './contextBreakdown';
+import { useHasProcesses } from './useHasProcesses';
+
+const ContextPanel = lazy(() => import('./ContextPanel'));
 
 export interface SessionPanelProps {
   ipc: WorkspaceIpc;
@@ -47,6 +53,8 @@ export interface SessionPanelProps {
   plan: PlanView | null;
   /** The thread is in plan mode: the Plan tab is offered even before a plan exists. */
   planMode: boolean;
+  /** The latest model call's context occupancy (the Context tab); absent before one reported it, and for the cloud copy. */
+  context?: ContextMeter | undefined;
 }
 
 function decisionLabel(decision: ApprovalDecision): string {
@@ -193,6 +201,12 @@ function ApprovalsPane({ waiting, decided }: Pick<SessionPanelProps, 'waiting' |
   );
 }
 
+/** The Context chip: "Context · 42%" once a model call reported its occupancy. */
+function contextTitle(meter: ContextMeter | undefined): string {
+  const title = t('workspace.panel.context', 'Context');
+  return meter === undefined ? title : t('workspace.panel.contextPercent', '{{title}} · {{percent}}%', { title, percent: contextBreakdown(meter).percent });
+}
+
 /** A tab's body: scrolls on its own, padded like the rest of the inspector. */
 function TabBody({ children }: { children: React.ReactNode }): React.JSX.Element {
   return <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingX: 1.5, paddingY: 1.5, display: 'flex', flexDirection: 'column', gap: 2 }}>{children}</Box>;
@@ -200,12 +214,13 @@ function TabBody({ children }: { children: React.ReactNode }): React.JSX.Element
 
 /**
  * The thread's tabs in the frame's inspector: Changes, Approvals (its chip
- * counts the approvals waiting) and, when the host keeps a local index,
- * Index. Each is a tab of its own, so it can share a group with the others,
+ * counts the approvals waiting), Plan and Processes when there is one to
+ * show, Context and, when the host keeps a local index, Index. Each is a tab of its own, so it can share a group with the others,
  * sit in the other group, or open in a window of its own.
  */
 export function SessionInspector(props: SessionPanelProps): React.JSX.Element {
   const { subject } = props;
+  const hasProcesses = useHasProcesses(props.workspaceId);
   return (
     <>
       <InspectorTab id="changes" title={t('workspace.panel.changes', 'Changes')} subject={subject}>
@@ -227,6 +242,22 @@ export function SessionInspector(props: SessionPanelProps): React.JSX.Element {
           </TabBody>
         </InspectorTab>
       )}
+      {hasProcesses && (
+        <InspectorTab id="processes" title={t('workspace.panel.processes', 'Processes')} subject={subject}>
+          <TabBody>
+            <Suspense fallback={null}>
+              <plan.TerminalPane workspaceId={props.workspaceId} />
+            </Suspense>
+          </TabBody>
+        </InspectorTab>
+      )}
+      <InspectorTab id="context" title={contextTitle(props.context)} subject={subject}>
+        <TabBody>
+          <Suspense fallback={null}>
+            <ContextPanel meter={props.context} />
+          </Suspense>
+        </TabBody>
+      </InspectorTab>
       {props.hasIndex && (
         <InspectorTab id="index" title={t('workspace.panel.index', 'Index')} subject={subject}>
           <TabBody>

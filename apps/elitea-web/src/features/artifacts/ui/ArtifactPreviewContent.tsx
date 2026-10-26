@@ -18,12 +18,15 @@ import { CodeMirrorEditor } from '@/shared/ui/CodeMirrorEditor';
 import { DefaultMarkdown } from '@/shared/ui/DefaultMarkdown';
 
 import { parseDataFile, type ArtifactPreviewKind } from '../lib/artifactParsers';
+import { PdfPreview } from './PdfPreview';
 
 interface ArtifactPreviewContentProps {
   readonly kind: ArtifactPreviewKind;
   readonly filename: string;
   readonly content: string;
   readonly imageUrl?: string;
+  /** The fetched bytes of a `pdf` kind file. */
+  readonly pdfData?: Blob;
   readonly mode: 'code' | 'rendered';
   readonly onChange: (content: string) => void;
   readonly onDownload: () => void;
@@ -64,18 +67,6 @@ function DataPreview({ content, kind }: { readonly content: string; readonly kin
 
 // oxlint-disable-next-line complexity -- dispatches the intentionally distinct preview formats documented by A8.
 export function ArtifactPreviewContent(props: ArtifactPreviewContentProps): ReactNode {
-  if (props.kind === 'image') {
-    return props.imageUrl === undefined ? (
-      <Typography>{t('artifacts.preview.noImage', 'No image to display.')}</Typography>
-    ) : (
-      <Box
-        component="img"
-        src={props.imageUrl}
-        alt={props.filename}
-        sx={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-      />
-    );
-  }
   if (props.isOversized || props.kind === 'docx' || props.kind === 'unsupported') {
     return (
       <Box sx={{ display: 'grid', placeItems: 'center', minHeight: '16rem', textAlign: 'center' }}>
@@ -104,6 +95,29 @@ export function ArtifactPreviewContent(props: ArtifactPreviewContentProps): Reac
           </Button>
         </Box>
       </Box>
+    );
+  }
+  if (props.kind === 'image') {
+    return props.imageUrl === undefined ? (
+      <Typography>{t('artifacts.preview.noImage', 'No image to display.')}</Typography>
+    ) : (
+      <Box
+        component="img"
+        src={props.imageUrl}
+        alt={props.filename}
+        sx={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+      />
+    );
+  }
+  if (props.kind === 'pdf') {
+    return props.pdfData === undefined ? (
+      <Typography>{t('artifacts.preview.noPdf', 'No PDF to display.')}</Typography>
+    ) : (
+      <PdfPreview
+        data={props.pdfData}
+        filename={props.filename}
+        onDownload={props.onDownload}
+      />
     );
   }
   if (props.mode === 'rendered' && props.kind === 'markdown') {

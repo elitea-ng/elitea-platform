@@ -53,7 +53,7 @@ use super::families::xray_cloud;
 use super::families::{
     aha, artifact, azure, azure_search, bitbucket, carrier, elastic, figma, gcp, github, gitlab,
     gitlab_org, google_places, keycloak, kubernetes, openapi, postman, rally, report_portal,
-    salesforce, service_now, sharepoint, slack, sonar, yagmail, zephyr, zephyr_squad,
+    salesforce, service_now, sharepoint, slack, sonar, web, yagmail, zephyr, zephyr_squad,
 };
 #[cfg(feature = "toolkit-office")]
 use super::families::{docx, pptx, xlsx};
@@ -863,6 +863,8 @@ fn family_tool_catalog(tool_type: &str) -> Option<Vec<(&'static str, bool)>> {
         "zephyr_essential" => zephyr_essential::tools::tool_catalog(),
         "zephyr_scale" => zephyr_scale::tools::tool_catalog(),
         "zephyr_squad" => zephyr_squad::tools::tool_catalog(),
+        "web" => web::web_tool_catalog(),
+        "host_intel" => web::host_intel_tool_catalog(),
         _ => return None,
     })
 }
@@ -1194,6 +1196,10 @@ async fn materialize(
         return materialize_imagegen(name, settings, policy, artifacts)
             .map(|toolset| (toolset, DelegatedAuthorizationCatalog::default()));
     }
+    if matches!(reference.tool_type(), "web" | "host_intel") {
+        let toolset = materialize_web(reference.tool_type(), name, settings, policy, artifacts)?;
+        return Ok((toolset, DelegatedAuthorizationCatalog::default()));
+    }
     if matches!(
         reference.tool_type(),
         "aha" | "bigquery" | "bitbucket" | "carrier" | "confluence" | "figma" | "gitlab" | "jira"
@@ -1299,6 +1305,27 @@ async fn materialize(
     }
     let toolset = materialize_p_to_z(reference.tool_type(), name, settings, policy)?;
     Ok((toolset, DelegatedAuthorizationCatalog::default()))
+}
+
+/// The `web` and `host_intel` families (#1238). Their meter and egress
+/// policy ride on the artifact authority of the live claim; a path that lends
+/// none builds them anyway, and every call is then refused
+/// (`metering_unavailable`): a host that forgets the meter fails closed.
+fn materialize_web(
+    tool_type: &str,
+    name: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    artifacts: Option<&ArtifactToolAuthority>,
+) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
+    let host = artifacts.and_then(ArtifactToolAuthority::web);
+    let toolset = match tool_type {
+        "web" => web::build_web_toolset(name, settings, policy, host),
+        "host_intel" => web::build_host_intel_toolset(name, settings, policy, host),
+        _ => return Err(unsupported_toolkit()),
+    }
+    .map_err(|_| invalid_configuration())?;
+    Ok(Arc::new(toolset))
 }
 
 /// The bearer-token Zephyr REST families (shared `zephyr_rest` transport);

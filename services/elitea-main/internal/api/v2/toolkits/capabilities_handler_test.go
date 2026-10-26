@@ -47,7 +47,7 @@ var (
 	// worker's attachment_tools.rs).
 	rustServedInternalTools = []string{
 		"planner", "lazy_tools_mode", "attachments", "data_analysis",
-		"skills_builder", "project_context_builder",
+		"skills_builder", "project_context_builder", "subagents",
 	}
 )
 

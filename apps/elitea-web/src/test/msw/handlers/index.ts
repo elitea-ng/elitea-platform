@@ -12,6 +12,8 @@ import { getSkillsMock } from '../../../shared/api/generated/skills/skills.msw';
 import { getTagsMock } from '../../../shared/api/generated/tags/tags.msw';
 import { getToolkitsMock } from '../../../shared/api/generated/toolkits/toolkits.msw';
 
+import { exportDocumentDefault } from './download';
+
 /**
  * MSW handler registry (spec §6.5 R-M2/R-M3), unit M1.
  *
@@ -29,9 +31,12 @@ import { getToolkitsMock } from '../../../shared/api/generated/toolkits/toolkits
  * `get<Tag>Mock()` aggregate (e.g. `getAuthMock`); spreading all 12 covers
  * every endpoint the manifest knows about with a self-consistent, always-
  * in-sync-with-the-OpenAPI-spec default response.
+ * Where an operation carries a response `example` in v2.yaml, orval's
+ * `useExamples: true` makes that example the generated body, so the default
+ * response is the contract's own documented one rather than faker noise.
  *
  * ── Why the 4 hand-authored files (transport/upload/artifacts/download)
- *    are DELIBERATELY NOT spread in here ─────────────────────────────────
+ *    are NOT spread in here (one stateless exception) ─────────────────────
  *
  * `handlers/{transport,upload,artifacts,download}.ts` (units F4/S6) do not
  * export a static `RequestHandler[]` at all — every export is a FACTORY
@@ -49,9 +54,11 @@ import { getToolkitsMock } from '../../../shared/api/generated/toolkits/toolkits
  * factories into the base registry would (a) not typecheck for the
  * parameterised ones without inventing arbitrary defaults, and (b) reinstate
  * exactly the cross-test state leakage `afterEach(() => server.resetHandlers())`
- * in src/test/setup.ts exists to prevent. So there is no "route-pattern
- * overlap" to resolve by precedence at the array level: the two sources
- * never occupy the same array. Where a hand-authored factory's route DOES
+ * in src/test/setup.ts exists to prevent. The one exception is
+ * `exportDocumentDefault()` (download.ts): stateless, and listed FIRST so it
+ * shadows the generated exportApplication handler, which answers an empty
+ * octet-stream because the operation also declares an application/zip body.
+ * Where a hand-authored factory's route DOES
  * overlap a generated one (e.g. `download.ts`'s `exportOk` and generated
  * `applications.msw.ts`'s `getExportApplicationMockHandler` both match GET
  * `*(/)elitea_core/export_import/prompt_lib/*` (msw wildcard-prefix pattern,
@@ -64,61 +71,24 @@ import { getToolkitsMock } from '../../../shared/api/generated/toolkits/toolkits
  * what this file exports. This file only has to be internally
  * non-contradictory with ITSELF, and it is (12 domains, no duplicate tags).
  *
- * ── R-M3 (validate every handler response against its zod schema AT
- *    REGISTRATION TIME) for generated vs. hand-authored handlers ─────────
+ * ── R-M2/R-M3 for generated vs. hand-authored handlers ──────────────────
  *
- * R-M3 is enforced two different, deliberately different ways, and both are
- * "at registration time" for what registration means in that source:
- *
- *  - Hand-authored (transport/upload/artifacts/download.ts): every exported
- *    factory routes its handler through `registerValidatedHandlers` (see
- *    each file's local `validated()` helper) at the moment the factory is
- *    CALLED — which for these is exactly when a test registers it via
- *    `server.use(probeOk())` etc. The fixture is an untyped, hand-maintained
- *    JSON file (`../fixtures/**\/*.json`) that COULD drift from its zod
- *    schema with no compiler to catch it — that's the entire reason R-M3's
- *    runtime `safeParse` exists, and it fires every time.
- *
- *  - Generated (`*.msw.ts`, spread into `handlers` below): these are NOT
- *    routed through `registerValidatedHandlers`, and that is a decision,
- *    not an oversight. Every generated mock body comes from a
- *    `get<Op>ResponseMock()` faker generator whose return type is the exact
- *    TS type orval derived from the SAME `override.zod` schema pass that
- *    produces the operation's response validator (orval.config.ts; see
- *    `src/shared/api/generated/model/*.zod.ts`) — schema and mock are two
- *    outputs of one codegen run against the same `v2.yaml`, so a
- *    mock-vs-schema mismatch is a `tsc --noEmit` failure, not a runtime
- *    condition, and `npm run typecheck` already gates every PR (§6.6). A
- *    `zod.safeParse` at registration would at best re-prove something the
- *    type system already guarantees and at worst pass silently on an `any`
- *    escape hatch the type check would have caught. More importantly,
- *    `registerValidatedHandlers` also asserts R-M4's `fixture.recordedAt`
- *    precondition — generated handlers have no `fixture` file and no
- *    Channel-B recording at all (`useExamples: false` in orval.config.ts's
- *    mock output; they are synthetic Channel-A data by construction), so
- *    the only way to route them through that function would be to invent a
- *    fabricated `recordedAt` timestamp with no real recording behind it —
- *    exactly the "fake fixture with a fabricated recordedAt" this unit was
- *    told not to do. R-M4 (fixture freshness) therefore also does not apply
- *    to generated handlers: `scripts/check-fixture-freshness.mjs` walks
- *    `src/test/msw/fixtures/**\/*.json` only, which by construction never
- *    contains generated-handler output.
- *
- * R-M2 (every handler lives in `src/test/msw/handlers/` and either derives
- * from a fixture or is orval-generated) is satisfied for this file's own
- * contents by construction (nothing here is a handler body, only imports of
- * already-compliant sources), and `scripts/check-handlers.mjs` scans this
- * directory's hand-authored `*.ts` files for the fixture-derivation rule
- * (R-M2's other clause) while intentionally NOT walking
- * `src/shared/api/generated/**` — that tree satisfies R-M2 via its OWN
- * clause ("generated by orval") and is `Do not edit manually` codegen
- * output the check-handlers heuristic does not own the shape of; running it
- * there would either be a no-op (the generated bodies are never object/array
- * literals — see `getXResponseMock()` calls, always a variable/conditional
- * argument, never an inline literal) or a false positive against a template
- * shape a future orval upgrade could change out from under this repo.
+ *  - Generated (`*.msw.ts`, spread into `handlers` below): every body comes
+ *    from a `get<Op>ResponseMock()` whose return type is the TS type orval
+ *    derived from v2.yaml, so a mock-vs-schema mismatch is a `tsc` failure.
+ *    Where the body is the operation's `example`,
+ *    `scripts/check-spec-examples.mjs` checks it against its schema (R-M3).
+ *  - Hand-authored (transport/upload/artifacts/download.ts): each body is
+ *    either one of those generated mocks or a typed module constant (typed
+ *    with the generated model type where the contract has one).
+ *    `scripts/check-handlers.mjs` (R-M2) walks this directory and fails on an
+ *    inline literal body, an untyped constant or a JSON import; it does not
+ *    walk `src/shared/api/generated/**`, which is codegen output.
  */
 export const handlers: RequestHandler[] = [
+  // Ahead of the generated applications handlers: the generated one for
+  // exportApplication answers an empty octet-stream (see download.ts).
+  exportDocumentDefault(),
   ...getAdminMock(),
   ...getAnalyticsMock(),
   ...getApplicationsMock(),

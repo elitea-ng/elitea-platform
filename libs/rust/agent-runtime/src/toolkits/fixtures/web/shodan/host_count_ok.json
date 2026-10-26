@@ -1,0 +1,16 @@
+{
+ "status": 200,
+ "content_type": "application/json",
+ "body": {
+  "matches": [],
+  "total": 1234,
+  "facets": {
+   "country": [
+    {
+     "count": 800,
+     "value": "DE"
+    }
+   ]
+  }
+ }
+}

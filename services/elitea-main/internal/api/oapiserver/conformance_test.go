@@ -254,6 +254,8 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		CurrentResolvedVersion: http.NotFoundHandler(),
 		// Client contract 1.6: executeRemoteToolkitTool, likewise.
 		CurrentRemoteToolkit: http.NotFoundHandler(),
+		// Issue 1239: startLocalChildTurn and readLocalChildTurn, likewise.
+		CurrentChildTurns: http.NotFoundHandler(),
 		// listExecutionInterrupts and decideExecutionInterrupt: registered only
 		// when the interrupt route is composed (production_router.go), i.e.
 		// whenever the agent runtime is.

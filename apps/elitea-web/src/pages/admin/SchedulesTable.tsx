@@ -1,10 +1,9 @@
 /**
- * The Schedules tab's table (unit A14, issue #200).
+ * The Schedules tab's table (issue #1369).
  *
- * MUI `Table` rather than the DataGrid `AdminProjectsTable` uses: two of the
- * five columns are interactive controls (a switch and an inline text editor)
- * bound to a write, and the row count is tens, not pages. A DataGrid here would
- * add virtualisation and a column API to buy nothing.
+ * MUI `Table` rather than a DataGrid: two columns are interactive controls (a
+ * switch and an inline text editor) bound to a write, and the row count is a
+ * dozen, not pages.
  *
  * `SortableHeaderCell` comes from `./AuditTableParts` unchanged — the Audit
  * Trail port left it behind and the sort affordance is identical.
@@ -26,98 +25,93 @@ import { useTheme } from '@mui/material/styles';
 import { t } from '@/shared/i18n';
 
 import { SortableHeaderCell } from './AuditTableParts';
-import type { AdminScheduleRow } from './api/adminSchedulesApi';
+import type { AdminRoutineRow } from './api/adminSchedulesApi';
 import type { ScheduleSort, ScheduleSortField } from './useAdminSchedulesPage';
 import { monoFontFamily } from '@/shared/brand/typeScale';
 
-export interface SchedulesTableProps {
-  readonly rows: readonly AdminScheduleRow[];
-  readonly sort: ScheduleSort;
-  readonly onSort: (field: ScheduleSortField) => void;
-  readonly onOpenHistory: (schedule: AdminScheduleRow) => void;
-  /** `undefined` ⇒ the server would refuse the write, so the switch is disabled. */
-  readonly onToggleActive: ((schedule: AdminScheduleRow) => void) | undefined;
-  /** `undefined` ⇒ the cron cell renders as text rather than as an editor. */
-  readonly onCronChange: ((schedule: AdminScheduleRow, cron: string) => void) | undefined;
-  readonly isSaving: boolean;
-}
-
-/**
- * `null` is rendered as "Never", not as an em dash: a schedule that has never
- * run is a fact about the platform, and it is the one an operator looks for.
- */
-function formatLastRun(value: string | null): string {
-  if (value === null) return t('pages.admin.schedules.neverRun', 'Never');
+function formatTime(value: string | null, absent: string): string {
+  if (value === null) return absent;
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString();
 }
 
-function CronCell({
+/** `null` is "Never", not an em dash: a routine that has never run is a fact an operator looks for. */
+function formatLastRun(row: AdminRoutineRow): string {
+  const when = formatTime(row.last_run_at, t('pages.admin.schedules.neverRun', 'Never'));
+  if (row.last_outcome === null || row.last_outcome === 'ok') return when;
+  return `${when} (${row.last_outcome})`;
+}
+
+function ScheduleCell({
   row,
-  onCronChange,
+  onScheduleChange,
   isSaving,
 }: {
-  readonly row: AdminScheduleRow;
-  readonly onCronChange: ((schedule: AdminScheduleRow, cron: string) => void) | undefined;
+  readonly row: AdminRoutineRow;
+  readonly onScheduleChange: ((routine: AdminRoutineRow, schedule: string) => void) | undefined;
   readonly isSaving: boolean;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const theme = useTheme();
 
-  // Focused programmatically rather than with `autoFocus`, which jsx-a11y bans
-  // for the case it is actually bad at — a control grabbing focus on page load.
-  // Here the editor exists only because the operator just clicked the cron, and
-  // an inline editor that needs a second click to type in is a worse control.
+  // Focused programmatically rather than with `autoFocus`: the editor exists
+  // only because the operator just clicked the schedule.
   useEffect(() => {
     if (draft !== null) inputRef.current?.focus();
   }, [draft]);
 
+  // Enter commits and closes the editor, and closing it blurs the input, whose
+  // onBlur still holds the old draft: without this guard the same edit is sent
+  // twice and the second PUT answers 409 "changed while editing".
+  const committedRef = useRef(false);
+  const open = useCallback((schedule: string) => {
+    committedRef.current = false;
+    setDraft(schedule);
+  }, []);
   const commit = useCallback(() => {
-    if (draft === null || !onCronChange) return;
-    onCronChange(row, draft);
+    if (draft === null || !onScheduleChange || committedRef.current) return;
+    committedRef.current = true;
+    onScheduleChange(row, draft);
     setDraft(null);
-  }, [draft, onCronChange, row]);
+  }, [draft, onScheduleChange, row]);
 
-  if (!onCronChange) {
-    return (
-      <Typography variant="bodySmall" sx={{ fontFamily: monoFontFamily }}>
-        {row.cron}
-      </Typography>
-    );
-  }
+  const overridden = row.schedule_override !== null;
+  const label = overridden
+    ? t('pages.admin.schedules.customised', 'Custom (default {{schedule}})', {
+        schedule: row.default_schedule,
+      })
+    : t('pages.admin.schedules.usingDefault', 'Default');
 
-  if (draft === null) {
-    return (
-      <Link
-        component="button"
-        type="button"
-        underline="hover"
-        onClick={() => setDraft(row.cron)}
-        sx={{ fontFamily: monoFontFamily }}
-      >
-        {row.cron}
-      </Link>
-    );
-  }
-
-  return (
+  const value = !onScheduleChange ? (
+    <Typography variant="bodySmall" sx={{ fontFamily: monoFontFamily }}>
+      {row.schedule}
+    </Typography>
+  ) : draft === null ? (
+    <Link
+      component="button"
+      type="button"
+      underline="hover"
+      onClick={() => open(row.schedule)}
+      sx={{ fontFamily: monoFontFamily }}
+    >
+      {row.schedule}
+    </Link>
+  ) : (
     <TextField
       inputRef={inputRef}
       size="small"
       value={draft}
       disabled={isSaving}
-      // The five-field contract the scheduler's parser enforces. Named on the
-      // control because the server's rejection arrives only after a save.
-      label={t('pages.admin.schedules.cronLabel', 'Cron (5 fields)')}
+      label={t('pages.admin.schedules.scheduleLabel', 'Schedule (interval or cron)')}
+      helperText={t(
+        'pages.admin.schedules.scheduleHelp',
+        'An interval such as 30m or 6h, or five cron fields. Empty restores the default.',
+      )}
       slotProps={{
         htmlInput: {
-          'aria-label': t('pages.admin.schedules.cronLabel', 'Cron (5 fields)'),
-          // Applied to the input element itself rather than reached through a
-          // nested MUI class selector: R-T6 keeps MUI internals out of call
-          // sites, and the theme gate greps for those class names in COMMENTS
-          // too — so this one deliberately does not name the one it replaced.
+          'aria-label': t('pages.admin.schedules.scheduleLabel', 'Schedule (interval or cron)'),
           style: { fontFamily: theme.typography.fontFamilyMono },
         },
       }}
@@ -125,21 +119,42 @@ function CronCell({
       onBlur={commit}
       onKeyDown={(event) => {
         if (event.key === 'Enter') commit();
-        // Escape ABANDONS rather than committing. Without it the only way out
-        // of a mistyped cron is to blur, which saves it.
-        if (event.key === 'Escape') setDraft(null);
+        // Escape ABANDONS rather than committing; blur is the save.
+        if (event.key === 'Escape') {
+          committedRef.current = true;
+          setDraft(null);
+        }
       }}
     />
   );
+
+  return (
+    <>
+      {value}
+      <Typography variant="bodySmall" color="text.secondary" component="div">
+        {label}
+      </Typography>
+    </>
+  );
+}
+
+export interface SchedulesTableProps {
+  readonly rows: readonly AdminRoutineRow[];
+  readonly sort: ScheduleSort;
+  readonly onSort: (field: ScheduleSortField) => void;
+  /** `undefined` => the server would refuse the write, so the switch is disabled. */
+  readonly onToggleEnabled: ((routine: AdminRoutineRow) => void) | undefined;
+  /** `undefined` => the schedule renders as text rather than as an editor. */
+  readonly onScheduleChange: ((routine: AdminRoutineRow, schedule: string) => void) | undefined;
+  readonly isSaving: boolean;
 }
 
 export function SchedulesTable({
   rows,
   sort,
   onSort,
-  onOpenHistory,
-  onToggleActive,
-  onCronChange,
+  onToggleEnabled,
+  onScheduleChange,
   isSaving,
 }: SchedulesTableProps) {
   if (rows.length === 0) {
@@ -157,73 +172,70 @@ export function SchedulesTable({
           <TableRow>
             <SortableHeaderCell
               label={t('pages.admin.schedules.column.name', 'Name')}
-              field="name"
+              field="id"
               sortField={sort.field}
               sortDirection={sort.direction}
-              onSort={() => onSort('name')}
+              onSort={() => onSort('id')}
             />
-            <TableCell>{t('pages.admin.schedules.column.cron', 'Cron')}</TableCell>
+            <TableCell>{t('pages.admin.schedules.column.schedule', 'Schedule')}</TableCell>
             <TableCell>{t('pages.admin.schedules.column.active', 'Active')}</TableCell>
             <SortableHeaderCell
-              label={t('pages.admin.schedules.column.function', 'Function')}
-              field="rpc_func"
+              label={t('pages.admin.schedules.column.lastRun', 'Last run')}
+              field="last_run_at"
               sortField={sort.field}
               sortDirection={sort.direction}
-              onSort={() => onSort('rpc_func')}
+              onSort={() => onSort('last_run_at')}
             />
             <SortableHeaderCell
-              label={t('pages.admin.schedules.column.lastRun', 'Last run')}
-              field="last_run"
+              label={t('pages.admin.schedules.column.nextRun', 'Next run')}
+              field="next_run_at"
               sortField={sort.field}
               sortDirection={sort.direction}
-              onSort={() => onSort('last_run')}
+              onSort={() => onSort('next_run_at')}
             />
           </TableRow>
         </TableHead>
         <TableBody>
           {rows.map((row) => (
-            // An inactive row is dimmed but never hidden: a disabled platform
-            // job is exactly what an operator comes to this page to find.
-            <TableRow key={row.id} sx={row.active ? undefined : { opacity: 0.6 }}>
+            // A switched-off routine is dimmed but never hidden: it is exactly
+            // what an operator comes to this page to find.
+            <TableRow key={row.id} sx={row.enabled ? undefined : { opacity: 0.6 }}>
               <TableCell>
-                <Link
-                  component="button"
-                  type="button"
-                  underline="hover"
-                  onClick={() => onOpenHistory(row)}
-                >
-                  {row.name}
-                </Link>
+                <Typography component="span" variant="bodySmall" sx={{ fontFamily: monoFontFamily }}>
+                  {row.id}
+                </Typography>
+                <Typography variant="bodySmall" color="text.secondary" component="div">
+                  {row.description}
+                </Typography>
               </TableCell>
               <TableCell>
-                <CronCell row={row} onCronChange={onCronChange} isSaving={isSaving} />
+                <ScheduleCell row={row} onScheduleChange={onScheduleChange} isSaving={isSaving} />
               </TableCell>
               <TableCell>
                 <Switch
                   size="small"
-                  checked={row.active}
-                  disabled={!onToggleActive || isSaving}
-                  onChange={() => onToggleActive?.(row)}
+                  checked={row.enabled}
+                  disabled={!onToggleEnabled || isSaving}
+                  onChange={() => onToggleEnabled?.(row)}
                   slotProps={{
                     input: {
                       // i18next interpolation, NOT a template literal: a bundle
-                      // value carrying `{{name}}` beats the fallback, and a
-                      // template-literal fallback would render the braces.
+                      // value carrying `{{name}}` beats the fallback.
                       'aria-label': t(
                         'pages.admin.schedules.toggleLabel',
                         'Schedule enabled: {{name}}',
-                        { name: row.name },
+                        { name: row.id },
                       ),
                     },
                   }}
                 />
               </TableCell>
-              <TableCell>
-                <Typography component="span" variant="bodySmall" sx={{ fontFamily: monoFontFamily }}>
-                  {row.rpc_func}
-                </Typography>
+              <TableCell data-testid="admin-schedules-time">{formatLastRun(row)}</TableCell>
+              <TableCell data-testid="admin-schedules-time">
+                {row.enabled
+                  ? formatTime(row.next_run_at, t('pages.admin.schedules.notPlanned', 'Not planned yet'))
+                  : t('pages.admin.schedules.off', 'Off')}
               </TableCell>
-              <TableCell>{formatLastRun(row.last_run)}</TableCell>
             </TableRow>
           ))}
         </TableBody>

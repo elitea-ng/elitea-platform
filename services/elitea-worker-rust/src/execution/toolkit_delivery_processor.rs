@@ -385,6 +385,13 @@ pub(super) struct ToolkitDeliveryProcessor<R, RC, T, K, I> {
     /// that reads platform objects (`pptx`); `None` leaves it unsupported on
     /// this path.
     office: Option<Arc<OfficeRuntime>>,
+    /// The web families' runtime and the model facade their meter rides
+    /// (#1238); without both a `web` or `host_intel` call refuses with
+    /// `metering_unavailable`.
+    web: Option<(
+        Arc<crate::transport::metering::WebRuntime>,
+        Arc<crate::transport::model_facade::ModelFacade>,
+    )>,
 }
 
 impl<R, RC, T, K, I> ToolkitDeliveryProcessor<R, RC, T, K, I>
@@ -425,7 +432,51 @@ where
             platform,
             index_runtime,
             office: None,
+            web: None,
         }
+    }
+
+    /// Lend the web families' runtime and meter to direct toolkit calls.
+    #[must_use]
+    pub(super) fn with_web(
+        mut self,
+        runtime: Option<Arc<crate::transport::metering::WebRuntime>>,
+        facade: Arc<crate::transport::model_facade::ModelFacade>,
+    ) -> Self {
+        self.web = runtime.map(|runtime| (runtime, facade));
+        self
+    }
+
+    /// The web host of a `web` or `host_intel` call, metered under the
+    /// claim and attributed to the desktop turn the call was made for, when
+    /// the command names one. `None` on a worker without the web runtime.
+    async fn web_authority(
+        &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        authorized: &AuthorizedToolkitExecution,
+        lease: &mut ClaimLeaseMonitor,
+    ) -> Result<Option<crate::toolkits::ArtifactToolAuthority>, RuntimeFailureKind> {
+        let Some((runtime, facade)) = self.web.as_ref() else {
+            return Ok(None);
+        };
+        let context = lease
+            .run_pre_invocation(
+                self.platform
+                    .redeem_elitea_context(authorized.runtime_context()),
+            )
+            .await
+            .map_err(|error| lease_failure(&error))?
+            .map_err(|error| runtime_context_failure(&error))?;
+        let attribution = match &verified.command().capability_command {
+            Some(worker_command_v1::CapabilityCommand::ToolkitCallTool(call)) => {
+                Some(call.attribution_execution_id.as_str())
+            }
+            _ => None,
+        };
+        Ok(Some(
+            crate::toolkits::ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter))
+                .with_web(runtime.host(facade, &context, attribution)),
+        ))
     }
 
     /// Lend the Office runtime to direct toolkit calls.
@@ -1324,9 +1375,12 @@ where
             Ok(authority) => IndexToolSupport::Lent(authority),
             Err(reason) => IndexToolSupport::Withheld(*reason),
         };
-        let office = self
-            .office_authority(verified, authorized, lease, request)
-            .await?;
+        let office = if is_call && matches!(request.toolkit_type(), "web" | "host_intel") {
+            self.web_authority(verified, authorized, lease).await?
+        } else {
+            self.office_authority(verified, authorized, lease, request)
+                .await?
+        };
         let operation = async {
             if is_call {
                 self.runtime

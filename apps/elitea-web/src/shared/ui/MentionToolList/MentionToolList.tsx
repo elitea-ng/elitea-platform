@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useEffect, useRef } from 'react';
+import { Fragment, useEffect, useRef } from 'react';
 
 import Box from '@mui/material/Box';
 import ClickAwayListener from '@mui/material/ClickAwayListener';
@@ -12,6 +12,8 @@ import { MentionToolItem } from '../MentionToolItem';
 export interface MentionTool {
   name: string;
   description?: string;
+  /** A section title: shown above the first row of each run of rows with the same group. */
+  group?: string;
 }
 
 /** @public shared/ui component API — consumed once a features/widgets/pages caller exists (none does yet in this pass). */
@@ -104,13 +106,19 @@ export function MentionToolList({
         </Box>
 
         {tools.map((tool, index) => (
-          <MentionToolItem
-            key={tool.name}
-            label={tool.name}
-            {...(tool.description !== undefined ? { description: tool.description } : {})}
-            onClick={() => onSelectTool(tool.name)}
-            isHighlighted={index === highlightedIndex}
-          />
+          <Fragment key={tool.name}>
+            {tool.group !== undefined && tool.group !== tools[index - 1]?.group && (
+              <Typography variant="labelSmall" color="text.secondary" sx={{ padding: '0.25rem 0.75rem 0' }}>
+                {tool.group}
+              </Typography>
+            )}
+            <MentionToolItem
+              label={tool.name}
+              {...(tool.description !== undefined ? { description: tool.description } : {})}
+              onClick={() => onSelectTool(tool.name)}
+              isHighlighted={index === highlightedIndex}
+            />
+          </Fragment>
         ))}
       </Box>
     </ClickAwayListener>

@@ -32,17 +32,20 @@ import (
 )
 
 type Conversation struct {
-	InstructionsUpdate *string   `json:"-"`
-	ID                 string    `json:"id"`
-	UUID               string    `json:"uuid,omitempty"`
-	ProjectID          string    `json:"project_id"`
-	Name               string    `json:"name"`
-	Description        string    `json:"description,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
-	CreatedBy          string    `json:"created_by"`
-	MessageCount       int       `json:"message_count"`
-	FolderID           *string   `json:"folder_id,omitempty"`
+	InstructionsUpdate *string `json:"-"`
+	// RenameOnlyFrom makes an Update a compare-and-set of the name: the row
+	// is written only while its name is this one, else ErrNameChanged.
+	RenameOnlyFrom *string   `json:"-"`
+	ID             string    `json:"id"`
+	UUID           string    `json:"uuid,omitempty"`
+	ProjectID      string    `json:"project_id"`
+	Name           string    `json:"name"`
+	Description    string    `json:"description,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	CreatedBy      string    `json:"created_by"`
+	MessageCount   int       `json:"message_count"`
+	FolderID       *string   `json:"folder_id,omitempty"`
 	// `chat_conversations.is_private` — the flag the rail's "Make public"
 	// item writes.
 	//
@@ -325,6 +328,7 @@ type Handler struct {
 	candidates      ParticipantCandidateStore
 	readEvents      ReadEvents
 	warmer          AttachmentExtractionWarmer
+	namer           NameCompleter
 }
 
 // EventEmitter is the seam to internal/events.Publisher — declared locally,
@@ -719,6 +723,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	// can still see it.
 	if ff := forkedFrom(conv.Meta); ff != nil {
 		h.annotateForkSource(r.Context(), projectID, ff)
+		annotateBranchSummary(conv.Meta, ff)
 		resp["forked_from"] = ff
 	}
 

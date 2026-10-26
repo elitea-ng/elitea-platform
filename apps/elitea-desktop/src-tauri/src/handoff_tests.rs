@@ -76,6 +76,9 @@ impl HandoffEvents for Events {
     }
 }
 
+/// A PUSH segment the mock store holds: sha, bytes, prerequisites, refs.
+type PushSegment = (String, u64, Vec<String>, BTreeMap<String, String>);
+
 /// The platform's side of the contract, in memory.
 #[derive(Default)]
 struct Platform {
@@ -90,6 +93,8 @@ struct Platform {
     groups: Vec<Value>,
     release: Option<Value>,
     fail_release: bool,
+    /// The release body is one the server never takes (422 `invalid_handoff`).
+    invalid_release: bool,
     /// `GET workspace_handoff_policy` (`None`: 404, an older server).
     policy: Option<Value>,
     /// The begin answer's `limits` instead of the defaults.
@@ -109,6 +114,13 @@ struct Platform {
     state_gets: u64,
     /// The begin body's stats (the state route answers them back).
     stats: Value,
+    /// Phase 2: the PUSH segments after the COMPACT (sha, bytes,
+    /// prerequisites, refs after it).
+    pushes: Vec<PushSegment>,
+    /// A take-back up to turn k kept the remaining turns.
+    rest_pending: bool,
+    /// The cloud copy's grace is over: the remaining turns are gone.
+    rest_expired: bool,
 }
 
 /// The base64 of the SHA-256 of `bytes` (`x-amz-checksum-sha256`).
@@ -138,6 +150,7 @@ fn handle(platform: &Mutex<Platform>, req: &Req) -> Res {
         json!({"state": p.state, "epoch": p.epoch, "reclaim_pending": false, "handoff_id": "h1",
                "device_name": "Test laptop", "history_mode": "none", "has_upstream": false, "stats": stats,
                "cloud_sha": p.refs.get("refs/elitea/cloud"), "updated_at": "2026-10-16T04:24:12.789394Z",
+               "rest_pending": p.rest_pending && !p.rest_expired,
                "delete_after": null, "workspace_bytes": p.objects.values().map(Vec::len).sum::<usize>()})
     };
     match (req.method.as_str(), path.as_str()) {
@@ -281,6 +294,28 @@ fn handle(platform: &Mutex<Platform>, req: &Req) -> Res {
         }
         ("POST", x) if x == format!("{PREFIX}/workspace_handoff_reclaim/{conv}") => {
             assert_eq!(body["epoch"], json!(p.epoch));
+            if body["rest"] == json!(true) {
+                // workspacehandoff.Service.Reclaim with rest: LOCAL, released
+                // with turns not taken, inside the grace.
+                if p.rest_expired {
+                    return Res::json(
+                        409,
+                        &json!({"error": "handoff_erased", "message": "The cloud copy of this thread was erased."}),
+                    );
+                }
+                if p.state != "LOCAL" || !p.rest_pending {
+                    return Res::json(
+                        409,
+                        &json!({"error": "stale_epoch", "message": "The thread's state changed."}),
+                    );
+                }
+                p.state = "RECLAIMING".into();
+                p.epoch += 1;
+                return Res::json(
+                    200,
+                    &json!({"state": "RECLAIMING", "epoch": p.epoch, "cloud_sha": p.refs.get("refs/elitea/cloud")}),
+                );
+            }
             if p.turn_running {
                 p.state = "CLOUD_RUNNING".into();
                 return Res::json(
@@ -298,11 +333,20 @@ fn handle(platform: &Mutex<Platform>, req: &Req) -> Res {
         }
         ("GET", x) if x == format!("{PREFIX}/workspace_store_fetch/{conv}") => {
             let (sha, bytes, refs) = p.segment.clone().unwrap();
+            let first = p.seq - p.pushes.len() as u64;
+            let mut segments = vec![json!({"seq": first, "kind": "COMPACT", "sha256": sha,
+                "bytes": bytes, "prerequisites": [], "refs": refs,
+                "url": format!("{}/obj/{sha}", p.origin)})];
+            for (n, (sha, bytes, prerequisites, refs)) in p.pushes.iter().enumerate() {
+                segments.push(
+                    json!({"seq": first + 1 + n as u64, "kind": "PUSH", "sha256": sha,
+                    "bytes": bytes, "prerequisites": prerequisites, "refs": refs,
+                    "url": format!("{}/obj/{sha}", p.origin)}),
+                );
+            }
             Res::json(
                 200,
-                &json!({"head_seq": p.seq, "refs": p.refs, "segments": [
-                {"seq": p.seq, "kind": "COMPACT", "sha256": sha, "bytes": bytes, "prerequisites": [], "refs": refs,
-                 "url": format!("{}/obj/{sha}", p.origin)}]}),
+                &json!({"head_seq": p.seq, "refs": p.refs, "segments": segments}),
             )
         }
         ("POST", x) if x == format!("{PREFIX}/workspace_handoff_release/{conv}") => {
@@ -322,12 +366,21 @@ fn handle(platform: &Mutex<Platform>, req: &Req) -> Res {
                 p.fail_release = false;
                 return Res::json(503, &json!({"error": "unavailable", "message": "later"}));
             }
+            // The server's outcomes (workspacehandoff.Service.Release).
+            let known = ["applied", "worktree", "discarded"];
+            if p.invalid_release || !known.iter().any(|o| body["outcome"] == json!(o)) {
+                return Res::json(
+                    422,
+                    &json!({"error": "invalid_handoff", "message": "The request is not a valid handoff."}),
+                );
+            }
             if p.state != "RECLAIMING" || body["epoch"] != json!(p.epoch) {
                 return Res::json(
                     409,
                     &json!({"error": "stale_epoch", "message": "The thread's state changed. Read the state and retry with its epoch."}),
                 );
             }
+            p.rest_pending = body["turns_not_taken"].as_u64().unwrap_or(0) > 0;
             p.release = Some(body);
             p.state = "LOCAL".into();
             p.epoch += 1;
@@ -528,6 +581,7 @@ async fn harness_full(
             app_id: None,
             user_rules_dir: None,
             user_commands_dir: None,
+            cache_dir: None,
         })
         .unwrap(),
     );
@@ -573,6 +627,12 @@ async fn harness_full(
 /// The cloud executor: hydrate the stored segment, one commit, publish a
 /// COMPACT with `refs/elitea/cloud`, and the conversation's two messages.
 fn cloud_turn(h: &Harness) -> String {
+    cloud_turns_n(h, 1).remove(0)
+}
+
+/// `n` cloud turns, each one commit and one answer in the conversation;
+/// their commits, oldest first.
+fn cloud_turns_n(h: &Harness, n: usize) -> Vec<String> {
     let (sha, refs) = {
         let p = h.platform.lock().unwrap();
         let (sha, _, refs) = p.segment.clone().unwrap();
@@ -601,11 +661,19 @@ fn cloud_turn(h: &Harness) -> String {
         !dir.join(".env").exists(),
         "the excluded file never reached the cloud"
     );
-    std::fs::write(dir.join("README.md"), "hello from the cloud\n").unwrap();
-    std::fs::write(dir.join("src/cloud.rs"), "pub fn c() {}\n").unwrap();
-    git(&dir, &["add", "-A"]);
-    git(&dir, &["commit", "-q", "-m", "cloud turn 1"]);
-    let commit = git(&dir, &["rev-parse", "HEAD"]);
+    let mut commits = Vec::new();
+    for turn in 1..=n {
+        if turn == 1 {
+            std::fs::write(dir.join("README.md"), "hello from the cloud\n").unwrap();
+            std::fs::write(dir.join("src/cloud.rs"), "pub fn c() {}\n").unwrap();
+        } else {
+            std::fs::write(dir.join(format!("src/cloud{turn}.rs")), "pub fn d() {}\n").unwrap();
+        }
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-q", "-m", &format!("cloud turn {turn}")]);
+        commits.push(git(&dir, &["rev-parse", "HEAD"]));
+    }
+    let commit = commits.last().unwrap().clone();
     git(&dir, &["update-ref", "refs/elitea/cloud", "HEAD"]);
     let out = h.app.path().join("cloud.bundle");
     let mut args = vec!["bundle", "create", "-q", out.to_str().unwrap()];
@@ -619,15 +687,233 @@ fn cloud_turn(h: &Harness) -> String {
     let all = p.refs.clone();
     p.seq += 1;
     p.segment = Some((sha.clone(), segment.len() as u64, all));
+    p.pushes.clear();
     p.objects.insert(sha, segment);
-    p.groups = vec![
-        json!({"id": 10, "uuid": "q1", "meta": {}, "created_at": "2026-10-15 10:00:00.000000",
-               "message_items": [{"item_type": "text_message", "item_details": {"content": "Make it greet the cloud"}}]}),
-        json!({"id": 11, "uuid": "a1", "reply_to_id": 10, "created_at": "2026-10-15 10:01:00.000000",
-               "meta": {"executed_by": "cloud_executor", "workspace_epoch": p.epoch, "workspace_commit": commit},
-               "message_items": [{"item_type": "text_message", "item_details": {"content": "Done: README greets the cloud."}}]}),
-    ];
+    p.groups = Vec::new();
+    for (index, commit) in commits.iter().enumerate() {
+        let turn = index + 1;
+        let (question, answer) = if turn == 1 {
+            (
+                "Make it greet the cloud".to_owned(),
+                "Done: README greets the cloud.".to_owned(),
+            )
+        } else {
+            (
+                format!("Turn {turn}, please"),
+                format!("Done: turn {turn}."),
+            )
+        };
+        let id = 10 * turn as i64;
+        let epoch = p.epoch;
+        p.groups.push(json!({"id": id, "uuid": format!("q{turn}"), "meta": {},
+            "created_at": format!("2026-10-15 10:{:02}:00.000000", 2 * index),
+            "message_items": [{"item_type": "text_message", "item_details": {"content": question}}]}));
+        p.groups.push(json!({"id": id + 1, "uuid": format!("a{turn}"), "reply_to_id": id,
+            "created_at": format!("2026-10-15 10:{:02}:00.000000", 2 * index + 1),
+            "meta": {"executed_by": "cloud_executor", "workspace_epoch": epoch, "workspace_commit": commit},
+            "message_items": [{"item_type": "text_message", "item_details": {"content": answer}}]}));
+    }
+    commits
+}
+
+/// Phase 2: one more cloud turn (number `turn`) in the cloud repository
+/// [`cloud_turns_n`] left, published as a PUSH segment over the store's
+/// head (the store crate's writer, as the executor writes it), with its
+/// question and answer; its commit.
+fn cloud_push_turn(h: &Harness, turn: usize) -> String {
+    use elitea_workspace_store::bundle::{self, Limits};
+    use elitea_workspace_store::chain::push_prerequisites;
+    use elitea_workspace_store::objects::{ObjectDb, oid};
+    let dir = h.app.path().join("cloud");
+    std::fs::write(dir.join(format!("src/cloud{turn}.rs")), "pub fn d() {}\n").unwrap();
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-q", "-m", &format!("cloud turn {turn}")]);
+    let commit = git(&dir, &["rev-parse", "HEAD"]);
+    let db = ObjectDb::open_objects(&dir.join(".git/objects")).unwrap();
+    let mut p = h.platform.lock().unwrap();
+    let prerequisites = push_prerequisites(&db, &p.refs).unwrap();
+    let written = bundle::write_push(
+        &db,
+        &[("refs/elitea/cloud".to_owned(), oid(&commit).unwrap())],
+        &prerequisites,
+        Limits::default(),
+    )
+    .unwrap();
+    p.refs.insert("refs/elitea/cloud".into(), commit.clone());
+    p.seq += 1;
+    let refs = p.refs.clone();
+    p.pushes.push((
+        written.sha256.clone(),
+        written.bytes.len() as u64,
+        prerequisites.iter().map(ToString::to_string).collect(),
+        refs,
+    ));
+    p.objects.insert(written.sha256, written.bytes);
+    let id = 10 * turn as i64;
+    let epoch = p.epoch;
+    p.groups.push(json!({"id": id, "uuid": format!("q{turn}"), "meta": {},
+        "created_at": format!("2026-10-15 11:{:02}:00.000000", 2 * turn),
+        "message_items": [{"item_type": "text_message", "item_details": {"content": format!("Turn {turn}, please")}}]}));
+    p.groups.push(json!({"id": id + 1, "uuid": format!("a{turn}"), "reply_to_id": id,
+        "created_at": format!("2026-10-15 11:{:02}:00.000000", 2 * turn + 1),
+        "meta": {"executed_by": "cloud_executor", "workspace_epoch": epoch, "workspace_commit": commit},
+        "message_items": [{"item_type": "text_message", "item_details": {"content": format!("Done: turn {turn}.")}}]}));
     commit
+}
+
+/// #1187 Batch 2, end to end: three cloud turns (a COMPACT, then a PUSH);
+/// a take-back up to turn 1 keeps the thread LOCAL with the remaining
+/// turns offered while the cloud copy is in its grace; taking them back
+/// applies turns 2 and 3 on top of the folder (the person's edit since
+/// kept), imports only their answers, lifts the seed boundary and drops
+/// the record. Once the grace is over, the offer is gone and a rest
+/// reclaim is refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_remaining_turns_are_taken_back_after_a_partial_take_back() {
+    let h = harness().await;
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    cloud_turns_n(&h, 2);
+    cloud_push_turn(&h, 3);
+    h.host.reclaim(CONVERSATION, false).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, Some(1)).await.unwrap();
+    assert_eq!((preflight.cloud_turns, preflight.up_to_turn), (3, 1));
+    let partial = h
+        .host
+        .apply(&preflight.preflight_id, Mode::Apply, Some(1))
+        .await
+        .unwrap();
+    assert!(partial.applied && partial.released, "{partial:?}");
+    assert_eq!((partial.imported_turns, partial.turns_not_taken), (1, 2));
+    let release = h.platform.lock().unwrap().release.clone().unwrap();
+    assert_eq!(release["turns_not_taken"], json!(2));
+    // LOCAL, not read-only, the remaining turns offered.
+    assert!(!h.host.is_away(CONVERSATION));
+    let status = h.host.status(CONVERSATION, None).await.unwrap();
+    assert_eq!(status["state"], json!("LOCAL"));
+    assert_eq!(status["read_only"], json!(false));
+    assert_eq!(status["rest_turns"], json!(2));
+    let owner = Owner {
+        origin: h.platform.lock().unwrap().origin.clone(),
+        user_id: 7,
+    };
+    let key = crate::sessions::session_key(&owner.origin, 7, CONVERSATION);
+    assert_eq!(
+        h.sessions.store().seed_skips(&key).await.unwrap(),
+        [20, 21, 30, 31]
+    );
+    // The person works on before taking back the rest.
+    std::fs::write(h.folder.join("mine.txt"), "my own work\n").unwrap();
+
+    let reclaimed = h.host.reclaim(CONVERSATION, true).await.unwrap();
+    assert_eq!(reclaimed["state"], json!("RECLAIMING"));
+    // The remaining turns come back together, never a turn of them.
+    assert_eq!(
+        h.host
+            .preflight(CONVERSATION, Some(2))
+            .await
+            .unwrap_err()
+            .code,
+        "invalid_request"
+    );
+    let rest = h.host.preflight(CONVERSATION, None).await.unwrap();
+    assert_eq!(
+        (rest.from_turn, rest.up_to_turn, rest.cloud_turns),
+        (1, 3, 3)
+    );
+    let applied = h
+        .host
+        .apply(&rest.preflight_id, Mode::Apply, None)
+        .await
+        .unwrap();
+    assert!(applied.applied && applied.released, "{applied:?}");
+    assert_eq!((applied.imported_turns, applied.turns_not_taken), (2, 0));
+    assert_eq!(
+        applied.branch.as_deref(),
+        Some("elitea/cloud/c0ffee00-turns-2-3")
+    );
+    assert!(h.folder.join("src/cloud2.rs").exists() && h.folder.join("src/cloud3.rs").exists());
+    assert_eq!(
+        std::fs::read_to_string(h.folder.join("mine.txt")).unwrap(),
+        "my own work\n"
+    );
+    let release = h.platform.lock().unwrap().release.clone().unwrap();
+    assert_eq!(release.get("turns_not_taken"), None);
+    let ids: Vec<String> = h
+        .history
+        .thread(&owner, &h.workspace_id, CONVERSATION)
+        .unwrap()
+        .into_iter()
+        .map(|turn| turn.turn_id)
+        .collect();
+    assert_eq!(ids, ["cloud:a1", "cloud:a2", "cloud:a3"]);
+    assert_eq!(
+        h.sessions.store().seed_skips(&key).await.unwrap(),
+        Vec::<i64>::new()
+    );
+    let status = h.host.status(CONVERSATION, None).await.unwrap();
+    assert_eq!(status["sent_from_here"], json!(false), "the record is gone");
+    assert_eq!(
+        h.host.reclaim(CONVERSATION, true).await.unwrap_err().code,
+        "handoff_unknown"
+    );
+}
+
+/// Past the cloud copy's grace the remaining turns are gone: the offer
+/// disappears with the record, and a rest reclaim the server refuses
+/// (`handoff_erased`) drops it too.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_remaining_turns_are_gone_after_the_grace() {
+    let h = harness().await;
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    cloud_turns_n(&h, 2);
+    h.host.reclaim(CONVERSATION, false).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, Some(1)).await.unwrap();
+    h.host
+        .apply(&preflight.preflight_id, Mode::Apply, Some(1))
+        .await
+        .unwrap();
+    // The grace ends before the person asks for the rest.
+    h.platform.lock().unwrap().rest_expired = true;
+    assert_eq!(
+        h.host.reclaim(CONVERSATION, true).await.unwrap_err().code,
+        "handoff_erased"
+    );
+    let status = h.host.status(CONVERSATION, None).await.unwrap();
+    assert_eq!(status["rest_turns"], json!(0));
+    assert_eq!(status["sent_from_here"], json!(false));
+
+    // A status read after the grace drops the record as well.
+    let h = harness().await;
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    cloud_turns_n(&h, 2);
+    h.host.reclaim(CONVERSATION, false).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, Some(1)).await.unwrap();
+    h.host
+        .apply(&preflight.preflight_id, Mode::Apply, Some(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        h.host.status(CONVERSATION, None).await.unwrap()["rest_turns"],
+        json!(1)
+    );
+    h.platform.lock().unwrap().rest_expired = true;
+    assert_eq!(
+        h.host.status(CONVERSATION, None).await.unwrap()["rest_turns"],
+        json!(0)
+    );
+    assert_eq!(
+        h.host.reclaim(CONVERSATION, true).await.unwrap_err().code,
+        "handoff_unknown"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -686,15 +972,50 @@ async fn send_take_back_import_and_undo() {
     let commit = cloud_turn(&h);
     // Preflight before reclaim is refused.
     assert_eq!(
-        h.host.preflight(CONVERSATION).await.unwrap_err().code,
+        h.host.preflight(CONVERSATION, None).await.unwrap_err().code,
         "handoff_not_reclaimed"
     );
-    let reclaimed = h.host.reclaim(CONVERSATION).await.unwrap();
+    let reclaimed = h.host.reclaim(CONVERSATION, false).await.unwrap();
     assert_eq!(reclaimed["state"], "RECLAIMING");
     let before = std::fs::read_to_string(h.folder.join("README.md")).unwrap();
-    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
-    assert_eq!(preflight.outcome, Outcome::FastPath);
+    // A turn the cloud chain does not have.
+    assert_eq!(
+        h.host
+            .preflight(CONVERSATION, Some(2))
+            .await
+            .unwrap_err()
+            .code,
+        "invalid_request"
+    );
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
+    assert_eq!(preflight.report.outcome, Outcome::FastPath);
     assert_eq!(preflight.cloud_turns, 1);
+    assert_eq!(preflight.up_to_turn, 1);
+    // The client contract (#1187): the engine's outcome, flattened.
+    let wire = serde_json::to_value(&preflight).unwrap();
+    assert_eq!(wire["outcome"], "fast_path");
+    assert_eq!(wire["applied"], false);
+    assert!(wire["base"].is_string() && wire["result_tree"].is_string());
+    assert_eq!(
+        wire["modes"],
+        serde_json::json!(["apply", "worktree", "discard"])
+    );
+    assert!(
+        wire["changed_paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["path"] == "README.md" && c["change"] == "modified" && c["from"].is_null()),
+        "{wire}"
+    );
+    assert!(
+        wire["skipped_paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["path"] == ".env" && s["reason"] == "excluded"),
+        "{wire}"
+    );
     // Risk 7: per-file unified diffs of what the take-back writes.
     let readme = preflight
         .files
@@ -721,12 +1042,22 @@ async fn send_take_back_import_and_undo() {
         "preflight wrote nothing"
     );
 
+    // Another turn than the preview's: refused, the preview kept.
+    assert_eq!(
+        h.host
+            .apply(&preflight.preflight_id, Mode::Apply, Some(2))
+            .await
+            .unwrap_err()
+            .code,
+        "invalid_request"
+    );
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Apply)
+        .apply(&preflight.preflight_id, Mode::Apply, Some(1))
         .await
         .unwrap();
     assert!(applied.applied && applied.released);
+    assert!(applied.report.applied);
     assert_eq!(applied.imported_turns, 1);
     assert_eq!(
         std::fs::read_to_string(h.folder.join("README.md")).unwrap(),
@@ -841,12 +1172,12 @@ async fn a_lost_release_is_kept_and_sent_again_by_status() {
         .await
         .unwrap();
     cloud_turn(&h);
-    h.host.reclaim(CONVERSATION).await.unwrap();
-    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
+    h.host.reclaim(CONVERSATION, false).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
     h.platform.lock().unwrap().fail_release = true;
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Discard)
+        .apply(&preflight.preflight_id, Mode::Discard, None)
         .await
         .unwrap();
     assert!(!applied.released);
@@ -890,12 +1221,14 @@ async fn a_retried_release_marks_the_session_for_reseeding() {
         version_id: 9,
         prompt: prompt.to_owned(),
         plan_mode: false,
+        bypass: false,
         mentions: Vec::new(),
         skills: Vec::new(),
         compact: false,
         model: None,
         project_skills: Vec::new(),
         command: None,
+        images: Vec::new(),
     };
     let emitter = h.emitter.clone();
     let run = |prompt: &'static str| {
@@ -939,12 +1272,12 @@ async fn a_retried_release_marks_the_session_for_reseeding() {
         .await
         .unwrap();
     cloud_turn(&h);
-    h.host.reclaim(CONVERSATION).await.unwrap();
-    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
+    h.host.reclaim(CONVERSATION, false).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
     h.platform.lock().unwrap().fail_release = true;
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Apply)
+        .apply(&preflight.preflight_id, Mode::Apply, None)
         .await
         .unwrap();
     assert!(!applied.released, "the release is refused once");
@@ -1008,6 +1341,154 @@ fn a_version_1_history_gains_the_turn_origin_column() {
     assert_eq!(turns[0].origin, "local");
 }
 
+/// Taking back up to turn 1 of 2 imports only turn 1 into the local
+/// history; turn 2 is reported as not taken back and its commit is kept on
+/// a branch of its own, and the folder has turn 1's tree only.
+#[tokio::test(flavor = "multi_thread")]
+async fn taking_back_up_to_turn_k_imports_only_those_turns() {
+    let h = harness().await;
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    let commits = cloud_turns_n(&h, 2);
+    no_commit_turn_after_turn_one(&h);
+    h.host.reclaim(CONVERSATION, false).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, Some(1)).await.unwrap();
+    assert_eq!((preflight.cloud_turns, preflight.up_to_turn), (2, 1));
+    let applied = h
+        .host
+        .apply(&preflight.preflight_id, Mode::Apply, Some(1))
+        .await
+        .unwrap();
+    assert!(applied.applied && applied.released);
+    assert_eq!(applied.imported_turns, 1);
+    assert_eq!(applied.turns_not_taken, 1);
+    let rest = applied.rest_branch.clone().unwrap();
+    assert_eq!(
+        git(&h.folder, &["log", "-1", "--format=%s", &rest]),
+        "cloud turn 2"
+    );
+    assert!(h.folder.join("src/cloud.rs").exists());
+    assert!(
+        !h.folder.join("src/cloud2.rs").exists(),
+        "turn 2 not taken back"
+    );
+    let release = h.platform.lock().unwrap().release.clone().unwrap();
+    assert_ne!(release["applied_sha"], json!(commits[1]));
+    let owner = Owner {
+        origin: h.platform.lock().unwrap().origin.clone(),
+        user_id: 7,
+    };
+    let turns = h
+        .history
+        .thread(&owner, &h.workspace_id, CONVERSATION)
+        .unwrap();
+    let ids: Vec<&str> = turns.iter().map(|turn| turn.turn_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["cloud:a1"],
+        "the answer after change 1 (no commit) and turn 2 are not local history"
+    );
+    // And no later seed of the agent's session holds them.
+    let key = crate::sessions::session_key(&owner.origin, 7, CONVERSATION);
+    assert_eq!(
+        h.sessions.store().seed_skips(&key).await.unwrap(),
+        [15, 16, 20, 21]
+    );
+}
+
+/// A cloud answer that changed nothing (no `workspace_commit`), after turn
+/// 1's answer and before turn 2's question (groups 15 and 16).
+fn no_commit_turn_after_turn_one(h: &Harness) {
+    let mut p = h.platform.lock().unwrap();
+    let epoch = p.epoch;
+    let at = p.groups.iter().position(|g| g["uuid"] == "a1").unwrap() + 1;
+    p.groups.insert(at, json!({"id": 15, "uuid": "qx", "meta": {}, "created_at": "2026-10-15 10:01:20.000000",
+        "message_items": [{"item_type": "text_message", "item_details": {"content": "Just explain the plan"}}]}));
+    p.groups.insert(at + 1, json!({"id": 16, "uuid": "ax", "reply_to_id": 15, "created_at": "2026-10-15 10:01:40.000000",
+        "meta": {"executed_by": "cloud_executor", "workspace_epoch": epoch},
+        "message_items": [{"item_type": "text_message", "item_details": {"content": "The plan, explained."}}]}));
+}
+
+/// Review of #1431: a markers take-back releases as `applied` (the
+/// server's outcomes are applied, worktree and discarded), its markers name
+/// the sides, and a refused mode or a folder that moved keeps the preview.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_markers_take_back_releases_as_applied_and_a_refusal_keeps_the_preview() {
+    let h = harness().await;
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    cloud_turn(&h);
+    std::fs::write(h.folder.join("README.md"), "hello from the laptop\n").unwrap();
+    h.host.reclaim(CONVERSATION, false).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
+    assert_eq!(preflight.report.outcome, Outcome::Conflicts);
+    let id = preflight.preflight_id.clone();
+
+    // A plain apply is refused, the preview kept.
+    let refused = h.host.apply(&id, Mode::Apply, None).await.unwrap_err();
+    assert_eq!(refused.code, "invalid_request");
+    assert!(
+        refused.message.starts_with("merge_conflicts"),
+        "{}",
+        refused.message
+    );
+    // The folder moved: refused, kept; back as it was: the same preview applies.
+    std::fs::write(h.folder.join("late.txt"), "late\n").unwrap();
+    let stale = h
+        .host
+        .apply(&id, Mode::ApplyWithMarkers, None)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        stale.code,
+        elitea_local_tools::handoff::apply::FOLDER_CHANGED
+    );
+    std::fs::remove_file(h.folder.join("late.txt")).unwrap();
+    let applied = h
+        .host
+        .apply(&id, Mode::ApplyWithMarkers, None)
+        .await
+        .unwrap();
+    assert_eq!(applied.outcome, "applied_with_markers");
+    assert!(applied.released, "{applied:?}");
+    assert_eq!(applied.release_refused, None);
+    let release = h.platform.lock().unwrap().release.clone().unwrap();
+    assert_eq!(release["outcome"], "applied");
+    let readme = std::fs::read_to_string(h.folder.join("README.md")).unwrap();
+    assert!(
+        readme.contains("<<<<<<< your folder\n") && readme.contains(">>>>>>> cloud\n"),
+        "{readme}"
+    );
+}
+
+/// A release body the server never takes (`invalid_handoff`) is refused for
+/// good: not kept, not sent again by the next status.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_release_the_server_never_takes_is_not_retried() {
+    let h = harness().await;
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    cloud_turn(&h);
+    h.host.reclaim(CONVERSATION, false).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
+    h.platform.lock().unwrap().invalid_release = true;
+    let applied = h
+        .host
+        .apply(&preflight.preflight_id, Mode::Apply, None)
+        .await
+        .unwrap();
+    assert_eq!(applied.release_refused.as_deref(), Some("invalid_handoff"));
+    h.host.status(CONVERSATION, None).await.unwrap();
+    h.host.status(CONVERSATION, None).await.unwrap();
+    assert_eq!(h.platform.lock().unwrap().releases, 1, "not sent again");
+}
+
 /// Risk 2: a take-back worktree (the folder moved on since the send)
 /// carries the folder's `.env`, is clean, and opens as a workspace with git
 /// checkpoints once its repository is an open workspace.
@@ -1021,12 +1502,15 @@ async fn a_take_back_worktree_opens_as_a_workspace_with_git_checkpoints() {
     cloud_turn(&h);
     git(&h.folder, &["add", "-A"]);
     git(&h.folder, &["commit", "-q", "-m", "moved on locally"]);
-    h.host.reclaim(CONVERSATION).await.unwrap();
-    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
-    assert_eq!(preflight.outcome, Outcome::Conflicts);
+    h.host.reclaim(CONVERSATION, false).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
+    // Tree-based: a commit that kept the folder's files is the fast path;
+    // the worktree is still on offer.
+    assert_eq!(preflight.report.outcome, Outcome::FastPath);
+    assert!(preflight.modes.contains(&Mode::Worktree));
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Worktree)
+        .apply(&preflight.preflight_id, Mode::Worktree, None)
         .await
         .unwrap();
     let path = std::path::PathBuf::from(applied.worktree_path.unwrap());
@@ -1528,12 +2012,12 @@ async fn a_release_refused_for_good_is_not_retried() {
         .await
         .unwrap();
     cloud_turn(&h);
-    h.host.reclaim(CONVERSATION).await.unwrap();
-    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
+    h.host.reclaim(CONVERSATION, false).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
     h.platform.lock().unwrap().erase_before_release = true;
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Apply)
+        .apply(&preflight.preflight_id, Mode::Apply, None)
         .await
         .unwrap();
     assert_eq!(applied.release_refused.as_deref(), Some("handoff_erased"));
@@ -1546,6 +2030,39 @@ async fn a_release_refused_for_good_is_not_retried() {
     let status = h.host.status(CONVERSATION, None).await.unwrap();
     assert_eq!(status["state"], "LOCAL");
     assert_eq!(h.platform.lock().unwrap().releases, 1, "not sent again");
+}
+
+/// A partial take-back whose release is refused for good (an erase won):
+/// the server keeps no remaining turns, so the seed boundary the take-back
+/// kept is lifted with the record instead of hiding those turns for ever.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_partial_release_lifts_the_seed_boundary() {
+    let h = harness().await;
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    cloud_turns_n(&h, 2);
+    h.host.reclaim(CONVERSATION, false).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, Some(1)).await.unwrap();
+    h.platform.lock().unwrap().erase_before_release = true;
+    let applied = h
+        .host
+        .apply(&preflight.preflight_id, Mode::Apply, Some(1))
+        .await
+        .unwrap();
+    assert_eq!(applied.release_refused.as_deref(), Some("handoff_erased"));
+    assert_eq!(applied.turns_not_taken, 1);
+    let origin = h.platform.lock().unwrap().origin.clone();
+    let key = crate::sessions::session_key(&origin, 7, CONVERSATION);
+    assert_eq!(
+        h.sessions.store().seed_skips(&key).await.unwrap(),
+        Vec::<i64>::new()
+    );
+    let status = h.host.status(CONVERSATION, None).await.unwrap();
+    assert_eq!(status["state"], "LOCAL");
+    assert_eq!(status["rest_turns"], json!(0));
+    assert_eq!(status["sent_from_here"], json!(false));
 }
 
 /// Live run 2026-10-16: a take-back asked while a cloud turn runs is
@@ -1562,10 +2079,10 @@ async fn a_take_back_asked_during_a_cloud_turn_releases_with_the_later_epoch() {
         .unwrap();
     cloud_turn(&h);
     h.platform.lock().unwrap().turn_running = true;
-    let pending = h.host.reclaim(CONVERSATION).await.unwrap();
+    let pending = h.host.reclaim(CONVERSATION, false).await.unwrap();
     assert_eq!(pending["reclaim_pending"], true);
     assert_eq!(
-        h.host.preflight(CONVERSATION).await.unwrap_err().code,
+        h.host.preflight(CONVERSATION, None).await.unwrap_err().code,
         "handoff_not_reclaimed"
     );
     {
@@ -1575,10 +2092,10 @@ async fn a_take_back_asked_during_a_cloud_turn_releases_with_the_later_epoch() {
         p.state = "RECLAIMING".into();
         p.epoch += 1;
     }
-    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Apply)
+        .apply(&preflight.preflight_id, Mode::Apply, None)
         .await
         .unwrap();
     assert!(applied.released, "{applied:?}");
@@ -1702,12 +2219,14 @@ async fn a_take_back_makes_the_next_local_turn_see_the_cloud_turns() {
         version_id: 9,
         prompt: prompt.to_owned(),
         plan_mode: false,
+        bypass: false,
         mentions: Vec::new(),
         skills: Vec::new(),
         compact: false,
         model: None,
         project_skills: Vec::new(),
         command: None,
+        images: Vec::new(),
     };
     let emitter = h.emitter.clone();
     let run = |prompt: &'static str| {
@@ -1777,11 +2296,11 @@ async fn a_take_back_makes_the_next_local_turn_see_the_cloud_turns() {
         c.steps.push(json!({"id": 902, "message_group_id": 13, "kind": "tool_call", "tool_name": "write_file",
             "tool_inputs": {"path": "CHANGELOG.md"}, "tool_output": "{\"written\":true}", "is_error": false}));
     }
-    h.host.reclaim(CONVERSATION).await.unwrap();
-    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
+    h.host.reclaim(CONVERSATION, false).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
     let applied = h
         .host
-        .apply(&preflight.preflight_id, Mode::Apply)
+        .apply(&preflight.preflight_id, Mode::Apply, None)
         .await
         .unwrap();
     assert!(applied.released);
@@ -1855,4 +2374,154 @@ async fn a_take_back_makes_the_next_local_turn_see_the_cloud_turns() {
     // And the next turn needs no seed.
     run("thanks").await;
     assert_eq!(seeds(&h), 1);
+}
+
+/// #1431 review: a take-back up to turn 1 of 2 re-seeds the agent's
+/// session without the later cloud turns, which the server still holds:
+/// the next local turn sees turn 1, never the answer after it or turn 2.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_partial_take_back_never_seeds_the_later_cloud_turns() {
+    use crate::d0::turn::TurnRequest;
+    let convo = Arc::new(Mutex::new(crate::d0::tests::Convo::default()));
+    let h = harness_full(
+        Arc::new(crate::handoff_settings::FixedEnv(Vec::new())),
+        None,
+        Some(convo.clone()),
+    )
+    .await;
+    let request = TurnRequest {
+        workspace_id: h.workspace_id.clone(),
+        project_id: 1,
+        conversation_id: json!(CONVERSATION),
+        application_id: 5,
+        version_id: 9,
+        prompt: "what did the cloud do?".to_owned(),
+        plan_mode: false,
+        bypass: false,
+        mentions: Vec::new(),
+        skills: Vec::new(),
+        compact: false,
+        model: None,
+        project_skills: Vec::new(),
+        command: None,
+        images: Vec::new(),
+    };
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    cloud_turns_n(&h, 2);
+    no_commit_turn_after_turn_one(&h);
+    h.host.reclaim(CONVERSATION, false).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, Some(1)).await.unwrap();
+    let applied = h
+        .host
+        .apply(&preflight.preflight_id, Mode::Apply, Some(1))
+        .await
+        .unwrap();
+    assert!(applied.released, "{applied:?}");
+
+    let started = h.agents.start(request).await.unwrap();
+    for _ in 0..500 {
+        if h.emitter
+            .all()
+            .iter()
+            .any(|e| e.kind == "done" && e.turn_id == started.turn_id)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::timeout(Duration::from_secs(5), h.agents.commits_idle())
+        .await
+        .expect("the turn's commit settled");
+    let bodies: Vec<String> = h
+        ._server
+        .seen()
+        .into_iter()
+        .filter(|r| r.path == "/llm/v1/chat/completions")
+        .map(|r| r.body)
+        .collect();
+    let text = bodies.first().expect("the turn called the model");
+    assert!(text.contains("Make it greet the cloud"), "{text}");
+    assert!(text.contains("what did the cloud do?"), "{text}");
+    for unseen in [
+        "Just explain the plan",
+        "The plan, explained.",
+        "Turn 2, please",
+        "Done: turn 2.",
+    ] {
+        assert!(!text.contains(unseen), "{unseen} in {text}");
+    }
+}
+
+/// #1223: a send stops the workspace's background processes before the
+/// snapshot: nothing the agent started keeps running, or writing, while
+/// the thread leaves the device.
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_start_kills_background_processes() {
+    let h = harness().await;
+    *h.policy.0.lock().unwrap() = json!({"allowed": true, "cloud_handoff": true, "shell": true});
+    let session = h
+        .agents
+        .local_session(&h.workspace_id, h.folder.clone())
+        .unwrap();
+    // `cat` reads its stdin until it closes: it runs until stopped.
+    let started = session
+        .call(
+            "run_command",
+            "c1",
+            json!({ "command": "cat", "background": true }),
+        )
+        .await;
+    assert_eq!(started["status"], "running", "{started}");
+    let id = started["process_id"].as_str().unwrap().to_owned();
+
+    let sent = h
+        .host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    assert_eq!(sent.state, "CLOUD_IDLE");
+    let process = session.process(&id).unwrap();
+    assert!(!process.is_running());
+    assert_eq!(
+        process.info().status,
+        elitea_local_tools::process::ProcessState::Killed
+    );
+}
+
+/// The handoff note names what stays on the laptop: the person's hooks
+/// (#1237) when they have any, and always the diagnostics tool (#1236).
+#[test]
+fn the_handoff_note_names_hooks_and_diagnostics() {
+    let snap = elitea_local_tools::handoff::snapshot::Snapshot {
+        shadow: false,
+        head: None,
+        tree: String::new(),
+        base: String::new(),
+        upstream: None,
+        handoff: String::new(),
+        twin: String::new(),
+        files: 3,
+        unpacked_bytes: 0,
+        excluded: Vec::new(),
+        included: Vec::new(),
+        findings: Vec::new(),
+        include_findings: Vec::new(),
+        caps: elitea_local_tools::handoff::caps::CapReport::default(),
+        patterns: elitea_local_tools::handoff::exclude::Patterns::default(),
+    };
+    let with_hooks = super::handoff_note(&snap, false, true);
+    assert!(
+        with_hooks.contains("hooks stay on the laptop"),
+        "{with_hooks}"
+    );
+    assert!(
+        with_hooks.contains("diagnostics tool (language servers) is not available in the cloud"),
+        "{with_hooks}"
+    );
+    let without = super::handoff_note(&snap, false, false);
+    assert!(!without.contains("hooks"), "{without}");
+    assert!(without.contains("diagnostics tool"), "{without}");
 }

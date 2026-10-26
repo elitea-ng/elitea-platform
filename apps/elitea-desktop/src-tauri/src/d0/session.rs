@@ -36,6 +36,10 @@ const CARRIED_ON_SEED: &[&str] = &[MODEL_CHOICE_KEY];
 pub struct SessionPlan {
     pub service: Arc<dyn SessionService>,
     pub session_id: String,
+    /// The thread's framing nonce, as 32 hex digits: the stored one, a new
+    /// one when the session was (re)seeded from the server, and a fresh one
+    /// per turn for the in-memory fallback (`crate::sessions::ThreadNonce`).
+    pub nonce: String,
     /// The durable store behind it; `None` for the in-memory fallback.
     durable: Option<Durable>,
     /// The conversation's group count after this turn's two messages.
@@ -55,6 +59,25 @@ pub enum SessionError {
     Api(ApiError),
     /// Another turn of this conversation is running.
     Busy,
+}
+
+/// Drop the message groups `skips` (and their tool steps) from a server
+/// transcript.
+fn leave_out(
+    groups: &mut Vec<serde_json::Value>,
+    steps: &mut std::collections::HashMap<i64, Vec<crate::seed::ToolStep>>,
+    skips: &[i64],
+) {
+    if skips.is_empty() {
+        return;
+    }
+    groups.retain(|group| {
+        group
+            .get("id")
+            .and_then(serde_json::Value::as_i64)
+            .is_none_or(|id| !skips.contains(&id))
+    });
+    steps.retain(|id, _| !skips.contains(id));
 }
 
 impl SessionPlan {
@@ -132,7 +155,7 @@ impl SessionPlan {
             None => (!empty_conversation, false),
         };
         let events = if needs_seed && !empty_conversation {
-            let (groups, steps) = api
+            let (mut groups, mut steps, forked_from) = api
                 .server_transcript(
                     project_id,
                     &answering.conversation_uuid,
@@ -141,23 +164,41 @@ impl SessionPlan {
                 )
                 .await
                 .map_err(SessionError::Api)?;
-            seed::fold(&groups, &steps, AGENT_AUTHOR, strip)
+            // The cloud turns a partial take-back did not take back stay on
+            // the server; the agent never sees them (#1187).
+            if let Some((state_store, key, _)) = &durable {
+                let skips = match state_store.store().seed_skips(key).await {
+                    Ok(skips) => skips,
+                    Err(error) => {
+                        log::warn!("the seed boundary could not be read: {error}");
+                        Vec::new()
+                    }
+                };
+                leave_out(&mut groups, &mut steps, &skips);
+            }
+            seed::with_branch_note(
+                seed::fold(&groups, &steps, AGENT_AUTHOR, strip),
+                forked_from.as_ref(),
+                AGENT_AUTHOR,
+            )
         } else {
             Vec::new()
         };
         match durable {
-            Some((state_store, key, _)) => {
+            Some((state_store, key, state)) => {
                 let store = state_store.store().clone();
+                let mut nonce = state.nonce;
                 if needs_seed {
                     // Empty conversation or not, the session now agrees.
-                    if let Err(error) = store.seed(&key, events, cursor_now, CARRIED_ON_SEED).await
-                    {
-                        log::warn!("the session could not be seeded: {error}");
+                    match store.seed(&key, events, cursor_now, CARRIED_ON_SEED).await {
+                        Ok(reseeded) => nonce = reseeded,
+                        Err(error) => log::warn!("the session could not be seeded: {error}"),
                     }
                 }
                 Ok(Self {
                     service: state_store.sessions(),
                     session_id: key.clone(),
+                    nonce: nonce.hex(),
                     durable: Some(Durable { store, key, scope }),
                     cursor_after,
                 })
@@ -184,6 +225,7 @@ impl SessionPlan {
                 Ok(Self {
                     service,
                     session_id,
+                    nonce: super::framing::nonce(),
                     durable: None,
                     cursor_after: None,
                 })

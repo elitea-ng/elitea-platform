@@ -48,6 +48,11 @@ export const UploadObjectResponse = zod.object({
   media_type: zod.string(),
   etag: zod.string(),
   created_at: zod.iso.datetime({ offset: true }),
+  updated_at: zod.iso
+    .datetime({ offset: true })
+    .describe(
+      "This write's time (artifacts/objects.go UploadObject); differs from created_at when overwrite=true replaced an existing object.\n",
+    ),
 });
 
 export type UploadObjectResponse = zod.input<typeof UploadObjectResponse>;

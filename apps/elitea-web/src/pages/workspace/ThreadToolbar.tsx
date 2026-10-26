@@ -2,12 +2,13 @@
  * The thread's toolbar, a native unified title bar: sidebar toggle, the title
  * (folder ▸ thread, a button that opens the folder's path card), an optional
  * centre slot (the activity island), and at the trailing edge the inspector
- * toggle and a ⋯ menu. Everything else that used to sit here lives where a
+ * toggle and a ⋯ menu (its Rename Thread turns the title into a field). Everything else that used to sit here lives where a
  * native app keeps it: the agent, mode and run location in the composer's
  * footer; the index in the inspector; the rest in the Thread and Folder menus.
  */
 import { useState } from 'react';
 
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 
 import FolderOpenOutlinedIcon from '@mui/icons-material/FolderOpenOutlined';
@@ -27,13 +28,14 @@ import Typography from '@mui/material/Typography';
 
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import CheckOutlinedIcon from '@mui/icons-material/CheckOutlined';
-import { readThreads, type ProjectChoice } from '@/features/workspace';
+import { readThreads, threadNames, threadsQueryKey } from '@/features/workspace';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { IndexIdleLine } from '@/features/workspace-index';
 import { ActivityIsland, conversationLink, copyText as copy, selectInspectorShown, ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { PanelToggle } from './sessionParts';
+import type { ProjectChoice } from './useBindableProjects';
 
 export interface ThreadToolbarProps {
   workspace: Workspace;
@@ -127,13 +129,32 @@ const rowButtonSx = (theme: Theme) => ({
   '&:hover': { background: theme.vars.palette.action.hover },
 });
 
-/** The title: folder ▸ thread. Clicking opens the path card. */
-function ThreadTitle(props: ThreadToolbarProps): React.JSX.Element {
-  const { workspace, conversationId, pathOpen, onPathOpenChange } = props;
+interface RenameProps {
+  /** ⋯ ▸ Rename Thread is on: the title is a field. */
+  renaming: boolean;
+  onRenamingChange: (renaming: boolean) => void;
+}
+
+/** The title: folder ▸ thread. Clicking opens the path card; while renaming, the thread's part is a field. */
+function ThreadTitle(props: ThreadToolbarProps & RenameProps): React.JSX.Element {
+  const { workspace, conversationId, projectId, pathOpen, onPathOpenChange, renaming, onRenamingChange } = props;
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const thread = conversationId === '' ? undefined : readThreads(workspace.id).find((x) => x.id === conversationId);
+  // Through the sidebar's threads query, so a rename or a generated name shows at once.
+  const threads = useQuery({ queryKey: threadsQueryKey(workspace.id), queryFn: () => readThreads(workspace.id) });
+  const thread = conversationId === '' ? undefined : threads.data?.find((x) => x.id === conversationId);
   const title = thread?.title !== undefined && thread.title !== '' ? thread.title : t('workspace.thread.untitled', 'New thread');
   const open = anchor !== null && pathOpen;
+  if (renaming && thread !== undefined) {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 240, padding: '2px 6px' }}>
+        <Typography component="h1" variant="labelMedium" sx={{ margin: 0, whiteSpace: 'nowrap', flexShrink: 0 }}>
+          {workspace.name}
+        </Typography>
+        <ChevronRightIcon aria-hidden sx={(theme: Theme) => ({ fontSize: 14, color: theme.vars.palette.text.metrics, flexShrink: 0, marginX: -0.25 })} />
+        <threadNames.RenameField thread={{ workspaceId: workspace.id, projectId, conversationId }} name={thread.title} onDone={() => onRenamingChange(false)} />
+      </Box>
+    );
+  }
   return (
     <>
       <ButtonBase
@@ -176,7 +197,7 @@ function ThreadTitle(props: ThreadToolbarProps): React.JSX.Element {
 }
 
 /** Trailing ⋯: what the thread offers that has no toolbar button of its own. */
-function Overflow({ conversationId, onIndexSettings, onFork, busy }: Pick<ThreadToolbarProps, 'conversationId' | 'onIndexSettings' | 'onFork' | 'busy'>): React.JSX.Element {
+function Overflow({ conversationId, onIndexSettings, onFork, onRename, busy }: Pick<ThreadToolbarProps, 'conversationId' | 'onIndexSettings' | 'onFork' | 'busy'> & { onRename: () => void }): React.JSX.Element {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const navigate = useNavigate();
   const link = conversationLink(conversationId);
@@ -207,6 +228,15 @@ function Overflow({ conversationId, onIndexSettings, onFork, busy }: Pick<Thread
           }}
         >
           {t('workspace.copyLink', 'Copy Link')}
+        </MenuItem>
+        <MenuItem
+          disabled={conversationId === ''}
+          onClick={() => {
+            close();
+            onRename();
+          }}
+        >
+          {t('workspace.thread.rename', 'Rename Thread')}
         </MenuItem>
         {onFork !== undefined && (
           <MenuItem
@@ -239,6 +269,7 @@ export function ThreadToolbar(props: ThreadToolbarProps): React.JSX.Element {
   // Shown whenever the inspector is not on screen: hidden, or every one of the thread's tabs closed.
   const inspectorShown = useDesktopLayout(selectInspectorShown);
   const sidebarOpen = useDesktopLayout((state) => state.sidebarOpen);
+  const [renaming, setRenaming] = useState(false);
   return (
     <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
       <TitleBarSpacer
@@ -247,13 +278,13 @@ export function ThreadToolbar(props: ThreadToolbarProps): React.JSX.Element {
         trailing={
           <>
             {!inspectorShown && <PanelToggle count={props.attention} />}
-            <Overflow conversationId={props.conversationId} onIndexSettings={props.onIndexSettings} onFork={props.onFork} busy={props.busy} />
+            <Overflow conversationId={props.conversationId} onIndexSettings={props.onIndexSettings} onFork={props.onFork} onRename={() => setRenaming(true)} busy={props.busy} />
           </>
         }
       >
         <ShowSidebarButton />
         <Box sx={{ flex: '0 1 auto', minWidth: 0 }}>
-          <ThreadTitle {...props} />
+          <ThreadTitle {...props} renaming={renaming} onRenamingChange={setRenaming} />
         </Box>
         <Box sx={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
           <IndexIdleLine workspaceId={props.workspace.id}>{(line) => <ActivityIsland idle={line} />}</IndexIdleLine>

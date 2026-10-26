@@ -33,6 +33,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/mcp"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 )
 
 /* ── fake start ────────────────────────────────────────────────────────── */
@@ -350,6 +351,48 @@ func TestARefusedAdmissionLeavesNoEmptyConversation(t *testing.T) {
 	}
 	if conversations != 0 {
 		t.Fatalf("a refused admission left %d conversations behind, want 0", conversations)
+	}
+}
+
+// The same refusal against the participant key the tenant migrations ship
+// (#1429). This file's bootstrap schema (001_initial.sql) always declared
+// chat_participant_mapping's key with ON DELETE CASCADE, so the test above
+// passed while deployments (tenant 0123, no cascade) refused the bare DELETE
+// with 23503 and left the conversation behind, unlogged. Here the key is
+// first given the shape the migrations produce (0123, then 0157).
+func TestARefusedAdmissionLeavesNoConversationUnderTheShippedParticipantKey(t *testing.T) {
+	pool := newMCPPool(t)
+	if err := dbtest.UseShippedParticipantKey(context.Background(), pool, homeSchema); err != nil {
+		t.Fatal(err)
+	}
+	seedUser(t, pool, callerUserID)
+	seedAgent(t, pool, homeSchema, "Release Notes", "writes release notes", "mcp")
+
+	start := &fakeStart{err: agentexecutionapp.ErrUnsupportedCurrentAgentStart}
+	var mappingsAtStart int
+	start.onStart = func(agentexecutionapp.CurrentApplicationStartRequest) {
+		// The conversation the refusal must discard really has mappings.
+		if err := pool.QueryRow(context.Background(), fmt.Sprintf(
+			`SELECT count(*) FROM %q.chat_participant_mapping`, homeSchema)).Scan(&mappingsAtStart); err != nil {
+			t.Errorf("count mappings at start: %v", err)
+		}
+	}
+	result := callTool(t, pool, start, "/app/"+homeProject+"/mcp", "Release_Notes", "go")
+	if result["isError"] != true {
+		t.Fatalf("isError = %v, want true", result["isError"])
+	}
+	if mappingsAtStart == 0 {
+		t.Fatal("the run conversation had no participant mappings, so this test proves nothing")
+	}
+	var conversations, mappings int
+	if err := pool.QueryRow(context.Background(), fmt.Sprintf(`
+SELECT (SELECT count(*) FROM %[1]q.chat_conversations),
+       (SELECT count(*) FROM %[1]q.chat_participant_mapping)`, homeSchema)).Scan(&conversations, &mappings); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if conversations != 0 || mappings != 0 {
+		t.Fatalf("a refused admission left %d conversations and %d mappings behind, want 0 and 0",
+			conversations, mappings)
 	}
 }
 

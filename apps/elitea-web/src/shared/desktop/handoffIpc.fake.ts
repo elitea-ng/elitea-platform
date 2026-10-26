@@ -22,6 +22,7 @@
  * in an included path is a warning, any other blocks.
  */
 import type {
+  ApplyOutcome,
   ApplyResult,
   EnvVar,
   FolderHandoffSettings,
@@ -112,8 +113,11 @@ export interface FakeHandoffIpc extends HandoffIpc {
     statuses: string[];
     statusManys: string[][];
     reclaims: string[];
+    reclaimRests: boolean[]; // whether each reclaim asked for the remaining turns
     preflights: string[];
-    applies: { preflightId: string; mode: TakeBackMode }[];
+    /** The turn each preflight asked for (`undefined`: the latest). */
+    preflightTurns: (number | undefined)[];
+    applies: { preflightId: string; mode: TakeBackMode; upToTurn?: number }[];
     undos: string[];
     erases: string[];
     settingsGets: string[];
@@ -154,21 +158,27 @@ export function createFakeHandoffIpc(initial: FakeInitial = {}): FakeHandoffIpc 
   let preflight: Preflight = {
     preflight_id: 'pf-1',
     outcome: 'fast_path',
-    changed_paths: ['src/main.rs'],
+    applied: false,
+    changed_paths: [{ path: 'src/main.rs', change: 'modified', from: null }],
     conflict_paths: [],
     skipped_paths: [],
+    base: 'b'.repeat(40),
+    result_tree: 'c'.repeat(40),
     cloud_turns: 1,
+    up_to_turn: 1,
     modes: ['apply', 'worktree', 'discard'],
     files: [{ path: 'src/main.rs', status: 'modified', added: 1, removed: 1, diff: '--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1 +1 @@\n-fn main() {}\n+fn main() { run() }\n' }],
     diffs_truncated: false,
   };
-  let apply: ApplyResult = {
+  let apply: Omit<ApplyResult, 'report'> & { report?: ApplyResult['report'] } = {
     applied: true,
     outcome: 'applied',
     checkpoint_id: 'w1:7',
     worktree_path: null,
     branch: 'elitea/cloud/abcd1234',
     imported_turns: 1,
+    turns_not_taken: 0,
+    rest_branch: null,
     released: true,
     copied: [],
   };
@@ -178,8 +188,8 @@ export function createFakeHandoffIpc(initial: FakeInitial = {}): FakeHandoffIpc 
   const handlers = new Set<HandoffEventHandler>();
   const failures = new Map<FailableCommand, HandoffIpcError>();
   const calls: FakeHandoffIpc['calls'] = {
-    previews: [], sends: [], cancels: [], statuses: [], statusManys: [], reclaims: [],
-    preflights: [], applies: [], undos: [], erases: [], settingsGets: [], settingsSets: [],
+    previews: [], sends: [], cancels: [], statuses: [], statusManys: [], reclaims: [], reclaimRests: [],
+    preflights: [], preflightTurns: [], applies: [], undos: [], erases: [], settingsGets: [], settingsSets: [],
   };
   const failure = (command: FailableCommand): Promise<never> | undefined => {
     const error = failures.get(command);
@@ -333,21 +343,25 @@ export function createFakeHandoffIpc(initial: FakeInitial = {}): FakeHandoffIpc 
       if (failed !== undefined) return failed;
       return Promise.resolve(Object.fromEntries(conversationUuids.map((uuid) => [uuid, statusOf(uuid)])));
     },
-    reclaim(conversationUuid) {
+    reclaim(conversationUuid, options) {
       calls.reclaims.push(conversationUuid);
+      calls.reclaimRests.push(options?.rest === true);
       return failure('reclaim') ?? Promise.resolve({ ...reclaim });
     },
-    preflight(conversationUuid) {
+    preflight(conversationUuid, upToTurn) {
       calls.preflights.push(conversationUuid);
-      return failure('preflight') ?? Promise.resolve(structuredClone(preflight));
+      calls.preflightTurns.push(upToTurn);
+      return failure('preflight') ?? Promise.resolve(structuredClone({ ...preflight, up_to_turn: upToTurn ?? preflight.cloud_turns }));
     },
-    apply(preflightId, mode) {
-      calls.applies.push({ preflightId, mode });
-      return failure('apply') ?? Promise.resolve(structuredClone(apply));
+    apply(preflightId, mode, upToTurn) {
+      calls.applies.push(upToTurn === undefined ? { preflightId, mode } : { preflightId, mode, upToTurn });
+      const { outcome, changed_paths, conflict_paths, skipped_paths, base, result_tree } = preflight;
+      const report: ApplyOutcome = apply.report ?? { outcome, applied: apply.applied, changed_paths, conflict_paths, skipped_paths, base, result_tree };
+      return failure('apply') ?? Promise.resolve(structuredClone({ ...apply, report }));
     },
     undo(checkpointId) {
       calls.undos.push(checkpointId);
-      return failure('undo') ?? Promise.resolve({ restored: preflight.changed_paths });
+      return failure('undo') ?? Promise.resolve({ restored: preflight.changed_paths.map((change) => change.path) });
     },
     erase(conversationUuid) {
       calls.erases.push(conversationUuid);

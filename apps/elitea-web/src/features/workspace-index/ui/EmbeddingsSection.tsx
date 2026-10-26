@@ -9,7 +9,7 @@
  * large index. A model's files can be imported from a folder (no download)
  * or removed; the deployment's models are offered from the project's list.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
@@ -27,6 +27,7 @@ import { EMBEDDINGS_OFF, type EmbedStatus, type ModelInfo } from '@/shared/deskt
 import { t } from '@/shared/i18n';
 
 import { describeIndexError } from '../model/describeIndexError';
+import { EmbeddingEstimate } from './EmbeddingEstimate';
 import { LOCAL_PREFIX, localModelOf, recommendedModel, REMOTE_PREFIX, remoteModelOf, type WorkspaceEmbeddings } from '../model/useEmbeddings';
 
 const mutedSx = (theme: Theme) => ({
@@ -34,6 +35,9 @@ const mutedSx = (theme: Theme) => ({
 });
 
 const REMOTE_OPTION = 'remote';
+
+/** How long the model field must rest before its estimate is asked (each one reads the index and the budget). */
+const ESTIMATE_DELAY_MS = 400;
 
 /** `470 MB`, `1.2 GB`. */
 function formatSize(bytes: number): string {
@@ -60,6 +64,28 @@ function runningLine(status: EmbedStatus, counts: { done: string; total: string 
   return t('workspace.index.embeddings.runningEta', 'Embedding: {{done}} of {{total}} chunks, about {{left}} left.', { ...counts, left: formatDuration(status.eta_seconds) });
 }
 
+/** Why a run stopped short of done: a token cap, or the project's budget. */
+function stoppedLine(status: EmbedStatus, counts: { done: string; total: string }): string {
+  if (status.state === 'budget_exhausted') {
+    return t('workspace.index.embeddings.budgetExhausted', 'The project’s budget is used up ({{done}} of {{total}} chunks). Embedding stopped and nothing more is sent until you try again.', counts);
+  }
+  return status.cap === 'day'
+    ? t('workspace.index.embeddings.cappedDay', 'Stopped at today’s token limit ({{done}} of {{total}} chunks). It continues tomorrow, or raise the limit.', counts)
+    : t('workspace.index.embeddings.cappedRun', 'Stopped at this run’s token limit ({{done}} of {{total}} chunks). What was embedded is kept; embed now to continue.', counts);
+}
+
+function heldLine(status: EmbedStatus, counts: { done: string; total: string }): string {
+  switch (status.held) {
+    case 'on_battery':
+      return t('workspace.index.embeddings.onBattery', 'Paused on battery ({{done}} of {{total}}); it continues on power.', counts);
+    case 'low_power':
+      return t('workspace.index.embeddings.lowPower', 'Paused in Low Power Mode ({{done}} of {{total}}).', counts);
+    case 'turn':
+    case null:
+      return t('workspace.index.embeddings.turn', 'Paused while an agent works ({{done}} of {{total}}).', counts);
+  }
+}
+
 function statusLine(status: EmbedStatus): string {
   const counts = { done: String(status.done), total: String(status.total) };
   switch (status.state) {
@@ -69,18 +95,13 @@ function statusLine(status: EmbedStatus): string {
       return t('workspace.index.embeddings.waiting', 'Waiting to embed ({{done}} of {{total}} chunks).', counts);
     case 'done':
       return t('workspace.index.embeddings.done', '{{done}} chunks embedded; searches use their meaning too.', counts);
+    case 'capped':
+    case 'budget_exhausted':
+      return stoppedLine(status, counts);
     case 'error':
       return status.error ?? t('workspace.index.embeddings.failed', 'Embedding failed; it is tried again shortly.');
     case 'paused':
-      switch (status.held) {
-        case 'on_battery':
-          return t('workspace.index.embeddings.onBattery', 'Paused on battery ({{done}} of {{total}}); it continues on power.', counts);
-        case 'low_power':
-          return t('workspace.index.embeddings.lowPower', 'Paused in Low Power Mode ({{done}} of {{total}}).', counts);
-        case 'turn':
-        case null:
-          return t('workspace.index.embeddings.turn', 'Paused while an agent works ({{done}} of {{total}}).', counts);
-      }
+      return heldLine(status, counts);
   }
 }
 
@@ -138,6 +159,19 @@ function Remote({ embeddings }: { embeddings: WorkspaceEmbeddings }): React.JSX.
   const listed = embeddings.remoteModels;
   const stored = remoteModelOf(embeddings.choice);
   const [model, setModel] = useState(stored ?? listed?.[0]?.name ?? '');
+  // The estimate follows the model being looked at, before it is used, once
+  // the field rests: not one estimate per keystroke.
+  const { consider } = embeddings;
+  const trimmed = model.trim();
+  useEffect(() => {
+    if (trimmed === '') {
+      consider(null);
+      return undefined;
+    }
+    const timer = setTimeout(() => consider(`${REMOTE_PREFIX}${trimmed}`), ESTIMATE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [consider, trimmed]);
+  useEffect(() => () => consider(null), [consider]);
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, paddingLeft: 4 }}>
       <Alert severity="warning">{t('workspace.index.embeddings.remoteWarning', 'This folder’s code is sent to your deployment’s embeddings model, paid from the bound project’s budget.')}</Alert>
@@ -256,10 +290,16 @@ function Progress({ embeddings, status }: { embeddings: WorkspaceEmbeddings; sta
     <Box data-testid="index-embeddings-status" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
       <Typography variant="bodySmall" sx={{ flex: 1 }}>
         {statusLine(status)}
+        {status.state === 'budget_exhausted' && status.error !== null && <Box component="span" sx={mutedSx}>{` (${status.error})`}</Box>}
       </Typography>
-      {status.state === 'paused' && status.held !== 'turn' && (
+      {((status.state === 'paused' && status.held !== 'turn') || (status.state === 'capped' && status.cap === 'run')) && (
         <Button size="small" disabled={embeddings.pending} onClick={() => embeddings.run({ kind: 'rebuild', full: false })}>
           {t('workspace.index.embeddings.now', 'Embed now')}
+        </Button>
+      )}
+      {status.state === 'budget_exhausted' && (
+        <Button size="small" disabled={embeddings.pending} onClick={() => embeddings.run({ kind: 'rebuild', full: false })}>
+          {t('workspace.index.embeddings.tryAgain', 'Try again')}
         </Button>
       )}
       {status.state === 'done' && (
@@ -304,6 +344,7 @@ export function EmbeddingsSection({ embeddings, chunks = 0 }: { embeddings: Work
         <Alert severity="error">{t('workspace.index.embeddings.downloadFailed', 'The download failed: {{error}}', { error: embeddings.downloadError.error })}</Alert>
       )}
       {status !== null && choice !== EMBEDDINGS_OFF && <Progress embeddings={embeddings} status={status} />}
+      <EmbeddingEstimate embeddings={embeddings} />
       <ModelFiles embeddings={embeddings} />
       {embeddings.actionError !== null && <Alert severity="error">{describeIndexError(embeddings.actionError)}</Alert>}
     </Box>

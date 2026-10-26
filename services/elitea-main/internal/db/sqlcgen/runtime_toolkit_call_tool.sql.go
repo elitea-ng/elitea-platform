@@ -196,7 +196,7 @@ INSERT INTO elitea_runtime.execution_jobs (
     projection_project_id, actor_id, principal_ref, capability_id,
     capability_version, input_bundle_id, request_digest,
     idempotency_scope, idempotency_key, state, desired_state, admitted_at,
-    memory_toolkit_ids
+    memory_toolkit_ids, attribution_execution_id
 ) VALUES (
     $1::text,
     $2::bigint,
@@ -218,29 +218,33 @@ INSERT INTO elitea_runtime.execution_jobs (
     -- shared/0166: the resolved toolkit itself when it is a memory toolkit
     -- (its type and id come from the project's elitea_tools row, never from
     -- the call's arguments). Never NULL.
-    COALESCE($16::bigint[], '{}')
+    COALESCE($16::bigint[], '{}'),
+    -- shared/0174: the desktop local turn a remote call was admitted for,
+    -- verified live by the route; NULL for every other run.
+    NULLIF($17::text, '')
 )
 ON CONFLICT (idempotency_scope, idempotency_key) DO NOTHING
 RETURNING execution_id
 `
 
 type InsertToolkitCallToolJobParams struct {
-	ExecutionID         string             `db:"execution_id" json:"execution_id"`
-	Generation          int64              `db:"generation" json:"generation"`
-	CommandID           string             `db:"command_id" json:"command_id"`
-	TenantID            string             `db:"tenant_id" json:"tenant_id"`
-	ResourceProjectID   int32              `db:"resource_project_id" json:"resource_project_id"`
-	ProjectionProjectID int32              `db:"projection_project_id" json:"projection_project_id"`
-	ActorID             string             `db:"actor_id" json:"actor_id"`
-	PrincipalRef        string             `db:"principal_ref" json:"principal_ref"`
-	CapabilityVersion   string             `db:"capability_version" json:"capability_version"`
-	InputBundleID       string             `db:"input_bundle_id" json:"input_bundle_id"`
-	RequestDigest       []byte             `db:"request_digest" json:"request_digest"`
-	IdempotencyScope    string             `db:"idempotency_scope" json:"idempotency_scope"`
-	IdempotencyKey      string             `db:"idempotency_key" json:"idempotency_key"`
-	State               string             `db:"state" json:"state"`
-	AdmittedAt          pgtype.Timestamptz `db:"admitted_at" json:"admitted_at"`
-	MemoryToolkitIds    []int64            `db:"memory_toolkit_ids" json:"memory_toolkit_ids"`
+	ExecutionID            string             `db:"execution_id" json:"execution_id"`
+	Generation             int64              `db:"generation" json:"generation"`
+	CommandID              string             `db:"command_id" json:"command_id"`
+	TenantID               string             `db:"tenant_id" json:"tenant_id"`
+	ResourceProjectID      int32              `db:"resource_project_id" json:"resource_project_id"`
+	ProjectionProjectID    int32              `db:"projection_project_id" json:"projection_project_id"`
+	ActorID                string             `db:"actor_id" json:"actor_id"`
+	PrincipalRef           string             `db:"principal_ref" json:"principal_ref"`
+	CapabilityVersion      string             `db:"capability_version" json:"capability_version"`
+	InputBundleID          string             `db:"input_bundle_id" json:"input_bundle_id"`
+	RequestDigest          []byte             `db:"request_digest" json:"request_digest"`
+	IdempotencyScope       string             `db:"idempotency_scope" json:"idempotency_scope"`
+	IdempotencyKey         string             `db:"idempotency_key" json:"idempotency_key"`
+	State                  string             `db:"state" json:"state"`
+	AdmittedAt             pgtype.Timestamptz `db:"admitted_at" json:"admitted_at"`
+	MemoryToolkitIds       []int64            `db:"memory_toolkit_ids" json:"memory_toolkit_ids"`
+	AttributionExecutionID string             `db:"attribution_execution_id" json:"attribution_execution_id"`
 }
 
 func (q *Queries) InsertToolkitCallToolJob(ctx context.Context, arg InsertToolkitCallToolJobParams) (string, error) {
@@ -261,6 +265,7 @@ func (q *Queries) InsertToolkitCallToolJob(ctx context.Context, arg InsertToolki
 		arg.State,
 		arg.AdmittedAt,
 		arg.MemoryToolkitIds,
+		arg.AttributionExecutionID,
 	)
 	var execution_id string
 	err := row.Scan(&execution_id)

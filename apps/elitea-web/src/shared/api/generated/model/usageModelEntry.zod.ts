@@ -43,8 +43,26 @@
 import * as zod from "zod";
 
 export const UsageModelEntry = zod.object({
-  provider: zod.string(),
-  model: zod.string(),
+  provider: zod
+    .string()
+    .describe("The model provider, or for a tool row the vendor (`tavily`)."),
+  model: zod
+    .string()
+    .describe("The model, or for a tool row the operation (`web_search`)."),
+  operation: zod
+    .enum(["llm", "tool"])
+    .optional()
+    .describe(
+      "`tool` for a metered tool operation, which bills per unit and has\nno tokens; `llm` for a model call.\n",
+    ),
+  units: zod
+    .int()
+    .optional()
+    .describe("Units a tool row consumed. Absent on an llm row."),
+  unit: zod
+    .enum(["request", "credit", "page"])
+    .optional()
+    .describe("What `units` counts. Absent on an llm row."),
   spend: zod
     .number()
     .nullish()

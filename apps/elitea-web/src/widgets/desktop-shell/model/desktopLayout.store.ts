@@ -38,6 +38,8 @@ export interface SessionActions {
   chooseAgent?: () => void;
   indexSettings?: () => void;
   handoffSettings?: () => void;
+  /** Files dropped on the window: the composer attaches the images among them (#1229); absent when it takes none. */
+  attachFiles?: ((paths: string[]) => void) | undefined;
 }
 
 /** What the page on screen offers the inspector: its kind and its tabs (none: `page` is `null`). */

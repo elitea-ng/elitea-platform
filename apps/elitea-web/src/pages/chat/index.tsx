@@ -51,6 +51,7 @@ import { ContextBudgetIndicator } from '@/widgets/context-budget';
 import { ForkErrorSnackbar, ForkedFromLink, useChatFork } from './ChatFork';
 import { ChatParticipantsPanel } from './ChatParticipantsPanel';
 import { handoffExtensions } from './handoffExtensions';
+import { useAutoConversationName } from './useAutoConversationName';
 import { useChatPageData } from './useChatPageData';
 import { useChatModelSettings } from './useChatModelSettings';
 import { useAddParticipants } from './useAddParticipants';
@@ -177,6 +178,7 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
   const fork = useChatFork(projectId, conversationId); // "Fork from here" (client contract 1.11)
   // Client contract 1.12: the open conversation is read while the person can see it.
   useMarkConversationReadOnView({ projectId, conversationId, revision: messageCountOf(activeConversation) });
+  useAutoConversationName(projectId, activeConversation);
   const llm = useChatModelSettings({ activeConversation, projectId, userId: user?.id });
   const { getLocalActiveParticipant, setLocalActiveParticipant, clearLocalActiveParticipant } = useLocalActiveParticipant();
   const { mutate: deleteParticipant } = useDeleteParticipantMutation();

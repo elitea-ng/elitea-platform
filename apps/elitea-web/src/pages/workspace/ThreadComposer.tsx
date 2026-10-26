@@ -2,41 +2,62 @@
  * The bottom of a thread: the notice for a thread that is away, the errors,
  * and the composer. Where a message goes depends on where the thread runs:
  *
- * - here: the local agent loop (`session.send`), with Act | Plan and the
+ * - here: the local agent loop (`session.send`), with Act | Plan | Bypass
+ *   (`useBypassMode`, kept per folder; Plan wins) and the
  *   agent·version picker;
  * - `cloud`: the SERVER conversation (`useCloudChat`: the chat's own execution
  *   route and stream). The conversation's own agent answers, so the picker is
  *   shown disabled and there is no plan mode;
  * - `returning`: read-only, with its notice.
  *
- * A local thread's footer also shows the context meter (`ContextMeter`, lazy)
- * once a model call reported its occupancy; `/compact` marks the next send.
+ * A local thread's footer also shows the usage chip (`UsageChip`, lazy: the
+ * latest turn's tokens, the thread's, a cost only from the catalogue's
+ * price, #1227); what fills the context is the inspector's Context tab
+ * (`ContextPanel`); `/compact` marks the next send, and so does a thread
+ * left idle (`useIdleCompaction`). Beside them the
+ * language-server chip (`LspChip`, lazy, #1236): the servers behind the
+ * edits' diagnostics, and the step-limit chip (`StepsChip`, lazy): the
+ * model steps each run here may take (`/steps` sets the same).
+ * `/retry` sends the last message again and `/steps` shows or sets the
+ * folder's step limit (`useRetryAndSteps`).
  * And the model chip (`ModelChip`, `useTurnModel`): the model the next turn
  * runs on, unless the agent pins it or the folder's settings keep it
  * (`/model` opens it, `/model <name>` sets a listed one; an unknown name or
  * a catalogue still loading is said above the composer and sets nothing).
+ *
+ * A pipeline (#1239 A3) never runs here: when it is the pick, a send runs it
+ * in the cloud and opens its chat (`useRunInCloud`; no plan mode, images or
+ * model chip); a start the host refuses with `pipeline_unsupported` offers
+ * the same for that prompt (`RunInCloudNotice`).
  */
 import { lazy, Suspense, useMemo, useState } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
-import { composer, type WorkspaceTurn } from '@/features/workspace';
-import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import { composer, replayView, type WorkspaceTurn } from '@/features/workspace';
+import type { CustomCommand, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
+import { BypassControls } from './BypassControls';
 import { AgentChip, RunLocationChip } from './ComposerControls';
 import { HandoffBanner } from './HandoffControls';
+import { RunInCloudNotice } from './RunInCloudNotice';
 import { firstError, SessionNotices } from './sessionParts';
 import { useProjectSkills, type ComposerSkill } from './useAgentSkills';
 import type { CloudChat } from './useCloudChat';
 import { useCustomCommands } from './useCustomCommands';
+import { pipelineComposerBinding, useComposerPipeline, type ComposerPipeline } from './useRunInCloud';
 import type { ThreadHandoff } from './useThreadHandoff';
 import type { ThreadSession } from './useThreadSession';
+import { useRetryAndSteps, type SentMessage } from './useRetryAndSteps';
 import type { SessionCommands } from './useSessionCommands';
+import { useComposerModes } from './useComposerModes';
 import { useTurnModel, type TurnModelControl } from './useTurnModel';
-import { WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
+import { skillPicks, WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
 
-const ContextMeter = lazy(() => import('./ContextMeter'));
+const UsageChip = lazy(() => import('./UsageChip'));
+const LspChip = lazy(() => import('./LspChip'));
+const StepsChip = lazy(() => import('./StepsChip'));
 
 export interface ThreadComposerProps {
   ipc: WorkspaceIpc;
@@ -63,6 +84,17 @@ function cloudBinding(cloud: CloudChat): Pick<WorkspaceComposerProps, 'canSend' 
   };
 }
 
+type SendBinding = Partial<Pick<WorkspaceComposerProps, 'placeholder' | 'showMode' | 'acceptImages'>> & Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'>;
+
+/**
+ * Where a message goes: the cloud copy, else the pipeline's cloud run (gated on that run alone, never on the local
+ * session: nothing runs here), else the local agent loop.
+ */
+function sendBinding(cloudMode: boolean, cloud: CloudChat, pipeline: ComposerPipeline, here: SendBinding): SendBinding {
+  if (cloudMode) return cloudBinding(cloud);
+  return pipeline.pipeline ? pipelineComposerBinding(pipeline.run) : here;
+}
+
 /** The model chip and `/model <name>`: neither for a cloud thread (its own agent answers) nor when no choice is offered. */
 function modelBinding(model: TurnModelControl, cloudMode: boolean, chipRef: SessionCommands['modelRef']): Pick<WorkspaceComposerProps, 'modelPicker' | 'onModelCommand'> {
   if (cloudMode || !model.offered) return {};
@@ -72,9 +104,55 @@ function modelBinding(model: TurnModelControl, cloudMode: boolean, chipRef: Sess
   };
 }
 
-/** The latest context occupancy of the shown turns: the active one's, else the newest earlier one's. */
-function latestMeter(turn: WorkspaceTurn) {
-  return turn.view.context ?? turn.earlier.findLast((earlier) => earlier.view.context !== undefined)?.view.context;
+type Usage = WorkspaceTurn['view']['usage'];
+
+/**
+ * The thread's last recorded message (thread history), for `/retry` before anything was sent here. The history keeps
+ * the prompt as typed: its skill or custom command is read from it again, as a send does.
+ */
+export function recordedPrompt(history: ThreadSession['history'], commands: readonly CustomCommand[], skills: readonly ComposerSkill[]): SentMessage | null {
+  if (history.kind !== 'local') return null;
+  const stored = history.turns[history.turns.length - 1];
+  if (stored === undefined) return null;
+  const { command, skill } = composer.invokedPick(stored.prompt, commands, skills);
+  return { prompt: stored.prompt, mentions: stored.mentions, skills: skillPicks(skill), command: command ?? undefined };
+}
+
+/** Each recorded turn's usage (thread history), replayed once per history, not per render. */
+function recordedUsages(history: ThreadSession['history']): { turnId: string; usage: Usage }[] {
+  return history.kind === 'local' ? history.turns.map((stored) => ({ turnId: stored.turn_id, usage: replayView(stored.events).usage })) : [];
+}
+
+/** The usage of the thread's turns that reported any, oldest first: the recorded ones not shown live, then this visit's. */
+function turnUsages(turn: WorkspaceTurn, recorded: readonly { turnId: string; usage: Usage }[]): NonNullable<Usage>[] {
+  const live = new Set(turn.earlier.map((earlier) => earlier.turnId));
+  if (turn.turnId !== null) live.add(turn.turnId);
+  const earlier = recorded.filter((entry) => !live.has(entry.turnId)).map((entry) => entry.usage);
+  return [...earlier, ...turn.earlier.map((entry) => entry.view.usage), turn.view.usage].filter((usage): usage is NonNullable<Usage> => usage !== undefined);
+}
+
+const NO_USAGE: NonNullable<Usage>[] = [];
+
+interface ComposerMetersProps {
+  usages: NonNullable<Usage>[];
+  projectId: number;
+  workspaceId: string;
+  /** A local thread: the folder's language-server and step-limit chips show (not for the cloud copy). */
+  local: boolean;
+  /** The step-limit chip could not store a choice: said above the composer. */
+  onStepsError: (message: string) => void;
+}
+
+/** The footer's step-limit and language-server chips and the usage chip (all lazy); the usage chip once a model call reported usage. */
+function ComposerMeters({ usages, projectId, workspaceId, local, onStepsError }: ComposerMetersProps): React.JSX.Element | null {
+  if (usages.length === 0 && !local) return null;
+  return (
+    <Suspense fallback={null}>
+      {local ? <StepsChip workspaceId={workspaceId} onError={onStepsError} /> : null}
+      {local ? <LspChip workspaceId={workspaceId} /> : null}
+      {usages.length === 0 ? null : <UsageChip turns={usages} projectId={projectId} />}
+    </Suspense>
+  );
 }
 
 /**
@@ -89,7 +167,8 @@ function useSlashSources(ipc: WorkspaceIpc, workspaceId: string, projectId: numb
   const offered = useMemo(() => [...skills, ...projectSkills], [skills, projectSkills]);
   const onFocus = (): void => {
     setFocused(true);
-    prewarm();
+    // Only the local host reads ahead (not for the cloud copy or a pipeline).
+    if (local) prewarm();
   };
   return { customCommands, offered, onFocus };
 }
@@ -98,48 +177,57 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   const navigate = useNavigate();
   const { commands } = session;
   const cloudMode = handoff.status?.executor === 'cloud';
+  const composerPipeline = useComposerPipeline(projectId, session.raw, turn, cloudMode);
+  const { pipeline, run: runInCloud, remember, refusedPrompt, turnError } = composerPipeline;
   const model = useTurnModel(workspaceId, projectId, session.raw, turn, session.history);
-  const { customCommands, offered, onFocus } = useSlashSources(ipc, workspaceId, projectId, !cloudMode, skills, session.prewarm, commands.notice === 'help');
-  const local: Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'> = {
+  const local = !cloudMode && !pipeline;
+  const modes = useComposerModes(workspaceId, local, turn, session.history, commands);
+  const { customCommands, offered, onFocus } = useSlashSources(ipc, workspaceId, projectId, local, skills, session.prewarm, commands.notice === 'help');
+  const here: Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'> = {
     canSend: session.canSend && !handoff.offLaptop,
     busy: turn.busy,
-    onSend: async (prompt, mentions, picked, command) => {
+    onSend: async (prompt, mentions, picked, command, images) => {
       model.dismissNotice();
-      const sent = await session.send(prompt, commands.planMode, mentions, picked, commands.compactNext, model.choice, command);
+      remember(prompt);
+      const sent = await session.send(prompt, modes.mode, mentions, picked, commands.compactNext, model.choice, command, images);
       if (sent && commands.compactNext) commands.compactSent();
       return sent;
     },
     onStop: () => void turn.cancel(),
   };
+  const bound = sendBinding(cloudMode, cloud, composerPipeline, here);
+  const lastRecorded = useMemo(() => recordedPrompt(session.history, customCommands, offered), [session.history, customCommands, offered]);
+  const controls = useRetryAndSteps(workspaceId, commands, session.run, { send: bound.onSend, busy: bound.busy, canSend: bound.canSend }, lastRecorded);
   const openInChat = conversationId === '' ? undefined : () => void navigate({ to: '/chat/$conversationId', params: { conversationId } });
-  const meter = cloudMode ? undefined : latestMeter(turn);
+  const recorded = useMemo(() => recordedUsages(session.history), [session.history]);
+  const usages = cloudMode ? NO_USAGE : turnUsages(turn, recorded);
   const modelNotice = cloudMode ? null : model.notice;
   const agentHint = cloudMode ? t('workspace.cloud.agentHint', 'The cloud copy answers with this thread’s own agent.') : undefined;
   return (
     <>
       <HandoffBanner handoff={handoff} />
-      <SessionNotices error={modelNotice ?? firstError(turn.startError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={offered} />
+      <SessionNotices error={modelNotice ?? firstError(turnError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={offered} />
+      <BypassControls bypass={modes.bypass} active={modes.bypassActive} />
+      <RunInCloudNotice cloudOnly={pipeline} refusedPrompt={refusedPrompt} running={runInCloud.running} error={runInCloud.error} onRun={(prompt) => void runInCloud.run(prompt)} />
       <WorkspaceComposer
         ipc={ipc}
         workspaceId={workspaceId}
         readOnly={handoff.offLaptop && !cloudMode}
+        acceptImages={!cloudMode}
         planMode={commands.planMode}
+        {...modes.switchProps}
         agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} disabledHint={agentHint} />}
-        {...modelBinding(model, cloudMode, commands.modelRef)}
+        {...modelBinding(model, !local, commands.modelRef)}
         runLocation={<RunLocationChip handoff={handoff} onOpenInChat={openInChat} />}
-        contextMeter={
-          meter === undefined ? undefined : (
-            <Suspense fallback={null}>
-              <ContextMeter meter={meter} />
-            </Suspense>
-          )
-        }
+        contextMeter={<ComposerMeters usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} onStepsError={commands.showText} />}
         onPlanModeChange={commands.setPlanMode}
         skills={offered}
         customCommands={customCommands}
-        onCommand={session.run}
+        onCommand={controls.onCommand}
+        onStepsCommand={controls.onStepsCommand}
         onFocus={onFocus}
-        {...(cloudMode ? cloudBinding(cloud) : local)}
+        {...bound}
+        onSend={controls.remembering(bound.onSend)}
       />
     </>
   );

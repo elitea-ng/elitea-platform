@@ -56,6 +56,7 @@ async fn git_diff_leaves_out_path_deny_files() {
         std::fs::write(root.join(file), format!("SECRET-AFTER {file}\n")).expect("change");
     }
     let session = LocalSession::open(SessionConfig {
+        spill_dir: None, // under data_dir
         root: root.clone(),
         session_id: "s".to_owned(),
         policy: LocalWorkPolicy {
@@ -75,6 +76,7 @@ async fn git_diff_leaves_out_path_deny_files() {
         deny_read: Vec::new(),
         app_id: None,
         budgets: elitea_local_tools::budget::Budgets::default(),
+        documents: elitea_local_tools::document::Documents::default(),
     })
     .expect("session");
     for args in [
@@ -116,6 +118,7 @@ async fn the_git_summary_is_the_branch_and_a_count() {
     std::fs::write(root.join("new.txt"), "new\n").expect("new");
     let open = |root: std::path::PathBuf| {
         LocalSession::open(SessionConfig {
+            spill_dir: None, // under data_dir
             root,
             session_id: "s".to_owned(),
             policy: LocalWorkPolicy {
@@ -130,6 +133,7 @@ async fn the_git_summary_is_the_branch_and_a_count() {
             deny_read: Vec::new(),
             app_id: None,
             budgets: elitea_local_tools::budget::Budgets::default(),
+            documents: elitea_local_tools::document::Documents::default(),
         })
         .expect("session")
     };

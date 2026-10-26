@@ -26,9 +26,26 @@ const (
 	RefCloud = "refs/elitea/cloud"
 	// RefUpstream is the desktop's orphan upstream commit U (decision 6).
 	RefUpstream = "refs/elitea/upstream"
-	// KindCompact is the only segment kind Phase 1 writes.
+	// KindCompact is a full segment with no prerequisites.
 	KindCompact = "COMPACT"
-	// ObjectFormatSHA1 is the only object format Phase 1 moves.
+	// KindPush is an incremental segment whose prerequisites are commits the
+	// store already holds (Phase 2).
+	KindPush = "PUSH"
+	// MaxPrerequisites bounds the prerequisites of one PUSH. The Rust
+	// readers and writers hold the same bound (workspace-store
+	// bundle::MAX_PREREQUISITES); TestChainBoundsMatchTheRustStore pins it.
+	MaxPrerequisites = 8
+	// MaxPushChain is the hard cap of live PUSH segments after a thread's
+	// live COMPACT (workspacestore.DefaultMaxPushChain is this value). The
+	// Rust writers clamp their compaction policy to the same number
+	// (workspace-store compaction::SERVER_MAX_PUSH_CHAIN), pinned by
+	// TestChainBoundsMatchTheRustStore.
+	MaxPushChain = 32
+	// MaxPlanSegments bounds a fetch plan's chain: one COMPACT and at most
+	// MaxPushChain PUSH segments, so the plan frame stays under the control
+	// listener's 80 KiB response bound.
+	MaxPlanSegments = 1 + MaxPushChain
+	// ObjectFormatSHA1 is the only object format the store moves.
 	ObjectFormatSHA1 = "sha1"
 	// ExecutedByCloud stamps a cloud turn's response meta (decision 8).
 	ExecutedByCloud = "cloud_executor"
@@ -127,7 +144,7 @@ type Segment struct {
 	Refs          []Ref
 }
 
-// FetchPlan is what a worker hydrates from (Phase 1: the newest COMPACT).
+// FetchPlan is what a worker hydrates from: the minimal segment chain.
 type FetchPlan struct {
 	HeadSeq  uint64
 	Refs     []Ref
@@ -158,7 +175,7 @@ type UploadResult struct {
 	Exists bool
 }
 
-// Store is what the executor's four gRPC calls need. The server unit
+// Store is what the executor's gRPC calls need. The server unit
 // implements it over workspacestore/workspacehandoff. Every method first
 // resolves claim to its thread (the claim's execution is a cloud turn of a
 // handed-off thread in CLOUD_RUNNING) and refuses RefusalNotWorkspaceTurn
@@ -186,6 +203,11 @@ type Store interface {
 	// turn (decision 12): EventScanBlocked or EventPullRequestOpened, with
 	// the allowlisted attributes only (never a path).
 	RecordEvent(ctx context.Context, claim ClaimRef, event ExecutorEvent) error
+	// RecordChanges keeps the files the running turn's published commit
+	// changed (ADR-0034 Phase 2): changes.Commit must be the thread's
+	// refs/elitea/cloud and changes.Base its handoff snapshot
+	// (RefusalRefConflict otherwise). A replay replaces the record.
+	RecordChanges(ctx context.Context, claim ClaimRef, changes TurnChanges) error
 }
 
 // The executor audit events (workspacehandoff.EventScanBlocked and
@@ -241,12 +263,36 @@ func ValidSHA256(value string) bool { return hexSHA256.MatchString(value) }
 // ValidThreadUUID reports a canonical lowercase uuid.
 func ValidThreadUUID(value string) bool { return uuidText.MatchString(value) }
 
+// ValidPrerequisites reports a segment's prerequisites as its kind needs
+// them: none for a COMPACT, 1..MaxPrerequisites distinct sha1 commits for a
+// PUSH; false for any other kind.
+func ValidPrerequisites(kind string, prerequisites []string) bool {
+	switch kind {
+	case KindCompact:
+		return len(prerequisites) == 0
+	case KindPush:
+		if len(prerequisites) == 0 || len(prerequisites) > MaxPrerequisites {
+			return false
+		}
+		seen := map[string]bool{}
+		for _, prerequisite := range prerequisites {
+			if !ValidSHA1(prerequisite) || seen[prerequisite] {
+				return false
+			}
+			seen[prerequisite] = true
+		}
+		return true
+	}
+	return false
+}
+
 // ValidateExecutorPublish checks the shape the executor may publish before
-// any store is asked: COMPACT, sha1, no prerequisites, exactly one move of
-// refs/elitea/cloud to a valid commit, with a valid expected old value.
+// any store is asked: a COMPACT (no prerequisites) or a PUSH (1..8 sha1
+// prerequisites), sha1, exactly one move of refs/elitea/cloud to a valid
+// commit, with a valid expected old value.
 func ValidateExecutorPublish(request PublishRequest) error {
-	if request.Kind != KindCompact || !ValidSHA256(request.SegmentSHA256) ||
-		request.Bytes == 0 || request.Bytes > MaxSegmentBytes || len(request.Prerequisites) != 0 {
+	if !ValidPrerequisites(request.Kind, request.Prerequisites) || !ValidSHA256(request.SegmentSHA256) ||
+		request.Bytes == 0 || request.Bytes > MaxSegmentBytes {
 		return ErrInvalidRequest
 	}
 	if request.ObjectFormat != ObjectFormatSHA1 {

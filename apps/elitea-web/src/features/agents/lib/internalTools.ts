@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 
 import { t } from '@/shared/i18n';
 import { isInternalToolAvailable, useRuntimeCapabilities } from '@/shared/api/runtimeCapabilities';
+import { AgentRobotIcon } from '@/shared/ui/icons/agent-robot-icon';
 import { AttachIcon } from '@/shared/ui/icons/attach-icon';
 import { CalendarIcon } from '@/shared/ui/icons/calendar-icon';
 import { ChatbotIcon } from '@/shared/ui/icons/chatbot-icon';
@@ -139,6 +140,16 @@ export const INTERNAL_TOOLS_LIST: readonly InternalToolDescriptor[] = [
     },
   },
   {
+    // #1226. Not `swarm`: children start from a fresh context with only their
+    // task, never the conversation, and can only read.
+    name: 'subagents',
+    title: 'Sub-agents',
+    icon: 'AgentRobotIcon',
+    infoTooltip: {
+      text: 'Let the agent hand independent investigations to read-only sub-agents that run in parallel, each with a fresh context, and report back.',
+    },
+  },
+  {
     name: 'lazy_tools_mode',
     title: 'Smart Tools Selection',
     icon: 'ToolsIcon',
@@ -168,6 +179,7 @@ export const INTERNAL_TOOLS_LIST: readonly InternalToolDescriptor[] = [
 
 /** `AgentInternalToolSwitch.jsx`'s `iconMap`, re-keyed to this port's icon names (see the module doc comment). */
 export const INTERNAL_TOOL_ICONS: Readonly<Record<string, SvgIconComponent>> = {
+  AgentRobotIcon,
   AttachIcon,
   CalendarIcon,
   ChatbotIcon,

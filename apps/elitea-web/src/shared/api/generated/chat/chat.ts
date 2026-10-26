@@ -77,6 +77,7 @@ import type {
   ConversationSummary,
   CreateSupportConversationBody,
   CreatedConversation,
+  DesktopOperationError,
   ErrorResponse,
   ExecutionInterruptDecisionRequest,
   ExecutionInterruptDecisionResult,
@@ -84,9 +85,12 @@ import type {
   ExecutionInterruptList,
   ExportConversationParams,
   ForkConversationRequest,
+  GenerateConversationNameRequest,
+  GeneratedConversationName,
   GetConversationParams,
   GetMessageTraceParams,
   GetWorkspaceFetchPlanParams,
+  GetWorkspaceHandoffDiffParams,
   InvalidClientVersionError,
   InvalidClientVersionResponse,
   ListConversationMessagesParams,
@@ -95,6 +99,9 @@ import type {
   ListMessageTracesParams,
   ListParticipantCandidatesParams,
   ListSupportConversationsParams,
+  LocalChildTurnRequest,
+  LocalChildTurnStarted,
+  LocalChildTurnState,
   LocalTurnCommitRequest,
   LocalTurnCommitted,
   LocalTurnError,
@@ -136,7 +143,9 @@ import type {
   WorkspaceFetchPlan,
   WorkspaceHandoffBeginRequest,
   WorkspaceHandoffBegun,
+  WorkspaceHandoffChanges,
   WorkspaceHandoffCompleteRequest,
+  WorkspaceHandoffDiff,
   WorkspaceHandoffEmpty,
   WorkspaceHandoffErased,
   WorkspaceHandoffError,
@@ -2691,8 +2700,8 @@ export const getUpdateConversationInternalToolsUrl = (
  * must be in the internal-tools catalogue the agent turn admits:
  * `ask_user`, `attachments`, `data_analysis`, `image_generation`,
  * `internal_mcp`, `lazy_tools_mode`, `planner`,
- * `project_context_builder`, `pyodide`, `skills_builder`, `swarm`. A
- * name outside it, a missing or non-array `internal_tools`, or any
+ * `project_context_builder`, `pyodide`, `skills_builder`, `subagents`,
+ * `swarm`. A name outside it, a missing or non-array `internal_tools`, or any
  * other key answers 400 and writes nothing. Whether the configured
  * worker runs a tool is a separate question (runtime capabilities).
  *
@@ -3007,6 +3016,11 @@ export type forkConversationResponse409 = {
   status: 409;
 };
 
+export type forkConversationResponse413 = {
+  data: ErrorResponse;
+  status: 413;
+};
+
 export type forkConversationResponse426 = {
   data: ClientUpgradeRequiredResponse;
   status: 426;
@@ -3026,6 +3040,7 @@ export type forkConversationResponseError = (
   | forkConversationResponse403
   | forkConversationResponse404
   | forkConversationResponse409
+  | forkConversationResponse413
   | forkConversationResponse426
   | forkConversationResponse500
 ) & {
@@ -3082,6 +3097,20 @@ export const getForkConversationUrl = (
  * reply of the copy that is; without
  * `message_id`, the newest message is the fork point. An editor Test
  * conversation answers 409 `fork_not_supported`.
+ *
+ * A rewind (`mode: rewind`, issue 1234) is a fork at an answer that
+ * also records what the turns after it tried: `forked_from` names the
+ * mode and the copy's fork point (`cut_message_uuid`), and
+ * getConversation's `forked_from.branch_summary` is the request's
+ * `branch_summary` or, without one, a summary the server builds from
+ * the text of the turns it did not copy. The source is not changed: a
+ * client lists it under the rewound conversation as the earlier
+ * attempt. A Local work thread the cloud executor owns (ADR-0034)
+ * answers 409 `thread_executor_is_cloud`; a fork of more than 1000
+ * message groups answers 413 `fork_too_large`. Nothing is created
+ * when the fork is refused. With `fork_id`, a retry answers the fork
+ * the first request made. The audit trail records
+ * `conversation.fork` or `conversation.rewind`.
  * @summary Fork a conversation into a new conversation
  */
 export const forkConversation = async (
@@ -4293,6 +4322,363 @@ export function useCreateConversation<
   const queryOptions = getCreateConversationQueryOptions(
     projectId,
     conversationCreateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type generateConversationNameResponse200 = {
+  data: GeneratedConversationName;
+  status: 200;
+};
+
+export type generateConversationNameResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type generateConversationNameResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type generateConversationNameResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type generateConversationNameResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type generateConversationNameResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type generateConversationNameResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type generateConversationNameResponse502 = {
+  data: ErrorResponse;
+  status: 502;
+};
+
+export type generateConversationNameResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type generateConversationNameResponseSuccess =
+  generateConversationNameResponse200 & {
+    headers: Headers;
+  };
+export type generateConversationNameResponseError = (
+  | generateConversationNameResponse400
+  | generateConversationNameResponse401
+  | generateConversationNameResponse403
+  | generateConversationNameResponse404
+  | generateConversationNameResponse426
+  | generateConversationNameResponse500
+  | generateConversationNameResponse502
+  | generateConversationNameResponse503
+) & {
+  headers: Headers;
+};
+
+export type generateConversationNameResponse =
+  | generateConversationNameResponseSuccess
+  | generateConversationNameResponseError;
+
+export const getGenerateConversationNameUrl = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return `/elitea_core/conversation_name/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Client contract 1.24. Asks the project's default model for a short
+ * title of the conversation, from its first question and first answer, and renames
+ * the conversation to it. Needs `models.chat.conversation.update` and
+ * access to the conversation, as a rename does. The call is billed to
+ * the caller, like `predict_llm`.
+ *
+ * `expected_name` is the name the client gave the conversation (a cut
+ * of the first message). The route renames only while the stored name
+ * is still that one, so it never overwrites a person's own rename: it
+ * reads the name again after the model call. The answer is the name
+ * the conversation has then, and whether this call set it. A
+ * conversation without a question yet keeps its name. Other devices
+ * get the new name through the `changes_since` delta, as with any
+ * rename.
+ * @summary Name a conversation from its first exchange
+ */
+export const generateConversationName = async (
+  projectId: string,
+  conversationId: string,
+  generateConversationNameRequest: GenerateConversationNameRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<generateConversationNameResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<generateConversationNameResponse>(
+    getGenerateConversationNameUrl(projectId, conversationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(generateConversationNameRequest),
+    },
+  );
+};
+
+export const getGenerateConversationNameQueryKey = (
+  projectId: string,
+  conversationId: string,
+  generateConversationNameRequest?: GenerateConversationNameRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/conversation_name/prompt_lib/${projectId}/${conversationId}`,
+    generateConversationNameRequest,
+  ] as const;
+};
+
+export const getGenerateConversationNameQueryOptions = <
+  TData = Awaited<ReturnType<typeof generateConversationName>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  generateConversationNameRequest: GenerateConversationNameRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateConversationName>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGenerateConversationNameQueryKey(
+      projectId,
+      conversationId,
+      generateConversationNameRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof generateConversationName>>
+  > = ({ signal }) =>
+    generateConversationName(
+      projectId,
+      conversationId,
+      generateConversationNameRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof generateConversationName>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GenerateConversationNameQueryResult = NonNullable<
+  Awaited<ReturnType<typeof generateConversationName>>
+>;
+export type GenerateConversationNameQueryError =
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useGenerateConversationName<
+  TData = Awaited<ReturnType<typeof generateConversationName>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  generateConversationNameRequest: GenerateConversationNameRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateConversationName>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof generateConversationName>>,
+          TError,
+          Awaited<ReturnType<typeof generateConversationName>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGenerateConversationName<
+  TData = Awaited<ReturnType<typeof generateConversationName>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  generateConversationNameRequest: GenerateConversationNameRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateConversationName>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof generateConversationName>>,
+          TError,
+          Awaited<ReturnType<typeof generateConversationName>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGenerateConversationName<
+  TData = Awaited<ReturnType<typeof generateConversationName>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  generateConversationNameRequest: GenerateConversationNameRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateConversationName>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Name a conversation from its first exchange
+ */
+
+export function useGenerateConversationName<
+  TData = Awaited<ReturnType<typeof generateConversationName>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  generateConversationNameRequest: GenerateConversationNameRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateConversationName>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGenerateConversationNameQueryOptions(
+    projectId,
+    conversationId,
+    generateConversationNameRequest,
     options,
   );
 
@@ -6621,8 +7007,13 @@ export type sendChatMessageResponse401 = {
 };
 
 export type sendChatMessageResponse403 = {
-  data: N403Response;
+  data: ChatExecutionError;
   status: 403;
+};
+
+export type sendChatMessageResponse404 = {
+  data: ChatExecutionError;
+  status: 404;
 };
 
 export type sendChatMessageResponse409 = {
@@ -6667,6 +7058,7 @@ export type sendChatMessageResponseError = (
   | sendChatMessageResponse400
   | sendChatMessageResponse401
   | sendChatMessageResponse403
+  | sendChatMessageResponse404
   | sendChatMessageResponse409
   | sendChatMessageResponse413
   | sendChatMessageResponse415
@@ -6787,7 +7179,6 @@ export const getSendChatMessageQueryOptions = <
   TError =
     | ChatExecutionError
     | N401Response
-    | N403Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -6847,7 +7238,6 @@ export type SendChatMessageQueryResult = NonNullable<
 export type SendChatMessageQueryError =
   | ChatExecutionError
   | N401Response
-  | N403Response
   | ClientUpgradeRequiredResponse
   | N500Response;
 
@@ -6856,7 +7246,6 @@ export function useSendChatMessage<
   TError =
     | ChatExecutionError
     | N401Response
-    | N403Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -6891,7 +7280,6 @@ export function useSendChatMessage<
   TError =
     | ChatExecutionError
     | N401Response
-    | N403Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -6926,7 +7314,6 @@ export function useSendChatMessage<
   TError =
     | ChatExecutionError
     | N401Response
-    | N403Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -6957,7 +7344,6 @@ export function useSendChatMessage<
   TError =
     | ChatExecutionError
     | N401Response
-    | N403Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -9404,6 +9790,12 @@ export const getReclaimWorkspaceHandoffUrl = (
  * pending (202): the thread becomes RECLAIMING when the turn ends, or
  * after 60 seconds, when the turn is cancelled. A native app token of the
  * owner only.
+ *
+ * Contract 1.25: with `rest`, a released LOCAL thread whose release left
+ * turns not taken moves to RECLAIMING (200, a new epoch) within its
+ * return grace; a retry answers the same RECLAIMING thread. Once the
+ * grace runs out a rest take back that was never released returns to
+ * LOCAL and the cloud copy is erased.
  * @summary Take a thread back to the desktop
  */
 export const reclaimWorkspaceHandoff = async (
@@ -10055,6 +10447,9 @@ export const getReleaseWorkspaceHandoffUrl = (
  * to LOCAL (a new epoch) with the take back's outcome, appends the event
  * message, and keeps the cloud copy until `cloud_copy_delete_after` (the
  * return grace). A retried release answers the same row.
+ *
+ * Contract 1.25: `turns_not_taken` > 0 (take back up to turn k) keeps
+ * the remaining cloud turns for a rest take back within the grace.
  * @summary Finish a take back
  */
 export const releaseWorkspaceHandoff = async (
@@ -10307,6 +10702,638 @@ export function useReleaseWorkspaceHandoff<
     projectId,
     conversationUuid,
     workspaceHandoffReleaseRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getWorkspaceHandoffChangesResponse200 = {
+  data: WorkspaceHandoffChanges;
+  status: 200;
+};
+
+export type getWorkspaceHandoffChangesResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type getWorkspaceHandoffChangesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getWorkspaceHandoffChangesResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type getWorkspaceHandoffChangesResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type getWorkspaceHandoffChangesResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type getWorkspaceHandoffChangesResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getWorkspaceHandoffChangesResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type getWorkspaceHandoffChangesResponseSuccess =
+  getWorkspaceHandoffChangesResponse200 & {
+    headers: Headers;
+  };
+export type getWorkspaceHandoffChangesResponseError = (
+  | getWorkspaceHandoffChangesResponse400
+  | getWorkspaceHandoffChangesResponse401
+  | getWorkspaceHandoffChangesResponse403
+  | getWorkspaceHandoffChangesResponse404
+  | getWorkspaceHandoffChangesResponse426
+  | getWorkspaceHandoffChangesResponse500
+  | getWorkspaceHandoffChangesResponse503
+) & {
+  headers: Headers;
+};
+
+export type getWorkspaceHandoffChangesResponse =
+  | getWorkspaceHandoffChangesResponseSuccess
+  | getWorkspaceHandoffChangesResponseError;
+
+export const getGetWorkspaceHandoffChangesUrl = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return `/elitea_core/workspace_handoff_changes/prompt_lib/${projectId}/${conversationUuid}`;
+};
+
+/**
+ * Client contract 1.26 (ADR-0034 Phase 2, the Files changed view). The
+ * files each cloud turn of the current handoff changed, oldest turn
+ * first, and what all of them changed since the handoff snapshot
+ * (`cumulative`), with a status, +/- line counts where the worker could
+ * count them, and whether a diff is kept (`has_diff`; read it with
+ * getWorkspaceHandoffDiff). The worker records them when it publishes a
+ * turn; Main reads no git pack.
+ *
+ * Only the turns on the live chain are listed: from the handoff
+ * snapshot to `refs/elitea/cloud`, so a regenerated answer's earlier
+ * attempt is not. `complete` is false when a turn on that chain has no
+ * record (its record failed): the turns below it are still listed (the
+ * walk resumes at the newest attempt under its turn `number`), and when
+ * the tip itself has none, the turns and `cumulative` start at the
+ * newest record (`cumulative_commit`).
+ *
+ * A path that the thread's exclusions (the platform and project
+ * patterns, the files excluded at send) or the path deny list match is
+ * never listed, nor is a rename from or to one: it is counted in
+ * `hidden_files`. As at the send, a file the exclusions match that was
+ * explicitly included (`included_excluded`, when the policy allows
+ * includes) is listed; the path deny list wins over an include. A
+ * thread with no handoff answers no turns.
+ *
+ * WHO. Any caller who may read the conversation (cookie or token, with
+ * `models.chat.conversation.details`), as getWorkspaceHandoff.
+ * @summary Read the files a cloud thread's turns changed
+ */
+export const getWorkspaceHandoffChanges = async (
+  projectId: string,
+  conversationUuid: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getWorkspaceHandoffChangesResponse> => {
+  return eliteaFetch<getWorkspaceHandoffChangesResponse>(
+    getGetWorkspaceHandoffChangesUrl(projectId, conversationUuid),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetWorkspaceHandoffChangesQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return [
+    `/elitea_core/workspace_handoff_changes/prompt_lib/${projectId}/${conversationUuid}`,
+  ] as const;
+};
+
+export const getGetWorkspaceHandoffChangesQueryOptions = <
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetWorkspaceHandoffChangesQueryKey(projectId, conversationUuid);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>
+  > = ({ signal }) =>
+    getWorkspaceHandoffChanges(projectId, conversationUuid, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetWorkspaceHandoffChangesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>
+>;
+export type GetWorkspaceHandoffChangesQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useGetWorkspaceHandoffChanges<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+          TError,
+          Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWorkspaceHandoffChanges<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+          TError,
+          Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWorkspaceHandoffChanges<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read the files a cloud thread's turns changed
+ */
+
+export function useGetWorkspaceHandoffChanges<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetWorkspaceHandoffChangesQueryOptions(
+    projectId,
+    conversationUuid,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getWorkspaceHandoffDiffResponse200 = {
+  data: WorkspaceHandoffDiff;
+  status: 200;
+};
+
+export type getWorkspaceHandoffDiffResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type getWorkspaceHandoffDiffResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getWorkspaceHandoffDiffResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type getWorkspaceHandoffDiffResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type getWorkspaceHandoffDiffResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type getWorkspaceHandoffDiffResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getWorkspaceHandoffDiffResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type getWorkspaceHandoffDiffResponseSuccess =
+  getWorkspaceHandoffDiffResponse200 & {
+    headers: Headers;
+  };
+export type getWorkspaceHandoffDiffResponseError = (
+  | getWorkspaceHandoffDiffResponse400
+  | getWorkspaceHandoffDiffResponse401
+  | getWorkspaceHandoffDiffResponse403
+  | getWorkspaceHandoffDiffResponse404
+  | getWorkspaceHandoffDiffResponse426
+  | getWorkspaceHandoffDiffResponse500
+  | getWorkspaceHandoffDiffResponse503
+) & {
+  headers: Headers;
+};
+
+export type getWorkspaceHandoffDiffResponse =
+  getWorkspaceHandoffDiffResponseSuccess | getWorkspaceHandoffDiffResponseError;
+
+export const getGetWorkspaceHandoffDiffUrl = (
+  projectId: string,
+  conversationUuid: string,
+  params: GetWorkspaceHandoffDiffParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/workspace_handoff_diff/prompt_lib/${projectId}/${conversationUuid}?${stringifiedParams}`
+    : `/elitea_core/workspace_handoff_diff/prompt_lib/${projectId}/${conversationUuid}`;
+};
+
+/**
+ * Client contract 1.26 (ADR-0034 Phase 2). The unified diff (git's
+ * format, 3 lines of context) the worker kept for one file of
+ * getWorkspaceHandoffChanges: `scope=turn` with that turn's `commit`, or
+ * `scope=cumulative` with `cumulative_commit`. A diff is at most 48 KiB; a file
+ * with `has_diff` false has none (404 `diff_not_found`), and so has a
+ * path getWorkspaceHandoffChanges hides. Who may read it is as for
+ * getWorkspaceHandoffChanges.
+ * @summary Read one changed file's diff
+ */
+export const getWorkspaceHandoffDiff = async (
+  projectId: string,
+  conversationUuid: string,
+  params: GetWorkspaceHandoffDiffParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getWorkspaceHandoffDiffResponse> => {
+  return eliteaFetch<getWorkspaceHandoffDiffResponse>(
+    getGetWorkspaceHandoffDiffUrl(projectId, conversationUuid, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetWorkspaceHandoffDiffQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+  params?: GetWorkspaceHandoffDiffParams,
+) => {
+  return [
+    `/elitea_core/workspace_handoff_diff/prompt_lib/${projectId}/${conversationUuid}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetWorkspaceHandoffDiffQueryOptions = <
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  params: GetWorkspaceHandoffDiffParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetWorkspaceHandoffDiffQueryKey(projectId, conversationUuid, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>
+  > = ({ signal }) =>
+    getWorkspaceHandoffDiff(projectId, conversationUuid, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetWorkspaceHandoffDiffQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>
+>;
+export type GetWorkspaceHandoffDiffQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useGetWorkspaceHandoffDiff<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  params: GetWorkspaceHandoffDiffParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+          TError,
+          Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWorkspaceHandoffDiff<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  params: GetWorkspaceHandoffDiffParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+          TError,
+          Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWorkspaceHandoffDiff<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  params: GetWorkspaceHandoffDiffParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read one changed file's diff
+ */
+
+export function useGetWorkspaceHandoffDiff<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  params: GetWorkspaceHandoffDiffParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetWorkspaceHandoffDiffQueryOptions(
+    projectId,
+    conversationUuid,
+    params,
     options,
   );
 
@@ -11471,8 +12498,11 @@ export const getGetWorkspaceFetchPlanUrl = (
 
 /**
  * Client contract 1.8 (ADR-0034 decision 2). The fetch plan from
- * `since_seq`: in this version the newest COMPACT segment at or after it,
- * with a URL valid until `expires_at`, and the thread's refs.
+ * `since_seq`, oldest first: the newest live COMPACT segment when it is
+ * at or after `since_seq`, then every later live PUSH segment after
+ * `since_seq` (contract 1.25; only PUSH segments when `since_seq` is
+ * past the COMPACT). Each has a URL valid until `expires_at`; the plan
+ * carries the thread's refs.
  * @summary Read the segments a reader needs
  */
 export const getWorkspaceFetchPlan = async (
@@ -12360,6 +13390,716 @@ export function useGetWorkspaceSegmentObject<
     projectId,
     conversationUuid,
     sha256,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type startLocalChildTurnResponse202 = {
+  data: LocalChildTurnStarted;
+  status: 202;
+};
+
+export type startLocalChildTurnResponse400 = {
+  data: DesktopOperationError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type startLocalChildTurnResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type startLocalChildTurnResponse403 = {
+  data: DesktopOperationError;
+  status: 403;
+};
+
+export type startLocalChildTurnResponse404 = {
+  data: DesktopOperationError;
+  status: 404;
+};
+
+export type startLocalChildTurnResponse409 = {
+  data: DesktopOperationError;
+  status: 409;
+};
+
+export type startLocalChildTurnResponse410 = {
+  data: DesktopOperationError;
+  status: 410;
+};
+
+export type startLocalChildTurnResponse413 = {
+  data: DesktopOperationError;
+  status: 413;
+};
+
+export type startLocalChildTurnResponse415 = {
+  data: DesktopOperationError;
+  status: 415;
+};
+
+export type startLocalChildTurnResponse422 = {
+  data: DesktopOperationError;
+  status: 422;
+};
+
+export type startLocalChildTurnResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type startLocalChildTurnResponse429 = {
+  data: DesktopOperationError;
+  status: 429;
+};
+
+export type startLocalChildTurnResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type startLocalChildTurnResponse501 = {
+  data: DesktopOperationError;
+  status: 501;
+};
+
+export type startLocalChildTurnResponse503 = {
+  data: DesktopOperationError;
+  status: 503;
+};
+
+export type startLocalChildTurnResponseSuccess =
+  startLocalChildTurnResponse202 & {
+    headers: Headers;
+  };
+export type startLocalChildTurnResponseError = (
+  | startLocalChildTurnResponse400
+  | startLocalChildTurnResponse401
+  | startLocalChildTurnResponse403
+  | startLocalChildTurnResponse404
+  | startLocalChildTurnResponse409
+  | startLocalChildTurnResponse410
+  | startLocalChildTurnResponse413
+  | startLocalChildTurnResponse415
+  | startLocalChildTurnResponse422
+  | startLocalChildTurnResponse426
+  | startLocalChildTurnResponse429
+  | startLocalChildTurnResponse500
+  | startLocalChildTurnResponse501
+  | startLocalChildTurnResponse503
+) & {
+  headers: Headers;
+};
+
+export type startLocalChildTurnResponse =
+  startLocalChildTurnResponseSuccess | startLocalChildTurnResponseError;
+
+export const getStartLocalChildTurnUrl = (
+  projectId: string,
+  executionId: string,
+) => {
+  return `/elitea_core/local_child_turn/prompt_lib/${projectId}/${executionId}`;
+};
+
+/**
+ * Issue 1239 (ADR-0029 decision 1). Starts a nested agent of the agent a
+ * desktop runs locally as an ordinary cloud turn on a worker, in a
+ * hidden child conversation (`source` `local_child`, `meta.is_hidden`,
+ * `meta.parent_execution_id` naming the local turn). The desktop never
+ * joins the worker protocol, and no credential of the child's toolkits
+ * reaches it: the worker runs the child as it runs any chat turn.
+ *
+ * WHO. Only a native access token or a personal access token; a browser
+ * session answers 403 `local_child_turn_requires_token`. The caller
+ * needs `models.chat.messages.create` in the project.
+ *
+ * THE AUTHORITY OF THE PARENT TURN. `execution_id` must be a live local
+ * turn of the caller (started by this caller in this project with the
+ * same credential family, not committed, not past its deadline, local
+ * work allowed), and the agent must be one of that turn's agent
+ * version's own `application` tools (403 `child_agent_not_in_agent`
+ * otherwise). A thread handed off to the cloud has no live local turn,
+ * so it starts no child.
+ *
+ * IDEMPOTENCY. One `idempotency_key` per intended call, repeated on every
+ * retry: a retry answers the child the first attempt admitted
+ * (`created: false`), never a second; the same key with another input
+ * is 409 `idempotency_conflict`. At most 30 new children a minute per
+ * caller on each server replica (429 `rate_limited`). Every start that
+ * names an agent is audited with the parent and the child execution.
+ *
+ * The answer streams nowhere: read the child with readLocalChildTurn,
+ * stop it with cancelChatExecution on its `response_message_id`, answer
+ * its pause with continueChatExecution on its conversation.
+ * @summary Run a nested agent of a local turn as a cloud child turn
+ */
+export const startLocalChildTurn = async (
+  projectId: string,
+  executionId: string,
+  localChildTurnRequest: LocalChildTurnRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<startLocalChildTurnResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<startLocalChildTurnResponse>(
+    getStartLocalChildTurnUrl(projectId, executionId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(localChildTurnRequest),
+    },
+  );
+};
+
+export const getStartLocalChildTurnQueryKey = (
+  projectId: string,
+  executionId: string,
+  localChildTurnRequest?: LocalChildTurnRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/local_child_turn/prompt_lib/${projectId}/${executionId}`,
+    localChildTurnRequest,
+  ] as const;
+};
+
+export const getStartLocalChildTurnQueryOptions = <
+  TData = Awaited<ReturnType<typeof startLocalChildTurn>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localChildTurnRequest: LocalChildTurnRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startLocalChildTurn>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getStartLocalChildTurnQueryKey(
+      projectId,
+      executionId,
+      localChildTurnRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof startLocalChildTurn>>
+  > = ({ signal }) =>
+    startLocalChildTurn(projectId, executionId, localChildTurnRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      executionId !== null &&
+      executionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof startLocalChildTurn>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type StartLocalChildTurnQueryResult = NonNullable<
+  Awaited<ReturnType<typeof startLocalChildTurn>>
+>;
+export type StartLocalChildTurnQueryError =
+  | DesktopOperationError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useStartLocalChildTurn<
+  TData = Awaited<ReturnType<typeof startLocalChildTurn>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localChildTurnRequest: LocalChildTurnRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startLocalChildTurn>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof startLocalChildTurn>>,
+          TError,
+          Awaited<ReturnType<typeof startLocalChildTurn>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useStartLocalChildTurn<
+  TData = Awaited<ReturnType<typeof startLocalChildTurn>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localChildTurnRequest: LocalChildTurnRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startLocalChildTurn>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof startLocalChildTurn>>,
+          TError,
+          Awaited<ReturnType<typeof startLocalChildTurn>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useStartLocalChildTurn<
+  TData = Awaited<ReturnType<typeof startLocalChildTurn>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localChildTurnRequest: LocalChildTurnRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startLocalChildTurn>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Run a nested agent of a local turn as a cloud child turn
+ */
+
+export function useStartLocalChildTurn<
+  TData = Awaited<ReturnType<typeof startLocalChildTurn>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localChildTurnRequest: LocalChildTurnRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startLocalChildTurn>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getStartLocalChildTurnQueryOptions(
+    projectId,
+    executionId,
+    localChildTurnRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type readLocalChildTurnResponse200 = {
+  data: LocalChildTurnState;
+  status: 200;
+};
+
+export type readLocalChildTurnResponse400 = {
+  data: DesktopOperationError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type readLocalChildTurnResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type readLocalChildTurnResponse403 = {
+  data: DesktopOperationError;
+  status: 403;
+};
+
+export type readLocalChildTurnResponse404 = {
+  data: DesktopOperationError;
+  status: 404;
+};
+
+export type readLocalChildTurnResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type readLocalChildTurnResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type readLocalChildTurnResponse501 = {
+  data: DesktopOperationError;
+  status: 501;
+};
+
+export type readLocalChildTurnResponse503 = {
+  data: DesktopOperationError;
+  status: 503;
+};
+
+export type readLocalChildTurnResponseSuccess =
+  readLocalChildTurnResponse200 & {
+    headers: Headers;
+  };
+export type readLocalChildTurnResponseError = (
+  | readLocalChildTurnResponse400
+  | readLocalChildTurnResponse401
+  | readLocalChildTurnResponse403
+  | readLocalChildTurnResponse404
+  | readLocalChildTurnResponse426
+  | readLocalChildTurnResponse500
+  | readLocalChildTurnResponse501
+  | readLocalChildTurnResponse503
+) & {
+  headers: Headers;
+};
+
+export type readLocalChildTurnResponse =
+  readLocalChildTurnResponseSuccess | readLocalChildTurnResponseError;
+
+export const getReadLocalChildTurnUrl = (
+  projectId: string,
+  executionId: string,
+  childExecutionId: string,
+) => {
+  return `/elitea_core/local_child_turn/prompt_lib/${projectId}/${executionId}/${childExecutionId}`;
+};
+
+/**
+ * Issue 1239. The child's state: `running`, its answer (`completed`,
+ * with a summary of its tool calls and its model usage), its failure,
+ * or the pause it waits on. Only the caller who started the child,
+ * under the local turn the path names, reads it (404
+ * `local_child_turn_not_found` otherwise); the local turn need not
+ * still be live. Token callers only, like the start.
+ * @summary Read a cloud child turn of a local turn
+ */
+export const readLocalChildTurn = async (
+  projectId: string,
+  executionId: string,
+  childExecutionId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<readLocalChildTurnResponse> => {
+  return eliteaFetch<readLocalChildTurnResponse>(
+    getReadLocalChildTurnUrl(projectId, executionId, childExecutionId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getReadLocalChildTurnQueryKey = (
+  projectId: string,
+  executionId: string,
+  childExecutionId: string,
+) => {
+  return [
+    `/elitea_core/local_child_turn/prompt_lib/${projectId}/${executionId}/${childExecutionId}`,
+  ] as const;
+};
+
+export const getReadLocalChildTurnQueryOptions = <
+  TData = Awaited<ReturnType<typeof readLocalChildTurn>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  childExecutionId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof readLocalChildTurn>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getReadLocalChildTurnQueryKey(projectId, executionId, childExecutionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof readLocalChildTurn>>
+  > = ({ signal }) =>
+    readLocalChildTurn(projectId, executionId, childExecutionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      executionId !== null &&
+      executionId !== undefined &&
+      childExecutionId !== null &&
+      childExecutionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof readLocalChildTurn>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ReadLocalChildTurnQueryResult = NonNullable<
+  Awaited<ReturnType<typeof readLocalChildTurn>>
+>;
+export type ReadLocalChildTurnQueryError =
+  | DesktopOperationError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useReadLocalChildTurn<
+  TData = Awaited<ReturnType<typeof readLocalChildTurn>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  childExecutionId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof readLocalChildTurn>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof readLocalChildTurn>>,
+          TError,
+          Awaited<ReturnType<typeof readLocalChildTurn>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useReadLocalChildTurn<
+  TData = Awaited<ReturnType<typeof readLocalChildTurn>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  childExecutionId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof readLocalChildTurn>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof readLocalChildTurn>>,
+          TError,
+          Awaited<ReturnType<typeof readLocalChildTurn>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useReadLocalChildTurn<
+  TData = Awaited<ReturnType<typeof readLocalChildTurn>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  childExecutionId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof readLocalChildTurn>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read a cloud child turn of a local turn
+ */
+
+export function useReadLocalChildTurn<
+  TData = Awaited<ReturnType<typeof readLocalChildTurn>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  childExecutionId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof readLocalChildTurn>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getReadLocalChildTurnQueryOptions(
+    projectId,
+    executionId,
+    childExecutionId,
     options,
   );
 
@@ -16244,6 +17984,11 @@ export type createMemoryResponse403 = {
   status: 403;
 };
 
+export type createMemoryResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type createMemoryResponse500 = {
   data: N500Response;
   status: 500;
@@ -16256,6 +18001,7 @@ export type createMemoryResponseError = (
   | createMemoryResponse400
   | createMemoryResponse401
   | createMemoryResponse403
+  | createMemoryResponse426
   | createMemoryResponse500
 ) & {
   headers: Headers;
@@ -16272,7 +18018,8 @@ export const getCreateMemoryUrl = (projectId: string) => {
  * internal/api/v2/memories/handler.go's Create (#870). Used both by
  * Settings > Memory's "Add memory" control and by the chat message
  * "Remember this" action (which additionally sends
- * `source_conversation_id`).
+ * `source_conversation_id`). Client contract 1.20: the desktop's
+ * `save_memory` tool (#1233) writes through it.
  * @summary Save a new persistent, cross-conversation memory
  */
 export const createMemory = async (
@@ -16325,7 +18072,12 @@ export const getCreateMemoryQueryKey = (
 
 export const getCreateMemoryQueryOptions = <
   TData = Awaited<ReturnType<typeof createMemory>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   memoryEntryWriteRequest: MemoryEntryWriteRequest,
@@ -16366,11 +18118,20 @@ export type CreateMemoryQueryResult = NonNullable<
   Awaited<ReturnType<typeof createMemory>>
 >;
 export type CreateMemoryQueryError =
-  ErrorResponse | N401Response | N403Response | N500Response;
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useCreateMemory<
   TData = Awaited<ReturnType<typeof createMemory>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   memoryEntryWriteRequest: MemoryEntryWriteRequest,
@@ -16394,7 +18155,12 @@ export function useCreateMemory<
 };
 export function useCreateMemory<
   TData = Awaited<ReturnType<typeof createMemory>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   memoryEntryWriteRequest: MemoryEntryWriteRequest,
@@ -16418,7 +18184,12 @@ export function useCreateMemory<
 };
 export function useCreateMemory<
   TData = Awaited<ReturnType<typeof createMemory>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   memoryEntryWriteRequest: MemoryEntryWriteRequest,
@@ -16438,7 +18209,12 @@ export function useCreateMemory<
 
 export function useCreateMemory<
   TData = Awaited<ReturnType<typeof createMemory>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   memoryEntryWriteRequest: MemoryEntryWriteRequest,

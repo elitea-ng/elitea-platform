@@ -60,7 +60,21 @@ const (
 	confirmationMaxSkew = 5 * time.Minute
 
 	remoteToolkitAuditEntity = "remote_toolkit_call"
+
+	localWorkPolicyRefused = "local_work_policy_refused"
 )
+
+// localWorkRefusal names the policy key that refuses a toolkit type for a
+// local turn, or "" when the type is allowed.
+func localWorkRefusal(toolkitType string, turn localturn.LiveTurn) string {
+	switch {
+	case toolkitType == "web" && !turn.Web:
+		return "local_work.web"
+	case toolkitType == "host_intel" && !turn.HostIntel:
+		return "local_work.host_intel"
+	}
+	return ""
+}
 
 // RemoteToolAuthorizer is *storage.ClientApplicationVersionService: the 5a
 // freeze, reused to decide what one remote call may run.
@@ -352,6 +366,14 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 		return
 	}
 	call.toolkitType = grant.ToolkitType
+	if refused := localWorkRefusal(grant.ToolkitType, turn); refused != "" {
+		// The desktop withholds these tools while the policy is off; a call
+		// that arrives anyway is refused here rather than sent to providers.
+		call.outcome = "policy_refused"
+		desktopwire.WriteError(writer, http.StatusForbidden, localWorkPolicyRefused,
+			"The "+grant.ToolkitType+" toolkit is turned off for local turns (native client policy "+refused+").")
+		return
+	}
 	if platform != grant.PlatformMCP {
 		// The authorizer resolved a different kind of tool than the path
 		// names: never run it.
@@ -360,6 +382,9 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 		return
 	}
 	runRequest.LLMModel = grant.LLMModel
+	// The turn verified live above: the run's metered web spend is attributed
+	// to it (#1238), and the /llm edge accepts this id for that run only.
+	runRequest.AttributionExecutionID = turn.ExecutionID
 	runRequest.LLMSettings = append(json.RawMessage(nil), grant.LLMSettings...)
 	if grant.Sensitive != nil {
 		confirmationTool := call.toolName

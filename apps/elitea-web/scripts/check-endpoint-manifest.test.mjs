@@ -768,7 +768,19 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // meta.internal_tools for the native settings sheets. No web code calls it
 // yet (the web still PUTs the whole meta), so the manifest count is
 // unchanged.
-const GENERATED_OPERATION_COUNT = 342;
+// 342 -> 344 (issue 1369): listPlatformRoutines and updatePlatformRoutine,
+// the routine registry behind Admin › Schedules. Admin routes are not in
+// the manifest, so its count is unchanged.
+// 344 -> 346 (client contract 1.23, issue 1239): startLocalChildTurn and
+// readLocalChildTurn, the cloud child turns of a desktop local turn. Only
+// the desktop host calls them (over its own HTTP client), so the manifest
+// count is unchanged.
+// 346 -> 347 (client contract 1.24): generateConversationName, a chat's
+// title from its first exchange. The manifest count is unchanged.
+// 347 -> 349 (client contract 1.26, issue 1187): getWorkspaceHandoffChanges
+// and getWorkspaceHandoffDiff, the Files changed view of a cloud thread in
+// the web chat (pages/chat). Generated; the manifest gains both.
+const GENERATED_OPERATION_COUNT = 349;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -982,8 +994,12 @@ const GENERATED_OPERATION_COUNT = 342;
  * the open chat moves (features/chat-conversation-list
  * `useMarkConversationReadOnView`, called by the web and desktop chat
  * page). Generated.
+ *
+ * 283 -> 285 (client contract 1.26, issue 1187):
+ * workspaceHandoff.changes and workspaceHandoff.diff, the Files changed
+ * view of a cloud thread in the web chat (pages/chat). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 283;
+const MANIFEST_ENTRY_COUNT = 285;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

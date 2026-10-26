@@ -7,6 +7,7 @@ use (
 	./libs/go/eventslib
 	./libs/go/natsconn
 	./libs/go/observability
+	./libs/go/routines
 	./libs/go/rpclib
 	./libs/proto/gen/go
 	./services/elitea-egress-proxy

@@ -435,6 +435,26 @@ impl OrdinaryRuntimeBindings {
         self
     }
 
+    /// Add the runtime's read-only sub-agents (#1226), last: `bind` gets the
+    /// toolsets bound so far (a child is offered their read-only tools) and
+    /// the names a child must never be offered, the tools that need a
+    /// confirmation or a delegated authorization, and returns the toolset.
+    #[must_use]
+    pub(crate) fn with_subagents(
+        mut self,
+        bind: impl FnOnce(&[Arc<dyn Toolset>], Vec<String>) -> Arc<dyn Toolset>,
+    ) -> Self {
+        let excluded = self
+            .sensitive_tools
+            .every_tool_name()
+            .chain(self.delegated_authorization.tool_names())
+            .map(ToOwned::to_owned)
+            .collect();
+        let toolset = bind(&self.toolsets, excluded);
+        self.toolsets.push(toolset);
+        self
+    }
+
     fn has_confirmation_guards(&self) -> bool {
         !self.sensitive_tools.is_empty()
             || !self.delegated_authorization.is_empty()
@@ -699,6 +719,7 @@ pub(crate) struct OrdinaryNativeAgentPlan {
     thread_id: String,
     chat_history: Vec<Content>,
     context_management: ContextManagementPlan,
+    step_compaction: Option<super::context_management::CompactionPolicy>,
     capability_id: &'static str,
     definition_digest: [u8; 32],
     tenant_id: String,
@@ -891,6 +912,7 @@ impl OrdinaryNativeAgentPlan {
             thread_id,
             chat_history: profile.chat_history().to_vec(),
             context_management: profile.context_management(),
+            step_compaction: profile.step_compaction(),
             capability_id,
             definition_digest: stable_definition_digest(request)?,
             tenant_id: binding.tenant_id.clone(),
@@ -2086,6 +2108,7 @@ pub(super) async fn assemble_pipeline_native(
         thread_id,
         chat_history: _,
         context_management: _,
+        step_compaction: _,
         capability_id: _,
         definition_digest: _,
         tenant_id: _,
@@ -2613,6 +2636,7 @@ where
         thread_id,
         chat_history,
         context_management,
+        step_compaction,
         capability_id: _,
         definition_digest,
         tenant_id: _,
@@ -2625,17 +2649,37 @@ where
         deadline_unix_millis: _,
         dispatch_abort: _,
     } = plan;
+    // `session_compaction` (#1368): the desktop's step compaction prepares
+    // every root request when the model's limits are frozen; without them the
+    // plan falls back to the Runner composition below, as before.
+    let step_compaction = match (
+        step_compaction,
+        model.request_budget(),
+        model.summarization_model(),
+    ) {
+        (Some(policy), Some(budget), Some(summary_model)) => {
+            Some(Arc::new(super::context_management::StepCompaction::new(
+                policy,
+                budget,
+                summary_model,
+                Arc::new(super::context_management::NoCompactionHost),
+            )))
+        }
+        _ => None,
+    };
     let durable_context_plan = match (
         &context_management,
         model.request_budget(),
         model.summarization_model(),
     ) {
-        (ContextManagementPlan::Summarize(plan), Some(budget), Some(summary_model)) => {
+        (ContextManagementPlan::Summarize(plan), Some(budget), Some(summary_model))
+            if step_compaction.is_none() =>
+        {
             Some((plan.clone(), budget, summary_model))
         }
         _ => None,
     };
-    let context_compaction = if durable_context_plan.is_some() {
+    let context_compaction = if durable_context_plan.is_some() || step_compaction.is_some() {
         None
     } else {
         context_management.prepare_runner_composition(model.summarization_model())?
@@ -2719,7 +2763,8 @@ where
         definition_digest,
     )
     .with_request_budget(model.request_budget())
-    .with_context_compaction(durable_context);
+    .with_context_compaction(durable_context)
+    .with_step_compaction(step_compaction);
     let checkpoint = if checkpoint_recovery {
         let restored = checkpoint
             .restore(session.as_ref())
@@ -3173,6 +3218,9 @@ where
         thread_id,
         chat_history: _,
         context_management,
+        // A direct resume has no model checkpoint to prepare requests in:
+        // it keeps the Runner composition of the plan.
+        step_compaction: _,
         capability_id: _,
         definition_digest,
         tenant_id: _,

@@ -1019,7 +1019,7 @@ export const shots: readonly Shot[] = [
     route: "/admin/app/schedules",
     viewport: DEFAULT_VIEWPORT,
     persona: "admin",
-    notes: "One schedule row visible on the Schedules tab.",
+    notes: "The routines table on the Schedules page; mask the Last run and Next run cells (wall-clock times).",
   },
   {
     id: "admin-tasks-table",

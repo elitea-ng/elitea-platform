@@ -24,8 +24,10 @@ import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
-import { approval, plan, readThreads, threadsQueryKey, useWorkspaceIpc } from '@/features/workspace';
+import { approval, plan, readThreads, threadsQueryKey, useWorkspaceIpc, type WorkspaceTurn } from '@/features/workspace';
+import { HooksProposals } from '@/features/workspace-hooks';
 import { useHasIndexHost } from '@/features/workspace-index';
+import { McpProposals } from '@/features/workspace-mcp';
 import type { Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
@@ -33,18 +35,21 @@ import { useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 import { NoAgents } from './AgentPickers';
 import { CloudTranscript } from './CloudTranscript';
 import { HandoffDialogs } from './HandoffControls';
-import { COLUMN, EarlierTurns, Exchanges, ForkNotices, ThreadIntro } from './sessionParts';
+import { ForkNotices } from './forkNotices';
+import { COLUMN, EarlierTurns, Exchanges, ThreadIntro } from './sessionParts';
 import { SessionInspector } from './SessionPanel';
 import { ThreadComposer } from './ThreadComposer';
 import { ThreadToolbar } from './ThreadToolbar';
 import { UnboundFolder } from './UnboundFolder';
+import { threadMeter } from './contextBreakdown';
 import { useCloudChat } from './useCloudChat';
 import { useSessionFork } from './useForkThread';
 import { useAgentSkills } from './useAgentSkills';
 import { useLocalCodingAgent } from './useLocalCodingAgent';
 import { useStickToBottom } from './useStickToBottom';
 import { useSessionMenuActions } from './useSessionMenuActions';
-import { useThreadHandoff } from './useThreadHandoff';
+import { useThreadHandoff, type ThreadHandoff } from './useThreadHandoff';
+import type { ThreadHistory } from './useThreadHistory';
 import { useThreadSession, type ThreadSession, type ThreadSessionInput } from './useThreadSession';
 
 const LIST_KEY = ['workspace', 'list'] as const;
@@ -62,6 +67,9 @@ function useThreadSubject(workspace: Workspace, conversationId: string): string 
   const threads = useQuery({ queryKey: threadsQueryKey(workspace.id), queryFn: () => readThreads(workspace.id) });
   return threads.data?.find((x) => x.id === conversationId)?.title ?? workspace.name;
 }
+
+/** The Context tab's figures: none for the cloud copy (its context is the cloud's). */
+const inspectorMeter = (handoff: ThreadHandoff, turn: WorkspaceTurn, history: ThreadHistory) => (handoff.status?.executor === 'cloud' ? undefined : threadMeter(turn, history));
 
 const indexSettingsOpener = (hasIndex: boolean): (() => void) | undefined => (hasIndex ? () => useDesktopLayout.getState().showInspector('index') : undefined);
 
@@ -126,9 +134,11 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
                   title={readThreads(workspace.id).find((x) => x.id === conversationId)?.title}
                 />
               )}
-              <ForkNotices fork={forking} />
+              <ForkNotices fork={forking} ipc={ipc} />
+              <McpProposals workspaceId={workspace.id} />
+              <HooksProposals workspaceId={workspace.id} />
               <EarlierTurns history={session.history} shown={session.shown} onFork={forking.onFork} />
-              <Exchanges turn={turn} prompts={session.prompts} onFork={forking.onFork} />
+              <Exchanges turn={turn} prompts={session.prompts} promptImages={session.promptImages} onFork={forking.onFork} live={{ onRetryTurn: () => session.run('retry'), onContinue: commands.continueTurn }} />
               <approval.Dialog request={continueRequest} queued={0} onRespond={session.answer} />
               <plan.Card proposal={turn.view.planProposal} onRespond={session.answer} />
               </>
@@ -152,6 +162,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
         decided={session.decided}
         plan={session.plan}
         planMode={commands.planMode}
+        context={inspectorMeter(handoff, turn, session.history)}
       />
       <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} />
       <approval.Dialog request={pendingApproval} queued={waiting.length} onRespond={session.answer} />

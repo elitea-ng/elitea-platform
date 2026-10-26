@@ -369,6 +369,7 @@ fn toolkit_call_tool_command_is_refused_with_a_typed_unsupported_capability() {
             arguments_entry_id: "arguments".to_owned(),
             toolkit_id: "17".to_owned(),
             toolkit_version: "1".to_owned(),
+            attribution_execution_id: String::new(),
         },
     ));
     assert_unsupported(&command);

@@ -33,6 +33,11 @@ type LiveTurn struct {
 	ExecutionID   string
 	ApplicationID int64
 	VersionID     int64
+	// Web and HostIntel are the policy's local_work.web and
+	// local_work.host_intel, read with the turn so the remote toolkit call
+	// refuses those toolkits under the same policy read.
+	Web       bool
+	HostIntel bool
 }
 
 // LiveTurns answers whether a turn is live — the checks start and commit make
@@ -85,5 +90,8 @@ func (l *LiveTurns) Live(ctx context.Context, projectID, actorUserID int64, cred
 	case binding.Expired:
 		return LiveTurn{}, ErrExpired
 	}
-	return LiveTurn{ExecutionID: executionID, ApplicationID: binding.ApplicationID, VersionID: binding.VersionID}, nil
+	return LiveTurn{
+		ExecutionID: executionID, ApplicationID: binding.ApplicationID, VersionID: binding.VersionID,
+		Web: policy.LocalWork.Web, HostIntel: policy.LocalWork.HostIntel,
+	}, nil
 }

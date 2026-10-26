@@ -26,7 +26,19 @@
 //!   Where the sandbox chosen for a command cannot hide them
 //!   ([`Prepared::hides_denied`]), the session asks for that command.
 //! * **No listening sockets** when the network is allowed, unless the host
-//!   allows it.
+//!   allows it, or the command asked for [`SandboxRequest::loopback`]
+//!   (listening on `127.0.0.1` / `::1` only).
+//!
+//! **Loopback** ([`SandboxRequest::loopback`], #1223: a dev server and the
+//! `curl` that checks it). With the network off, a loopback command may
+//! listen on and connect to the loopback addresses and nothing else:
+//!
+//! | Sandbox | What `loopback` allows |
+//! |---|---|
+//! | Seatbelt | `network-bind` / `network-inbound` on a local `localhost` address and `network-outbound` to a remote `localhost` one: the host's own loopback, so a server one command started is reachable from another loopback command; every other address stays denied |
+//! | bubblewrap | nothing more: the command keeps its private network namespace, whose own `lo` is up, so its processes reach each other over loopback but neither the host's loopback nor another command's ([`loopback_scoped`] is true) |
+//! | Landlock alone | Landlock's TCP rules are by port, not address: a loopback command gets TCP unrestricted. [`loopback_scoped`] is false, so the session asks for every such command |
+//! | Container | the container's own network: nothing changes |
 //!
 //! [`SandboxMode::FullAccess`] with the network on is no sandbox at all and
 //! reports [`Enforcement::None`].
@@ -82,6 +94,7 @@ pub const BWRAP_TRUNCATED_GAPS: &str = "the workspace has more directories than 
 
 /// What one command may do.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // independent switches
 pub struct SandboxRequest {
     pub mode: SandboxMode,
     pub network: bool,
@@ -103,8 +116,16 @@ pub struct SandboxRequest {
     pub deny_globs: Vec<String>,
     /// The canonical workspace root the globs are relative to.
     pub deny_root: Option<PathBuf>,
+    /// Canonical directories inside a denied one whose contents stay
+    /// readable (not writable unless also a writable root): host git's view
+    /// of a task worktree, which lives in the host's data directory.
+    pub readable_roots: Vec<PathBuf>,
     /// With the network on: may the command listen for connections.
     pub allow_listen: bool,
+    /// May the command listen on and connect to the loopback addresses
+    /// (with the network off: those only; with it on: listening on them
+    /// too). See the module's loopback table.
+    pub loopback: bool,
     /// May the command reach the keychain's services.
     pub allow_keychain: bool,
 }
@@ -340,6 +361,19 @@ pub struct Prepared {
     pub hides_denied: bool,
 }
 
+/// Whether `prepared` keeps a [`SandboxRequest::loopback`] command to the
+/// loopback addresses: Seatbelt, bubblewrap and a container do; Landlock
+/// alone and no sandbox do not (the session then asks for every such
+/// command).
+#[must_use]
+pub fn loopback_scoped(prepared: &Prepared) -> bool {
+    match prepared.enforcement {
+        Enforcement::Full | Enforcement::Container => true,
+        Enforcement::Partial => prepared.note != Some(LANDLOCK_GAPS),
+        Enforcement::None => false,
+    }
+}
+
 fn unwrapped(argv: &[String], enforcement: Enforcement) -> ToolResult<Prepared> {
     let (program, rest) = argv
         .split_first()
@@ -505,7 +539,7 @@ fn platform_prepare(
 /// profile text, so no path can change the profile's meaning.
 pub mod seatbelt {
     use std::fmt::Write as _;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use unicode_normalization::UnicodeNormalization;
 
@@ -777,16 +811,23 @@ pub mod seatbelt {
     }
 
     /// Credentials, the host's data directory and `path_deny`: contents
-    /// neither read nor written; then the writable roots inside a denied
-    /// directory are opened again.
+    /// neither read nor written; then the readable roots and the writable
+    /// roots inside a denied directory are opened again; then what is
+    /// denied inside an opened root is denied again (SBPL: the last
+    /// matching rule wins, so the opening would otherwise uncover it).
     fn push_denials(
         text: &mut String,
         params: &mut Vec<(String, String)>,
         request: &SandboxRequest,
     ) {
-        let mut denied = Vec::new();
+        // (filter, the denied path: `None` for a glob, which only matches
+        // under the workspace root)
+        let mut denied: Vec<(String, Option<&PathBuf>)> = Vec::new();
         for (index, path) in request.deny_paths.iter().enumerate() {
-            denied.push(deny_filter(path, &format!("DENY_{index}"), params));
+            denied.push((
+                deny_filter(path, &format!("DENY_{index}"), params),
+                Some(path),
+            ));
         }
         if let Some(root) = &request.deny_root {
             for (index, pattern) in request.deny_globs.iter().enumerate() {
@@ -794,14 +835,14 @@ pub mod seatbelt {
                     deny_glob_regex(root, pattern, crate::workspace::CASE_INSENSITIVE_FS)
                 {
                     let name = format!("DENY_GLOB_{index}");
-                    denied.push(format!("(regex (param \"{name}\"))"));
+                    denied.push((format!("(regex (param \"{name}\"))"), None));
                     params.push((name, regex));
                 }
             }
         }
         if !denied.is_empty() {
             text.push_str("\n; credentials and path_deny: contents neither read nor written\n(deny file-read-data file-write*");
-            for filter in &denied {
+            for (filter, _) in &denied {
                 let _ = write!(text, "\n  {filter}");
             }
             text.push_str(")\n");
@@ -823,6 +864,16 @@ pub mod seatbelt {
             })
             .map(|(index, _)| index)
             .collect();
+        let mut opened: Vec<&PathBuf> = Vec::new();
+        for (index, root) in request.readable_roots.iter().enumerate() {
+            let name = format!("READABLE_ROOT_{index}");
+            let _ = writeln!(
+                text,
+                "(allow file-read* file-read-data (subpath (param \"{name}\")))"
+            );
+            params.push((name, root.display().to_string()));
+            opened.push(root);
+        }
         for index in reopened {
             let _ = writeln!(
                 text,
@@ -834,6 +885,30 @@ pub mod seatbelt {
                     "(allow file-write* (subpath (param \"WRITABLE_ROOT_{index}\")))"
                 );
             }
+            opened.push(&request.writable_roots[index]);
+        }
+        if opened.is_empty() {
+            return;
+        }
+        // Denied again: a glob (anchored under the workspace root, which
+        // may be an opened root itself) and an entry inside an opened root,
+        // never one that holds it (that would close the root again).
+        let again: Vec<&str> = denied
+            .iter()
+            .filter(|(_, path)| {
+                path.is_none_or(|path| {
+                    opened.iter().any(|root| path.starts_with(root))
+                        && !opened.iter().any(|root| root.starts_with(path))
+                })
+            })
+            .map(|(filter, _)| filter.as_str())
+            .collect();
+        if !again.is_empty() {
+            text.push_str("; what is denied inside an opened root stays denied\n(deny file-read-data file-write*");
+            for filter in again {
+                let _ = write!(text, "\n  {filter}");
+            }
+            text.push_str(")\n");
         }
     }
 
@@ -904,7 +979,21 @@ pub mod seatbelt {
             text.push_str(&mach_lookup(DNS_SERVICES));
             if !request.allow_listen {
                 text.push_str("; no listening sockets\n(deny network-bind)\n");
+                if request.loopback {
+                    text.push_str(concat!(
+                        "; but on the loopback addresses (asked for)\n",
+                        "(allow network-bind (local ip \"localhost:*\"))\n",
+                    ));
+                }
             }
+        } else if request.loopback {
+            text.push_str(concat!(
+                "\n; no network but loopback (asked for): listen on and connect to\n",
+                "; 127.0.0.1 and ::1, nothing else\n",
+                "(allow network-bind (local ip \"localhost:*\"))\n",
+                "(allow network-inbound (local ip \"localhost:*\"))\n",
+                "(allow network-outbound (remote ip \"localhost:*\"))\n",
+            ));
         } else {
             text.push_str(
                 "\n; no network: every socket, loopback included, is denied by default\n",
@@ -1203,6 +1292,12 @@ pub mod bubblewrap {
         }
     }
 
+    /// Hide the file `path` behind `/dev/null`.
+    fn hide_file(args: &mut Vec<String>, path: &Path) {
+        args.extend(["--ro-bind", "/dev/null"].map(str::to_owned));
+        args.push(path.display().to_string());
+    }
+
     /// The `bwrap` arguments that run `argv` under `request`.
     #[must_use]
     pub fn args(request: &SandboxRequest, masks: &Masks, argv: &[String]) -> Vec<String> {
@@ -1241,12 +1336,20 @@ pub mod bubblewrap {
                 .map(Path::new)
                 .filter(|file| file.exists()),
         ) {
-            out.extend(["--ro-bind", "/dev/null"].map(str::to_owned));
-            out.push(file.display().to_string());
+            hide_file(&mut out, file);
         }
-        // A writable root inside a hidden directory (the session's
-        // temporary directory) is bound again over the mask.
+        // A readable root inside a hidden directory (a task worktree, for
+        // host git) and a writable root there (the session's temporary
+        // directory, a task worktree's own folder) are bound again over the
+        // mask; a writable one bound after a readable one wins.
+        let mut rebound: Vec<&Path> = Vec::new();
         if request.mode != SandboxMode::FullAccess {
+            for readable in &request.readable_roots {
+                if masks.hide_dirs.iter().any(|dir| readable.starts_with(dir)) {
+                    push(&mut out, &["--ro-bind"], readable);
+                    rebound.push(readable);
+                }
+            }
             for writable in &request.writable_roots {
                 if masks.hide_dirs.iter().any(|dir| writable.starts_with(dir)) {
                     let flag = if request.mode == SandboxMode::WorkspaceWrite {
@@ -1255,8 +1358,23 @@ pub mod bubblewrap {
                         "--ro-bind"
                     };
                     push(&mut out, &[flag], writable);
+                    rebound.push(writable);
                 }
             }
+        }
+        // Mounts stack, the last one wins: what is denied inside a root
+        // bound again (`<worktree>/.env`, a deny-list entry inside it) is
+        // masked again over that bind, or the bind would uncover it.
+        // (Never a mask that holds a bound root: that would hide it again.)
+        let inside = |path: &Path| {
+            rebound.iter().any(|root| path.starts_with(root))
+                && !rebound.iter().any(|root| root.starts_with(path))
+        };
+        for dir in masks.hide_dirs.iter().filter(|dir| inside(dir)) {
+            push(&mut out, &["--tmpfs"], dir);
+        }
+        for file in masks.hide_files.iter().filter(|file| inside(file)) {
+            hide_file(&mut out, file);
         }
         if request.mode != SandboxMode::ReadOnly {
             // `-try`: a protected path that does not exist (`commondir`,
@@ -1383,7 +1501,14 @@ pub mod landlock {
         let mut helper = vec![
             HELPER_FLAG.to_owned(),
             request.mode.as_str().to_owned(),
-            if request.network { "net" } else { "no-net" }.to_owned(),
+            // Landlock's TCP rules cannot name an address: loopback is TCP
+            // unrestricted (the session asks for every such command).
+            if request.network || request.loopback {
+                "net"
+            } else {
+                "no-net"
+            }
+            .to_owned(),
         ];
         for root in &request.writable_roots {
             helper.push(
@@ -1490,7 +1615,10 @@ pub mod landlock {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Enforcement, SandboxConfig, SandboxRequest, credential_paths, prepare, seatbelt};
+    use super::{
+        BWRAP_TRUNCATED_GAPS, Enforcement, LANDLOCK_GAPS, Prepared, SandboxConfig, SandboxRequest,
+        bubblewrap, credential_paths, loopback_scoped, prepare, seatbelt,
+    };
     use crate::error::ErrorCode;
     use crate::policy::SandboxMode;
 
@@ -1500,6 +1628,102 @@ mod tests {
             protected: vec![PathBuf::from("/work/space/vendor")],
             ..SandboxRequest::new(mode, network)
         }
+    }
+
+    /// A task worktree in the host's denied data is readable again for host
+    /// git (read-only: no write rule), in both sandboxes; nothing else
+    /// under the denied directory is.
+    #[test]
+    fn readable_roots_are_opened_again_read_only() {
+        let request = SandboxRequest {
+            deny_paths: vec![PathBuf::from("/data")],
+            readable_roots: vec![PathBuf::from("/data/worktrees/a")],
+            writable_roots: vec![PathBuf::from("/tmp/index")],
+            ..SandboxRequest::new(SandboxMode::WorkspaceWrite, false)
+        };
+        let (text, params) = seatbelt::profile(&request);
+        assert!(
+            text.contains(
+                "(allow file-read* file-read-data (subpath (param \"READABLE_ROOT_0\")))"
+            )
+        );
+        assert!(!text.contains("(allow file-write* (subpath (param \"READABLE_ROOT_0\")))"));
+        assert!(params.contains(&("READABLE_ROOT_0".to_owned(), "/data/worktrees/a".to_owned())));
+        let masks = bubblewrap::Masks {
+            hide_dirs: vec![PathBuf::from("/data")],
+            ..bubblewrap::Masks::default()
+        };
+        let args = bubblewrap::args(&request, &masks, &[]);
+        let tmpfs = args
+            .windows(2)
+            .position(|pair| pair == ["--tmpfs", "/data"])
+            .expect("hidden");
+        let rebound = args
+            .windows(3)
+            .position(|triple| triple == ["--ro-bind", "/data/worktrees/a", "/data/worktrees/a"])
+            .expect("bound again");
+        assert!(rebound > tmpfs, "bound over the mask");
+    }
+
+    /// What is denied inside a root opened again (`DenyList::reopening`: a
+    /// deny-list file in a task worktree, its `path_deny` matches) stays
+    /// denied: both sandboxes deny or mask it again AFTER the opening, as
+    /// the later rule (SBPL) or mount (bwrap) wins.
+    #[test]
+    fn denials_inside_an_opened_root_come_after_the_opening() {
+        let request = SandboxRequest {
+            deny_paths: vec![
+                PathBuf::from("/data"),
+                PathBuf::from("/data/worktrees/a/secret.txt"),
+                PathBuf::from("/data/worktrees/b/secret.txt"),
+            ],
+            readable_roots: vec![PathBuf::from("/data/worktrees/a")],
+            writable_roots: vec![PathBuf::from("/data/worktrees/w")],
+            deny_globs: vec![".env".to_owned()],
+            deny_root: Some(PathBuf::from("/data/worktrees/w")),
+            ..SandboxRequest::new(SandboxMode::WorkspaceWrite, false)
+        };
+        let (text, _) = seatbelt::profile(&request);
+        let opened = text
+            .find("(subpath (param \"READABLE_ROOT_0\")))")
+            .expect("readable root opened");
+        let reopened = text
+            .find("(allow file-write* (subpath (param \"WRITABLE_ROOT_0\")))")
+            .expect("writable root opened");
+        let again = text
+            .rfind("(deny file-read-data file-write*")
+            .expect("denied again");
+        assert!(again > opened && again > reopened, "{text}");
+        let tail = &text[again..];
+        let tail = &tail[..tail.find("\n\n").expect("closed")];
+        assert!(tail.contains("(subpath (param \"DENY_1\"))"), "{tail}");
+        assert!(tail.contains("(regex (param \"DENY_GLOB_0\"))"), "{tail}");
+        // Not what holds an opened root, nor what lies outside every one.
+        assert!(!tail.contains("\"DENY_0\""), "{tail}");
+        assert!(!tail.contains("\"DENY_2\""), "{tail}");
+
+        let masks = bubblewrap::Masks {
+            hide_dirs: vec![PathBuf::from("/data")],
+            hide_files: vec![
+                PathBuf::from("/data/worktrees/a/secret.txt"),
+                PathBuf::from("/data/worktrees/w/.env"),
+            ],
+            ..bubblewrap::Masks::default()
+        };
+        let args = bubblewrap::args(&request, &masks, &[]);
+        let last = |window: &[&str]| {
+            args.windows(window.len())
+                .rposition(|found| found == window)
+                .unwrap_or_else(|| panic!("{window:?} in {args:?}"))
+        };
+        let readable = last(&["--ro-bind", "/data/worktrees/a", "/data/worktrees/a"]);
+        let writable = last(&["--bind", "/data/worktrees/w", "/data/worktrees/w"]);
+        assert!(last(&["--ro-bind", "/dev/null", "/data/worktrees/a/secret.txt"]) > readable);
+        assert!(last(&["--ro-bind", "/dev/null", "/data/worktrees/w/.env"]) > writable);
+        assert!(
+            last(&["--tmpfs", "/data"]) < readable,
+            "the mask is not laid again"
+        );
     }
 
     #[test]
@@ -1612,6 +1836,54 @@ mod tests {
             Some(PathBuf::from("/usr/bin/true")),
             "a stand-in that succeeds passes the probe"
         );
+    }
+
+    /// #1223: loopback opens the loopback addresses only, never another
+    /// address; off, the profile has no network rule at all.
+    #[test]
+    fn loopback_allows_localhost_only_and_is_off_by_default() {
+        let (closed, _) = seatbelt::profile(&request(SandboxMode::WorkspaceWrite, false));
+        assert!(!closed.contains("(allow network"), "{closed}");
+        let mut req = request(SandboxMode::WorkspaceWrite, false);
+        req.loopback = true;
+        let (text, _) = seatbelt::profile(&req);
+        let rules: Vec<&str> = text
+            .lines()
+            .filter(|line| line.starts_with("(allow network"))
+            .collect();
+        assert_eq!(
+            rules,
+            [
+                "(allow network-bind (local ip \"localhost:*\"))",
+                "(allow network-inbound (local ip \"localhost:*\"))",
+                "(allow network-outbound (remote ip \"localhost:*\"))",
+            ]
+        );
+        // With the network on, listening stays denied but on loopback.
+        let mut open = request(SandboxMode::WorkspaceWrite, true);
+        open.loopback = true;
+        let (text, _) = seatbelt::profile(&open);
+        let bind = text.find("(deny network-bind)").expect("deny");
+        let local = text
+            .find("(allow network-bind (local ip \"localhost:*\"))")
+            .expect("allow");
+        assert!(local > bind, "the later rule wins");
+        // bubblewrap keeps its own namespace either way.
+        let masks = bubblewrap::Masks::default();
+        assert!(bubblewrap::args(&req, &masks, &[]).contains(&"--unshare-net".to_owned()));
+        let scoped = |enforcement, note| {
+            loopback_scoped(&Prepared {
+                program: PathBuf::from("/x"),
+                args: Vec::new(),
+                enforcement,
+                note,
+                hides_denied: false,
+            })
+        };
+        assert!(scoped(Enforcement::Full, None));
+        assert!(scoped(Enforcement::Partial, Some(BWRAP_TRUNCATED_GAPS)));
+        assert!(!scoped(Enforcement::Partial, Some(LANDLOCK_GAPS)));
+        assert!(!scoped(Enforcement::None, None));
     }
 
     #[test]

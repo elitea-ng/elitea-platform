@@ -172,6 +172,14 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
     let prompt = Arc::new(CloudPrompt::default());
     let mut shell = ShellConfig::new(config.data_dir.join("tmp"));
     shell.sandbox.container = true;
+    // A cloud turn's tool calls end with the turn and nobody watches a
+    // terminal there: `run_command` stays foreground-only, and the
+    // `process_*` tools are not offered (#1223).
+    shell.background_processes = false;
+    // The worker pushes for a cloud turn: no `git_push` here (it is not in
+    // `WORKSPACE_TOOLS`), and `git push` in `run_command` is not pointed at
+    // it.
+    shell.host_push = false;
     shell.sandbox.container_env =
         elitea_local_tools::sandbox::ContainerEnv::new(config.env.clone());
     // The workspace volume's top directory is not owned by the runner's uid
@@ -182,6 +190,8 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
             .map_err(|_| WORKSPACE_UNAVAILABLE.to_owned())?,
     );
     let session = LocalSession::open(SessionConfig {
+        // The pod has no cache directory: spills stay under the data dir.
+        spill_dir: None,
         root: config.root.clone(),
         session_id: "cloud".to_owned(),
         policy: LocalWorkPolicy {
@@ -199,6 +209,16 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
             index_local_embeddings: false,
             index_remote_embeddings: false,
             index_model_mirror_url: String::new(),
+            // Stdio MCP servers are the person's, on their device: never in
+            // the cloud executor (#1230).
+            local_mcp: false,
+            // The memory tools are not workspace tools: the cloud host
+            // offers them over its own `MemoryStore` (#1233).
+            memory_write: false,
+            // The cloud executor attaches the web toolkits as ordinary
+            // toolkits; they are no workspace tools.
+            web: false,
+            host_intel: false,
         },
         settings: WorkspaceSettings::default(),
         choices: Arc::new(MemoryChoices::default()),
@@ -208,6 +228,7 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
         deny_read: Vec::new(),
         app_id: None,
         budgets: elitea_local_tools::budget::Budgets::default(),
+        documents: elitea_local_tools::document::Documents::default(),
     })
     .map_err(|_| WORKSPACE_UNAVAILABLE.to_owned())?;
     prompt.bind(Arc::clone(session.rules()));

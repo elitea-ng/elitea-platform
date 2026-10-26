@@ -39,6 +39,8 @@ type internalToolCapability struct {
 //     the worker's attachment_tools.rs);
 //   - data_analysis is served as structured table tools over CSV, JSON and
 //     Excel attachments (and, with a sandbox, free-form code; ADR-0033);
+//   - subagents (#1226) is served by the runtime's read-only sub-agents
+//     (libs/rust/agent-runtime subagents/);
 //   - skills_builder and project_context_builder (#940 A8) are served by the
 //     native runtime's SkillsBuilderTool/ProjectContextBuilderTool, which
 //     write through the claim-bound content listener;
@@ -66,6 +68,7 @@ var platformInternalTools = []internalToolCapability{
 	{name: "skills_builder", rustAvailable: true},
 	{name: "project_context_builder", rustAvailable: true},
 	{name: "pyodide", rustAvailable: false},
+	{name: "subagents", rustAvailable: true},
 }
 
 // RuntimeCapabilitiesResponse is RuntimeCapabilities' wire shape.

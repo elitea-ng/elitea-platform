@@ -65,6 +65,17 @@ const audioPricesMigrationPath = "shared/0086_gateway_audio_prices.sql"
 // which is the failure mode GatewayMigrationSQL exists to prevent.
 const requestLogMigrationPath = "shared/0099_gateway_request_logs.sql"
 
+// meteredOperationsMigrationPath is the FIFTH file of the gateway schema
+// (#1238): the metered tool price catalog and the operation/units/unit
+// columns of the usage ledger and the request log.
+//
+// It is here for the reason the four above are: the budget Usage read, the
+// analytics reads and the admin request-log listing all select
+// operation, so a test database built without it answers 42703 at query
+// time. Every statement in it is guarded, and its execution_jobs half is
+// skipped when elitea_runtime is absent (a gateway-only schema).
+const meteredOperationsMigrationPath = "shared/0174_gateway_metered_operations.sql"
+
 // tokenBindingMigrationPath is the access-token project binding (ADR-0018,
 // spec-llm-project-scope §3), inside the LEDGERED corpus.
 //
@@ -102,6 +113,9 @@ var dumpGuardExemptMigrations = []string{
 	// skipped, so without this entry both answer 42P01 on an instance whose
 	// budget tables are present. Every statement in the file is guarded.
 	requestLogMigrationPath,
+	// After 0084 and 0099: it adds columns to the usage ledger and the
+	// request log, which the Usage, analytics and request-log reads select.
+	meteredOperationsMigrationPath,
 	tokenBindingMigrationPath,
 }
 
@@ -183,11 +197,15 @@ func GatewayMigrationSQL() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	metered, err := ledgeredMigrationSQL(meteredOperationsMigrationPath)
+	if err != nil {
+		return "", err
+	}
 	// A newline between them: the ledgered runner executes each file separately,
 	// and concatenating without a separator would splice the last statement of
 	// one onto the first of the next. 0086 comes last because it ALTERs the
 	// table 0067 creates.
-	return base + "\n" + dimensions + "\n" + audio + "\n" + requestLog, nil
+	return base + "\n" + dimensions + "\n" + audio + "\n" + requestLog + "\n" + metered, nil
 }
 
 // TokenBindingMigrationSQL returns the token project binding migration as SQL,

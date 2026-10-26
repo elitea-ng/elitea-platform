@@ -53,7 +53,7 @@ pub enum Status {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Check {
     /// Stable: `credentials`, `dir.config`, `dir.data`, `dir.logs`,
-    /// `history`, `workspaces`, `index.<workspace id>` (one per workspace
+    /// `history`, `workspaces`, `worktrees`, `index.<workspace id>` (one per workspace
     /// with a local index), `models`, `deployment`, `session`, `local_work`,
     /// `pending_revokes`.
     pub id: String,
@@ -106,6 +106,19 @@ pub trait DoctorHooks: Send + Sync {
     ///
     /// The index could not refresh (turned off, the policy turns it off, …).
     fn refresh_index(&self, workspace_id: &str) -> Result<(), String>;
+    /// What host git may not read when the Doctor looks at a repository
+    /// (its task worktrees): every session's deny list.
+    fn git_deny(&self) -> Arc<elitea_local_tools::deny::DenyList> {
+        Arc::new(elitea_local_tools::deny::DenyList::for_session(
+            std::env::var_os("HOME")
+                .filter(|home| !home.is_empty())
+                .map(PathBuf::from)
+                .as_deref(),
+            None,
+            true,
+            std::iter::empty(),
+        ))
+    }
 }
 
 /// An index turned on whose last build is older than this, while its
@@ -114,7 +127,12 @@ const INDEX_STALE_AFTER: chrono::TimeDelta = chrono::TimeDelta::hours(24);
 
 /// The repairs that delete what the app keeps: refused without `confirm`.
 /// A workspace's index repair is matched without its `:<workspace id>`.
-const CONFIRMED_FIXES: &[&str] = &["workspaces.drop_missing", "index.rebuild"];
+const CONFIRMED_FIXES: &[&str] = &[
+    "workspaces.drop_missing",
+    "index.rebuild",
+    "worktrees.prune",
+    "threads.prune",
+];
 
 impl Check {
     fn new(id: impl Into<String>, title: &'static str, status: Status, message: String) -> Self {
@@ -196,6 +214,29 @@ fn grant_access_hint() -> &'static str {
     } else {
         "Check that your user may read them, then run the checks again."
     }
+}
+
+/// The size of the directory at `path` (all its files, not just the top
+/// level), in bytes. `0` when it cannot be read; the space check counts
+/// what it can reach and shows `0` for the rest.
+fn dir_bytes(path: &Path) -> u64 {
+    let mut total: u64 = 0;
+    for entry in fs::read_dir(path).into_iter().flatten() {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        let meta = match entry.metadata() {
+            Ok(meta) => meta,
+            Err(_) => continue,
+        };
+        if meta.is_dir() {
+            total = total.saturating_add(dir_bytes(&entry.path()));
+        } else {
+            total = total.saturating_add(meta.len());
+        }
+    }
+    total
 }
 
 /// What a file or directory looks like to the app's trust rules.
@@ -312,6 +353,9 @@ pub struct LocalDoctor {
     pub hooks: Arc<dyn DoctorHooks>,
     pub config_dir: PathBuf,
     pub data_dir: PathBuf,
+    /// The host's cache directory: the sessions' spilled outputs (the space
+    /// check counts it; the turns write there).
+    pub cache_dir: Option<PathBuf>,
     pub log_dir: Option<PathBuf>,
     pub credentials: Arc<CredentialsFile>,
     pub workspaces: Arc<WorkspaceStore>,
@@ -319,6 +363,10 @@ pub struct LocalDoctor {
     pub history: Option<Arc<HistoryStore>>,
     /// The agent's session memory opened at launch; `None` when refused.
     pub sessions: Option<Arc<DesktopStateStore>>,
+    /// How many days the thread history keeps a thread before the
+    /// `threads.prune` repair may forget it (from the settings; 0 keeps
+    /// forever, and the repair then never runs).
+    pub history_retention_days: u32,
 }
 
 /// One owner-only SQLite file the Doctor checks (`database_check`).
@@ -337,6 +385,10 @@ struct Database {
     move_aside: &'static str,
     /// Why moving it aside loses nothing.
     on_server: &'static str,
+    /// `true` when the app keeps deleting rows from it (trimmed sessions,
+    /// deleted threads): its free space then does not return to the OS on
+    /// its own, and the file only grows.
+    reclaims: bool,
 }
 
 const MOVE_ASIDE: &str = "Move it aside";
@@ -383,8 +435,12 @@ impl LocalDoctor {
             ));
         }
         checks.push(self.history_check());
+        checks.push(self.threads_prune_check());
+        checks.push(self.data_space_check());
         checks.push(self.sessions_check());
         checks.push(self.workspaces_check());
+        checks.push(self.worktrees_check());
+        checks.push(self.mcp_check());
         checks.extend(self.index_checks());
         checks.push(self.models_check());
         checks
@@ -507,7 +563,107 @@ impl LocalDoctor {
             tighten: "history.tighten",
             move_aside: "history.move_aside",
             on_server: "the threads on the server are not affected",
+            reclaims: true,
         })
+    }
+
+    /// The thread-history retention (`threads.prune`): the threads idle past
+    /// the retention's cutoff (the last finished turn older than it).
+    /// Offered only when retention is on and the history counts idle
+    /// threads; the repair is refused without the app's confirm. Old threads
+    /// are not a fault, so the check stays `Ok` and only offers the repair.
+    fn threads_prune_check(&self) -> Check {
+        const ID: &str = "threads.prune";
+        const TITLE: &str = "Thread history retention";
+        let days = self.history_retention_days;
+        if days == 0 {
+            return Check::new(
+                ID,
+                TITLE,
+                Status::Ok,
+                "Thread history retention is off; the history keeps every thread.".into(),
+            );
+        }
+        let Some(store) = &self.history else {
+            return Check::new(
+                ID,
+                TITLE,
+                Status::Warn,
+                "The thread history is not open; it will be at the next start.".into(),
+            );
+        };
+        match store.idle_threads(days) {
+            Ok(0) => Check::new(
+                ID,
+                TITLE,
+                Status::Ok,
+                "No idle threads past the retention. The history keeps what it holds.".into(),
+            ),
+            Ok(idle) => Check::new(
+                ID,
+                TITLE,
+                Status::Ok,
+                format!(
+                    "{idle} thread(s) sat idle more than {days} days. Forgetting them keeps their messages on the server, but deletes what only this device recorded: their tool activity, approvals and file changes."
+                ),
+            )
+            .fix("threads.prune", "Forget the idle threads")
+            .confirming(format!(
+                "This deletes the local record of {idle} thread(s) idle more than {days} days: their tool activity, approvals and file changes. Their messages stay on the server. It cannot be undone."
+            )),
+            Err(error) => Check::new(
+                ID,
+                TITLE,
+                Status::Fail,
+                format!("Could not count the idle threads: {error}"),
+            ),
+        }
+    }
+
+    /// What is eating the app's data directory (`data.space`): the size of
+    /// the data dir and of its two databases, each database's free-page
+    /// share (trimmed space not yet returned to the disk), and the spilled
+    /// outputs (`<cache>/sessions` only, not the webview's cache). It warns
+    /// when a store's shrink is advised ([`sessions::DbSpace::shrink_advised`]);
+    /// the shrink itself is offered on that store's own check, by the same
+    /// rule, so both stores can be offered at once.
+    fn data_space_check(&self) -> Check {
+        const ID: &str = "data.space";
+        const TITLE: &str = "What the data directory holds";
+        let data = dir_bytes(&self.data_dir);
+        let sessions = sessions::database_space(&self.data_dir, sessions::FILE_NAME);
+        let history = sessions::database_space(&self.data_dir, history::FILE_NAME);
+        let spill = self
+            .cache_dir
+            .as_ref()
+            .map(|dir| dir_bytes(&dir.join("sessions")))
+            .unwrap_or(0);
+        let message = format!(
+            "The data directory holds {data} bytes ({} session memory, {} thread history); {spill} bytes of spilled outputs in the cache dir. {:.0}% of the session memory and {:.0}% of the history are free pages.",
+            sessions.bytes,
+            history.bytes,
+            sessions.free_fraction * 100.0,
+            history.free_fraction * 100.0,
+        );
+        let advised: Vec<&str> = [
+            (sessions.shrink_advised(), "Agent session memory"),
+            (history.shrink_advised(), "Thread history"),
+        ]
+        .into_iter()
+        .filter_map(|(advised, title)| advised.then_some(title))
+        .collect();
+        if advised.is_empty() {
+            return Check::new(ID, TITLE, Status::Ok, message);
+        }
+        Check::new(
+            ID,
+            TITLE,
+            Status::Warn,
+            format!(
+                "{message} Shrink {} from its own check to give the free space back.",
+                advised.join(" and ")
+            ),
+        )
     }
 
     /// The agent's session memory (`sessions.sqlite`): untrusted, loose,
@@ -526,6 +682,7 @@ impl LocalDoctor {
             tighten: "sessions.tighten",
             move_aside: "sessions.move_aside",
             on_server: "the conversations on the server are not affected and rebuild it",
+            reclaims: true,
         })
     }
 
@@ -596,12 +753,39 @@ impl LocalDoctor {
                     db.noun
                 ),
             ),
-            Ok(_) => Check::new(
-                id,
-                title,
-                Status::Ok,
-                "Opens and passes its integrity check.".into(),
-            ),
+            Ok(_) => {
+                // Trimmed and deleted rows free pages; a file not yet under
+                // incremental vacuum keeps them. One rule with `data.space`
+                // ([`sessions::DbSpace::shrink_advised`]).
+                let space = sessions::database_space(&self.data_dir, db.file_name);
+                let bytes = space.bytes;
+                if db.reclaims && space.shrink_advised() {
+                    return Check::new(
+                        id,
+                        title,
+                        Status::Ok,
+                        format!(
+                            "Opens and passes its integrity check. The file holds {bytes} bytes, {:.0}% of it free pages; the shrink gives that space back to the disk and keeps the {}.",
+                            space.free_fraction * 100.0,
+                            db.noun
+                        ),
+                    )
+                    .fix(
+                        if db.id == "sessions" {
+                            "sessions.vacuum"
+                        } else {
+                            "history.vacuum"
+                        },
+                        "Shrink the file",
+                    );
+                }
+                Check::new(
+                    id,
+                    title,
+                    Status::Ok,
+                    format!("Opens and passes its integrity check. The file holds {bytes} bytes."),
+                )
+            }
             Err(error) => Check::new(
                 id,
                 title,
@@ -612,6 +796,61 @@ impl LocalDoctor {
                 ),
             )
             .fix(db.move_aside, MOVE_ASIDE),
+        }
+    }
+
+    fn mcp_path(&self) -> PathBuf {
+        self.config_dir
+            .join(elitea_local_tools::mcp::config::FILE_NAME)
+    }
+
+    /// The person's MCP servers (`<config>/mcp.json`, #1230): owner-only
+    /// and valid, or the app runs none of them.
+    fn mcp_check(&self) -> Check {
+        const ID: &str = "mcp.config";
+        const TITLE: &str = "Local MCP servers";
+        let path = self.mcp_path();
+        match health(&path, false) {
+            Health::Missing => {
+                return Check::new(ID, TITLE, Status::Ok, "No MCP servers are set up.".into());
+            }
+            Health::Untrusted(why) => {
+                return Check::new(
+                    ID,
+                    TITLE,
+                    Status::Fail,
+                    format!("The MCP settings file {why}, so no server runs from it."),
+                )
+                .fix("mcp.move_aside", MOVE_ASIDE);
+            }
+            Health::Loose(mode) => {
+                return Check::new(
+                    ID,
+                    TITLE,
+                    Status::Warn,
+                    format!(
+                        "Other users can read the MCP settings (mode {mode:o}), so no server \
+                         runs from them."
+                    ),
+                )
+                .fix("mcp.tighten", RESTRICT);
+            }
+            Health::Healthy => {}
+        }
+        match elitea_local_tools::mcp::config::load(&path) {
+            Ok(file) => Check::new(
+                ID,
+                TITLE,
+                Status::Ok,
+                format!("{} server(s) set up.", file.servers.len()),
+            ),
+            Err(error) => Check::new(
+                ID,
+                TITLE,
+                Status::Fail,
+                format!("The MCP settings are not used: {}", error.message()),
+            )
+            .fix("mcp.move_aside", MOVE_ASIDE),
         }
     }
 
@@ -674,6 +913,44 @@ impl LocalDoctor {
                  The folders themselves are not touched.",
                 missing.join(", ")
             ))
+    }
+
+    /// Task worktrees (#1235) whose folder is gone, and admin directories
+    /// the app made that no workspace's registry names.
+    fn worktrees_check(&self) -> Check {
+        const ID: &str = "worktrees";
+        const TITLE: &str = "Task worktrees";
+        let stale = crate::worktrees::find_stale(&self.workspaces, &self.hooks.git_deny());
+        if stale.is_empty() {
+            return Check::new(ID, TITLE, Status::Ok, "No stale task worktrees.".into());
+        }
+        let mut names: Vec<String> = stale
+            .missing
+            .iter()
+            .map(|(_, record)| record.branch.clone())
+            .collect();
+        names.extend(
+            stale
+                .orphans
+                .iter()
+                .map(|(_, folder, _)| folder.display().to_string()),
+        );
+        Check::new(
+            ID,
+            TITLE,
+            Status::Warn,
+            format!(
+                "{} task worktree(s) are stale (their folder is gone, or the app no longer lists them): {}.",
+                names.len(),
+                names.join(", ")
+            ),
+        )
+        .fix("worktrees.prune", "Prune them")
+        .confirming(format!(
+            "Prune {}? Their folders, git admin directories and what Elitea keeps for them are \
+             deleted; branches with commits on them are kept.",
+            names.join(", ")
+        ))
     }
 
     /// The workspaces whose folder is gone (see [`Reach::Missing`]).
@@ -746,6 +1023,14 @@ impl LocalDoctor {
                 Ok("The session memory is now readable by you only.".into())
             }
             "sessions.move_aside" => self.move_sessions_aside(),
+            "sessions.vacuum" => self.vacuum_sessions(),
+            "history.vacuum" => self.vacuum_history(),
+            "threads.prune" => self.prune_threads(),
+            "worktrees.prune" => {
+                crate::worktrees::prune_stale(&self.workspaces, &self.hooks.git_deny(), &|id| {
+                    self.hooks.remove_workspace(id)
+                })
+            }
             "workspaces.drop_missing" => {
                 let (mut removed, mut kept) = (0, Vec::new());
                 for workspace in self.missing_workspaces()? {
@@ -764,6 +1049,17 @@ impl LocalDoctor {
                 }
                 Ok(message)
             }
+            "mcp.tighten" => {
+                tighten_file(&self.mcp_path())?;
+                Ok("The MCP settings are now readable by you only.".into())
+            }
+            "mcp.move_aside" => Ok(match move_aside(&self.mcp_path())? {
+                Some(aside) => format!(
+                    "Moved to {}. Set your MCP servers up again in Settings.",
+                    aside.display()
+                ),
+                None => "There was nothing to move.".into(),
+            }),
             "workspaces.move_aside" => {
                 let aside = move_aside(&self.workspaces_path())?;
                 Ok(match aside {
@@ -812,6 +1108,25 @@ impl LocalDoctor {
         ))
     }
 
+    /// `sessions.vacuum`: the open store closes, `VACUUM`s its file and
+    /// reopens it; without one (refused at launch) the file is vacuumed the
+    /// same way and the next launch opens the slimmer store.
+    fn vacuum_sessions(&self) -> Result<String, HostError> {
+        let before = if let Some(store) = &self.sessions {
+            store.store().reclaim()?
+        } else {
+            let before = sessions::reclaim_database(&self.data_dir, sessions::FILE_NAME)?;
+            if before == 0 {
+                return Ok("There was nothing to shrink.".into());
+            }
+            log::warn!("diagnostics: reclaimed the session store ({before} bytes)");
+            before
+        };
+        Ok(format!(
+            "The session memory held {before} bytes; the file now holds only what it uses."
+        ))
+    }
+
     /// `history.move_aside`: the open store closes, moves its three files
     /// together and starts afresh; without one (refused at launch) the
     /// files are moved the same way and the next launch starts afresh.
@@ -835,6 +1150,41 @@ impl LocalDoctor {
         Ok(format!(
             "Moved to {}. Restart Elitea to start a new history.",
             aside.display()
+        ))
+    }
+
+    /// `history.vacuum`: as [`Self::vacuum_sessions`]; the threads on the
+    /// server are not affected.
+    fn vacuum_history(&self) -> Result<String, HostError> {
+        let before = if let Some(store) = &self.history {
+            store.reclaim()?
+        } else {
+            let before = sessions::reclaim_database(&self.data_dir, history::FILE_NAME)?;
+            if before == 0 {
+                return Ok("There was nothing to shrink.".into());
+            }
+            log::warn!("diagnostics: reclaimed the thread history ({before} bytes)");
+            before
+        };
+        Ok(format!(
+            "The history held {before} bytes; the file now holds only what it uses."
+        ))
+    }
+
+    /// Forget the threads idle past the retention (`threads.prune`): the
+    /// server keeps the messages, the history re-builds a thread from them.
+    /// Refused without the app's confirm (the repair deletes data).
+    fn prune_threads(&self) -> Result<String, HostError> {
+        let store = self.history.as_ref().ok_or_else(|| {
+            HostError::Storage(
+                "the thread history is not open; it will be at the next start".into(),
+            )
+        })?;
+        let days = self.history_retention_days;
+        let threads = store.prune_idle(days)?;
+        log::info!("diagnostics: forgot {threads} idle thread(s), retention {days} days");
+        Ok(format!(
+            "Forgot {threads} thread(s) idle more than {days} days. The server keeps their messages."
         ))
     }
 }
@@ -1265,8 +1615,16 @@ pub struct Doctor {
 impl Doctor {
     /// `scope`: `local` checks this computer's files only (no network);
     /// anything else adds the deployment, the session and the policy.
-    pub async fn run(&self, scope: Option<&str>) -> Vec<Check> {
-        let mut checks = self.local.checks();
+    pub async fn run(self: &Arc<Self>, scope: Option<&str>) -> Vec<Check> {
+        // The local checks read files, walk the data directory and open the
+        // stores: off the async workers.
+        let doctor = self.clone();
+        let mut checks = tokio::task::spawn_blocking(move || doctor.local.checks())
+            .await
+            .unwrap_or_else(|error| {
+                log::warn!("diagnostics: the local checks stopped: {error}");
+                Vec::new()
+            });
         if scope != Some("local") {
             checks.extend(remote_checks(&self.auth).await);
         }
@@ -1474,8 +1832,10 @@ mod tests {
             config_dir,
             data_dir,
             log_dir: Some(log_dir),
+            cache_dir: None,
             history: None,
             sessions: None,
+            history_retention_days: 0,
         };
         Fixture {
             _root: root,
@@ -1997,6 +2357,33 @@ mod tests {
         // Nothing to move: no sign-out.
         doctor.fix("credentials.move_aside", false).await.unwrap();
         assert_eq!(hooks.signed_out.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn the_mcp_settings_are_checked_tightened_and_moved_aside() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let f = fixture();
+        let doctor = &f.doctor;
+        assert_eq!(check(&doctor.checks(), "mcp.config").status, Status::Ok);
+        let path = doctor.config_dir.join("mcp.json");
+        fs::write(&path, br#"{"version": 1, "servers": {}}"#).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let loose = check(&doctor.checks(), "mcp.config").clone();
+        assert_eq!(
+            (loose.status, loose.fix_id.as_deref()),
+            (Status::Warn, Some("mcp.tighten"))
+        );
+        doctor.fix("mcp.tighten", false).unwrap();
+        assert_eq!(check(&doctor.checks(), "mcp.config").status, Status::Ok);
+        fs::write(&path, br#"{"version": 1, "unknown": true}"#).unwrap();
+        let broken = check(&doctor.checks(), "mcp.config").clone();
+        assert_eq!(
+            (broken.status, broken.fix_id.as_deref()),
+            (Status::Fail, Some("mcp.move_aside"))
+        );
+        doctor.fix("mcp.move_aside", false).unwrap();
+        assert!(fs::symlink_metadata(&path).is_err());
+        assert_eq!(check(&doctor.checks(), "mcp.config").status, Status::Ok);
     }
 
     #[test]

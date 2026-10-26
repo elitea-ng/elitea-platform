@@ -3618,6 +3618,78 @@
     "title": "vectorstore",
     "type": "object"
   },
+  "web": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "web",
+        "search",
+        "fetch",
+        "browse",
+        "documentation"
+      ],
+      "has_function_validators": false,
+      "icon_url": null,
+      "label": "Web Search"
+    },
+    "name_required": true,
+    "properties": {
+      "default_fetch_backend": {
+        "enum": [
+          "direct",
+          "tavily",
+          "firecrawl"
+        ],
+        "title": "Default Fetch Backend",
+        "type": "string"
+      },
+      "default_search_provider": {
+        "anyOf": [
+          {
+            "enum": [
+              "tavily",
+              "firecrawl",
+              "brave",
+              "ddg_instant"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Default Search Provider"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "web_fetch": {
+            "type": "object"
+          },
+          "web_search": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "web_fetch",
+            "web_search"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      },
+      "strict_options": {
+        "title": "Strict Options",
+        "type": "boolean"
+      }
+    },
+    "title": "web",
+    "type": "object"
+  },
   "xlsx": {
     "metadata": {
       "categories": [

@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use elitea_llm_wire::headers::{EXECUTION_HEADER, PROJECT_HEADER};
-use elitea_llm_wire::refusal::refusal_code;
+use elitea_llm_wire::refusal::{Refusal, refusal_code};
 use elitea_llm_wire::route::EMBEDDINGS_ROUTE;
 use elitea_local_embed::candle_backend::{CandleEmbedder, DevicePreference};
 use elitea_local_embed::catalog::{self, ModelSpec};
@@ -298,7 +298,90 @@ struct EmbeddingRow {
     embedding: Vec<f32>,
 }
 
-/// POST `inputs` to `/llm/v1/embeddings`; the vectors in input order.
+/// How a call backs off a `429`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Backoff {
+    /// Retries after the first try.
+    pub retries: u32,
+    /// The wait before the first retry when the service names none; it
+    /// doubles with every retry.
+    pub base: Duration,
+    /// The longest single wait. A `Retry-After` above it is not waited for
+    /// inside the call: the call gives up with [`EmbedError::RateLimited`]
+    /// and the caller decides when to come back.
+    pub max_wait: Duration,
+}
+
+impl Backoff {
+    /// Background embedding: patient (1 s, 2 s, 4 s … up to a minute a
+    /// wait, six retries).
+    pub const DOCUMENTS: Self = Self {
+        retries: 6,
+        base: Duration::from_secs(1),
+        max_wait: Duration::from_secs(60),
+    };
+    /// A search's query embedding: a person waits for it.
+    pub const QUERY: Self = Self {
+        retries: 1,
+        base: Duration::from_millis(500),
+        max_wait: Duration::from_secs(2),
+    };
+    /// A single probe or one-off call: no retry.
+    pub const NONE: Self = Self {
+        retries: 0,
+        base: Duration::ZERO,
+        max_wait: Duration::ZERO,
+    };
+
+    /// How long to wait before retry number `retry` (from 0): what the
+    /// service asked, else the doubling backoff.
+    ///
+    /// # Errors
+    ///
+    /// The retries are spent, or the wait is longer than [`Self::max_wait`]:
+    /// the wait that was asked (or would have been).
+    pub fn wait(&self, retry: u32, retry_after: Option<Duration>) -> Result<Duration, Duration> {
+        let asked = retry_after.unwrap_or_else(|| self.base.saturating_mul(1_u32 << retry.min(16)));
+        if retry >= self.retries || asked > self.max_wait {
+            Err(asked)
+        } else {
+            Ok(asked)
+        }
+    }
+}
+
+/// A `Retry-After` header: delta-seconds (fractions allowed). The HTTP-date
+/// form is not read (it needs a date parser the app does not otherwise
+/// carry); the backoff covers it.
+#[must_use]
+pub fn parse_retry_after(value: &str) -> Option<Duration> {
+    value
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+        .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+}
+
+/// Wait `delay` unless `stop` answers `true` first (looked at every
+/// 100 ms); whether the wait ran its course.
+async fn sleep_unless(delay: Duration, stop: &(dyn Fn() -> bool + Sync)) -> bool {
+    const SLICE: Duration = Duration::from_millis(100);
+    let until = Instant::now() + delay;
+    loop {
+        if stop() {
+            return false;
+        }
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return true;
+        }
+        tokio::time::sleep(left.min(SLICE)).await;
+    }
+}
+
+/// POST `inputs` to `/llm/v1/embeddings`; the vectors in input order. One
+/// try, no backoff (a probe).
 ///
 /// # Errors
 ///
@@ -311,6 +394,34 @@ pub async fn embed_remote(
     inputs: &[&str],
     execution_id: Option<&str>,
 ) -> Result<Vec<Vec<f32>>, EmbedError> {
+    embed_remote_with(
+        deps,
+        (project_id, model),
+        inputs,
+        execution_id,
+        Backoff::NONE,
+        &|| false,
+    )
+    .await
+}
+
+/// [`embed_remote`] that backs off a `429` as `backoff` says, honouring
+/// `Retry-After`, and gives up with [`EmbedError::Paused`] once `stop`
+/// answers `true` while it waits. A `402` is [`EmbedError::BudgetExhausted`]
+/// at once: waiting does not refill a budget.
+///
+/// # Errors
+///
+/// As [`embed_remote`], plus the two above and [`EmbedError::RateLimited`]
+/// once the retries or the longest wait are spent.
+pub async fn embed_remote_with(
+    deps: &RemoteDeps,
+    (project_id, model): (i64, &str),
+    inputs: &[&str],
+    execution_id: Option<&str>,
+    backoff: Backoff,
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Result<Vec<Vec<f32>>, EmbedError> {
     let remote = |message: String| EmbedError::Remote(message);
     let client = deps.http.client().await;
     let body = serde_json::json!({"model": model, "input": inputs, "encoding_format": "float"});
@@ -319,7 +430,8 @@ pub async fn embed_remote(
         .bearer()
         .await
         .map_err(|error| remote(error.message))?;
-    for attempt in 0..2 {
+    let (mut refreshed, mut retries) = (false, 0_u32);
+    loop {
         let mut request = client
             .post(format!("{}{EMBEDDINGS_ROUTE}", bearer.origin))
             .timeout(REMOTE_TIMEOUT)
@@ -334,7 +446,8 @@ pub async fn embed_remote(
             .await
             .map_err(|_| remote("could not reach the deployment".into()))?;
         let status = response.status().as_u16();
-        if status == 401 && attempt == 0 {
+        if status == 401 && !refreshed {
+            refreshed = true;
             bearer = deps
                 .credentials
                 .refreshed()
@@ -342,15 +455,33 @@ pub async fn embed_remote(
                 .map_err(|error| remote(error.message))?;
             continue;
         }
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_retry_after);
         let bytes = response
             .bytes()
             .await
             .map_err(|_| remote("the answer was cut off".into()))?;
         if !(200..300).contains(&status) {
-            return Err(remote(format!(
-                "{} (HTTP {status})",
-                refusal_code(status, &bytes)
-            )));
+            let code = refusal_code(status, &bytes);
+            return Err(match Refusal::from_status(status) {
+                Some(Refusal::BudgetExhausted(_)) => {
+                    EmbedError::BudgetExhausted(format!("{code} (HTTP {status})"))
+                }
+                Some(Refusal::RateLimited) => match backoff.wait(retries, retry_after) {
+                    Ok(delay) => {
+                        retries += 1;
+                        if sleep_unless(delay, stop).await {
+                            continue;
+                        }
+                        EmbedError::Paused
+                    }
+                    Err(asked) => EmbedError::RateLimited { retry_after: asked },
+                },
+                _ => remote(format!("{code} (HTTP {status})")),
+            });
         }
         let mut answer: EmbeddingsAnswer = serde_json::from_slice(&bytes)
             .map_err(|_| EmbedError::Shape("not an embeddings answer".into()))?;
@@ -364,7 +495,6 @@ pub async fn embed_remote(
         answer.data.sort_by_key(|row| row.index);
         return Ok(answer.data.into_iter().map(|row| row.embedding).collect());
     }
-    Err(remote("the deployment refused the sign-in".into()))
 }
 
 /// The deployment's catalogue route; `?section=embedding` keeps its
@@ -373,11 +503,16 @@ pub const MODELS_ROUTE: &str = "/api/v2/configurations/models/";
 
 /// One embedding model the workspace's project can use through the
 /// deployment.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct RemoteModel {
     /// What a `remote:<model>` choice names.
     pub name: String,
     pub display_name: Option<String>,
+    /// Price per 1M input tokens in `currency`, when the catalogue prices
+    /// the model and the caller may see amounts (both or neither): what the
+    /// consent UI's estimate costs the tokens at.
+    pub price_per_1m: Option<f64>,
+    pub currency: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -390,19 +525,23 @@ struct ModelListItem {
     name: String,
     #[serde(default)]
     display_name: Option<String>,
+    /// Price per 1M input tokens, when the catalogue prices the model and
+    /// the caller may see amounts (the server serves it for chat models
+    /// today), in `currency`.
+    #[serde(default)]
+    input_cost_per_1m_tokens: Option<f64>,
+    #[serde(default)]
+    currency: Option<String>,
 }
 
-/// The embedding models `project_id` can use (its own and the shared
-/// ones), by name, deduplicated, valid names only.
-///
-/// # Errors
-///
-/// Signed out, unreachable, refused, or an answer that does not fit (the
-/// caller falls back to a typed name).
-pub async fn remote_models(
+/// GET `path` (with `query`) as the signed-in person and read the JSON
+/// answer as `T`; a `401` is retried once with a refreshed token.
+async fn get_json<T: serde::de::DeserializeOwned>(
     deps: &RemoteDeps,
-    project_id: i64,
-) -> Result<Vec<RemoteModel>, EmbedError> {
+    path: &str,
+    query: &[(&str, &str)],
+    what: &str,
+) -> Result<T, EmbedError> {
     let remote = |message: String| EmbedError::Remote(message);
     let client = deps.http.client().await;
     let mut bearer = deps
@@ -412,8 +551,8 @@ pub async fn remote_models(
         .map_err(|error| remote(error.message))?;
     for attempt in 0..2 {
         let response = client
-            .get(format!("{}{MODELS_ROUTE}{project_id}", bearer.origin))
-            .query(&[("section", "embedding"), ("include_shared", "true")])
+            .get(format!("{}{path}", bearer.origin))
+            .query(query)
             .timeout(REMOTE_TIMEOUT)
             .bearer_auth(&bearer.token)
             .header(
@@ -442,20 +581,111 @@ pub async fn remote_models(
                 refusal_code(status, &bytes)
             )));
         }
-        let list: ModelList = serde_json::from_slice(&bytes)
-            .map_err(|_| EmbedError::Shape("not a model list".into()))?;
-        let mut seen = std::collections::HashSet::new();
-        return Ok(list
-            .items
-            .into_iter()
-            .filter(|item| valid_model(&item.name) && seen.insert(item.name.clone()))
-            .map(|item| RemoteModel {
-                name: item.name,
-                display_name: item.display_name.filter(|name| !name.trim().is_empty()),
-            })
-            .collect());
+        return serde_json::from_slice(&bytes)
+            .map_err(|_| EmbedError::Shape(format!("not {what}")));
     }
     Err(remote("the deployment refused the sign-in".into()))
+}
+
+async fn model_list(deps: &RemoteDeps, project_id: i64) -> Result<ModelList, EmbedError> {
+    get_json(
+        deps,
+        &format!("{MODELS_ROUTE}{project_id}"),
+        &[("section", "embedding"), ("include_shared", "true")],
+        "a model list",
+    )
+    .await
+}
+
+/// The embedding models `project_id` can use (its own and the shared
+/// ones), by name, deduplicated, valid names only.
+///
+/// # Errors
+///
+/// Signed out, unreachable, refused, or an answer that does not fit (the
+/// caller falls back to a typed name).
+pub async fn remote_models(
+    deps: &RemoteDeps,
+    project_id: i64,
+) -> Result<Vec<RemoteModel>, EmbedError> {
+    let list = model_list(deps, project_id).await?;
+    let mut seen = std::collections::HashSet::new();
+    Ok(list
+        .items
+        .into_iter()
+        .filter(|item| valid_model(&item.name) && seen.insert(item.name.clone()))
+        .map(|item| {
+            // An embedding model usually has no price here (the catalogue
+            // prices chat models today): the estimate then shows tokens and
+            // the budget only.
+            let price = item
+                .input_cost_per_1m_tokens
+                .filter(|price| price.is_finite() && *price >= 0.0)
+                .zip(item.currency.filter(|currency| !currency.trim().is_empty()));
+            RemoteModel {
+                name: item.name,
+                display_name: item.display_name.filter(|name| !name.trim().is_empty()),
+                price_per_1m: price.as_ref().map(|(price, _)| *price),
+                currency: price.map(|(_, currency)| currency),
+            }
+        })
+        .collect())
+}
+
+/// What is left of a project's monthly budget, as the platform tells the
+/// caller: amounts only for a project admin or the owner of a personal
+/// project (`can_see_amounts`); everyone else gets the percentage.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ProjectBudgetLeft {
+    /// No enforced ceiling.
+    pub unlimited: bool,
+    /// What is left this month, in `currency` (`None`: unlimited, or
+    /// amounts not shown).
+    pub remaining: Option<f64>,
+    /// The budget's currency, present exactly when the amounts are.
+    pub currency: Option<String>,
+    /// Percent of the ceiling spent (`None`: unlimited).
+    pub percent_used: Option<f64>,
+    /// The platform's own "close to the limit" flag.
+    pub warning_active: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct BudgetAnswer {
+    limit_source: String,
+    #[serde(default)]
+    remaining: Option<f64>,
+    #[serde(default)]
+    currency: Option<String>,
+    #[serde(default)]
+    percent_used: Option<f64>,
+    #[serde(default)]
+    warning_active: bool,
+}
+
+/// `getProjectBudget`: `GET /api/v2/elitea_core/project_budget/prompt_lib/{project}/budget`.
+///
+/// # Errors
+///
+/// Signed out, unreachable, refused, or an answer that does not fit.
+pub async fn project_budget(
+    deps: &RemoteDeps,
+    project_id: i64,
+) -> Result<ProjectBudgetLeft, EmbedError> {
+    let answer: BudgetAnswer = get_json(
+        deps,
+        &format!("/api/v2/elitea_core/project_budget/prompt_lib/{project_id}/budget"),
+        &[],
+        "a budget",
+    )
+    .await?;
+    Ok(ProjectBudgetLeft {
+        unlimited: answer.limit_source == "unlimited",
+        remaining: answer.remaining,
+        currency: answer.currency,
+        percent_used: answer.percent_used,
+        warning_active: answer.warning_active,
+    })
 }
 
 impl RemoteEmbedder {
@@ -463,13 +693,16 @@ impl RemoteEmbedder {
         &self,
         inputs: &[&str],
         execution_id: Option<&str>,
+        backoff: Backoff,
+        stop: &(dyn Fn() -> bool + Sync),
     ) -> Result<Vec<Vec<f32>>, EmbedError> {
-        let vectors = self.deps.runtime.block_on(embed_remote(
+        let vectors = self.deps.runtime.block_on(embed_remote_with(
             &self.deps,
-            self.project_id,
-            &self.model,
+            (self.project_id, &self.model),
             inputs,
             execution_id,
+            backoff,
+            stop,
         ))?;
         vectors
             .into_iter()
@@ -498,11 +731,19 @@ impl Embedder for RemoteEmbedder {
     }
 
     fn embed_documents(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbedError> {
+        self.embed_documents_until(texts, &|| false)
+    }
+
+    fn embed_documents_until(
+        &self,
+        texts: &[&str],
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Vec<Vec<f32>>, EmbedError> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
         // Background work: no turn to attribute it to.
-        self.call(texts, None)
+        self.call(texts, None, Backoff::DOCUMENTS, stop)
     }
 
     fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbedError> {
@@ -514,7 +755,7 @@ impl Embedder for RemoteEmbedder {
         text: &str,
         execution_id: Option<&str>,
     ) -> Result<Vec<f32>, EmbedError> {
-        self.call(&[text], execution_id)?
+        self.call(&[text], execution_id, Backoff::QUERY, &|| false)?
             .pop()
             .ok_or_else(|| EmbedError::Shape("no vector".into()))
     }
@@ -844,11 +1085,15 @@ mod tests {
             [
                 RemoteModel {
                     name: "text-embedding-3-small".into(),
-                    display_name: Some("Small".into())
+                    display_name: Some("Small".into()),
+                    price_per_1m: None,
+                    currency: None,
                 },
                 RemoteModel {
                     name: "nomic-embed".into(),
-                    display_name: None
+                    display_name: None,
+                    price_per_1m: None,
+                    currency: None,
                 },
             ]
         );
@@ -898,10 +1143,252 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            matches!(refused, EmbedError::Remote(ref m) if m.contains("402")),
-            "{refused}"
+            matches!(refused, EmbedError::BudgetExhausted(ref m)
+                if m.contains("budget_exhausted") && m.contains("402")),
+            "a 402 is its own state, not a generic failure: {refused}"
         );
         assert!(matches!(narrow, EmbedError::Shape(_)), "{narrow}");
+    }
+
+    #[test]
+    fn retry_after_is_read_as_seconds_and_a_date_is_left_to_the_backoff() {
+        assert_eq!(parse_retry_after("7"), Some(Duration::from_secs(7)));
+        assert_eq!(parse_retry_after(" 0.5 "), Some(Duration::from_millis(500)));
+        assert_eq!(parse_retry_after("0"), Some(Duration::ZERO));
+        for unusable in [
+            "",
+            "soon",
+            "-1",
+            "NaN",
+            "inf",
+            "Wed, 21 Oct 2026 07:28:00 GMT",
+        ] {
+            assert_eq!(parse_retry_after(unusable), None, "{unusable}");
+        }
+    }
+
+    #[test]
+    fn the_backoff_doubles_honours_the_service_and_is_bounded() {
+        let backoff = Backoff {
+            retries: 3,
+            base: Duration::from_secs(1),
+            max_wait: Duration::from_secs(5),
+        };
+        assert_eq!(backoff.wait(0, None), Ok(Duration::from_secs(1)));
+        assert_eq!(backoff.wait(1, None), Ok(Duration::from_secs(2)));
+        assert_eq!(backoff.wait(2, None), Ok(Duration::from_secs(4)));
+        // The retries are spent.
+        assert_eq!(backoff.wait(3, None), Err(Duration::from_secs(8)));
+        // What the service asks replaces the doubling ...
+        assert_eq!(
+            backoff.wait(2, Some(Duration::from_millis(300))),
+            Ok(Duration::from_millis(300))
+        );
+        // ... unless it is longer than the bound: the caller is told.
+        assert_eq!(
+            backoff.wait(0, Some(Duration::from_secs(600))),
+            Err(Duration::from_secs(600))
+        );
+        // No overflow however many retries.
+        assert!(Backoff::DOCUMENTS.wait(60, None).is_err());
+        assert_eq!(Backoff::NONE.wait(0, None), Err(Duration::ZERO));
+    }
+
+    fn deps_for(origin: String, app: &std::path::Path) -> RemoteDeps {
+        RemoteDeps {
+            http: SharedHttp::new("test"),
+            credentials: Arc::new(Signed(origin)),
+            workspaces: Arc::new(WorkspaceStore::new(app.to_owned())),
+            runtime: tokio::runtime::Handle::current(),
+        }
+    }
+
+    fn limited(retry_after: Option<&str>) -> Res {
+        let mut res = Res::json(429, &json!({"error": {"code": "rate_limited"}}));
+        if let Some(value) = retry_after {
+            res.headers.push(("Retry-After", value.to_owned()));
+        }
+        res
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_429_waits_the_retry_after_then_succeeds() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        let server = serve(move |_| {
+            if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2 {
+                limited(Some("0.15"))
+            } else {
+                Res::json(
+                    200,
+                    &json!({"data": [{"index": 0, "embedding": [1.0, 0.0]}]}),
+                )
+            }
+        })
+        .await;
+        let app = tempfile::tempdir().unwrap();
+        let deps = deps_for(server.origin.clone(), app.path());
+        let backoff = Backoff {
+            retries: 3,
+            base: Duration::from_millis(1),
+            max_wait: Duration::from_secs(1),
+        };
+        let started = Instant::now();
+        let vectors = embed_remote_with(&deps, (1, "m"), &["a"], None, backoff, &|| false)
+            .await
+            .unwrap();
+        assert_eq!(vectors.len(), 1);
+        assert_eq!(server.seen().len(), 3);
+        assert!(
+            started.elapsed() >= Duration::from_millis(300),
+            "two Retry-After waits of 150 ms, not the 1 ms backoff: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_429_is_retried_a_bounded_number_of_times() {
+        let server = serve(|_| limited(None)).await;
+        let app = tempfile::tempdir().unwrap();
+        let deps = deps_for(server.origin.clone(), app.path());
+        let backoff = Backoff {
+            retries: 2,
+            base: Duration::from_millis(5),
+            max_wait: Duration::from_secs(1),
+        };
+        let error = embed_remote_with(&deps, (1, "m"), &["a"], None, backoff, &|| false)
+            .await
+            .unwrap_err();
+        assert_eq!(server.seen().len(), 3, "the try and two retries");
+        assert_eq!(
+            error,
+            EmbedError::RateLimited {
+                retry_after: Duration::from_millis(20)
+            }
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_retry_after_beyond_the_bound_is_not_waited_for() {
+        let server = serve(|_| limited(Some("3600"))).await;
+        let app = tempfile::tempdir().unwrap();
+        let deps = deps_for(server.origin.clone(), app.path());
+        let started = Instant::now();
+        let error = embed_remote_with(&deps, (1, "m"), &["a"], None, Backoff::DOCUMENTS, &|| false)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            EmbedError::RateLimited {
+                retry_after: Duration::from_secs(3600)
+            }
+        );
+        assert_eq!(server.seen().len(), 1);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_backoff_can_be_cancelled_while_it_waits() {
+        let server = serve(|_| limited(Some("30"))).await;
+        let app = tempfile::tempdir().unwrap();
+        let deps = deps_for(server.origin.clone(), app.path());
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = stop.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        let stopper = stop.clone();
+        let error = embed_remote_with(
+            &deps,
+            (1, "m"),
+            &["a"],
+            None,
+            Backoff::DOCUMENTS,
+            &move || stopper.load(std::sync::atomic::Ordering::SeqCst),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, EmbedError::Paused);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(server.seen().len(), 1, "nothing sent after the stop");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_project_budget_and_the_model_price_are_read_when_the_platform_gives_them() {
+        let server = serve(|req| {
+            if req.path.contains("/project_budget/prompt_lib/7/budget") {
+                Res::json(
+                    200,
+                    &json!({"limit_source": "explicit", "enabled": true, "warning_pct": 80,
+                        "percent_used": 91.5, "warning_active": true, "spend_available": true,
+                        "remaining": 4.25, "currency": "EUR", "can_see_amounts": true}),
+                )
+            } else if req.path.contains("/project_budget/prompt_lib/8/budget") {
+                // A member who may not see amounts: the cost fields are gone.
+                Res::json(
+                    200,
+                    &json!({"limit_source": "unlimited", "enabled": false, "warning_pct": 80,
+                        "percent_used": null, "warning_active": false, "spend_available": false,
+                        "can_see_amounts": false}),
+                )
+            } else if req.path.starts_with(MODELS_ROUTE) {
+                Res::json(
+                    200,
+                    &json!({"items": [
+                        {"name": "priced", "input_cost_per_1m_tokens": 0.02, "currency": "EUR"},
+                        {"name": "no-currency", "input_cost_per_1m_tokens": 0.02},
+                        {"name": "unpriced"}]}),
+                )
+            } else {
+                Res::json(404, &json!({}))
+            }
+        })
+        .await;
+        let app = tempfile::tempdir().unwrap();
+        let deps = deps_for(server.origin.clone(), app.path());
+        let budget = project_budget(&deps, 7).await.unwrap();
+        assert_eq!(
+            budget,
+            ProjectBudgetLeft {
+                unlimited: false,
+                remaining: Some(4.25),
+                currency: Some("EUR".into()),
+                percent_used: Some(91.5),
+                warning_active: true
+            }
+        );
+        let hidden = project_budget(&deps, 8).await.unwrap();
+        assert!(hidden.unlimited && hidden.remaining.is_none() && hidden.currency.is_none());
+        assert!(project_budget(&deps, 9).await.is_err());
+        // The price comes with the picker's list, in its currency (both or
+        // neither).
+        let prices: Vec<_> = remote_models(&deps, 7)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|model| (model.name, model.price_per_1m, model.currency))
+            .collect();
+        assert_eq!(
+            prices,
+            [
+                ("priced".to_owned(), Some(0.02), Some("EUR".to_owned())),
+                ("no-currency".to_owned(), None, None),
+                ("unpriced".to_owned(), None, None),
+            ]
+        );
+        assert!(
+            server
+                .seen()
+                .iter()
+                .all(|req| req.headers.contains_key("x-client-version")),
+            "the budget route wants the client version"
+        );
     }
 
     #[test]

@@ -1,30 +1,30 @@
 ---
 title: "Schedules and tasks"
-description: "Manage cron schedules and see what background work is currently running."
+description: "Switch recurring platform routines on or off, change their schedules, and see what background work is currently running."
 ---
 
-Two admin pages cover recurring and running work: **Schedules & Tasks** for cron schedules, and **Tasks** for a live view of background jobs.
+Two admin pages cover recurring and running work: **Schedules & Tasks** for the platform's recurring routines, and **Tasks** for a live view of background jobs.
 
 ## Manage schedules
 
-Open **Schedules & Tasks**. Its Schedules tab lists cron-bound platform jobs (for example, indexing schedules) with a live read and write — the scheduler service polls this table every minute and dispatches whatever is due.
+Open **Schedules & Tasks**. It lists every recurring routine the platform runs: the scheduled jobs of the main service (index schedule scan, pipeline schedule scan, artifact retention, token expiry notices) and the workers of the scheduler service (price sync and the retention sweeps). Each row shows the schedule in force, whether the routine is on, when it last ran and its outcome, and when it runs next.
 
 <Steps>
-  <Step title="Find or create a schedule">
-    Each row pairs a cron expression with the platform operation it runs.
+  <Step title="Switch a routine off or on">
+    The switch stops a routine from running without deleting anything. A routine that is switched back on waits for its next scheduled time; it does not replay the runs it missed.
   </Step>
-  <Step title="Enable or disable it">
-    Disabling a row stops it from being dispatched without deleting it.
+  <Step title="Change its schedule">
+    Click the schedule and enter an interval such as `30m` or `6h`, or five cron fields. Each routine has a shortest allowed gap, and a faster schedule is refused with the reason. Leave the field empty to go back to the default that the deployment sets.
   </Step>
-  <Step title="Review history">
-    Open a schedule's history drawer for its past occurrences.
+  <Step title="Check the result">
+    Changes apply within about a minute, without restarting anything. Every change is recorded in the audit trail with who made it.
   </Step>
 </Steps>
 
-<Screenshot id="admin-schedules-table" alt="Schedules & Tasks page, Schedules tab" />
+<Screenshot id="admin-schedules-table" alt="Schedules & Tasks page listing the platform's recurring routines" />
 
 <Note>
-The page's own "Tasks" tab is a permanent notice, not a table: it describes maintenance operations from the legacy plugin runtime, which this platform does not have and has no plan to add. It answers as unavailable rather than as an empty list, so "nothing is running" and "this deployment cannot see what is running" are never shown identically.
+What a routine does is fixed in code and cannot be edited here: only whether it runs, and when. The editing controls need the `configuration.scheduling.schedules.edit` permission; with only the view permission the page is read-only. If the scheduling registry cannot be read, the main service's scheduled jobs pause until it can, rather than running unchecked.
 </Note>
 
 ## See what is running

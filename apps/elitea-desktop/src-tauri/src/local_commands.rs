@@ -22,6 +22,7 @@ use crate::d0::mentions::Located;
 use crate::auth::{AuthService, RefreshResult};
 use crate::d0::api::{ApiError, Bearer, Credentials};
 use crate::d0::approvals::UiDecision;
+use crate::d0::attachments::{Added, ImagePick};
 use crate::d0::definition::ModelChoice;
 use crate::d0::events::{AgentEvent, EVENT_NAME, EventEmitter};
 use crate::d0::recorder::FileChange;
@@ -88,6 +89,10 @@ impl crate::doctor::DoctorHooks for AppDoctorHooks {
     fn refresh_index(&self, workspace_id: &str) -> Result<(), String> {
         crate::doctor::DoctorHooks::refresh_index(self.agents.as_ref(), workspace_id)
     }
+
+    fn git_deny(&self) -> Arc<elitea_local_tools::deny::DenyList> {
+        crate::doctor::DoctorHooks::git_deny(self.agents.as_ref())
+    }
 }
 
 /// A local-work command's failure as the webview receives it.
@@ -98,7 +103,7 @@ pub struct IpcError {
 }
 
 impl IpcError {
-    fn new(code: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &str, message: impl Into<String>) -> Self {
         Self {
             code: code.to_owned(),
             message: message.into(),
@@ -205,6 +210,21 @@ impl EventEmitter for MainWindowEvents {
             activity.agent(&event);
         }
     }
+
+    fn emit_process(&self, event: crate::d0::processes::ProcessEvent) {
+        if let Err(error) = self
+            .0
+            .emit_to("main", crate::d0::processes::EVENT_NAME, &event)
+        {
+            log::warn!("could not deliver a process event: {error}");
+        }
+    }
+
+    fn emit_lsp(&self, event: crate::d0::lsp::LspEvent) {
+        if let Err(error) = self.0.emit_to("main", crate::d0::lsp::EVENT_NAME, &event) {
+            log::warn!("could not deliver a language server event: {error}");
+        }
+    }
 }
 
 /// The native folder dialog; `None` when the person cancelled (or the
@@ -228,7 +248,16 @@ pub async fn workspace_open(
     let Some(path) = pick_folder(&app).await else {
         return Ok(None);
     };
-    Ok(state.workspaces.add(&path).map(Some)?)
+    let workspace = state.workspaces.add(&path)?;
+    // The folder's MCP and hooks files are proposals only (#1230, #1237):
+    // shown, never run.
+    let agents = state.agents.clone();
+    let id = workspace.id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::mcp_commands::propose_on_open(&app, &agents, &id);
+        crate::hooks_commands::propose_on_open(&app, &agents, &id);
+    });
+    Ok(Some(workspace))
 }
 
 /// Files whose "open with the default app" would RUN something (an app
@@ -481,7 +510,7 @@ pub async fn workspace_remove(state: State<'_, LocalState>, id: String) -> Resul
 }
 
 /// The workspace's agent settings (`step_limit`: its turns' steps per run,
-/// over the agent's own; `null` for the agent's value, else the default).
+/// a number or `"unlimited"`; `null` for the default, 1024).
 #[tauri::command(rename_all = "snake_case")]
 pub fn workspace_agent_settings_get(
     state: State<'_, LocalState>,
@@ -491,23 +520,31 @@ pub fn workspace_agent_settings_get(
 }
 
 /// Store the workspace's agent settings; they apply from the next turn.
-/// `invalid_request` for a step limit outside 10 to 200.
+/// `invalid_request` for a step limit outside 1 to 1000000 (and not
+/// `"unlimited"`).
 #[tauri::command(rename_all = "snake_case")]
 pub fn workspace_agent_settings_set(
     state: State<'_, LocalState>,
     id: String,
     settings: AgentSettings,
 ) -> Result<AgentSettings, IpcError> {
-    if settings
-        .step_limit
-        .is_some_and(|limit| !STEP_LIMIT_RANGE.contains(&limit))
-    {
+    if settings.step_limit.is_some_and(|limit| !limit.valid()) {
         return Err(IpcError::new(
             "invalid_request",
             format!(
-                "The step limit must be {} to {}.",
+                "The step limit must be {} to {}, or unlimited.",
                 STEP_LIMIT_RANGE.start(),
                 STEP_LIMIT_RANGE.end()
+            ),
+        ));
+    }
+    if !settings.diagnostics_wait_ms.valid() {
+        return Err(IpcError::new(
+            "invalid_request",
+            format!(
+                "A diagnostics wait must be {} to {} ms.",
+                crate::workspaces::DIAGNOSTICS_WAIT_RANGE.start(),
+                crate::workspaces::DIAGNOSTICS_WAIT_RANGE.end()
             ),
         ));
     }
@@ -549,7 +586,16 @@ pub async fn agent_turn_start(
     compact: Option<bool>,
     model: Option<TurnModel>,
     command: Option<CommandPick>,
+    images: Option<Vec<ImagePick>>,
+    bypass_approvals: Option<bool>,
 ) -> Result<TurnStarted, IpcError> {
+    let bypass = bypass_approvals.unwrap_or(false);
+    if bypass && plan_mode {
+        return Err(IpcError::new(
+            "invalid_request",
+            "A turn cannot run in plan mode and in bypass mode.",
+        ));
+    }
     // A thread in the cloud runs no local turn (ADR-0034 decision 7; the
     // platform refuses it too).
     if let (Some(handoff), Some(conversation)) = (&state.handoff, conversation_id.as_str())
@@ -571,6 +617,7 @@ pub async fn agent_turn_start(
             version_id,
             prompt,
             plan_mode,
+            bypass,
             mentions: mentions.unwrap_or_default(),
             skills,
             project_skills,
@@ -582,8 +629,53 @@ pub async fn agent_turn_start(
                 })
                 .transpose()?,
             command,
+            images: images.unwrap_or_default(),
         })
         .await?)
+}
+
+/// Attach the image file at `path` (absolute: a dropped file's path from
+/// `files_dropped`, or a picked one) to the next turn of the workspace
+/// (#1229). The host reads it confined (credentials, the app's data and
+/// `path_deny` are refused with `path_denied`), checks and shrinks it, and
+/// keeps it in memory; the answer's token goes in `agent_turn_start.images`.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn attachment_add(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    path: String,
+) -> Result<Added, IpcError> {
+    let agents = state.agents.clone();
+    tokio::task::spawn_blocking(move || agents.attachment_add(&workspace_id, &path))
+        .await
+        .map_err(|_| IpcError::new("internal", "the image lookup stopped unexpectedly"))?
+        .map_err(IpcError::from)
+}
+
+/// Attach a pasted image (`data`: base64, at most 10 MiB decoded). `mime`
+/// is what the clipboard said; the host goes by the bytes.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn attachment_add_bytes(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    mime: String,
+    data: String,
+    name: Option<String>,
+) -> Result<Added, IpcError> {
+    let _ = mime;
+    let agents = state.agents.clone();
+    tokio::task::spawn_blocking(move || {
+        agents.attachment_add_bytes(&workspace_id, name.as_deref(), &data)
+    })
+    .await
+    .map_err(|_| IpcError::new("internal", "the image lookup stopped unexpectedly"))?
+    .map_err(IpcError::from)
+}
+
+/// Take an attached image off the composer before it is sent.
+#[tauri::command(rename_all = "snake_case")]
+pub fn attachment_remove(state: State<'_, LocalState>, workspace_id: String, token: String) {
+    state.agents.attachment_remove(&workspace_id, &token);
 }
 
 /// Read ahead what a turn to this agent version (and conversation) reads
@@ -937,6 +1029,24 @@ pub async fn checkpoint_restore(
     .await
     .map_err(|e| IpcError::new("internal", e.to_string()))??;
     Ok(Restored { restored })
+}
+
+#[derive(Serialize)]
+pub struct RestorePoint {
+    turn_id: Option<String>,
+}
+
+/// The turn whose checkpoint is the folder as `turn_id` left it (the
+/// first later turn of its workspace that changed files and stands), or
+/// `null` when no later turn changed the folder.
+#[tauri::command(rename_all = "snake_case")]
+pub fn checkpoint_after(
+    state: State<'_, LocalState>,
+    turn_id: String,
+) -> Result<RestorePoint, IpcError> {
+    Ok(RestorePoint {
+        turn_id: state.agents.restore_point_after(&turn_id)?,
+    })
 }
 
 /// What restoring the folder to before a turn would write back and

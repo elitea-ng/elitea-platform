@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-process-kill"
+description = "Enables the process_kill command without any pre-configured scope."
+commands.allow = ["process_kill"]
+
+[[permission]]
+identifier = "deny-process-kill"
+description = "Denies the process_kill command without any pre-configured scope."
+commands.deny = ["process_kill"]

@@ -153,6 +153,26 @@ function mentionedUserIDs(raw: unknown): number[] {
   return ids;
 }
 
+/**
+ * The project skill ids as NUMBERS, each once. Anything that is not a
+ * positive integer is dropped: it cannot name a skill. A list past the five a
+ * turn may use is NOT cut here: the start route answers 400 and the person
+ * sees the refusal, rather than a message that silently ran without a skill.
+ */
+function projectSkillIDs(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  const ids: number[] = [];
+  for (const value of raw) {
+    const numeric = Number(value);
+    if (Number.isInteger(numeric) && numeric > 0 && !ids.includes(numeric)) ids.push(numeric);
+  }
+  return ids;
+}
+
+function projectSkillsField(isApplicationTurn: boolean, ids: readonly number[]): { skills?: { source: 'project'; id: number }[] } {
+  return isApplicationTurn && ids.length > 0 ? { skills: ids.map((id) => ({ source: 'project' as const, id })) } : {};
+}
+
 export function buildStartBody(params: {
   readonly mcpTokens?: Readonly<Record<string, unknown>>;
   readonly conversationUuid: string;
@@ -177,6 +197,7 @@ export function buildStartBody(params: {
   // that covered it replayed a captured POST with the field injected, so CI
   // never exercised the composer that is supposed to produce it.
   const mentioned = mentionedUserIDs(payload['userIds']);
+  const projectSkills = projectSkillIDs(payload['projectSkillIds']);
   const mentionsEveryone = payload['isMentioningEveryone'] === true;
   const mentions = {
     ...(mentioned.length > 0 ? { user_ids: mentioned } : {}),
@@ -192,7 +213,12 @@ export function buildStartBody(params: {
     interaction_uuid: crypto.randomUUID(),
     mcp_tokens: params.mcpTokens ?? {},
     ...mentions,
-    payload: { user_input: question, ...(payload['attachments'] ? { attachments: payload['attachments'] } : {}) },
+    payload: {
+      user_input: question,
+      ...(payload['attachments'] ? { attachments: payload['attachments'] } : {}),
+      // Project skills picked in the "~" menu: ids only, application turns only.
+      ...projectSkillsField(params.isApplicationTurn, projectSkills),
+    },
   };
   if (params.isApplicationTurn) {
     if (params.participantId === undefined) return undefined;

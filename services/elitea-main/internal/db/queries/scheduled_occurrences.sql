@@ -26,6 +26,18 @@ WHERE job_id = sqlc.arg(job_id)
   AND schedule_revision = sqlc.arg(schedule_revision)
   AND state = 'PENDING';
 
+-- name: SupersedePendingScheduledJobOccurrences :exec
+UPDATE elitea_runtime.scheduled_occurrences
+SET state = 'SUPERSEDED',
+    lease_owner = NULL,
+    claim_fence = NULL,
+    lease_expires_at = NULL,
+    completed_at = sqlc.arg(completed_at),
+    updated_at = sqlc.arg(completed_at)
+WHERE job_id = sqlc.arg(job_id)
+  AND state = 'PENDING'
+  AND (lease_expires_at IS NULL OR lease_expires_at <= sqlc.arg(completed_at));
+
 -- name: ClaimScheduledJobCursor :execrows
 UPDATE elitea_runtime.scheduled_job_cursors
 SET schedule_revision = sqlc.arg(schedule_revision),

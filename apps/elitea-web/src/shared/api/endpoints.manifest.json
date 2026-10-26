@@ -3354,6 +3354,26 @@
       "responseSchema": "ExecutionInterruptDecisionResult",
       "fixture": null,
       "usedBy": ["features/chat-messages/api/interruptLedgerApi.ts"]
+    },
+    {
+      "id": "workspaceHandoff.changes",
+      "method": "GET",
+      "path": "/elitea_core/workspace_handoff_changes/prompt_lib/{project_id}/{conversation_uuid}",
+      "operationId": "getWorkspaceHandoffChanges",
+      "source": "generated",
+      "responseSchema": "WorkspaceHandoffChanges",
+      "fixture": null,
+      "usedBy": ["pages/chat"]
+    },
+    {
+      "id": "workspaceHandoff.diff",
+      "method": "GET",
+      "path": "/elitea_core/workspace_handoff_diff/prompt_lib/{project_id}/{conversation_uuid}",
+      "operationId": "getWorkspaceHandoffDiff",
+      "source": "generated",
+      "responseSchema": "WorkspaceHandoffDiff",
+      "fixture": null,
+      "usedBy": ["pages/chat"]
     }
   ]
 }

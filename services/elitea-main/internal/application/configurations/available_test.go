@@ -44,6 +44,8 @@ func TestPinnedCurrentAvailableCatalogMatchesCurrentFixedRegistry(t *testing.T) 
 		"zephyr_essential", "figma", "rally", "sonar", "sql", "google_places", "salesforce",
 		"sharepoint", "carrier", "report_portal", "testio", "openapi", "langfuse",
 		"aha",
+		// The web search and host-intelligence providers (#1238).
+		"tavily", "firecrawl", "brave_search", "duckduckgo_instant", "shodan",
 		// Registered in Go: the cloud executor project setting (ADR-0034).
 		"cloud_executor",
 	}

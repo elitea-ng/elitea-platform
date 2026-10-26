@@ -805,6 +805,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// Project Context was switched on — see
 		// internal/application/agentexecution/projectcontext.go's header.
 		agentStart = agentStart.WithProjectContext(repos.NewProjectContextRepo(dependencies.AdmissionPool))
+		// Project skills picked in the chat composer's `~` menu: read by id,
+		// base version, under the caller's folder visibility. Same setter
+		// idiom and admission pool.
+		agentStart = agentStart.WithProjectSkills(repos.NewProjectSkillsRepo(dependencies.AdmissionPool))
 		// @mention notifications (#977). Same setter idiom, same admission
 		// pool. The composer has always put the tagged users on the wire; the
 		// start route used to REFUSE the field and nothing wrote a row, so a
@@ -1955,6 +1959,18 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 					schedulerErr,
 				)
 			}
+			// The operator registry (#1369): switch a job off or change its
+			// schedule without a restart.
+			routineControls, controlsErr := repos.NewPlatformRoutineControls(
+				dependencies.AdmissionPool,
+			)
+			if controlsErr != nil {
+				return nil, fmt.Errorf(
+					"construct platform routine controls: %w",
+					controlsErr,
+				)
+			}
+			scheduler.WithControls(routineControls)
 			indexPublishers = append(indexPublishers, scheduler)
 		}
 		publisherRoot, err = newPublisherSet(indexPublishers...)

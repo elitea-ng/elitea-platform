@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { URL, fileURLToPath } from 'node:url';
 
 import mdx from '@mdx-js/rollup';
@@ -86,6 +87,37 @@ export const guardedLazyRouteComponent = (routesDirectory: string): PluginOption
 });
 
 /**
+ * pdf.js's plain-JavaScript JPEG 2000 and JBIG2 decoders, next to its worker.
+ *
+ * The Artifacts PDF preview runs pdf.js with WebAssembly off (neither CSP
+ * allows 'wasm-unsafe-eval'), so pdf.js falls back to these two modules,
+ * which it `import()`s as `${wasmUrl}<fixed file name>`. A `?url` import would
+ * hash the names, so they keep their own names in `assets/pdfjs-<version>/`,
+ * beside the worker, and `features/artifacts/lib/pdfjs.ts` points `wasmUrl`
+ * there. The version folder stands in for the hash: nginx serves `assets/` as
+ * immutable for a year, so an upgrade must change the URL. Same origin, no
+ * eval: both CSPs' `script-src 'self'` admit them. The dev server serves them
+ * from the package itself.
+ */
+const PDFJS_NOWASM_DECODERS = ['openjpeg_nowasm_fallback.js', 'jbig2_nowasm_fallback.js'];
+const PDFJS_VERSION = (
+  JSON.parse(readFileSync(resolvePath('./node_modules/pdfjs-dist/package.json'), 'utf8')) as { version: string }
+).version;
+const pdfjsNoWasmDecoders = (): PluginOption => ({
+  name: 'elitea:pdfjs-nowasm-decoders',
+  apply: 'build',
+  generateBundle() {
+    for (const name of PDFJS_NOWASM_DECODERS) {
+      this.emitFile({
+        type: 'asset',
+        fileName: `assets/pdfjs-${PDFJS_VERSION}/${name}`,
+        source: readFileSync(resolvePath(`./node_modules/pdfjs-dist/wasm/${name}`)),
+      });
+    }
+  },
+});
+
+/**
  * The main SPA's plugin chain (route tree + guarded lazy routes + the base
  * plugins), shared by the default build and the `desktop` build.
  *
@@ -114,6 +146,7 @@ function mainAppPlugins(basePlugins: PluginOption[]): PluginOption[] {
       },
     }),
     ...basePlugins,
+    pdfjsNoWasmDecoders(),
   ];
 }
 

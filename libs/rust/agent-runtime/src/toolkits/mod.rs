@@ -170,6 +170,10 @@ mod sql_tests;
 mod testio_tests;
 #[cfg(test)]
 mod testrail_tests;
+#[cfg(test)]
+mod web_test_support;
+#[cfg(test)]
+mod web_tests;
 #[cfg(all(test, feature = "toolkit-office"))]
 mod xlsx_tests;
 #[cfg(test)]
@@ -198,6 +202,9 @@ pub use delegated_auth::{
     decode_delegated_authorization_requirement, delegated_authorization_declined_result,
     delegated_authorization_granted_result, delegated_authorization_requirement,
     encode_delegated_authorization_requirement, hide_model_tools,
+};
+pub use elitea_egress_guard::{
+    Allowlist as WebEgressAllowlist, AllowlistError as WebEgressAllowlistError,
 };
 pub use families::artifact::ArtifactToolAuthority;
 #[cfg(feature = "toolkit-data-analysis")]
@@ -228,6 +235,8 @@ pub use families::office_host::{
 pub use families::sharepoint::tools::{
     sharepoint_tool_names, sharepoint_tool_reads_text, sharepoint_tool_uses_office_host,
 };
+pub use families::web::meter as web_meter;
+pub use families::web::{WebToolHost, provider_egress_entries};
 pub use materialize::{
     ConfiguredToolsets, LeftOutReason, LeftOutToolkit, MAX_NOTICE_LABEL_BYTES,
     ToolsetMaterializationError, ToolsetMaterializationErrorCode, bounded_label,

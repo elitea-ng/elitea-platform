@@ -67,7 +67,7 @@ The server's 1.3 work (elitea-platform PR #1090) is released in v4.7.0. Every 1.
 |---|---|
 | Chat | `cancelChatExecution` (server-side Stop), `regenerateChatMessage`, `getMessageFeedback`, `setMessageFeedback`, `deleteMessageFeedback`, `exportConversation`, `getRecommendations` |
 | Notifications | `deleteNotification`, `deleteNotifications` (a deletion reaches the caller's other devices as a `deleted` tombstone in the `changes_since` delta) |
-| Memory | `listMemories`, `deleteMemory`, `clearMemories` (the caller's own memories in the project) |
+| Memory | `listMemories`, `createMemory`, `deleteMemory`, `clearMemories` (the caller's own memories in the project) |
 | Usage | `getProjectUsage` (current-period totals; money fields are removed for a member who may not see them) |
 | Discover | `listPublicApplications` (the public catalogue: `{rows, total}`, `total` counts the filtered set; rows carry the public `project_id` and the published `version_id`), `getPublicApplication` (welcome message and conversation starters; not tagged `client` upstream, read as optional enrichment: the details screen works without it) |
 

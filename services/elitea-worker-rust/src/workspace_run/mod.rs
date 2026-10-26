@@ -15,6 +15,7 @@
 //! its files.
 
 pub(crate) mod audit;
+pub(crate) mod changes;
 pub(crate) mod codec;
 pub(crate) mod context;
 pub(crate) mod file_redact;

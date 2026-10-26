@@ -67,6 +67,7 @@ const INTERNAL_TOOL_NAMES = [
   'data_analysis',
   'planner',
   'swarm',
+  'subagents',
   'lazy_tools_mode',
 ] as const;
 

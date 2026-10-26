@@ -1,0 +1,640 @@
+{
+  "_comment": "JSON examples from the Agent Client Protocol documentation (https://github.com/agentclientprotocol/agent-client-protocol, docs/protocol/v1), Apache License 2.0. Each value round-trips through the hand-written types in ../types.rs.",
+  "repository": "https://github.com/agentclientprotocol/agent-client-protocol",
+  "commit": "e2d83349bc9e28a4059ea3acefa1c91c966f74e2",
+  "examples": [
+    {
+      "type": "InitializeRequest",
+      "source": "docs/protocol/v1/initialization.mdx #0",
+      "value": {
+        "protocolVersion": 1,
+        "clientCapabilities": {
+          "fs": {
+            "readTextFile": true,
+            "writeTextFile": true
+          },
+          "terminal": true
+        },
+        "clientInfo": {
+          "name": "my-client",
+          "title": "My Client",
+          "version": "1.0.0"
+        }
+      }
+    },
+    {
+      "type": "InitializeResponse",
+      "source": "docs/protocol/v1/initialization.mdx #1",
+      "value": {
+        "protocolVersion": 1,
+        "agentCapabilities": {
+          "loadSession": true,
+          "promptCapabilities": {
+            "image": true,
+            "audio": true,
+            "embeddedContext": true
+          },
+          "mcpCapabilities": {
+            "http": true,
+            "sse": true
+          }
+        },
+        "agentInfo": {
+          "name": "my-agent",
+          "title": "My Agent",
+          "version": "1.0.0"
+        },
+        "authMethods": []
+      }
+    },
+    {
+      "type": "NewSessionRequest",
+      "source": "docs/protocol/v1/session-setup.mdx #0",
+      "value": {
+        "cwd": "/home/user/project",
+        "mcpServers": [
+          {
+            "name": "filesystem",
+            "command": "/path/to/mcp-server",
+            "args": [
+              "--stdio"
+            ],
+            "env": []
+          }
+        ]
+      }
+    },
+    {
+      "type": "NewSessionResponse",
+      "source": "docs/protocol/v1/session-setup.mdx #1",
+      "value": {
+        "sessionId": "sess_abc123def456"
+      }
+    },
+    {
+      "type": "LoadSessionRequest",
+      "source": "docs/protocol/v1/session-setup.mdx #3",
+      "value": {
+        "sessionId": "sess_789xyz",
+        "cwd": "/home/user/project",
+        "mcpServers": [
+          {
+            "name": "filesystem",
+            "command": "/path/to/mcp-server",
+            "args": [
+              "--mode",
+              "filesystem"
+            ],
+            "env": []
+          }
+        ]
+      }
+    },
+    {
+      "type": "LoadSessionRequest",
+      "source": "docs/protocol/v1/session-setup.mdx #13",
+      "value": {
+        "sessionId": "sess_789xyz",
+        "cwd": "/home/user/project",
+        "additionalDirectories": [
+          "/home/user/shared-lib",
+          "/home/user/product-docs"
+        ],
+        "mcpServers": []
+      }
+    },
+    {
+      "type": "LoadSessionResponse",
+      "source": "docs/protocol/v1/session-setup.mdx #6",
+      "value": {}
+    },
+    {
+      "type": "McpServer",
+      "source": "docs/protocol/v1/session-setup.mdx #14",
+      "value": {
+        "name": "filesystem",
+        "command": "/path/to/mcp-server",
+        "args": [
+          "--stdio"
+        ],
+        "env": [
+          {
+            "name": "API_KEY",
+            "value": "secret123"
+          }
+        ]
+      }
+    },
+    {
+      "type": "McpServer",
+      "source": "docs/protocol/v1/session-setup.mdx #15",
+      "value": {
+        "type": "http",
+        "name": "api-server",
+        "url": "https://api.example.com/mcp",
+        "headers": [
+          {
+            "name": "Authorization",
+            "value": "Bearer token123"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          }
+        ]
+      }
+    },
+    {
+      "type": "McpServer",
+      "source": "docs/protocol/v1/session-setup.mdx #16",
+      "value": {
+        "type": "sse",
+        "name": "event-stream",
+        "url": "https://events.example.com/mcp",
+        "headers": [
+          {
+            "name": "X-API-Key",
+            "value": "apikey456"
+          }
+        ]
+      }
+    },
+    {
+      "type": "SessionNotification",
+      "source": "docs/protocol/v1/agent-plan.mdx #0",
+      "value": {
+        "sessionId": "sess_abc123def456",
+        "update": {
+          "sessionUpdate": "plan",
+          "entries": [
+            {
+              "content": "Analyze the existing codebase structure",
+              "priority": "high",
+              "status": "pending"
+            },
+            {
+              "content": "Identify components that need refactoring",
+              "priority": "high",
+              "status": "pending"
+            },
+            {
+              "content": "Create unit tests for critical functions",
+              "priority": "medium",
+              "status": "pending"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "SessionNotification",
+      "source": "docs/protocol/v1/prompt-turn.mdx #1",
+      "value": {
+        "sessionId": "sess_abc123def456",
+        "update": {
+          "sessionUpdate": "plan",
+          "entries": [
+            {
+              "content": "Check for syntax errors",
+              "priority": "high",
+              "status": "pending"
+            },
+            {
+              "content": "Identify potential type issues",
+              "priority": "medium",
+              "status": "pending"
+            },
+            {
+              "content": "Review error handling patterns",
+              "priority": "medium",
+              "status": "pending"
+            },
+            {
+              "content": "Suggest improvements",
+              "priority": "low",
+              "status": "pending"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "SessionNotification",
+      "source": "docs/protocol/v1/prompt-turn.mdx #2",
+      "value": {
+        "sessionId": "sess_abc123def456",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "msg_agent_c42b9",
+          "content": {
+            "type": "text",
+            "text": "I'll analyze your code for potential issues. Let me examine it..."
+          }
+        }
+      }
+    },
+    {
+      "type": "SessionNotification",
+      "source": "docs/protocol/v1/prompt-turn.mdx #3",
+      "value": {
+        "sessionId": "sess_abc123def456",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "call_001",
+          "title": "Analyzing Python code",
+          "kind": "other",
+          "status": "pending"
+        }
+      }
+    },
+    {
+      "type": "SessionNotification",
+      "source": "docs/protocol/v1/prompt-turn.mdx #10",
+      "value": {
+        "sessionId": "sess_abc123def456",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "call_001",
+          "status": "in_progress"
+        }
+      }
+    },
+    {
+      "type": "SessionNotification",
+      "source": "docs/protocol/v1/prompt-turn.mdx #11",
+      "value": {
+        "sessionId": "sess_abc123def456",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "call_001",
+          "status": "completed",
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "Analysis complete:\n- No syntax errors found\n- Consider adding type hints for better clarity\n- The function could benefit from error handling for empty lists"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "SessionNotification",
+      "source": "docs/protocol/v1/session-setup.mdx #4",
+      "value": {
+        "sessionId": "sess_789xyz",
+        "update": {
+          "sessionUpdate": "user_message_chunk",
+          "messageId": "msg_user_8f7a1",
+          "content": {
+            "type": "text",
+            "text": "What's the capital of France?"
+          }
+        }
+      }
+    },
+    {
+      "type": "SessionNotification",
+      "source": "docs/protocol/v1/session-setup.mdx #5",
+      "value": {
+        "sessionId": "sess_789xyz",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "msg_agent_c42b9",
+          "content": {
+            "type": "text",
+            "text": "The capital of France is Paris."
+          }
+        }
+      }
+    },
+    {
+      "type": "SessionNotification",
+      "source": "docs/protocol/v1/session-modes.mdx #2",
+      "value": {
+        "sessionId": "sess_abc123def456",
+        "update": {
+          "sessionUpdate": "current_mode_update",
+          "currentModeId": "code"
+        }
+      }
+    },
+    {
+      "type": "SessionNotification",
+      "source": "docs/protocol/v1/slash-commands.mdx #0",
+      "value": {
+        "sessionId": "sess_abc123def456",
+        "update": {
+          "sessionUpdate": "available_commands_update",
+          "availableCommands": [
+            {
+              "name": "web",
+              "description": "Search the web for information",
+              "input": {
+                "hint": "query to search for"
+              }
+            },
+            {
+              "name": "test",
+              "description": "Run tests for the current project"
+            },
+            {
+              "name": "plan",
+              "description": "Create a detailed implementation plan",
+              "input": {
+                "hint": "description of what to plan"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "SessionNotification",
+      "source": "docs/protocol/v1/tool-calls.mdx #0",
+      "value": {
+        "sessionId": "sess_abc123def456",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "call_001",
+          "name": "read_file",
+          "title": "Reading configuration file",
+          "kind": "read",
+          "status": "pending"
+        }
+      }
+    },
+    {
+      "type": "SessionNotification",
+      "source": "docs/protocol/v1/tool-calls.mdx #1",
+      "value": {
+        "sessionId": "sess_abc123def456",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "call_001",
+          "status": "in_progress",
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "Found 3 configuration files..."
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "PromptRequest",
+      "source": "docs/protocol/v1/prompt-turn.mdx #0",
+      "value": {
+        "sessionId": "sess_abc123def456",
+        "prompt": [
+          {
+            "type": "text",
+            "text": "Can you analyze this code for potential issues?"
+          },
+          {
+            "type": "resource",
+            "resource": {
+              "uri": "file:///home/user/project/main.py",
+              "mimeType": "text/x-python",
+              "text": "def process_data(items):\n    for item in items:\n        print(item)"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "PromptRequest",
+      "source": "docs/protocol/v1/slash-commands.mdx #1",
+      "value": {
+        "sessionId": "sess_abc123def456",
+        "prompt": [
+          {
+            "type": "text",
+            "text": "/web agent client protocol"
+          }
+        ]
+      }
+    },
+    {
+      "type": "PromptResponse",
+      "source": "docs/protocol/v1/prompt-turn.mdx #9",
+      "value": {
+        "stopReason": "end_turn"
+      }
+    },
+    {
+      "type": "CancelNotification",
+      "source": "docs/protocol/v1/prompt-turn.mdx #12",
+      "value": {
+        "sessionId": "sess_abc123def456"
+      }
+    },
+    {
+      "type": "NewSessionResponse",
+      "source": "docs/protocol/v1/session-modes.mdx #0",
+      "value": {
+        "sessionId": "sess_abc123def456",
+        "modes": {
+          "currentModeId": "ask",
+          "availableModes": [
+            {
+              "id": "ask",
+              "name": "Ask",
+              "description": "Request permission before making any changes"
+            },
+            {
+              "id": "architect",
+              "name": "Architect",
+              "description": "Design and plan software systems without implementation"
+            },
+            {
+              "id": "code",
+              "name": "Code",
+              "description": "Write and modify code with full tool access"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "SetSessionModeRequest",
+      "source": "docs/protocol/v1/session-modes.mdx #1",
+      "value": {
+        "sessionId": "sess_abc123def456",
+        "modeId": "code"
+      }
+    },
+    {
+      "type": "RequestPermissionRequest",
+      "source": "docs/protocol/v1/session-modes.mdx #3",
+      "value": {
+        "sessionId": "sess_abc123def456",
+        "toolCall": {
+          "toolCallId": "call_switch_mode_001",
+          "title": "Ready for implementation",
+          "kind": "switch_mode",
+          "status": "pending",
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "## Implementation Plan..."
+              }
+            }
+          ]
+        },
+        "options": [
+          {
+            "optionId": "code",
+            "name": "Yes, and auto-accept all actions",
+            "kind": "allow_always"
+          },
+          {
+            "optionId": "ask",
+            "name": "Yes, and manually accept actions",
+            "kind": "allow_once"
+          },
+          {
+            "optionId": "reject",
+            "name": "No, stay in architect mode",
+            "kind": "reject_once"
+          }
+        ]
+      }
+    },
+    {
+      "type": "RequestPermissionRequest",
+      "source": "docs/protocol/v1/tool-calls.mdx #2",
+      "value": {
+        "sessionId": "sess_abc123def456",
+        "toolCall": {
+          "toolCallId": "call_001"
+        },
+        "options": [
+          {
+            "optionId": "allow-once",
+            "name": "Allow once",
+            "kind": "allow_once"
+          },
+          {
+            "optionId": "reject-once",
+            "name": "Reject",
+            "kind": "reject_once"
+          }
+        ]
+      }
+    },
+    {
+      "type": "RequestPermissionResponse",
+      "source": "docs/protocol/v1/tool-calls.mdx #3",
+      "value": {
+        "outcome": {
+          "outcome": "selected",
+          "optionId": "allow-once"
+        }
+      }
+    },
+    {
+      "type": "RequestPermissionResponse",
+      "source": "docs/protocol/v1/tool-calls.mdx #4",
+      "value": {
+        "outcome": {
+          "outcome": "cancelled"
+        }
+      }
+    },
+    {
+      "type": "ContentBlock",
+      "source": "docs/protocol/v1/content.mdx #0",
+      "value": {
+        "type": "text",
+        "text": "What's the weather like today?"
+      }
+    },
+    {
+      "type": "ContentBlock",
+      "source": "docs/protocol/v1/content.mdx #1",
+      "value": {
+        "type": "image",
+        "mimeType": "image/png",
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB..."
+      }
+    },
+    {
+      "type": "ContentBlock",
+      "source": "docs/protocol/v1/content.mdx #2",
+      "value": {
+        "type": "audio",
+        "mimeType": "audio/wav",
+        "data": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAAB..."
+      }
+    },
+    {
+      "type": "ContentBlock",
+      "source": "docs/protocol/v1/content.mdx #3",
+      "value": {
+        "type": "resource",
+        "resource": {
+          "uri": "file:///home/user/script.py",
+          "mimeType": "text/x-python",
+          "text": "def hello():\n    print('Hello, world!')"
+        }
+      }
+    },
+    {
+      "type": "ContentBlock",
+      "source": "docs/protocol/v1/content.mdx #4",
+      "value": {
+        "type": "resource_link",
+        "uri": "file:///home/user/document.pdf",
+        "name": "document.pdf",
+        "mimeType": "application/pdf",
+        "size": 1024000
+      }
+    },
+    {
+      "type": "ToolCallContent",
+      "source": "docs/protocol/v1/tool-calls.mdx #5",
+      "value": {
+        "type": "content",
+        "content": {
+          "type": "text",
+          "text": "Analysis complete. Found 3 issues."
+        }
+      }
+    },
+    {
+      "type": "ToolCallContent",
+      "source": "docs/protocol/v1/tool-calls.mdx #6",
+      "value": {
+        "type": "diff",
+        "path": "/home/user/project/src/config.json",
+        "oldText": "{\n  \"debug\": false\n}",
+        "newText": "{\n  \"debug\": true\n}"
+      }
+    },
+    {
+      "type": "ToolCallContent",
+      "source": "docs/protocol/v1/tool-calls.mdx #7",
+      "value": {
+        "type": "terminal",
+        "terminalId": "term_xyz789"
+      }
+    },
+    {
+      "type": "ToolCallLocation",
+      "source": "docs/protocol/v1/tool-calls.mdx #8",
+      "value": {
+        "path": "/home/user/project/src/main.py",
+        "line": 42
+      }
+    }
+  ]
+}

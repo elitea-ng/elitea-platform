@@ -19,8 +19,8 @@ func TestPinnedWorkerToolkitCapabilityLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load rust capability: %v", err)
 	}
-	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 49 {
-		t.Errorf("rust implementation=%q supported=%d, want rust and 49",
+	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 51 {
+		t.Errorf("rust implementation=%q supported=%d, want rust and 51",
 			rust.Implementation(), len(rust.SupportedNames()))
 	}
 	// The Python worker was removed: its name, like any other, is refused.

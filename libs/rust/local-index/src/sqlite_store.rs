@@ -66,8 +66,13 @@
 //!
 //! WAL journal, `synchronous=NORMAL`, one connection behind a mutex (one
 //! writer; the desktop's single-instance plugin keeps it one process). The
-//! store's futures do their SQLite work synchronously: run them on the
-//! blocking pool, as the index service does.
+//! store's [`GraphStore`] futures run their SQLite work on tokio's blocking
+//! pool and only await it, so they never hold an async worker (they need a
+//! tokio runtime, any flavour). The synchronous methods (`*_now`,
+//! [`SqliteGraphStore::complete_with_chunks`], …) block their caller: the
+//! index service calls them from its own blocking-pool thread. The trait's
+//! writes take a borrowed graph, which the blocking pool cannot borrow:
+//! they copy it first, which the service's commits (synchronous) never do.
 //!
 //! Embeddings are kept beside the attributes, as the PostgreSQL store keeps
 //! them, so [`GraphStore::rank`] is a brute-force cosine scan over them.
@@ -86,7 +91,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -234,6 +239,22 @@ pub struct RunRow {
     pub error: Option<String>,
 }
 
+/// One embedding run, from the `runs` table (`toolkit_id` [`EMBEDDING_RUNS`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddingRun {
+    /// `embedding` while it runs, then `embedded`, `capped`,
+    /// `budget_exhausted`, `rate_limited`, `error` or `stopped`.
+    pub status: String,
+    /// Estimated tokens it embedded ([`crate::embed_caps::estimate_tokens`]).
+    pub tokens: u64,
+    pub error: Option<String>,
+}
+
+/// The `runs.toolkit_id` of embedding runs. They share the table with the
+/// graph's ingestion runs, which never see them: [`SqliteGraphStore::runs`]
+/// leaves them out and none of their statuses is `completed`.
+pub const EMBEDDING_RUNS: &str = "embeddings";
+
 /// The chunks a refresh staged for one document: the version they were
 /// cut from (the bytes it parsed) and the rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -311,26 +332,30 @@ impl Drop for Lease {
 }
 
 /// The SQLite graph store of one index directory.
+///
+/// Every field is shared (`Arc`) so that `handle` can hand a copy
+/// of the store to the blocking pool: the [`GraphStore`] futures run their
+/// SQLite work there, not on the async runtime's threads.
 #[derive(Debug)]
 pub struct SqliteGraphStore {
     path: PathBuf,
-    conn: Mutex<Option<Connection>>,
+    conn: Arc<Mutex<Option<Connection>>>,
     /// A read-only connection for searches, opened on first use: WAL lets
     /// it read while a refresh writes. Closed with the store.
-    reader: Mutex<Option<Connection>>,
-    closed: std::sync::atomic::AtomicBool,
+    reader: Arc<Mutex<Option<Connection>>>,
+    closed: Arc<AtomicBool>,
     leases: Arc<Mutex<HashSet<GraphKey>>>,
-    last_commit_rows: AtomicU64,
+    last_commit_rows: Arc<AtomicU64>,
     /// How many times a graph was loaded from the database.
-    loads: AtomicU64,
+    loads: Arc<AtomicU64>,
     /// Bumped by every write that changes which chunks have vectors (a
     /// build, new vectors, a prune): what a cached vector matrix is
     /// checked against.
-    vectors_version: AtomicU64,
+    vectors_version: Arc<AtomicU64>,
     /// Bumped by every write that changes the chunks or drops vectors (a
     /// build, a prune): a cached matrix of another chunks version holds
     /// chunk ids that may be gone or reused, and is never served.
-    chunks_version: AtomicU64,
+    chunks_version: Arc<AtomicU64>,
 }
 
 fn open_connection(path: &Path) -> Result<Connection> {
@@ -416,15 +441,50 @@ impl SqliteGraphStore {
         }
         Ok(Self {
             path,
-            conn: Mutex::new(Some(conn)),
-            reader: Mutex::new(None),
-            closed: std::sync::atomic::AtomicBool::new(false),
+            conn: Arc::new(Mutex::new(Some(conn))),
+            reader: Arc::default(),
+            closed: Arc::default(),
             leases: Arc::default(),
-            last_commit_rows: AtomicU64::new(0),
-            loads: AtomicU64::new(0),
-            vectors_version: AtomicU64::new(0),
-            chunks_version: AtomicU64::new(0),
+            last_commit_rows: Arc::default(),
+            loads: Arc::default(),
+            vectors_version: Arc::default(),
+            chunks_version: Arc::default(),
         })
+    }
+
+    /// The same store (its connections, counters and leases), for a
+    /// closure the blocking pool runs.
+    fn handle(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            conn: Arc::clone(&self.conn),
+            reader: Arc::clone(&self.reader),
+            closed: Arc::clone(&self.closed),
+            leases: Arc::clone(&self.leases),
+            last_commit_rows: Arc::clone(&self.last_commit_rows),
+            loads: Arc::clone(&self.loads),
+            vectors_version: Arc::clone(&self.vectors_version),
+            chunks_version: Arc::clone(&self.chunks_version),
+        }
+    }
+
+    /// Run `work` on a handle of this store on the blocking pool, and wait
+    /// for it without holding an async worker.
+    ///
+    /// The work is one call of the synchronous store: one lock of the
+    /// connection, and each write one transaction. Dropping the returned
+    /// future does not stop the work once it has started: it runs to its
+    /// end on the blocking pool, so a write is committed whole (or rolled
+    /// back on its error) and never left half applied; only its answer is
+    /// lost. A panic in `work` resumes in the caller, as it did when the
+    /// work ran inline; a runtime shutting down before the work ran
+    /// answers [`StoreError::Closed`].
+    async fn blocking<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&Self) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let store = self.handle();
+        elitea_content_source::blocking_or(move || work(&store), || StoreError::Closed).await
     }
 
     /// What an index in `dir` holds, read without loading its graph: the
@@ -587,12 +647,155 @@ impl SqliteGraphStore {
         self.with(|conn| {
             let mut statement = conn.prepare(
                 "SELECT status, finished_at, error FROM runs
-                  WHERE project_id = ?1 AND application_id = ?2 ORDER BY id",
+                  WHERE project_id = ?1 AND application_id = ?2 AND toolkit_id <> ?3
+                  ORDER BY id",
             )?;
-            let rows = statement.query_map(params![key.project_id, key.application_id], |row| {
-                Ok(RunRow {
+            let rows = statement.query_map(
+                params![key.project_id, key.application_id, EMBEDDING_RUNS],
+                |row| {
+                    Ok(RunRow {
+                        status: row.get(0)?,
+                        finished_at: row.get(1)?,
+                        error: row.get(2)?,
+                    })
+                },
+            )?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    /// Distinct chunk texts with no vector in `stamp` (`None`: every
+    /// text, as for an embedder not chosen yet), and their estimated
+    /// tokens ([`crate::embed_caps::estimate_tokens`], counted in SQL).
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn missing_text_stats(&self, stamp: Option<&str>) -> Result<(u64, u64)> {
+        self.read(|conn| {
+            let (texts, tokens): (i64, i64) = conn.query_row(
+                "SELECT count(*), coalesce(sum((length(t) + 3) / 4), 0) FROM (
+                   SELECT c.text AS t FROM chunks c
+                    WHERE ?1 IS NULL OR NOT EXISTS (SELECT 1 FROM chunk_vectors v
+                                        WHERE v.stamp = ?1 AND v.text_hash = c.text_hash)
+                    GROUP BY c.text_hash)",
+                [stamp],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            Ok((
+                u64::try_from(texts).unwrap_or(0),
+                u64::try_from(tokens).unwrap_or(0),
+            ))
+        })
+    }
+
+    /// The estimated tokens embedded today (UTC), over every run.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn embed_tokens_today(&self) -> Result<u64> {
+        self.read(|conn| {
+            let today: String =
+                conn.query_row("SELECT strftime('%Y-%m-%d', 'now')", [], |row| row.get(0))?;
+            let stored: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM meta WHERE key = 'embed_day_tokens'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(crate::embed_caps::day_total(stored.as_deref(), &today))
+        })
+    }
+
+    /// Record a batch that embedded `tokens` (estimated): into the run
+    /// `run` (a new `embedding` run when `None`) and, when `daily`, today's
+    /// counter (what the per-day cap holds; an on-device model is not
+    /// counted), in one transaction. Returns the run's id.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn embedding_batch_done(&self, run: Option<i64>, tokens: u64, daily: bool) -> Result<i64> {
+        let tokens = i64::try_from(tokens).unwrap_or(i64::MAX);
+        self.with(|conn| {
+            let tx = conn.transaction()?;
+            let run = if let Some(run) = run {
+                run
+            } else {
+                tx.execute(
+                    &format!(
+                        "INSERT INTO runs (project_id, application_id, toolkit_id,
+                                           started_at, status)
+                         VALUES (?1, ?2, ?3, {NOW}, 'embedding')"
+                    ),
+                    params![
+                        GraphKey::LOCAL.project_id,
+                        GraphKey::LOCAL.application_id,
+                        EMBEDDING_RUNS
+                    ],
+                )?;
+                tx.last_insert_rowid()
+            };
+            tx.execute(
+                "UPDATE runs SET tokens = tokens + ?2 WHERE id = ?1",
+                params![run, tokens],
+            )?;
+            if daily {
+                let today: String =
+                    tx.query_row("SELECT strftime('%Y-%m-%d', 'now')", [], |row| row.get(0))?;
+                let stored: Option<String> = tx
+                    .query_row(
+                        "SELECT value FROM meta WHERE key = 'embed_day_tokens'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                let total = crate::embed_caps::day_total(stored.as_deref(), &today)
+                    .saturating_add(u64::try_from(tokens).unwrap_or(0));
+                tx.execute(
+                    "INSERT INTO meta (key, value) VALUES ('embed_day_tokens', ?1)
+                     ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                    [format!("{today}:{total}")],
+                )?;
+            }
+            tx.commit()?;
+            Ok(run)
+        })
+    }
+
+    /// End embedding run `run` with `status` (and the error that ended it).
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn finish_embedding_run(&self, run: i64, status: &str, error: Option<&str>) -> Result<()> {
+        self.with(|conn| {
+            conn.execute(
+                &format!(
+                    "UPDATE runs SET status = ?2, error = ?3, finished_at = {NOW} WHERE id = ?1"
+                ),
+                params![run, status, error],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Every embedding run, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn embedding_runs(&self) -> Result<Vec<EmbeddingRun>> {
+        self.read(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT status, tokens, error FROM runs WHERE toolkit_id = ?1 ORDER BY id",
+            )?;
+            let rows = statement.query_map([EMBEDDING_RUNS], |row| {
+                Ok(EmbeddingRun {
                     status: row.get(0)?,
-                    finished_at: row.get(1)?,
+                    tokens: u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
                     error: row.get(2)?,
                 })
             })?;
@@ -958,6 +1161,24 @@ impl SqliteGraphStore {
                   GROUP BY c.text_hash ORDER BY min(c.id)",
             )?;
             let rows = statement.query_map([stamp], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    /// The text hashes of the chunks whose estimated tokens
+    /// ([`crate::embed_caps::estimate_tokens`], counted in SQL) are more
+    /// than `tokens`: texts a token cap that small can never let through.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn chunk_hashes_over(&self, tokens: u64) -> Result<HashSet<String>> {
+        let tokens = i64::try_from(tokens).unwrap_or(i64::MAX);
+        self.read(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT DISTINCT text_hash FROM chunks WHERE (length(text) + 3) / 4 > ?1",
+            )?;
+            let rows = statement.query_map([tokens], |row| row.get::<_, String>(0))?;
             Ok(rows.collect::<rusqlite::Result<_>>()?)
         })
     }
@@ -2158,35 +2379,40 @@ fn status_document(conn: &Connection, key: GraphKey) -> Result<Value> {
     Ok(json!({"sources": sources, "last_modified": last_modified}))
 }
 
-#[allow(
-    clippy::unused_async_trait_impl,
-    reason = "synchronous SQLite I/O inside async fns holds a tokio worker; moving it off the executor is tracked in #1377"
-)]
+/// Every call but [`GraphStore::lease`] (a set in memory) runs on the
+/// blocking pool (`SqliteGraphStore::blocking`), with what it borrows
+/// copied: the connection mutex orders them as before, and each write is
+/// still one transaction, committed whole even when its future is dropped
+/// while it runs.
 impl GraphStore for SqliteGraphStore {
     type Error = StoreError;
     type Lease = Lease;
 
-    async fn lease(&self, key: GraphKey) -> Result<Option<Lease>> {
-        let mut held = self.leases.lock().unwrap_or_else(PoisonError::into_inner);
-        if !held.insert(key) {
-            return Ok(None);
+    fn lease(&self, key: GraphKey) -> impl Future<Output = Result<Option<Lease>>> + Send {
+        // No I/O: taken when polled, as an async fn would.
+        let leases = Arc::clone(&self.leases);
+        async move {
+            let mut held = leases.lock().unwrap_or_else(PoisonError::into_inner);
+            if !held.insert(key) {
+                return Ok(None);
+            }
+            Ok(Some(Lease {
+                held: Arc::clone(&leases),
+                key,
+            }))
         }
-        Ok(Some(Lease {
-            held: Arc::clone(&self.leases),
-            key,
-        }))
     }
 
     async fn load(&self, key: GraphKey) -> Result<Option<(Graph, i64)>> {
-        self.load_now(key)
+        self.blocking(move |store| store.load_now(key)).await
     }
 
     async fn load_view(&self, key: GraphKey) -> Result<Option<GraphRead>> {
-        self.load_view_now(key)
+        self.blocking(move |store| store.load_view_now(key)).await
     }
 
     async fn revision(&self, key: GraphKey) -> Result<Option<i64>> {
-        self.revision_now(key)
+        self.blocking(move |store| store.revision_now(key)).await
     }
 
     async fn document_versions(
@@ -2194,50 +2420,60 @@ impl GraphStore for SqliteGraphStore {
         key: GraphKey,
         source_name: &str,
     ) -> Result<BTreeMap<String, String>> {
-        self.with(|conn| {
-            let mut statement = conn.prepare(
-                "SELECT key, version FROM documents
+        let source_name = source_name.to_owned();
+        self.blocking(move |store| {
+            store.with(|conn| {
+                let mut statement = conn.prepare(
+                    "SELECT key, version FROM documents
                   WHERE project_id = ?1 AND application_id = ?2 AND source_name = ?3",
-            )?;
-            let rows = statement.query_map(
-                params![key.project_id, key.application_id, source_name],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )?;
-            Ok(rows.collect::<rusqlite::Result<_>>()?)
+                )?;
+                let rows = statement.query_map(
+                    params![key.project_id, key.application_id, source_name],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                Ok(rows.collect::<rusqlite::Result<_>>()?)
+            })
         })
+        .await
     }
 
     async fn restricted_documents(&self, key: GraphKey) -> Result<Vec<(String, String, Acl)>> {
-        self.with(|conn| {
-            let mut statement = conn.prepare(
-                "SELECT source_name, key, acl FROM documents
+        self.blocking(move |store| {
+            store.with(|conn| {
+                let mut statement = conn.prepare(
+                    "SELECT source_name, key, acl FROM documents
                   WHERE project_id = ?1 AND application_id = ?2 AND restricted = 1",
-            )?;
-            let rows = statement.query_map(params![key.project_id, key.application_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?;
-            let mut restricted = Vec::new();
-            for row in rows {
-                let (source, document, acl) = row?;
-                let acl: Acl = serde_json::from_str(&acl).map_err(|_| {
-                    StoreError::Damaged(format!("the readers of {document} do not parse"))
-                })?;
-                restricted.push((source, document, acl));
-            }
-            Ok(restricted)
+                )?;
+                let rows =
+                    statement.query_map(params![key.project_id, key.application_id], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    })?;
+                let mut restricted = Vec::new();
+                for row in rows {
+                    let (source, document, acl) = row?;
+                    let acl: Acl = serde_json::from_str(&acl).map_err(|_| {
+                        StoreError::Damaged(format!("the readers of {document} do not parse"))
+                    })?;
+                    restricted.push((source, document, acl));
+                }
+                Ok(restricted)
+            })
         })
+        .await
     }
 
     async fn start(&self, key: GraphKey, status: &SourceStatus) -> Result<()> {
-        self.with(|conn| {
-            let transaction = conn.transaction()?;
-            transaction.execute(
-                &format!(
-                    "INSERT INTO sources (project_id, application_id, toolkit_id, toolkit_name,
+        let status = status.clone();
+        self.blocking(move |store| {
+            store.with(|conn| {
+                let transaction = conn.transaction()?;
+                transaction.execute(
+                    &format!(
+                        "INSERT INTO sources (project_id, application_id, toolkit_id, toolkit_name,
                          toolkit_type, status, started_at, last_updated, documents_processed,
                          error_message, progress_message, branch)
                      VALUES (?1, ?2, ?3, ?4, ?5, 'in_progress', {NOW}, {NOW}, 0, NULL,
@@ -2248,30 +2484,33 @@ impl GraphStore for SqliteGraphStore {
                          last_updated = excluded.last_updated, documents_processed = 0,
                          error_message = NULL, progress_message = excluded.progress_message,
                          branch = excluded.branch"
-                ),
-                params![
-                    key.project_id,
-                    key.application_id,
-                    status.toolkit_id,
-                    status.toolkit_name,
-                    status.toolkit_type,
-                    status.branch
-                ],
-            )?;
-            transaction.execute(
-                &format!(
+                    ),
+                    params![
+                        key.project_id,
+                        key.application_id,
+                        status.toolkit_id,
+                        status.toolkit_name,
+                        status.toolkit_type,
+                        status.branch
+                    ],
+                )?;
+                transaction.execute(
+                    &format!(
                     "INSERT INTO runs (project_id, application_id, toolkit_id, started_at, status)
                      VALUES (?1, ?2, ?3, {NOW}, 'in_progress')"
                 ),
-                params![key.project_id, key.application_id, status.toolkit_id],
-            )?;
-            transaction.commit()?;
-            Ok(())
+                    params![key.project_id, key.application_id, status.toolkit_id],
+                )?;
+                transaction.commit()?;
+                Ok(())
+            })
         })
+        .await
     }
 
     async fn fail(&self, key: GraphKey, toolkit_id: &str, error: &str) -> Result<()> {
-        self.with(|conn| {
+        let (toolkit_id, error) = (toolkit_id.to_owned(), error.to_owned());
+        self.blocking(move |store| store.with(|conn| {
             let transaction = conn.transaction()?;
             transaction.execute(
                 &format!(
@@ -2291,7 +2530,8 @@ impl GraphStore for SqliteGraphStore {
             )?;
             transaction.commit()?;
             Ok(())
-        })
+        }))
+        .await
     }
 
     async fn complete(
@@ -2300,51 +2540,81 @@ impl GraphStore for SqliteGraphStore {
         graph: &Graph,
         completion: &Completion<'_>,
     ) -> Result<i64> {
-        self.complete_with_stats(key, graph, completion, &Stats::new(), None)
+        let graph = graph.clone();
+        let (toolkit_id, source_name) = (
+            completion.toolkit_id.to_owned(),
+            completion.source_name.to_owned(),
+        );
+        let documents = completion.documents.clone();
+        let counts = completion.counts;
+        let commit_sha = completion.commit_sha.map(str::to_owned);
+        self.blocking(move |store| {
+            let completion = Completion {
+                toolkit_id: &toolkit_id,
+                source_name: &source_name,
+                documents: &documents,
+                counts,
+                commit_sha: commit_sha.as_deref(),
+            };
+            store.complete_with_stats(key, &graph, &completion, &Stats::new(), None)
+        })
+        .await
     }
 
     async fn status_document(&self, key: GraphKey) -> Result<Value> {
-        self.status_document_now(key)
+        self.blocking(move |store| store.status_document_now(key))
+            .await
     }
 
     async fn rank(&self, key: GraphKey, vector: &[f64], min_score: f64) -> Result<Ranking> {
-        self.with(|conn| rank(conn, key, vector, min_score))
+        let vector = vector.to_vec();
+        self.blocking(move |store| store.with(|conn| rank(conn, key, &vector, min_score)))
+            .await
     }
 
     async fn delete(&self, key: GraphKey) -> Result<bool> {
-        self.with(|conn| {
-            let transaction = conn.transaction()?;
-            let mut existed = false;
-            for table in [
-                "graphs",
-                "entities",
-                "relations",
-                "documents",
-                "sources",
-                "runs",
-            ] {
-                let removed = transaction.execute(
-                    &format!("DELETE FROM {table} WHERE project_id = ?1 AND application_id = ?2"),
-                    params![key.project_id, key.application_id],
-                )?;
-                if table == "graphs" {
-                    existed = removed > 0;
+        self.blocking(move |store| {
+            store.with(|conn| {
+                let transaction = conn.transaction()?;
+                let mut existed = false;
+                for table in [
+                    "graphs",
+                    "entities",
+                    "relations",
+                    "documents",
+                    "sources",
+                    "runs",
+                ] {
+                    let removed = transaction.execute(
+                        &format!(
+                            "DELETE FROM {table} WHERE project_id = ?1 AND application_id = ?2"
+                        ),
+                        params![key.project_id, key.application_id],
+                    )?;
+                    if table == "graphs" {
+                        existed = removed > 0;
+                    }
                 }
-            }
-            clear_chunks(&transaction)?;
-            transaction.commit()?;
-            Ok(existed)
+                clear_chunks(&transaction)?;
+                transaction.commit()?;
+                Ok(existed)
+            })
         })
+        .await
     }
 
     async fn save(&self, key: GraphKey, graph: &Graph) -> Result<i64> {
         check_rows(graph)?;
-        self.with(|conn| {
-            let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let (revision, _) = write_graph(&transaction, key, graph, None)?;
-            transaction.commit()?;
-            Ok(revision)
+        let graph = graph.clone();
+        self.blocking(move |store| {
+            store.with(|conn| {
+                let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let (revision, _) = write_graph(&transaction, key, &graph, None)?;
+                transaction.commit()?;
+                Ok(revision)
+            })
         })
+        .await
     }
 
     async fn remove_source(
@@ -2355,67 +2625,76 @@ impl GraphStore for SqliteGraphStore {
         source_name: &str,
     ) -> Result<i64> {
         check_rows(graph)?;
-        self.with(|conn| {
-            let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let (revision, _) = write_graph(&transaction, key, graph, None)?;
-            transaction.execute(
-                "DELETE FROM documents
+        let graph = graph.clone();
+        let (toolkit_id, source_name) = (toolkit_id.to_owned(), source_name.to_owned());
+        self.blocking(move |store| {
+            store.with(|conn| {
+                let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let (revision, _) = write_graph(&transaction, key, &graph, None)?;
+                transaction.execute(
+                    "DELETE FROM documents
                   WHERE project_id = ?1 AND application_id = ?2 AND source_name = ?3",
-                params![key.project_id, key.application_id, source_name],
-            )?;
-            transaction.execute(
-                "DELETE FROM sources
+                    params![key.project_id, key.application_id, source_name],
+                )?;
+                transaction.execute(
+                    "DELETE FROM sources
                   WHERE project_id = ?1 AND application_id = ?2 AND toolkit_id = ?3",
-                params![key.project_id, key.application_id, toolkit_id],
-            )?;
-            // The desktop's one source: its documents' chunks go with them.
-            clear_chunks(&transaction)?;
-            transaction.commit()?;
-            Ok(revision)
+                    params![key.project_id, key.application_id, toolkit_id],
+                )?;
+                // The desktop's one source: its documents' chunks go with them.
+                clear_chunks(&transaction)?;
+                transaction.commit()?;
+                Ok(revision)
+            })
         })
+        .await
     }
 
     async fn import(&self, key: GraphKey, graph: &Graph, replace_state: bool) -> Result<Imported> {
         check_rows(graph)?;
-        self.with(|conn| {
-            let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let mut counts = [0_i64; 2];
-            for (found, table) in counts.iter_mut().zip(["sources", "documents"]) {
-                *found = transaction.query_row(
+        let graph = graph.clone();
+        self.blocking(move |store| {
+            store.with(|conn| {
+                let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let mut counts = [0_i64; 2];
+                for (found, table) in counts.iter_mut().zip(["sources", "documents"]) {
+                    *found = transaction.query_row(
                     &format!(
                         "SELECT count(*) FROM {table} WHERE project_id = ?1 AND application_id = ?2"
                     ),
                     params![key.project_id, key.application_id],
                     |row| row.get(0),
                 )?;
+                    if replace_state {
+                        transaction.execute(
+                            &format!(
+                                "DELETE FROM {table} WHERE project_id = ?1 AND application_id = ?2"
+                            ),
+                            params![key.project_id, key.application_id],
+                        )?;
+                    }
+                }
+                if !replace_state && counts.iter().any(|found| *found > 0) {
+                    return Ok(Imported::HasIngestionState {
+                        sources: counts[0],
+                        documents: counts[1],
+                    });
+                }
                 if replace_state {
+                    // The run history belongs to the ingestion state being
+                    // replaced, as `delete` clears it.
                     transaction.execute(
-                        &format!(
-                            "DELETE FROM {table} WHERE project_id = ?1 AND application_id = ?2"
-                        ),
+                        "DELETE FROM runs WHERE project_id = ?1 AND application_id = ?2",
                         params![key.project_id, key.application_id],
                     )?;
+                    clear_chunks(&transaction)?;
                 }
-            }
-            if !replace_state && counts.iter().any(|found| *found > 0) {
-                return Ok(Imported::HasIngestionState {
-                    sources: counts[0],
-                    documents: counts[1],
-                });
-            }
-            if replace_state {
-                // The run history belongs to the ingestion state being
-                // replaced, as `delete` clears it.
-                transaction.execute(
-                    "DELETE FROM runs WHERE project_id = ?1 AND application_id = ?2",
-                    params![key.project_id, key.application_id],
-                )?;
-                clear_chunks(&transaction)?;
-            }
-            let (revision, _) = write_graph(&transaction, key, graph, None)?;
-            transaction.commit()?;
-            Ok(Imported::Saved { revision })
+                let (revision, _) = write_graph(&transaction, key, &graph, None)?;
+                transaction.commit()?;
+                Ok(Imported::Saved { revision })
+            })
         })
+        .await
     }
 }
 
@@ -2466,6 +2745,46 @@ mod tests {
         assert_eq!(
             store.search_fts("\"word\"", 10).unwrap(),
             [] as [(i64, f64); 0]
+        );
+    }
+
+    /// A store call that waits on SQLite (here: on the connection, held by
+    /// another thread for a while) leaves a current-thread runtime free:
+    /// a timer started beside it fires first. Inline, the call held the
+    /// runtime's one thread and the timer fired only after it.
+    #[test]
+    fn a_slow_store_call_does_not_hold_the_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteGraphStore::open(&dir.path().join("index")).unwrap();
+        let (held, holding) = std::sync::mpsc::channel();
+        let conn = Arc::clone(&store.conn);
+        let holder = std::thread::spawn(move || {
+            let _guard = conn.lock().unwrap_or_else(PoisonError::into_inner);
+            held.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+        });
+        holding.recv().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let (stored, store_done, timer_done) = runtime.block_on(async {
+            let call = async {
+                let revision = store.revision(GraphKey::LOCAL).await;
+                (revision, std::time::Instant::now())
+            };
+            let timer = async {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                std::time::Instant::now()
+            };
+            let ((revision, store_done), timer_done) = tokio::join!(call, timer);
+            (revision, store_done, timer_done)
+        });
+        holder.join().unwrap();
+        assert_eq!(stored.unwrap(), None);
+        assert!(
+            timer_done < store_done,
+            "the timer fired only after the store call returned"
         );
     }
 }
