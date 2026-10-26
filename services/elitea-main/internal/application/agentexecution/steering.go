@@ -63,11 +63,8 @@ const (
 	SteeringEventDropped  = "steer.dropped"
 
 	// SteeringDropRemoved is the steer.dropped reason of a message its author
-	// removed. SteeringDropSuperseded is the reason of a turn_ended message
-	// that the server's hand-off did not start, because the author had
-	// already sent a newer message in the conversation.
-	SteeringDropRemoved    = "removed"
-	SteeringDropSuperseded = "superseded"
+	// removed, the only reason there is.
+	SteeringDropRemoved = "removed"
 )
 
 var (

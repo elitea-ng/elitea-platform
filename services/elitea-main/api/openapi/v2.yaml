@@ -21755,19 +21755,21 @@ paths:
         asks for authorization, as for a client that holds no token.
         Whoever takes the messages first wins; the other gets an empty list.
         When the author already sent a newer message in the conversation
-        after the turn ended, the server starts no turn: the messages are
-        `removed`, and each gets `steer.dropped` with `reason: superseded`
-        on the stream of the author's newer turn (else on this answer's
-        stream). The event's `response_message_id` names this answer. The
-        client shows the texts as not sent, so the author can send them
-        again.
+        after the turn ended, the server CARRIES the messages over to the
+        author's newer turn: they move to the newer answer (same `id`,
+        `response_message_id` of the newer answer, `revision` + 1) and
+        `steer.queued` goes on the newer turn's stream. A running newer turn
+        injects them at its next safe point, before its own steering
+        messages. A newer turn that ended, or a pipeline turn, leaves them
+        `turn_ended` on the newer answer, and that answer's hand-off starts
+        the next turn with them. Nothing is dropped.
 
         EVENTS. The execution event stream
         (`/api/v2/executions/{project_id}/{execution_id}/events`) carries
         `steer.queued` (a new or edited pending message), `steer.injected`
-        (with `message_id`) and `steer.dropped` (`reason` `removed`, or
-        `superseded` as above). The `data` of each is one SteeringMessage,
-        plus `reason` on `steer.dropped`.
+        (with `message_id`) and `steer.dropped` (`reason: removed`). The
+        `data` of each is one SteeringMessage, plus `reason` on
+        `steer.dropped`.
 
         WHO. The permission is the send's (`models.chat.messages.create`),
         and the caller must be a user participant of the conversation. A

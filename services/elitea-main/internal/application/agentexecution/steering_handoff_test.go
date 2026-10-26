@@ -73,7 +73,7 @@ func TestSteeringHandOffRoutineStartsDropsAndRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result != (SteeringHandOffResult{Started: 2, Dropped: 2, Retried: 2, Superseded: 1}) || len(woken) != 1 || woken[0].ExecutionID != "newer" {
+	if result != (SteeringHandOffResult{Started: 2, Dropped: 2, Retried: 2, Carried: 1}) || len(woken) != 1 || woken[0].ExecutionID != "newer" {
 		t.Fatalf("result=%+v", result)
 	}
 	if len(starter.applications) != 3 || starter.applications[0].UserInput != "one\n\ntwo" ||

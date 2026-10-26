@@ -71,9 +71,9 @@ func startSteeringHandOff(
 		if passErr != nil {
 			return routines.OutcomeError, passErr
 		}
-		if result.Started+result.Dropped+result.Retried+result.Superseded > 0 {
+		if result.Started+result.Dropped+result.Retried+result.Carried > 0 {
 			logger.Info("steering hand-off pass", "started", result.Started, "dropped", result.Dropped,
-				"retried", result.Retried, "superseded", result.Superseded)
+				"retried", result.Retried, "carried", result.Carried)
 		}
 		return routines.OutcomeOK, nil
 	})

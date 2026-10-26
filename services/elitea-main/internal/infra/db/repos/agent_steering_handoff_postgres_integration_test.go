@@ -204,59 +204,146 @@ WHERE response_message_id = $1::uuid AND state = 'handed_off'`, response).Scan(&
 	t.Logf("client won %d, server won %d", clientWins, serverWins)
 }
 
-// TestPostgresSteeringServerHandOffSkipsANewerMessage: the author already sent
-// a newer message in the conversation, so the server starts no turn. The
-// leftover messages are removed, and steer.dropped `superseded` goes on the
-// newer turn's stream, which the client watches.
-func TestPostgresSteeringServerHandOffSkipsANewerMessage(t *testing.T) {
+// TestPostgresSteeringServerHandOffCarriesToTheRunningNewerTurn: the author
+// already sent a newer message, and its turn runs. The leftovers move to that
+// turn as pending, before its own steering, with steer.queued on its stream.
+func TestPostgresSteeringServerHandOffCarriesToTheRunningNewerTurn(t *testing.T) {
 	repository, pool := newSteeringIntegrationRepository(t)
-	response := seedSteeringTurn(t, pool, "41", "execution-steer-superseded-old", "RUNNING")
-	queueSteeringTexts(t, repository, response, "old instruction", "another one")
-	endSteeringTurn(t, repository, response, "execution-steer-superseded-old", time.Minute)
-	// The author's newer turn in the same conversation.
-	seedSteeringTurn(t, pool, "42", "execution-steer-superseded-new", "RUNNING")
+	old := seedSteeringTurn(t, pool, "41", "execution-steer-carry-old", "RUNNING")
+	queueSteeringTexts(t, repository, old, "old instruction", "another one")
+	endSteeringTurn(t, repository, old, "execution-steer-carry-old", time.Minute)
+	newer := seedSteeringTurn(t, pool, "42", "execution-steer-carry-new", "RUNNING")
+	if _, _, err := repository.QueueSteering(t.Context(), agentexecutionapp.SteeringQueueRequest{
+		SteeringTarget: steeringTarget(newer), IdempotencyKey: "newer-own", Content: "newer own",
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	taken, effects, err := repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, time.Hour, 10)
 	if err != nil || len(taken) != 0 || len(effects) != 2 {
 		t.Fatalf("taken=%+v effects=%+v err=%v", taken, effects, err)
 	}
 	for _, effect := range effects {
-		if effect.ExecutionID != "execution-steer-superseded-new" || effect.Cursor == 0 {
+		if effect.ExecutionID != "execution-steer-carry-new" || effect.Cursor == 0 {
 			t.Fatalf("effect=%+v", effect)
 		}
 	}
-	listed, err := repository.ListSteering(t.Context(), steeringTarget(response))
-	if err != nil || len(listed) != 2 || listed[0].State != agentexecutionapp.SteeringRemoved || listed[1].State != agentexecutionapp.SteeringRemoved {
+	listed, err := repository.ListSteering(t.Context(), steeringTarget(newer))
+	if err != nil || len(listed) != 3 ||
+		listed[0].Content != "old instruction" || listed[1].Content != "another one" || listed[2].Content != "newer own" ||
+		listed[0].State != agentexecutionapp.SteeringPending || listed[0].Revision != 2 || listed[0].ResponseMessageID != newer {
 		t.Fatalf("listed=%+v err=%v", listed, err)
 	}
+	if left, err := repository.ListSteering(t.Context(), steeringTarget(old)); err != nil || len(left) != 0 {
+		t.Fatalf("left=%+v err=%v", left, err)
+	}
+	var events []string
 	rows, err := repository.shared.Query(t.Context(), `
-SELECT event_type, convert_from(event_bytes, 'UTF8') FROM elitea_runtime.execution_replay_events
-WHERE execution_id = 'execution-steer-superseded-new' AND event_type = 'steer.dropped'
+SELECT convert_from(event_bytes, 'UTF8') FROM elitea_runtime.execution_replay_events
+WHERE execution_id = 'execution-steer-carry-new' AND event_type = 'steer.queued'
 ORDER BY cursor`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var events []string
 	for rows.Next() {
-		var eventType, data string
-		if err := rows.Scan(&eventType, &data); err != nil {
+		var data string
+		if err := rows.Scan(&data); err != nil {
 			t.Fatal(err)
 		}
 		events = append(events, data)
 	}
 	rows.Close()
-	if len(events) != 2 || !strings.Contains(events[0], `"reason":"superseded"`) ||
-		!strings.Contains(events[0], `"content":"old instruction"`) || !strings.Contains(events[0], response) {
+	// The newer turn's own message, then the two carried ones.
+	if len(events) != 3 || !strings.Contains(events[1], `"content":"old instruction"`) ||
+		!strings.Contains(events[1], `"revision":2`) || !strings.Contains(events[1], newer) {
 		t.Fatalf("events=%v", events)
 	}
-	// Nothing is left to start, and the client's hand-off finds nothing.
-	again, _, err := repository.TakeServerHandOffs(t.Context(), 0, 0, 10)
-	if err != nil || len(again) != 0 {
-		t.Fatalf("again=%+v err=%v", again, err)
+	// Idempotent: nothing is left to carry or start, and the old answer's
+	// client hand-off finds nothing.
+	again, more, err := repository.TakeServerHandOffs(t.Context(), 0, 0, 10)
+	if err != nil || len(again) != 0 || len(more) != 0 {
+		t.Fatalf("again=%+v more=%+v err=%v", again, more, err)
 	}
 	if handed, err := repository.HandOffSteering(t.Context(), agentexecutionapp.SteeringHandOffRequest{
-		SteeringTarget: steeringTarget(response), IdempotencyKey: "after",
+		SteeringTarget: steeringTarget(old), IdempotencyKey: "after",
 	}); err != nil || len(handed) != 0 {
 		t.Fatalf("handed=%+v err=%v", handed, err)
+	}
+}
+
+// TestPostgresSteeringServerHandOffCarriesToAnEndedNewerTurn: the author's
+// newer turn already ended. The leftovers move to it as turn_ended, and the
+// next pass starts ONE next turn with them, after the newer turn.
+func TestPostgresSteeringServerHandOffCarriesToAnEndedNewerTurn(t *testing.T) {
+	repository, pool := newSteeringIntegrationRepository(t)
+	old := seedSteeringTurn(t, pool, "43", "execution-steer-carry-old2", "RUNNING")
+	queueSteeringTexts(t, repository, old, "first", "second")
+	endSteeringTurn(t, repository, old, "execution-steer-carry-old2", 2*time.Minute)
+	newer := seedSteeringTurn(t, pool, "44", "execution-steer-carry-new2", "RUNNING")
+	endSteeringTurn(t, repository, newer, "execution-steer-carry-new2", time.Minute)
+
+	taken, effects, err := repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, time.Hour, 10)
+	if err != nil || len(taken) != 0 || len(effects) != 2 || effects[0].ExecutionID != "execution-steer-carry-new2" {
+		t.Fatalf("taken=%+v effects=%+v err=%v", taken, effects, err)
+	}
+	listed, err := repository.ListSteering(t.Context(), steeringTarget(newer))
+	if err != nil || len(listed) != 2 || listed[0].State != agentexecutionapp.SteeringTurnEnded {
+		t.Fatalf("listed=%+v err=%v", listed, err)
+	}
+	next, _, err := repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, time.Hour, 10)
+	if err != nil || len(next) != 1 || next[0].ResponseMessageID != newer ||
+		len(next[0].Texts) != 2 || next[0].Texts[0] != "first" || next[0].Texts[1] != "second" || next[0].ParticipantID <= 0 {
+		t.Fatalf("next=%+v err=%v", next, err)
+	}
+}
+
+// TestPostgresSteeringCarryRacesTheClientHandOff runs the old answer's client
+// hand-off and the server's carry-over at the same time: exactly one of them
+// takes every message.
+func TestPostgresSteeringCarryRacesTheClientHandOff(t *testing.T) {
+	repository, pool := newSteeringIntegrationRepository(t)
+	for round := range 4 {
+		oldSuffix := "5" + string(rune('0'+round))
+		newSuffix := "6" + string(rune('0'+round))
+		old := seedSteeringTurn(t, pool, oldSuffix, "execution-steer-carry-race-old-"+oldSuffix, "RUNNING")
+		queueSteeringTexts(t, repository, old, "one", "two")
+		endSteeringTurn(t, repository, old, "execution-steer-carry-race-old-"+oldSuffix, time.Minute)
+		newer := seedSteeringTurn(t, pool, newSuffix, "execution-steer-carry-race-new-"+newSuffix, "RUNNING")
+
+		var wait sync.WaitGroup
+		start := make(chan struct{})
+		var client []agentexecutionapp.SteeringMessage
+		var carried []agentexecutionapp.SteeringEffect
+		var clientErr, serverErr error
+		wait.Add(2)
+		go func() {
+			defer wait.Done()
+			<-start
+			client, clientErr = repository.HandOffSteering(t.Context(), agentexecutionapp.SteeringHandOffRequest{
+				SteeringTarget: steeringTarget(old), IdempotencyKey: "carry-race-" + oldSuffix,
+			})
+		}()
+		go func() {
+			defer wait.Done()
+			<-start
+			_, carried, serverErr = repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, time.Hour, 10)
+		}()
+		close(start)
+		wait.Wait()
+		if clientErr != nil || serverErr != nil {
+			t.Fatalf("round %d: client err=%v server err=%v", round, clientErr, serverErr)
+		}
+		onNewer, err := repository.ListSteering(t.Context(), steeringTarget(newer))
+		if err != nil {
+			t.Fatal(err)
+		}
+		clientWon := len(client) == 2 && len(carried) == 0 && len(onNewer) == 0
+		serverWon := len(client) == 0 && len(carried) == 2 && len(onNewer) == 2
+		if clientWon == serverWon {
+			t.Fatalf("round %d: client took %d, carried %d, newer lists %d", round, len(client), len(carried), len(onNewer))
+		}
+		// End the newer turn, so the next round's newer message is the
+		// newest and its carried rows wait for their own hand-off.
+		endSteeringTurn(t, repository, newer, "execution-steer-carry-race-new-"+newSuffix, 0)
 	}
 }

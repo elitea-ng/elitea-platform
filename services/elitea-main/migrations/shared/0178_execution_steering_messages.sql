@@ -33,8 +33,12 @@
 -- state is `handed_off` (final). `handoff_started_at` records that the
 -- server's start was admitted; a server hand-off without it is retried.
 -- When the author already sent a newer message in the conversation, the
--- routine starts nothing: the rows become `removed` and the clients get
--- steer.dropped with reason `superseded`.
+-- routine CARRIES the rows over to the author's newer turn instead (they
+-- move to its execution and answer as `pending`, with steer.queued there):
+-- a running newer turn injects them at its next safe point, before its own
+-- steering (their queue_order is lower); a newer turn that ended, or a
+-- pipeline turn, leaves them turn_ended on the newer answer, whose hand-off
+-- starts the next turn with them.
 --
 -- A turn stopped before any output is deleted with its question; its rows
 -- here are deleted in the same transaction (agent_cancel.go).

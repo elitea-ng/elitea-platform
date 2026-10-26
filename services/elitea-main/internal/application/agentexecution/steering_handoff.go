@@ -22,13 +22,13 @@ import (
 // and no turn starts twice.
 //
 // A NEWER MESSAGE. When the author already sent a newer message in the
-// conversation after the turn ended, the routine starts no turn: the
-// messages are removed, and each gets steer.dropped with reason
-// `superseded` on the stream of the author's newer turn (the stream the
-// client watches), so the client shows them as not sent. Adding them to the
-// newer turn was the other option. It was not chosen: that turn is about
-// something the author asked later, and old instructions must not steer it
-// without the author's action.
+// conversation after the turn ended, the routine starts no turn for this
+// answer: it carries the messages over to the author's newer turn
+// (steer.queued on that turn's stream). A running newer turn injects them
+// at its next safe point, before its own steering messages. A newer turn
+// that ended, or a pipeline turn (no safe point), leaves them turn_ended on
+// the newer answer, and that answer's hand-off starts the next turn with
+// them after it. Nothing is dropped.
 //
 // MCP. The client's MCP tokens are never stored, so this turn has none. An MCP
 // server that needs a token asks for authorization in the turn, the same way
@@ -77,8 +77,8 @@ type SteeringHandOffStore interface {
 	// TakeServerHandOffs takes the groups whose answer settled before
 	// readyBefore and returns them, with the groups it took before whose
 	// start was not confirmed before retryBefore. A group whose author sent
-	// a newer message is removed instead (steer.dropped `superseded`); the
-	// effects name the events to wake.
+	// a newer message is carried over to that turn instead; the effects
+	// name the steer.queued events to wake.
 	TakeServerHandOffs(ctx context.Context, readyBefore, retryBefore time.Duration, limit int) ([]ServerHandOff, []SteeringEffect, error)
 	// MarkServerHandOffStarted records that the start was admitted.
 	MarkServerHandOffStarted(ctx context.Context, handOff ServerHandOff) error
@@ -127,9 +127,8 @@ type SteeringHandOffResult struct {
 	Started int
 	Dropped int
 	Retried int
-	// Superseded counts the steer.dropped `superseded` events: removed
-	// messages of authors who had sent a newer message.
-	Superseded int
+	// Carried counts the messages carried over to the author's newer turn.
+	Carried int
 }
 
 // Pass takes the due groups and starts their turns.
@@ -137,7 +136,7 @@ func (routine *SteeringHandOffRoutine) Pass(ctx context.Context) (SteeringHandOf
 	var result SteeringHandOffResult
 	handOffs, effects, err := routine.store.TakeServerHandOffs(ctx, ServerHandOffDelay, ServerHandOffRetryAfter, MaxServerHandOffsPerPass)
 	routine.wake(effects)
-	result.Superseded = len(effects)
+	result.Carried = len(effects)
 	if err != nil {
 		return result, err
 	}
