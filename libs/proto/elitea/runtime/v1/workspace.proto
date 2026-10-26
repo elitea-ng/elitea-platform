@@ -276,8 +276,9 @@ message WorkspaceRecordEventRequestV1 {
   uint64 number = 8;
   string url = 9;
   uint32 files = 10;
-  uint32 commits = 11;
-  reserved 12 to 15;
+  reserved 11 to 15;
+  // branch.pushed: how many commits the new branch carries.
+  uint32 commits = 16;
 }
 
 message WorkspaceRecordEventResponseV1 {

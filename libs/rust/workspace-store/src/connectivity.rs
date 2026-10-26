@@ -68,7 +68,7 @@ pub fn reachable_excluding(
         WalkError::OverLimit { max_objects } => {
             StoreError::Integrity(format!("more than {max_objects} objects are reachable"))
         }
-        WalkError::Store(error) => error,
+        WalkError::Store(error) => *error,
     })
 }
 
@@ -76,8 +76,11 @@ pub fn reachable_excluding(
 /// or a store failure (a missing or mistyped object, a read error).
 #[derive(Debug)]
 pub enum WalkError {
-    OverLimit { max_objects: usize },
-    Store(StoreError),
+    OverLimit {
+        max_objects: usize,
+    },
+    /// Boxed: a store error is large, and the over-limit case is common.
+    Store(Box<StoreError>),
 }
 
 /// [`reachable_excluding`], telling the object limit apart from a missing
@@ -111,7 +114,7 @@ pub fn reachable_bounded(
         if walk.over_limit {
             WalkError::OverLimit { max_objects }
         } else {
-            WalkError::Store(error)
+            WalkError::Store(Box::new(error))
         }
     })?;
     Ok(walk.out)

@@ -1686,13 +1686,14 @@ type WorkspaceRecordEventRequestV1 struct {
 	// how many files it changes. branch.pushed: the toolkit, the new branch,
 	// the upstream branch it starts from, the branch's URL and how many
 	// commits it carries.
-	Toolkit       string `protobuf:"bytes,5,opt,name=toolkit,proto3" json:"toolkit,omitempty"`
-	Branch        string `protobuf:"bytes,6,opt,name=branch,proto3" json:"branch,omitempty"`
-	Base          string `protobuf:"bytes,7,opt,name=base,proto3" json:"base,omitempty"`
-	Number        uint64 `protobuf:"varint,8,opt,name=number,proto3" json:"number,omitempty"`
-	Url           string `protobuf:"bytes,9,opt,name=url,proto3" json:"url,omitempty"`
-	Files         uint32 `protobuf:"varint,10,opt,name=files,proto3" json:"files,omitempty"`
-	Commits       uint32 `protobuf:"varint,11,opt,name=commits,proto3" json:"commits,omitempty"`
+	Toolkit string `protobuf:"bytes,5,opt,name=toolkit,proto3" json:"toolkit,omitempty"`
+	Branch  string `protobuf:"bytes,6,opt,name=branch,proto3" json:"branch,omitempty"`
+	Base    string `protobuf:"bytes,7,opt,name=base,proto3" json:"base,omitempty"`
+	Number  uint64 `protobuf:"varint,8,opt,name=number,proto3" json:"number,omitempty"`
+	Url     string `protobuf:"bytes,9,opt,name=url,proto3" json:"url,omitempty"`
+	Files   uint32 `protobuf:"varint,10,opt,name=files,proto3" json:"files,omitempty"`
+	// branch.pushed: how many commits the new branch carries.
+	Commits       uint32 `protobuf:"varint,16,opt,name=commits,proto3" json:"commits,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2328,7 +2329,7 @@ const file_elitea_runtime_v1_workspace_proto_rawDesc = "" +
 	"\x03url\x18\t \x01(\tR\x03url\x12\x14\n" +
 	"\x05files\x18\n" +
 	" \x01(\rR\x05files\x12\x18\n" +
-	"\acommits\x18\v \x01(\rR\acommitsJ\x04\b\f\x10\x10\"\xc4\x01\n" +
+	"\acommits\x18\x10 \x01(\rR\acommitsJ\x04\b\v\x10\x10\"\xc4\x01\n" +
 	"\x1eWorkspaceRecordEventResponseV1\x12\x1a\n" +
 	"\brecorded\x18\x01 \x01(\bR\brecorded\x12?\n" +
 	"\arefusal\x18\x02 \x01(\v2%.elitea.runtime.v1.WorkspaceRefusalV1R\arefusal\x12?\n" +
