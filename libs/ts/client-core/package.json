@@ -2,9 +2,10 @@
   "name": "@elitea/client-core",
   "version": "0.0.0",
   "private": true,
-  "description": "Pure TypeScript shared by the Elitea web, desktop and mobile clients: brand defaults and chat stream parsing.",
+  "description": "Pure TypeScript shared by the Elitea web, desktop and mobile clients: brand defaults, chat stream parsing and the agent builder.",
   "type": "module",
   "exports": {
+    "./agent-builder": "./src/agent-builder/index.ts",
     "./brand": "./src/brand/index.ts",
     "./stream": "./src/stream/index.ts"
   },
