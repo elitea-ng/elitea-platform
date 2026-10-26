@@ -47,6 +47,9 @@ const (
 	SteeringPending  SteeringState = "pending"
 	SteeringInjected SteeringState = "injected"
 	SteeringRemoved  SteeringState = "removed"
+	// SteeringHandedOff is final: the turn ended first, and a client (or the
+	// server's hand-off routine) took the message as the next turn's message.
+	SteeringHandedOff SteeringState = "handed_off"
 	// SteeringTurnEnded is read, not stored: a pending message whose turn is
 	// no longer running. No claim can reach it, so the client sends it as the
 	// next turn's message.
@@ -128,6 +131,12 @@ type SteeringEffect struct {
 	Cursor      uint64
 }
 
+// SteeringHandOffRequest is one client hand-off of turn_ended messages.
+type SteeringHandOffRequest struct {
+	SteeringTarget
+	IdempotencyKey string
+}
+
 // SteeringClaimRequest is one call of the worker at a safe point: the
 // messages its persisted checkpoints hold (Acknowledged), then, unless
 // AcknowledgeOnly, a claim of the messages that wait.
@@ -150,6 +159,10 @@ type SteeringStore interface {
 	ListSteering(context.Context, SteeringTarget) ([]SteeringMessage, error)
 	EditSteering(context.Context, SteeringEditRequest) (SteeringMessage, []SteeringEffect, error)
 	RemoveSteering(context.Context, SteeringRemoveRequest) ([]SteeringEffect, error)
+	// HandOffSteering takes the caller's turn_ended messages of the answer
+	// as the next turn's message (state handed_off), in one guarded update,
+	// and answers them. A retry with the same key answers the same messages.
+	HandOffSteering(ctx context.Context, request SteeringHandOffRequest) ([]SteeringMessage, error)
 	// ClaimSteering first injects the acknowledged messages (writes each as
 	// a conversation message), then claims the messages that wait for this
 	// lease epoch. It locks the claim named by the fence and refuses a stale
@@ -240,6 +253,26 @@ func (service *SteeringService) Remove(ctx context.Context, request SteeringRemo
 	}
 	service.wake(effects)
 	return nil
+}
+
+// HandOff takes the caller's turn_ended messages of the answer, so the client
+// sends them as one message. The server's hand-off routine takes rows the same
+// way, so a message is taken once.
+func (service *SteeringService) HandOff(ctx context.Context, request SteeringHandOffRequest) ([]SteeringMessage, error) {
+	if err := service.ready(ctx, request.SteeringTarget); err != nil {
+		return nil, err
+	}
+	if !steeringIdempotencyKey.MatchString(request.IdempotencyKey) || strings.HasPrefix(request.IdempotencyKey, ServerHandOffKey) {
+		return nil, ErrSteeringIdempotencyRequired
+	}
+	messages, err := service.store.HandOffSteering(ctx, request)
+	if err != nil {
+		return nil, service.safe(ctx, err)
+	}
+	if messages == nil {
+		messages = []SteeringMessage{}
+	}
+	return messages, nil
 }
 
 // Claim is the worker's half: the gRPC control server calls it after it has

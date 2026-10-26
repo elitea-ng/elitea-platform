@@ -26,10 +26,11 @@ import (
 // the send's; the store checks that the caller is a user participant of the
 // answer's conversation.
 const (
-	CurrentAgentSteeringPath       = "/api/v2/elitea_core/task/prompt_lib/{projectID}/{responseMessageID}/steering"
-	CurrentAgentSteeringItemPath   = CurrentAgentSteeringPath + "/{steeringID}"
-	CurrentAgentSteeringMode       = auth.PermissionModeDefault
-	CurrentAgentSteeringPermission = "models.chat.messages.create"
+	CurrentAgentSteeringPath        = "/api/v2/elitea_core/task/prompt_lib/{projectID}/{responseMessageID}/steering"
+	CurrentAgentSteeringItemPath    = CurrentAgentSteeringPath + "/{steeringID}"
+	CurrentAgentSteeringHandOffPath = CurrentAgentSteeringPath + "/handoff"
+	CurrentAgentSteeringMode        = auth.PermissionModeDefault
+	CurrentAgentSteeringPermission  = "models.chat.messages.create"
 
 	// steeringRatePerMinute bounds queued messages per caller on one replica.
 	steeringRatePerMinute = 30
@@ -46,6 +47,7 @@ type SteeringUseCase interface {
 	List(context.Context, agentexecutionapp.SteeringTarget) ([]agentexecutionapp.SteeringMessage, error)
 	Edit(context.Context, agentexecutionapp.SteeringEditRequest) (agentexecutionapp.SteeringMessage, error)
 	Remove(context.Context, agentexecutionapp.SteeringRemoveRequest) error
+	HandOff(context.Context, agentexecutionapp.SteeringHandOffRequest) ([]agentexecutionapp.SteeringMessage, error)
 }
 
 var _ SteeringUseCase = (*agentexecutionapp.SteeringService)(nil)
@@ -92,6 +94,7 @@ func NewCurrentAgentSteeringRoute(
 	router.Method(http.MethodGet, CurrentAgentSteeringPath, guard(handler.list))
 	router.Method(http.MethodPatch, CurrentAgentSteeringItemPath, guard(handler.edit))
 	router.Method(http.MethodDelete, CurrentAgentSteeringItemPath, guard(handler.remove))
+	router.Method(http.MethodPost, CurrentAgentSteeringHandOffPath, guard(handler.handOff))
 	return router, nil
 }
 
@@ -179,11 +182,39 @@ func (handler *steeringHandler) list(writer http.ResponseWriter, request *http.R
 		writeSteeringError(request.Context(), writer, err)
 		return
 	}
+	writeSteeringList(writer, messages)
+}
+
+func writeSteeringList(writer http.ResponseWriter, messages []agentexecutionapp.SteeringMessage) {
 	items := make([]map[string]any, 0, len(messages))
 	for _, message := range messages {
 		items = append(items, steeringView(message))
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"items": items})
+}
+
+// handOff takes the caller's turn_ended messages, so the client sends them as
+// the next message. The server's hand-off routine takes the same rows the
+// same way: the messages it answers are the client's to send, and no other
+// party starts a turn with them.
+func (handler *steeringHandler) handOff(writer http.ResponseWriter, request *http.Request) {
+	target, ok := handler.target(writer, request)
+	if !ok {
+		return
+	}
+	messages, err := handler.steering.HandOff(request.Context(), agentexecutionapp.SteeringHandOffRequest{
+		SteeringTarget: target,
+		IdempotencyKey: request.Header.Get("Idempotency-Key"),
+	})
+	if err != nil {
+		handler.record(request, target, "hand-off", "", err)
+		writeSteeringError(request.Context(), writer, err)
+		return
+	}
+	if len(messages) > 0 {
+		handler.record(request, target, "hand-off", "", nil)
+	}
+	writeSteeringList(writer, messages)
 }
 
 func (handler *steeringHandler) steeringID(writer http.ResponseWriter, request *http.Request) (string, bool) {

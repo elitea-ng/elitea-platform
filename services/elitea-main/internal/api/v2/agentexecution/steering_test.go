@@ -23,7 +23,15 @@ type steeringUseCaseStub struct {
 	edited  []agentexecutionapp.SteeringEditRequest
 	removed []agentexecutionapp.SteeringRemoveRequest
 	listed  int
+	handed  []agentexecutionapp.SteeringHandOffRequest
 	err     error
+}
+
+func (stub *steeringUseCaseStub) HandOff(_ context.Context, request agentexecutionapp.SteeringHandOffRequest) ([]agentexecutionapp.SteeringMessage, error) {
+	stub.handed = append(stub.handed, request)
+	message := stub.message("handed off")
+	message.State = agentexecutionapp.SteeringHandedOff
+	return []agentexecutionapp.SteeringMessage{message}, stub.err
 }
 
 func (stub *steeringUseCaseStub) message(content string) agentexecutionapp.SteeringMessage {
@@ -217,5 +225,30 @@ func TestSteeringRouteListsEditsRemovesAndRateLimits(t *testing.T) {
 	}
 	if limited != 1 {
 		t.Fatalf("limited=%d", limited)
+	}
+}
+
+func TestSteeringRouteHandsOffWithTheKey(t *testing.T) {
+	useCase := &steeringUseCaseStub{}
+	recorder := &steeringAuditStub{}
+	route := newSteeringTestRoute(t, useCase, []string{CurrentAgentSteeringPermission}, recorder)
+
+	response := httptest.NewRecorder()
+	route.ServeHTTP(response, steeringRequest(http.MethodPost, "/handoff", "", "handoff-1"))
+	if response.Code != http.StatusOK || len(useCase.handed) != 1 {
+		t.Fatalf("status=%d body=%q handed=%d", response.Code, response.Body.String(), len(useCase.handed))
+	}
+	if got := useCase.handed[0]; got.IdempotencyKey != "handoff-1" || got.ActorUserID != 11 || got.ProjectID != 7 {
+		t.Fatalf("request=%+v", got)
+	}
+	if !strings.Contains(response.Body.String(), `"state":"handed_off"`) || len(recorder.events) != 1 {
+		t.Fatalf("body=%q events=%d", response.Body.String(), len(recorder.events))
+	}
+
+	useCase.err = agentexecutionapp.ErrSteeringIdempotencyRequired
+	response = httptest.NewRecorder()
+	route.ServeHTTP(response, steeringRequest(http.MethodPost, "/handoff", "", ""))
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "idempotency_key_required") {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
 	}
 }

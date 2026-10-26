@@ -2090,6 +2090,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			); scheduleErr != nil {
 				return fmt.Errorf("compose pipeline schedule job: %w", scheduleErr)
 			}
+			// The server's hand-off of leftover steering messages: it starts
+			// the next turn through the same use case as the chat composer.
+			if publicRoutes.Steering != nil {
+				if handOffErr := startSteeringHandOff(
+					ctx, runtimePools.Admission, publicRoutes.AgentStart,
+					legacyrbac.NewPostgresResolver(pool), logger,
+				); handOffErr != nil {
+					return fmt.Errorf("compose steering hand-off: %w", handOffErr)
+				}
+			}
 			currentAgentStart, err = agentexecutionapi.NewCurrentApplicationStartRoute(
 				publicRoutes.AgentStart,
 				// The browser's session cookie is this route's only credential

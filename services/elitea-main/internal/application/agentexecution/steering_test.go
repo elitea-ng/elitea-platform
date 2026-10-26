@@ -35,6 +35,11 @@ func (s *steeringStoreStub) RemoveSteering(context.Context, SteeringRemoveReques
 	return s.effects, s.err
 }
 
+func (s *steeringStoreStub) HandOffSteering(context.Context, SteeringHandOffRequest) ([]SteeringMessage, error) {
+	s.calls++
+	return nil, s.err
+}
+
 func (s *steeringStoreStub) ClaimSteering(context.Context, SteeringClaimRequest) ([]ClaimedSteeringMessage, []SteeringEffect, error) {
 	s.calls++
 	return nil, s.effects, s.err
@@ -115,5 +120,24 @@ func TestSteeringServiceWakesTheStreamAndHidesRawErrors(t *testing.T) {
 	}
 	if store.calls != calls {
 		t.Fatal("a malformed acknowledgement reached the store")
+	}
+}
+
+func TestSteeringServiceHandOffNeedsAClientKey(t *testing.T) {
+	for _, key := range []string{"", "a b", "server_10000000-0000-4000-8000-000000000001"} {
+		store := &steeringStoreStub{}
+		service, err := NewSteeringService(store, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.HandOff(context.Background(), SteeringHandOffRequest{SteeringTarget: steeringTestTarget, IdempotencyKey: key}); err != ErrSteeringIdempotencyRequired || store.calls != 0 {
+			t.Fatalf("key=%q err=%v calls=%d", key, err, store.calls)
+		}
+	}
+	store := &steeringStoreStub{}
+	service, _ := NewSteeringService(store, nil)
+	messages, err := service.HandOff(context.Background(), SteeringHandOffRequest{SteeringTarget: steeringTestTarget, IdempotencyKey: "k-1"})
+	if err != nil || messages == nil || len(messages) != 0 || store.calls != 1 {
+		t.Fatalf("messages=%v err=%v calls=%d", messages, err, store.calls)
 	}
 }

@@ -11,7 +11,7 @@ import (
 	specfiles "github.com/elitea-ng/elitea-platform/services/elitea-main/api/openapi"
 )
 
-// TestSteeringSpecMatchesTheRoute: client contract 1.26 publishes the four
+// TestSteeringSpecMatchesTheRoute: client contract 1.26 publishes the five
 // steering operations. Each must sit on the route's own path, be a client
 // operation, and declare every status the route answers, so the lock never
 // records behaviour the server does not have.
@@ -35,6 +35,7 @@ func TestSteeringSpecMatchesTheRoute(t *testing.T) {
 		{"listChatExecutionSteering", http.MethodGet, CurrentAgentSteeringPath, []string{"200", "400", "401", "403", "426", "502", "504"}},
 		{"updateChatExecutionSteering", http.MethodPatch, CurrentAgentSteeringItemPath, []string{"200", "400", "401", "403", "404", "409", "426", "502", "504"}},
 		{"removeChatExecutionSteering", http.MethodDelete, CurrentAgentSteeringItemPath, []string{"204", "400", "401", "403", "404", "409", "426", "502", "504"}},
+		{"handOffChatExecutionSteering", http.MethodPost, CurrentAgentSteeringHandOffPath, []string{"200", "400", "401", "403", "426", "502", "504"}},
 	} {
 		t.Run(test.operationID, func(t *testing.T) {
 			item := doc.Paths.Value(specPath(test.path))

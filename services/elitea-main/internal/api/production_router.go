@@ -227,6 +227,7 @@ func mountReviewedAPIRoutes(r chi.Router, cfg RouterConfig) {
 		r.Method(http.MethodGet, agentexecutionapi.CurrentAgentSteeringPath, cfg.CurrentAgentSteering)
 		r.Method(http.MethodPatch, agentexecutionapi.CurrentAgentSteeringItemPath, cfg.CurrentAgentSteering)
 		r.Method(http.MethodDelete, agentexecutionapi.CurrentAgentSteeringItemPath, cfg.CurrentAgentSteering)
+		r.Method(http.MethodPost, agentexecutionapi.CurrentAgentSteeringHandOffPath, cfg.CurrentAgentSteering)
 	}
 	if cfg.CurrentLocalTurns != nil {
 		r.Method(http.MethodPost, localturnsapi.StartPath, cfg.CurrentLocalTurns)

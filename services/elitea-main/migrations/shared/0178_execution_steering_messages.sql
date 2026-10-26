@@ -23,6 +23,16 @@
 -- runs is read as `turn_ended`, because no acknowledgement can reach it after
 -- the claim fence is gone. A claimed row reads as `pending` to the client.
 --
+-- HAND-OFF. A `turn_ended` message becomes the next turn's message exactly
+-- once. A client takes its own rows (handOffChatExecutionSteering, a
+-- `handoff_key` of its choice) and sends them; when no client acts within
+-- about 10 seconds of the settlement, the steering hand-off routine of Main
+-- takes them (`handoff_by = 'server'`) and starts the next turn itself, with
+-- `handoff_question_id` as the question id so a retried start is the same
+-- turn. Both take rows with one guarded UPDATE, so the first one wins. The
+-- state is `handed_off` (final). `handoff_started_at` records that the
+-- server's start was admitted; a server hand-off without it is retried.
+--
 -- A turn stopped before any output is deleted with its question; its rows
 -- here are deleted in the same transaction (agent_cancel.go).
 --
@@ -49,12 +59,22 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.execution_steering_messages (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     injected_at TIMESTAMPTZ,
     claim_lease_epoch BIGINT CHECK (claim_lease_epoch > 0),
+    handoff_key TEXT,
+    handoff_by TEXT,
+    handoff_question_id UUID,
+    handed_off_at TIMESTAMPTZ,
+    handoff_started_at TIMESTAMPTZ,
     FOREIGN KEY (execution_id, generation)
         REFERENCES elitea_runtime.execution_jobs (execution_id, generation)
         ON DELETE CASCADE,
     UNIQUE (execution_id, author_user_id, idempotency_key),
     CONSTRAINT execution_steering_messages_state CHECK (
-        state IN ('pending', 'claimed', 'injected', 'removed')
+        state IN ('pending', 'claimed', 'injected', 'removed', 'handed_off')
+    ),
+    CONSTRAINT execution_steering_messages_handoff CHECK (
+        (state = 'handed_off') = (handoff_key IS NOT NULL AND handed_off_at IS NOT NULL)
+        AND (handoff_by IS NULL OR handoff_by IN ('client', 'server'))
+        AND (handoff_by IS NOT DISTINCT FROM 'server') = (handoff_question_id IS NOT NULL)
     ),
     CONSTRAINT execution_steering_messages_claimed CHECK (
         state <> 'claimed' OR claim_lease_epoch IS NOT NULL
@@ -80,3 +100,10 @@ CREATE INDEX IF NOT EXISTS execution_steering_messages_queue_idx
 CREATE INDEX IF NOT EXISTS execution_steering_messages_response_idx
     ON elitea_runtime.execution_steering_messages
        (project_id, response_message_id, queue_order);
+
+-- The hand-off routine finds the waiting rows of ended turns, and its own
+-- hand-offs that still wait for their start.
+CREATE INDEX IF NOT EXISTS execution_steering_messages_handoff_idx
+    ON elitea_runtime.execution_steering_messages (state, execution_id, generation)
+    WHERE state IN ('pending', 'claimed')
+       OR (state = 'handed_off' AND handoff_by = 'server' AND handoff_started_at IS NULL);
