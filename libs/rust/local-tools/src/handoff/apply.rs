@@ -147,9 +147,10 @@ pub struct Preflight {
     replay_onto: Option<String>,
     plan: Plan,
     objects: Objects,
+    /// The verified chain. Its packs stay indexed in the quarantine (one
+    /// `.pack` per segment), which the import reads them from: the preflight
+    /// holds no copy of the fetched bytes.
     bundle: VerifiedBundle,
-    /// Each segment's pack, in chain order.
-    packs: Vec<Vec<u8>>,
     record: SendRecord,
     _scratch: TempDir,
     _quarantine: TempDir,
@@ -702,11 +703,6 @@ pub fn preflight_chain(
         &verdict,
     )?;
     add_record_exclusions(&mut plan.outcome, record, &denied);
-    let packs = segments
-        .iter()
-        .zip(&bundle.pack_offsets)
-        .map(|(segment, offset)| segment.bytes[*offset..].to_vec())
-        .collect();
     Ok(Preflight {
         report: plan.outcome.clone(),
         chain,
@@ -721,7 +717,6 @@ pub fn preflight_chain(
         plan,
         objects,
         bundle,
-        packs,
         record: record.clone(),
         _scratch: scratch,
         _quarantine: quarantine,
@@ -805,6 +800,20 @@ fn head_excluded(
         .collect())
 }
 
+/// The `.pack` files the chain's verification indexed into `quarantine`
+/// (one per segment), in a stable order. None of them is thin: each holds
+/// its own deltas' bases, so the order they are imported in is free.
+fn quarantine_packs(quarantine: &Path) -> ToolResult<Vec<PathBuf>> {
+    let mut packs: Vec<PathBuf> = std::fs::read_dir(quarantine.join("objects/pack"))
+        .map_err(|error| ToolError::io("cannot read the verified packs", &error))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "pack"))
+        .collect();
+    packs.sort();
+    Ok(packs)
+}
+
 /// Import the segment's objects and replay the cloud chain onto `H'_1`
 /// (each tree with the excluded paths as `HEAD` had them,
 /// [`graft_excluded`]); the branch name and the replayed commits.
@@ -814,12 +823,15 @@ fn import_and_replay(
     exclusions: &Exclusions,
 ) -> ToolResult<Replayed> {
     let objects = source.objects();
-    for pack in &preflight.packs {
+    for path in quarantine_packs(&preflight.bundle.quarantine)? {
+        // One segment's pack at a time, as verified into the quarantine.
+        let pack = std::fs::read(&path)
+            .map_err(|error| ToolError::io("cannot read a verified pack", &error))?;
         source
             .repo
             .git(source.top())
             .writes(std::slice::from_ref(&objects))
-            .stdin(pack)
+            .stdin(&pack)
             .run(&["index-pack", "--stdin"])?;
     }
     let head_excluded = head_excluded(source, &preflight.record, exclusions)?;

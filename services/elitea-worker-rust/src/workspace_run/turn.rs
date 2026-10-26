@@ -36,7 +36,8 @@ use super::sandbox::{
 };
 use super::scan::{ScanError, ScanLimits, scan_tree};
 use super::store::{
-    PublishSegment, REF_CLOUD, REF_HANDOFF_PREFIX, RefusalCode, StoreCallError, WorkspaceStore,
+    MAIN_MAX_SEGMENT_BYTES, PublishSegment, REF_CLOUD, REF_HANDOFF_PREFIX, RefusalCode,
+    StoreCallError, WorkspaceStore,
 };
 
 /// The commit author of every cloud turn.
@@ -217,7 +218,7 @@ impl WorkspaceRunFactory {
         );
         let fetched = self
             .store
-            .fetch(&claim, 0, limits.max_segment_bytes, &fetch_dir)
+            .fetch(&claim, 0, MAIN_MAX_SEGMENT_BYTES, &fetch_dir)
             .await
             .map_err(WorkspaceRunError::Store)?;
         let checkout = checkout_commit(context, &fetched.refs)?;

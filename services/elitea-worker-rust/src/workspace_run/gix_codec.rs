@@ -391,12 +391,15 @@ pub(crate) fn verify_chain_files(
     }
     let mut db = index_segment(first, header.pack_offset, git_dir, reader)?;
     let tips: Vec<gix_hash::ObjectId> = header.refs.iter().map(|(_, id)| *id).collect();
-    let mut known: HashSet<gix_hash::ObjectId> =
-        elitea_workspace_store::connectivity::reachable(&db, &tips, max_objects)
-            .map_err(|error| verify_error(&error))?
-            .objects
-            .into_iter()
-            .collect();
+    let first_walk = elitea_workspace_store::connectivity::reachable(&db, &tips, max_objects)
+        .map_err(|error| verify_error(&error))?;
+    // Each segment's walk covers only what it added: the chain's unpacked
+    // size is their sum, with no second walk over the whole closure.
+    let mut unpacked_bytes = first_walk.blob_bytes;
+    let mut known: HashSet<gix_hash::ObjectId> = first_walk.objects.into_iter().collect();
+    if unpacked_bytes > head.max_unpacked_bytes {
+        return Err(CodecError::TooLarge);
+    }
     for segment in rest {
         let header = checked_header(segment, reader)?;
         let mut named = Vec::with_capacity(segment.expect.prerequisites.len());
@@ -438,19 +441,16 @@ pub(crate) fn verify_chain_files(
         )
         .map_err(|error| verify_error(&error))?;
         known.extend(walk.objects);
+        unpacked_bytes = unpacked_bytes.saturating_add(walk.blob_bytes);
+        if unpacked_bytes > head.max_unpacked_bytes || known.len() > max_objects {
+            return Err(CodecError::TooLarge);
+        }
     }
-    let mut tips = Vec::with_capacity(head.refs.len());
     for sha in head.refs.values() {
         let id = oid(sha).map_err(|_| CodecError::Integrity)?;
         if !known.contains(&id) {
             return Err(CodecError::Integrity);
         }
-        tips.push(id);
-    }
-    let walk = elitea_workspace_store::connectivity::reachable(&db, &tips, max_objects)
-        .map_err(|error| verify_error(&error))?;
-    if walk.blob_bytes > head.max_unpacked_bytes {
-        return Err(CodecError::TooLarge);
     }
     Ok(VerifiedSegment { db })
 }

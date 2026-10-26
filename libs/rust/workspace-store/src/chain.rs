@@ -63,6 +63,11 @@ pub fn push_prerequisites(
 /// [`bundle::MAX_PREREQUISITES`] prerequisites; the last segment is the head
 /// and holds the plan's refs.
 ///
+/// Every reader asks for the plan from `since_seq` 0 and verifies the chain
+/// from nothing. Main answers a `since_seq` at or past the `COMPACT`'s seq
+/// with only the later `PUSH` segments; such a plan is refused here (there
+/// is no incremental reader), so a client must never send one.
+///
 /// # Errors
 ///
 /// [`StoreError::Integrity`] naming what is wrong;
@@ -198,7 +203,7 @@ pub fn verify_chain_into(
         },
         limits,
     )?;
-    let mut known: HashSet<ObjectId> = connectivity::reachable(
+    let first_walk = connectivity::reachable(
         &compact.db,
         &compact
             .header
@@ -207,10 +212,11 @@ pub fn verify_chain_into(
             .map(|(_, id)| *id)
             .collect::<Vec<_>>(),
         limits.max_objects,
-    )?
-    .objects
-    .into_iter()
-    .collect();
+    )?;
+    // Each segment's walk covers only what it added, so the chain's
+    // unpacked size is their sum: no second walk over the whole closure.
+    let mut unpacked_bytes = first_walk.blob_bytes;
+    let mut known: HashSet<ObjectId> = first_walk.objects.into_iter().collect();
     let mut pack_offsets = vec![compact.pack_offset];
     let mut previous = first.seq;
     let mut db = compact.db;
@@ -226,9 +232,17 @@ pub fn verify_chain_into(
                 "only PUSH segments follow the chain's COMPACT".into(),
             ));
         }
-        let (offset, next) = verify_push(segment, quarantine, &db, &mut known, limits)?;
+        let (offset, next, added_bytes) =
+            verify_push(segment, quarantine, &db, &mut known, limits)?;
         pack_offsets.push(offset);
         db = next;
+        unpacked_bytes = unpacked_bytes.saturating_add(added_bytes);
+        if unpacked_bytes > limits.max_unpacked_bytes || known.len() > limits.max_objects {
+            return Err(StoreError::Integrity(format!(
+                "the chain unpacks to more than {} bytes or {} objects",
+                limits.max_unpacked_bytes, limits.max_objects
+            )));
+        }
     }
     let last = segments[segments.len() - 1];
     let mut refs = Vec::with_capacity(last.refs.len());
@@ -241,12 +255,10 @@ pub fn verify_chain_into(
         }
         refs.push((name.clone(), id));
     }
-    let tips: Vec<ObjectId> = refs.iter().map(|(_, id)| *id).collect();
-    let walk = connectivity::reachable(&db, &tips, limits.max_objects)?;
-    if walk.blob_bytes > limits.max_unpacked_bytes {
+    if unpacked_bytes > limits.max_unpacked_bytes {
         return Err(StoreError::Integrity(format!(
-            "the chain unpacks to {} bytes; the limit is {}",
-            walk.blob_bytes, limits.max_unpacked_bytes
+            "the chain unpacks to {unpacked_bytes} bytes; the limit is {}",
+            limits.max_unpacked_bytes
         )));
     }
     Ok(VerifiedBundle {
@@ -259,20 +271,21 @@ pub fn verify_chain_into(
         quarantine: quarantine.to_path_buf(),
         pack_offset: compact.pack_offset,
         pack_offsets,
-        objects: walk.objects.len(),
-        unpacked_bytes: walk.blob_bytes,
+        objects: known.len(),
+        unpacked_bytes,
     })
 }
 
-/// One `PUSH` of a chain: its pack's offset and the quarantine reopened over
-/// it. `known` gains what it carried.
+/// One `PUSH` of a chain: its pack's offset, the quarantine reopened over
+/// it, and the unpacked bytes of the blobs it added. `known` gains what it
+/// carried.
 fn verify_push(
     segment: &ChainSegment<'_>,
     quarantine: &Path,
     db: &ObjectDb,
     known: &mut HashSet<ObjectId>,
     limits: Limits,
-) -> Result<(usize, ObjectDb), StoreError> {
+) -> Result<(usize, ObjectDb, u64), StoreError> {
     if sha256_hex(segment.bytes) != segment.sha256 {
         return Err(StoreError::Integrity(format!(
             "segment {}'s SHA-256 is not its content address",
@@ -325,5 +338,5 @@ fn verify_push(
     let tips: Vec<ObjectId> = header.refs.iter().map(|(_, id)| *id).collect();
     let walk = connectivity::reachable_excluding(&db, &tips, known, limits.max_objects)?;
     known.extend(walk.objects);
-    Ok((header.pack_offset, db))
+    Ok((header.pack_offset, db, walk.blob_bytes))
 }

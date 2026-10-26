@@ -180,6 +180,10 @@ fn sha_of_url<'a>(url: &'a str, prefix: &str) -> Result<&'a str, StoreError> {
 
 /// Whether `request` is a `PUSH`; a `COMPACT` names no prerequisites, a
 /// `PUSH` 1 to 8, and no other kind exists.
+///
+/// Main's rule is `workspaceruntime.ValidPrerequisites` (the bound is
+/// [`crate::bundle::MAX_PREREQUISITES`], pinned against Main's by
+/// `TestChainBoundsMatchTheRustStore`); keep the two in step.
 fn is_push(request: &PublishRequest) -> Result<bool, StoreError> {
     match request.kind.as_str() {
         crate::KIND_COMPACT if request.prerequisites.is_empty() => Ok(false),
@@ -454,9 +458,10 @@ impl StoreTransport for MemoryStore {
     async fn fetch_plan(&self, since_seq: u64) -> Result<FetchPlan, StoreError> {
         let inner = lock(self);
         let head_seq = inner.segments.last().map_or(0, |last| last.seq);
-        // The live chain: the newest live COMPACT, then every live PUSH
-        // after it; a reader that holds `since_seq` at or past the COMPACT
-        // gets only the PUSH segments after `since_seq`.
+        // The live chain, as Main's `workspacestore.SelectChain` answers
+        // it: the newest live COMPACT unless `since_seq` is past it, then
+        // every live PUSH after both the COMPACT and `since_seq`. The
+        // readers here always ask from 0 (see `chain::check_plan`).
         let live: Vec<&Segment> = inner
             .segments
             .iter()
@@ -472,10 +477,10 @@ impl StoreTransport for MemoryStore {
             Some(compact) => live
                 .iter()
                 .filter(|segment| {
-                    if since_seq >= compact {
-                        segment.seq > since_seq
+                    if segment.seq == compact {
+                        since_seq <= compact
                     } else {
-                        segment.seq >= compact
+                        segment.seq > compact && segment.seq > since_seq
                     }
                 })
                 .map(|segment| PlanSegment {

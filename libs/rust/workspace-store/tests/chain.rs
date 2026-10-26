@@ -450,12 +450,17 @@ async fn a_published_chain_is_fetched_whole_and_verifies() {
     let verified =
         chain::verify_chain_into(&segments, &quarantine(&dir, "q"), Limits::default()).unwrap();
     assert_eq!(verified.header.ref_map(), plan.refs);
-    // A reader that holds seq 3 gets only the PUSH after it.
+    // As Main's SelectChain: a since_seq up to the COMPACT's still gets the
+    // COMPACT; one past it gets only the later PUSH segments, which no
+    // reader asks for and the plan check refuses.
+    let seqs = |plan: &FetchPlan| plan.segments.iter().map(|s| s.seq).collect::<Vec<_>>();
+    assert_eq!(seqs(&store.fetch_plan(1).await.unwrap()), [1, 2, 3, 4]);
     let since = store.fetch_plan(3).await.unwrap();
-    assert_eq!(
-        since.segments.iter().map(|s| s.seq).collect::<Vec<_>>(),
-        [4]
-    );
+    assert_eq!(seqs(&since), [4]);
+    assert!(matches!(
+        chain::check_plan(&since),
+        Err(StoreError::Integrity(_))
+    ));
 }
 
 #[tokio::test]

@@ -57,6 +57,8 @@ struct StoreState {
     chain_pushes: Vec<u64>,
     /// Main refuses every PUSH (as its prerequisite or chain checks do).
     refuse_push: bool,
+    /// The segment bound each fetch was asked with.
+    fetch_bounds: Vec<u64>,
 }
 
 struct FakeStore(Mutex<StoreState>);
@@ -85,10 +87,11 @@ impl WorkspaceStore for FakeStore {
         &self,
         claim: &WorkspaceClaimV1,
         _since: u64,
-        _max: u64,
+        max: u64,
         into: &Path,
     ) -> Result<FetchedThread, StoreCallError> {
-        let state = self.state();
+        let mut state = self.state();
+        state.fetch_bounds.push(max);
         if claim.epoch != state.epoch {
             return Err(StoreCallError::Refused {
                 code: RefusalCode::StaleEpoch,
@@ -1272,6 +1275,39 @@ async fn a_turn_pushes_over_the_chain_and_compacts_when_the_policy_says() {
     let state = long.store.state();
     assert_eq!(state.publishes[0].kind, KIND_COMPACT);
     assert_eq!(state.publishes[0].prerequisites, Vec::<String>::new());
+}
+
+/// The deployment lowered `max_segment_bytes` below what the live chain's
+/// PUSH segments already hold: the chain is still fetched against Main's
+/// absolute bound (never refused for good, which would strand the thread),
+/// and the turn publishes a COMPACT instead of one more PUSH.
+#[tokio::test]
+async fn a_lowered_segment_limit_still_hydrates_the_chain_and_compacts() {
+    let harness = harness(CLOUD_REFS, &[("a.txt", "a\n")]);
+    harness.store.state().chain_pushes = vec![600];
+    let mut context = later_turn();
+    context.limits.max_segment_bytes = 500;
+    let turn = harness
+        .factory
+        .begin(
+            &context,
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
+        .await
+        .expect("hydrated");
+    turn.finish(TurnEnd::Completed).await.expect("published");
+    assert_eq!(
+        harness.store.state().fetch_bounds,
+        vec![super::store::MAIN_MAX_SEGMENT_BYTES]
+    );
+    assert_eq!(*harness.codec.chains.lock().expect("chains"), vec![2]);
+    assert_eq!(
+        harness.codec.budgets.lock().expect("budgets")[0].push_bytes,
+        None
+    );
+    assert_eq!(harness.store.state().publishes[0].kind, KIND_COMPACT);
 }
 
 /// Main refuses the PUSH for good (its prerequisites moved, or the chain is

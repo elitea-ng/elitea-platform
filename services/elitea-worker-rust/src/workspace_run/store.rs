@@ -51,6 +51,13 @@ pub(crate) const KIND_PUSH: &str = elitea_workspace_store::KIND_PUSH;
 /// the `PUSH` segments after it.
 pub(crate) const MAX_PLAN_SEGMENTS: usize =
     1 + elitea_workspace_store::compaction::SERVER_MAX_PUSH_CHAIN;
+/// Main's absolute segment bound (`workspaceruntime.MaxSegmentBytes`, the
+/// transport's). A fetch checks the stored chain against it, never against
+/// the claim's current `max_segment_bytes`: a policy lowered after segments
+/// were published must not refuse them for good (the thread would never run
+/// again). The turn then compacts, since its PUSH budget is what the lower
+/// bound leaves past the chain's PUSH bytes (`turn.rs`).
+pub(crate) const MAIN_MAX_SEGMENT_BYTES: u64 = 2 << 30;
 /// The most prerequisites one `PUSH` names.
 pub(crate) const MAX_PREREQUISITES: usize = elitea_workspace_store::bundle::MAX_PREREQUISITES;
 pub(crate) const OBJECT_FORMAT_SHA1: &str = "sha1";
@@ -201,6 +208,12 @@ pub(crate) struct PublishedSegment {
 pub(crate) trait WorkspaceStore: Send + Sync {
     /// Fetch the plan and stream its chain into files in the directory
     /// `into`, one per segment, never holding more than one chunk.
+    ///
+    /// A turn hydrates from nothing, so it always asks with `since_seq` 0
+    /// and the plan starts with the chain's `COMPACT`. Main answers a
+    /// `since_seq` at or past that `COMPACT`'s seq with only the later
+    /// `PUSH` segments (`workspacestore.SelectChain`), which the plan check
+    /// here refuses: there is no incremental reader.
     async fn fetch(
         &self,
         claim: &WorkspaceClaimV1,
@@ -423,9 +436,8 @@ pub(crate) struct FetchSink {
 /// The plan's segments, checked for shape: ascending `seq`, a `COMPACT`
 /// with no prerequisites first, then `PUSH` segments with 1 to
 /// [`MAX_PREREQUISITES`] prerequisites; the last is the head and holds the
-/// plan's refs. Each segment is within `max_segment_bytes`, and the chain
-/// within twice that (a `COMPACT` and the increments the writer's policy
-/// lets past it, see `turn.rs`).
+/// plan's refs. Each segment is within `max_segment_bytes` (a turn passes
+/// [`MAIN_MAX_SEGMENT_BYTES`]), and the chain within twice that.
 fn planned_chain(
     plan: &crate::protocol::elitea::runtime::v1::WorkspaceFetchPlanV1,
     refs: &BTreeMap<String, String>,
