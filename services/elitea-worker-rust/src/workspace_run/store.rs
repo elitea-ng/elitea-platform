@@ -32,6 +32,8 @@ use crate::protocol::elitea::runtime::v1::{
     workspace_upload_frame_v1,
 };
 
+use elitea_agent_runtime::toolkits::workspace_pull_request::{ForgeKind, ThreadConfiguration};
+
 use super::context::sha1_hex;
 use super::redact::SecretEnv;
 
@@ -250,13 +252,14 @@ pub(crate) trait WorkspaceStore: Send + Sync {
     /// The thread's harvested env (contract 6.4); empty when it has none.
     async fn env_secret(&self, claim: &WorkspaceClaimV1) -> Result<SecretEnv, StoreCallError>;
 
-    /// The thread's pull-request credential (ADR-0034 decision 10,
-    /// amendment 2026-10-26): the GitHub configuration's data as JSON text,
-    /// zeroized on drop. Redeemed only when `open_pull_request` runs.
+    /// The thread's push and pull-request credential (ADR-0034 decision 10,
+    /// amendment 2026-10-26): its forge and the configuration's data as JSON
+    /// text, zeroized on drop. Redeemed only when `git_push` or
+    /// `open_pull_request` runs.
     async fn forge_credential(
         &self,
         _claim: &WorkspaceClaimV1,
-    ) -> Result<zeroize::Zeroizing<String>, StoreCallError> {
+    ) -> Result<ThreadConfiguration, StoreCallError> {
         Err(StoreCallError::Malformed(
             "this store serves no forge credential",
         ))
@@ -298,6 +301,20 @@ pub(crate) fn record_event_request(
             request.kind = WorkspaceExecutorEventKindV1::ScanBlocked as i32;
             request.findings = *findings;
             request.rules.clone_from(rules);
+        }
+        ExecutorEvent::BranchPushed {
+            toolkit,
+            branch,
+            base,
+            url,
+            commits,
+        } => {
+            request.kind = WorkspaceExecutorEventKindV1::BranchPushed as i32;
+            request.toolkit.clone_from(toolkit);
+            request.branch.clone_from(branch);
+            request.base.clone_from(base);
+            request.url.clone_from(url);
+            request.commits = *commits;
         }
         ExecutorEvent::PullRequestOpened {
             toolkit,
@@ -445,20 +462,26 @@ pub(crate) fn refused(refusal: &WorkspaceRefusalV1) -> StoreCallError {
 /// `workspaceruntime.MaxForgeCredentialBytes`).
 pub(crate) const MAX_FORGE_CREDENTIAL_BYTES: usize = 32 * 1_024;
 
-/// Reads a `WorkspaceForgeCredential` answer: exactly one of a JSON object,
-/// a refusal or a rejection. The text is moved into zeroizing storage; the
-/// response's own copy is wiped by the caller dropping it.
+/// Reads a `WorkspaceForgeCredential` answer: exactly one of a JSON object
+/// with its forge (`github` or `gitlab`), a refusal or a rejection. The text
+/// is moved into zeroizing storage; the response's own copy is wiped by the
+/// caller dropping it.
 pub(crate) fn read_forge_credential(
     response: &mut WorkspaceForgeCredentialResponseV1,
-) -> Result<zeroize::Zeroizing<String>, StoreCallError> {
-    let text = zeroize::Zeroizing::new(std::mem::take(&mut response.github_configuration_json));
+) -> Result<ThreadConfiguration, StoreCallError> {
+    let text = zeroize::Zeroizing::new(std::mem::take(&mut response.configuration_json));
+    let forge = ForgeKind::parse(&response.forge);
     match (&response.refusal, &response.rejection, text.is_empty()) {
         (Some(refusal), None, true) => Err(refused(refusal)),
         (None, Some(rejection), true) => Err(rejected(rejection)),
         (None, None, false)
             if text.len() <= MAX_FORGE_CREDENTIAL_BYTES && text.starts_with('{') =>
         {
-            Ok(text)
+            forge
+                .map(|forge| ThreadConfiguration { forge, json: text })
+                .ok_or(StoreCallError::Malformed(
+                    "the forge credential names no known forge",
+                ))
         }
         _ => Err(StoreCallError::Malformed(
             "the forge credential answer is malformed",
@@ -1012,7 +1035,7 @@ impl WorkspaceStore for GrpcWorkspaceStore {
     async fn forge_credential(
         &self,
         claim: &WorkspaceClaimV1,
-    ) -> Result<zeroize::Zeroizing<String>, StoreCallError> {
+    ) -> Result<ThreadConfiguration, StoreCallError> {
         let mut client = self.client.clone();
         let request = WorkspaceForgeCredentialRequestV1 {
             claim: Some(claim.clone()),
@@ -1484,14 +1507,16 @@ mod tests {
     fn a_forge_credential_answer_is_exactly_one_of_its_three_forms() {
         use crate::protocol::elitea::runtime::v1::WorkspaceForgeCredentialResponseV1;
         let mut ok = WorkspaceForgeCredentialResponseV1 {
-            github_configuration_json:
-                r#"{"base_url":"https://api.github.com","access_token":"t"}"#.to_owned(),
+            configuration_json: r#"{"url":"https://gitlab.example.com","private_token":"t"}"#
+                .to_owned(),
+            forge: "gitlab".to_owned(),
             ..Default::default()
         };
-        let text = read_forge_credential(&mut ok).expect("a credential");
-        assert!(text.contains("access_token"));
+        let configuration = read_forge_credential(&mut ok).expect("a credential");
+        assert_eq!(configuration.forge, ForgeKind::GitLab);
+        assert!(configuration.json.contains("private_token"));
         assert!(
-            ok.github_configuration_json.is_empty(),
+            ok.configuration_json.is_empty(),
             "moved out of the response"
         );
         let mut none = WorkspaceForgeCredentialResponseV1 {
@@ -1524,18 +1549,22 @@ mod tests {
         for mut malformed in [
             WorkspaceForgeCredentialResponseV1::default(),
             WorkspaceForgeCredentialResponseV1 {
-                github_configuration_json: "[]".to_owned(),
+                configuration_json: "[]".to_owned(),
+                forge: "github".to_owned(),
                 ..Default::default()
             },
             WorkspaceForgeCredentialResponseV1 {
-                github_configuration_json: format!(
-                    "{{{}}}",
-                    " ".repeat(MAX_FORGE_CREDENTIAL_BYTES)
-                ),
+                configuration_json: "{}".to_owned(),
+                forge: "bitbucket".to_owned(),
                 ..Default::default()
             },
             WorkspaceForgeCredentialResponseV1 {
-                github_configuration_json: "{}".to_owned(),
+                forge: "github".to_owned(),
+                configuration_json: format!("{{{}}}", " ".repeat(MAX_FORGE_CREDENTIAL_BYTES)),
+                ..Default::default()
+            },
+            WorkspaceForgeCredentialResponseV1 {
+                configuration_json: "{}".to_owned(),
                 refusal: Some(WorkspaceRefusalV1 {
                     code: WorkspaceRefusalCodeV1::NoForgeCredential as i32,
                     ..Default::default()

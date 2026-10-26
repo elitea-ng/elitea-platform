@@ -577,8 +577,74 @@ impl WorkspaceTurn {
     /// Main refused it (none chosen, pull requests off) or could not answer.
     pub(crate) async fn forge_credential(
         &self,
-    ) -> Result<zeroize::Zeroizing<String>, super::store::StoreCallError> {
+    ) -> Result<
+        elitea_agent_runtime::toolkits::workspace_pull_request::ThreadConfiguration,
+        super::store::StoreCallError,
+    > {
         self.store.forge_credential(&self.claim).await
+    }
+
+    /// The thread's commits re-parented onto the recorded upstream commit,
+    /// packed for `git_push` (ADR-0034 decision 10, amendment 2026-10-26):
+    /// the store history plus the workspace as it is now, moved out of the
+    /// sandbox and redacted exactly as the end-of-turn commit would be. The
+    /// new commits are written into the turn's own quarantine (unreferenced
+    /// there, so no segment carries them); the pack is bounded by the
+    /// segment budget.
+    ///
+    /// # Errors
+    ///
+    /// No upstream, no change, over the budget, or the workspace could not
+    /// be read.
+    pub(crate) async fn prepare_push(
+        &self,
+    ) -> Result<
+        elitea_agent_runtime::toolkits::workspace_pull_request::PreparedPush,
+        elitea_agent_runtime::toolkits::workspace_pull_request::PushUnavailable,
+    > {
+        use elitea_agent_runtime::toolkits::workspace_pull_request::PushUnavailable;
+        let failed =
+            || PushUnavailable::Failed("The workspace could not be read; nothing was pushed.");
+        let upstream = self
+            .refs
+            .get(super::store::REF_UPSTREAM)
+            .cloned()
+            .ok_or(PushUnavailable::NoUpstream)?;
+        let view = tempfile::Builder::new()
+            .prefix("push-")
+            .tempdir_in(self.scratch.path())
+            .map_err(|_| failed())?;
+        self.sandbox
+            .pull_tree(view.path())
+            .await
+            .map_err(|_| failed())?;
+        let (redactor, codec, git_dir, parent, tree, max_bytes) = (
+            Arc::clone(&self.file_redactor),
+            Arc::clone(&self.codec),
+            self.git_dir.clone(),
+            self.parent.clone(),
+            view.path().to_path_buf(),
+            self.max_segment_bytes,
+        );
+        let seconds = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs());
+        let signature = format!("{COMMIT_AUTHOR_NAME} <{COMMIT_AUTHOR_EMAIL}> {seconds} +0000");
+        tokio::task::spawn_blocking(move || {
+            if !redactor.is_empty() {
+                let parent_files = codec
+                    .parent_files(&git_dir, &parent)
+                    .map_err(|_| failed())?;
+                redactor
+                    .redact_tree(&tree, parent_files.as_ref())
+                    .map_err(|_| failed())?;
+            }
+            super::push_prep::prepare_push(
+                &git_dir, &upstream, &parent, &tree, max_bytes, &signature,
+            )
+        })
+        .await
+        .map_err(|_| failed())?
     }
 
     /// The pull-request diff (ADR-0034 decision 10), computed here from the

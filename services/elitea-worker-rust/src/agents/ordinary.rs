@@ -410,39 +410,45 @@ impl OrdinaryNativeAgentAssembler {
                 } else {
                     runtime
                 };
-                // ADR-0034 decision 10 (amended 2026-10-26): open_pull_request,
-                // only with an upstream, a policy that allows it, and a
-                // credential: the owner's choice for the thread (redeemed per
-                // call, outside the sandbox) or a bound GitHub toolkit.
+                // ADR-0034 decision 10 (amended 2026-10-26): git_push and
+                // open_pull_request, only with an upstream, a policy that
+                // allows them, and a credential: the owner's choice for the
+                // thread (redeemed per call, outside the sandbox) or a bound
+                // GitHub or GitLab toolkit.
                 let pull_request = if field.has_upstream
                     && field.pull_requests != crate::workspace_run::context::PullRequestMode::Off
                 {
                     use elitea_agent_runtime::toolkits::workspace_pull_request as pr;
-                    pr::open_pull_request_toolset(
-                        field.pull_request_credential.then(|| {
+                    pr::WorkspaceForgeTools {
+                        thread: field.pull_request_credential.then(|| {
                             pr::ThreadCredential::new(Arc::new(
                                 crate::workspace_run::tools::TurnCredentialSource::new(Arc::clone(
                                     turn,
                                 )),
                             ))
                         }),
-                        pr::github_pull_request_targets(&tool_snapshot),
-                        Arc::new(crate::workspace_run::tools::TurnDiffSource::new(
+                        targets: pr::pull_request_targets(&tool_snapshot),
+                        diff: Arc::new(crate::workspace_run::tools::TurnDiffSource::new(
                             Arc::clone(turn),
                         )),
-                        Arc::new(
+                        push: Some(Arc::new(crate::workspace_run::tools::TurnPushSource::new(
+                            Arc::clone(turn),
+                        ))),
+                        push_transport: None,
+                        audit: Arc::new(
                             crate::workspace_run::tools::LogPullRequestAudit::new(
                                 context.execution_id(),
                             )
                             .with_audit(turn.audit()),
                         ),
-                    )
+                    }
+                    .toolset()
                 } else {
                     None
                 };
                 match pull_request {
-                    // A person approves each pull request unless the policy
-                    // lets them open without one.
+                    // A person approves each push and pull request unless the
+                    // policy lets them run without one.
                     Some(toolset)
                         if field.pull_requests
                             == crate::workspace_run::context::PullRequestMode::Ask =>

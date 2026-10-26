@@ -167,9 +167,38 @@ impl elitea_agent_runtime::toolkits::workspace_pull_request::WorkspaceDiffSource
     }
 }
 
-/// The thread's pull-request credential (amendment 2026-10-26): redeemed
-/// from Main per `open_pull_request` call, outside the sandbox, and handed to
-/// the GitHub family in process. A refusal is mapped to a data-free reason.
+/// `git_push`'s commits (ADR-0034 decision 10, amendment 2026-10-26):
+/// re-parented and packed by the worker from the turn's own repository,
+/// outside the sandbox ([`super::turn::WorkspaceTurn::prepare_push`]).
+pub(crate) struct TurnPushSource {
+    turn: Arc<super::turn::WorkspaceTurn>,
+}
+
+impl TurnPushSource {
+    #[must_use]
+    pub(crate) fn new(turn: Arc<super::turn::WorkspaceTurn>) -> Self {
+        Self { turn }
+    }
+}
+
+#[async_trait]
+impl elitea_agent_runtime::toolkits::workspace_pull_request::WorkspacePushSource
+    for TurnPushSource
+{
+    async fn prepare_push(
+        &self,
+    ) -> Result<
+        elitea_agent_runtime::toolkits::workspace_pull_request::PreparedPush,
+        elitea_agent_runtime::toolkits::workspace_pull_request::PushUnavailable,
+    > {
+        self.turn.prepare_push().await
+    }
+}
+
+/// The thread's push and pull-request credential (amendment 2026-10-26):
+/// redeemed from Main per `git_push` or `open_pull_request` call, outside
+/// the sandbox, and handed to the forge client in process. A refusal is
+/// mapped to a data-free reason.
 pub(crate) struct TurnCredentialSource {
     turn: Arc<super::turn::WorkspaceTurn>,
 }
@@ -205,10 +234,10 @@ pub(crate) fn credential_unavailable(
 impl elitea_agent_runtime::toolkits::workspace_pull_request::ThreadCredentialSource
     for TurnCredentialSource
 {
-    async fn github_configuration(
+    async fn configuration(
         &self,
     ) -> Result<
-        zeroize::Zeroizing<String>,
+        elitea_agent_runtime::toolkits::workspace_pull_request::ThreadConfiguration,
         elitea_agent_runtime::toolkits::workspace_pull_request::CredentialUnavailable,
     > {
         self.turn.forge_credential().await.map_err(|error| {
@@ -221,8 +250,9 @@ impl elitea_agent_runtime::toolkits::workspace_pull_request::ThreadCredentialSou
     }
 }
 
-/// `pull_request.opened` (decision 12): identifiers and counts, never file
-/// contents. Main records the audit row from this event.
+/// `pull_request.opened` and `branch.pushed` (decision 12): identifiers and
+/// counts, never file contents or a credential. Main records the audit row
+/// from each event.
 pub(crate) struct LogPullRequestAudit {
     execution_id: String,
     /// The turn's audit queue: Main records the row (decision 12).
@@ -272,6 +302,29 @@ impl elitea_agent_runtime::toolkits::workspace_pull_request::PullRequestAudit
                 number: event.number,
                 url: Some(event.url.clone()),
                 files: u32::try_from(event.files).unwrap_or(u32::MAX),
+            });
+        }
+    }
+
+    fn pushed(&self, event: &elitea_agent_runtime::toolkits::workspace_pull_request::BranchPushed) {
+        tracing::info!(
+            event = "branch.pushed",
+            audit = "branch.pushed",
+            entity_type = "workspace_handoff",
+            execution_id = self.execution_id.as_str(),
+            toolkit = event.toolkit.as_str(),
+            forge = event.forge.as_str(),
+            repository = event.repository.as_str(),
+            commits = event.commits,
+            upstream_sha = event.upstream_sha.as_str(),
+        );
+        if let Some(audit) = &self.audit {
+            audit.record(super::audit::ExecutorEvent::BranchPushed {
+                toolkit: event.toolkit.clone(),
+                branch: event.branch.clone(),
+                base: event.base.clone(),
+                url: event.url.clone(),
+                commits: event.commits,
             });
         }
     }

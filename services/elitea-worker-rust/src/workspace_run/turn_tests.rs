@@ -803,7 +803,7 @@ async fn a_secret_in_the_tree_fails_the_turn_before_any_sandbox_starts() {
 #[tokio::test]
 async fn executor_audit_events_reach_main_and_never_fail_the_turn() {
     use elitea_agent_runtime::toolkits::workspace_pull_request::{
-        PullRequestAudit, PullRequestOpened,
+        BranchPushed, ForgeKind, PullRequestAudit, PullRequestOpened,
     };
     let harness = harness(CLOUD_REFS, &[("src/main.rs", "fn main() {}\n")]);
     let turn = harness
@@ -829,13 +829,34 @@ async fn executor_audit_events_reach_main_and_never_fail_the_turn() {
     };
     harness.store.state().events_refused = 1;
     audit.opened(&opened); // refused: logged, not retried, the turn goes on
+    audit.pushed(&BranchPushed {
+        toolkit: "@thread".to_owned(),
+        forge: ForgeKind::GitLab,
+        repository: "g/s/r".to_owned(),
+        branch: "elitea/cloud-1".to_owned(),
+        base: "main".to_owned(),
+        url: "https://gitlab.example.com/g/s/r/-/tree/elitea/cloud-1".to_owned(),
+        commits: 4,
+        upstream_sha: "u".repeat(40),
+    });
     audit.opened(&opened);
     turn.finish(TurnEnd::Completed).await.expect("published");
     let state = harness.store.state();
     assert_eq!(state.publishes.len(), 1, "the turn published");
-    assert_eq!(state.events.len(), 1, "flushed before the turn ended");
+    assert_eq!(state.events.len(), 2, "flushed before the turn ended");
     assert!(matches!(
         &state.events[0],
+        super::audit::ExecutorEvent::BranchPushed { commits: 4, url, .. }
+            if url.ends_with("/-/tree/elitea/cloud-1")
+    ));
+    let request = super::store::record_event_request(&claim(2), &state.events[0]);
+    assert_eq!(
+        request.kind,
+        crate::protocol::elitea::runtime::v1::WorkspaceExecutorEventKindV1::BranchPushed as i32
+    );
+    assert_eq!(request.commits, 4);
+    assert!(matches!(
+        &state.events[1],
         super::audit::ExecutorEvent::PullRequestOpened {
             files: 3,
             number: 42,
