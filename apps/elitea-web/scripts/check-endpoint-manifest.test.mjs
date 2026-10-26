@@ -998,8 +998,12 @@ const GENERATED_OPERATION_COUNT = 349;
  * 283 -> 285 (client contract 1.26, issue 1187):
  * workspaceHandoff.changes and workspaceHandoff.diff, the Files changed
  * view of a cloud thread in the web chat (pages/chat). Generated.
+ *
+ * 285 -> 287 (Point 5 2a-2, fixed Parallel): chat.listExecutionInterrupts
+ * and chat.decideExecutionInterrupt, the open fan-out cards of a response
+ * and their decision (features/chat-messages interruptLedgerApi). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 285;
+const MANIFEST_ENTRY_COUNT = 287;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

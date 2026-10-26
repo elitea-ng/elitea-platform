@@ -239,7 +239,7 @@ fn the_member_status_frame_matches_the_contract_fixture() {
 fn member_call_ids_match_the_contract_vectors() {
     let vectors = fixture_json("fanout-interrupt-key-vectors-v1.json");
     let calls = vectors["member_call_ids"].as_array().expect("vectors");
-    assert!(!calls.is_empty());
+    assert_ne!(calls.as_slice(), &[] as &[Value]);
     for vector in calls {
         assert_eq!(
             member_call_id(vector["child_thread"].as_str().expect("thread")),
@@ -318,7 +318,7 @@ fn a_64_kib_flush_splits_into_at_most_eight_lossless_frames() {
             assert!(ordinal > previous, "ascending within a frame");
             previous = ordinal;
             let text = member["text"].as_str().expect("text");
-            assert!(!text.is_empty());
+            assert_ne!(text, "");
             bytes += text.len();
             rebuilt[ordinal].push_str(text);
         }

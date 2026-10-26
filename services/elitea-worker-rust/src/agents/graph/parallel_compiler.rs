@@ -207,6 +207,7 @@ impl PipelineDefinition {
             DurableParallelNode::new(definition.clone(), runtime)
                 .with_deadline(binding.deadline)
                 .with_cancellation(Arc::clone(&binding.cancellation))
+                .with_failure_events(runtimes.events.clone())
                 .with_output_reducer(self.state_reducers.get(definition.output_key()).copied()),
         );
         if let Some(target) = definition.transition() {

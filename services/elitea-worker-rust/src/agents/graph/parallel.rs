@@ -1432,6 +1432,9 @@ pub(crate) struct DurableParallelNode {
     cancellation: Option<Arc<FanoutCancellation>>,
     decisions: Arc<dyn DecisionSource>,
     events: Arc<dyn FanoutEvents>,
+    /// The run's terminal channel: an On Error `stop` caused by a child that
+    /// may have started ends the run with its registered reason.
+    failure_events: Option<super::node_events::PipelineNodeEventSender>,
     permits: ChildPermits,
     /// The output key's declared reducer, if it declares one.
     output_reducer: Option<StateReducer>,
@@ -1449,6 +1452,7 @@ impl DurableParallelNode {
             cancellation: None,
             decisions: Arc::new(NoDecisions),
             events: Arc::new(NoEvents),
+            failure_events: None,
             permits: worker_child_permits(),
             output_reducer: None,
         }
@@ -1469,6 +1473,15 @@ impl DurableParallelNode {
     /// Main's claim-fenced decision ledger. Default: nothing is decided.
     pub(crate) fn with_decisions(mut self, decisions: Arc<dyn DecisionSource>) -> Self {
         self.decisions = decisions;
+        self
+    }
+
+    /// The run's terminal channel. Default: none (the node error only).
+    pub(crate) fn with_failure_events(
+        mut self,
+        events: Option<super::node_events::PipelineNodeEventSender>,
+    ) -> Self {
+        self.failure_events = events;
         self
     }
 
@@ -1585,7 +1598,7 @@ impl DurableParallelNode {
             return Err(cancelled_error());
         }
         match outcome {
-            RunnerOutcome::Settled(settled) => self.land(settled, context),
+            RunnerOutcome::Settled(settled) => self.land(settled, context).await,
             RunnerOutcome::Parked {
                 open,
                 decision_revision_seen,
@@ -1636,7 +1649,7 @@ impl DurableParallelNode {
         }
     }
 
-    fn land(
+    async fn land(
         &self,
         settled: Vec<plan::SettledChild>,
         context: &NodeContext,
@@ -1646,6 +1659,17 @@ impl DurableParallelNode {
         {
             JoinOutcome::Joined(entries) => entries,
             JoinOutcome::Failed { key, failure } => {
+                if failure.code == BRANCH_MAY_HAVE_STARTED_CODE
+                    && let Some(events) = &self.failure_events
+                    && let Some(stop) = events
+                        .approved_call_stop(
+                            crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+                            self.definition.id(),
+                        )
+                        .await
+                {
+                    return Err(stop);
+                }
                 return Err(GraphError::NodeExecutionFailed {
                     node: self.definition.id().to_owned(),
                     message: format!(
@@ -2009,9 +2033,10 @@ impl Write for CappedJsonWriter {
 }
 
 fn graph_error_code(error: &GraphError) -> &'static str {
-    // A child refusal that names its own registered cause keeps it.
+    // A child refusal that names its own registered cause keeps it, also
+    // when an inner node's failure wraps it.
     if let GraphError::NodeExecutionFailed { message, .. } = error
-        && message
+        && unwrap_node_failures(message)
             .strip_prefix(crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE)
             .is_some_and(|rest| rest.starts_with(": "))
     {
@@ -2036,6 +2061,17 @@ fn graph_error_code(error: &GraphError) -> &'static str {
         GraphError::JsonError(_) => "graph.json",
         GraphError::Other(_) => "graph.other",
     }
+}
+
+/// The innermost message of nested `Node '<id>' execution failed: ` wrappers.
+fn unwrap_node_failures(mut message: &str) -> &str {
+    while let Some(rest) = message.strip_prefix("Node '")
+        && let Some((node, inner)) = rest.split_once("' execution failed: ")
+        && !node.contains('\'')
+    {
+        message = inner;
+    }
+    message
 }
 
 fn valid_failure_code(code: &str) -> bool {
@@ -2066,5 +2102,34 @@ fn parallel_error(code: &str, message: &str) -> GraphError {
     GraphError::NodeExecutionFailed {
         node: "parallel".to_owned(),
         message: format!("{code}: {message}"),
+    }
+}
+
+#[cfg(test)]
+mod error_code_tests {
+    use super::*;
+
+    #[test]
+    fn a_wrapped_may_have_started_refusal_keeps_its_code() {
+        let inner = format!(
+            "{}: it is not repeated",
+            crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE
+        );
+        for message in [
+            inner.clone(),
+            format!("Node 'application_scope' execution failed: {inner}"),
+            format!("Node 'a' execution failed: Node 'b' execution failed: {inner}"),
+        ] {
+            let error = GraphError::NodeExecutionFailed {
+                node: "second_call".to_owned(),
+                message,
+            };
+            assert_eq!(graph_error_code(&error), BRANCH_MAY_HAVE_STARTED_CODE);
+        }
+        let other = GraphError::NodeExecutionFailed {
+            node: "second_call".to_owned(),
+            message: format!("provider said {inner}"),
+        };
+        assert_eq!(graph_error_code(&other), "graph.node_execution_failed");
     }
 }

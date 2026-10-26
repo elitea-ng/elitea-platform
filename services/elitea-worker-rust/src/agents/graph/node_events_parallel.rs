@@ -8,6 +8,7 @@ use super::{
     pipeline_node_event_channel_error, valid_event_identity, valid_graph_id,
 };
 use crate::agents::graph::ParallelBranchExecution;
+use crate::agents::pipeline::scoped_applications::PipelineApplicationActivation;
 
 const MAX_BRANCH_THREADS: usize = 129;
 const MAX_FIXED_BRANCHES: usize = 16;
@@ -103,13 +104,31 @@ impl PipelineNodeEventSender {
             .filter(|key| event.provider_metadata.contains_key(**key))
             .count();
         if existing != 0 {
-            if existing != keys.len()
-                || keys
-                    .iter()
-                    .any(|key| !valid_event_identity(&event.provider_metadata[*key]))
-                || !scope
-                    .contains_thread(&event.provider_metadata[DESCENDANT_CHECKPOINT_THREAD_KEY])
-            {
+            let edge = |key: &str| {
+                event
+                    .provider_metadata
+                    .get(key)
+                    .is_some_and(|value| valid_event_identity(value))
+            };
+            let proved = if existing == keys.len() {
+                keys.iter().all(|key| edge(key))
+                    && scope
+                        .contains_thread(&event.provider_metadata[DESCENDANT_CHECKPOINT_THREAD_KEY])
+            } else {
+                // An Agent child's leaf carries no checkpoint thread (the
+                // projector refuses one on a non-pipeline child); the
+                // activation receipt stamped on it proves its branch thread.
+                !event
+                    .provider_metadata
+                    .contains_key(DESCENDANT_CHECKPOINT_THREAD_KEY)
+                    && edge(DESCENDANT_CONTAINER_INVOCATION_KEY)
+                    && edge(DESCENDANT_PARENT_CALL_KEY)
+                    && PipelineApplicationActivation::from_event(event)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|activation| scope.contains_thread(activation.thread_id()))
+            };
+            if !proved {
                 return Err(pipeline_node_event_channel_error());
             }
             return Ok(());

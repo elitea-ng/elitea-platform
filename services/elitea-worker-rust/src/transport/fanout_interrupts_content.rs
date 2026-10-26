@@ -304,13 +304,15 @@ impl InputContentClient {
 /// runner retries on its next tick.
 fn decision_status(status: &Status, is_ack: bool) -> InputContentError {
     match status.code() {
-        Code::Unauthenticated | Code::PermissionDenied => {
-            InputContentError::AuthorizationFailed("the fan-out decision authority is no longer current")
+        Code::Unauthenticated | Code::PermissionDenied => InputContentError::AuthorizationFailed(
+            "the fan-out decision authority is no longer current",
+        ),
+        Code::AlreadyExists if !is_ack => InputContentError::AuthorizationFailed(
+            "the fan-out decision authority is no longer current",
+        ),
+        Code::DeadlineExceeded => {
+            InputContentError::Timeout("the fan-out decision request timed out")
         }
-        Code::AlreadyExists if !is_ack => {
-            InputContentError::AuthorizationFailed("the fan-out decision authority is no longer current")
-        }
-        Code::DeadlineExceeded => InputContentError::Timeout("the fan-out decision request timed out"),
         _ if is_transport_status(status) => InputContentError::transport(status.clone()),
         _ => InputContentError::DependencyUnavailable("the fan-out decision route is unavailable"),
     }

@@ -272,6 +272,59 @@ fn routed_leaf_retains_its_nearest_edge_and_refuses_partial_or_unknown_threads()
     );
 }
 
+/// An Agent child's leaf has no checkpoint thread: its activation receipt
+/// (stamped by the scoped runtime) proves the branch thread instead.
+#[test]
+fn agent_child_leaf_is_proved_by_its_activation_receipt() {
+    use crate::agents::pipeline::scoped_applications::PipelineApplicationScope;
+    let definition = crate::agents::graph::compiler::PipelineDefinition::from_yaml(
+        "state: {answer: str}\nentry_point: child\nnodes:\n  - id: child\n    type: agent\n    tool: assistant\n    input_mapping: {task: {type: fixed, value: work}}\n    output: [answer]\n    transition: END\n",
+    )
+    .unwrap();
+    let scope = PipelineApplicationScope::new(String::new(), &definition, None).unwrap();
+    let leaf = |thread: &str| {
+        let mut event = Event::new("agent-leaf");
+        event.provider_metadata.insert(
+            DESCENDANT_CONTAINER_INVOCATION_KEY.to_owned(),
+            "agent-child".to_owned(),
+        );
+        event.provider_metadata.insert(
+            DESCENDANT_PARENT_CALL_KEY.to_owned(),
+            "agent-call".to_owned(),
+        );
+        scope
+            .activate(thread, "child", 0)
+            .unwrap()
+            .stamp_with_branch(&mut event, "elitea.saved_applications".to_owned())
+            .unwrap();
+        event
+    };
+    let (sender, _) = sender(binding(Some(parent())));
+    let mut event = leaf("hashed-branch/owned");
+    let original = json!(event);
+    sender
+        .project_parallel_application_event(&mut event, None, "root-invocation")
+        .unwrap();
+    assert_eq!(json!(event), original, "the leaf keeps its own edge");
+    // A receipt for a thread this branch does not own.
+    let mut foreign = leaf("other-branch");
+    assert!(
+        sender
+            .project_parallel_application_event(&mut foreign, None, "root-invocation")
+            .is_err()
+    );
+    // No receipt: nothing proves the leaf.
+    let mut bare = leaf("hashed-branch/owned");
+    bare.provider_metadata.remove(
+        crate::agents::pipeline::scoped_applications::PIPELINE_APPLICATION_SCOPE_METADATA_KEY,
+    );
+    assert!(
+        sender
+            .project_parallel_application_event(&mut bare, None, "root-invocation")
+            .is_err()
+    );
+}
+
 #[tokio::test]
 async fn ordinary_sender_keeps_existing_root_projection() {
     let (sender, receiver) = pipeline_node_event_channel();

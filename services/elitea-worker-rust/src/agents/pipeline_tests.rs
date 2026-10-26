@@ -50,10 +50,10 @@ use crate::transport::runtime_context::{RuntimeContextClient, RuntimeContextConf
 
 #[path = "pipeline_artifact_tests.rs"]
 mod artifact_tests;
-#[path = "pipeline_fanout_effect_pg_tests.rs"]
-mod fanout_effect_pg_tests;
 #[path = "pipeline_effect_pg_tests.rs"]
 mod effect_pg_tests;
+#[path = "pipeline_fanout_effect_pg_tests.rs"]
+mod fanout_effect_pg_tests;
 #[path = "pipeline_scope_tests.rs"]
 mod model_scope_tests;
 #[path = "pipeline_restart_pg_tests.rs"]

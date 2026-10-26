@@ -61,7 +61,9 @@ impl ReplyRpc {
 impl super::super::content_fake::ContentFake for ReplyRpc {
     async fn fetch_execution_interrupts(
         &self,
-        request: tonic::Request<crate::protocol::elitea::runtime::v1::FetchExecutionInterruptsRequestV1>,
+        request: tonic::Request<
+            crate::protocol::elitea::runtime::v1::FetchExecutionInterruptsRequestV1,
+        >,
     ) -> Result<
         tonic::Response<crate::protocol::elitea::runtime::v1::FetchExecutionInterruptsResponseV1>,
         tonic::Status,
@@ -275,13 +277,20 @@ async fn refused_claims_are_lease_loss_and_other_failures_are_transient() {
             Err(InputContentError::AuthorizationFailed(_))
         ));
     }
+    // An unavailable Main is a transport failure (the connection is retried);
+    // any other refusal is a dependency failure. Both are transient.
     for status in [500, 502, 503] {
         let (client, _, _) = make_client(status, json!({}), "fetch");
         assert!(matches!(
             client.fetch_fanout_decisions(&authority()).await,
-            Err(InputContentError::DependencyUnavailable(_))
+            Err(InputContentError::Transport(_))
         ));
     }
+    let (client, _, _) = make_client(404, json!({}), "fetch");
+    assert!(matches!(
+        client.fetch_fanout_decisions(&authority()).await,
+        Err(InputContentError::DependencyUnavailable(_))
+    ));
 }
 
 fn ack_request() -> FanoutAckRequest<'static> {

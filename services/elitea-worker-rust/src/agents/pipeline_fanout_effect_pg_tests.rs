@@ -346,6 +346,7 @@ async fn postgres_effectful_fanout_child_may_have_started_stops_the_node() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)] // One child process per phase: crash, then recover with its assertions.
 async fn postgres_fanout_effect_child() {
     let Ok(database) = std::env::var(DATABASE_ENV) else {
         return;
@@ -432,8 +433,10 @@ async fn postgres_fanout_effect_child() {
                 assert_eq!(entries[2]["status"], "succeeded");
             } else {
                 let error = outcome.expect_err("recover: On Error stop fails the node");
+                // The run ends with the registered "may have started, not
+                // repeated" reason, as an unscoped Agent node's approved call.
                 assert!(
-                    error.contains(MAY_HAVE_STARTED) || error.contains("graph.fanout"),
+                    error.contains(crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE),
                     "recover: a typed fan-out failure: {error}"
                 );
                 assert_eq!(

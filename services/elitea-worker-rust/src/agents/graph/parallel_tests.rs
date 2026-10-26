@@ -1110,8 +1110,8 @@ impl ParallelBranchGraphFactory for PausingBranchGraphs {
         pause: &ParallelBranchPause,
         decisions: &[ParallelDecision],
     ) -> Result<State, GraphError> {
-        assert!(!pause.thread_id.is_empty());
-        assert!(!pause.checkpoint_id.is_empty());
+        assert_ne!(pause.thread_id, "");
+        assert_ne!(pause.checkpoint_id, "");
         // One resume carries exactly this child's whole decision set.
         assert_eq!(decisions.len(), self.card_count(branch.node()));
         assert!(decisions.iter().all(|decision| {
