@@ -114,6 +114,7 @@ func composeWorkspaceHandoff(
 	recorder audit.Recorder,
 	groupAuth apimw.AuthConfig,
 	liveEvents workspacehandoff.StateEvents,
+	forgeExpander forgeExpander,
 	logger *slog.Logger,
 ) (workspaceHandoffComposition, error) {
 	if pool == nil || objectStore == nil || groupAuth.PrincipalValidator == nil || device == nil {
@@ -203,6 +204,12 @@ func composeWorkspaceHandoff(
 	// Live state changes for the web app and the desktop (scope B); nil when
 	// the deployment has no live-update plane, and the clients poll.
 	handoff.WithStateEvents(liveEvents)
+	// The thread's pull-request credential (decision 10, amended): a GitHub
+	// configuration reference expanded by the Configurations runtime, only
+	// when that runtime is composed.
+	if resolver := newForgeCredentialResolver(forgeExpander); resolver != nil {
+		handoff.WithForgeCredentials(handoffRepo, resolver)
+	}
 	// The Files changed view (ADR-0034 Phase 2): what the worker records after
 	// each cloud turn, filtered by the policy the handoff service answers.
 	changesRepo, err := dbrepos.NewWorkspaceChangesRepository(pool)

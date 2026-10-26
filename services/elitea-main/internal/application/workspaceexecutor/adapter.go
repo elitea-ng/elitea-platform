@@ -204,6 +204,9 @@ func (a *Adapter) ResolveCloudTurn(ctx context.Context, claim workspaceruntime.T
 		EnvSecret:     started.EnvSecret(),
 		Rewind:        started.RewindTo != nil,
 		RewindTo:      started.RewindTo,
+		// The reference only; the credential travels over
+		// WorkspaceForgeCredential.
+		ForgeCredential: started.ForgeCredential != nil,
 	}, true, nil
 }
 
@@ -228,6 +231,9 @@ func (a *Adapter) EffectiveCloudPolicy(ctx context.Context, projectID int64, _ s
 		CPUMillis:        a.resources.CPUMillis,
 		MemoryBytes:      a.resources.MemoryBytes,
 		DiskBytes:        a.resources.DiskBytes,
+		// Decision 10, amended 2026-10-26.
+		PullRequests:        policy.PullRequests,
+		PullRequestApproval: policy.PullRequestApproval,
 	}, nil
 }
 
@@ -355,6 +361,40 @@ func (a *Adapter) EnvSecret(ctx context.Context, claim workspaceruntime.ClaimRef
 		env = map[string]string{}
 	}
 	return env, nil
+}
+
+// forgeCredentials is the optional Handoffs call behind
+// WorkspaceForgeCredential (*workspacehandoff.Service).
+type forgeCredentials interface {
+	ForgeCredentialForTurn(ctx context.Context, handoff workspacehandoff.Handoff) (map[string]any, error)
+}
+
+var _ workspaceruntime.ForgeCredentialSource = (*Adapter)(nil)
+
+// ForgeCredential redeems the running turn's pull-request credential
+// (ADR-0034 decision 10, amended 2026-10-26). The claim is bound to the
+// thread first, as every Store call is.
+func (a *Adapter) ForgeCredential(ctx context.Context, claim workspaceruntime.ClaimRef) (map[string]any, error) {
+	handoff, _, err := a.running(ctx, claim)
+	if err != nil {
+		return nil, err
+	}
+	forge, ok := a.handoffs.(forgeCredentials)
+	if !ok {
+		return nil, workspaceruntime.ErrUnavailable
+	}
+	credential, err := forge.ForgeCredentialForTurn(ctx, handoff)
+	switch {
+	case errors.Is(err, workspacehandoff.ErrNoForgeCredential), errors.Is(err, workspacehandoff.ErrForgeCredentialInvalid):
+		return nil, workspaceruntime.Refuse(workspaceruntime.RefusalNoForgeCredential)
+	case errors.Is(err, workspacehandoff.ErrPullRequestsDisabled):
+		return nil, workspaceruntime.Refuse(workspaceruntime.RefusalPullRequestsDisabled)
+	case errors.Is(err, workspacehandoff.ErrUnavailable):
+		return nil, workspaceruntime.ErrUnavailable
+	case err != nil:
+		return nil, storeError(err)
+	}
+	return credential, nil
 }
 
 // RecordEvent writes the running turn's executor audit event.

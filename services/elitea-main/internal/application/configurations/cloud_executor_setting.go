@@ -5,7 +5,8 @@ import "encoding/json"
 // CloudExecutorConfigurationType is the project setting of the desktop ⇄
 // cloud handoff (ADR-0034 decision 11): one tenant configuration row with
 // type `cloud_executor` in section `project_settings`. It holds `enabled`,
-// `shell`, `network`, `network_allowlist`, `history` and optional lower caps,
+// `shell`, `network`, `network_allowlist`, `history`, `pull_requests`,
+// `pull_request_approval` and optional lower caps,
 // and it can only NARROW the platform ceiling (`cloud_executor` platform
 // section): the handoff's effective policy takes the minimum of the two. The
 // exception is `enabled`: an explicit value wins under a platform that has the
@@ -90,6 +91,11 @@ func (catalog *CurrentAvailableCatalog) addCloudExecutorProjectSetting() error {
 				"exclusions match. Cannot be turned on when the platform has it off."),
 			"env_harvest": optionalBool("Allow Environment Variables", "Allow users to send selected environment "+
 				"variables. Cannot be turned on when the platform has it off."),
+			"pull_requests": optionalBool("Allow Pull Requests", "Allow cloud turns to open a pull request. "+
+				"Cannot be turned on when the platform has it off."),
+			"pull_request_approval": optionalBool("Approve Each Pull Request", "Require a person's approval "+
+				"before each pull request. Can be turned on when the platform does not require it, never off "+
+				"when it does."),
 			"env_deny_add": optionalList("Denied Variable Names to Add", "Name patterns never offered, on top of "+
 				"the platform list."),
 			"env_allow": optionalList("Allowed Variable Names", "When set, the only names that can be sent; "+
@@ -143,7 +149,8 @@ func normalizeCloudExecutorSetting(data map[string]any) (map[string]any, error) 
 		}
 		normalized[key] = patterns
 	}
-	for _, key := range []string{"enabled", "shell", "network", "allow_user_include", "env_harvest"} {
+	for _, key := range []string{"enabled", "shell", "network", "allow_user_include", "env_harvest",
+		"pull_requests", "pull_request_approval"} {
 		raw, present := data[key]
 		if !present || raw == nil {
 			continue

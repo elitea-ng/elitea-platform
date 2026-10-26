@@ -84,6 +84,10 @@ const (
 	RefusalUnsupportedObjectFormat RefusalCode = "unsupported_object_format"
 	RefusalSegmentTooLarge         RefusalCode = "segment_too_large"
 	RefusalQuotaExceeded           RefusalCode = "workspace_quota_exceeded"
+	// RefusalNoForgeCredential and RefusalPullRequestsDisabled answer
+	// WorkspaceForgeCredential (ADR-0034 decision 10, amended 2026-10-26).
+	RefusalNoForgeCredential    RefusalCode = "no_forge_credential"
+	RefusalPullRequestsDisabled RefusalCode = "pull_requests_disabled"
 )
 
 // Refusal is the error a Store returns for a business refusal.
@@ -209,6 +213,19 @@ type Store interface {
 	// (RefusalRefConflict otherwise). A replay replaces the record.
 	RecordChanges(ctx context.Context, claim ClaimRef, changes TurnChanges) error
 }
+
+// ForgeCredentialSource is the optional Store call behind
+// WorkspaceForgeCredential: the claim's thread's pull-request credential,
+// redeemed (ADR-0034 decision 10, amended 2026-10-26). It answers
+// RefusalNoForgeCredential when the owner chose none (or it no longer
+// resolves) and RefusalPullRequestsDisabled when the policy is off. The
+// values are a credential: never logged, audited or cached.
+type ForgeCredentialSource interface {
+	ForgeCredential(ctx context.Context, claim ClaimRef) (map[string]any, error)
+}
+
+// MaxForgeCredentialBytes bounds the encoded credential the worker receives.
+const MaxForgeCredentialBytes = 32 << 10
 
 // The executor audit events (workspacehandoff.EventScanBlocked and
 // EventPullRequestOpened).

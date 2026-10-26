@@ -44,6 +44,9 @@ type Service struct {
 	// long list of idle threads is covered across sweeps.
 	idleAt IdleCursor
 	vault  EnvVault
+	// The thread's pull-request credential (forge_credential.go).
+	forgeStore    ForgeCredentialStore
+	forgeResolver ForgeCredentialResolver
 }
 
 // WithEnvVault supplies the vault of the harvested environment. Without it a

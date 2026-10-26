@@ -1425,8 +1425,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// live-update plane: the runtime plane publishes the turn transitions,
 	// the read route the read markers. nil without the plane.
 	conversationActivity := newConversationActivity(workspaceBus, pool, logger)
+	// Assigned only from a composed runtime, never a typed nil.
+	var workspaceForgeExpander forgeExpander
+	if currentConfigurationsRoot != nil {
+		if expander := currentConfigurationsRoot.Expansion(); expander != nil {
+			workspaceForgeExpander = expander
+		}
+	}
 	workspaceHandoff, err := composeWorkspaceHandoff(ctx, pool, objectStore, workspaceInputs, nativePolicy,
-		workspaceTurnCanceller, auditRecorder, apiGroupAuth, newHandoffLiveEvents(workspaceBus), logger)
+		workspaceTurnCanceller, auditRecorder, apiGroupAuth, newHandoffLiveEvents(workspaceBus), workspaceForgeExpander, logger)
 	if err != nil {
 		return fmt.Errorf("compose workspace handoff routes: %w", err)
 	}

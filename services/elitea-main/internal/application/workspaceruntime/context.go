@@ -63,6 +63,10 @@ type Turn struct {
 	// publish compare-and-set before the turn runs.
 	Rewind   bool
 	RewindTo *string
+	// ForgeCredential: the owner chose a pull-request credential for the
+	// thread. The worker redeems it over WorkspaceForgeCredential; it is
+	// never in this field.
+	ForgeCredential bool
 }
 
 // TurnResolver reads the claimed execution's handoff state.
@@ -117,6 +121,29 @@ type Policy struct {
 	CPUMillis       uint64
 	MemoryBytes     uint64
 	DiskBytes       uint64
+	// PullRequests and PullRequestApproval (decision 10, amended
+	// 2026-10-26): whether a cloud turn may open a pull request, and whether
+	// a person approves each one first.
+	PullRequests        bool
+	PullRequestApproval bool
+}
+
+// The values of the `workspace.pull_requests` field.
+const (
+	PullRequestsOff   = "off"
+	PullRequestsAsk   = "ask"
+	PullRequestsAllow = "allow"
+)
+
+// PullRequestMode answers the field's value for a policy.
+func (p Policy) PullRequestMode() string {
+	switch {
+	case !p.PullRequests:
+		return PullRequestsOff
+	case p.PullRequestApproval:
+		return PullRequestsAsk
+	}
+	return PullRequestsAllow
 }
 
 // PolicyEvaluator computes the effective policy. It is called at every
@@ -161,6 +188,14 @@ type RuntimeContext struct {
 	// proxy (with the run token) or unavailable (an allowlist this
 	// deployment cannot enforce; the worker refuses the turn).
 	Egress RuntimeContextEgress `json:"egress"`
+	// PullRequests is open_pull_request's policy (decision 10, amended
+	// 2026-10-26): off (the tool is absent), ask (each call is a HITL
+	// approval first) or allow.
+	PullRequests string `json:"pull_requests"`
+	// PullRequestCredential: the thread has an owner-chosen GitHub
+	// credential, which the worker redeems over WorkspaceForgeCredential
+	// right before a pull request is written. Never the credential itself.
+	PullRequestCredential bool `json:"pull_request_credential"`
 }
 
 // ContextResolver builds the `workspace` field for one claimed execution.
@@ -279,6 +314,9 @@ func (r *ContextResolver) ResolveWorkspaceContext(ctx context.Context, claim Tur
 		Rewind:           turn.Rewind,
 		Egress:           egress,
 		RewindTo:         rewindTo,
+		PullRequests:     policy.PullRequestMode(),
+		// A credential is only worth redeeming while pull requests are on.
+		PullRequestCredential: turn.ForgeCredential && policy.PullRequests,
 	}, nil
 }
 

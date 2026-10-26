@@ -49,6 +49,11 @@ type ProjectSetting struct {
 	EnvHarvest       *bool     `json:"env_harvest"`
 	EnvDenyAdd       *[]string `json:"env_deny_add"`
 	EnvAllow         *[]string `json:"env_allow"`
+	// Amendment 2026-10-26 (decision 10): a project turns pull requests from
+	// the cloud off, or requires an approval for each one the platform does
+	// not ask about. It can never waive a platform-required approval.
+	PullRequests        *bool `json:"pull_requests"`
+	PullRequestApproval *bool `json:"pull_request_approval"`
 }
 
 // PolicyService computes the effective policy (decision 11): the platform
@@ -191,6 +196,10 @@ func Narrow(ceiling platformconfig.CloudExecutorSettings, project ProjectSetting
 	policy.AllowUserInclude = and(ceiling.AllowUserInclude, project.AllowUserInclude)
 	policy.EnvHarvest = and(ceiling.EnvHarvest, project.EnvHarvest)
 	policy.EnvAllow = narrowNames(ceiling.EnvAllow, project.EnvAllow)
+	// Pull requests narrow like any switch; the approval only tightens.
+	policy.PullRequests = and(ceiling.PullRequests, project.PullRequests)
+	policy.PullRequestApproval = ceiling.PullRequestApproval ||
+		(project.PullRequestApproval != nil && *project.PullRequestApproval)
 	// The allowlist. Empty means the public internet, so an intersection that
 	// comes out empty must not widen into "everything": the network is then off.
 	policy.NetworkAllowlist = append([]string{}, ceiling.NetworkAllowlist...)

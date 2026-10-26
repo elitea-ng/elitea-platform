@@ -139,6 +139,10 @@ type Handoff struct {
 	IncludedExcluded []string
 	EnvNames         []string
 	EnvSecretName    string
+	// ForgeCredential is the owner's pull-request credential for the thread
+	// (decision 10, amendment 2026-10-26): a configuration reference, never
+	// a secret. nil when none was chosen.
+	ForgeCredential *ForgeCredential
 	// RewindTo is set only on the answer of StartCloudTurn: the turn is a
 	// regenerate of the newest cloud turn, and the worker moves
 	// refs/elitea/cloud from CloudSHA back to this commit before it runs.
@@ -185,6 +189,11 @@ type Policy struct {
 	EnvDeny            []string
 	// EnvAllow, when not nil, is the only list of names that can be harvested.
 	EnvAllow *[]string
+	// PullRequests: a cloud turn may open a pull request (decision 10,
+	// amendment 2026-10-26). PullRequestApproval: each one is a HITL
+	// approval before anything is written to the forge.
+	PullRequests        bool
+	PullRequestApproval bool
 	// DisabledReason is why Enabled is false (one of the Disabled* values),
 	// empty when it is true. Clients show one message per reason instead of
 	// reading every refusal as the organisation's policy.
