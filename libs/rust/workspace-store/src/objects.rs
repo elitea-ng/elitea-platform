@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use gix_hash::ObjectId;
-use gix_object::{Exists as _, Find as _, Kind};
+use gix_object::{Exists as _, Find as _, FindHeader as _, Kind};
 
 use crate::error::StoreError;
 
@@ -253,6 +253,25 @@ impl ObjectDb {
     /// The object is missing or not a blob.
     pub fn blob(&self, id: &ObjectId) -> Result<Vec<u8>, StoreError> {
         self.require(id, Kind::Blob)
+    }
+
+    /// A blob's size from its object header, without reading its bytes.
+    ///
+    /// # Errors
+    ///
+    /// The object is missing, not a blob, or its header cannot be read.
+    pub fn blob_size(&self, id: &ObjectId) -> Result<u64, StoreError> {
+        match self.handle.try_header(id) {
+            Ok(Some(header)) if header.kind == Kind::Blob => Ok(header.size),
+            Ok(Some(header)) => Err(StoreError::Integrity(format!(
+                "object {id} is a {}, not a blob",
+                header.kind
+            ))),
+            Ok(None) => Err(StoreError::Integrity(format!("object {id} is missing"))),
+            Err(error) => Err(StoreError::Integrity(format!(
+                "cannot read object {id}: {error}"
+            ))),
+        }
     }
 
     /// Every non-tree entry under tree `id`, by `/`-joined path. Names that

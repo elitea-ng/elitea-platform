@@ -146,7 +146,7 @@ fn tool_error(error: &elitea_local_tools::error::ToolError) -> HandoffError {
         ErrorCode::InvalidArgument => "invalid_request",
         _ => "handoff_failed",
     };
-    HandoffError::new(code, error.message())
+    HandoffError::new(code, error.person_message())
 }
 
 fn joined<T>(result: Result<T, tokio::task::JoinError>) -> Result<T, HandoffError> {

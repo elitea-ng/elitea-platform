@@ -19,11 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	WorkspaceStoreService_WorkspaceFetchPlan_FullMethodName   = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceFetchPlan"
-	WorkspaceStoreService_WorkspaceUpload_FullMethodName      = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceUpload"
-	WorkspaceStoreService_WorkspacePublish_FullMethodName     = "/elitea.runtime.v1.WorkspaceStoreService/WorkspacePublish"
-	WorkspaceStoreService_WorkspaceEnvSecret_FullMethodName   = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceEnvSecret"
-	WorkspaceStoreService_WorkspaceRecordEvent_FullMethodName = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceRecordEvent"
+	WorkspaceStoreService_WorkspaceFetchPlan_FullMethodName     = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceFetchPlan"
+	WorkspaceStoreService_WorkspaceUpload_FullMethodName        = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceUpload"
+	WorkspaceStoreService_WorkspacePublish_FullMethodName       = "/elitea.runtime.v1.WorkspaceStoreService/WorkspacePublish"
+	WorkspaceStoreService_WorkspaceEnvSecret_FullMethodName     = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceEnvSecret"
+	WorkspaceStoreService_WorkspaceRecordEvent_FullMethodName   = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceRecordEvent"
+	WorkspaceStoreService_WorkspaceRecordChanges_FullMethodName = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceRecordChanges"
 )
 
 // WorkspaceStoreServiceClient is the client API for WorkspaceStoreService service.
@@ -39,6 +40,9 @@ type WorkspaceStoreServiceClient interface {
 	// An executor audit event of the running turn, bound to its claim and
 	// fence like every call here.
 	WorkspaceRecordEvent(ctx context.Context, in *WorkspaceRecordEventRequestV1, opts ...grpc.CallOption) (*WorkspaceRecordEventResponseV1, error)
+	// The files the running turn's published commit changed, best effort: a
+	// turn whose record fails is published all the same.
+	WorkspaceRecordChanges(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[WorkspaceChangesFrameV1, WorkspaceRecordChangesResponseV1], error)
 }
 
 type workspaceStoreServiceClient struct {
@@ -120,6 +124,19 @@ func (c *workspaceStoreServiceClient) WorkspaceRecordEvent(ctx context.Context, 
 	return out, nil
 }
 
+func (c *workspaceStoreServiceClient) WorkspaceRecordChanges(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[WorkspaceChangesFrameV1, WorkspaceRecordChangesResponseV1], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &WorkspaceStoreService_ServiceDesc.Streams[3], WorkspaceStoreService_WorkspaceRecordChanges_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WorkspaceChangesFrameV1, WorkspaceRecordChangesResponseV1]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkspaceStoreService_WorkspaceRecordChangesClient = grpc.ClientStreamingClient[WorkspaceChangesFrameV1, WorkspaceRecordChangesResponseV1]
+
 // WorkspaceStoreServiceServer is the server API for WorkspaceStoreService service.
 // All implementations must embed UnimplementedWorkspaceStoreServiceServer
 // for forward compatibility.
@@ -133,6 +150,9 @@ type WorkspaceStoreServiceServer interface {
 	// An executor audit event of the running turn, bound to its claim and
 	// fence like every call here.
 	WorkspaceRecordEvent(context.Context, *WorkspaceRecordEventRequestV1) (*WorkspaceRecordEventResponseV1, error)
+	// The files the running turn's published commit changed, best effort: a
+	// turn whose record fails is published all the same.
+	WorkspaceRecordChanges(grpc.ClientStreamingServer[WorkspaceChangesFrameV1, WorkspaceRecordChangesResponseV1]) error
 	mustEmbedUnimplementedWorkspaceStoreServiceServer()
 }
 
@@ -157,6 +177,9 @@ func (UnimplementedWorkspaceStoreServiceServer) WorkspaceEnvSecret(*WorkspaceEnv
 }
 func (UnimplementedWorkspaceStoreServiceServer) WorkspaceRecordEvent(context.Context, *WorkspaceRecordEventRequestV1) (*WorkspaceRecordEventResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method WorkspaceRecordEvent not implemented")
+}
+func (UnimplementedWorkspaceStoreServiceServer) WorkspaceRecordChanges(grpc.ClientStreamingServer[WorkspaceChangesFrameV1, WorkspaceRecordChangesResponseV1]) error {
+	return status.Errorf(codes.Unimplemented, "method WorkspaceRecordChanges not implemented")
 }
 func (UnimplementedWorkspaceStoreServiceServer) mustEmbedUnimplementedWorkspaceStoreServiceServer() {}
 func (UnimplementedWorkspaceStoreServiceServer) testEmbeddedByValue()                               {}
@@ -244,6 +267,13 @@ func _WorkspaceStoreService_WorkspaceRecordEvent_Handler(srv interface{}, ctx co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkspaceStoreService_WorkspaceRecordChanges_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(WorkspaceStoreServiceServer).WorkspaceRecordChanges(&grpc.GenericServerStream[WorkspaceChangesFrameV1, WorkspaceRecordChangesResponseV1]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkspaceStoreService_WorkspaceRecordChangesServer = grpc.ClientStreamingServer[WorkspaceChangesFrameV1, WorkspaceRecordChangesResponseV1]
+
 // WorkspaceStoreService_ServiceDesc is the grpc.ServiceDesc for WorkspaceStoreService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -275,6 +305,11 @@ var WorkspaceStoreService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "WorkspaceEnvSecret",
 			Handler:       _WorkspaceStoreService_WorkspaceEnvSecret_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "WorkspaceRecordChanges",
+			Handler:       _WorkspaceStoreService_WorkspaceRecordChanges_Handler,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "elitea/runtime/v1/workspace.proto",

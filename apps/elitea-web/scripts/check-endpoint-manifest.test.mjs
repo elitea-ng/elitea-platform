@@ -777,7 +777,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // count is unchanged.
 // 346 -> 347 (client contract 1.24): generateConversationName, a chat's
 // title from its first exchange. The manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 347;
+// 347 -> 349 (client contract 1.26, issue 1187): getWorkspaceHandoffChanges
+// and getWorkspaceHandoffDiff, the Files changed view of a cloud thread in
+// the web chat (pages/chat). Generated; the manifest gains both.
+const GENERATED_OPERATION_COUNT = 349;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -991,8 +994,12 @@ const GENERATED_OPERATION_COUNT = 347;
  * the open chat moves (features/chat-conversation-list
  * `useMarkConversationReadOnView`, called by the web and desktop chat
  * page). Generated.
+ *
+ * 283 -> 285 (client contract 1.26, issue 1187):
+ * workspaceHandoff.changes and workspaceHandoff.diff, the Files changed
+ * view of a cloud thread in the web chat (pages/chat). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 283;
+const MANIFEST_ENTRY_COUNT = 285;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

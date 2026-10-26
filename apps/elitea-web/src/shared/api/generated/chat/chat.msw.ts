@@ -82,6 +82,8 @@ import type {
   UpdatedConversation,
   WorkspaceFetchPlan,
   WorkspaceHandoffBegun,
+  WorkspaceHandoffChanges,
+  WorkspaceHandoffDiff,
   WorkspaceHandoffEmpty,
   WorkspaceHandoffErased,
   WorkspaceHandoffPolicy,
@@ -1334,6 +1336,109 @@ export const getReleaseWorkspaceHandoffResponseMock =
     state: "LOCAL",
     epoch: 4,
     cloud_copy_delete_after: "2026-11-01T12:00:00Z",
+  });
+
+export const getGetWorkspaceHandoffChangesResponseMock =
+  (): WorkspaceHandoffChanges => ({
+    handoff_id: "6b1f3f0e-6a52-4d0b-9a55-7f3c2f2f7a10",
+    base_sha: "3f2c1b0a9e8d7c6b5a493827161504f3e2d1c0b9",
+    head_sha: "9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3",
+    complete: true,
+    cumulative_commit: "9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3",
+    cumulative: {
+      additions: 14,
+      deletions: 3,
+      omitted_files: 0,
+      hidden_files: 0,
+      files: [
+        {
+          path: "src/parser.rs",
+          from_path: null,
+          status: "modified",
+          additions: 12,
+          deletions: 3,
+          binary: false,
+          too_large: false,
+          has_diff: true,
+        },
+        {
+          path: "docs/parser.md",
+          from_path: null,
+          status: "added",
+          additions: 2,
+          deletions: 0,
+          binary: false,
+          too_large: false,
+          has_diff: true,
+        },
+        {
+          path: "assets/logo.png",
+          from_path: null,
+          status: "modified",
+          additions: null,
+          deletions: null,
+          binary: true,
+          too_large: false,
+          has_diff: false,
+        },
+      ],
+    },
+    turns: [
+      {
+        commit: "9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3",
+        parent_sha: "3f2c1b0a9e8d7c6b5a493827161504f3e2d1c0b9",
+        seq: 2,
+        number: 1,
+        response_message_id: "0b5d2f6e-3c1a-4e8b-9f7d-2a6c4e8b1d3f",
+        created_at: "2026-10-25T12:00:00Z",
+        changes: {
+          additions: 14,
+          deletions: 3,
+          omitted_files: 0,
+          hidden_files: 0,
+          files: [
+            {
+              path: "src/parser.rs",
+              from_path: null,
+              status: "modified",
+              additions: 12,
+              deletions: 3,
+              binary: false,
+              too_large: false,
+              has_diff: true,
+            },
+            {
+              path: "docs/parser.md",
+              from_path: null,
+              status: "added",
+              additions: 2,
+              deletions: 0,
+              binary: false,
+              too_large: false,
+              has_diff: true,
+            },
+            {
+              path: "assets/logo.png",
+              from_path: null,
+              status: "modified",
+              additions: null,
+              deletions: null,
+              binary: true,
+              too_large: false,
+              has_diff: false,
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+export const getGetWorkspaceHandoffDiffResponseMock =
+  (): WorkspaceHandoffDiff => ({
+    commit: "9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3",
+    scope: "turn",
+    path: "docs/parser.md",
+    diff: "diff --git a/docs/parser.md b/docs/parser.md\nnew file mode 100644\n--- /dev/null\n+++ b/docs/parser.md\n@@ -0,0 +1,2 @@\n+# Parser\n+The parser reads one token at a time.\n",
   });
 
 export const getRequestWorkspaceSegmentUploadResponseMock = (
@@ -2995,6 +3100,58 @@ export const getReleaseWorkspaceHandoffMockHandler = (
   );
 };
 
+export const getGetWorkspaceHandoffChangesMockHandler = (
+  overrideResponse?:
+    | WorkspaceHandoffChanges
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<WorkspaceHandoffChanges> | WorkspaceHandoffChanges),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/workspace_handoff_changes/prompt_lib/:projectId/:conversationUuid",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetWorkspaceHandoffChangesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetWorkspaceHandoffDiffMockHandler = (
+  overrideResponse?:
+    | WorkspaceHandoffDiff
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<WorkspaceHandoffDiff> | WorkspaceHandoffDiff),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/workspace_handoff_diff/prompt_lib/:projectId/:conversationUuid",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetWorkspaceHandoffDiffResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getRequestWorkspaceSegmentUploadMockHandler = (
   overrideResponse?:
     | WorkspaceSegmentUploadGrant
@@ -3742,6 +3899,8 @@ export const getChatMock = () => [
   getReclaimWorkspaceHandoffMockHandler(),
   getRequestWorkspaceHandoffReclaimMockHandler(),
   getReleaseWorkspaceHandoffMockHandler(),
+  getGetWorkspaceHandoffChangesMockHandler(),
+  getGetWorkspaceHandoffDiffMockHandler(),
   getRequestWorkspaceSegmentUploadMockHandler(),
   getCompleteWorkspaceSegmentUploadMockHandler(),
   getPublishWorkspaceSegmentMockHandler(),

@@ -234,6 +234,16 @@ async fn a_repository_http_setting_refuses_the_push() {
     fixture.session.set_profile(PermissionProfile::Bypass);
     let result = push(&fixture, json!({})).await;
     assert_eq!(result["code"], "local_tools.unsafe_repository", "{result}");
+    // The agent reads the repository-relative path, never the full one.
+    let message = result["message"].as_str().expect("message");
+    assert!(
+        message.contains(".git/config sets `http.proxy`"),
+        "{message}"
+    );
+    assert!(
+        !message.contains(&fixture.root.display().to_string()),
+        "{message}"
+    );
     assert_eq!(remote_head(&fixture), before);
 }
 

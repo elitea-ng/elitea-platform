@@ -27,6 +27,20 @@ class WorkspaceExecutorEventKindV1(int, metaclass=_enum_type_wrapper.EnumTypeWra
     WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED: _ClassVar[WorkspaceExecutorEventKindV1]
     WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED: _ClassVar[WorkspaceExecutorEventKindV1]
     WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED: _ClassVar[WorkspaceExecutorEventKindV1]
+
+class WorkspaceChangeStatusV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    WORKSPACE_CHANGE_STATUS_V1_UNSPECIFIED: _ClassVar[WorkspaceChangeStatusV1]
+    WORKSPACE_CHANGE_STATUS_V1_ADDED: _ClassVar[WorkspaceChangeStatusV1]
+    WORKSPACE_CHANGE_STATUS_V1_MODIFIED: _ClassVar[WorkspaceChangeStatusV1]
+    WORKSPACE_CHANGE_STATUS_V1_DELETED: _ClassVar[WorkspaceChangeStatusV1]
+    WORKSPACE_CHANGE_STATUS_V1_RENAMED: _ClassVar[WorkspaceChangeStatusV1]
+
+class WorkspaceChangeScopeV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    WORKSPACE_CHANGE_SCOPE_V1_UNSPECIFIED: _ClassVar[WorkspaceChangeScopeV1]
+    WORKSPACE_CHANGE_SCOPE_V1_TURN: _ClassVar[WorkspaceChangeScopeV1]
+    WORKSPACE_CHANGE_SCOPE_V1_CUMULATIVE: _ClassVar[WorkspaceChangeScopeV1]
 WORKSPACE_REFUSAL_CODE_V1_UNSPECIFIED: WorkspaceRefusalCodeV1
 WORKSPACE_REFUSAL_CODE_V1_NOT_A_WORKSPACE_TURN: WorkspaceRefusalCodeV1
 WORKSPACE_REFUSAL_CODE_V1_STALE_EPOCH: WorkspaceRefusalCodeV1
@@ -40,6 +54,14 @@ WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED: WorkspaceRefusalCodeV1
 WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED: WorkspaceExecutorEventKindV1
 WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED: WorkspaceExecutorEventKindV1
 WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED: WorkspaceExecutorEventKindV1
+WORKSPACE_CHANGE_STATUS_V1_UNSPECIFIED: WorkspaceChangeStatusV1
+WORKSPACE_CHANGE_STATUS_V1_ADDED: WorkspaceChangeStatusV1
+WORKSPACE_CHANGE_STATUS_V1_MODIFIED: WorkspaceChangeStatusV1
+WORKSPACE_CHANGE_STATUS_V1_DELETED: WorkspaceChangeStatusV1
+WORKSPACE_CHANGE_STATUS_V1_RENAMED: WorkspaceChangeStatusV1
+WORKSPACE_CHANGE_SCOPE_V1_UNSPECIFIED: WorkspaceChangeScopeV1
+WORKSPACE_CHANGE_SCOPE_V1_TURN: WorkspaceChangeScopeV1
+WORKSPACE_CHANGE_SCOPE_V1_CUMULATIVE: WorkspaceChangeScopeV1
 
 class WorkspaceClaimV1(_message.Message):
     __slots__ = ("identity", "fence", "claim_id", "thread_uuid", "epoch")
@@ -252,6 +274,64 @@ class WorkspaceRecordEventRequestV1(_message.Message):
     def __init__(self, claim: _Optional[_Union[WorkspaceClaimV1, _Mapping]] = ..., kind: _Optional[_Union[WorkspaceExecutorEventKindV1, str]] = ..., findings: _Optional[int] = ..., rules: _Optional[_Iterable[str]] = ..., toolkit: _Optional[str] = ..., branch: _Optional[str] = ..., base: _Optional[str] = ..., number: _Optional[int] = ..., url: _Optional[str] = ..., files: _Optional[int] = ...) -> None: ...
 
 class WorkspaceRecordEventResponseV1(_message.Message):
+    __slots__ = ("recorded", "refusal", "rejection")
+    RECORDED_FIELD_NUMBER: _ClassVar[int]
+    REFUSAL_FIELD_NUMBER: _ClassVar[int]
+    REJECTION_FIELD_NUMBER: _ClassVar[int]
+    recorded: bool
+    refusal: WorkspaceRefusalV1
+    rejection: _errors_pb2.RuntimeErrorV1
+    def __init__(self, recorded: bool = ..., refusal: _Optional[_Union[WorkspaceRefusalV1, _Mapping]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+
+class WorkspaceChangedFileV1(_message.Message):
+    __slots__ = ("scope", "path", "from_path", "status", "additions", "deletions", "binary", "too_large", "diff")
+    SCOPE_FIELD_NUMBER: _ClassVar[int]
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    FROM_PATH_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    ADDITIONS_FIELD_NUMBER: _ClassVar[int]
+    DELETIONS_FIELD_NUMBER: _ClassVar[int]
+    BINARY_FIELD_NUMBER: _ClassVar[int]
+    TOO_LARGE_FIELD_NUMBER: _ClassVar[int]
+    DIFF_FIELD_NUMBER: _ClassVar[int]
+    scope: WorkspaceChangeScopeV1
+    path: str
+    from_path: str
+    status: WorkspaceChangeStatusV1
+    additions: int
+    deletions: int
+    binary: bool
+    too_large: bool
+    diff: str
+    def __init__(self, scope: _Optional[_Union[WorkspaceChangeScopeV1, str]] = ..., path: _Optional[str] = ..., from_path: _Optional[str] = ..., status: _Optional[_Union[WorkspaceChangeStatusV1, str]] = ..., additions: _Optional[int] = ..., deletions: _Optional[int] = ..., binary: bool = ..., too_large: bool = ..., diff: _Optional[str] = ...) -> None: ...
+
+class WorkspaceChangesHeaderV1(_message.Message):
+    __slots__ = ("claim", "commit", "parent", "base", "turn_omitted", "cumulative_omitted", "depth")
+    CLAIM_FIELD_NUMBER: _ClassVar[int]
+    COMMIT_FIELD_NUMBER: _ClassVar[int]
+    PARENT_FIELD_NUMBER: _ClassVar[int]
+    BASE_FIELD_NUMBER: _ClassVar[int]
+    TURN_OMITTED_FIELD_NUMBER: _ClassVar[int]
+    CUMULATIVE_OMITTED_FIELD_NUMBER: _ClassVar[int]
+    DEPTH_FIELD_NUMBER: _ClassVar[int]
+    claim: WorkspaceClaimV1
+    commit: str
+    parent: str
+    base: str
+    turn_omitted: int
+    cumulative_omitted: int
+    depth: int
+    def __init__(self, claim: _Optional[_Union[WorkspaceClaimV1, _Mapping]] = ..., commit: _Optional[str] = ..., parent: _Optional[str] = ..., base: _Optional[str] = ..., turn_omitted: _Optional[int] = ..., cumulative_omitted: _Optional[int] = ..., depth: _Optional[int] = ...) -> None: ...
+
+class WorkspaceChangesFrameV1(_message.Message):
+    __slots__ = ("header", "file")
+    HEADER_FIELD_NUMBER: _ClassVar[int]
+    FILE_FIELD_NUMBER: _ClassVar[int]
+    header: WorkspaceChangesHeaderV1
+    file: WorkspaceChangedFileV1
+    def __init__(self, header: _Optional[_Union[WorkspaceChangesHeaderV1, _Mapping]] = ..., file: _Optional[_Union[WorkspaceChangedFileV1, _Mapping]] = ...) -> None: ...
+
+class WorkspaceRecordChangesResponseV1(_message.Message):
     __slots__ = ("recorded", "refusal", "rejection")
     RECORDED_FIELD_NUMBER: _ClassVar[int]
     REFUSAL_FIELD_NUMBER: _ClassVar[int]

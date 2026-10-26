@@ -751,7 +751,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// column on elitea_runtime.workspace_handoffs: a release that left cloud
 	// turns not taken lets the owner's desktop take the rest back within the
 	// return grace (#1187). No data, no permission.
-	require.EqualValues(t, 176, Head(shared))
+	//
+	// 177: shared/0177_workspace_turn_changes.sql, the workspace_turn_changes
+	// and workspace_change_diffs tables in elitea_runtime: the files each
+	// cloud turn changed, which the worker records after it publishes, for
+	// the web Files changed view (#1187). No data, no permission.
+	require.EqualValues(t, 177, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

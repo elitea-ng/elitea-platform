@@ -84,6 +84,11 @@ pub struct ToolError {
     /// More fields of the tool result the model sees (a rule's refusal:
     /// `error`, `rule`, `justification`).
     details: Option<serde_json::Map<String, serde_json::Value>>,
+    /// The person's own text, when it differs from the model's (full
+    /// paths, uids, what to change): shown through the host's UI, never in
+    /// a tool result.
+    /// Boxed: the error stays small enough to return by value.
+    person: Option<Box<str>>,
 }
 
 impl ToolError {
@@ -93,7 +98,23 @@ impl ToolError {
             code,
             message: message.into(),
             details: None,
+            person: None,
         }
+    }
+
+    /// This error with a text of its own for the person (see
+    /// [`Self::person_message`]); the model keeps [`Self::message`].
+    #[must_use]
+    pub fn with_person_message(mut self, text: impl Into<String>) -> Self {
+        self.person = Some(text.into().into_boxed_str());
+        self
+    }
+
+    /// What the person is told: their own text when there is one, else
+    /// the model's message.
+    #[must_use]
+    pub fn person_message(&self) -> &str {
+        self.person.as_deref().unwrap_or(&self.message)
     }
 
     /// This error with more fields in its tool result (never `status`,
@@ -156,6 +177,7 @@ impl fmt::Debug for ToolError {
             .field("code", &self.code)
             .field("message", &self.message)
             .field("details", &self.details)
+            .field("person", &self.person)
             .finish()
     }
 }

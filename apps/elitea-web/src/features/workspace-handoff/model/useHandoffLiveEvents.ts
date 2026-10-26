@@ -18,7 +18,7 @@ import { useMemo } from 'react';
 
 import { useSharedEventSource } from '@/shared/api/sse';
 import { getConfig } from '@/shared/config';
-import { WORKSPACE_HANDOFF_STATES } from '@/shared/api/workspaceHandoffApi';
+import { handoffChangesKey, WORKSPACE_HANDOFF_STATES } from '@/shared/api/workspaceHandoffApi';
 import { CONVERSATION_ACTIVITY_EVENT, onActivityEvent } from '@/shared/lib/conversationActivity';
 import type { WorkspaceHandoffState } from '@/shared/api/workspaceHandoffApi';
 
@@ -67,6 +67,7 @@ function applyHandoffEvent(queryClient: QueryClient, projectId: string, event: H
     return { ...previous, state: event.state, epoch: event.epoch, reclaim_pending: event.reclaim_pending };
   });
   void queryClient.invalidateQueries({ queryKey: handoffInfoKey(projectId, event.conversation_uuid) });
+  void queryClient.invalidateQueries({ queryKey: handoffChangesKey(projectId, event.conversation_uuid) });
   void queryClient.invalidateQueries({ queryKey: handoffStatusKey(event.conversation_uuid) });
   void queryClient.invalidateQueries({ queryKey: handoffStatusManyKey() });
   // Local again: the details reads go stale (the frame carries no thread id to narrow the prefix), so the composer and the badge follow.

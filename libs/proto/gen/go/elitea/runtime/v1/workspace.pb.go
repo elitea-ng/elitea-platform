@@ -151,6 +151,121 @@ func (WorkspaceExecutorEventKindV1) EnumDescriptor() ([]byte, []int) {
 	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{1}
 }
 
+// The files a cloud turn changed (ADR-0034 Phase 2: the web "Files changed"
+// view). The worker computes them from its own repository right after the
+// publish, outside the sandbox: the TURN set (the parent's tree to the
+// commit's tree) and the CUMULATIVE set (the handoff snapshot's tree to the
+// commit's tree). Main reads no git pack: it keeps what the worker sends,
+// bounded, drops every path the thread's exclusions or path deny list
+// match (an explicitly included excluded file stays, as at the send; never
+// a path deny one), and serves the rest to the conversation's readers.
+type WorkspaceChangeStatusV1 int32
+
+const (
+	WorkspaceChangeStatusV1_WORKSPACE_CHANGE_STATUS_V1_UNSPECIFIED WorkspaceChangeStatusV1 = 0
+	WorkspaceChangeStatusV1_WORKSPACE_CHANGE_STATUS_V1_ADDED       WorkspaceChangeStatusV1 = 1
+	WorkspaceChangeStatusV1_WORKSPACE_CHANGE_STATUS_V1_MODIFIED    WorkspaceChangeStatusV1 = 2
+	WorkspaceChangeStatusV1_WORKSPACE_CHANGE_STATUS_V1_DELETED     WorkspaceChangeStatusV1 = 3
+	// An exact rename: the same blob left from_path and arrived at path.
+	WorkspaceChangeStatusV1_WORKSPACE_CHANGE_STATUS_V1_RENAMED WorkspaceChangeStatusV1 = 4
+)
+
+// Enum value maps for WorkspaceChangeStatusV1.
+var (
+	WorkspaceChangeStatusV1_name = map[int32]string{
+		0: "WORKSPACE_CHANGE_STATUS_V1_UNSPECIFIED",
+		1: "WORKSPACE_CHANGE_STATUS_V1_ADDED",
+		2: "WORKSPACE_CHANGE_STATUS_V1_MODIFIED",
+		3: "WORKSPACE_CHANGE_STATUS_V1_DELETED",
+		4: "WORKSPACE_CHANGE_STATUS_V1_RENAMED",
+	}
+	WorkspaceChangeStatusV1_value = map[string]int32{
+		"WORKSPACE_CHANGE_STATUS_V1_UNSPECIFIED": 0,
+		"WORKSPACE_CHANGE_STATUS_V1_ADDED":       1,
+		"WORKSPACE_CHANGE_STATUS_V1_MODIFIED":    2,
+		"WORKSPACE_CHANGE_STATUS_V1_DELETED":     3,
+		"WORKSPACE_CHANGE_STATUS_V1_RENAMED":     4,
+	}
+)
+
+func (x WorkspaceChangeStatusV1) Enum() *WorkspaceChangeStatusV1 {
+	p := new(WorkspaceChangeStatusV1)
+	*p = x
+	return p
+}
+
+func (x WorkspaceChangeStatusV1) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (WorkspaceChangeStatusV1) Descriptor() protoreflect.EnumDescriptor {
+	return file_elitea_runtime_v1_workspace_proto_enumTypes[2].Descriptor()
+}
+
+func (WorkspaceChangeStatusV1) Type() protoreflect.EnumType {
+	return &file_elitea_runtime_v1_workspace_proto_enumTypes[2]
+}
+
+func (x WorkspaceChangeStatusV1) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use WorkspaceChangeStatusV1.Descriptor instead.
+func (WorkspaceChangeStatusV1) EnumDescriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{2}
+}
+
+type WorkspaceChangeScopeV1 int32
+
+const (
+	WorkspaceChangeScopeV1_WORKSPACE_CHANGE_SCOPE_V1_UNSPECIFIED WorkspaceChangeScopeV1 = 0
+	// What this turn changed.
+	WorkspaceChangeScopeV1_WORKSPACE_CHANGE_SCOPE_V1_TURN WorkspaceChangeScopeV1 = 1
+	// What every cloud turn so far changed, since the handoff snapshot.
+	WorkspaceChangeScopeV1_WORKSPACE_CHANGE_SCOPE_V1_CUMULATIVE WorkspaceChangeScopeV1 = 2
+)
+
+// Enum value maps for WorkspaceChangeScopeV1.
+var (
+	WorkspaceChangeScopeV1_name = map[int32]string{
+		0: "WORKSPACE_CHANGE_SCOPE_V1_UNSPECIFIED",
+		1: "WORKSPACE_CHANGE_SCOPE_V1_TURN",
+		2: "WORKSPACE_CHANGE_SCOPE_V1_CUMULATIVE",
+	}
+	WorkspaceChangeScopeV1_value = map[string]int32{
+		"WORKSPACE_CHANGE_SCOPE_V1_UNSPECIFIED": 0,
+		"WORKSPACE_CHANGE_SCOPE_V1_TURN":        1,
+		"WORKSPACE_CHANGE_SCOPE_V1_CUMULATIVE":  2,
+	}
+)
+
+func (x WorkspaceChangeScopeV1) Enum() *WorkspaceChangeScopeV1 {
+	p := new(WorkspaceChangeScopeV1)
+	*p = x
+	return p
+}
+
+func (x WorkspaceChangeScopeV1) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (WorkspaceChangeScopeV1) Descriptor() protoreflect.EnumDescriptor {
+	return file_elitea_runtime_v1_workspace_proto_enumTypes[3].Descriptor()
+}
+
+func (WorkspaceChangeScopeV1) Type() protoreflect.EnumType {
+	return &file_elitea_runtime_v1_workspace_proto_enumTypes[3]
+}
+
+func (x WorkspaceChangeScopeV1) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use WorkspaceChangeScopeV1.Descriptor instead.
+func (WorkspaceChangeScopeV1) EnumDescriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{3}
+}
+
 // WorkspaceClaimV1 binds one request to the live claim of a cloud turn.
 type WorkspaceClaimV1 struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
@@ -1601,6 +1716,365 @@ func (x *WorkspaceRecordEventResponseV1) GetRejection() *RuntimeErrorV1 {
 	return nil
 }
 
+// One changed file of one scope. The frame stays under the control
+// listener's 64 KiB request bound: path and from_path at most 4096 bytes
+// each, diff at most 48 KiB.
+type WorkspaceChangedFileV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Scope WorkspaceChangeScopeV1 `protobuf:"varint,1,opt,name=scope,proto3,enum=elitea.runtime.v1.WorkspaceChangeScopeV1" json:"scope,omitempty"`
+	Path  string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	// RENAMED only: the path before.
+	FromPath string                  `protobuf:"bytes,3,opt,name=from_path,json=fromPath,proto3" json:"from_path,omitempty"`
+	Status   WorkspaceChangeStatusV1 `protobuf:"varint,4,opt,name=status,proto3,enum=elitea.runtime.v1.WorkspaceChangeStatusV1" json:"status,omitempty"`
+	// The +/- line counts; absent for a binary file, a symlink, or a text
+	// file too large to count.
+	Additions *uint32 `protobuf:"varint,5,opt,name=additions,proto3,oneof" json:"additions,omitempty"`
+	Deletions *uint32 `protobuf:"varint,6,opt,name=deletions,proto3,oneof" json:"deletions,omitempty"`
+	Binary    bool    `protobuf:"varint,7,opt,name=binary,proto3" json:"binary,omitempty"`
+	// Too large to count or to keep a diff of.
+	TooLarge bool `protobuf:"varint,8,opt,name=too_large,json=tooLarge,proto3" json:"too_large,omitempty"`
+	// The file's unified diff (git's format, 3 lines of context); empty when
+	// none is kept (binary, too large, or past the scope's diff budget).
+	Diff          string `protobuf:"bytes,9,opt,name=diff,proto3" json:"diff,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkspaceChangedFileV1) Reset() {
+	*x = WorkspaceChangedFileV1{}
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkspaceChangedFileV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkspaceChangedFileV1) ProtoMessage() {}
+
+func (x *WorkspaceChangedFileV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkspaceChangedFileV1.ProtoReflect.Descriptor instead.
+func (*WorkspaceChangedFileV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *WorkspaceChangedFileV1) GetScope() WorkspaceChangeScopeV1 {
+	if x != nil {
+		return x.Scope
+	}
+	return WorkspaceChangeScopeV1_WORKSPACE_CHANGE_SCOPE_V1_UNSPECIFIED
+}
+
+func (x *WorkspaceChangedFileV1) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *WorkspaceChangedFileV1) GetFromPath() string {
+	if x != nil {
+		return x.FromPath
+	}
+	return ""
+}
+
+func (x *WorkspaceChangedFileV1) GetStatus() WorkspaceChangeStatusV1 {
+	if x != nil {
+		return x.Status
+	}
+	return WorkspaceChangeStatusV1_WORKSPACE_CHANGE_STATUS_V1_UNSPECIFIED
+}
+
+func (x *WorkspaceChangedFileV1) GetAdditions() uint32 {
+	if x != nil && x.Additions != nil {
+		return *x.Additions
+	}
+	return 0
+}
+
+func (x *WorkspaceChangedFileV1) GetDeletions() uint32 {
+	if x != nil && x.Deletions != nil {
+		return *x.Deletions
+	}
+	return 0
+}
+
+func (x *WorkspaceChangedFileV1) GetBinary() bool {
+	if x != nil {
+		return x.Binary
+	}
+	return false
+}
+
+func (x *WorkspaceChangedFileV1) GetTooLarge() bool {
+	if x != nil {
+		return x.TooLarge
+	}
+	return false
+}
+
+func (x *WorkspaceChangedFileV1) GetDiff() string {
+	if x != nil {
+		return x.Diff
+	}
+	return ""
+}
+
+type WorkspaceChangesHeaderV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Claim *WorkspaceClaimV1      `protobuf:"bytes,1,opt,name=claim,proto3" json:"claim,omitempty"`
+	// The turn's published commit (refs/elitea/cloud now), its parent, and
+	// the handoff snapshot the cumulative set is measured from (40 hex each).
+	Commit string `protobuf:"bytes,2,opt,name=commit,proto3" json:"commit,omitempty"`
+	Parent string `protobuf:"bytes,3,opt,name=parent,proto3" json:"parent,omitempty"`
+	Base   string `protobuf:"bytes,4,opt,name=base,proto3" json:"base,omitempty"`
+	// Changed files past each scope's file bound, counted and not listed.
+	TurnOmitted       uint32 `protobuf:"varint,5,opt,name=turn_omitted,json=turnOmitted,proto3" json:"turn_omitted,omitempty"`
+	CumulativeOmitted uint32 `protobuf:"varint,6,opt,name=cumulative_omitted,json=cumulativeOmitted,proto3" json:"cumulative_omitted,omitempty"`
+	// The commit's turn number: how many commits the parent walk from it takes
+	// to reach the handoff snapshot (1: the first cloud turn). 0: unknown.
+	Depth         uint32 `protobuf:"varint,7,opt,name=depth,proto3" json:"depth,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkspaceChangesHeaderV1) Reset() {
+	*x = WorkspaceChangesHeaderV1{}
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkspaceChangesHeaderV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkspaceChangesHeaderV1) ProtoMessage() {}
+
+func (x *WorkspaceChangesHeaderV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkspaceChangesHeaderV1.ProtoReflect.Descriptor instead.
+func (*WorkspaceChangesHeaderV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *WorkspaceChangesHeaderV1) GetClaim() *WorkspaceClaimV1 {
+	if x != nil {
+		return x.Claim
+	}
+	return nil
+}
+
+func (x *WorkspaceChangesHeaderV1) GetCommit() string {
+	if x != nil {
+		return x.Commit
+	}
+	return ""
+}
+
+func (x *WorkspaceChangesHeaderV1) GetParent() string {
+	if x != nil {
+		return x.Parent
+	}
+	return ""
+}
+
+func (x *WorkspaceChangesHeaderV1) GetBase() string {
+	if x != nil {
+		return x.Base
+	}
+	return ""
+}
+
+func (x *WorkspaceChangesHeaderV1) GetTurnOmitted() uint32 {
+	if x != nil {
+		return x.TurnOmitted
+	}
+	return 0
+}
+
+func (x *WorkspaceChangesHeaderV1) GetCumulativeOmitted() uint32 {
+	if x != nil {
+		return x.CumulativeOmitted
+	}
+	return 0
+}
+
+func (x *WorkspaceChangesHeaderV1) GetDepth() uint32 {
+	if x != nil {
+		return x.Depth
+	}
+	return 0
+}
+
+// The record stream: one header frame, then one frame per changed file.
+type WorkspaceChangesFrameV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Frame:
+	//
+	//	*WorkspaceChangesFrameV1_Header
+	//	*WorkspaceChangesFrameV1_File
+	Frame         isWorkspaceChangesFrameV1_Frame `protobuf_oneof:"frame"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkspaceChangesFrameV1) Reset() {
+	*x = WorkspaceChangesFrameV1{}
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkspaceChangesFrameV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkspaceChangesFrameV1) ProtoMessage() {}
+
+func (x *WorkspaceChangesFrameV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkspaceChangesFrameV1.ProtoReflect.Descriptor instead.
+func (*WorkspaceChangesFrameV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *WorkspaceChangesFrameV1) GetFrame() isWorkspaceChangesFrameV1_Frame {
+	if x != nil {
+		return x.Frame
+	}
+	return nil
+}
+
+func (x *WorkspaceChangesFrameV1) GetHeader() *WorkspaceChangesHeaderV1 {
+	if x != nil {
+		if x, ok := x.Frame.(*WorkspaceChangesFrameV1_Header); ok {
+			return x.Header
+		}
+	}
+	return nil
+}
+
+func (x *WorkspaceChangesFrameV1) GetFile() *WorkspaceChangedFileV1 {
+	if x != nil {
+		if x, ok := x.Frame.(*WorkspaceChangesFrameV1_File); ok {
+			return x.File
+		}
+	}
+	return nil
+}
+
+type isWorkspaceChangesFrameV1_Frame interface {
+	isWorkspaceChangesFrameV1_Frame()
+}
+
+type WorkspaceChangesFrameV1_Header struct {
+	Header *WorkspaceChangesHeaderV1 `protobuf:"bytes,1,opt,name=header,proto3,oneof"`
+}
+
+type WorkspaceChangesFrameV1_File struct {
+	File *WorkspaceChangedFileV1 `protobuf:"bytes,2,opt,name=file,proto3,oneof"`
+}
+
+func (*WorkspaceChangesFrameV1_Header) isWorkspaceChangesFrameV1_Frame() {}
+
+func (*WorkspaceChangesFrameV1_File) isWorkspaceChangesFrameV1_Frame() {}
+
+type WorkspaceRecordChangesResponseV1 struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Recorded bool                   `protobuf:"varint,1,opt,name=recorded,proto3" json:"recorded,omitempty"`
+	// REF_CONFLICT: commit is not the thread's refs/elitea/cloud, or base is
+	// not its handoff snapshot.
+	Refusal       *WorkspaceRefusalV1 `protobuf:"bytes,2,opt,name=refusal,proto3" json:"refusal,omitempty"`
+	Rejection     *RuntimeErrorV1     `protobuf:"bytes,3,opt,name=rejection,proto3" json:"rejection,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkspaceRecordChangesResponseV1) Reset() {
+	*x = WorkspaceRecordChangesResponseV1{}
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkspaceRecordChangesResponseV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkspaceRecordChangesResponseV1) ProtoMessage() {}
+
+func (x *WorkspaceRecordChangesResponseV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkspaceRecordChangesResponseV1.ProtoReflect.Descriptor instead.
+func (*WorkspaceRecordChangesResponseV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *WorkspaceRecordChangesResponseV1) GetRecorded() bool {
+	if x != nil {
+		return x.Recorded
+	}
+	return false
+}
+
+func (x *WorkspaceRecordChangesResponseV1) GetRefusal() *WorkspaceRefusalV1 {
+	if x != nil {
+		return x.Refusal
+	}
+	return nil
+}
+
+func (x *WorkspaceRecordChangesResponseV1) GetRejection() *RuntimeErrorV1 {
+	if x != nil {
+		return x.Rejection
+	}
+	return nil
+}
+
 var File_elitea_runtime_v1_workspace_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_workspace_proto_rawDesc = "" +
@@ -1702,6 +2176,37 @@ const file_elitea_runtime_v1_workspace_proto_rawDesc = "" +
 	"\x1eWorkspaceRecordEventResponseV1\x12\x1a\n" +
 	"\brecorded\x18\x01 \x01(\bR\brecorded\x12?\n" +
 	"\arefusal\x18\x02 \x01(\v2%.elitea.runtime.v1.WorkspaceRefusalV1R\arefusal\x12?\n" +
+	"\trejection\x18\x03 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x04\x10\x10\"\xff\x02\n" +
+	"\x16WorkspaceChangedFileV1\x12?\n" +
+	"\x05scope\x18\x01 \x01(\x0e2).elitea.runtime.v1.WorkspaceChangeScopeV1R\x05scope\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x1b\n" +
+	"\tfrom_path\x18\x03 \x01(\tR\bfromPath\x12B\n" +
+	"\x06status\x18\x04 \x01(\x0e2*.elitea.runtime.v1.WorkspaceChangeStatusV1R\x06status\x12!\n" +
+	"\tadditions\x18\x05 \x01(\rH\x00R\tadditions\x88\x01\x01\x12!\n" +
+	"\tdeletions\x18\x06 \x01(\rH\x01R\tdeletions\x88\x01\x01\x12\x16\n" +
+	"\x06binary\x18\a \x01(\bR\x06binary\x12\x1b\n" +
+	"\ttoo_large\x18\b \x01(\bR\btooLarge\x12\x12\n" +
+	"\x04diff\x18\t \x01(\tR\x04diffB\f\n" +
+	"\n" +
+	"_additionsB\f\n" +
+	"\n" +
+	"_deletionsJ\x04\b\n" +
+	"\x10\x10\"\x87\x02\n" +
+	"\x18WorkspaceChangesHeaderV1\x129\n" +
+	"\x05claim\x18\x01 \x01(\v2#.elitea.runtime.v1.WorkspaceClaimV1R\x05claim\x12\x16\n" +
+	"\x06commit\x18\x02 \x01(\tR\x06commit\x12\x16\n" +
+	"\x06parent\x18\x03 \x01(\tR\x06parent\x12\x12\n" +
+	"\x04base\x18\x04 \x01(\tR\x04base\x12!\n" +
+	"\fturn_omitted\x18\x05 \x01(\rR\vturnOmitted\x12-\n" +
+	"\x12cumulative_omitted\x18\x06 \x01(\rR\x11cumulativeOmitted\x12\x14\n" +
+	"\x05depth\x18\a \x01(\rR\x05depthJ\x04\b\b\x10\x10\"\xb0\x01\n" +
+	"\x17WorkspaceChangesFrameV1\x12E\n" +
+	"\x06header\x18\x01 \x01(\v2+.elitea.runtime.v1.WorkspaceChangesHeaderV1H\x00R\x06header\x12?\n" +
+	"\x04file\x18\x02 \x01(\v2).elitea.runtime.v1.WorkspaceChangedFileV1H\x00R\x04fileB\a\n" +
+	"\x05frameJ\x04\b\x03\x10\x10\"\xc6\x01\n" +
+	" WorkspaceRecordChangesResponseV1\x12\x1a\n" +
+	"\brecorded\x18\x01 \x01(\bR\brecorded\x12?\n" +
+	"\arefusal\x18\x02 \x01(\v2%.elitea.runtime.v1.WorkspaceRefusalV1R\arefusal\x12?\n" +
 	"\trejection\x18\x03 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x04\x10\x10*\x99\x05\n" +
 	"\x16WorkspaceRefusalCodeV1\x12)\n" +
 	"%WORKSPACE_REFUSAL_CODE_V1_UNSPECIFIED\x10\x00\x122\n" +
@@ -1718,13 +2223,24 @@ const file_elitea_runtime_v1_workspace_proto_rawDesc = "" +
 	"\x1cWorkspaceExecutorEventKindV1\x120\n" +
 	",WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED\x10\x00\x121\n" +
 	"-WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED\x10\x01\x128\n" +
-	"4WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED\x10\x022\xdb\x04\n" +
+	"4WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED\x10\x02*\xe4\x01\n" +
+	"\x17WorkspaceChangeStatusV1\x12*\n" +
+	"&WORKSPACE_CHANGE_STATUS_V1_UNSPECIFIED\x10\x00\x12$\n" +
+	" WORKSPACE_CHANGE_STATUS_V1_ADDED\x10\x01\x12'\n" +
+	"#WORKSPACE_CHANGE_STATUS_V1_MODIFIED\x10\x02\x12&\n" +
+	"\"WORKSPACE_CHANGE_STATUS_V1_DELETED\x10\x03\x12&\n" +
+	"\"WORKSPACE_CHANGE_STATUS_V1_RENAMED\x10\x04*\x91\x01\n" +
+	"\x16WorkspaceChangeScopeV1\x12)\n" +
+	"%WORKSPACE_CHANGE_SCOPE_V1_UNSPECIFIED\x10\x00\x12\"\n" +
+	"\x1eWORKSPACE_CHANGE_SCOPE_V1_TURN\x10\x01\x12(\n" +
+	"$WORKSPACE_CHANGE_SCOPE_V1_CUMULATIVE\x10\x022\xd8\x05\n" +
 	"\x15WorkspaceStoreService\x12p\n" +
 	"\x12WorkspaceFetchPlan\x12..elitea.runtime.v1.WorkspaceFetchPlanRequestV1\x1a(.elitea.runtime.v1.WorkspaceFetchFrameV10\x01\x12l\n" +
 	"\x0fWorkspaceUpload\x12).elitea.runtime.v1.WorkspaceUploadFrameV1\x1a,.elitea.runtime.v1.WorkspaceUploadResponseV1(\x01\x12o\n" +
 	"\x10WorkspacePublish\x12,.elitea.runtime.v1.WorkspacePublishRequestV1\x1a-.elitea.runtime.v1.WorkspacePublishResponseV1\x12t\n" +
 	"\x12WorkspaceEnvSecret\x12..elitea.runtime.v1.WorkspaceEnvSecretRequestV1\x1a,.elitea.runtime.v1.WorkspaceEnvSecretFrameV10\x01\x12{\n" +
-	"\x14WorkspaceRecordEvent\x120.elitea.runtime.v1.WorkspaceRecordEventRequestV1\x1a1.elitea.runtime.v1.WorkspaceRecordEventResponseV1BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\x14WorkspaceRecordEvent\x120.elitea.runtime.v1.WorkspaceRecordEventRequestV1\x1a1.elitea.runtime.v1.WorkspaceRecordEventResponseV1\x12{\n" +
+	"\x16WorkspaceRecordChanges\x12*.elitea.runtime.v1.WorkspaceChangesFrameV1\x1a3.elitea.runtime.v1.WorkspaceRecordChangesResponseV1(\x01BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_workspace_proto_rawDescOnce sync.Once
@@ -1738,81 +2254,96 @@ func file_elitea_runtime_v1_workspace_proto_rawDescGZIP() []byte {
 	return file_elitea_runtime_v1_workspace_proto_rawDescData
 }
 
-var file_elitea_runtime_v1_workspace_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_elitea_runtime_v1_workspace_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_elitea_runtime_v1_workspace_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_elitea_runtime_v1_workspace_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_elitea_runtime_v1_workspace_proto_goTypes = []any{
-	(WorkspaceRefusalCodeV1)(0),            // 0: elitea.runtime.v1.WorkspaceRefusalCodeV1
-	(WorkspaceExecutorEventKindV1)(0),      // 1: elitea.runtime.v1.WorkspaceExecutorEventKindV1
-	(*WorkspaceClaimV1)(nil),               // 2: elitea.runtime.v1.WorkspaceClaimV1
-	(*WorkspaceRefV1)(nil),                 // 3: elitea.runtime.v1.WorkspaceRefV1
-	(*WorkspaceRefUpdateV1)(nil),           // 4: elitea.runtime.v1.WorkspaceRefUpdateV1
-	(*WorkspaceRefusalV1)(nil),             // 5: elitea.runtime.v1.WorkspaceRefusalV1
-	(*WorkspaceSegmentV1)(nil),             // 6: elitea.runtime.v1.WorkspaceSegmentV1
-	(*WorkspaceFetchPlanRequestV1)(nil),    // 7: elitea.runtime.v1.WorkspaceFetchPlanRequestV1
-	(*WorkspaceFetchPlanV1)(nil),           // 8: elitea.runtime.v1.WorkspaceFetchPlanV1
-	(*WorkspaceSegmentEndV1)(nil),          // 9: elitea.runtime.v1.WorkspaceSegmentEndV1
-	(*WorkspaceFetchFrameV1)(nil),          // 10: elitea.runtime.v1.WorkspaceFetchFrameV1
-	(*WorkspaceUploadHeaderV1)(nil),        // 11: elitea.runtime.v1.WorkspaceUploadHeaderV1
-	(*WorkspaceUploadFrameV1)(nil),         // 12: elitea.runtime.v1.WorkspaceUploadFrameV1
-	(*WorkspaceUploadResponseV1)(nil),      // 13: elitea.runtime.v1.WorkspaceUploadResponseV1
-	(*WorkspacePublishRequestV1)(nil),      // 14: elitea.runtime.v1.WorkspacePublishRequestV1
-	(*WorkspacePublishResponseV1)(nil),     // 15: elitea.runtime.v1.WorkspacePublishResponseV1
-	(*WorkspaceEnvSecretRequestV1)(nil),    // 16: elitea.runtime.v1.WorkspaceEnvSecretRequestV1
-	(*WorkspaceEnvVarV1)(nil),              // 17: elitea.runtime.v1.WorkspaceEnvVarV1
-	(*WorkspaceEnvSecretFrameV1)(nil),      // 18: elitea.runtime.v1.WorkspaceEnvSecretFrameV1
-	(*WorkspaceEnvVarsV1)(nil),             // 19: elitea.runtime.v1.WorkspaceEnvVarsV1
-	(*WorkspaceRecordEventRequestV1)(nil),  // 20: elitea.runtime.v1.WorkspaceRecordEventRequestV1
-	(*WorkspaceRecordEventResponseV1)(nil), // 21: elitea.runtime.v1.WorkspaceRecordEventResponseV1
-	(*ExecutionIdentityV1)(nil),            // 22: elitea.runtime.v1.ExecutionIdentityV1
-	(*ExecutionFenceV1)(nil),               // 23: elitea.runtime.v1.ExecutionFenceV1
-	(*RuntimeErrorV1)(nil),                 // 24: elitea.runtime.v1.RuntimeErrorV1
+	(WorkspaceRefusalCodeV1)(0),              // 0: elitea.runtime.v1.WorkspaceRefusalCodeV1
+	(WorkspaceExecutorEventKindV1)(0),        // 1: elitea.runtime.v1.WorkspaceExecutorEventKindV1
+	(WorkspaceChangeStatusV1)(0),             // 2: elitea.runtime.v1.WorkspaceChangeStatusV1
+	(WorkspaceChangeScopeV1)(0),              // 3: elitea.runtime.v1.WorkspaceChangeScopeV1
+	(*WorkspaceClaimV1)(nil),                 // 4: elitea.runtime.v1.WorkspaceClaimV1
+	(*WorkspaceRefV1)(nil),                   // 5: elitea.runtime.v1.WorkspaceRefV1
+	(*WorkspaceRefUpdateV1)(nil),             // 6: elitea.runtime.v1.WorkspaceRefUpdateV1
+	(*WorkspaceRefusalV1)(nil),               // 7: elitea.runtime.v1.WorkspaceRefusalV1
+	(*WorkspaceSegmentV1)(nil),               // 8: elitea.runtime.v1.WorkspaceSegmentV1
+	(*WorkspaceFetchPlanRequestV1)(nil),      // 9: elitea.runtime.v1.WorkspaceFetchPlanRequestV1
+	(*WorkspaceFetchPlanV1)(nil),             // 10: elitea.runtime.v1.WorkspaceFetchPlanV1
+	(*WorkspaceSegmentEndV1)(nil),            // 11: elitea.runtime.v1.WorkspaceSegmentEndV1
+	(*WorkspaceFetchFrameV1)(nil),            // 12: elitea.runtime.v1.WorkspaceFetchFrameV1
+	(*WorkspaceUploadHeaderV1)(nil),          // 13: elitea.runtime.v1.WorkspaceUploadHeaderV1
+	(*WorkspaceUploadFrameV1)(nil),           // 14: elitea.runtime.v1.WorkspaceUploadFrameV1
+	(*WorkspaceUploadResponseV1)(nil),        // 15: elitea.runtime.v1.WorkspaceUploadResponseV1
+	(*WorkspacePublishRequestV1)(nil),        // 16: elitea.runtime.v1.WorkspacePublishRequestV1
+	(*WorkspacePublishResponseV1)(nil),       // 17: elitea.runtime.v1.WorkspacePublishResponseV1
+	(*WorkspaceEnvSecretRequestV1)(nil),      // 18: elitea.runtime.v1.WorkspaceEnvSecretRequestV1
+	(*WorkspaceEnvVarV1)(nil),                // 19: elitea.runtime.v1.WorkspaceEnvVarV1
+	(*WorkspaceEnvSecretFrameV1)(nil),        // 20: elitea.runtime.v1.WorkspaceEnvSecretFrameV1
+	(*WorkspaceEnvVarsV1)(nil),               // 21: elitea.runtime.v1.WorkspaceEnvVarsV1
+	(*WorkspaceRecordEventRequestV1)(nil),    // 22: elitea.runtime.v1.WorkspaceRecordEventRequestV1
+	(*WorkspaceRecordEventResponseV1)(nil),   // 23: elitea.runtime.v1.WorkspaceRecordEventResponseV1
+	(*WorkspaceChangedFileV1)(nil),           // 24: elitea.runtime.v1.WorkspaceChangedFileV1
+	(*WorkspaceChangesHeaderV1)(nil),         // 25: elitea.runtime.v1.WorkspaceChangesHeaderV1
+	(*WorkspaceChangesFrameV1)(nil),          // 26: elitea.runtime.v1.WorkspaceChangesFrameV1
+	(*WorkspaceRecordChangesResponseV1)(nil), // 27: elitea.runtime.v1.WorkspaceRecordChangesResponseV1
+	(*ExecutionIdentityV1)(nil),              // 28: elitea.runtime.v1.ExecutionIdentityV1
+	(*ExecutionFenceV1)(nil),                 // 29: elitea.runtime.v1.ExecutionFenceV1
+	(*RuntimeErrorV1)(nil),                   // 30: elitea.runtime.v1.RuntimeErrorV1
 }
 var file_elitea_runtime_v1_workspace_proto_depIdxs = []int32{
-	22, // 0: elitea.runtime.v1.WorkspaceClaimV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	23, // 1: elitea.runtime.v1.WorkspaceClaimV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	28, // 0: elitea.runtime.v1.WorkspaceClaimV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	29, // 1: elitea.runtime.v1.WorkspaceClaimV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
 	0,  // 2: elitea.runtime.v1.WorkspaceRefusalV1.code:type_name -> elitea.runtime.v1.WorkspaceRefusalCodeV1
-	3,  // 3: elitea.runtime.v1.WorkspaceRefusalV1.current:type_name -> elitea.runtime.v1.WorkspaceRefV1
-	3,  // 4: elitea.runtime.v1.WorkspaceSegmentV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefV1
-	2,  // 5: elitea.runtime.v1.WorkspaceFetchPlanRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
-	3,  // 6: elitea.runtime.v1.WorkspaceFetchPlanV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefV1
-	6,  // 7: elitea.runtime.v1.WorkspaceFetchPlanV1.segments:type_name -> elitea.runtime.v1.WorkspaceSegmentV1
-	8,  // 8: elitea.runtime.v1.WorkspaceFetchFrameV1.plan:type_name -> elitea.runtime.v1.WorkspaceFetchPlanV1
-	9,  // 9: elitea.runtime.v1.WorkspaceFetchFrameV1.segment_end:type_name -> elitea.runtime.v1.WorkspaceSegmentEndV1
-	5,  // 10: elitea.runtime.v1.WorkspaceFetchFrameV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
-	24, // 11: elitea.runtime.v1.WorkspaceFetchFrameV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	2,  // 12: elitea.runtime.v1.WorkspaceUploadHeaderV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
-	11, // 13: elitea.runtime.v1.WorkspaceUploadFrameV1.header:type_name -> elitea.runtime.v1.WorkspaceUploadHeaderV1
-	5,  // 14: elitea.runtime.v1.WorkspaceUploadResponseV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
-	24, // 15: elitea.runtime.v1.WorkspaceUploadResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	2,  // 16: elitea.runtime.v1.WorkspacePublishRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
-	4,  // 17: elitea.runtime.v1.WorkspacePublishRequestV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefUpdateV1
-	3,  // 18: elitea.runtime.v1.WorkspacePublishResponseV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefV1
-	5,  // 19: elitea.runtime.v1.WorkspacePublishResponseV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
-	24, // 20: elitea.runtime.v1.WorkspacePublishResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	2,  // 21: elitea.runtime.v1.WorkspaceEnvSecretRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
-	19, // 22: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.vars:type_name -> elitea.runtime.v1.WorkspaceEnvVarsV1
-	5,  // 23: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
-	24, // 24: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	17, // 25: elitea.runtime.v1.WorkspaceEnvVarsV1.vars:type_name -> elitea.runtime.v1.WorkspaceEnvVarV1
-	2,  // 26: elitea.runtime.v1.WorkspaceRecordEventRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
+	5,  // 3: elitea.runtime.v1.WorkspaceRefusalV1.current:type_name -> elitea.runtime.v1.WorkspaceRefV1
+	5,  // 4: elitea.runtime.v1.WorkspaceSegmentV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefV1
+	4,  // 5: elitea.runtime.v1.WorkspaceFetchPlanRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
+	5,  // 6: elitea.runtime.v1.WorkspaceFetchPlanV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefV1
+	8,  // 7: elitea.runtime.v1.WorkspaceFetchPlanV1.segments:type_name -> elitea.runtime.v1.WorkspaceSegmentV1
+	10, // 8: elitea.runtime.v1.WorkspaceFetchFrameV1.plan:type_name -> elitea.runtime.v1.WorkspaceFetchPlanV1
+	11, // 9: elitea.runtime.v1.WorkspaceFetchFrameV1.segment_end:type_name -> elitea.runtime.v1.WorkspaceSegmentEndV1
+	7,  // 10: elitea.runtime.v1.WorkspaceFetchFrameV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
+	30, // 11: elitea.runtime.v1.WorkspaceFetchFrameV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	4,  // 12: elitea.runtime.v1.WorkspaceUploadHeaderV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
+	13, // 13: elitea.runtime.v1.WorkspaceUploadFrameV1.header:type_name -> elitea.runtime.v1.WorkspaceUploadHeaderV1
+	7,  // 14: elitea.runtime.v1.WorkspaceUploadResponseV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
+	30, // 15: elitea.runtime.v1.WorkspaceUploadResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	4,  // 16: elitea.runtime.v1.WorkspacePublishRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
+	6,  // 17: elitea.runtime.v1.WorkspacePublishRequestV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefUpdateV1
+	5,  // 18: elitea.runtime.v1.WorkspacePublishResponseV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefV1
+	7,  // 19: elitea.runtime.v1.WorkspacePublishResponseV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
+	30, // 20: elitea.runtime.v1.WorkspacePublishResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	4,  // 21: elitea.runtime.v1.WorkspaceEnvSecretRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
+	21, // 22: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.vars:type_name -> elitea.runtime.v1.WorkspaceEnvVarsV1
+	7,  // 23: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
+	30, // 24: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	19, // 25: elitea.runtime.v1.WorkspaceEnvVarsV1.vars:type_name -> elitea.runtime.v1.WorkspaceEnvVarV1
+	4,  // 26: elitea.runtime.v1.WorkspaceRecordEventRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
 	1,  // 27: elitea.runtime.v1.WorkspaceRecordEventRequestV1.kind:type_name -> elitea.runtime.v1.WorkspaceExecutorEventKindV1
-	5,  // 28: elitea.runtime.v1.WorkspaceRecordEventResponseV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
-	24, // 29: elitea.runtime.v1.WorkspaceRecordEventResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	7,  // 30: elitea.runtime.v1.WorkspaceStoreService.WorkspaceFetchPlan:input_type -> elitea.runtime.v1.WorkspaceFetchPlanRequestV1
-	12, // 31: elitea.runtime.v1.WorkspaceStoreService.WorkspaceUpload:input_type -> elitea.runtime.v1.WorkspaceUploadFrameV1
-	14, // 32: elitea.runtime.v1.WorkspaceStoreService.WorkspacePublish:input_type -> elitea.runtime.v1.WorkspacePublishRequestV1
-	16, // 33: elitea.runtime.v1.WorkspaceStoreService.WorkspaceEnvSecret:input_type -> elitea.runtime.v1.WorkspaceEnvSecretRequestV1
-	20, // 34: elitea.runtime.v1.WorkspaceStoreService.WorkspaceRecordEvent:input_type -> elitea.runtime.v1.WorkspaceRecordEventRequestV1
-	10, // 35: elitea.runtime.v1.WorkspaceStoreService.WorkspaceFetchPlan:output_type -> elitea.runtime.v1.WorkspaceFetchFrameV1
-	13, // 36: elitea.runtime.v1.WorkspaceStoreService.WorkspaceUpload:output_type -> elitea.runtime.v1.WorkspaceUploadResponseV1
-	15, // 37: elitea.runtime.v1.WorkspaceStoreService.WorkspacePublish:output_type -> elitea.runtime.v1.WorkspacePublishResponseV1
-	18, // 38: elitea.runtime.v1.WorkspaceStoreService.WorkspaceEnvSecret:output_type -> elitea.runtime.v1.WorkspaceEnvSecretFrameV1
-	21, // 39: elitea.runtime.v1.WorkspaceStoreService.WorkspaceRecordEvent:output_type -> elitea.runtime.v1.WorkspaceRecordEventResponseV1
-	35, // [35:40] is the sub-list for method output_type
-	30, // [30:35] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	7,  // 28: elitea.runtime.v1.WorkspaceRecordEventResponseV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
+	30, // 29: elitea.runtime.v1.WorkspaceRecordEventResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	3,  // 30: elitea.runtime.v1.WorkspaceChangedFileV1.scope:type_name -> elitea.runtime.v1.WorkspaceChangeScopeV1
+	2,  // 31: elitea.runtime.v1.WorkspaceChangedFileV1.status:type_name -> elitea.runtime.v1.WorkspaceChangeStatusV1
+	4,  // 32: elitea.runtime.v1.WorkspaceChangesHeaderV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
+	25, // 33: elitea.runtime.v1.WorkspaceChangesFrameV1.header:type_name -> elitea.runtime.v1.WorkspaceChangesHeaderV1
+	24, // 34: elitea.runtime.v1.WorkspaceChangesFrameV1.file:type_name -> elitea.runtime.v1.WorkspaceChangedFileV1
+	7,  // 35: elitea.runtime.v1.WorkspaceRecordChangesResponseV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
+	30, // 36: elitea.runtime.v1.WorkspaceRecordChangesResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	9,  // 37: elitea.runtime.v1.WorkspaceStoreService.WorkspaceFetchPlan:input_type -> elitea.runtime.v1.WorkspaceFetchPlanRequestV1
+	14, // 38: elitea.runtime.v1.WorkspaceStoreService.WorkspaceUpload:input_type -> elitea.runtime.v1.WorkspaceUploadFrameV1
+	16, // 39: elitea.runtime.v1.WorkspaceStoreService.WorkspacePublish:input_type -> elitea.runtime.v1.WorkspacePublishRequestV1
+	18, // 40: elitea.runtime.v1.WorkspaceStoreService.WorkspaceEnvSecret:input_type -> elitea.runtime.v1.WorkspaceEnvSecretRequestV1
+	22, // 41: elitea.runtime.v1.WorkspaceStoreService.WorkspaceRecordEvent:input_type -> elitea.runtime.v1.WorkspaceRecordEventRequestV1
+	26, // 42: elitea.runtime.v1.WorkspaceStoreService.WorkspaceRecordChanges:input_type -> elitea.runtime.v1.WorkspaceChangesFrameV1
+	12, // 43: elitea.runtime.v1.WorkspaceStoreService.WorkspaceFetchPlan:output_type -> elitea.runtime.v1.WorkspaceFetchFrameV1
+	15, // 44: elitea.runtime.v1.WorkspaceStoreService.WorkspaceUpload:output_type -> elitea.runtime.v1.WorkspaceUploadResponseV1
+	17, // 45: elitea.runtime.v1.WorkspaceStoreService.WorkspacePublish:output_type -> elitea.runtime.v1.WorkspacePublishResponseV1
+	20, // 46: elitea.runtime.v1.WorkspaceStoreService.WorkspaceEnvSecret:output_type -> elitea.runtime.v1.WorkspaceEnvSecretFrameV1
+	23, // 47: elitea.runtime.v1.WorkspaceStoreService.WorkspaceRecordEvent:output_type -> elitea.runtime.v1.WorkspaceRecordEventResponseV1
+	27, // 48: elitea.runtime.v1.WorkspaceStoreService.WorkspaceRecordChanges:output_type -> elitea.runtime.v1.WorkspaceRecordChangesResponseV1
+	43, // [43:49] is the sub-list for method output_type
+	37, // [37:43] is the sub-list for method input_type
+	37, // [37:37] is the sub-list for extension type_name
+	37, // [37:37] is the sub-list for extension extendee
+	0,  // [0:37] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_workspace_proto_init() }
@@ -1840,13 +2371,18 @@ func file_elitea_runtime_v1_workspace_proto_init() {
 		(*WorkspaceEnvSecretFrameV1_Refusal)(nil),
 		(*WorkspaceEnvSecretFrameV1_Rejection)(nil),
 	}
+	file_elitea_runtime_v1_workspace_proto_msgTypes[20].OneofWrappers = []any{}
+	file_elitea_runtime_v1_workspace_proto_msgTypes[22].OneofWrappers = []any{
+		(*WorkspaceChangesFrameV1_Header)(nil),
+		(*WorkspaceChangesFrameV1_File)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_workspace_proto_rawDesc), len(file_elitea_runtime_v1_workspace_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   20,
+			NumEnums:      4,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

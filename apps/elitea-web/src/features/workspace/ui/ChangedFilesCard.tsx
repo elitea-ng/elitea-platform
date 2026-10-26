@@ -35,10 +35,10 @@ import Typography from '@mui/material/Typography';
 
 import { toWorkspaceIpcError, type ChangedFile, type WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
+import { parseUnifiedDiff } from '@/shared/lib/unifiedDiff';
 import { DiffView } from '@/shared/ui/DiffView';
 
 import { describeWorkspaceError } from '../model/describeWorkspaceError';
-import { parseUnifiedDiff } from '../model/unifiedDiff';
 
 /** The host's codes that say why (busy, expired, no checkpoint, not the newest, …) are described; anything else gets the generic `fallback`. */
 const ACTIONABLE = new Set(['workspace_busy', 'turn_expired', 'no_checkpoint', 'undo_not_latest', 'file_changed_since', 'session_replaced', 'already_undone']);
