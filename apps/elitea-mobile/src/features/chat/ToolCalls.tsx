@@ -55,12 +55,30 @@ export function statusWord(step: Pick<ToolStep, 'status' | 'waitingFor'>): strin
  * The pull request a cloud thread's `open_pull_request` opened (ADR-0034 decision 10), so the
  * row can open it without the answer repeating the link. Only an `https:` URL of an `ok` result.
  */
-export function openedPullRequest(step: Pick<ToolStep, 'name' | 'status' | 'output'>): { url: string; number: number | null } | null {
-  if (step.name !== 'open_pull_request' || step.status !== 'done' || step.output === null) return null;
+/**
+ * The forge page a cloud thread's `git_push` or `open_pull_request` produced (ADR-0034 decision
+ * 10, amended 2026-10-26): a pushed branch, a GitHub pull request or a GitLab merge request, read
+ * from the tool's own JSON answer. Only an `https:` URL of an `ok` answer is a link.
+ */
+export interface ForgeLink {
+  url: string;
+  label: string;
+}
+
+function forgeLabel(name: string, parsed: { forge?: unknown; branch?: unknown; pull_request?: unknown }): string | null {
+  if (name === 'git_push') return typeof parsed.branch === 'string' ? `Open branch ${parsed.branch}` : null;
+  const number = typeof parsed.pull_request === 'number' ? parsed.pull_request : null;
+  if (parsed.forge === 'gitlab') return number === null ? 'Open the merge request' : `Open merge request !${number}`;
+  return number === null ? 'Open the pull request' : `Open pull request #${number}`;
+}
+
+export function openedForgeLink(step: Pick<ToolStep, 'name' | 'status' | 'output'>): ForgeLink | null {
+  if ((step.name !== 'open_pull_request' && step.name !== 'git_push') || step.status !== 'done' || step.output === null) return null;
   try {
-    const parsed = JSON.parse(step.output) as { status?: unknown; url?: unknown; pull_request?: unknown } | null;
+    const parsed = JSON.parse(step.output) as { status?: unknown; url?: unknown; pull_request?: unknown; forge?: unknown; branch?: unknown } | null;
     if (parsed?.status !== 'ok' || typeof parsed.url !== 'string' || !parsed.url.startsWith('https://')) return null;
-    return { url: parsed.url, number: typeof parsed.pull_request === 'number' ? parsed.pull_request : null };
+    const label = forgeLabel(step.name, parsed);
+    return label === null ? null : { url: parsed.url, label };
   } catch {
     return null;
   }
@@ -171,16 +189,16 @@ export function ToolActivity({
                   <Icon name="chevronRight" size={14} tone="tertiary" weight="semibold" />
                 </Pressable>
               )).flatMap((row, index) => {
-                const pullRequest = openedPullRequest(group.steps[index]!);
-                if (pullRequest === null) return [row];
-                const label = pullRequest.number === null ? 'Open the pull request' : `Open pull request #${pullRequest.number}`;
+                const link = openedForgeLink(group.steps[index]!);
+                if (link === null) return [row];
+                const { label } = link;
                 return [
                   row,
                   <Pressable
                     key={`${group.steps[index]!.id}-pr`}
                     accessibilityRole="link"
                     accessibilityLabel={label}
-                    onPress={() => void Linking.openURL(pullRequest.url)}
+                    onPress={() => void Linking.openURL(link.url)}
                     android_ripple={ripple(design)}
                     style={({ pressed: on }) => [styles.step, pressed(on)]}>
                     <Icon name="tool" size={18} tone="accent" />

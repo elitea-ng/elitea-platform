@@ -19,6 +19,8 @@ export interface CloudThreadBannerProps {
   status: HandoffStatus;
   onTakeBack: () => void;
   onErase: () => void;
+  /** The push and pull-request credential picker, for the thread's owner (ADR-0034 decision 10). */
+  pullRequests?: React.ReactNode;
 }
 
 const quiet = (theme: Theme) => ({ color: theme.vars.palette.text.secondary });
@@ -47,7 +49,7 @@ function Details({ status }: { status: HandoffStatus }): React.JSX.Element {
   );
 }
 
-export function CloudThreadBanner({ status, onTakeBack, onErase }: CloudThreadBannerProps): React.JSX.Element {
+export function CloudThreadBanner({ status, onTakeBack, onErase, pullRequests }: CloudThreadBannerProps): React.JSX.Element {
   return (
     <Box
       component="output"
@@ -76,6 +78,7 @@ export function CloudThreadBanner({ status, onTakeBack, onErase }: CloudThreadBa
         <Details status={status} />
       </Box>
       {/* Plain buttons after the message, as in the other banners. */}
+      {pullRequests}
       <Button size="small" onClick={onTakeBack} disabled={!status.sent_from_here}>
         {t('workspace.handoff.takeBack', 'Take back')}
       </Button>

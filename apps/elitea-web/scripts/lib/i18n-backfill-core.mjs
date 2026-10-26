@@ -218,6 +218,10 @@ export const ROUTE_CATALOGUES = [
   // module registers it; the table's row action is rendered only by the page
   // that also imports the dialog.
   { file: 'src/features/cloud-executor-switch/i18n/en.cloudExecutorSwitch.json', prefix: 'features.cloudExecutorSwitch.' },
+  // A cloud thread's push and pull-request credential (ADR-0034 decision 10):
+  // the picker the chat's cloud notice and the desktop's banner render; its
+  // module registers it.
+  { file: 'src/features/forge-credential/i18n/en.forgeCredential.json', prefix: 'features.forgeCredential.' },
 ];
 
 /** Keys in the wrong place for the route catalogues: `[{ key, problem }]`. */

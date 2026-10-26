@@ -44,8 +44,8 @@ export interface WorkspaceHandoffInfo {
   /** When the cloud copy is erased on its own (after a take back, or after idling too long). */
   readonly delete_after?: string | null;
   readonly updated_at?: string;
-  /** Contract 1.29: the GitHub configuration the cloud opens pull requests through (a reference, never a secret). */
-  readonly pull_request_credential?: { readonly elitea_title: string; readonly private: boolean } | null;
+  /** Contract 1.29: the GitHub or GitLab configuration the cloud pushes and opens pull requests through (a reference, never a secret). */
+  readonly pull_request_credential?: { readonly type: 'github' | 'gitlab'; readonly elitea_title: string; readonly private: boolean } | null;
 }
 
 const handoffUrl = (projectId: string | number, conversationUuid: string): string =>

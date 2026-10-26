@@ -24,6 +24,8 @@ export type TranscriptItem =
       argsSummary: string;
       remote: boolean;
       result?: { ok: boolean; summary: string; truncated: boolean };
+      /** A page the step produced (a pushed branch, a pull request): an `https:` link the row shows. */
+      link?: { href: string; label: string };
       process?: ToolProcess;
     }
   /** A message the person sent while the turn ran (`steer_injected`): the agent got it at this point of the turn. */

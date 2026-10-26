@@ -61,6 +61,8 @@
     "getWorkspaceHandoff",
     "eraseWorkspaceHandoff",
     "requestWorkspaceHandoffReclaim",
+    "setWorkspaceHandoffPullRequestCredential",
+    "listConfigurations",
     "permissionList",
     "archiveConversation",
     "unarchiveConversation",

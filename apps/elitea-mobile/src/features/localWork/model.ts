@@ -23,6 +23,9 @@ export const HANDOFF_STATES = ['LOCAL', 'HANDING_OFF', 'CLOUD_IDLE', 'CLOUD_RUNN
 /** First client contract with the handoff routes and `workspace_executor`. */
 export const HANDOFF_CONTRACT = { major: 1, minor: 8 } as const;
 
+/** First client contract with the cloud thread's push and pull-request credential. */
+export const FORGE_CREDENTIAL_CONTRACT = { major: 1, minor: 29 } as const;
+
 /** `workspace_executor` of a row or a conversation; absent or unknown means the laptop. */
 export function executorOf(value: { workspace_executor?: unknown } | null | undefined): WorkspaceExecutor {
   const executor = value?.workspace_executor;

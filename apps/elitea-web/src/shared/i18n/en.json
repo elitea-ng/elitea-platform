@@ -4995,5 +4995,8 @@
   "features.agents.generateAgentModal.refineLabel": "Change the draft",
   "features.agents.generateAgentModal.refinePlaceholder": "Ask for a change, e.g. \"Make it more formal\"",
   "chatMessages.actionView.pullRequest": "Open the pull request",
-  "chatMessages.actionView.pullRequestNumber": "Open pull request #{{number}}"
+  "chatMessages.actionView.pullRequestNumber": "Open pull request #{{number}}",
+  "chatMessages.actionView.branch": "Open branch {{branch}}",
+  "chatMessages.actionView.mergeRequest": "Open the merge request",
+  "chatMessages.actionView.mergeRequestNumber": "Open merge request !{{number}}"
 }

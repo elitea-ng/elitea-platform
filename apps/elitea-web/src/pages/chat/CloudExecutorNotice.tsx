@@ -41,7 +41,7 @@ import cloudCatalogue from './i18n/en.chatCloud.json';
 // The Files changed dialog loads when it is opened.
 const CloudFilesChanged = lazy(() => import('./CloudFilesChanged'));
 // The pull-request credential picker: the owner's only (ADR-0034 decision 10, amended 2026-10-26).
-const CloudPullRequestCredential = lazy(() => import('./CloudPullRequestCredential'));
+const CloudPullRequestCredential = lazy(() => import('@/features/forge-credential').then((module) => ({ default: module.CloudPullRequestCredential })));
 
 // The notice's strings ride with this (lazy) chat chunk, not the web app's
 // initial catalogue: only a handed-off Local work thread renders them. Deep
@@ -218,6 +218,7 @@ export default function CloudExecutorNotice({ projectId, conversationUuid, execu
                 projectId={projectId}
                 conversationUuid={conversationUuid}
                 current={pullRequestCredential}
+                onSaved={() => void queryClient.invalidateQueries({ queryKey: handoffInfoKey(projectId, conversationUuid) })}
                 onError={(message) => setToast({ severity: 'error', message })}
               />
             </Suspense>
