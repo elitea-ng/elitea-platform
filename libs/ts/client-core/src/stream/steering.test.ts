@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  STEERING_RETRY_DEFAULT_MS,
+  STEERING_RETRY_MAX_MS,
   isSteeringTextValid,
   joinSteeringTexts,
   leftoverSteering,
@@ -10,7 +12,9 @@ import {
   parseSteeringList,
   parseSteeringMessage,
   steeringErrorCode,
+  steeringRetryAfterMs,
   steeringStateOf,
+  steeringWaitSeconds,
   visibleSteering,
   type SteeringItem,
 } from './steering';
@@ -120,5 +124,28 @@ describe('joinSteeringTexts', () => {
     assert.equal(isSteeringTextValid('ok'), true);
     assert.equal(isSteeringTextValid(' '), false);
     assert.equal(isSteeringTextValid('x'.repeat(16 * 1024 + 1)), false);
+  });
+});
+
+describe('steeringRetryAfterMs', () => {
+  // The 429 `rate_limited` example of services/elitea-main/api/openapi/v2.yaml.
+  const RATE_LIMITED = { error: 'rate_limited', message: 'Too many steering messages. Retry after the interval in Retry-After.', retry_after_ms: 2000 };
+  it('reads retry_after_ms from the body first', () => {
+    assert.equal(steeringRetryAfterMs({ ...RATE_LIMITED, retry_after_ms: 3500 }, 9000), 3500);
+  });
+  it('uses the Retry-After wait, then the default, when the body has no valid wait', () => {
+    assert.equal(steeringRetryAfterMs({ error: 'rate_limited' }, 4000), 4000);
+    assert.equal(steeringRetryAfterMs({ ...RATE_LIMITED, retry_after_ms: 0 }), STEERING_RETRY_DEFAULT_MS);
+    assert.equal(steeringRetryAfterMs({ ...RATE_LIMITED, retry_after_ms: '5' }), STEERING_RETRY_DEFAULT_MS);
+    assert.equal(steeringRetryAfterMs(undefined), STEERING_RETRY_DEFAULT_MS);
+  });
+  it('rounds up and caps a very long wait', () => {
+    assert.equal(steeringRetryAfterMs({ retry_after_ms: 1200.2 }), 1201);
+    assert.equal(steeringRetryAfterMs({ retry_after_ms: 10 * 60_000 }), STEERING_RETRY_MAX_MS);
+  });
+  it('shows at least one whole second', () => {
+    assert.equal(steeringWaitSeconds(2000), 2);
+    assert.equal(steeringWaitSeconds(2001), 3);
+    assert.equal(steeringWaitSeconds(10), 1);
   });
 });

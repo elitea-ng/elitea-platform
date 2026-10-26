@@ -10,8 +10,13 @@
  *    queue and goes as a normal new message when the composer settles.
  *  - `steering_not_supported` (a pipeline): the same A17 queue, and later
  *    sends of this turn go there directly.
- *  - any other refusal (`steering_queue_full`, `rate_limited`, a network
- *    failure, ...): the A17 queue, plus a short notice.
+ *  - `rate_limited` (429): the hook waits `retry_after_ms` (the notice
+ *    counts the seconds down) and sends the SAME text with the SAME
+ *    Idempotency-Key again, at most `STEERING_RETRY_LIMIT` times. The key
+ *    makes sure that the server keeps one message only. After the last
+ *    try, the text goes to the A17 queue, plus a short notice.
+ *  - any other refusal (`steering_queue_full`, a network failure, ...): the
+ *    A17 queue, plus a short notice.
  *
  * WHEN A MESSAGE IS SENT AGAIN. A message that the turn did not inject is
  * `turn_ended` on the server after the turn. This tab (and only this tab,
@@ -23,7 +28,16 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { STEERING_ERROR, STEERING_STATE, joinSteeringTexts, leftoverSteering, type SteeringItem } from '@elitea/client-core/stream';
+import {
+  STEERING_ERROR,
+  STEERING_RETRY_DEFAULT_MS,
+  STEERING_RETRY_LIMIT,
+  STEERING_STATE,
+  joinSteeringTexts,
+  leftoverSteering,
+  steeringWaitSeconds,
+  type SteeringItem,
+} from '@elitea/client-core/stream';
 
 import { editSteering, listSteering, newSteeringKey, queueSteering, removeSteering, type SteeringTarget } from '@/entities/conversation/api/steeringApi';
 import { t } from '@/shared/i18n';
@@ -68,6 +82,41 @@ function targetOf(responseMessageId: string, projectId: string): SteeringTarget 
   return { projectId, responseMessageId };
 }
 
+/** The time between two updates of the countdown. */
+const COUNTDOWN_TICK_MS = 250;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+
+/**
+ * The countdown of a rate-limited send. `start(ms)` shows "You can send
+ * again in N s" until the wait ends; the text updates each tick. A later
+ * wait that ends later replaces the current one.
+ */
+function useRetryCountdown(): { readonly text: string | null; readonly start: (ms: number) => void; readonly clear: () => void } {
+  const [until, setUntil] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (until === null) return undefined;
+    const timer = setInterval(() => {
+      const at = Date.now();
+      setNow(at);
+      if (at >= until) setUntil(null);
+    }, COUNTDOWN_TICK_MS);
+    return () => { clearInterval(timer); };
+  }, [until]);
+  const start = useCallback((ms: number) => {
+    const at = Date.now();
+    setNow(at);
+    setUntil((current) => Math.max(current ?? 0, at + ms));
+  }, []);
+  const clear = useCallback(() => { setUntil(null); }, []);
+  const left = until === null ? 0 : until - now;
+  const text = left > 0
+    ? t('chatMessages.steering.rateLimited', 'Too many messages at once. You can send again in {{seconds}} s. Your message goes again then.', { seconds: String(steeringWaitSeconds(left)) })
+    : null;
+  return { text, start, clear };
+}
+
 function failureNotice(code: string | undefined): string {
   if (code === STEERING_ERROR.queueFull) {
     return t('chatMessages.steering.queueFull', 'This turn has too many waiting messages. Your message is sent after the turn.');
@@ -82,6 +131,9 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
   const live = useRef(params);
   live.current = params;
   const settling = useRef(new Set<string>());
+  const { text: countdownText, start: startCountdown, clear: clearCountdown } = useRetryCountdown();
+  /** Texts whose send failed while another conversation was on screen, by conversation key. */
+  const stranded = useRef(new Map<string, string[]>());
 
   const refresh = useCallback(async (target: SteeringTarget): Promise<void> => {
     try {
@@ -130,26 +182,53 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
     }
   }, []);
 
+  /** Puts a refused text in the A17 queue of the conversation that sent it. */
+  const fallBack = useCallback((conversationKey: string, question: string): void => {
+    if (live.current.conversationKey === conversationKey) {
+      live.current.queueAfterTurn(question);
+      return;
+    }
+    // Another conversation is on screen: its A17 queue is not the right one. Keep the text for the reopen.
+    stranded.current.set(conversationKey, [...(stranded.current.get(conversationKey) ?? []), question]);
+  }, []);
+
+  /**
+   * Sends one steering message. A network failure is tried one more time,
+   * and a `rate_limited` refusal again after its wait, always with the SAME
+   * key: the server then answers the first message again, so the text is
+   * not kept two times.
+   */
+  const post = useCallback(async (call: SteeringTarget, question: string, key: string) => {
+    let result = await queueSteering(call, question, key);
+    for (let retry = 0; ; retry++) {
+      if (!result.ok && result.status === undefined) result = await queueSteering(call, question, key);
+      if (result.ok || result.code !== STEERING_ERROR.rateLimited || retry >= STEERING_RETRY_LIMIT) return result;
+      const wait = result.retryAfterMs ?? STEERING_RETRY_DEFAULT_MS;
+      startCountdown(wait);
+      await sleep(wait);
+      result = await queueSteering(call, question, key);
+    }
+  }, [startCountdown]);
+
   const steer = useCallback(async (target: ChatSteeringRunTarget, question: string): Promise<void> => {
     const responseId = target.messageGroupUuid;
-    const call = { projectId: target.projectId, responseMessageId: responseId };
-    const key = newSteeringKey();
-    let result = await queueSteering(call, question, key);
-    // A network failure is tried one more time with the SAME key: the server answers the first message again.
-    if (!result.ok && result.status === undefined) result = await queueSteering(call, question, key);
+    const conversationKey = live.current.conversationKey;
+    const result = await post({ projectId: target.projectId, responseMessageId: responseId }, question, newSteeringKey());
     const store = useChatSteeringStore.getState();
     if (result.ok) {
       if (result.item === undefined) return;
-      store.addOwn(responseId, { projectId: String(target.projectId), conversationKey: live.current.conversationKey }, result.item.id);
+      store.addOwn(responseId, { projectId: String(target.projectId), conversationKey }, result.item.id);
       store.apply(responseId, [result.item]);
       // The turn ended while the POST was on its way: the end-of-turn rule must still see this message.
       if (!live.current.isStreaming) void settle(responseId, 0);
       return;
     }
     if (result.code === STEERING_ERROR.notSupported) store.markUnsupported(responseId);
-    live.current.queueAfterTurn(question);
+    fallBack(conversationKey, question);
+    // The last try was refused too: the countdown must not hide that the text now waits for the turn end.
+    if (result.code === STEERING_ERROR.rateLimited) clearCountdown();
     if (result.code !== STEERING_ERROR.notSupported && result.code !== STEERING_ERROR.turnNotRunning) setNotice(failureNotice(result.code));
-  }, [settle]);
+  }, [settle, post, fallBack, clearCountdown]);
 
   const onSend = useCallback((question: string): void => {
     if (question.trim() === '') return;
@@ -195,17 +274,25 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
 
   // When no turn of this chat runs: settle every answer that this tab steered here.
   useEffect(() => {
+    const texts = stranded.current.get(conversationKey);
+    if (texts !== undefined) {
+      stranded.current.delete(conversationKey);
+      for (const text of texts) live.current.queueAfterTurn(text);
+    }
     if (isStreaming) return;
     for (const [responseId, record] of Object.entries(useChatSteeringStore.getState().own)) {
       if (record.conversationKey === conversationKey) void settle(responseId, 0);
     }
   }, [conversationKey, isStreaming, settle]);
 
-  const dismissNotice = useCallback(() => { setNotice(null); }, []);
+  const dismissNotice = useCallback(() => {
+    setNotice(null);
+    clearCountdown();
+  }, [clearCountdown]);
   const onReattached = useCallback(() => {
     const target = live.current.streamTarget();
     if (target) void refresh({ projectId: target.projectId, responseMessageId: target.messageGroupUuid });
   }, [refresh]);
 
-  return { onSend, edit, remove, onReattached, notice, dismissNotice };
+  return { onSend, edit, remove, onReattached, notice: countdownText ?? notice, dismissNotice };
 }

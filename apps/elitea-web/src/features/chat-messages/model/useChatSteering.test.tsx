@@ -39,6 +39,9 @@ const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
 const refuse = (code: SteeringError['error'], status = 409) =>
   http.post(ROUTE, () => HttpResponse.json({ error: code } satisfies SteeringError, { status }));
 const row = (patch: Partial<SteeringMessage>): SteeringMessage => ({ ...EXAMPLE, ...patch });
+// The 429 example of v2.yaml. `retry_after_ms` is typed here until the generated `SteeringError` has it.
+type RateLimitedBody = SteeringError & { readonly retry_after_ms?: number };
+const RATE_LIMITED: RateLimitedBody = { error: 'rate_limited', message: 'Too many steering messages. Retry after the interval in Retry-After.', retry_after_ms: 2000 };
 
 function setup(overrides: Partial<UseChatSteeringParams> = {}) {
   const send = vi.fn();
@@ -108,6 +111,61 @@ describe('useChatSteering — where a send goes', () => {
     act(() => { result.current.onSend('one more'); });
     await waitFor(() => { expect(result.current.notice).toMatch(/too many waiting messages/); });
     expect(queueAfterTurn).toHaveBeenCalledWith('one more');
+  });
+});
+
+describe('useChatSteering — rate_limited (429)', () => {
+  beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  /** Answers 429 with `bodies` in order, then the example message (202). Records the key of each POST. */
+  function limitedThenOk(bodies: readonly RateLimitedBody[]) {
+    const keys: (string | null)[] = [];
+    const queue = [...bodies];
+    server.use(http.post(ROUTE, ({ request }) => {
+      keys.push(request.headers.get('Idempotency-Key'));
+      const next = queue.shift();
+      return next ? HttpResponse.json(next, { status: 429, headers: { 'Retry-After': '9' } }) : HttpResponse.json(EXAMPLE, { status: 202 });
+    }));
+    return keys;
+  }
+
+  it('counts down retry_after_ms, then sends the same text again with the SAME Idempotency-Key', async () => {
+    const keys = limitedThenOk([{ ...RATE_LIMITED, retry_after_ms: 3_000 }]);
+    const { result, queueAfterTurn } = setup();
+    act(() => { result.current.onSend(EXAMPLE.content); });
+    await waitFor(() => { expect(result.current.notice).toMatch(/You can send again in 3 s/); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_100); });
+    expect(result.current.notice).toMatch(/You can send again in 2 s/);
+    expect(keys).toHaveLength(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    await waitFor(() => { expect(useChatSteeringStore.getState().own[RESPONSE]?.ids).toEqual([EXAMPLE.id]); });
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+    expect(queueAfterTurn).not.toHaveBeenCalled();
+    expect(result.current.notice).toBeNull();
+  });
+
+  it('waits the default 2 s when the body has no retry_after_ms', async () => {
+    const keys = limitedThenOk([{ error: 'rate_limited' }]);
+    const { result } = setup();
+    act(() => { result.current.onSend('hello'); });
+    await waitFor(() => { expect(result.current.notice).toMatch(/You can send again in 2 s/); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_100); });
+    await waitFor(() => { expect(keys).toHaveLength(2); });
+    expect(keys[1]).toBe(keys[0]);
+  });
+
+  it('after the last try, the text waits for the turn end ONE time and a notice says so', async () => {
+    const keys = limitedThenOk(Array.from({ length: 10 }, () => ({ ...RATE_LIMITED, retry_after_ms: 100 })));
+    const { result, queueAfterTurn } = setup();
+    act(() => { result.current.onSend('busy'); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    await waitFor(() => { expect(queueAfterTurn).toHaveBeenCalledTimes(1); });
+    expect(queueAfterTurn).toHaveBeenCalledWith('busy');
+    expect(keys).toHaveLength(4);
+    expect(new Set(keys).size).toBe(1);
+    expect(result.current.notice).toMatch(/could not reach the running turn/);
   });
 });
 

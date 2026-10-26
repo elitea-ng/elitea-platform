@@ -12,7 +12,14 @@
  * `eliteaFetch` returns the `{ data, status, headers }` envelope (see
  * `stopChatTask`'s neighbour `fetchData`), so each adapter reads `.data`.
  */
-import { parseSteeringList, parseSteeringMessage, steeringErrorCode, type SteeringItem } from '@elitea/client-core/stream';
+import {
+  STEERING_ERROR,
+  parseSteeringList,
+  parseSteeringMessage,
+  steeringErrorCode,
+  steeringRetryAfterMs,
+  type SteeringItem,
+} from '@elitea/client-core/stream';
 
 import {
   listChatExecutionSteering,
@@ -37,11 +44,17 @@ export type SteeringCallResult =
       readonly code: string | undefined;
       /** The HTTP status, or `undefined` for a network failure. */
       readonly status: number | undefined;
+      /** On a 429 `rate_limited` only: the wait before the call goes again with the SAME key. */
+      readonly retryAfterMs?: number;
     };
 
 function refusal(error: unknown): SteeringCallResult {
   if (error instanceof EliteaApiError && error.failure.kind === 'http') {
-    return { ok: false, code: steeringErrorCode(error.failure.body), status: error.failure.status };
+    const code = steeringErrorCode(error.failure.body);
+    if (code === STEERING_ERROR.rateLimited) {
+      return { ok: false, code, status: error.failure.status, retryAfterMs: steeringRetryAfterMs(error.failure.body) };
+    }
+    return { ok: false, code, status: error.failure.status };
   }
   if (error instanceof EliteaApiError && error.failure.kind === 'auth') {
     return { ok: false, code: undefined, status: error.failure.status };

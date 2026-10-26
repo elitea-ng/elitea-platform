@@ -95,6 +95,37 @@ export function steeringErrorCode(body: unknown): string | undefined {
   return text((body as Record<string, unknown>)['error']);
 }
 
+/** The wait before a rate-limited steering call goes again, when the server sends no wait. */
+export const STEERING_RETRY_DEFAULT_MS = 2_000;
+
+/** The longest wait that the clients accept from the server, so a bad value cannot hold a message for long. */
+export const STEERING_RETRY_MAX_MS = 60_000;
+
+/** How many times a client sends a rate-limited steering message again before it gives up. */
+export const STEERING_RETRY_LIMIT = 3;
+
+function positiveMs(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * The wait, in milliseconds, before a `429 rate_limited` steering call goes
+ * again (with the SAME Idempotency-Key). The body's `retry_after_ms` comes
+ * first, then `headerMs` (the parsed `Retry-After`), then
+ * `STEERING_RETRY_DEFAULT_MS`. The value is a whole number in the range
+ * 1 .. `STEERING_RETRY_MAX_MS`.
+ */
+export function steeringRetryAfterMs(body: unknown, headerMs?: number): number {
+  const fromBody = typeof body === 'object' && body !== null ? positiveMs((body as Record<string, unknown>)['retry_after_ms']) : undefined;
+  const ms = fromBody ?? positiveMs(headerMs) ?? STEERING_RETRY_DEFAULT_MS;
+  return Math.min(STEERING_RETRY_MAX_MS, Math.ceil(ms));
+}
+
+/** The seconds to show for a wait: always at least 1, rounded up. */
+export function steeringWaitSeconds(ms: number): number {
+  return Math.max(1, Math.ceil(ms / 1_000));
+}
+
 /** A state that cannot change again. `pending` is the only open state. */
 function isFinal(state: SteeringState): boolean {
   return state !== STEERING_STATE.Pending;

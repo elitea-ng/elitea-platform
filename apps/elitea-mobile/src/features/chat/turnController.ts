@@ -17,7 +17,7 @@ import {
   type StartedTurn,
   type TurnRequest,
 } from '@/api/queries/sendMessage';
-import { editSteering, listSteering, newSteeringKey, queueSteering, removeSteering } from '@/api/queries/steering';
+import { editSteering, listSteering, newSteeringKey, queueSteeringWithRetry, removeSteering } from '@/api/queries/steering';
 import { stopTurn, type StopOutcome } from '@/api/queries/stopTurn';
 import { backoffDelay, ResumableStream, type ResumableStreamOptions, type StreamStatus } from '@/api/sse/stream';
 import type { StreamTransport } from '@/api/sse/transport';
@@ -87,6 +87,8 @@ export interface LiveTurn {
   ownSteering?: string[];
   /** The server refused steering for this turn (`steering_not_supported`, a pipeline). */
   steeringUnsupported?: boolean;
+  /** A rate-limited steering message goes again at this time (epoch ms); null when none waits. */
+  steeringRetryAt?: number | null;
 }
 
 /** What a message sent while the answer runs came to (client contract 1.26). */
@@ -99,6 +101,8 @@ export type SteerOutcome =
   | 'not_supported'
   /** The turn already has the most waiting messages. The text is not sent. */
   | 'queue_full'
+  /** The server refused too many messages in a short time, also after the retries. The text is not sent. */
+  | 'rate_limited'
   /** The answer is not admitted yet, or the request failed. The text is not sent. */
   | 'failed';
 
@@ -411,15 +415,22 @@ export class TurnController {
   /**
    * Sends `text` as a steering message of the running answer. A network
    * failure is tried once more with the SAME `Idempotency-Key` (the server
-   * then answers the first message again).
+   * then answers the first message again). A `rate_limited` refusal is tried
+   * again after its wait, with the same key; `steeringRetryAt` shows the
+   * wait meanwhile.
    */
   async steer(text: string): Promise<SteerOutcome> {
     const responseMessageId = this.state.execution?.responseMessageId ?? null;
     if (!this.canSteer || responseMessageId === null) return 'failed';
     const projectId = this.prepared.request.projectId;
     const key = newSteeringKey();
-    let result = await queueSteering(projectId, responseMessageId, text, key, this.deps.client);
-    if (!result.ok && result.status === undefined) result = await queueSteering(projectId, responseMessageId, text, key, this.deps.client);
+    const sleep = this.deps.sleep ?? defaultSleep;
+    const result = await queueSteeringWithRetry(projectId, responseMessageId, text, key, {
+      client: this.deps.client,
+      sleep: (ms) => sleep(ms, new AbortController().signal),
+      onWait: (ms) => this.update({ steeringRetryAt: Date.now() + ms }),
+    });
+    if (this.state.steeringRetryAt != null) this.update({ steeringRetryAt: null });
     if (result.ok) {
       const item = result.item;
       if (item) this.update({ ownSteering: [...(this.state.ownSteering ?? []), item.id], turn: withSteering(this.state.turn, [item]) });
@@ -436,6 +447,8 @@ export class TurnController {
         return 'not_supported';
       case STEERING_ERROR.queueFull:
         return 'queue_full';
+      case STEERING_ERROR.rateLimited:
+        return 'rate_limited';
       default:
         return 'failed';
     }

@@ -4982,6 +4982,7 @@
   "chatMessages.steering.failed": "Your message could not reach the running turn. It is sent after the turn.",
   "chatMessages.steering.pending": "Waiting for the next step",
   "chatMessages.steering.queueFull": "This turn has too many waiting messages. Your message is sent after the turn.",
+  "chatMessages.steering.rateLimited": "Too many messages at once. You can send again in {{seconds}} s. Your message goes again then.",
   "chatMessages.steering.remove": "Remove",
   "chatMessages.steering.removeFailed": "The message could not be removed. Try again.",
   "chatMessages.steering.save": "Save",

@@ -87,6 +87,7 @@ import { exportErrorText } from '@/api/queries/exportConversation';
 import { shareTranscript } from '@/features/chat/export/shareTranscript';
 import { answerHiddenByRegeneration, newQuestionId, type LiveTurn } from '@/features/chat/turnController';
 import { ATTACHMENT_ONLY_TEXT, STEERING_NOT_SUPPORTED_TEXT, useTurn } from '@/features/chat/useTurn';
+import { useSteeringWaitText } from '@/features/chat/useSteeringWaitText';
 import { CloudExecutorNotice } from '@/features/localWork/CloudExecutorNotice';
 import { lastAnswerRanOnDesktop } from '@/features/localWork/model';
 import { useLocalWork } from '@/features/localWork/useLocalWork';
@@ -201,6 +202,7 @@ export function ThreadView({
     steering: contract126,
   });
   const { live, dismiss } = turn;
+  const steeringWait = useSteeringWaitText(live?.steeringRetryAt);
   // VoiceOver hears when the answer is done, stopped, failed or waits for the user.
   useTurnAnnouncements(live, target.ok ? target.name : null, inFront);
   const highlight = {
@@ -938,11 +940,12 @@ export function ThreadView({
             busy={turn.busy}
             people={people}
             hint={
-              turn.canSteer
+              steeringWait ??
+              (turn.canSteer
                 ? 'The agent reads your message at its next step.'
                 : turn.busy && live?.steeringUnsupported === true
                   ? STEERING_NOT_SUPPORTED_TEXT
-                  : mentionHint
+                  : mentionHint)
             }
             externalTriggers={externalTriggers}
             onTriggerChange={setTrigger}

@@ -1,8 +1,16 @@
 import { randomUUID } from 'expo-crypto';
 
 import { sessionApiClient, type ApiClient } from '@/api/client';
-import { ApiError } from '@/api/errors';
-import { parseSteeringList, parseSteeringMessage, steeringErrorCode, type SteeringItem } from '@elitea/client-core/stream';
+import { ApiError, parseRetryAfter } from '@/api/errors';
+import {
+  STEERING_ERROR,
+  STEERING_RETRY_LIMIT,
+  parseSteeringList,
+  parseSteeringMessage,
+  steeringErrorCode,
+  steeringRetryAfterMs,
+  type SteeringItem,
+} from '@elitea/client-core/stream';
 
 /**
  * Steering of a running answer (client contract 1.26):
@@ -18,12 +26,14 @@ import { parseSteeringList, parseSteeringMessage, steeringErrorCode, type Steeri
  * code (`turn_not_running`, `steering_not_supported`, `steering_queue_full`,
  * `steering_not_pending`, ...), so that the caller picks the fallback. A
  * network failure is `{ ok: false, status: undefined }`. A session failure
- * (401, 426) throws: the session layer already reacted to it.
+ * (401, 426) throws: the session layer already reacted to it. A 429
+ * `rate_limited` also has `retryAfterMs`: the body's `retry_after_ms`, else
+ * `Retry-After`, else 2 s.
  */
 
 export type SteeringCallResult =
   | { ok: true; item: SteeringItem | undefined }
-  | { ok: false; code: string | undefined; status: number | undefined };
+  | { ok: false; code: string | undefined; status: number | undefined; retryAfterMs?: number };
 
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -50,11 +60,17 @@ async function call(run: () => Promise<{ data?: unknown; error?: unknown; respon
     result = await run();
   } catch (error) {
     if (error instanceof ApiError && (error.kind === 'network' || error.kind === 'timeout')) return { ok: false, code: undefined, status: undefined };
-    if (error instanceof ApiError && error.kind === 'http') return { ok: false, code: error.code, status: error.status };
+    if (error instanceof ApiError && error.kind === 'http') return refused(error.code, error.status, undefined, error.retryAfterMs);
     throw error;
   }
   if (result.response.ok) return { ok: true, item: parseSteeringMessage(result.data) };
-  return { ok: false, code: steeringErrorCode(result.error), status: result.response.status };
+  const header = parseRetryAfter(result.response.headers.get('Retry-After'));
+  return refused(steeringErrorCode(result.error), result.response.status, result.error, header);
+}
+
+function refused(code: string | undefined, status: number | undefined, body: unknown, headerMs: number | undefined): SteeringCallResult {
+  if (code !== STEERING_ERROR.rateLimited) return { ok: false, code, status };
+  return { ok: false, code, status, retryAfterMs: steeringRetryAfterMs(body, headerMs) };
 }
 
 /** Queues `content` against the running answer. A retry sends the SAME `idempotencyKey`. */
@@ -72,6 +88,38 @@ export function queueSteering(
       body: { content },
     }),
   );
+}
+
+export interface SteerRetryOptions {
+  client?: ApiClient;
+  /** Resolves after `ms`. */
+  sleep: (ms: number) => Promise<void>;
+  /** A `rate_limited` refusal: the next try goes after `ms`. */
+  onWait?: (ms: number) => void;
+}
+
+/**
+ * Queues `content` and tries again with the SAME `idempotencyKey`: one more
+ * time after a network failure, and after the wait of each `rate_limited`
+ * refusal, at most `STEERING_RETRY_LIMIT` times. The key makes sure that
+ * the server keeps the message one time only. Resolves to the last answer.
+ */
+export async function queueSteeringWithRetry(
+  projectId: number,
+  responseMessageId: string,
+  content: string,
+  idempotencyKey: string,
+  options: SteerRetryOptions,
+): Promise<SteeringCallResult> {
+  const once = () => queueSteering(projectId, responseMessageId, content, idempotencyKey, options.client);
+  let result = await once();
+  for (let retry = 0; ; retry++) {
+    if (!result.ok && result.status === undefined) result = await once();
+    if (result.ok || result.code !== STEERING_ERROR.rateLimited || result.retryAfterMs === undefined || retry >= STEERING_RETRY_LIMIT) return result;
+    options.onWait?.(result.retryAfterMs);
+    await options.sleep(result.retryAfterMs);
+    result = await once();
+  }
 }
 
 /** Every steering message of the answer, oldest first, in all states. Throws when the list cannot be read. */

@@ -7,6 +7,7 @@ import { parseFrame } from '@/features/chat/frames';
 import { steeringRows } from '@/features/chat/SteeringRows';
 import { TurnController } from '@/features/chat/turnController';
 import { steerOutcomeText } from '@/features/chat/useTurn';
+import { steeringWaitText } from '@/features/chat/useSteeringWaitText';
 import { abortAll } from '@/lib/abortRegistry';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
 import { FAKE_ORIGIN } from '@/test/fakeServer';
@@ -16,6 +17,8 @@ jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecur
 jest.mock('expo-crypto', () => ({ randomUUID: jest.fn(() => '3F1C2A9E-7B4D-4C8E-9A10-5D6E7F809A1B') }));
 
 type SteeringMessage = components['schemas']['SteeringMessage'];
+// `retry_after_ms` is typed here until the generated `SteeringError` has it.
+type SteeringError = components['schemas']['SteeringError'] & { retry_after_ms?: number };
 
 const P = 7;
 const CONV = '9bb96505-d0fb-4473-be67-4884de5047d3';
@@ -33,6 +36,8 @@ const EXAMPLE: SteeringMessage = {
   message_id: null,
 };
 const ANSWER = EXAMPLE.response_message_id;
+// The 429 `rate_limited` example of v2.yaml.
+const RATE_LIMITED: SteeringError = { error: 'rate_limited', message: 'Too many steering messages. Retry after the interval in Retry-After.', retry_after_ms: 2000 };
 const ROUTE = `/api/v2/elitea_core/task/prompt_lib/${P}/${ANSWER}/steering`;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const flush = async () => {
@@ -60,13 +65,13 @@ function workspace(steering: (method: string, path: string) => Response) {
   return { client: createApiClient({ origin: FAKE_ORIGIN, auth: { kind: 'session' }, fetch }), seen };
 }
 
-function controller(steering: (method: string, path: string) => Response) {
+function controller(steering: (method: string, path: string) => Response, sleep: (ms: number) => Promise<void> = async () => {}) {
   const { client, seen } = workspace(steering);
   const stream = fakeStreamTransport();
   const onLeftover = jest.fn();
   const c = new TurnController(
     prepareTurn({ projectId: P, conversationUuid: CONV, participantId: 3, userInput: 'build it', questionId: '3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b' }),
-    { client, transport: stream.transport, appState: null, sleep: async () => {}, random: () => 0.5, onSettle: async () => {}, onLeftover },
+    { client, transport: stream.transport, appState: null, sleep, random: () => 0.5, onSettle: async () => {}, onLeftover },
   );
   return { c, stream, seen, onLeftover };
 }
@@ -88,8 +93,18 @@ describe('steering calls (client contract 1.26)', () => {
     const { client, seen } = workspace(() => answers.shift()!);
     await expect(queueSteering(P, ANSWER, EXAMPLE.content, 'key-1', client)).resolves.toMatchObject({ ok: true, item: { id: EXAMPLE.id, state: 'pending' } });
     await expect(queueSteering(P, ANSWER, 'x', 'key-2', client)).resolves.toEqual({ ok: false, code: 'turn_not_running', status: 409 });
-    await expect(queueSteering(P, ANSWER, 'y', 'key-3', client)).resolves.toEqual({ ok: false, code: 'rate_limited', status: 429 });
+    await expect(queueSteering(P, ANSWER, 'y', 'key-3', client)).resolves.toEqual({ ok: false, code: 'rate_limited', status: 429, retryAfterMs: 2000 });
     expect(seen[0]).toMatchObject({ method: 'POST', path: ROUTE, key: 'key-1', body: JSON.stringify({ content: EXAMPLE.content }) });
+  });
+
+  it('429 rate_limited: retryAfterMs is the body retry_after_ms, else Retry-After, else 2 s', async () => {
+    const limited = (body: SteeringError, headers: Record<string, string> = {}) =>
+      new Response(JSON.stringify(body), { status: 429, headers: { 'Content-Type': 'application/json', ...headers } });
+    const answers = [limited({ ...RATE_LIMITED, retry_after_ms: 3500 }, { 'Retry-After': '9' }), limited({ error: 'rate_limited' }, { 'Retry-After': '4' }), limited({ error: 'rate_limited' })];
+    const { client } = workspace(() => answers.shift()!);
+    await expect(queueSteering(P, ANSWER, 'a', 'k', client)).resolves.toMatchObject({ code: 'rate_limited', retryAfterMs: 3500 });
+    await expect(queueSteering(P, ANSWER, 'a', 'k', client)).resolves.toMatchObject({ code: 'rate_limited', retryAfterMs: 4000 });
+    await expect(queueSteering(P, ANSWER, 'a', 'k', client)).resolves.toMatchObject({ code: 'rate_limited', retryAfterMs: 2000 });
   });
 
   it('GET reads the list; PATCH and DELETE address one message', async () => {
@@ -138,8 +153,8 @@ describe('steer frames', () => {
 });
 
 describe('TurnController steering', () => {
-  async function streaming(steering: (method: string, path: string) => Response) {
-    const t = controller(steering);
+  async function streaming(steering: (method: string, path: string) => Response, sleep?: (ms: number) => Promise<void>) {
+    const t = controller(steering, sleep);
     void t.c.start();
     await flush();
     expect(t.c.canSteer).toBe(true);
@@ -194,5 +209,45 @@ describe('TurnController steering', () => {
     await expect(c.steer('one more')).resolves.toBe('queue_full');
     expect(steerOutcomeText('queue_full')).toMatch(/most waiting messages/);
     c.detach();
+  });
+
+  it('rate_limited: waits retry_after_ms, shows the wait, then sends again with the SAME Idempotency-Key', async () => {
+    const posted = [json({ ...RATE_LIMITED, retry_after_ms: 3000 }, 429), json(EXAMPLE, 202)];
+    const waits: number[] = [];
+    let shownAt: number | null | undefined;
+    const t = await streaming(
+      (method) => (method === 'POST' ? posted.shift()! : json({ items: [] })),
+      async (ms) => {
+        waits.push(ms);
+        shownAt = t.c.getSnapshot().steeringRetryAt;
+      },
+    );
+    const before = Date.now();
+    await expect(t.c.steer(EXAMPLE.content)).resolves.toBe('queued');
+    expect(waits).toEqual([3000]);
+    expect(shownAt).toBeGreaterThanOrEqual(before + 3000);
+    expect(t.c.getSnapshot().steeringRetryAt).toBeNull();
+    const keys = t.seen.filter((s) => s.method === 'POST' && s.path === ROUTE).map((s) => s.key);
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+    expect(t.c.getSnapshot().ownSteering).toEqual([EXAMPLE.id]);
+    t.c.detach();
+  });
+
+  it('rate_limited after every retry: the text stays with the user, and each try used the same key', async () => {
+    const t = await streaming((method) => (method === 'POST' ? json({ error: 'rate_limited' }, 429) : json({ items: [] })));
+    await expect(t.c.steer('busy')).resolves.toBe('rate_limited');
+    const keys = t.seen.filter((s) => s.method === 'POST' && s.path === ROUTE).map((s) => s.key);
+    expect(keys).toHaveLength(4);
+    expect(new Set(keys).size).toBe(1);
+    expect(steerOutcomeText('rate_limited')).toMatch(/Too many messages/);
+    t.c.detach();
+  });
+
+  it('the composer hint counts the wait down in whole seconds', () => {
+    expect(steeringWaitText(10_000, 7_000)).toMatch(/send again in 3 s/);
+    expect(steeringWaitText(10_000, 8_100)).toMatch(/send again in 2 s/);
+    expect(steeringWaitText(10_000, 10_000)).toBeNull();
+    expect(steeringWaitText(null, 0)).toBeNull();
   });
 });

@@ -62,6 +62,8 @@ export function steerOutcomeText(outcome: SteerOutcome): string | null {
       return STEERING_NOT_SUPPORTED_TEXT;
     case 'queue_full':
       return 'The agent already has the most waiting messages. Wait for the answer to finish.';
+    case 'rate_limited':
+      return 'Too many messages at once. Wait a moment and send again.';
     default:
       return "Couldn't send the message to the running answer. Try again.";
   }
