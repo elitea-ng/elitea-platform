@@ -79,7 +79,7 @@ use crate::error::HostError;
 
 pub const FILE_NAME: &str = "threads.sqlite";
 /// `PRAGMA user_version` of the schema this build writes.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 3;
 /// A string inside one event's payload is cut to this many bytes.
 pub const MAX_EVENT_STRING: usize = 16 * 1024;
 /// One turn's stored events, in payload bytes.
@@ -382,8 +382,8 @@ enum Op {
     },
     /// Remove the turns of every thread that sat idle past the cutoff
     /// (retention): its last finished turn is older than `cutoff_ms`. The
-    /// server keeps the messages; this file is the cache the UI re-builds.
-    /// Answers with the number of turns deleted.
+    /// server keeps the messages; the turns' local recording goes. Answers
+    /// with the number of turns deleted.
     PruneIdle {
         cutoff_ms: i64,
         ack: std::sync::mpsc::Sender<rusqlite::Result<usize>>,
@@ -496,6 +496,7 @@ fn start_at(
     }
     let conn = open_connection(path)?;
     migrate(&conn)?;
+    crate::sessions::ensure_incremental_vacuum(&conn, "the thread history");
     let writer_conn = open_connection(path)?;
     let (sender, receiver) = std::sync::mpsc::channel();
     queued.store(0, Ordering::SeqCst);
@@ -1054,10 +1055,12 @@ impl HistoryStore {
 
     /// Remove the turns of every thread that sat idle past `idle_days`: its
     /// last finished turn (`MAX(turns.finished_at)`) is older than the
-    /// cutoff. Threads that never finished a turn, or that stay empty, are
-    /// kept: retention counts finished work, not absence. The server keeps
-    /// the messages; this file is the cache the UI re-builds. Queued on the
-    /// writer (after the queued turns), so it sees the app's last turns.
+    /// cutoff. Threads that never finished a turn are kept: retention counts
+    /// finished work, not absence. The server keeps the messages; what only
+    /// this device recorded (the tool rows, approvals and file changes of
+    /// those turns) is gone for good, which is why the Doctor runs it only on
+    /// the person's confirm. Queued on the writer (after the queued turns),
+    /// so it sees the app's last turns.
     ///
     /// # Errors
     ///
@@ -1307,8 +1310,12 @@ struct Writer {
     /// Turns a write failed for: their later ops are dropped.
     failed: HashSet<String>,
     /// Committed batches: every 64th, the file gives its free pages back to
-    /// the OS (incremental vacuum, schema 4).
+    /// the OS (incremental vacuum, [`crate::sessions::ensure_incremental_vacuum`]).
     commits: u64,
+    /// Something was written (a commit, a flush before a delete, a prune)
+    /// since the last idle checkpoint: an idle writer with nothing new
+    /// sleeps instead of checkpointing every interval.
+    dirty: bool,
 }
 
 impl Writer {
@@ -1321,6 +1328,7 @@ impl Writer {
             since: None,
             failed: HashSet::new(),
             commits: 0,
+            dirty: false,
         }
     }
 
@@ -1334,7 +1342,10 @@ impl Writer {
                     match receiver.recv_timeout(idle_checkpoint) {
                         Ok(op) => Ok(op),
                         Err(RecvTimeoutError::Timeout) => {
-                            self.checkpoint_wal();
+                            if self.dirty {
+                                self.checkpoint_wal();
+                                self.dirty = false;
+                            }
                             Err(RecvTimeoutError::Timeout)
                         }
                         Err(RecvTimeoutError::Disconnected) => Err(RecvTimeoutError::Disconnected),
@@ -1352,6 +1363,9 @@ impl Writer {
             match next {
                 Ok(Op::Flush(ack)) => {
                     self.commit();
+                    // A flush precedes the readers' deletes, which write
+                    // through the other connection.
+                    self.dirty = true;
                     let _ = ack.send(());
                 }
                 Ok(Op::PruneIdle { cutoff_ms, ack }) => {
@@ -1360,6 +1374,11 @@ impl Writer {
                     // caller.
                     self.commit();
                     let pruned = prune_idle_threads(&self.conn, cutoff_ms);
+                    self.dirty = true;
+                    // A prune frees whole threads: give the pages back now.
+                    if let Err(error) = self.conn.pragma_update(None, "incremental_vacuum", 0) {
+                        log::warn!("the thread history could not vacuum: {error}");
+                    }
                     let _ = ack.send(pruned);
                 }
                 Ok(op) => self.push(op),
@@ -1423,6 +1442,7 @@ impl Writer {
             log::warn!("the thread history could not commit: {error}");
         }
         self.commits += 1;
+        self.dirty = true;
         // The pages a delete or a thread trim freed would otherwise stay in
         // the file's free space, and the file would only grow.
         if self.commits.is_multiple_of(64)
@@ -1448,11 +1468,12 @@ fn add_bytes(conn: &Connection, turn_id: &str, bytes: usize) -> rusqlite::Result
     )
 }
 
-/// Remove the turns of every thread of `owner` that sat idle past the cutoff
-/// (retention): its last finished turn (`MAX(turns.finished_at)`) is older
-/// than `cutoff_ms`, in Unix ms. Threads that never finished a turn stay:
-/// retention counts finished work, not absence. Their `threads` rows go
-/// too. Answers with the number of turns deleted.
+/// Remove the turns of every thread (of every account) that sat idle past
+/// the cutoff (retention): its last finished turn (`MAX(turns.finished_at)`)
+/// is older than `cutoff_ms`, in Unix ms. Threads that never finished a
+/// turn stay: retention counts finished work, not absence. A thread is its
+/// turns (there is no thread table); their events go with them (`ON DELETE
+/// CASCADE`). Answers with the number of turns deleted.
 fn prune_idle_threads(conn: &Connection, cutoff_ms: i64) -> rusqlite::Result<usize> {
     // The idle threads: last finished turn older than the cutoff.
     let idle = "SELECT conversation_uuid FROM turns
@@ -1714,46 +1735,26 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(|e| storage("could not read the thread history", &e))?;
     match version {
-        0 => {
-            // Set before the schema: a database takes the vacuum mode it is
-            // created with, and freed pages then return to the OS on their
-            // own. The mode only sticks while the database is empty (no
-            // tables), so the VACUUM that fixes the empty header must run
-            // before the schema.
-            conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")
-                .map_err(|e| storage("could not create the thread history", &e))?;
-            conn.execute_batch("VACUUM")
-                .map_err(|e| storage("could not create the thread history", &e))?;
-            conn.execute_batch(&format!(
+        0 => conn
+            .execute_batch(&format!(
                 "BEGIN; {SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
-            .map_err(|e| storage("could not create the thread history", &e))
-        }
+            .map_err(|e| storage("could not create the thread history", &e)),
         // 2 (ADR-0034): turns imported from the cloud executor. 3 (#1229):
-        // the images a turn carried. 4: incremental vacuum, so a deleted
-        // thread gives its pages back to the OS instead of the file only
-        // growing. The VACUUM is what switches the mode on (it cannot run
-        // inside a transaction).
-        1..=3 => {
-            let alter = match version {
-                1 => {
-                    "ALTER TABLE turns ADD COLUMN turn_origin TEXT NOT NULL DEFAULT 'local';\
-                       ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]';"
-                }
-                2 => "ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]';",
-                _ => "",
-            };
-            conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")
-                .map_err(|e| storage("could not upgrade the thread history", &e))?;
-            if !alter.is_empty() {
-                conn.execute_batch(&format!("BEGIN; {alter}; COMMIT;"))
-                    .map_err(|e| storage("could not upgrade the thread history", &e))?;
-            }
-            conn.execute_batch("VACUUM")
-                .map_err(|e| storage("could not upgrade the thread history", &e))?;
-            conn.pragma_update(None, "user_version", SCHEMA_VERSION)
-                .map_err(|e| storage("could not upgrade the thread history", &e))
-        }
+        // the images a turn carried.
+        1 => conn
+            .execute_batch(&format!(
+                "BEGIN; ALTER TABLE turns ADD COLUMN turn_origin TEXT NOT NULL DEFAULT 'local'; \
+                 ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]'; \
+                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+            ))
+            .map_err(|e| storage("could not upgrade the thread history", &e)),
+        2 => conn
+            .execute_batch(&format!(
+                "BEGIN; ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]'; \
+                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+            ))
+            .map_err(|e| storage("could not upgrade the thread history", &e)),
         SCHEMA_VERSION => Ok(()),
         newer => Err(HostError::Storage(format!(
             "the thread history was written by a newer version of the app (schema {newer})"
@@ -2119,6 +2120,36 @@ mod tests {
         let turns = reopened.thread(&owner(1), "w1", "42").unwrap();
         assert_eq!(turns.len(), 2);
         assert!(turns[0].images.is_empty());
+    }
+
+    #[test]
+    fn an_existing_file_switches_to_incremental_vacuum_and_keeps_its_schema() {
+        let (root, store) = store();
+        play(&store, new_turn(owner(1), "t1", "42"));
+        // A file from before incremental vacuum: mode NONE, same schema.
+        store
+            .with("no vacuum mode", |c| {
+                c.execute_batch("PRAGMA auto_vacuum = NONE; VACUUM;")
+            })
+            .unwrap();
+        drop(store);
+        let path = root.path().join("ai.elitea.desktop").join(FILE_NAME);
+        let mode = |path: &Path| -> i64 {
+            rusqlite::Connection::open(path)
+                .unwrap()
+                .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+                .unwrap()
+        };
+        assert_eq!(mode(&path), 0, "the file starts without it");
+        let reopened =
+            Arc::new(HistoryStore::open(&root.path().join("ai.elitea.desktop")).unwrap());
+        assert_eq!(mode(&path), 2, "the open switched it to INCREMENTAL");
+        let version: i64 = rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION, "the schema version is untouched");
+        assert_eq!(reopened.thread(&owner(1), "w1", "42").unwrap().len(), 1);
     }
 
     #[test]

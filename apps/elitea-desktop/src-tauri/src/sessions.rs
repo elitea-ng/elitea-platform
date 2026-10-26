@@ -35,7 +35,8 @@
 //!   the server refused marks the session for re-seeding, and a turn that
 //!   never finished (a crash) is dropped when the session is next opened.
 //! * The file gives its freed space back to the OS: it is kept under
-//!   incremental vacuum (schema 2), and the Doctor's `sessions.vacuum`
+//!   incremental vacuum ([`ensure_incremental_vacuum`], applied at open and
+//!   independent of the schema version), and the Doctor's `sessions.vacuum`
 //!   ([`SessionStore::reclaim`]) folds it down when the file has grown
 //!   ahead of its sessions.
 //!
@@ -395,21 +396,11 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(|e| storage("could not read the session store", &e))?;
     match version {
-        0 => {
-            // Set before the schema: a database takes the vacuum mode it is
-            // created with, and freed pages then return to the OS on their
-            // own. The mode only sticks while the database is empty (no
-            // tables), so the VACUUM that fixes the empty header must run
-            // before the schema.
-            conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")
-                .map_err(|e| storage("could not create the session store", &e))?;
-            conn.execute_batch("VACUUM")
-                .map_err(|e| storage("could not create the session store", &e))?;
-            conn.execute_batch(&format!(
+        0 => conn
+            .execute_batch(&format!(
                 "BEGIN; {SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
-            .map_err(|e| storage("could not create the session store", &e))
-        }
+            .map_err(|e| storage("could not create the session store", &e)),
         1 => conn
             .execute_batch(MIGRATE_1_TO_2)
             .map_err(|e| storage("could not upgrade the session store", &e)),
@@ -443,6 +434,7 @@ fn start_at(path: &Path, idle_checkpoint: Duration) -> Result<Writing, HostError
     }
     let conn = open_connection(path)?;
     migrate(&conn)?;
+    ensure_incremental_vacuum(&conn, "the session store");
     let (sender, receiver) = std::sync::mpsc::channel::<Job>();
     let thread = std::thread::Builder::new()
         .name("session-store".into())
@@ -453,6 +445,9 @@ fn start_at(path: &Path, idle_checkpoint: Duration) -> Result<Writing, HostError
 
 fn run_jobs(mut conn: Connection, receiver: &Receiver<Job>, idle_checkpoint: Duration) {
     let mut jobs: u64 = 0;
+    // A job ran since the last checkpoint: an idle store with nothing new
+    // sleeps instead of checkpointing every interval.
+    let mut dirty = false;
     loop {
         let job = match receiver.recv_timeout(idle_checkpoint) {
             Ok(job) => job,
@@ -460,14 +455,18 @@ fn run_jobs(mut conn: Connection, receiver: &Receiver<Job>, idle_checkpoint: Dur
                 // Idle for a while: fold the WAL into the database, so the
                 // `-wal` file does not hold the turn's bytes on disk while
                 // the app sits open.
-                checkpoint_wal(&conn);
+                if dirty {
+                    checkpoint_wal(&conn);
+                    dirty = false;
+                }
                 continue;
             }
             Err(RecvTimeoutError::Disconnected) => break,
         };
         job(&mut conn);
         jobs += 1;
-        // Incremental vacuum (schema 2): the pages a trim freed would
+        dirty = true;
+        // Incremental vacuum: the pages a trim freed would
         // otherwise stay in the file's free space, and the store would only
         // grow.
         if jobs.is_multiple_of(64)
@@ -493,9 +492,43 @@ fn closed() -> HostError {
     HostError::Storage("the session store is closed; restart Elitea".into())
 }
 
+/// Put the database on `conn` under incremental vacuum, so the pages a trim
+/// or a delete frees can go back to the OS (`PRAGMA incremental_vacuum`).
+/// A file created without it (every file before this mode, and a new file:
+/// opening it in WAL mode writes its header first) only switches over
+/// through a full `VACUUM`, which runs here once. It is best effort: a
+/// `VACUUM` that fails (the disk is full, another process is mid-write
+/// past the busy timeout) is logged and the store opens as it was; the next
+/// open tries again. It never touches `user_version`, so an older build
+/// still opens the file.
+pub(crate) fn ensure_incremental_vacuum(conn: &Connection, what: &str) {
+    const INCREMENTAL: i64 = 2;
+    match conn.query_row("PRAGMA auto_vacuum", [], |row| row.get::<_, i64>(0)) {
+        Ok(INCREMENTAL) => return,
+        Ok(_) => {}
+        Err(error) => {
+            log::warn!("{what} could not read its vacuum mode: {error}");
+            return;
+        }
+    }
+    let started = std::time::Instant::now();
+    let switched = conn
+        .pragma_update(None, "auto_vacuum", "INCREMENTAL")
+        .and_then(|()| conn.execute_batch("VACUUM"));
+    match switched {
+        Ok(()) => log::info!(
+            "{what} now gives freed space back (vacuumed in {:?})",
+            started.elapsed()
+        ),
+        Err(error) => log::warn!(
+            "{what} could not switch to incremental vacuum; it opens as it was and tries again next time: {error}"
+        ),
+    }
+}
+
 /// `VACUUM` the database in `dir` while no connection of this process holds
-/// it: the file's free space returns to the OS, and a file older than
-/// schema 2 takes incremental vacuum with it. The bytes it held before.
+/// it: the file's free space returns to the OS, and a file not yet under
+/// incremental vacuum takes it with it. The bytes it held before.
 /// A missing database holds nothing.
 ///
 /// # Errors

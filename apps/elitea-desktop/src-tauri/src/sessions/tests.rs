@@ -965,6 +965,40 @@ async fn new_files_are_vacuumed_incrementally() {
 }
 
 #[tokio::test]
+async fn an_existing_file_switches_to_incremental_vacuum_and_keeps_its_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(FILE_NAME);
+    {
+        let store = SessionStore::open(dir.path()).unwrap();
+        store
+            .open_session(&identity(1, "https://a.example"), "fp")
+            .await
+            .unwrap();
+    }
+    // A file from before incremental vacuum: mode NONE, same schema.
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("PRAGMA auto_vacuum = NONE; VACUUM;")
+            .unwrap();
+    }
+    let mode = || -> i64 {
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+            .unwrap()
+    };
+    assert_eq!(mode(), 0, "the file starts without it");
+    let store = SessionStore::open(dir.path()).unwrap();
+    assert_eq!(mode(), 2, "the open switched it to INCREMENTAL");
+    let version: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION, "the schema version is untouched");
+    drop(store);
+}
+
+#[tokio::test]
 async fn an_idle_store_folds_its_wal_into_the_database() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(FILE_NAME);
