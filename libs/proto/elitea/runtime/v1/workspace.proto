@@ -251,6 +251,83 @@ message WorkspaceRecordEventResponseV1 {
   reserved 4 to 15;
 }
 
+// The files a cloud turn changed (ADR-0034 Phase 2: the web "Files changed"
+// view). The worker computes them from its own repository right after the
+// publish, outside the sandbox: the TURN set (the parent's tree to the
+// commit's tree) and the CUMULATIVE set (the handoff snapshot's tree to the
+// commit's tree). Main reads no git pack: it keeps what the worker sends,
+// bounded, drops every path the thread's exclusions or path deny list
+// match, and serves the rest to the conversation's readers.
+enum WorkspaceChangeStatusV1 {
+  WORKSPACE_CHANGE_STATUS_V1_UNSPECIFIED = 0;
+  WORKSPACE_CHANGE_STATUS_V1_ADDED = 1;
+  WORKSPACE_CHANGE_STATUS_V1_MODIFIED = 2;
+  WORKSPACE_CHANGE_STATUS_V1_DELETED = 3;
+  // An exact rename: the same blob left from_path and arrived at path.
+  WORKSPACE_CHANGE_STATUS_V1_RENAMED = 4;
+}
+
+enum WorkspaceChangeScopeV1 {
+  WORKSPACE_CHANGE_SCOPE_V1_UNSPECIFIED = 0;
+  // What this turn changed.
+  WORKSPACE_CHANGE_SCOPE_V1_TURN = 1;
+  // What every cloud turn so far changed, since the handoff snapshot.
+  WORKSPACE_CHANGE_SCOPE_V1_CUMULATIVE = 2;
+}
+
+// One changed file of one scope. The frame stays under the control
+// listener's 64 KiB request bound: path and from_path at most 4096 bytes
+// each, diff at most 48 KiB.
+message WorkspaceChangedFileV1 {
+  WorkspaceChangeScopeV1 scope = 1;
+  string path = 2;
+  // RENAMED only: the path before.
+  string from_path = 3;
+  WorkspaceChangeStatusV1 status = 4;
+  // The +/- line counts; absent for a binary file, a symlink, or a text
+  // file too large to count.
+  optional uint32 additions = 5;
+  optional uint32 deletions = 6;
+  bool binary = 7;
+  // Too large to count or to keep a diff of.
+  bool too_large = 8;
+  // The file's unified diff (git's format, 3 lines of context); empty when
+  // none is kept (binary, too large, or past the scope's diff budget).
+  string diff = 9;
+  reserved 10 to 15;
+}
+
+message WorkspaceChangesHeaderV1 {
+  WorkspaceClaimV1 claim = 1;
+  // The turn's published commit (refs/elitea/cloud now), its parent, and
+  // the handoff snapshot the cumulative set is measured from (40 hex each).
+  string commit = 2;
+  string parent = 3;
+  string base = 4;
+  // Changed files past each scope's file bound, counted and not listed.
+  uint32 turn_omitted = 5;
+  uint32 cumulative_omitted = 6;
+  reserved 7 to 15;
+}
+
+// The record stream: one header frame, then one frame per changed file.
+message WorkspaceChangesFrameV1 {
+  oneof frame {
+    WorkspaceChangesHeaderV1 header = 1;
+    WorkspaceChangedFileV1 file = 2;
+  }
+  reserved 3 to 15;
+}
+
+message WorkspaceRecordChangesResponseV1 {
+  bool recorded = 1;
+  // REF_CONFLICT: commit is not the thread's refs/elitea/cloud, or base is
+  // not its handoff snapshot.
+  WorkspaceRefusalV1 refusal = 2;
+  RuntimeErrorV1 rejection = 3;
+  reserved 4 to 15;
+}
+
 service WorkspaceStoreService {
   rpc WorkspaceFetchPlan(WorkspaceFetchPlanRequestV1) returns (stream WorkspaceFetchFrameV1);
   rpc WorkspaceUpload(stream WorkspaceUploadFrameV1) returns (WorkspaceUploadResponseV1);
@@ -261,4 +338,7 @@ service WorkspaceStoreService {
   // An executor audit event of the running turn, bound to its claim and
   // fence like every call here.
   rpc WorkspaceRecordEvent(WorkspaceRecordEventRequestV1) returns (WorkspaceRecordEventResponseV1);
+  // The files the running turn's published commit changed, best effort: a
+  // turn whose record fails is published all the same.
+  rpc WorkspaceRecordChanges(stream WorkspaceChangesFrameV1) returns (WorkspaceRecordChangesResponseV1);
 }

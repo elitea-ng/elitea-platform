@@ -90,6 +90,7 @@ import type {
   GetConversationParams,
   GetMessageTraceParams,
   GetWorkspaceFetchPlanParams,
+  GetWorkspaceHandoffDiffParams,
   InvalidClientVersionError,
   InvalidClientVersionResponse,
   ListConversationMessagesParams,
@@ -142,7 +143,9 @@ import type {
   WorkspaceFetchPlan,
   WorkspaceHandoffBeginRequest,
   WorkspaceHandoffBegun,
+  WorkspaceHandoffChanges,
   WorkspaceHandoffCompleteRequest,
+  WorkspaceHandoffDiff,
   WorkspaceHandoffEmpty,
   WorkspaceHandoffErased,
   WorkspaceHandoffError,
@@ -10699,6 +10702,632 @@ export function useReleaseWorkspaceHandoff<
     projectId,
     conversationUuid,
     workspaceHandoffReleaseRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getWorkspaceHandoffChangesResponse200 = {
+  data: WorkspaceHandoffChanges;
+  status: 200;
+};
+
+export type getWorkspaceHandoffChangesResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type getWorkspaceHandoffChangesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getWorkspaceHandoffChangesResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type getWorkspaceHandoffChangesResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type getWorkspaceHandoffChangesResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type getWorkspaceHandoffChangesResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getWorkspaceHandoffChangesResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type getWorkspaceHandoffChangesResponseSuccess =
+  getWorkspaceHandoffChangesResponse200 & {
+    headers: Headers;
+  };
+export type getWorkspaceHandoffChangesResponseError = (
+  | getWorkspaceHandoffChangesResponse400
+  | getWorkspaceHandoffChangesResponse401
+  | getWorkspaceHandoffChangesResponse403
+  | getWorkspaceHandoffChangesResponse404
+  | getWorkspaceHandoffChangesResponse426
+  | getWorkspaceHandoffChangesResponse500
+  | getWorkspaceHandoffChangesResponse503
+) & {
+  headers: Headers;
+};
+
+export type getWorkspaceHandoffChangesResponse =
+  | getWorkspaceHandoffChangesResponseSuccess
+  | getWorkspaceHandoffChangesResponseError;
+
+export const getGetWorkspaceHandoffChangesUrl = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return `/elitea_core/workspace_handoff_changes/prompt_lib/${projectId}/${conversationUuid}`;
+};
+
+/**
+ * Client contract 1.26 (ADR-0034 Phase 2, the Files changed view). The
+ * files each cloud turn of the current handoff changed, oldest turn
+ * first, and what all of them changed since the handoff snapshot
+ * (`cumulative`), with a status, +/- line counts where the worker could
+ * count them, and whether a diff is kept (`has_diff`; read it with
+ * getWorkspaceHandoffDiff). The worker records them when it publishes a
+ * turn; Main reads no git pack.
+ *
+ * Only the turns on the live chain are listed: from the handoff
+ * snapshot to `refs/elitea/cloud`, so a regenerated answer's earlier
+ * attempt is not. `complete` is false when a turn on that chain has no
+ * record (its record failed, or it ran before this view existed).
+ *
+ * A path that the thread's exclusions (the platform and project
+ * patterns, the files excluded at send) or the path deny list match is
+ * never listed, nor is a rename from or to one: it is counted in
+ * `hidden_files`. A thread with no handoff answers no turns.
+ *
+ * WHO. Any caller who may read the conversation (cookie or token, with
+ * `models.chat.conversation.details`), as getWorkspaceHandoff.
+ * @summary Read the files a cloud thread's turns changed
+ */
+export const getWorkspaceHandoffChanges = async (
+  projectId: string,
+  conversationUuid: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getWorkspaceHandoffChangesResponse> => {
+  return eliteaFetch<getWorkspaceHandoffChangesResponse>(
+    getGetWorkspaceHandoffChangesUrl(projectId, conversationUuid),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetWorkspaceHandoffChangesQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return [
+    `/elitea_core/workspace_handoff_changes/prompt_lib/${projectId}/${conversationUuid}`,
+  ] as const;
+};
+
+export const getGetWorkspaceHandoffChangesQueryOptions = <
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetWorkspaceHandoffChangesQueryKey(projectId, conversationUuid);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>
+  > = ({ signal }) =>
+    getWorkspaceHandoffChanges(projectId, conversationUuid, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetWorkspaceHandoffChangesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>
+>;
+export type GetWorkspaceHandoffChangesQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useGetWorkspaceHandoffChanges<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+          TError,
+          Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWorkspaceHandoffChanges<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+          TError,
+          Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWorkspaceHandoffChanges<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read the files a cloud thread's turns changed
+ */
+
+export function useGetWorkspaceHandoffChanges<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffChanges>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetWorkspaceHandoffChangesQueryOptions(
+    projectId,
+    conversationUuid,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getWorkspaceHandoffDiffResponse200 = {
+  data: WorkspaceHandoffDiff;
+  status: 200;
+};
+
+export type getWorkspaceHandoffDiffResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type getWorkspaceHandoffDiffResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getWorkspaceHandoffDiffResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type getWorkspaceHandoffDiffResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type getWorkspaceHandoffDiffResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type getWorkspaceHandoffDiffResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getWorkspaceHandoffDiffResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type getWorkspaceHandoffDiffResponseSuccess =
+  getWorkspaceHandoffDiffResponse200 & {
+    headers: Headers;
+  };
+export type getWorkspaceHandoffDiffResponseError = (
+  | getWorkspaceHandoffDiffResponse400
+  | getWorkspaceHandoffDiffResponse401
+  | getWorkspaceHandoffDiffResponse403
+  | getWorkspaceHandoffDiffResponse404
+  | getWorkspaceHandoffDiffResponse426
+  | getWorkspaceHandoffDiffResponse500
+  | getWorkspaceHandoffDiffResponse503
+) & {
+  headers: Headers;
+};
+
+export type getWorkspaceHandoffDiffResponse =
+  getWorkspaceHandoffDiffResponseSuccess | getWorkspaceHandoffDiffResponseError;
+
+export const getGetWorkspaceHandoffDiffUrl = (
+  projectId: string,
+  conversationUuid: string,
+  params: GetWorkspaceHandoffDiffParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/workspace_handoff_diff/prompt_lib/${projectId}/${conversationUuid}?${stringifiedParams}`
+    : `/elitea_core/workspace_handoff_diff/prompt_lib/${projectId}/${conversationUuid}`;
+};
+
+/**
+ * Client contract 1.26 (ADR-0034 Phase 2). The unified diff (git's
+ * format, 3 lines of context) the worker kept for one file of
+ * getWorkspaceHandoffChanges: `scope=turn` with that turn's `commit`, or
+ * `scope=cumulative` with `head_sha`. A diff is at most 48 KiB; a file
+ * with `has_diff` false has none (404 `diff_not_found`), and so has a
+ * path the exclusions or the path deny list match. Who may read it is
+ * as for getWorkspaceHandoffChanges.
+ * @summary Read one changed file's diff
+ */
+export const getWorkspaceHandoffDiff = async (
+  projectId: string,
+  conversationUuid: string,
+  params: GetWorkspaceHandoffDiffParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getWorkspaceHandoffDiffResponse> => {
+  return eliteaFetch<getWorkspaceHandoffDiffResponse>(
+    getGetWorkspaceHandoffDiffUrl(projectId, conversationUuid, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetWorkspaceHandoffDiffQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+  params?: GetWorkspaceHandoffDiffParams,
+) => {
+  return [
+    `/elitea_core/workspace_handoff_diff/prompt_lib/${projectId}/${conversationUuid}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetWorkspaceHandoffDiffQueryOptions = <
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  params: GetWorkspaceHandoffDiffParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetWorkspaceHandoffDiffQueryKey(projectId, conversationUuid, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>
+  > = ({ signal }) =>
+    getWorkspaceHandoffDiff(projectId, conversationUuid, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetWorkspaceHandoffDiffQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>
+>;
+export type GetWorkspaceHandoffDiffQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useGetWorkspaceHandoffDiff<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  params: GetWorkspaceHandoffDiffParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+          TError,
+          Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWorkspaceHandoffDiff<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  params: GetWorkspaceHandoffDiffParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+          TError,
+          Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWorkspaceHandoffDiff<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  params: GetWorkspaceHandoffDiffParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read one changed file's diff
+ */
+
+export function useGetWorkspaceHandoffDiff<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  params: GetWorkspaceHandoffDiffParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffDiff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetWorkspaceHandoffDiffQueryOptions(
+    projectId,
+    conversationUuid,
+    params,
     options,
   );
 
