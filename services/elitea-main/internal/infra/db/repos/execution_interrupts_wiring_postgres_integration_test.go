@@ -19,18 +19,24 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
+	grpcstatus "google.golang.org/grpc/status"
 
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
 	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
 )
 
 const interruptWorkloadIdentity = "spiffe://elitea.test/runtime/rust-worker"
@@ -422,7 +428,12 @@ func TestDecideVersusParkExactlyOneContinuation(t *testing.T) {
 
 func (h *interruptHarness) claimTLS() *tls.ConnectionState {
 	identity, _ := url.Parse(interruptWorkloadIdentity)
-	return &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{URIs: []*url.URL{identity}}}}}
+	return verifiedPeer(&x509.Certificate{URIs: []*url.URL{identity}})
+}
+
+// verifiedPeer is the TLS state of a caller whose certificate verified at the handshake.
+func verifiedPeer(certificate *x509.Certificate) *tls.ConnectionState {
+	return &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{certificate}}, PeerCertificates: []*x509.Certificate{certificate}}
 }
 
 type noContentAuthorizer struct{}
@@ -443,50 +454,72 @@ type privateCall struct {
 	execution   string
 	tlsState    *tls.ConnectionState
 	body        []byte
-	query       string
 	userSession bool
 }
 
-func (h *interruptHarness) privateRoutes() http.Handler {
+func (h *interruptHarness) privateRoutes() *storage.ContentServer {
 	h.t.Helper()
 	server, err := storage.NewContentServer(noContentAuthorizer{}, noContentStore{}, 8192)
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	return server.WithExecutionInterrupts(h.repo).Routes()
+	return server.WithExecutionInterrupts(h.repo)
 }
 
-func callPrivate(routes http.Handler, route string, call privateCall) *httptest.ResponseRecorder {
-	path := "/executions/" + call.execution + "/generations/1/interrupts/" + route
-	if call.query != "" {
-		path += "?" + call.query
+// privateAnswer is one RPC's outcome as the HTTP status of the same contract
+// row (v1.1 §7.1) and the canonical body.
+type privateAnswer struct {
+	Code int
+	Body *bytes.Buffer
+}
+
+// callPrivate calls the private fetch or ACK RPC as the Worker does: a
+// verified client certificate (tlsState) and the claim metadata.
+func callPrivate(server *storage.ContentServer, rpc string, call privateCall) privateAnswer {
+	ctx := context.Background()
+	if call.tlsState != nil {
+		ctx = peer.NewContext(ctx, &peer.Peer{AuthInfo: credentials.TLSInfo{State: *call.tlsState}})
 	}
-	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(call.body))
-	req.ContentLength = int64(len(call.body))
-	req.TLS = call.tlsState
+	var pairs []string
 	if call.claimID != "" {
-		req.Header.Set("X-Elitea-Claim-Id", call.claimID)
+		pairs = append(pairs, grpcauth.MetadataClaimID, call.claimID)
 	}
 	if call.fence != nil {
-		req.Header.Set("X-Elitea-Fence", base64.RawURLEncoding.EncodeToString(call.fence))
+		pairs = append(pairs, grpcauth.MetadataClaimFence, string(call.fence))
 	}
 	if call.userSession {
-		// A browser identity is never authority on the private listener.
-		req.Header.Set("X-Auth-Type", "user")
-		req.Header.Set("X-Auth-ID", "7")
-		req.Header.Set("Cookie", "elitea_session=opaque")
+		// A browser identity is never authority on the private plane.
+		pairs = append(pairs, "cookie", "elitea_session=opaque", "authorization", "Bearer browser")
 	}
-	w := httptest.NewRecorder()
-	routes.ServeHTTP(w, req)
-	return w
+	if len(pairs) > 0 {
+		ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(pairs...))
+	}
+	scope := &runtimev1.RuntimeContentScopeV1{ExecutionId: call.execution, Generation: 1}
+	var body []byte
+	var err error
+	if rpc == "fetch" {
+		response, callErr := server.FetchExecutionInterrupts(ctx, &runtimev1.FetchExecutionInterruptsRequestV1{Scope: scope})
+		body, err = response.GetFetchJson(), callErr
+	} else {
+		response, callErr := server.AcknowledgeExecutionInterrupt(ctx, &runtimev1.AcknowledgeExecutionInterruptRequestV1{Scope: scope, AckJson: call.body})
+		body, err = response.GetOutcomeJson(), callErr
+	}
+	status := map[codes.Code]int{
+		codes.OK: http.StatusOK, codes.PermissionDenied: http.StatusForbidden, codes.InvalidArgument: http.StatusBadRequest,
+		codes.NotFound: http.StatusNotFound, codes.AlreadyExists: http.StatusConflict, codes.Unavailable: http.StatusServiceUnavailable,
+	}[grpcstatus.Code(err)]
+	if status == 0 {
+		status = http.StatusInternalServerError
+	}
+	return privateAnswer{Code: status, Body: bytes.NewBuffer(body)}
 }
 
-// TestPrivateDecisionRoutesOverHTTP covers the private fetch/ACK routes end to
+// TestPrivateDecisionRoutesOverGRPC covers the private fetch/ACK RPCs end to
 // end (contract v1.1 §7.1), including the claim matrix: the live claim, an
 // unauthenticated caller (no client certificate), a user session, a foreign
 // workload identity, another execution's claim, a stale fence, a
 // NODE_RECOVERY claim, and the old claim after a takeover.
-func TestPrivateDecisionRoutesOverHTTP(t *testing.T) {
+func TestPrivateDecisionRoutesOverGRPC(t *testing.T) {
 	h := newInterruptHarness(t)
 	response := h.newResponse()
 	fence := h.bindLiveClaim(response)
@@ -504,7 +537,7 @@ func TestPrivateDecisionRoutesOverHTTP(t *testing.T) {
 	live := privateCall{claimID: fence.ClaimID, fence: fence.FenceToken, execution: fence.ExecutionID, tlsState: h.claimTLS()}
 
 	w := callPrivate(routes, "fetch", live)
-	if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("Content-Type") != "application/json" {
+	if w.Code != 200 {
 		t.Fatalf("live fetch: %d %s", w.Code, w.Body.String())
 	}
 	var fetch domain.Fetch
@@ -532,24 +565,13 @@ func TestPrivateDecisionRoutesOverHTTP(t *testing.T) {
 	}
 	foreign, _ := url.Parse("spiffe://elitea.test/runtime/other-worker")
 	foreignCall := refusals["foreign workload identity"]
-	foreignCall.tlsState = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{URIs: []*url.URL{foreign}}}}}
+	foreignCall.tlsState = verifiedPeer(&x509.Certificate{URIs: []*url.URL{foreign}})
 	refusals["foreign workload identity"] = foreignCall
 	for name, call := range refusals {
 		if w := callPrivate(routes, "fetch", call); w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), key) {
 			t.Errorf("%s fetch: %d %s", name, w.Code, w.Body.String())
 		}
 	}
-	bad := live
-	bad.query = "x=1"
-	if w := callPrivate(routes, "fetch", bad); w.Code != http.StatusBadRequest {
-		t.Errorf("query string: %d", w.Code)
-	}
-	bad = live
-	bad.body = []byte("{}")
-	if w := callPrivate(routes, "fetch", bad); w.Code != http.StatusBadRequest {
-		t.Errorf("fetch with a body: %d", w.Code)
-	}
-
 	checkpoint := "ckpt-http"
 	ackBody, err := json.Marshal(domain.Ack{InterruptKey: key, RequestID: fetch.Decisions[0].RequestID, Revision: 2,
 		DecisionSHA256: fetch.Decisions[0].DecisionSHA256, Outcome: domain.AckApplied, ChildCheckpointID: &checkpoint})

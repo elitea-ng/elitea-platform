@@ -128,29 +128,38 @@ type interruptResolvedFrame struct {
 // caller's transaction (contract §9). The frame carries the action of a
 // decision and never its value. A response with no agent execution in this
 // project (impossible for a raised card) is a ledger fault.
-func emitInterruptResolved(ctx context.Context, tx sqlExecutor, projectID int64, rootResponseID string, resolved []domain.Resolved) error {
+//
+// The returned notice names the highest replay cursor this call inserted; the
+// caller hands it to ExecutionInterruptSignals after its transaction commits,
+// so open tabs read the frames without waiting for the replay poll. A frame
+// that already existed (a replayed write) produces no notice.
+func emitInterruptResolved(ctx context.Context, tx sqlExecutor, projectID int64, rootResponseID string, resolved []domain.Resolved) (resolvedNotice, error) {
 	if len(resolved) == 0 {
-		return nil
+		return resolvedNotice{}, nil
 	}
+	notice := resolvedNotice{projectID: projectID}
 	var executionID, streamID, executionGeneration, sioEvent string
 	var generation int64
+	// The conversation's readers ride on the same statement (no extra round
+	// trip): the live project-plane copy goes to them only.
 	err := tx.QueryRow(ctx, `
-SELECT binding.execution_id, binding.generation, binding.client_stream_id, binding.client_execution_generation, binding.sio_event
+SELECT binding.execution_id, binding.generation, binding.client_stream_id, binding.client_execution_generation, binding.sio_event,
+       `+conversationReadersSQL("binding.client_stream_id")+`
 FROM elitea_runtime.agent_execution_jobs binding
 JOIN elitea_runtime.execution_jobs job USING (execution_id, generation)
 WHERE binding.client_message_id = $1 AND job.projection_project_id = $2 AND job.resource_project_id = $2
 ORDER BY job.admitted_at DESC, binding.generation DESC, binding.execution_id DESC
-LIMIT 1`, rootResponseID, projectID).Scan(&executionID, &generation, &streamID, &executionGeneration, &sioEvent)
+LIMIT 1`, rootResponseID, projectID).Scan(&executionID, &generation, &streamID, &executionGeneration, &sioEvent, &notice.audience)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.ErrLedgerFault
+		return resolvedNotice{}, domain.ErrLedgerFault
 	}
 	if err != nil {
-		return fmt.Errorf("execution interrupt resolved frame: %w", err)
+		return resolvedNotice{}, fmt.Errorf("execution interrupt resolved frame: %w", err)
 	}
 	for _, card := range resolved {
 		metadata, err := card.ResolvedMetadataJSON()
 		if err != nil {
-			return err
+			return resolvedNotice{}, err
 		}
 		frame, err := json.Marshal(interruptResolvedFrame{
 			Type: interruptResolvedEventType, StreamID: streamID, MessageID: rootResponseID,
@@ -159,31 +168,178 @@ LIMIT 1`, rootResponseID, projectID).Scan(&executionID, &generation, &streamID, 
 			SIOEvent:         sioEvent, ExecutionGeneration: executionGeneration,
 		})
 		if err != nil {
-			return fmt.Errorf("execution interrupt resolved frame: %w", err)
+			return resolvedNotice{}, fmt.Errorf("execution interrupt resolved frame: %w", err)
 		}
 		eventID := interruptResolvedEventIDPrefix + rootResponseID + ":" + card.InterruptKey + ":" + strconv.FormatInt(card.Revision, 10)
 		digest := runtimedomain.SHA256(frame)
 		var stored []byte
+		var cursor int64
+		var inserted bool
 		err = tx.QueryRow(ctx, `
 WITH inserted AS (
   INSERT INTO elitea_runtime.execution_replay_events (
       event_id, execution_id, generation, projection_project_id, event_type, event_bytes, event_digest)
   VALUES ($1, $2, $3, $4, $5, $6, $7)
   ON CONFLICT (event_id) DO NOTHING
-  RETURNING event_bytes
+  RETURNING event_bytes, cursor
 )
-SELECT event_bytes FROM inserted
+SELECT event_bytes, cursor, TRUE FROM inserted
 UNION ALL
-SELECT event_bytes FROM elitea_runtime.execution_replay_events WHERE event_id = $1 AND NOT EXISTS (SELECT 1 FROM inserted)`,
-			eventID, executionID, generation, projectID, replayEventNodeEvent, frame, digest[:]).Scan(&stored)
+SELECT event_bytes, cursor, FALSE FROM elitea_runtime.execution_replay_events WHERE event_id = $1 AND NOT EXISTS (SELECT 1 FROM inserted)`,
+			eventID, executionID, generation, projectID, replayEventNodeEvent, frame, digest[:]).Scan(&stored, &cursor, &inserted)
 		if err != nil {
-			return fmt.Errorf("execution interrupt resolved frame: %w", err)
+			return resolvedNotice{}, fmt.Errorf("execution interrupt resolved frame: %w", err)
 		}
 		if !bytes.Equal(stored, frame) {
-			return domain.ErrLedgerFault
+			return resolvedNotice{}, domain.ErrLedgerFault
+		}
+		if inserted && cursor > notice.cursor {
+			notice.executionID, notice.cursor = executionID, cursor
+		}
+		if inserted {
+			event, err := liveEventData(metadata, streamID, rootResponseID)
+			if err != nil {
+				return resolvedNotice{}, err
+			}
+			notice.live = append(notice.live, liveEvent{eventType: interruptResolvedEventType, data: event})
 		}
 	}
-	return nil
+	notice.conversationID = streamID
+	return notice, nil
+}
+
+// LiveFanoutWakeAdmittedEventType tells open tabs that a wake job was
+// admitted for a parked response, so they attach to its execution stream.
+const LiveFanoutWakeAdmittedEventType = "agent_fanout_wake_admitted"
+
+// maxLiveAudience bounds the readers one live frame names. A conversation
+// with more readers gets no live copy (the durable replay copy remains).
+const maxLiveAudience = 256
+
+// conversationReadersSQL selects, as a bigint[] in id order, the users who
+// may read the conversation whose uuid text is in streamExpression: its
+// author and its user participants. At most maxLiveAudience+1 ids, so an
+// oversized audience is detectable without an unbounded read. A stream id
+// that is not a conversation uuid yields an empty array.
+func conversationReadersSQL(streamExpression string) string {
+	return `COALESCE((
+  SELECT array_agg(readers.user_id ORDER BY readers.user_id) FROM (
+    SELECT DISTINCT reader.user_id FROM chat_conversations conversation
+    CROSS JOIN LATERAL (
+      SELECT conversation.author_id::bigint AS user_id
+      UNION
+      SELECT (participant.entity_meta ->> 'id')::bigint
+      FROM chat_participant_mapping mapping
+      JOIN chat_participants participant ON participant.id = mapping.participant_id AND participant.entity_name = 'user'
+      WHERE mapping.conversation_id = conversation.id AND participant.entity_meta ->> 'id' ~ '^[1-9][0-9]{0,17}$'
+    ) reader
+    WHERE conversation.uuid = CASE WHEN ` + streamExpression + ` ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                                    THEN (` + streamExpression + `)::uuid END
+      AND reader.user_id > 0
+    ORDER BY reader.user_id
+    LIMIT ` + strconv.Itoa(maxLiveAudience+1) + `
+  ) readers), '{}'::bigint[])`
+}
+
+// liveEventData is the project-plane payload of agent_hitl_resolved: the
+// fanout-interrupt-resolved object (never a decision value) plus the
+// conversation and root response it belongs to.
+func liveEventData(metadata []byte, conversationID, rootResponseID string) (map[string]any, error) {
+	var data map[string]any
+	if err := json.Unmarshal(metadata, &data); err != nil {
+		return nil, domain.ErrLedgerFault
+	}
+	data["conversation_id"] = conversationID
+	data["root_response_id"] = rootResponseID
+	return data, nil
+}
+
+// liveEvent is one project-plane event owed after commit.
+type liveEvent struct {
+	eventType string
+	data      map[string]any
+}
+
+// resolvedNotice is what one committed change owes open tabs: the replay
+// wake of the execution whose replay log received agent_hitl_resolved frames
+// (highest cursor), and the project-plane events for the conversation's
+// readers (audience), computed in the committing transaction.
+type resolvedNotice struct {
+	projectID      int64
+	executionID    string
+	cursor         int64
+	conversationID string
+	audience       []int64
+	live           []liveEvent
+}
+
+func (n resolvedNotice) valid() bool {
+	return n.projectID > 0 && n.executionID != "" && n.cursor > 0
+}
+
+// InterruptReplayNotifier wakes live replay streams of one execution (the
+// replay wake bus, runtimecomposition/execution_replay_wake.go).
+type InterruptReplayNotifier interface {
+	Notify(projectID, executionID string, cursor uint64)
+}
+
+// FanoutWakeKicker starts wake admission (agentexecution.FanoutWakeAdmitter).
+type FanoutWakeKicker interface {
+	Kick()
+}
+
+// InterruptLiveEvents publishes one event on the project SSE plane's
+// audience-scoped conversations family (events.ConversationsChannel). The payload carries an "audience" member (the user
+// ids allowed to receive it); the SSE relay delivers the frame only to those
+// callers and strips the member.
+type InterruptLiveEvents interface {
+	PublishInterruptEvent(ctx context.Context, projectID int64, eventType string, payload map[string]any)
+}
+
+// ExecutionInterruptSignals are the ledger's after-commit signals. Every
+// method is called only after the transaction that made the change visible
+// has committed, and both are advisory: a lost signal costs latency (the
+// replay poll, the wake sweep), never correctness. The zero value and a nil
+// pointer are silent. Fields are set once during composition, before any
+// request or output is served.
+type ExecutionInterruptSignals struct {
+	Replay InterruptReplayNotifier
+	Wakes  FanoutWakeKicker
+	Live   InterruptLiveEvents
+}
+
+func (s *ExecutionInterruptSignals) resolved(ctx context.Context, notices ...resolvedNotice) {
+	if s == nil {
+		return
+	}
+	for _, notice := range notices {
+		if s.Replay != nil && notice.valid() {
+			s.Replay.Notify(strconv.FormatInt(notice.projectID, 10), notice.executionID, uint64(notice.cursor))
+		}
+		if s.Live == nil || len(notice.live) == 0 || notice.projectID <= 0 {
+			continue
+		}
+		if len(notice.audience) == 0 || len(notice.audience) > maxLiveAudience {
+			// No live copy; the durable replay copy and a reload still show it.
+			slog.Info("execution interrupt live event not published", "reason", "audience_out_of_bounds",
+				"readers", len(notice.audience))
+			continue
+		}
+		for _, event := range notice.live {
+			payload := make(map[string]any, len(event.data)+1)
+			for key, value := range event.data {
+				payload[key] = value
+			}
+			payload["audience"] = notice.audience
+			s.Live.PublishInterruptEvent(context.WithoutCancel(ctx), notice.projectID, event.eventType, payload)
+		}
+	}
+}
+
+func (s *ExecutionInterruptSignals) wakeQueued(queued bool) {
+	if queued && s != nil && s.Wakes != nil {
+		s.Wakes.Kick()
+	}
 }
 
 func wakeClosedFailureCode(state domain.State) string {
@@ -197,6 +353,9 @@ func wakeClosedFailureCode(state domain.State) string {
 // partial unique index allows one active wake per response; the caller holds
 // the per-response row lock, so a second active wake is a ledger fault.
 func insertWake(ctx context.Context, tx sqlExecutor, projectID int64, rootResponseID string, decisionRevision int64, parkedExecution string, parkedGeneration int64) error {
+	if err := retireSettledWakes(ctx, tx, rootResponseID); err != nil {
+		return err
+	}
 	var queued int
 	err := tx.QueryRow(ctx, `
 WITH unparked AS (
@@ -242,6 +401,10 @@ type ParkSettlement struct {
 //   - otherwise the response is recorded parked, and the next decision
 //     queues the wake.
 func (r *ExecutionInterruptRepository) SettleParkedResponse(ctx context.Context, tx sqlExecutor, projectID int64, rootResponseID, executionID string, generation, decisionRevisionSeen int64) (ParkSettlement, error) {
+	return settleParkedResponse(ctx, tx, projectID, rootResponseID, executionID, generation, decisionRevisionSeen)
+}
+
+func settleParkedResponse(ctx context.Context, tx sqlExecutor, projectID int64, rootResponseID, executionID string, generation, decisionRevisionSeen int64) (ParkSettlement, error) {
 	if tx == nil || projectID <= 0 || !domain.ValidResponseMessageID(rootResponseID) || !domain.ValidExecutionID(executionID) ||
 		generation <= 0 || decisionRevisionSeen < 0 {
 		return ParkSettlement{}, domain.ErrInvalidRaise
@@ -272,6 +435,9 @@ WHERE root_response_id = $1::uuid AND state = 'ADMITTED' AND wake_execution_id =
 	}
 	settlement := ParkSettlement{DecisionRevision: current}
 	if current > decisionRevisionSeen || decided {
+		if err := retireSettledWakes(ctx, tx, rootResponseID); err != nil {
+			return ParkSettlement{}, err
+		}
 		var active bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM elitea_runtime.execution_interrupt_wakes
 WHERE root_response_id = $1::uuid AND state IN ('QUEUED', 'ADMITTED'))`, rootResponseID).Scan(&active); err != nil {

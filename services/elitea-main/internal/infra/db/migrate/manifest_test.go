@@ -737,7 +737,8 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// per-interrupt decision ledger (fanout-interrupt-decisions v1.1 §8): the
 	// park columns on execution_interrupt_responses and
 	// elitea_runtime.execution_interrupt_wakes with the partial unique index
-	// "one active continuation per response". No data, no permission.
+	// "one active continuation per response", and the open-card index a new
+	// turn supersedes through. No data, no permission.
 	require.EqualValues(t, 173, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)

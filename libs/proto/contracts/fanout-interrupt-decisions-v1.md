@@ -387,6 +387,44 @@ the pending fan-out node and fetches.
   (`libs/proto/elitea/runtime/v1/control.proto`) when it implements this contract. Main never grants a `fanout_wake`
   job to a claim without it (the claim is answered retry-later, so an older Worker in a rolling deploy cannot run a wake
   as a fresh turn).
+- **Parked terminal frame (Main wiring).** The parked execution ends with the existing paused terminal: terminal state
+  `PAUSED_HITL`, result artifact `node-event:{execution}:hitl-interrupt`, NodeEvent `type` `agent_hitl_interrupt`, a
+  non-empty `content` string, `response_metadata.thread_id` and `response_metadata.fanout_parked_v1`. It carries none of
+  `hitl_interrupt`, `hitl_interrupts`, `authorization_requests`, `parallel_pause_v1`, `node_recovery_required_v1`. Main
+  validates the payload against `fanout-parked` and requires every `pending` entry to be a card of this response
+  (`interrupt_key` and `interrupt_id`) and `decision_revision_seen` not to exceed the response's revision; otherwise the
+  frame is refused as a result mismatch (never stored as a silent park). Main stores the canonical payload on the
+  response and settles the park in the same transaction.
+- **Wake job (Main wiring).** The wake job is an ordinary agent execution of the parked execution's capability, actor,
+  tenant and projects, bound to the same `client_stream_id`, `client_message_id` and `client_execution_generation`, with
+  `sio_event` `chat_continue_predict`, and with `thread_id` set to the parked response's thread. Its input is the parked
+  execution's frozen request entry (digest-checked) with only the §8.1 changes; `meta` keeps every frozen member except
+  the static resume markers (`pipeline_static_resume_v1`, `pipeline_static_tool_resume_v1`). Main admits it after the
+  queuing transaction commits and from a sweep every 5 s (16 rows per pass, `FOR UPDATE SKIP LOCKED`, a claimed row is
+  skipped for 30 s on the database clock, at most 20 attempts). The original actor is rechecked at the claim and again
+  inside the admission transaction; a wake that can never run ends `FAILED` with `failure_code` `actor_not_allowed`,
+  `response_not_parked`, `parked_input_invalid`, `admission_refused` or `admission_exhausted`, and its cards stay
+  `DECIDED`. An `ADMITTED` wake becomes `DONE` when its execution parks again, or lazily when its job is terminal.
+- **New turn.** Admitting a new user turn in a conversation supersedes every open card of the conversation's earlier
+  responses in the same transaction (queued wakes `FAILED` `response_superseded`, `agent_hitl_resolved` per card).
+- **Live delivery of `agent_hitl_resolved`.** A park is terminal for the execution stream, and Web does not hold it
+  open. After the deciding, stopping, regenerating or new-turn transaction commits (never before), Main:
+  - publishes one `agent_hitl_resolved` event per resolution on the project SSE plane
+    (`GET /api/v2/events/prompt_lib/{projectId}`), data = the `fanout-interrupt-resolved` object (never a value) plus
+    `conversation_id` (the conversation uuid) and `root_response_id`;
+  - publishes `agent_fanout_wake_admitted` `{conversation_id, root_response_id, execution_id, generation}` when a wake
+    job is admitted, so open tabs attach to that execution's stream;
+  - also wakes the replay stream of the response's latest execution, and keeps the durable replay-log copy for reload.
+
+  Both project-plane events use their own audience-scoped family, the **conversation** family: NATS subject
+  `elitea.events.project.<id>.conversation`, logical channel `project:<id>:conversation`, MAIN account, published by
+  elitea-main only (`deploy/helm/nats/values.yaml`, `deploy/helm/nats/README.md`). The SSE route relays exactly these two
+  types from it. Each frame names the conversation's readers (its author and user participants, computed in the
+  committing transaction, at most 256); the relay delivers it only to a caller in that list and strips the list. Web
+  receives them on the project stream it already holds, as SSE events named `agent_hitl_resolved` and
+  `agent_fanout_wake_admitted`.
+  A conversation with more readers gets no live copy. Live delivery is at most once; a lost event costs latency only
+  (reload or the next frame reconciles).
 
 ## 8a. Fan-out join and On Error (v1.1, binding user decision 2026-10-12)
 

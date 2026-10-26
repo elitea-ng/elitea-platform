@@ -27,8 +27,9 @@ import (
 // browser correlation. Conversation content and trace steps remain owned by
 // the existing per-project chat schema.
 type AgentExecutionJobsRepository struct {
-	pool   *pgxpool.Pool
-	policy AgentExecutionDispatchPolicy
+	pool    *pgxpool.Pool
+	signals *ExecutionInterruptSignals
+	policy  AgentExecutionDispatchPolicy
 	// catalogueProjectID is the ONE public project, the same id
 	// CurrentAgentStartRepository admits a foreign participant from. The turn
 	// INSERT repeats that admission rather than trusting the resolve that
@@ -93,6 +94,13 @@ func (r *AgentExecutionJobsRepository) ExpectedAgentExecution(
 		return outputapp.ExpectedAgentExecution{}, fmt.Errorf("invalid stored agent output binding: %w", err)
 	}
 	return expected, nil
+}
+
+// SetInterruptSignals installs the after-commit live wake for the
+// agent_hitl_resolved frames a regenerate or a new turn emits when it
+// supersedes open cards. Call it during composition.
+func (r *AgentExecutionJobsRepository) SetInterruptSignals(signals *ExecutionInterruptSignals) {
+	r.signals = signals
 }
 
 func NewAgentExecutionJobsRepository(
@@ -197,6 +205,19 @@ func (r *AgentExecutionJobsRepository) AdmitAgentExecution(
 			return executionapp.AdmissionOutcome{}, executionapp.ErrInvalidAdmission
 		}
 	}
+	if admission.CurrentFanoutWakeTurn != nil {
+		turn := admission.CurrentFanoutWakeTurn
+		if admission.CurrentTurn != nil || admission.CurrentAdhocTurn != nil || admission.CurrentRegenerateTurn != nil ||
+			admission.CurrentContinueTurn != nil || turn.Validate() != nil || turn.ProjectID > math.MaxInt32 ||
+			turn.ProjectID != resourceProjectIDUnchecked(admission.Record.Job.ResourceProjectID) ||
+			admission.Record.IdempotencyKey != agentexecutionapp.FanoutWakeIdempotencyKey(turn.ResponseMessageID, turn.DecisionRevision) ||
+			turn.ResponseMessageID != admission.Binding.ClientMessageID ||
+			turn.ConversationUUID != admission.Binding.ClientStreamID ||
+			turn.ExecutionGeneration != admission.Binding.ClientExecutionGeneration ||
+			admission.Binding.SIOEvent != "chat_continue_predict" {
+			return executionapp.AdmissionOutcome{}, executionapp.ErrInvalidAdmission
+		}
+	}
 
 	resourceProject, err := parseProjectID(admission.Record.Job.ResourceProjectID)
 	if err != nil || resourceProject > math.MaxInt32 {
@@ -236,7 +257,12 @@ func (r *AgentExecutionJobsRepository) AdmitAgentExecution(
 	if err := r.reserveAgentAdmission(ctx, admission); err != nil {
 		return executionapp.AdmissionOutcome{}, err
 	}
-	outcome, err := r.materializeAgentAdmission(ctx, admission, resourceProject, projectionProject)
+	outcome, notices, err := r.materializeAgentAdmission(ctx, admission, resourceProject, projectionProject)
+	if err == nil {
+		// After commit: open tabs drop the cards a regenerate or new turn
+		// superseded, and attach to an admitted wake's execution.
+		r.signals.resolved(ctx, notices...)
+	}
 	if err != nil || !outcome.Created {
 		// The reserve committed but this call did not commit a new job: an
 		// error, a cancelled request, or a replay resolved against the durable
@@ -426,14 +452,15 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 	admission agentexecutionapp.Admission,
 	resourceProject,
 	projectionProject int64,
-) (executionapp.AdmissionOutcome, error) {
+) (executionapp.AdmissionOutcome, []resolvedNotice, error) {
 	capabilityID := admission.Record.Job.CapabilityID
+	var notices []resolvedNotice
 	tx, err := r.pool.BeginTx(
 		ctx,
 		pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite},
 	)
 	if err != nil {
-		return executionapp.AdmissionOutcome{}, fmt.Errorf("begin agent admission materialize: %w", err)
+		return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("begin agent admission materialize: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -451,6 +478,8 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 		currentProjectID = admission.CurrentRegenerateTurn.ProjectID
 	} else if admission.CurrentContinueTurn != nil {
 		currentProjectID = admission.CurrentContinueTurn.ProjectID
+	} else if admission.CurrentFanoutWakeTurn != nil {
+		currentProjectID = admission.CurrentFanoutWakeTurn.ProjectID
 	}
 	if currentProjectID > 0 {
 		if err := tenant.BindProject(
@@ -458,7 +487,7 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 			tx,
 			tenant.Project{ID: currentProjectID},
 		); err != nil {
-			return executionapp.AdmissionOutcome{}, fmt.Errorf("bind current agent project: %w", err)
+			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("bind current agent project: %w", err)
 		}
 		conversationID := ""
 		if admission.CurrentTurn != nil {
@@ -467,18 +496,20 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 			conversationID = admission.CurrentAdhocTurn.ConversationUUID
 		} else if admission.CurrentRegenerateTurn != nil {
 			conversationID = admission.CurrentRegenerateTurn.ConversationUUID
+		} else if admission.CurrentFanoutWakeTurn != nil {
+			conversationID = admission.CurrentFanoutWakeTurn.ConversationUUID
 		} else {
 			conversationID = admission.CurrentContinueTurn.ConversationUUID
 		}
 		conversationUUID, err := currentPGUUID(conversationID)
 		if err != nil {
-			return executionapp.AdmissionOutcome{}, executionapp.ErrInvalidAdmission
+			return executionapp.AdmissionOutcome{}, nil, executionapp.ErrInvalidAdmission
 		}
 		if _, err := txQueries.LockCurrentAgentConversation(ctx, conversationUUID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return executionapp.AdmissionOutcome{}, agentexecutionapp.ErrUnsupportedCurrentAgentStart
+				return executionapp.AdmissionOutcome{}, nil, agentexecutionapp.ErrUnsupportedCurrentAgentStart
 			}
-			return executionapp.AdmissionOutcome{}, fmt.Errorf("lock current agent conversation: %w", err)
+			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("lock current agent conversation: %w", err)
 		}
 	}
 
@@ -491,26 +522,26 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 	switch {
 	case err == nil:
 		if digest != admission.Record.RequestDigest {
-			return executionapp.AdmissionOutcome{}, executionapp.ErrIdempotencyConflict
+			return executionapp.AdmissionOutcome{}, nil, executionapp.ErrIdempotencyConflict
 		}
 		if err := tx.Commit(ctx); err != nil {
-			return executionapp.AdmissionOutcome{}, fmt.Errorf("commit agent admission replay: %w", err)
+			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("commit agent admission replay: %w", err)
 		}
 		committed = true
-		return existing, nil
+		return existing, nil, nil
 	case !errors.Is(err, pgx.ErrNoRows):
-		return executionapp.AdmissionOutcome{}, fmt.Errorf("reload agent idempotency binding: %w", err)
+		return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("reload agent idempotency binding: %w", err)
 	}
 
 	// Publication and expiry use the database clock. Keep admission timing
 	// on that clock so host clock drift cannot change the durable deadline.
 	timingRow, err := txQueries.LoadRuntimeAdmissionTiming(ctx, r.policy.DeadlineTTL.Milliseconds())
 	if err != nil {
-		return executionapp.AdmissionOutcome{}, fmt.Errorf("load agent admission timing: %w", err)
+		return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("load agent admission timing: %w", err)
 	}
 	timing, err := decodeAdmissionTiming(timingRow, r.policy.DeadlineTTL)
 	if err != nil {
-		return executionapp.AdmissionOutcome{}, err
+		return executionapp.AdmissionOutcome{}, nil, err
 	}
 	if err := insertRuntimeInputBundle(
 		ctx,
@@ -519,7 +550,7 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 		admission.Record,
 		timing.AdmittedAt,
 	); err != nil {
-		return executionapp.AdmissionOutcome{}, err
+		return executionapp.AdmissionOutcome{}, nil, err
 	}
 	createdID, err := txQueries.InsertAgentExecutionJob(
 		ctx,
@@ -553,23 +584,23 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 			admission.Record.IdempotencyKey,
 		)
 		if loadErr != nil {
-			return executionapp.AdmissionOutcome{}, fmt.Errorf("load concurrent agent admission: %w", loadErr)
+			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("load concurrent agent admission: %w", loadErr)
 		}
 		if digest != admission.Record.RequestDigest {
-			return executionapp.AdmissionOutcome{}, executionapp.ErrIdempotencyConflict
+			return executionapp.AdmissionOutcome{}, nil, executionapp.ErrIdempotencyConflict
 		}
 		if rollbackErr := tx.Rollback(context.WithoutCancel(ctx)); rollbackErr != nil &&
 			!errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			return executionapp.AdmissionOutcome{}, fmt.Errorf("rollback concurrent agent admission: %w", rollbackErr)
+			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("rollback concurrent agent admission: %w", rollbackErr)
 		}
 		committed = true
-		return existing, nil
+		return existing, nil, nil
 	}
 	if err != nil {
-		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert agent execution job: %w", err)
+		return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("insert agent execution job: %w", err)
 	}
 	if createdID != admission.Record.Job.ID {
-		return executionapp.AdmissionOutcome{}, errors.New("agent execution job insert changed identity")
+		return executionapp.AdmissionOutcome{}, nil, errors.New("agent execution job insert changed identity")
 	}
 	if err := txQueries.InsertAgentExecutionBinding(
 		ctx,
@@ -585,26 +616,40 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 			SioEvent:                  admission.Binding.SIOEvent,
 		},
 	); err != nil {
-		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert agent execution binding: %w", err)
+		return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("insert agent execution binding: %w", err)
 	}
 	if admission.CurrentTurn != nil {
+		turn := admission.CurrentTurn
 		if err := insertCurrentApplicationTurn(
 			ctx,
 			txQueries,
 			admission.Record.Job.ID,
-			*admission.CurrentTurn,
+			*turn,
 			r.catalogueProjectID,
 		); err != nil {
-			return executionapp.AdmissionOutcome{}, err
+			return executionapp.AdmissionOutcome{}, nil, err
+		}
+		// A new user turn supersedes the open cards of the conversation's
+		// earlier responses (fanout-interrupt-decisions §5), atomically.
+		notices, err = supersedeEarlierTurnInterrupts(ctx, pgxExecutor{queryer: tx}, turn.ProjectID,
+			turn.ConversationUUID, turn.ResponseMessageID, turn.ActorUserID)
+		if err != nil {
+			return executionapp.AdmissionOutcome{}, nil, err
 		}
 	} else if admission.CurrentAdhocTurn != nil {
+		turn := admission.CurrentAdhocTurn
 		if err := insertCurrentAdhocTurn(
 			ctx,
 			txQueries,
 			admission.Record.Job.ID,
-			*admission.CurrentAdhocTurn,
+			*turn,
 		); err != nil {
-			return executionapp.AdmissionOutcome{}, err
+			return executionapp.AdmissionOutcome{}, nil, err
+		}
+		notices, err = supersedeEarlierTurnInterrupts(ctx, pgxExecutor{queryer: tx}, turn.ProjectID,
+			turn.ConversationUUID, turn.ResponseMessageID, turn.ActorUserID)
+		if err != nil {
+			return executionapp.AdmissionOutcome{}, nil, err
 		}
 	} else if admission.CurrentRegenerateTurn != nil {
 		if err := resetCurrentAgentResponse(
@@ -614,16 +659,25 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 			admission.Record.Job.ID,
 			*admission.CurrentRegenerateTurn,
 		); err != nil {
-			return executionapp.AdmissionOutcome{}, err
+			return executionapp.AdmissionOutcome{}, nil, err
 		}
 		// Regenerate and edit-and-resend supersede every open per-interrupt
 		// card of the response in the same transaction that resets it
 		// (fanout-interrupt-decisions §5), so a late ACK meets a closed card.
 		regenerate := admission.CurrentRegenerateTurn
-		if _, err := closeOpenExecutionInterrupts(ctx, pgxExecutor{queryer: tx}, regenerate.ResponseMessageID,
-			interruptdomain.StateSuperseded, interruptdomain.Closer{ActorUserID: regenerate.ActorUserID}); err != nil {
-			return executionapp.AdmissionOutcome{}, fmt.Errorf("supersede open interrupt cards: %w", err)
+		_, notice, err := closeOpenExecutionInterrupts(ctx, pgxExecutor{queryer: tx}, regenerate.ResponseMessageID,
+			interruptdomain.StateSuperseded, interruptdomain.Closer{ActorUserID: regenerate.ActorUserID})
+		if err != nil {
+			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("supersede open interrupt cards: %w", err)
 		}
+		notices = append(notices, notice)
+	} else if admission.CurrentFanoutWakeTurn != nil {
+		notice, err := admitCurrentFanoutWake(ctx, pgxExecutor{queryer: tx}, admission.Record.Job.ID,
+			admission.Record.Job.Generation, *admission.CurrentFanoutWakeTurn)
+		if err != nil {
+			return executionapp.AdmissionOutcome{}, nil, err
+		}
+		notices = append(notices, notice)
 	} else if admission.CurrentContinueTurn != nil {
 		turn := *admission.CurrentContinueTurn
 		var resumeErr error
@@ -642,7 +696,7 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 			resumeErr = resumeCurrentAgentHITL(ctx, txQueries, admission.Record.Job.ID, turn)
 		}
 		if resumeErr != nil {
-			return executionapp.AdmissionOutcome{}, resumeErr
+			return executionapp.AdmissionOutcome{}, nil, resumeErr
 		}
 	}
 	if err := txQueries.InsertRuntimeCommandOutbox(
@@ -660,7 +714,7 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 			CreatedAt:      timestamp(timing.AdmittedAt),
 		},
 	); err != nil {
-		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert agent command outbox: %w", err)
+		return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("insert agent command outbox: %w", err)
 	}
 	// Mark the reserved slot materialized in the same commit as the job.
 	marked, err := txQueries.MarkAgentAdmissionMaterialized(
@@ -672,7 +726,7 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 		},
 	)
 	if err != nil {
-		return executionapp.AdmissionOutcome{}, fmt.Errorf("mark agent admission materialized: %w", err)
+		return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("mark agent admission materialized: %w", err)
 	}
 	if marked == 0 {
 		// The reaper reclaimed the reservation as stale while this materialize
@@ -681,21 +735,21 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 		// the freed slot. Re-check the cap under the policy row lock, counting
 		// this transaction's own job, before committing over it (issue 965).
 		if _, err := txQueries.LockRuntimeAdmissionPolicy(ctx, capabilityID); err != nil {
-			return executionapp.AdmissionOutcome{}, fmt.Errorf("lock agent admission policy after reap: %w", err)
+			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("lock agent admission policy after reap: %w", err)
 		}
 		slots, err := txQueries.CountAgentAdmissionSlots(ctx, capabilityID)
 		if err != nil {
-			return executionapp.AdmissionOutcome{}, fmt.Errorf("count agent admission slots after reap: %w", err)
+			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("count agent admission slots after reap: %w", err)
 		}
 		if slots > r.policy.MaxOutstanding {
-			return executionapp.AdmissionOutcome{}, &executionapp.AdmissionCapacityError{
+			return executionapp.AdmissionOutcome{}, nil, &executionapp.AdmissionCapacityError{
 				CapabilityID:   capabilityID,
 				MaxOutstanding: r.policy.MaxOutstanding,
 			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return executionapp.AdmissionOutcome{}, fmt.Errorf("commit agent admission: %w", err)
+		return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("commit agent admission: %w", err)
 	}
 	committed = true
 	return executionapp.AdmissionOutcome{
@@ -704,7 +758,7 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 		Created:     true,
 		AdmittedAt:  timing.AdmittedAt,
 		Deadline:    timing.Deadline,
-	}, nil
+	}, notices, nil
 }
 
 func resetCurrentAgentResponse(

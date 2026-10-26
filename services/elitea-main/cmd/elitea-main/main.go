@@ -1932,6 +1932,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// runtimecomposition.Dependencies.PipelineRuns' own doc comment.
 			PipelineRuns: pipelineRunsRepo,
 			DomainEvents: domainEvents,
+			// The per-interrupt ledger's live frames, on the project's
+			// audience-scoped conversation family.
+			InterruptLiveEvents: newInterruptLiveEvents(workspaceBus),
 			// The cloud executor (ADR-0034): all four adapters when the
 			// workspace handoff is composed, none otherwise; and how a project
 			// host allowlist is enforced (decision 9, the egress proxy and its

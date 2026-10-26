@@ -119,7 +119,7 @@ func TestExecutionInterruptPublicRouteAuthorizationMatrix(t *testing.T) {
 	response := h.newResponse()
 	key := h.raise(response, "fanout-interrupt-card-v1.json")
 	route, err := agentexecutionapi.NewCurrentExecutionInterruptRoute(h.repo,
-		apimw.AuthConfig{PrincipalValidator: interruptPrincipalValidator{}, ForwardedIdentityVerifier: interruptPeerVerifier{}},
+		apimw.AuthConfig{PrincipalValidator: interruptPrincipalValidator{}, FormSessions: authtest.FormSessions{}, Validator: authtest.Tokens{}},
 		legacyrbac.NewPostgresResolver(h.pool))
 	if err != nil {
 		t.Fatal(err)
@@ -137,13 +137,13 @@ func TestExecutionInterruptPublicRouteAuthorizationMatrix(t *testing.T) {
 		req := httptest.NewRequest(method, path, bytes.NewReader(body))
 		switch authType {
 		case "user":
-			req.Header.Set("X-Auth-Type", "user")
-			req.Header.Set("X-Auth-ID", strconv.FormatInt(actor, 10))
+			authtest.SignIn(req, strconv.FormatInt(actor, 10))
 		case "token":
 			// A personal access token: the token id differs from its owner.
-			req.Header.Set("X-Auth-Type", "token")
-			req.Header.Set("X-Auth-ID", "900"+strconv.FormatInt(actor, 10)) // the seeded token ids
-			req.Header.Set("X-Auth-User-ID", strconv.FormatInt(actor, 10))
+			authtest.BearerToken(req, "900"+strconv.FormatInt(actor, 10), strconv.FormatInt(actor, 10)) // the seeded token ids
+		case "forged":
+			// The retired forward-auth identity headers, no credential.
+			authtest.ForgeXAuth(req, strconv.FormatInt(actor, 10))
 		}
 		w := httptest.NewRecorder()
 		route.ServeHTTP(w, req)
@@ -161,6 +161,7 @@ func TestExecutionInterruptPublicRouteAuthorizationMatrix(t *testing.T) {
 	foreignProject := strings.Replace(base, "/prompt_lib/1/", "/prompt_lib/2/", 1)
 	refused := []matrixCase{
 		{"unauthenticated", "", 0, base, http.StatusUnauthorized, http.StatusUnauthorized},
+		{"forged identity headers of the owner", "forged", interruptOwner, base, http.StatusUnauthorized, http.StatusUnauthorized},
 		{"project member outside the conversation", "user", interruptOutsider, base, http.StatusForbidden, http.StatusForbidden},
 		{"member of another project only", "user", interruptForeigner, base, http.StatusForbidden, http.StatusForbidden},
 		{"owner through another project", "user", interruptOwner, foreignProject, http.StatusForbidden, http.StatusForbidden},

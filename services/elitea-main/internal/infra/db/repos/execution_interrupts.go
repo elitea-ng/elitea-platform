@@ -33,6 +33,14 @@ type ExecutionInterruptRepository struct {
 	projects    projectStore
 	shared      sharedStore
 	permissions interruptPermissionCheck
+	signals     *ExecutionInterruptSignals
+}
+
+// SetSignals installs the after-commit signals (live replay wake for
+// agent_hitl_resolved, wake admission kick). Call it during composition,
+// before the repository serves anything.
+func (r *ExecutionInterruptRepository) SetSignals(signals *ExecutionInterruptSignals) {
+	r.signals = signals
 }
 
 type interruptPermissionCheck func(ctx context.Context, tx sqlExecutor, projectID, actorID int64, permission string) error
@@ -327,7 +335,10 @@ func (r *ExecutionInterruptRepository) Decide(ctx context.Context, input domain.
 	}
 	selector := input.Selector
 	var result domain.DecideResult
+	var notice resolvedNotice
+	var wakeQueued bool
 	err = r.projects.WithinProjectTx(ctx, selector.ProjectID, interruptWriteTx, func(tx sqlExecutor) error {
+		notice, wakeQueued = resolvedNotice{}, false
 		if _, err := lockOwnedResponse(ctx, tx, selector, true); err != nil {
 			return err
 		}
@@ -405,21 +416,30 @@ SELECT decided.revision, bumped.decision_revision, bumped.parked_execution_id, b
 		// Same transaction (contract §6, §8): other tabs drop the card, and a
 		// parked response gets exactly one wake.
 		action := decision.Action
-		if err := emitInterruptResolved(ctx, tx, selector.ProjectID, selector.ResponseMessageID, []domain.Resolved{{
+		emitted, err := emitInterruptResolved(ctx, tx, selector.ProjectID, selector.ResponseMessageID, []domain.Resolved{{
 			InterruptKey: input.InterruptKey, InterruptID: row.interruptID, State: domain.StateDecided,
 			Revision: result.Revision, Action: &action,
-		}}); err != nil {
+		}})
+		if err != nil {
 			return err
 		}
+		notice = emitted
 		if parkedExecution == nil || parkedGeneration == nil {
 			return nil // running or queued: the live tick or restore fetch delivers it
 		}
 		// Parked (contract §8): this decision admits the one wake.
-		return insertWake(ctx, tx, selector.ProjectID, selector.ResponseMessageID, result.DecisionRevision, *parkedExecution, *parkedGeneration)
+		if err := insertWake(ctx, tx, selector.ProjectID, selector.ResponseMessageID, result.DecisionRevision, *parkedExecution, *parkedGeneration); err != nil {
+			return err
+		}
+		wakeQueued = true
+		return nil
 	})
 	if err != nil {
 		return domain.DecideResult{}, fmt.Errorf("execution interrupt decide: %w", err)
 	}
+	// After commit only: the frame and the wake row are durable now.
+	r.signals.resolved(ctx, notice)
+	r.signals.wakeQueued(wakeQueued)
 	return result, nil
 }
 
@@ -627,27 +647,35 @@ SELECT revision FROM acked`, scope.responseID, ack.InterruptKey, row.revision, s
 // transaction, which already holds the chat_message_group response row lock
 // (pattern agent_cancel.sql), so closing is atomic with the stop or
 // regenerate. One statement; at most MaxOpenInterrupts rows.
+//
+// They run on the caller's transaction, so they cannot know when it commits
+// and send no live replay wake; the stop, regenerate and new-turn paths call
+// closeOpenExecutionInterrupts and signal after their own commit.
 func (r *ExecutionInterruptRepository) CancelAllForResponse(ctx context.Context, tx sqlExecutor, rootResponseID string, by domain.Closer) ([]domain.Resolved, error) {
-	return closeOpenExecutionInterrupts(ctx, tx, rootResponseID, domain.StateCancelled, by)
+	closed, _, err := closeOpenExecutionInterrupts(ctx, tx, rootResponseID, domain.StateCancelled, by)
+	return closed, err
 }
 
 func (r *ExecutionInterruptRepository) SupersedeForResponse(ctx context.Context, tx sqlExecutor, rootResponseID string, by domain.Closer) ([]domain.Resolved, error) {
-	return closeOpenExecutionInterrupts(ctx, tx, rootResponseID, domain.StateSuperseded, by)
+	closed, _, err := closeOpenExecutionInterrupts(ctx, tx, rootResponseID, domain.StateSuperseded, by)
+	return closed, err
 }
 
-func closeOpenExecutionInterrupts(ctx context.Context, tx sqlExecutor, rootResponseID string, state domain.State, by domain.Closer) ([]domain.Resolved, error) {
+// closeOpenExecutionInterrupts returns the closed cards and the replay notice
+// the caller owes after its commit.
+func closeOpenExecutionInterrupts(ctx context.Context, tx sqlExecutor, rootResponseID string, state domain.State, by domain.Closer) ([]domain.Resolved, resolvedNotice, error) {
 	if tx == nil || !domain.ValidResponseMessageID(rootResponseID) || !by.Valid() {
-		return nil, domain.ErrInvalidClose
+		return nil, resolvedNotice{}, domain.ErrInvalidClose
 	}
 	// Take the per-response lock that Raise takes, so a raise in flight
 	// commits first and its card is closed by the UPDATE below.
 	var projectID int64
 	err := tx.QueryRow(ctx, `SELECT project_id FROM elitea_runtime.execution_interrupt_responses WHERE root_response_id = $1::uuid FOR UPDATE`, rootResponseID).Scan(&projectID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return []domain.Resolved{}, nil
+		return []domain.Resolved{}, resolvedNotice{}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("execution interrupt close: %w", err)
+		return nil, resolvedNotice{}, fmt.Errorf("execution interrupt close: %w", err)
 	}
 	var actor, claim any
 	if by.ActorUserID > 0 {
@@ -667,19 +695,19 @@ WITH closed AS (
 )
 SELECT interrupt_key, interrupt_id, revision FROM closed ORDER BY interrupt_key`, rootResponseID, string(state), actor, claim)
 	if err != nil {
-		return nil, fmt.Errorf("execution interrupt close: %w", err)
+		return nil, resolvedNotice{}, fmt.Errorf("execution interrupt close: %w", err)
 	}
 	defer rows.Close()
 	closed := []domain.Resolved{}
 	for rows.Next() {
 		resolved := domain.Resolved{State: state}
 		if err := rows.Scan(&resolved.InterruptKey, &resolved.InterruptID, &resolved.Revision); err != nil {
-			return nil, err
+			return nil, resolvedNotice{}, err
 		}
 		closed = append(closed, resolved)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("execution interrupt close: %w", err)
+		return nil, resolvedNotice{}, fmt.Errorf("execution interrupt close: %w", err)
 	}
 	rows.Close()
 	// A stopped or regenerated response is no longer parked, and a queued wake
@@ -695,10 +723,11 @@ WITH unparked AS (
 UPDATE elitea_runtime.execution_interrupt_wakes
 SET state = 'FAILED', failure_code = $2, updated_at = clock_timestamp()
 WHERE root_response_id = $1::uuid AND state = 'QUEUED'`, rootResponseID, wakeClosedFailureCode(state)); err != nil {
-		return nil, fmt.Errorf("execution interrupt close: %w", err)
+		return nil, resolvedNotice{}, fmt.Errorf("execution interrupt close: %w", err)
 	}
-	if err := emitInterruptResolved(ctx, tx, projectID, rootResponseID, closed); err != nil {
-		return nil, err
+	notice, err := emitInterruptResolved(ctx, tx, projectID, rootResponseID, closed)
+	if err != nil {
+		return nil, resolvedNotice{}, err
 	}
-	return closed, nil
+	return closed, notice, nil
 }
