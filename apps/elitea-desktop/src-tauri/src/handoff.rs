@@ -185,8 +185,6 @@ struct RestRecord {
     turns: usize,
     /// `C'_k`: the take-back's replayed commit of turn `k`.
     replayed: String,
-    /// `elitea/cloud/<thread>-after-turn-<k>`.
-    rest_branch: Option<String>,
     /// The message groups the take-back left out of the agent's seed.
     skipped_groups: Vec<i64>,
 }
@@ -1893,7 +1891,6 @@ impl HandoffHost {
                 after_turn: held.preflight.up_to_turn,
                 turns: held.preflight.cloud_turns(),
                 replayed,
-                rest_branch: applied.rest_branch.clone(),
                 skipped_groups,
             });
         }
@@ -2001,6 +1998,14 @@ impl HandoffHost {
             }
             return;
         }
+        self.lift_seed_boundary(record).await;
+        self.records.remove(&record.conversation_uuid);
+    }
+
+    /// The message groups a partial take-back left out of the agent's seed
+    /// are seeded again: the remaining turns were taken back, or the server
+    /// will never keep them (a release refused for good).
+    async fn lift_seed_boundary(&self, record: &ThreadRecord) {
         if let Some(rest) = &record.rest
             && !rest.skipped_groups.is_empty()
         {
@@ -2009,7 +2014,6 @@ impl HandoffHost {
                 .unskip_on_seed(&record.conversation_uuid, rest.skipped_groups.clone())
                 .await;
         }
-        self.records.remove(&record.conversation_uuid);
     }
 
     async fn retry_release(&self, record: ThreadRecord) {
@@ -2049,6 +2053,9 @@ impl HandoffHost {
             .and_then(|state| str_of(state, "state"))
             .unwrap_or_else(|| "LOCAL".into());
         if name == "LOCAL" {
+            // A refused release kept no remaining turns on the server, so
+            // the seed boundary of a partial take-back goes with the record.
+            self.lift_seed_boundary(record).await;
             self.records.remove(&record.conversation_uuid);
             return true;
         }

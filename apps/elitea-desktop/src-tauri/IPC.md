@@ -1798,7 +1798,11 @@ type HandoffEvent = { conversation_uuid: string;
   and the seed boundary the first take-back kept is lifted. The segments
   are fetched as the store's chain (a `COMPACT`, then `PUSH` segments,
   every prerequisite proved before a pack is read). After a `worktree` or
-  `discard` up to turn k nothing is kept.
+  `discard` up to turn k nothing is kept. A release the server refuses for
+  good drops the record and lifts the seed boundary too: no turns are kept
+  for later. A rest take-back left unreleased for an hour goes back to
+  `LOCAL` on the server with the rest still pending (a new epoch);
+  `handoff_status` follows it, and the late release is refused.
 - **Release and history.** The release's outcome is the server's:
   `applied` for `apply` and `apply_with_markers` (the folder took the
   cloud's changes), `worktree`, `discarded`. `handoff_apply` releases the thread and imports

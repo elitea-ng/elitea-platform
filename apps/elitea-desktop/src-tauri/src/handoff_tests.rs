@@ -2031,6 +2031,39 @@ async fn a_release_refused_for_good_is_not_retried() {
     assert_eq!(h.platform.lock().unwrap().releases, 1, "not sent again");
 }
 
+/// A partial take-back whose release is refused for good (an erase won):
+/// the server keeps no remaining turns, so the seed boundary the take-back
+/// kept is lifted with the record instead of hiding those turns for ever.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_partial_release_lifts_the_seed_boundary() {
+    let h = harness().await;
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    cloud_turns_n(&h, 2);
+    h.host.reclaim(CONVERSATION, false).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, Some(1)).await.unwrap();
+    h.platform.lock().unwrap().erase_before_release = true;
+    let applied = h
+        .host
+        .apply(&preflight.preflight_id, Mode::Apply, Some(1))
+        .await
+        .unwrap();
+    assert_eq!(applied.release_refused.as_deref(), Some("handoff_erased"));
+    assert_eq!(applied.turns_not_taken, 1);
+    let origin = h.platform.lock().unwrap().origin.clone();
+    let key = crate::sessions::session_key(&origin, 7, CONVERSATION);
+    assert_eq!(
+        h.sessions.store().seed_skips(&key).await.unwrap(),
+        Vec::<i64>::new()
+    );
+    let status = h.host.status(CONVERSATION, None).await.unwrap();
+    assert_eq!(status["state"], "LOCAL");
+    assert_eq!(status["rest_turns"], json!(0));
+    assert_eq!(status["sent_from_here"], json!(false));
+}
+
 /// Live run 2026-10-16: a take-back asked while a cloud turn runs is
 /// answered 202 `reclaim_pending`; the thread becomes RECLAIMING one epoch
 /// later when the turn ends. The release must carry that epoch, not the
