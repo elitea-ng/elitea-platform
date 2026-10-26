@@ -29,6 +29,10 @@ use crate::transport::ControlRpc;
 
 const MIN_LEASE_POLL_INTERVAL: Duration = Duration::from_millis(1);
 const MAX_LEASE_POLL_INTERVAL: Duration = Duration::from_secs(10);
+/// The tries to confirm the steering acknowledgements when the turn ends.
+pub(crate) const STEERING_ACK_FLUSH_ATTEMPTS: u32 = 3;
+/// The wait before the second try; it doubles before each next try.
+const STEERING_ACK_FLUSH_BACKOFF: Duration = Duration::from_millis(100);
 
 /// Immutable lease polling policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -393,23 +397,61 @@ impl ClaimLeaseStateProbe {
         let Some(claimed) = self.steering_call(acknowledged.clone(), false).await else {
             return Vec::new();
         };
-        let ids: Vec<String> = claimed.iter().map(|(id, _)| id.clone()).collect();
-        let checkpointed = self.ledger(|ledger| {
+        let (fresh, checkpointed) = self.ledger(|ledger| {
             ledger.acknowledged.extend(acknowledged);
-            for id in &ids {
-                if !ledger.taken.contains(id) {
+            // Main also gives again the rows that this or an older lease
+            // epoch claimed and that are not acknowledged, so a lost reply
+            // loses nothing. An id that this turn already holds was given to
+            // the model before: do not give it again.
+            let mut fresh = Vec::new();
+            for (id, text) in claimed {
+                if !ledger.taken.contains(&id) {
                     ledger.taken.push(id.clone());
+                    fresh.push((id, text));
                 }
             }
-            ledger.checkpointed
+            (fresh, ledger.checkpointed)
         });
-        if !checkpointed && !ids.is_empty() {
+        if !checkpointed && !fresh.is_empty() {
             // No checkpoint will hold them: the model request that follows
             // is the only proof, so acknowledge now.
+            let ids: Vec<String> = fresh.iter().map(|(id, _)| id.clone()).collect();
             self.ledger(|ledger| ledger.add_persisted(&ids));
             self.acknowledge().await;
         }
-        claimed.into_iter().map(|(_, text)| text).collect()
+        fresh.into_iter().map(|(_, text)| text).collect()
+    }
+
+    /// Send again, before the turn settles, the acknowledgements that Main
+    /// did not confirm. After the last checkpoint no safe point comes to
+    /// send them, and Main gives an unacknowledged message to a new turn: the
+    /// model would see it two times. The call tries at most
+    /// [`STEERING_ACK_FLUSH_ATTEMPTS`] times and never fails. It returns
+    /// `true` when nothing stays unconfirmed.
+    pub(crate) async fn flush_steering_acknowledgements(&self) -> bool {
+        let mut backoff = STEERING_ACK_FLUSH_BACKOFF;
+        for attempt in 1..=STEERING_ACK_FLUSH_ATTEMPTS {
+            if self.ledger(|ledger| ledger.unacknowledged().is_empty()) {
+                return true;
+            }
+            if self.ensure_running().is_err() {
+                break;
+            }
+            if attempt > 1 {
+                tokio::time::sleep(backoff).await;
+                backoff = backoff.saturating_mul(2);
+            }
+            self.acknowledge().await;
+        }
+        let pending = self.ledger(|ledger| ledger.unacknowledged().len());
+        if pending == 0 {
+            return true;
+        }
+        tracing::warn!(
+            pending,
+            "the steering acknowledgements are not confirmed before the turn settles"
+        );
+        false
     }
 
     /// Acknowledge, without a claim, what persisted checkpoints hold.

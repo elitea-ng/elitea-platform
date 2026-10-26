@@ -42,7 +42,8 @@ pub(crate) trait TurnSteering: adk_rust::agent::SteeringSource {
     /// The ids of a restored checkpoint: the model request holds them.
     fn restored(&self, ids: &[String]);
     /// A checkpoint that holds `ids` is persisted. It never fails: an
-    /// acknowledgement that is not confirmed is sent again on the next call.
+    /// acknowledgement that is not confirmed is sent again on the next call,
+    /// and again when the turn ends, before it settles.
     async fn persisted(&self, ids: &[String]);
 }
 

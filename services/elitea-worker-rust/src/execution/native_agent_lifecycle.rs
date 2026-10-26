@@ -507,6 +507,12 @@ where
         event = "agent_event_stream_completed",
         stream_disposition = stream_disposition(&stream),
     );
+    // Client contract 1.27: no safe point comes after the last checkpoint,
+    // so send the steering acknowledgements that Main did not confirm before
+    // the turn settles. Else Main gives those messages to a new turn.
+    if !matches!(stream, NativeStreamOutcome::FatalLease(_)) {
+        probe.flush_steering_acknowledgements().await;
+    }
     let mut successful_terminal = FreshAgentTerminalSelection::Completed;
     let mut failure = match stream {
         NativeStreamOutcome::Eos => None,

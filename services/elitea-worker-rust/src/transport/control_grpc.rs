@@ -128,8 +128,11 @@ pub trait ControlRpc: Send + Sync {
         Err(Status::unimplemented("index removal is unavailable"))
     }
 
-    /// `ClaimSteeringMessages` (client contract 1.27): the steering messages
-    /// queued against the running turn, taken at a safe point. A transport
+    /// `ClaimSteeringMessages` (client contract 1.27): acknowledge the given
+    /// ids, then return the steering messages queued against the running
+    /// turn, plus the rows that this or an older lease epoch claimed and that
+    /// are not acknowledged. The worker ignores an id that it already holds.
+    /// The worker calls it at a safe point. A transport
     /// that does not serve it answers `Unimplemented`; the turn then runs
     /// without steering.
     async fn claim_steering_messages(
@@ -524,10 +527,12 @@ impl<R: ControlRpc> ControlGrpcClient<R> {
         Ok(response)
     }
 
-    /// Take the queued steering messages of the live claim, once, without
-    /// retry: Main records them as injected when it answers, so a lost
-    /// answer is not replayed (the model checkpoint of the next request
-    /// carries what was taken).
+    /// Acknowledge the given steering ids (Main then writes them as
+    /// messages), then claim, once and without retry, the steering messages
+    /// of the live claim. The claim returns the waiting rows and also the
+    /// rows that this or an older lease epoch claimed and that are not
+    /// acknowledged, so a lost answer loses nothing: the next call gets those
+    /// rows again. The worker ignores an id that its turn already holds.
     ///
     /// # Errors
     ///

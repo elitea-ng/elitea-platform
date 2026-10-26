@@ -2443,7 +2443,9 @@ impl<R: ControlRpc> AgentControlClient<R> {
     /// Acknowledge the steering messages that persisted checkpoints hold,
     /// then (unless `acknowledge_only`) take the messages queued against the
     /// running turn of one unchanged accepted claim, as `(id, text)` in queue
-    /// order. Main records the taken ones as claimed by this lease epoch.
+    /// order. Main records the taken ones as claimed by this lease epoch. The
+    /// reply also holds the rows that this or an older epoch claimed and that
+    /// are not acknowledged; the caller ignores the ids that it already holds.
     ///
     /// # Errors
     ///
