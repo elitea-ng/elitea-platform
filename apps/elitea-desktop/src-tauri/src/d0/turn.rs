@@ -4024,6 +4024,31 @@ impl AgentHost {
         }
     }
 
+    /// The remaining cloud turns after a partial take-back were taken back
+    /// too (#1187): their message groups are seeded again.
+    pub async fn unskip_on_seed(&self, conversation_uuid: &str, group_ids: Vec<i64>) {
+        let Some(sessions) = &self.deps.sessions else {
+            return;
+        };
+        let owner = match self.owner(&self.api).await {
+            Ok(owner) => owner,
+            Err(error) => {
+                log::warn!(
+                    "the seed boundary could not be lifted: {}",
+                    log_reason(&error.code, error.status)
+                );
+                return;
+            }
+        };
+        if let Err(error) = sessions
+            .store()
+            .unskip_on_seed(&owner.origin, owner.user_id, conversation_uuid, group_ids)
+            .await
+        {
+            log::warn!("the seed boundary could not be lifted: {error}");
+        }
+    }
+
     /// A take-back brought the cloud's turns into the conversation: its
     /// agent session is marked so the next local turn re-seeds from the
     /// server and folds them in (`executed_by = 'cloud_executor'`).

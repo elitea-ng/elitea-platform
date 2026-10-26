@@ -15,7 +15,7 @@ import { threadsQueryKey } from '@/features/workspace';
 import { handoffStatusManyKey, isOffLaptop, rememberThreadUuid, useHandoffIpc, useHandoffStatus, useTakeBackRequests } from '@/features/workspace-handoff';
 import type { HandoffIpc, HandoffStatus } from '@/shared/desktop/handoffIpc';
 
-type HandoffDialog = 'send' | 'takeBack' | 'erase' | 'settings';
+type HandoffDialog = 'send' | 'takeBack' | 'takeBackRest' | 'erase' | 'settings';
 
 export interface ThreadHandoff {
   ipc: HandoffIpc | undefined;

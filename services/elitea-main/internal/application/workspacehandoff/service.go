@@ -279,16 +279,29 @@ type ReclaimRequest struct {
 	ActorUserID int64
 	Epoch       int64
 	DeviceID    string
-	AuditRoute  string
+	// Rest takes back the turns a release left (from LOCAL, within the
+	// return grace) instead of the cloud thread.
+	Rest       bool
+	AuditRoute string
 }
 
 // Reclaim takes the thread back: CLOUD_IDLE → RECLAIMING, or, during a cloud
-// turn, reclaim_pending (Handoff.ReclaimPending, state CLOUD_RUNNING).
+// turn, reclaim_pending (Handoff.ReclaimPending, state CLOUD_RUNNING). A rest
+// take back moves a released, rest_pending LOCAL row to RECLAIMING.
 func (s *Service) Reclaim(ctx context.Context, request ReclaimRequest) (Handoff, error) {
 	started := s.now()
 	if !validThread(request.Thread) || !validActor(request.ActorUserID) || request.Epoch <= 0 ||
 		len(request.DeviceID) > 128 {
 		return Handoff{}, ErrInvalid
+	}
+	if request.Rest {
+		reclaimed, err := s.repo.ReclaimRest(ctx, request.Thread, request.ActorUserID, request.Epoch, request.DeviceID)
+		if err != nil {
+			return Handoff{}, err
+		}
+		s.record(ctx, request.Thread, request.ActorUserID, "POST", request.AuditRoute, started,
+			fmt.Sprintf("handoff.reclaim: rest, from LOCAL, epoch %d", reclaimed.Handoff.Epoch), false)
+		return reclaimed.Handoff, nil
 	}
 	reclaimed, err := s.repo.Reclaim(ctx, request.Thread, request.ActorUserID, request.Epoch, request.DeviceID)
 	if err != nil {
@@ -326,8 +339,15 @@ type ReleaseRequest struct {
 	Epoch       int64
 	Outcome     string
 	AppliedSHA  *string
-	AuditRoute  string
+	// TurnsNotTaken is how many cloud turns the take back left (up to turn
+	// k); nil when the client did not say. More than zero keeps them for a
+	// rest take back within the return grace.
+	TurnsNotTaken *int
+	AuditRoute    string
 }
+
+// MaxTurnsNotTaken bounds a release's turns_not_taken.
+const MaxTurnsNotTaken = 1000
 
 // Release moves RECLAIMING to LOCAL. The cloud copy is kept for the project's
 // return grace (decision 12), then erased.
@@ -344,13 +364,17 @@ func (s *Service) Release(ctx context.Context, request ReleaseRequest) (Handoff,
 	if request.AppliedSHA != nil && !workspacestore.ValidSHA1(*request.AppliedSHA) {
 		return Handoff{}, ErrInvalid
 	}
+	if request.TurnsNotTaken != nil && (*request.TurnsNotTaken < 0 || *request.TurnsNotTaken > MaxTurnsNotTaken) {
+		return Handoff{}, ErrInvalid
+	}
 	policy, err := s.EffectivePolicy(ctx, request.Thread.ProjectID)
 	if err != nil {
 		return Handoff{}, err
 	}
 	released, err := s.repo.Release(ctx, ReleaseRecord{
 		Thread: request.Thread, ActorUserID: request.ActorUserID, Epoch: request.Epoch,
-		Grace: policy.ReturnGrace, Message: EventMessage{Event: "handoff.release"},
+		Grace: policy.ReturnGrace, RestPending: request.TurnsNotTaken != nil && *request.TurnsNotTaken > 0,
+		Message: EventMessage{Event: "handoff.release"},
 	})
 	if err != nil {
 		return Handoff{}, err
@@ -360,8 +384,11 @@ func (s *Service) Release(ctx context.Context, request ReleaseRequest) (Handoff,
 	if request.AppliedSHA != nil {
 		applied = *request.AppliedSHA
 	}
-	s.record(ctx, request.Thread, request.ActorUserID, "POST", request.AuditRoute, started,
-		fmt.Sprintf("handoff.release: outcome %s, applied %s, epoch %d", request.Outcome, applied, handoff.Epoch), false)
+	action := fmt.Sprintf("handoff.release: outcome %s, applied %s, epoch %d", request.Outcome, applied, handoff.Epoch)
+	if request.TurnsNotTaken != nil {
+		action += fmt.Sprintf(", turns not taken %d", *request.TurnsNotTaken)
+	}
+	s.record(ctx, request.Thread, request.ActorUserID, "POST", request.AuditRoute, started, action, false)
 	return handoff, nil
 }
 
@@ -385,6 +412,10 @@ type View struct {
 	// DeleteAfter is when the cloud copy is erased: the release grace, or, in
 	// CLOUD_IDLE, the end of the idle retention.
 	DeleteAfter *time.Time
+	// RestPending: the owner's desktop may take back the turns the last
+	// release left (a released LOCAL row within its return grace), or is
+	// taking them back (a rest RECLAIMING row).
+	RestPending bool
 }
 
 // State reads the banner state.
@@ -402,6 +433,16 @@ func (s *Service) State(ctx context.Context, thread Thread) (View, error) {
 	view := View{Handoff: handoff, Present: true, DeleteAfter: handoff.DeleteAfter}
 	if handoff.DeletedAt != nil {
 		view.DeleteAfter = nil
+	}
+	switch handoff.State {
+	case workspacestore.StateLocal:
+		// The database clock decides, as for ReclaimRest: an app clock that
+		// drifts would offer a take back the server refuses, or hide one it
+		// would accept.
+		view.RestPending = handoff.Released && handoff.RestPending && handoff.DeletedAt == nil &&
+			handoff.DeleteAfter != nil && handoff.ReturnGraceOpen
+	case workspacestore.StateReclaiming:
+		view.RestPending = handoff.RestPending
 	}
 	if handoff.State == workspacestore.StateCloudIdle {
 		if policy, err := s.EffectivePolicy(ctx, thread.ProjectID); err == nil && policy.IdleRetention > 0 {

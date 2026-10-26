@@ -10,7 +10,8 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::codec::{
-    BuiltSegment, CodecError, HydratedTree, SegmentExpectation, TurnCommit, WorkspaceCodec,
+    BuiltSegment, CodecError, HydratedTree, SegmentBudget, SegmentExpectation, SegmentFile,
+    TurnCommit, WorkspaceCodec,
 };
 use super::context::{WorkspaceRuntimeContext, fixture};
 use super::redact::SecretEnv;
@@ -19,11 +20,13 @@ use super::sandbox::{
     WorkspaceSandboxLauncher,
 };
 use super::store::{
-    FetchedThread, PlannedSegment, PublishSegment, PublishedSegment, REF_CLOUD, RefusalCode,
-    StoreCallError, WorkspaceStore, sha256_hex,
+    FetchSink, FetchedSegment, FetchedThread, KIND_COMPACT, KIND_PUSH, PlannedSegment,
+    PublishSegment, PublishedSegment, REF_CLOUD, RefusalCode, StoreCallError, WorkspaceStore,
+    sha256_hex,
 };
 use super::turn::{TurnEnd, WorkspaceRunError, WorkspaceRunFactory};
 use crate::protocol::elitea::runtime::v1::WorkspaceClaimV1;
+use elitea_workspace_store::compaction::Policy;
 
 const HANDOFF: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const BASE: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -50,6 +53,12 @@ struct StoreState {
     events: Vec<super::audit::ExecutorEvent>,
     /// Answer this many record-event calls with a non-retryable refusal.
     events_refused: u32,
+    /// The live chain's PUSH segments after its COMPACT, by size.
+    chain_pushes: Vec<u64>,
+    /// Main refuses every PUSH (as its prerequisite or chain checks do).
+    refuse_push: bool,
+    /// The segment bound each fetch was asked with.
+    fetch_bounds: Vec<u64>,
 }
 
 struct FakeStore(Mutex<StoreState>);
@@ -78,27 +87,51 @@ impl WorkspaceStore for FakeStore {
         &self,
         claim: &WorkspaceClaimV1,
         _since: u64,
-        _max: u64,
+        max: u64,
         into: &Path,
     ) -> Result<FetchedThread, StoreCallError> {
-        let state = self.state();
+        let mut state = self.state();
+        state.fetch_bounds.push(max);
         if claim.epoch != state.epoch {
             return Err(StoreCallError::Refused {
                 code: RefusalCode::StaleEpoch,
                 current: BTreeMap::new(),
             });
         }
-        Ok(FetchedThread {
-            head_seq: 1,
-            refs: state.refs.clone(),
-            segment: PlannedSegment {
+        std::fs::create_dir_all(into).expect("fetch dir");
+        let mut segments = vec![FetchedSegment {
+            planned: PlannedSegment {
                 seq: 1,
+                kind: KIND_COMPACT.to_owned(),
                 sha256: sha256_hex(&state.segment),
                 bytes: state.segment.len() as u64,
+                prerequisites: Vec::new(),
                 refs: state.refs.clone(),
             },
+            path: FetchSink::segment_path(into, 0),
+        }];
+        std::fs::write(&segments[0].path, &state.segment).expect("segment file");
+        for (index, bytes) in state.chain_pushes.iter().enumerate() {
+            let content = vec![b'p'; usize::try_from(*bytes).expect("size")];
+            let path = FetchSink::segment_path(into, index + 1);
+            std::fs::write(&path, &content).expect("segment file");
+            segments.push(FetchedSegment {
+                planned: PlannedSegment {
+                    seq: 2 + index as u64,
+                    kind: KIND_PUSH.to_owned(),
+                    sha256: sha256_hex(&content),
+                    bytes: *bytes,
+                    prerequisites: vec![HANDOFF.to_owned()],
+                    refs: state.refs.clone(),
+                },
+                path,
+            });
+        }
+        Ok(FetchedThread {
+            head_seq: segments.len() as u64,
+            refs: state.refs.clone(),
+            segments,
         })
-        .inspect(|_| std::fs::write(into, &state.segment).expect("segment file"))
     }
 
     async fn upload(
@@ -129,6 +162,13 @@ impl WorkspaceStore for FakeStore {
             return Err(StoreCallError::Refused {
                 code: RefusalCode::StaleEpoch,
                 current: BTreeMap::new(),
+            });
+        }
+        if state.refuse_push && request.kind == KIND_PUSH {
+            return Err(StoreCallError::Rejected {
+                code: crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::ProtocolViolation
+                    as i32,
+                retryable: false,
             });
         }
         // An identical replay returns the original result.
@@ -189,6 +229,9 @@ struct FakeCodec {
     /// The tree hydrated (the parent's files) and the last committed tree.
     hydrated: Mutex<BTreeMap<String, String>>,
     committed: Mutex<BTreeMap<String, String>>,
+    /// The budget of every segment written, and the chain lengths hydrated.
+    budgets: Mutex<Vec<SegmentBudget>>,
+    chains: Mutex<Vec<usize>>,
 }
 
 struct FakeParent(BTreeMap<String, String>);
@@ -242,17 +285,24 @@ fn write_tree(root: &Path, files: &BTreeMap<String, String>) {
 impl WorkspaceCodec for FakeCodec {
     fn hydrate(
         &self,
-        segment: &Path,
-        expect: &SegmentExpectation,
+        chain: &[SegmentFile],
         _checkout: &str,
         _git_dir: &Path,
         worktree: &Path,
     ) -> Result<HydratedTree, CodecError> {
-        let segment = std::fs::read(segment).map_err(|_| CodecError::Io)?;
-        let segment = segment.as_slice();
-        if sha256_hex(segment) != expect.sha256 || segment.len() as u64 != expect.bytes {
-            return Err(CodecError::Integrity);
+        self.chains.lock().expect("chains").push(chain.len());
+        for link in chain {
+            let content = std::fs::read(&link.path).map_err(|_| CodecError::Io)?;
+            if sha256_hex(&content) != link.expect.sha256
+                || content.len() as u64 != link.expect.bytes
+            {
+                return Err(CodecError::Integrity);
+            }
         }
+        // The fake's tree is the COMPACT's JSON; its PUSH segments carry
+        // no files.
+        let segment = std::fs::read(&chain[0].path).map_err(|_| CodecError::Io)?;
+        let segment = segment.as_slice();
         let files: BTreeMap<String, String> =
             serde_json::from_slice(segment).map_err(|_| CodecError::Integrity)?;
         write_tree(worktree, &files);
@@ -270,9 +320,10 @@ impl WorkspaceCodec for FakeCodec {
         worktree: &Path,
         commit: &TurnCommit,
         refs: &BTreeMap<String, String>,
-        _max: u64,
+        budget: SegmentBudget,
         out: &Path,
     ) -> Result<BuiltSegment, CodecError> {
+        self.budgets.lock().expect("budgets").push(budget);
         self.commits.lock().expect("commits").push(commit.clone());
         let files = read_tree(worktree);
         *self.committed.lock().expect("committed") = files.clone();
@@ -281,7 +332,17 @@ impl WorkspaceCodec for FakeCodec {
                 .expect("json");
         let commit_sha = sha256_hex(&bytes)[..40].to_owned();
         std::fs::write(out, &bytes).map_err(|_| CodecError::Io)?;
+        let (kind, prerequisites) = if budget.push_bytes.is_some() {
+            let mut published: Vec<String> = refs.values().cloned().collect();
+            published.sort();
+            published.dedup();
+            (KIND_PUSH, published)
+        } else {
+            (KIND_COMPACT, Vec::new())
+        };
         Ok(BuiltSegment {
+            kind,
+            prerequisites,
             commit: commit_sha,
             path: out.to_path_buf(),
             sha256: sha256_hex(&bytes),
@@ -318,6 +379,8 @@ impl WorkspaceCodec for FakeCodec {
         Ok((
             target.clone(),
             BuiltSegment {
+                kind: KIND_COMPACT,
+                prerequisites: Vec::new(),
                 commit: target,
                 path: out.to_path_buf(),
                 sha256: sha256_hex(&bytes),
@@ -430,7 +493,8 @@ fn harness(refs: &[(&str, &str)], files: &[(&str, &str)]) -> Harness {
             turn_wall: Duration::from_mins(10),
         },
         PathBuf::from(scratch.path()),
-    );
+    )
+    .with_compaction(Policy::default());
     Harness {
         store,
         codec,
@@ -1153,4 +1217,163 @@ async fn a_regenerate_rewinds_to_the_target_main_names() {
     let state = harness.store.state();
     assert_eq!(state.publishes.len(), 2);
     assert_eq!(state.publishes[1].old_cloud.as_deref(), Some(STARTED_FROM));
+}
+
+/// Phase 2: the turn hydrates the whole chain and publishes a PUSH over the
+/// published head while the chain is short and small; it compacts once the
+/// policy's count is reached, and gives the PUSH only what is left of the
+/// byte bound.
+#[tokio::test]
+async fn a_turn_pushes_over_the_chain_and_compacts_when_the_policy_says() {
+    let policy = Policy {
+        max_push_segments: 2,
+        max_push_bytes: 1_000,
+    };
+    let run = |pushes: Vec<u64>| async move {
+        let mut harness = harness(CLOUD_REFS, &[("a.txt", "a\n")]);
+        harness.factory = harness.factory.with_compaction(policy);
+        harness.store.state().chain_pushes = pushes;
+        let turn = harness
+            .factory
+            .begin(
+                &later_turn(),
+                claim(2),
+                "execution-1",
+                Arc::new(super::sandbox::NoGrants),
+            )
+            .await
+            .expect("hydrated");
+        turn.finish(TurnEnd::Completed).await.expect("published");
+        harness
+    };
+
+    let short = run(Vec::new()).await;
+    assert_eq!(*short.codec.chains.lock().expect("chains"), vec![1]);
+    assert_eq!(
+        short.codec.budgets.lock().expect("budgets")[0].push_bytes,
+        Some(1_000)
+    );
+    let publish = short.store.state().publishes[0].clone();
+    assert_eq!(publish.kind, KIND_PUSH);
+    assert!(publish.prerequisites.contains(&CLOUD.to_owned()));
+
+    // One PUSH of 600 bytes: the next may take the 400 left.
+    let one = run(vec![600]).await;
+    assert_eq!(*one.codec.chains.lock().expect("chains"), vec![2]);
+    assert_eq!(
+        one.codec.budgets.lock().expect("budgets")[0].push_bytes,
+        Some(400)
+    );
+
+    // The chain holds the most PUSH segments: the turn compacts.
+    let long = run(vec![10, 10]).await;
+    assert_eq!(*long.codec.chains.lock().expect("chains"), vec![3]);
+    assert_eq!(
+        long.codec.budgets.lock().expect("budgets")[0].push_bytes,
+        None
+    );
+    let state = long.store.state();
+    assert_eq!(state.publishes[0].kind, KIND_COMPACT);
+    assert_eq!(state.publishes[0].prerequisites, Vec::<String>::new());
+}
+
+/// The deployment lowered `max_segment_bytes` below what the live chain's
+/// PUSH segments already hold: the chain is still fetched against Main's
+/// absolute bound (never refused for good, which would strand the thread),
+/// and the turn publishes a COMPACT instead of one more PUSH.
+#[tokio::test]
+async fn a_lowered_segment_limit_still_hydrates_the_chain_and_compacts() {
+    let harness = harness(CLOUD_REFS, &[("a.txt", "a\n")]);
+    harness.store.state().chain_pushes = vec![600];
+    let mut context = later_turn();
+    context.limits.max_segment_bytes = 500;
+    let turn = harness
+        .factory
+        .begin(
+            &context,
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
+        .await
+        .expect("hydrated");
+    turn.finish(TurnEnd::Completed).await.expect("published");
+    assert_eq!(
+        harness.store.state().fetch_bounds,
+        vec![super::store::MAIN_MAX_SEGMENT_BYTES]
+    );
+    assert_eq!(*harness.codec.chains.lock().expect("chains"), vec![2]);
+    assert_eq!(
+        harness.codec.budgets.lock().expect("budgets")[0].push_bytes,
+        None
+    );
+    assert_eq!(harness.store.state().publishes[0].kind, KIND_COMPACT);
+}
+
+/// Main refuses the PUSH for good (its prerequisites moved, or the chain is
+/// at Main's bound): the same commit is published once more as a COMPACT.
+#[tokio::test]
+async fn a_refused_push_is_published_again_as_a_compact() {
+    let harness = harness(CLOUD_REFS, &[("a.txt", "a\n")]);
+    harness.store.state().refuse_push = true;
+    let turn = harness
+        .factory
+        .begin(
+            &later_turn(),
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
+        .await
+        .expect("hydrated");
+    let stamp = turn
+        .finish(TurnEnd::Completed)
+        .await
+        .expect("published")
+        .expect("a stamp");
+    let budgets = harness.codec.budgets.lock().expect("budgets").clone();
+    assert_eq!(budgets.len(), 2);
+    assert!(budgets[0].push_bytes.is_some());
+    assert_eq!(budgets[1].push_bytes, None);
+    let commits = harness.codec.commits.lock().expect("commits").clone();
+    assert_eq!(commits[0], commits[1], "the same commit, rebuilt");
+    let state = harness.store.state();
+    assert_eq!(state.publishes.len(), 1);
+    assert_eq!(state.publishes[0].kind, KIND_COMPACT);
+    assert_eq!(state.refs.get(REF_CLOUD), Some(&stamp.workspace_commit));
+}
+
+/// A regenerate's rewind is a COMPACT: it supersedes the chain, so the turn
+/// after it pushes again even when the chain it found was at the bound.
+#[tokio::test]
+async fn a_rewind_resets_the_chain_the_policy_weighs() {
+    let mut harness = harness(CLOUD_REFS, &[("a.txt", "a\n")]);
+    harness.factory = harness.factory.with_compaction(Policy {
+        max_push_segments: 1,
+        max_push_bytes: 1_000,
+    });
+    harness.store.state().chain_pushes = vec![10];
+    let context = WorkspaceRuntimeContext {
+        rewind: true,
+        ..later_turn()
+    };
+    let turn = harness
+        .factory
+        .begin(
+            &context,
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
+        .await
+        .expect("rewound");
+    turn.finish(TurnEnd::Completed).await.expect("published");
+    let state = harness.store.state();
+    assert_eq!(state.publishes[0].kind, KIND_COMPACT, "the rewind");
+    assert_eq!(state.publishes[1].kind, KIND_PUSH);
+    assert_eq!(state.publishes[1].prerequisites, {
+        let mut published = vec![BASE.to_owned(), HANDOFF.to_owned(), PARENT.to_owned()];
+        published.sort();
+        published
+    });
 }

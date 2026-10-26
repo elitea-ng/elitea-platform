@@ -77,6 +77,10 @@ func (r eventingRepository) Reclaim(ctx context.Context, thread Thread, actorUse
 	return r.afterChange(ctx)(r.Repository.Reclaim(ctx, thread, actorUserID, epoch, deviceID))
 }
 
+func (r eventingRepository) ReclaimRest(ctx context.Context, thread Thread, actorUserID, epoch int64, deviceID string) (TransitionResult, error) {
+	return r.afterChange(ctx)(r.Repository.ReclaimRest(ctx, thread, actorUserID, epoch, deviceID))
+}
+
 func (r eventingRepository) Release(ctx context.Context, record ReleaseRecord) (TransitionResult, error) {
 	return r.afterChange(ctx)(r.Repository.Release(ctx, record))
 }
@@ -111,6 +115,14 @@ func (r eventingRepository) ForceReclaim(ctx context.Context, transition TimedTr
 
 func (r eventingRepository) AbandonReclaim(ctx context.Context, transition TimedTransition) (Handoff, error) {
 	return r.after(ctx)(r.Repository.AbandonReclaim(ctx, transition))
+}
+
+func (r eventingRepository) AbandonRestReclaim(ctx context.Context, transition TimedTransition) (Handoff, error) {
+	return r.after(ctx)(r.Repository.AbandonRestReclaim(ctx, transition))
+}
+
+func (r eventingRepository) ExpireRestReclaim(ctx context.Context, transition TimedTransition) (Handoff, error) {
+	return r.after(ctx)(r.Repository.ExpireRestReclaim(ctx, transition))
 }
 
 func (r eventingRepository) IdleErase(ctx context.Context, transition TimedTransition) (Handoff, error) {

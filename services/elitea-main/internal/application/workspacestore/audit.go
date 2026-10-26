@@ -32,6 +32,12 @@ func (a RecorderAudit) StoreEvent(ctx context.Context, event AuditEvent) {
 	if event.Writer != "" {
 		parts = append(parts, "writer "+string(event.Writer))
 	}
+	if event.Kind != "" {
+		parts = append(parts, "kind "+event.Kind)
+	}
+	if event.Prerequisites > 0 {
+		parts = append(parts, fmt.Sprintf("prerequisites %d", event.Prerequisites))
+	}
 	if event.Epoch > 0 {
 		parts = append(parts, fmt.Sprintf("epoch %d", event.Epoch))
 	}

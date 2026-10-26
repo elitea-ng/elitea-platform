@@ -87,7 +87,7 @@ message WorkspaceRefusalV1 {
 // WorkspaceSegmentV1 describes one stored segment of a fetch plan.
 message WorkspaceSegmentV1 {
   uint64 seq = 1;
-  // "COMPACT" in Phase 1.
+  // "COMPACT" (full, no prerequisites) or "PUSH" (incremental).
   string kind = 2;
   // The content address: lowercase hex SHA-256 of the file bytes.
   string sha256 = 3;
@@ -108,7 +108,8 @@ message WorkspaceFetchPlanV1 {
   uint64 head_seq = 1;
   // The thread's live refs.
   repeated WorkspaceRefV1 refs = 2;
-  // Phase 1: the newest COMPACT only.
+  // The minimal chain, oldest first: the newest COMPACT, then every later
+  // PUSH; only PUSH segments when since_seq is past the COMPACT.
   repeated WorkspaceSegmentV1 segments = 3;
   reserved 4 to 15;
 }

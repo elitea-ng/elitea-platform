@@ -11,6 +11,9 @@
  * the folder; only `apply` does, and it keeps a checkpoint `undo` restores.
  * The first preflight takes back every cloud turn; `pickTurn` previews the
  * take back up to an earlier one instead, and `apply` sends that turn along.
+ * With `rest`, it takes back the remaining turns after an earlier take back
+ * up to turn k (`handoff_reclaim` with `rest`; the preflight answers
+ * `from_turn: k`), all of them together.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -44,7 +47,7 @@ export interface TakeBack {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-export function useTakeBack(ipc: HandoffIpc, conversationUuid: string, onSettled: () => void): TakeBack {
+export function useTakeBack(ipc: HandoffIpc, conversationUuid: string, onSettled: () => void, rest = false): TakeBack {
   const [step, setStep] = useState<TakeBackStep>({ kind: 'idle' });
   const [error, setError] = useState<unknown>(null);
   const [undoing, setUndoing] = useState(false);
@@ -73,7 +76,7 @@ export function useTakeBack(ipc: HandoffIpc, conversationUuid: string, onSettled
     setStep({ kind: 'reclaiming' });
     void (async () => {
       try {
-        const answer = await ipc.reclaim(conversationUuid);
+        const answer = await ipc.reclaim(conversationUuid, rest ? { rest: true } : undefined);
         if (!live()) return;
         if (answer.state !== 'RECLAIMING') {
           setStep({ kind: 'waiting' });
@@ -97,11 +100,11 @@ export function useTakeBack(ipc: HandoffIpc, conversationUuid: string, onSettled
         fail(cause);
       }
     })();
-  }, [ipc, conversationUuid]);
+  }, [ipc, conversationUuid, rest]);
 
   const pickTurn = useCallback(
     (turn: number) => {
-      if (step.kind !== 'review' || turn === step.preflight.up_to_turn) return;
+      if (step.kind !== 'review' || turn === step.preflight.up_to_turn || (step.preflight.from_turn ?? 0) > 0) return;
       const previous = step.preflight;
       const mine = (run.current += 1);
       setError(null);

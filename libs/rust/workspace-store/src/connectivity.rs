@@ -42,9 +42,32 @@ pub fn reachable(
     tips: &[ObjectId],
     max_objects: usize,
 ) -> Result<Reachable, StoreError> {
+    reachable_excluding(db, tips, &HashSet::new(), max_objects)
+}
+
+/// [`reachable`], treating every object of `known` as present with its
+/// whole closure: it is neither walked into nor reported. A `PUSH` segment's
+/// objects are what its tips reach beyond what the reader already holds (the
+/// closure of its prerequisites), and a chain is verified segment by segment
+/// over what the earlier segments proved, so each object is walked once.
+///
+/// # Errors
+///
+/// As [`reachable`]; `max_objects` bounds the objects reported.
+#[allow(
+    clippy::implicit_hasher,
+    reason = "the walk's own sets use the default hasher; callers pass one of those"
+)]
+pub fn reachable_excluding(
+    db: &ObjectDb,
+    tips: &[ObjectId],
+    known: &HashSet<ObjectId>,
+    max_objects: usize,
+) -> Result<Reachable, StoreError> {
     let mut walk = Walk {
         db,
         max_objects,
+        known,
         seen: HashSet::new(),
         out: Reachable::default(),
         commits: VecDeque::new(),
@@ -63,7 +86,7 @@ pub fn reachable(
             walk.trees.push_back(commit.tree);
         }
         for parent in commit.parents {
-            if !walk.seen.contains(&parent) {
+            if !walk.seen.contains(&parent) && !walk.known.contains(&parent) {
                 walk.commits.push_back(parent);
             }
         }
@@ -90,6 +113,7 @@ pub fn reachable(
 struct Walk<'a> {
     db: &'a ObjectDb,
     max_objects: usize,
+    known: &'a HashSet<ObjectId>,
     seen: HashSet<ObjectId>,
     out: Reachable,
     commits: VecDeque<ObjectId>,
@@ -99,7 +123,7 @@ struct Walk<'a> {
 impl Walk<'_> {
     /// Record `id`; `false` when it was seen already.
     fn push(&mut self, id: ObjectId) -> Result<bool, StoreError> {
-        if !self.seen.insert(id) {
+        if self.known.contains(&id) || !self.seen.insert(id) {
             return Ok(false);
         }
         if self.seen.len() > self.max_objects {
@@ -142,7 +166,7 @@ impl Walk<'_> {
                     id = tag.target();
                 }
                 Kind::Commit => {
-                    if !self.seen.contains(&id) {
+                    if !self.seen.contains(&id) && !self.known.contains(&id) {
                         self.commits.push_back(id);
                     }
                     return Ok(());

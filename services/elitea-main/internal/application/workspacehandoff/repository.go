@@ -74,6 +74,9 @@ type ReleaseRecord struct {
 	ActorUserID int64
 	Epoch       int64
 	Grace       time.Duration
+	// RestPending: the release left cloud turns not taken; the owner's
+	// desktop may take them back within the return grace.
+	RestPending bool
 	Message     EventMessage
 }
 
@@ -126,6 +129,10 @@ type Repository interface {
 	// Reclaim takes the thread back: CLOUD_IDLE → RECLAIMING (epoch + 1), or
 	// CLOUD_RUNNING → reclaim_pending. Replayed answers a retried reclaim.
 	Reclaim(ctx context.Context, thread Thread, actorUserID, epoch int64, deviceID string) (TransitionResult, error)
+	// ReclaimRest takes back the turns a release left: a released,
+	// rest_pending LOCAL row within its return grace → RECLAIMING
+	// (epoch + 1). A retry answers the RECLAIMING row unchanged.
+	ReclaimRest(ctx context.Context, thread Thread, actorUserID, epoch int64, deviceID string) (TransitionResult, error)
 	Release(ctx context.Context, record ReleaseRecord) (TransitionResult, error)
 	Erase(ctx context.Context, record EraseRecord) (EraseResult, error)
 	StartCloudTurn(ctx context.Context, thread Thread, epoch int64, executionID, responseMessageID string) (TransitionResult, error)
@@ -146,6 +153,15 @@ type Repository interface {
 	// database clock). A released claim (retry, requeue) is not a dead worker.
 	DeadCloudTurns(ctx context.Context, grace time.Duration, limit int) ([]Handoff, error)
 	AbandonReclaim(ctx context.Context, transition TimedTransition) (Handoff, error)
+	// DueRestExpired answers rest take backs whose return grace ran out;
+	// ExpireRestReclaim returns one to LOCAL (released), never CLOUD_IDLE.
+	DueRestExpired(ctx context.Context, now time.Time, limit int) ([]Handoff, error)
+	ExpireRestReclaim(ctx context.Context, transition TimedTransition) (Handoff, error)
+	// DueAbandonedRestReclaim answers rest take backs RECLAIMING since before
+	// `before` whose return grace is still open; AbandonRestReclaim returns
+	// one to LOCAL, released, with the rest still pending.
+	DueAbandonedRestReclaim(ctx context.Context, before time.Time, limit int) ([]Handoff, error)
+	AbandonRestReclaim(ctx context.Context, transition TimedTransition) (Handoff, error)
 	// DueIdle walks the CLOUD_IDLE rows in (state_changed_at, project,
 	// conversation) order, after the cursor. A short page means the walk
 	// reached the end.

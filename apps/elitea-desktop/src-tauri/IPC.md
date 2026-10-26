@@ -1607,10 +1607,10 @@ noted). `conversation_uuid` is the server conversation's UUID.
 | `handoff_preview` | `{workspace_id, conversation_uuid, leave_on_laptop?: string[]}` | `Preview` — what a send would transfer under the effective policy and the folder's settings; sends nothing |
 | `handoff_send` | `{workspace_id, conversation_uuid, leave_on_laptop?: string[], confirm_includes?: boolean}` | `{handoff_id, state, epoch, files, excluded, included, env_vars}` — progress on `handoff://event` |
 | `handoff_cancel` | `{conversation_uuid}` | `{cancelled: boolean}` — stops a running send; after begin the host cancels the handoff on the server (`DELETE workspace_handoff`), so the thread is `LOCAL` again; the send rejects `handoff_cancelled` |
-| `handoff_status` | `{conversation_uuid, project_id?}` | `HandoffStatus`: the server's state (contract §2.9) plus `executor: "local" \| "cloud" \| "returning"`, `read_only: boolean`, `sent_from_here: boolean` |
+| `handoff_status` | `{conversation_uuid, project_id?}` | `HandoffStatus`: the server's state (contract §2.9, `rest_pending` and `delete_after` included) plus `executor: "local" \| "cloud" \| "returning"`, `read_only: boolean`, `sent_from_here: boolean`, `rest_turns: number` (the cloud turns after a take-back up to turn k that can still be taken back; 0 when none or the grace is over) |
 | `handoff_status_many` | `{conversation_uuids: string[]}` | `{statuses: Record<uuid, HandoffStatus>}` — for the sidebar: a thread this desktop never sent is `LOCAL` with no request; the rest from the host's records, refreshed at most once per project per call and cached 15 s |
-| `handoff_reclaim` | `{conversation_uuid}` | `{state: "RECLAIMING", epoch, cloud_sha}`, or `{state: "CLOUD_RUNNING", reclaim_pending: true, …}` while a cloud turn runs |
-| `handoff_preflight` | `{conversation_uuid, up_to_turn?: number}` | `ApplyOutcome & {preflight_id, cloud_turns, up_to_turn, modes: TakeBackMode[], files: ChangedFile[], diffs_truncated: boolean}` — `up_to_turn` (1-based, default the latest) takes back the cloud turns up to that one; `invalid_request` (`turn_out_of_range`) for a turn the chain does not have |
+| `handoff_reclaim` | `{conversation_uuid, rest?: boolean}` | `{state: "RECLAIMING", epoch, cloud_sha}`, or `{state: "CLOUD_RUNNING", reclaim_pending: true, …}` while a cloud turn runs; with `rest`, the remaining turns after a take-back up to turn k (`rest_unknown` when this desktop keeps none, the server's `handoff_erased` once the grace is over: the record goes) |
+| `handoff_preflight` | `{conversation_uuid, up_to_turn?: number}` | `ApplyOutcome & {preflight_id, cloud_turns, up_to_turn, from_turn, modes: TakeBackMode[], files: ChangedFile[], diffs_truncated: boolean}` — `up_to_turn` (1-based, default the latest) takes back the cloud turns up to that one; `invalid_request` (`turn_out_of_range`) for a turn the chain does not have. After a `rest` reclaim it takes back the remaining turns `from_turn+1..up_to_turn` (no `up_to_turn` then: `invalid_request`) |
 | `handoff_apply` | `{preflight_id, mode: TakeBackMode, up_to_turn?: number}` | `{applied, outcome: "applied" \| "applied_with_markers" \| "worktree" \| "discarded", report: ApplyOutcome, checkpoint_id, worktree_path, branch, imported_turns, turns_not_taken, rest_branch: string \| null, released, release_refused: string \| null, copied: string[]}` — `up_to_turn`, when given, must be the preflight's (`invalid_request` otherwise; the preview is kept) |
 | `handoff_undo` | `{checkpoint_id}` | `{restored: string[]}` — restores the folder to before a take-back |
 | `handoff_erase` | `{conversation_uuid, project_id?}` | the server's answer; the local folder is kept |
@@ -1785,6 +1785,24 @@ type HandoffEvent = { conversation_uuid: string;
   so their work is kept as commits on the local branch `rest_branch`
   (`elitea/cloud/<short>-after-turn-<k>`), and the dialog warns that their
   conversation goes with the cloud copy when its grace ends.
+- **The remaining turns.** An `apply` (or `apply_with_markers`) up to turn
+  k releases with `turns_not_taken`, so the server keeps the cloud copy's
+  remaining turns until its grace ends (`rest_pending`); the record stays,
+  `LOCAL` (not read-only), and `handoff_status` answers `rest_turns`. "Take
+  back the remaining turns" is `handoff_reclaim` with `rest: true`, then
+  `handoff_preflight` (it answers `from_turn: k`) and `handoff_apply` as
+  usual: the merge is `(tree(C_k), the folder, tree(C_N))`, so only what
+  turns k+1..N changed lands, on top of the person's edits since; their
+  commits are replayed onto the first take-back's `C'_k` and kept on
+  `elitea/cloud/<short>-turns-<k+1>-<N>`; only their answers are imported,
+  and the seed boundary the first take-back kept is lifted. The segments
+  are fetched as the store's chain (a `COMPACT`, then `PUSH` segments,
+  every prerequisite proved before a pack is read). After a `worktree` or
+  `discard` up to turn k nothing is kept. A release the server refuses for
+  good drops the record and lifts the seed boundary too: no turns are kept
+  for later. A rest take-back left unreleased for an hour goes back to
+  `LOCAL` on the server with the rest still pending (a new epoch);
+  `handoff_status` follows it, and the late release is refused.
 - **Release and history.** The release's outcome is the server's:
   `applied` for `apply` and `apply_with_markers` (the folder took the
   cloud's changes), `worktree`, `discarded`. `handoff_apply` releases the thread and imports

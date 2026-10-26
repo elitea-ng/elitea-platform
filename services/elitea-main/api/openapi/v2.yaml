@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.24"
+  x-elitea-client-contract: "1.25"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -4034,6 +4034,12 @@ components:
         state: { type: string, description: 'LOCAL, HANDING_OFF, CLOUD_IDLE, CLOUD_RUNNING or RECLAIMING.' }
         epoch: { type: integer, format: int64 }
         reclaim_pending: { type: boolean }
+        rest_pending:
+          type: boolean
+          description: >-
+            Contract 1.25. True while the owner's desktop may take back the
+            cloud turns the last release left (LOCAL, within the return grace
+            `delete_after`), and during that take back (RECLAIMING).
         handoff_id: { type: string, format: uuid }
         device_name: { type: string }
         history_mode: { type: string }
@@ -4073,6 +4079,14 @@ components:
       properties:
         epoch: { type: integer, format: int64 }
         device_id: { type: string }
+        rest:
+          type: boolean
+          description: >-
+            Contract 1.25. Take back the cloud turns the last release left
+            (`turns_not_taken` > 0): a released LOCAL thread within its return
+            grace moves to RECLAIMING with a new epoch, keeping the grace.
+            `epoch` is the LOCAL thread's. Absent or false is the take back of
+            a cloud thread.
     WorkspaceHandoffReclaimed:
       type: object
       description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:393 (`reclaim`).'
@@ -4104,6 +4118,15 @@ components:
         epoch: { type: integer, format: int64 }
         outcome: { type: string, description: '`applied`, `worktree` or `discarded`.' }
         applied_sha: { type: string, nullable: true }
+        turns_not_taken:
+          type: integer
+          minimum: 0
+          maximum: 1000
+          description: >-
+            Contract 1.25. How many cloud turns the take back did not apply
+            (take back up to turn k). More than zero keeps them for a rest
+            take back (reclaim with `rest`) until `cloud_copy_delete_after`.
+            The release of a rest take back keeps the first release's grace.
     WorkspaceHandoffReleased:
       type: object
       description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:447 (`release`).'
@@ -4189,7 +4212,12 @@ components:
       required: [epoch, kind, segment_sha256, bytes, refs, object_format]
       properties:
         epoch: { type: integer, format: int64 }
-        kind: { type: string, description: '`COMPACT` in this version.' }
+        kind:
+          type: string
+          description: >-
+            `COMPACT` (a full segment, no prerequisites; it supersedes every
+            earlier segment) or `PUSH` (incremental, on the live COMPACT; 1 to
+            8 sha1 `prerequisites`, each a current ref value of the thread).
         segment_sha256: { type: string }
         bytes: { type: integer, format: int64 }
         prerequisites:
@@ -19723,6 +19751,12 @@ paths:
         pending (202): the thread becomes RECLAIMING when the turn ends, or
         after 60 seconds, when the turn is cancelled. A native app token of the
         owner only.
+
+        Contract 1.25: with `rest`, a released LOCAL thread whose release left
+        turns not taken moves to RECLAIMING (200, a new epoch) within its
+        return grace; a retry answers the same RECLAIMING thread. Once the
+        grace runs out a rest take back that was never released returns to
+        LOCAL and the cloud copy is erased.
       tags: [chat, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'
@@ -19740,6 +19774,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkspaceHandoffReclaimed'
+              example:
+                state: RECLAIMING
+                epoch: 5
+                cloud_sha: 0123456789abcdef0123456789abcdef01234567
         '400':
           description: >-
             A malformed body (`invalid_handoff`), or an `X-Client-Version`
@@ -19782,7 +19820,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkspaceHandoffReclaimPending'
         '409':
-          description: '`stale_epoch`.'
+          description: >-
+            `stale_epoch`. With `rest`: `stale_epoch` also when the thread is
+            not a released LOCAL thread with turns not taken,
+            `handoff_erased` when its return grace is over or its cloud copy
+            was erased, `local_turn_in_progress` when a local turn is not
+            committed.
           content:
             application/json:
               schema:
@@ -19884,6 +19927,9 @@ paths:
         to LOCAL (a new epoch) with the take back's outcome, appends the event
         message, and keeps the cloud copy until `cloud_copy_delete_after` (the
         return grace). A retried release answers the same row.
+
+        Contract 1.25: `turns_not_taken` > 0 (take back up to turn k) keeps
+        the remaining cloud turns for a rest take back within the grace.
       tags: [chat, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'
@@ -19901,6 +19947,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkspaceHandoffReleased'
+              example:
+                state: LOCAL
+                epoch: 4
+                cloud_copy_delete_after: '2026-11-01T12:00:00Z'
         '400':
           description: >-
             A malformed body (`invalid_handoff`), or an `X-Client-Version`
@@ -20208,7 +20258,10 @@ paths:
             (with a `Retry-After: 1` header): another change to the thread is
             being saved; nothing was compared, so send the SAME publish again
             after the delay (it then answers the original result if the first
-            one committed).
+            one committed). Contract 1.25, a `PUSH`: `prerequisite_unknown`
+            (a prerequisite is not a current ref value of the thread, or the
+            thread has no live COMPACT) or `segment_chain_too_long` (the live
+            PUSH chain is at its cap; publish a COMPACT).
           headers:
             Retry-After:
               description: Seconds to wait before retrying; set for `thread_busy`.
@@ -20249,8 +20302,11 @@ paths:
       summary: Read the segments a reader needs
       description: |
         Client contract 1.8 (ADR-0034 decision 2). The fetch plan from
-        `since_seq`: in this version the newest COMPACT segment at or after it,
-        with a URL valid until `expires_at`, and the thread's refs.
+        `since_seq`, oldest first: the newest live COMPACT segment when it is
+        at or after `since_seq`, then every later live PUSH segment after
+        `since_seq` (contract 1.25; only PUSH segments when `since_seq` is
+        past the COMPACT). Each has a URL valid until `expires_at`; the plan
+        carries the thread's refs.
       tags: [chat, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'

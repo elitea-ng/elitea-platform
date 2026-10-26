@@ -19,11 +19,12 @@ use std::path::Path;
 use elitea_local_tools::checkpoint::Checkpoints;
 use elitea_local_tools::error::ErrorCode;
 use elitea_local_tools::handoff::SendRecord;
-use elitea_local_tools::handoff::apply::{self, Mode, Outcome};
+use elitea_local_tools::handoff::apply::{self, Mode, Outcome, Take};
 use elitea_local_tools::handoff::snapshot::{self, Source, open_source};
 use elitea_local_tools::sandbox::SandboxConfig;
 use elitea_local_tools::workspace::Workspace;
 use elitea_workspace_store::bundle::{self, Limits};
+use elitea_workspace_store::chain::{ChainSegment, push_prerequisites};
 
 use handoff_common::{
     CONVERSATION, Fixture, all_refs, git, git_state_fingerprint, tree_fingerprint, write,
@@ -69,6 +70,24 @@ fn cloud(
     sent: &Sent,
     turns: &[Turn<'_>],
 ) -> (Vec<u8>, BTreeMap<String, String>) {
+    let dir = cloud_repo(fixture, sent, turns);
+    let mut names = vec!["refs/elitea/base", "refs/elitea/handoff/1"];
+    if !turns.is_empty() {
+        git(&dir, &["update-ref", "refs/elitea/cloud", "HEAD"]);
+        names.push("refs/elitea/cloud");
+    }
+    let out = dir.join("../cloud.bundle");
+    let mut args = vec!["bundle", "create", "-q", out.to_str().unwrap()];
+    args.extend(names);
+    git(&dir, &args);
+    let bytes = std::fs::read(&out).unwrap();
+    let refs = bundle::parse_header(&bytes).unwrap().ref_map();
+    (bytes, refs)
+}
+
+/// The cloud's repository after its turns (one commit each, `HEAD` the
+/// last).
+fn cloud_repo(fixture: &Fixture, sent: &Sent, turns: &[Turn<'_>]) -> std::path::PathBuf {
     let dir = fixture.base.join(format!("cloud-{}", rand_suffix()));
     std::fs::create_dir(&dir).unwrap();
     git(&dir, &["init", "-q"]);
@@ -101,18 +120,89 @@ fn cloud(
             ],
         );
     }
-    let mut names = vec!["refs/elitea/base", "refs/elitea/handoff/1"];
-    if !turns.is_empty() {
-        git(&dir, &["update-ref", "refs/elitea/cloud", "HEAD"]);
-        names.push("refs/elitea/cloud");
+    dir
+}
+
+/// One published segment of a chain: its plan entry and its bytes.
+struct Published {
+    kind: &'static str,
+    sha256: String,
+    prerequisites: Vec<String>,
+    refs: BTreeMap<String, String>,
+    bytes: Vec<u8>,
+}
+
+impl Published {
+    fn segment(&self, seq: u64) -> ChainSegment<'_> {
+        ChainSegment {
+            seq,
+            kind: self.kind,
+            sha256: &self.sha256,
+            prerequisites: &self.prerequisites,
+            refs: &self.refs,
+            bytes: &self.bytes,
+        }
     }
-    let out = dir.join("../cloud.bundle");
-    let mut args = vec!["bundle", "create", "-q", out.to_str().unwrap()];
-    args.extend(names);
-    git(&dir, &args);
-    let bytes = std::fs::read(&out).unwrap();
-    let refs = bundle::parse_header(&bytes).unwrap().ref_map();
-    (bytes, refs)
+}
+
+fn chain_of<'a>(published: &[&'a Published]) -> Vec<ChainSegment<'a>> {
+    published
+        .iter()
+        .enumerate()
+        .map(|(n, segment)| segment.segment(n as u64 + 1))
+        .collect()
+}
+
+/// The cloud executor of Phase 2: the first turn's COMPACT, then one PUSH
+/// per later turn over the published head, written with the store crate
+/// (as the worker writes them) from the cloud repository's objects.
+fn cloud_chain(fixture: &Fixture, sent: &Sent, turns: &[Turn<'_>]) -> Vec<Published> {
+    use elitea_workspace_store::objects::{ObjectDb, oid};
+    let dir = cloud_repo(fixture, sent, turns);
+    let db = ObjectDb::open_objects(&dir.join(".git/objects")).unwrap();
+    let id = |rev: &str| oid(&git(&dir, &["rev-parse", rev])).unwrap();
+    let mut refs: BTreeMap<String, String> = ["refs/elitea/base", "refs/elitea/handoff/1"]
+        .iter()
+        .map(|name| ((*name).to_owned(), id(name).to_string()))
+        .collect();
+    let mut out = Vec::new();
+    for n in 0..turns.len() {
+        let commit = id(&format!("HEAD~{}", turns.len() - 1 - n));
+        let previous = refs.clone();
+        refs.insert("refs/elitea/cloud".to_owned(), commit.to_string());
+        let written = if n == 0 {
+            let tips: Vec<(String, _)> = refs
+                .iter()
+                .map(|(name, sha)| (name.clone(), oid(sha).unwrap()))
+                .collect();
+            (
+                "COMPACT",
+                Vec::new(),
+                bundle::write_compact(&db, &tips, Limits::default()).unwrap(),
+            )
+        } else {
+            let prerequisites = push_prerequisites(&db, &previous).unwrap();
+            (
+                "PUSH",
+                prerequisites.iter().map(ToString::to_string).collect(),
+                bundle::write_push(
+                    &db,
+                    &[("refs/elitea/cloud".to_owned(), commit)],
+                    &prerequisites,
+                    Limits::default(),
+                )
+                .unwrap(),
+            )
+        };
+        out.push(Published {
+            kind: written.0,
+            sha256: written.2.sha256.clone(),
+            prerequisites: written.1,
+            refs: refs.clone(),
+            bytes: written.2.bytes,
+        });
+    }
+    out
 }
 
 fn rand_suffix() -> String {
@@ -1001,6 +1091,189 @@ fn taking_back_up_to_turn_k_applies_exactly_that_turns_tree() {
     assert_eq!(
         git(top, &["log", "-1", "--format=%s", &branch]),
         "cloud turn 2"
+    );
+}
+
+fn three_turns() -> [Turn<'static>; 3] {
+    [
+        &|dir| {
+            write(dir, "README.md", "turn 1\n");
+            write(dir, "t1.txt", "one\n");
+        },
+        &|dir| {
+            write(dir, "README.md", "turn 2\n");
+            write(dir, "t2.txt", "two\n");
+            std::fs::remove_file(dir.join("src/lib.rs")).unwrap();
+        },
+        &|dir| {
+            write(dir, "README.md", "turn 3\n");
+            write(dir, "t3.txt", "three\n");
+        },
+    ]
+}
+
+/// Phase 2: a chain (a COMPACT, then PUSH segments) takes back like one
+/// COMPACT of the same head; a chain missing a PUSH, or with a tampered
+/// one, is refused with the folder untouched.
+#[test]
+fn a_chain_of_push_segments_takes_back_like_a_compact() {
+    let fixture = plain_repo();
+    let top = &fixture.top;
+    let sent = send(&fixture);
+    let turns = three_turns();
+    let published = cloud_chain(&fixture, &sent, &turns);
+    assert_eq!(
+        published.iter().map(|p| p.kind).collect::<Vec<_>>(),
+        ["COMPACT", "PUSH", "PUSH"]
+    );
+    let tree = tree_fingerprint(top);
+    let missing = chain_of(&[&published[0], &published[2]]);
+    let error = apply::preflight_chain(
+        &sent.source,
+        &sent.record,
+        &missing,
+        &deny(),
+        &Take::UpTo(None),
+    )
+    .unwrap_err();
+    assert!(error.message().contains("does not hold"), "{error:?}");
+    let mut tampered_push = Published {
+        kind: published[1].kind,
+        sha256: String::new(),
+        prerequisites: published[1].prerequisites.clone(),
+        refs: published[1].refs.clone(),
+        bytes: published[1].bytes.clone(),
+    };
+    let last = tampered_push.bytes.len() - 25;
+    tampered_push.bytes[last] ^= 0x40;
+    tampered_push.sha256 = elitea_workspace_store::digest::sha256_hex(&tampered_push.bytes);
+    let tampered = chain_of(&[&published[0], &tampered_push, &published[2]]);
+    assert!(
+        apply::preflight_chain(
+            &sent.source,
+            &sent.record,
+            &tampered,
+            &deny(),
+            &Take::UpTo(None)
+        )
+        .is_err()
+    );
+    assert_eq!(tree_fingerprint(top), tree);
+
+    let chain = chain_of(&[&published[0], &published[1], &published[2]]);
+    let preflight = apply::preflight_chain(
+        &sent.source,
+        &sent.record,
+        &chain,
+        &deny(),
+        &Take::UpTo(None),
+    )
+    .unwrap();
+    assert_eq!(preflight.cloud_turns(), 3);
+    assert_eq!(preflight.report.outcome, Outcome::FastPath);
+    let applied = apply::apply(&sent.source, &preflight, Mode::Apply, &deny(), None).unwrap();
+    assert_eq!(applied.replayed.len(), 3);
+    assert_eq!(
+        std::fs::read_to_string(top.join("README.md")).unwrap(),
+        "turn 3\n"
+    );
+    assert!(top.join("t1.txt").exists() && top.join("t3.txt").exists());
+    // Every segment's objects were imported into the repository.
+    for commit in &preflight.chain {
+        git(
+            top,
+            &["cat-file", "-e", &format!("{}^{{commit}}", commit.sha)],
+        );
+    }
+}
+
+/// After a take-back up to turn `k`, the remaining turns `k+1..N` are
+/// taken back on top: merged from `C_k`'s tree, so the folder's own edits
+/// since (and `C_k`'s work already there) stay, replayed onto `C'_k`, and
+/// kept on their own branch. No turn after `k` is refused.
+#[test]
+fn the_remaining_turns_take_back_on_top_of_a_partial_take_back() {
+    let fixture = plain_repo();
+    let top = &fixture.top;
+    let sent = send(&fixture);
+    let turns = three_turns();
+    let published = cloud_chain(&fixture, &sent, &turns);
+    let chain = chain_of(&[&published[0], &published[1], &published[2]]);
+    let first = apply::preflight_chain(
+        &sent.source,
+        &sent.record,
+        &chain,
+        &deny(),
+        &Take::UpTo(Some(1)),
+    )
+    .unwrap();
+    let partial = apply::apply(&sent.source, &first, Mode::Apply, &deny(), None).unwrap();
+    assert_eq!(
+        partial.rest_branch.as_deref(),
+        Some("elitea/cloud/c0ffee00-after-turn-1")
+    );
+    let replayed_k = partial.replayed.last().unwrap().clone();
+    // The person keeps working before taking back the rest.
+    write(top, "mine.txt", "my own work\n");
+
+    for bad in [0, 3, 7] {
+        let error = apply::preflight_chain(
+            &sent.source,
+            &sent.record,
+            &chain,
+            &deny(),
+            &Take::Rest {
+                after_turn: bad,
+                replayed: replayed_k.clone(),
+            },
+        )
+        .unwrap_err();
+        assert!(error.message().starts_with("turn_out_of_range"), "{bad}");
+    }
+    let rest = apply::preflight_chain(
+        &sent.source,
+        &sent.record,
+        &chain,
+        &deny(),
+        &Take::Rest {
+            after_turn: 1,
+            replayed: replayed_k.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!((rest.from_turn, rest.up_to_turn), (1, 3));
+    assert_eq!(rest.target, rest.cloud_tip);
+    // `mine.txt` is the folder's own: both sides changed other files.
+    assert_eq!(rest.report.outcome, Outcome::CleanMerge);
+    let touched = rest.report.touched();
+    assert!(touched.contains(&"t2.txt".to_owned()));
+    assert!(
+        !touched.contains(&"t1.txt".to_owned()),
+        "turn 1 is in already"
+    );
+    let applied = apply::apply(&sent.source, &rest, Mode::Apply, &deny(), None).unwrap();
+    assert_eq!(applied.replayed.len(), 2, "turns 2 and 3 only");
+    let branch = applied.branch.clone().unwrap();
+    assert_eq!(branch, "elitea/cloud/c0ffee00-turns-2-3");
+    assert_eq!(applied.rest_branch, None);
+    assert_eq!(git(top, &["rev-parse", &format!("{branch}~2")]), replayed_k);
+    assert_eq!(
+        git(top, &["log", "-1", "--format=%s", &branch]),
+        "cloud turn 3"
+    );
+    assert_eq!(
+        std::fs::read_to_string(top.join("README.md")).unwrap(),
+        "turn 3\n"
+    );
+    assert!(top.join("t1.txt").exists() && top.join("t2.txt").exists());
+    assert!(top.join("t3.txt").exists() && !top.join("src/lib.rs").exists());
+    assert_eq!(
+        std::fs::read_to_string(top.join("mine.txt")).unwrap(),
+        "my own work\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(top.join(".env")).unwrap(),
+        "TOKEN=local\n"
     );
 }
 

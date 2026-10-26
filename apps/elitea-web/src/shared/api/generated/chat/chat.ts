@@ -9787,6 +9787,12 @@ export const getReclaimWorkspaceHandoffUrl = (
  * pending (202): the thread becomes RECLAIMING when the turn ends, or
  * after 60 seconds, when the turn is cancelled. A native app token of the
  * owner only.
+ *
+ * Contract 1.25: with `rest`, a released LOCAL thread whose release left
+ * turns not taken moves to RECLAIMING (200, a new epoch) within its
+ * return grace; a retry answers the same RECLAIMING thread. Once the
+ * grace runs out a rest take back that was never released returns to
+ * LOCAL and the cloud copy is erased.
  * @summary Take a thread back to the desktop
  */
 export const reclaimWorkspaceHandoff = async (
@@ -10438,6 +10444,9 @@ export const getReleaseWorkspaceHandoffUrl = (
  * to LOCAL (a new epoch) with the take back's outcome, appends the event
  * message, and keeps the cloud copy until `cloud_copy_delete_after` (the
  * return grace). A retried release answers the same row.
+ *
+ * Contract 1.25: `turns_not_taken` > 0 (take back up to turn k) keeps
+ * the remaining cloud turns for a rest take back within the grace.
  * @summary Finish a take back
  */
 export const releaseWorkspaceHandoff = async (
@@ -11854,8 +11863,11 @@ export const getGetWorkspaceFetchPlanUrl = (
 
 /**
  * Client contract 1.8 (ADR-0034 decision 2). The fetch plan from
- * `since_seq`: in this version the newest COMPACT segment at or after it,
- * with a URL valid until `expires_at`, and the thread's refs.
+ * `since_seq`, oldest first: the newest live COMPACT segment when it is
+ * at or after `since_seq`, then every later live PUSH segment after
+ * `since_seq` (contract 1.25; only PUSH segments when `since_seq` is
+ * past the COMPACT). Each has a URL valid until `expires_at`; the plan
+ * carries the thread's refs.
  * @summary Read the segments a reader needs
  */
 export const getWorkspaceFetchPlan = async (

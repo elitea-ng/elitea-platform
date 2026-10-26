@@ -466,9 +466,9 @@ test('J17.7: a failed tool-catalogue read shows an error with a retry, not an em
   const { id } = (await created.json()) as { id: string };
   createdIds.push(id);
 
-  // The retry below needs the REAL catalogue read to succeed. A deployment that
-  // leaves runtime discovery off answers it 503, so the error correctly stays
-  // after Retry — skipped there, never on the rig.
+  // A deployment that leaves runtime discovery off answers the real read 503
+  // "discovery unavailable"; skipped there. The rig composes no discovery
+  // either, so the retry below is answered here, never by the server.
   await skipWhenToolkitDiscoveryAbsent(page.request, id);
 
   // The server answers this route with an error for a lost read (#381). The
@@ -490,7 +490,11 @@ test('J17.7: a failed tool-catalogue read shows an error with a retry, not an em
   await page.route('**/elitea_core/toolkit_*_tools/**', async (route) => {
     catalogueReads += 1;
     if (!failReads) {
-      await route.continue();
+      // A successful read with no tools. Continuing to the server here made
+      // the journey pass only by catching the alert's absence during the
+      // refetch: the rig answers the real read 503 "discovery unavailable",
+      // whose alert carries the same test id and comes straight back.
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ tools: [], total: 0 }) });
       return;
     }
     await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'read available tools failed' }) });
@@ -513,8 +517,8 @@ test('J17.7: a failed tool-catalogue read shows an error with a retry, not an em
   const readsBeforeRetry = catalogueReads;
   failReads = false;
   await error.getByRole('button', { name: 'Retry' }).click();
+  await expect.poll(() => catalogueReads, { message: 'Retry did not read the catalogue again', timeout: 20_000 }).toBeGreaterThan(readsBeforeRetry);
   await expect(error).toHaveCount(0, { timeout: 20_000 });
-  expect(catalogueReads).toBeGreaterThan(readsBeforeRetry);
 });
 
 /**
