@@ -4990,5 +4990,8 @@
   "widgets.chatBox.steeringNoticeClose": "Close",
   "widgets.chatBox.steeringOfferDismiss": "Dismiss",
   "widgets.chatBox.steeringOfferHeading": "The turn ended before it read these messages. Send them as the next message?",
-  "widgets.chatBox.steeringOfferSend": "Send"
+  "widgets.chatBox.steeringOfferSend": "Send",
+  "features.agents.generateAgentModal.refine": "Refine",
+  "features.agents.generateAgentModal.refineLabel": "Change the draft",
+  "features.agents.generateAgentModal.refinePlaceholder": "Ask for a change, e.g. \"Make it more formal\""
 }

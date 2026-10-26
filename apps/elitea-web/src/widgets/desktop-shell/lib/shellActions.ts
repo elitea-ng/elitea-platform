@@ -16,6 +16,8 @@ export type ShellAction =
   | { type: 'toggle_plan' }
   /** Thread / Folder menu: the session on screen acts (`SessionActions`). */
   | { type: 'send_to_cloud' | 'open_in_chat' | 'choose_agent' | 'index_settings' | 'handoff_settings' }
+  /** The palette's "Create agent…": the builder of the thread on screen (ADR-0037). */
+  | { type: 'create_agent' }
   | { type: 'back' }
   | { type: 'forward' }
   /** The folders home: the last folder/thread, else the start screen. */

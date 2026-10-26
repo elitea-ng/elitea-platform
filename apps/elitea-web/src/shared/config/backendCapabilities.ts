@@ -19,6 +19,7 @@
 
 /** One optional backend surface. */
 export type BackendCapability =
+  | 'aiDraftStreaming'
   | 'aiGeneration'
   | 'deepwiki'
   | 'inventory'
@@ -107,6 +108,7 @@ export type BackendCapability =
  * why — the failure this module exists to prevent, in the other direction.
  */
 const SERVED: Readonly<Record<BackendCapability, boolean>> = {
+  aiDraftStreaming: true,
   aiGeneration: true,
   deepwiki: true,
   inventory: true,
@@ -114,6 +116,14 @@ const SERVED: Readonly<Record<BackendCapability, boolean>> = {
   llmPredictStreaming: false,
   pipelineTriggers: true,
 };
+
+/*
+ * `aiDraftStreaming` (ADR-0037) is the streamed agent draft,
+ * `generateApplicationDraftStream`, mounted in the same change that turns it
+ * on. With it off, the "Build with AI" builder falls back to the one-shot
+ * `generateApplicationDraft` (which `aiGeneration` covers) and offers no
+ * refinement turns.
+ */
 
 /**
  * Test-only overrides.

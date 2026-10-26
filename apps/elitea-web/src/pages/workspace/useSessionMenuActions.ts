@@ -17,6 +17,8 @@ export interface SessionMenuInput {
   hasIndex: boolean;
   agentRef: RefObject<HTMLDivElement | null>;
   openIndexSettings: () => void;
+  /** Opens the agent builder (ADR-0037). */
+  createAgent: () => void;
   /** The folder, for the island's cloud line. */
   workspace: { id: string; name: string };
 }
@@ -38,6 +40,7 @@ export function useSessionMenuActions(input: SessionMenuInput): void {
         if (id !== '') void navigate({ to: '/chat/$conversationId', params: { conversationId: id } });
       },
       chooseAgent: () => latest.current.agentRef.current?.querySelector<HTMLElement>('button')?.click(),
+      createAgent: () => latest.current.createAgent(),
       indexSettings: () => {
         if (latest.current.hasIndex) latest.current.openIndexSettings();
       },

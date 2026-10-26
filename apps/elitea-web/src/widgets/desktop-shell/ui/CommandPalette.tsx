@@ -52,6 +52,7 @@ function paletteEntries(workspaces: readonly Workspace[], eliteaItems: readonly 
   ];
   if (hasSession) {
     entries.push({ id: 'toggle_plan', group: actions, label: t('desktop.palette.togglePlan', 'Toggle plan mode'), action: { type: 'toggle_plan' } });
+    entries.push({ id: 'create_agent', group: actions, label: t('desktop.palette.createAgent', 'Create agent…'), action: { type: 'create_agent' } });
   }
   entries.push(
     { id: 'toggle_sidebar', group: actions, label: t('desktop.palette.toggleSidebar', 'Toggle sidebar'), hint: `${mod}\\`, action: { type: 'toggle_sidebar' } },

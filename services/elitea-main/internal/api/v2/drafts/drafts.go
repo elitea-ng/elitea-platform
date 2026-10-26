@@ -395,6 +395,51 @@ func (h *Handler) GenerateApplicationDraft(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	draft, failure := h.finishApplicationDraft(r.Context(), chi.URLParam(r, "projectID"), content)
+	if failure != nil {
+		failure.log(r.Context())
+		writeJSON(w, failure.status, map[string]any{"error": failure.message, "code": failure.code})
+		return
+	}
+	writeJSON(w, http.StatusOK, draft)
+}
+
+// draftFailure is a generation that worked as a hop and failed as a draft.
+// Both application draft routes report it: the one-shot route as the status
+// and body, the streaming route as its draft.error frame.
+type draftFailure struct {
+	status  int
+	code    string
+	message string
+	cause   error
+}
+
+func (f *draftFailure) log(ctx context.Context) {
+	slog.WarnContext(ctx, "draft: generated agent draft refused", "code", f.code, "err", f.cause)
+}
+
+// The machine codes of a refused agent draft, beside DraftInvalidCode.
+const (
+	draftUnparseableCode = "agent_draft_unparseable"
+	draftCutOffCode      = "agent_draft_cut_off"
+)
+
+// finishApplicationDraft turns the model's text into the validated draft. It
+// is the one path both application draft routes take from model text to
+// answer, so they truncate, validate and suggest identically.
+func (h *Handler) finishApplicationDraft(ctx context.Context, projectID, content string) (ApplicationDraft, *draftFailure) {
+	unusable := func(text, otherwise string, cause error) *draftFailure {
+		message := truncatedOrUnusable(text, otherwise)
+		code := draftUnparseableCode
+		if message != otherwise {
+			code = draftCutOffCode
+		}
+		return &draftFailure{status: http.StatusUnprocessableEntity, code: code, message: message, cause: cause}
+	}
+	object, err := extractJSONObject(content)
+	if err != nil {
+		return ApplicationDraft{}, unusable(content, "the model did not return a JSON draft", err)
+	}
 	var raw struct {
 		Name                 string   `json:"name"`
 		Description          string   `json:"description"`
@@ -402,16 +447,8 @@ func (h *Handler) GenerateApplicationDraft(w http.ResponseWriter, r *http.Reques
 		WelcomeMessage       string   `json:"welcome_message"`
 		ConversationStarters []string `json:"conversation_starters"`
 	}
-	if !decodeModelJSON(w, r, content, &raw) {
-		return
-	}
-
-	name := strings.TrimSpace(truncate(raw.Name, applicationNameMaxLength))
-	description := strings.TrimSpace(truncate(raw.Description, applicationDescriptionMaxLength))
-	instructions := strings.TrimSpace(truncate(raw.Instructions, applicationInstructionsSanityLength))
-	if name == "" || description == "" || instructions == "" {
-		writeUnprocessable(w, r, "agent", errors.New("name, description and instructions are all required"))
-		return
+	if err := json.Unmarshal([]byte(object), &raw); err != nil {
+		return ApplicationDraft{}, unusable(object, "the model returned unusable JSON", err)
 	}
 
 	starters := make([]string, 0, applicationMaxConversationStarters)
@@ -425,28 +462,39 @@ func (h *Handler) GenerateApplicationDraft(w http.ResponseWriter, r *http.Reques
 			break
 		}
 	}
-
-	// The query the five suggestion categories are scored against — the same
-	// text a human reviewer sees, not just body.UserDescription: a draft
-	// whose instructions elaborate on tools/domains the short user
-	// description didn't mention should still surface those matches.
-	suggestionQuery := name + " " + description + " " + instructions
-	projectID := chi.URLParam(r, "projectID")
-	ctx := r.Context()
-	suggestedToolkits, suggestedMCP := h.suggestToolkits(ctx, projectID, suggestionQuery)
-
-	writeJSON(w, http.StatusOK, ApplicationDraft{
-		Name:                 name,
-		Description:          description,
-		Instructions:         instructions,
+	draft := ApplicationDraft{
+		Name:                 strings.TrimSpace(truncate(raw.Name, applicationNameMaxLength)),
+		Description:          strings.TrimSpace(truncate(raw.Description, applicationDescriptionMaxLength)),
+		Instructions:         strings.TrimSpace(truncate(raw.Instructions, applicationInstructionsSanityLength)),
 		WelcomeMessage:       strings.TrimSpace(truncate(raw.WelcomeMessage, applicationWelcomeMessageMaxLength)),
 		ConversationStarters: starters,
-		SuggestedToolkits:    suggestedToolkits,
-		SuggestedMCP:         suggestedMCP,
-		SuggestedPipelines:   h.suggestApplications(ctx, projectID, suggestionQuery, true),
-		SuggestedAgents:      h.suggestApplications(ctx, projectID, suggestionQuery, false),
-		SuggestedSkills:      h.suggestSkills(ctx, projectID, suggestionQuery),
-	})
+	}
+	// AgentDefinition (v2.yaml) is the rule: a missing name, description or
+	// instructions is refused, the same way on both routes.
+	if err := ValidateApplicationDraft(draft); err != nil {
+		var unavailable *SchemaUnavailableError
+		if errors.As(err, &unavailable) {
+			return ApplicationDraft{}, &draftFailure{status: http.StatusInternalServerError, code: SchemaUnavailableCode,
+				message: "the agent schema could not be loaded", cause: err}
+		}
+		return ApplicationDraft{}, &draftFailure{
+			status:  http.StatusUnprocessableEntity,
+			code:    DraftInvalidCode,
+			message: "the generated agent draft is not usable: " + err.Error(),
+			cause:   err,
+		}
+	}
+
+	// The query the five suggestion categories are scored against — the same
+	// text a human reviewer sees, not just the user's request: a draft
+	// whose instructions elaborate on tools/domains the short request
+	// didn't mention should still surface those matches.
+	suggestionQuery := draft.Name + " " + draft.Description + " " + draft.Instructions
+	draft.SuggestedToolkits, draft.SuggestedMCP = h.suggestToolkits(ctx, projectID, suggestionQuery)
+	draft.SuggestedPipelines = h.suggestApplications(ctx, projectID, suggestionQuery, true)
+	draft.SuggestedAgents = h.suggestApplications(ctx, projectID, suggestionQuery, false)
+	draft.SuggestedSkills = h.suggestSkills(ctx, projectID, suggestionQuery)
+	return draft, nil
 }
 
 // GenerateProjectContextDraft serves POST /generate_project_context_draft/prompt_lib/{projectID}.

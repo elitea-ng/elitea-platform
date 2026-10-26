@@ -45,3 +45,7 @@ Keys, all required:
   "project_background"  string. Markdown. At most 2500 characters, so be dense and drop anything an agent would not act on. Use short headed sections.
 
 Write only what the request supports. Do not invent technologies, team practices or constraints that were not described.`
+
+// conversationalDraftPrompt is appended to applicationDraftSystemPrompt by the
+// streaming route, whose request carries the builder conversation so far.
+const conversationalDraftPrompt = `The messages that follow are a conversation with the person building this agent. Earlier turns are context; the last message is the request to satisfy now. Your reply is still ONE JSON object with the keys above and nothing else, even when the request is a small change.`

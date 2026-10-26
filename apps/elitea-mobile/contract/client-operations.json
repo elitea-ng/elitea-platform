@@ -5,6 +5,7 @@
     "listConversations",
     "listApplications",
     "getApplication",
+    "deleteApplication",
     "getConversation",
     "generateConversationName",
     "listConversationMessages",
@@ -64,6 +65,8 @@
     "archiveConversation",
     "unarchiveConversation",
     "forkConversation",
-    "markConversationRead"
+    "markConversationRead",
+    "generateApplicationDraftStream",
+    "createApplication"
   ]
 }

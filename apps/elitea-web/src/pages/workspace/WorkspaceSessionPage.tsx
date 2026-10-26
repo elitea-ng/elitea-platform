@@ -18,7 +18,7 @@
 import { useState } from 'react';
 
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
@@ -28,12 +28,14 @@ import { approval, plan, readThreads, threadsQueryKey, useWorkspaceIpc, type Wor
 import { HooksProposals } from '@/features/workspace-hooks';
 import { useHasIndexHost } from '@/features/workspace-index';
 import { McpProposals } from '@/features/workspace-mcp';
+import { getListApplicationsQueryKey } from '@/shared/api/generated/applications/applications';
 import type { Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { NoAgents } from './AgentPickers';
 import { CloudTranscript } from './CloudTranscript';
+import { CreateAgentDialog } from './CreateAgentDialog';
 import { HandoffDialogs } from './HandoffControls';
 import { ForkNotices } from './forkNotices';
 import { COLUMN, EarlierTurns, Exchanges, ThreadIntro } from './sessionParts';
@@ -96,8 +98,12 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   // A thread away from this computer is chatted with on the server (the cloud copy); `cloud` is idle otherwise.
   const cloud = useCloudChat({ conversationId, workspace, active: handoff.offLaptop, mayChat: handoff.status?.executor === 'cloud' });
 
-  useSessionMenuActions({ handoff, conversationId, workspace, hasIndex, agentRef: commands.agentRef, openIndexSettings: () => useDesktopLayout.getState().showInspector('index') });
+  useSessionMenuActions({ handoff, conversationId, workspace, hasIndex, agentRef: commands.agentRef, openIndexSettings: () => useDesktopLayout.getState().showInspector('index'), createAgent: () => setCreateAgentOpen(true) });
   const forking = useSessionFork({ ipc, workspaceId: workspace.id, projectId, conversationId, offLaptop: handoff.offLaptop });
+  const queryClient = useQueryClient();
+  // ⋯ ▸ Create Agent… and the palette's "Create agent…" (ADR-0037).
+  const [createAgentOpen, setCreateAgentOpen] = useState(false);
+  const openCreateAgent = (): void => setCreateAgentOpen(true);
 
   return (
     // Pinned to the frame's scroll box (which is `position: relative`): the
@@ -116,6 +122,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           attention={attentionOf(session)}
           onIndexSettings={indexSettingsOpener(hasIndex)}
           onFork={forking.onForkThread}
+          onCreateAgent={openCreateAgent}
         />
         <Box ref={scrollRef} data-testid="session-transcript" sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <Box ref={contentRef} sx={{ ...COLUMN, paddingY: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -165,6 +172,19 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
         context={inspectorMeter(handoff, turn, session.history)}
       />
       <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} />
+      <CreateAgentDialog
+        open={createAgentOpen}
+        onClose={() => setCreateAgentOpen(false)}
+        projectId={projectId}
+        localFolder={!handoff.offLaptop}
+        canSendLocal={session.canSend}
+        onLocal={(prompt) => void session.send(prompt, 'act', [])}
+        onCreated={(result) => {
+          // The new agent lists in this session at once and is picked: the next message runs it.
+          void queryClient.invalidateQueries({ queryKey: getListApplicationsQueryKey(String(projectId)) });
+          session.selection.selectAgent(String(result.id));
+        }}
+      />
       <approval.Dialog request={pendingApproval} queued={waiting.length} onRespond={session.answer} />
     </Box>
   );

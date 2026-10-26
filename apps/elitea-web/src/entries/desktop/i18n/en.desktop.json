@@ -960,5 +960,22 @@
   "workspace.steer.save": "Save",
   "workspace.steer.stopAndSend": "Stop and send",
   "workspace.steer.unsent": "The messages you queued did not start a new turn. They are back in the message box: change them if you want, then send them again.",
-  "workspace.steer.waiting": "The agent reads these after its current step:"
+  "workspace.steer.waiting": "The agent reads these after its current step:",
+  "workspace.createAgent.back": "Back",
+  "workspace.createAgent.cannotSend": "Pick an agent for this thread, or wait for the running turn to finish.",
+  "workspace.createAgent.eliteaBody": "Generated with AI and saved to the project. It runs here, on the web and on mobile.",
+  "workspace.createAgent.eliteaTitle": "Elitea agent",
+  "workspace.createAgent.localBody": "An AGENTS.md in this folder. Every turn here follows it; commit it to share it.",
+  "workspace.createAgent.localTitle": "Local agent",
+  "workspace.createAgent.menu": "Create Agent…",
+  "workspace.createAgent.name": "Name (optional)",
+  "workspace.createAgent.question": "Which kind of agent?",
+  "workspace.createAgent.request": "What should the agent do?",
+  "workspace.createAgent.scope": "Folder",
+  "workspace.createAgent.scopeHelp": "A subfolder such as apps/web gets its own AGENTS.md, read with the root one.",
+  "workspace.createAgent.scopeInvalid": "Use a folder inside this one, such as apps/web.",
+  "workspace.createAgent.scopePlaceholder": "The whole folder (AGENTS.md at the root)",
+  "workspace.createAgent.title": "Create agent",
+  "workspace.createAgent.write": "Ask the agent to write it",
+  "desktop.palette.createAgent": "Create agent…"
 }

@@ -24,6 +24,9 @@ export interface StreamResponse {
 export interface StreamRequestInit {
   headers: Record<string, string>;
   signal: AbortSignal;
+  /** GET unless set: the agent builder's draft stream is a POST with a JSON body (ADR-0037). */
+  method?: 'GET' | 'POST';
+  body?: string;
 }
 
 export type StreamTransport = (url: string, init: StreamRequestInit) => Promise<StreamResponse>;
@@ -45,8 +48,9 @@ async function* readChunks(stream: ReadableStream<Uint8Array>): AsyncGenerator<U
 
 export const expoStreamTransport: StreamTransport = async (url, init) => {
   const response = await expoFetch(url, {
-    method: 'GET',
+    method: init.method ?? 'GET',
     headers: init.headers,
+    ...(init.body === undefined ? {} : { body: init.body }),
     signal: init.signal,
     // A redirect must never carry the bearer token anywhere: refuse it.
     redirect: 'error',

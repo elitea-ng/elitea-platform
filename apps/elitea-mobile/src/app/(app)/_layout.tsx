@@ -49,6 +49,15 @@ export default function AppLayout() {
           headerLeft: () => <Button title="Cancel" variant="plain" size="small" onPress={() => router.back()} />,
         }}
       />
+      {/* Create an agent (client contract 1.28), from New chat; Save opens a chat with it. */}
+      <Stack.Screen
+        name="agent-new"
+        options={{
+          title: 'New agent',
+          presentation: 'modal',
+          headerLeft: () => <Button title="Cancel" variant="plain" size="small" onPress={() => router.back()} />,
+        }}
+      />
       <Stack.Screen name="notifications" options={{ title: 'Notifications' }} />
       <Stack.Screen name="archived" options={{ title: 'Archived chats' }} />
       <Stack.Screen name="memory" options={{ title: 'Memory' }} />

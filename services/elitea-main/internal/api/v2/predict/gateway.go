@@ -156,8 +156,8 @@ type chatCompletionsRequest struct {
 	Temperature     *float64  `json:"temperature,omitempty"`
 	MaxTokens       *int      `json:"max_tokens,omitempty"`
 	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
-	// Streaming is never requested: this is the blocking mode, and the
-	// handler has no transport to stream over.
+	// Stream is false for Complete (the blocking mode) and true for
+	// CompleteStream (stream.go).
 	Stream bool `json:"stream"`
 }
 

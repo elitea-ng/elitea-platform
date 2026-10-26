@@ -20,6 +20,10 @@ and each app generates its own client from it.
 | | Steering (client contract 1.27, `stream/steering.ts`): `parseSteeringMessage` / `parseSteeringList` (an unknown state reads as `pending`), `mergeSteering` (a higher `revision` wins and a final state beats `pending`, so a replayed `steer.*` event cannot undo an injection; a new item goes in `created_at` order), `isSteeringCarryOver` + `foldSteeringByAnswer` (the server carried a leftover message to the author's newer answer: the same `id` under another answer with a higher `revision` moves the item), `visibleSteering` (hides an item whose `message_id` is already a transcript row), `leftoverSteering` + `joinSteeringTexts` (the `turn_ended` messages of this client, joined with a blank line as the next turn's message), `steeringRetryAfterMs` / `steeringWaitSeconds` (the wait of a 429 `rate_limited`, from `retry_after_ms`), `STEERING_ERROR` codes and the 16 KiB bound | web (`features/chat-messages/model/useChatSteering.ts`), mobile (`features/chat/turnController.ts`) |
 | | `ANSWER_DELTA_TYPES`, `TURN_FAILURE_TYPES`, `TOOL_CALL_TYPES`, `PAUSE_FINISH_REASONS`: the frame classes every client applies the same way | web (`chatStreamTurnEnd.ts`), mobile (`turnReducer.ts`, `toolActivity.ts`, `api/queries/messageTraces.ts`) |
 | | `parseEventData`: `JSON.parse` of an SSE `data` field that never throws | web, mobile |
+| `@elitea/client-core/agent-builder` | `draftReducer`, `draftStreamReader`, `draftRequestBody`: the streamed agent draft as one state machine (ADR-0037) | web and desktop (`features/agent-builder`), mobile (`features/agent-builder`) |
+| | `localAgentPrompt`, `validateLocalAgent`, `localAgentPath`: the local agent (`AGENTS.md`) and the loader's caps | desktop (`features/agent-builder`) |
+| | `agentBranches`: the one branch question (local or Elitea agent) | web, desktop, mobile |
+| | `agentCreateBody`: the create-application body for a reviewed draft | mobile (the web review form keeps its own) |
 | `@elitea/client-core/brand` | `ELITEA_MARK_SVG`, `ELITEA_MARK_VIEWBOX`, `ELITEA_MARK_ASPECT`: the Elitea mark | mobile (`components/EliteaMark.tsx`) |
 | | `DEFAULT_PRODUCT`, `DEFAULT_BRAND_HUE`: the default identity | web (`defaultPackSync.test.ts`), mobile (`EliteaMark.tsx`) |
 | | `DEFAULT_PACK_ACCENTS`: the default pack's accent inputs | mobile (`theme/brandPack.ts`) |
@@ -105,6 +109,15 @@ pure, equivalent in both apps, and a drift risk moved here.
   (with a parity test that read the web file) and hand-copied the default
   pack's hue and accents. The web app had three copies of the mark artwork
   (public, favicon, icon). All of them now derive from one source.
+
+- **The agent builder (2026-10-26, ADR-0037).** The draft stream's frames,
+  the builder's states (idle, streaming, review, failed), the request body
+  with its bounded history, the local agent's caps and the branch question.
+  Each host keeps its own HTTP client (the web `http.ts`, the mobile
+  `expo/fetch` transport) and its own screens; the review form is the web
+  one on web and desktop. The schemas are not copied here: they are
+  `AgentDefinition` and `LocalAgentDefinition` in `v2.yaml`, served by
+  `getAgentSchema`, and the constants here only mirror the loader's caps.
 
 ### Not shared, with the reason
 

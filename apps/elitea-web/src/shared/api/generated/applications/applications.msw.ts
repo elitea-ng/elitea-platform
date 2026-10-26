@@ -47,6 +47,7 @@ import type { RequestHandlerOptions } from "msw";
 
 import type {
   AgentCategoriesResponse,
+  AgentSchemaResponse,
   ApplicationCreatedResponse,
   ApplicationDetail,
   ApplicationDraft,
@@ -1356,6 +1357,21 @@ export const getGenerateApplicationDraftResponseMock = (
     ]),
   })),
   ...overrideResponse,
+});
+
+export const getGenerateApplicationDraftStreamResponseMock = (): string =>
+  'event: draft.token\ndata: {"text":"{\\"name\\": \\"Inci"}\n\nevent: draft.complete\ndata: {"name":"Incident Triager","description":"Sorts incidents.","instructions":"Assign a severity.","welcome_message":"","conversation_starters":[],"suggested_toolkits":[],"suggested_mcp":[],"suggested_pipelines":[],"suggested_agents":[],"suggested_skills":[]}\n\n';
+
+export const getGetAgentSchemaResponseMock = (): AgentSchemaResponse => ({
+  schema_version: "3f2a9c0d41be",
+  agent_definition: {
+    type: "object",
+    required: ["name", "description", "instructions"],
+  },
+  local_agent_definition: {
+    type: "object",
+    required: ["name", "instructions", "scope"],
+  },
 });
 
 export const getListApplicationsResponseMock = (
@@ -6467,6 +6483,64 @@ export const getGenerateApplicationDraftMockHandler = (
   );
 };
 
+export const getGenerateApplicationDraftStreamMockHandler = (
+  overrideResponse?:
+    | string
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<string> | string),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/generate_application_draft_stream/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      const resolvedBody =
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGenerateApplicationDraftStreamResponseMock();
+      const textBody =
+        typeof resolvedBody === "string"
+          ? resolvedBody
+          : JSON.stringify(resolvedBody ?? null);
+      return HttpResponse.text(textBody, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    },
+    options,
+  );
+};
+
+export const getGetAgentSchemaMockHandler = (
+  overrideResponse?:
+    | AgentSchemaResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentSchemaResponse> | AgentSchemaResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_schema/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAgentSchemaResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListApplicationsMockHandler = (
   overrideResponse?:
     | ApplicationList
@@ -8067,6 +8141,8 @@ export const getApplicationsMock = () => [
   getResolveApplicationVersionMockHandler(),
   getPredictLLMMockHandler(),
   getGenerateApplicationDraftMockHandler(),
+  getGenerateApplicationDraftStreamMockHandler(),
+  getGetAgentSchemaMockHandler(),
   getListApplicationsMockHandler(),
   getCreateApplicationMockHandler(),
   getListPublicApplicationsMockHandler(),

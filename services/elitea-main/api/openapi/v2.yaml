@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.27"
+  x-elitea-client-contract: "1.28"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -6568,6 +6568,235 @@ components:
             read.
         llm_settings:
           $ref: '#/components/schemas/DraftLlmSettings'
+
+    AgentDefinition:
+      type: object
+      description: >
+        ADR-0037 decision 5: the intended cloud agent, as a conversational
+        builder produces it. It is NOT the database passthrough
+        (ApplicationVersionDetail); the review form maps it onto the reviewed
+        create-application body. Served as JSON Schema by getAgentSchema and
+        compiled into the validator both draft routes run before they answer
+        (internal/api/v2/drafts/schema.go), so this component is the one
+        source. Self-contained on purpose: no $ref and no `nullable`, so it is
+        valid JSON Schema as written.
+      required: [name, description, instructions]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 32
+          description: A short, specific name.
+        description:
+          type: string
+          minLength: 1
+          maxLength: 2304
+        instructions:
+          type: string
+          minLength: 1
+          maxLength: 32768
+          description: The agent's system prompt, in Markdown.
+        welcome_message:
+          type: string
+          maxLength: 768
+        conversation_starters:
+          type: array
+          maxItems: 4
+          items:
+            type: string
+            minLength: 1
+            maxLength: 768
+        llm_settings:
+          type: object
+          description: The model the agent runs on. Absent means the project default.
+          properties:
+            model_name: { type: string, minLength: 1 }
+            temperature: { type: number, minimum: 0, maximum: 2 }
+            max_tokens: { type: integer, minimum: 1 }
+            reasoning_effort: { type: string, enum: [low, medium, high] }
+        variables:
+          type: array
+          maxItems: 32
+          items:
+            type: object
+            required: [name]
+            properties:
+              name: { type: string, pattern: '^[A-Za-z_][A-Za-z0-9_]{0,63}$' }
+              value: { type: string }
+        tools:
+          type: array
+          description: References to existing project toolkits. Attaching them is a human step in review.
+          items:
+            type: object
+            required: [id]
+            properties:
+              id: { type: string, minLength: 1 }
+              name: { type: string }
+              type: { type: string }
+        skills:
+          type: array
+          description: References to existing project skills.
+          items:
+            type: object
+            required: [id]
+            properties:
+              id: { type: string, minLength: 1 }
+              name: { type: string }
+      example:
+        name: Incident Triager
+        description: Sorts new incidents by severity and names the owning team.
+        instructions: "## Role\nYou triage incidents. Read the report, assign a severity, name the owning team."
+        welcome_message: What broke?
+        conversation_starters: [Triage this page, Summarise the last hour]
+
+    LocalAgentDefinition:
+      type: object
+      description: >
+        ADR-0037 decision 1: a local agent is an AGENTS.md file in a desktop
+        workspace, read by the D0 project-instructions loader
+        (libs/rust/local-tools/src/project_instructions.rs). The loader is the
+        authority on its caps and refusals; this schema states them so a
+        client can check a file before it asks the approval bridge to write
+        it. Caps the loader enforces on every read: the file name is
+        AGENTS.md (matched case-insensitively, the exact spelling wins); all
+        AGENTS.md text one turn reads, root and nested together, is at most
+        32768 bytes, and text past the cap is not read; a symlinked file or
+        folder is not read; a path the workspace denies is not read. A nested
+        AGENTS.md (scope other than `root`) applies to a turn that references
+        a path under that folder, in addition to the root file.
+      required: [name, instructions, scope]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: The title of the file (its first heading).
+        description:
+          type: string
+          maxLength: 2304
+        instructions:
+          type: string
+          minLength: 1
+          maxLength: 32768
+          description: The Markdown body. Counted in bytes against the loader's 32768-byte cap.
+        scope:
+          type: string
+          minLength: 1
+          maxLength: 512
+          pattern: '^(root|[A-Za-z0-9_][A-Za-z0-9_.@ -]*(/[A-Za-z0-9_][A-Za-z0-9_.@ -]*)*)$'
+          description: >
+            `root` writes AGENTS.md at the workspace root. A relative folder
+            path (no leading slash, no `..` segment, `/` separators) writes a
+            nested AGENTS.md in that folder.
+      example:
+        name: Web app conventions
+        description: How to work in the React client.
+        instructions: "# Web app conventions\n\nRun the unit tests before you commit."
+        scope: apps/web
+
+    AgentSchemaResponse:
+      type: object
+      required: [schema_version, agent_definition, local_agent_definition]
+      description: >
+        The two published agent schemas as JSON Schema, read out of this
+        contract's AgentDefinition and LocalAgentDefinition components.
+      properties:
+        schema_version:
+          type: string
+          description: >
+            12 hex characters of the SHA-256 of the two schemas. It changes
+            exactly when a schema changes; the response ETag carries it.
+        agent_definition:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the AgentDefinition component is itself a JSON Schema document,
+            decoded from this spec and served verbatim by
+            internal/api/v2/drafts/schema.go:78, so its keys are the schema
+            language's, not fields of this contract.
+          description: The AgentDefinition component, as JSON Schema.
+        local_agent_definition:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the LocalAgentDefinition component is itself a JSON Schema document,
+            decoded from this spec and served verbatim by
+            internal/api/v2/drafts/schema.go:78, so its keys are the schema
+            language's, not fields of this contract.
+          description: The LocalAgentDefinition component, as JSON Schema.
+      example:
+        schema_version: 3f2a9c0d41be
+        agent_definition: { type: object, required: [name, description, instructions] }
+        local_agent_definition: { type: object, required: [name, instructions, scope] }
+
+    DraftRefusedResponse:
+      type: object
+      required: [error, code]
+      description: A generated agent draft the one-shot route refused (422), or agent_schema_unavailable (500) when the embedded schema could not be loaded.
+      properties:
+        error: { type: string }
+        code:
+          type: string
+          enum: [agent_draft_invalid, agent_draft_unparseable, agent_draft_cut_off, agent_schema_unavailable]
+      example: { error: "the generated agent draft is not usable: the draft does not match AgentDefinition: name (missing)", code: agent_draft_invalid }
+
+    DraftConversationTurn:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string, enum: [user, assistant] }
+        content: { type: string, maxLength: 16384 }
+
+    GenerateApplicationDraftStreamRequest:
+      type: object
+      required: [user_description]
+      properties:
+        user_description:
+          type: string
+          description: This turn's request, in plain text. Required and non-blank.
+        conversation_history:
+          type: array
+          maxItems: 20
+          description: >
+            The builder conversation so far, oldest first. At most 20 turns;
+            entries with an empty role or content are dropped.
+          items: { $ref: '#/components/schemas/DraftConversationTurn' }
+        current_draft:
+          $ref: '#/components/schemas/AgentDefinition'
+        llm_settings:
+          $ref: '#/components/schemas/DraftLlmSettings'
+      example:
+        user_description: Make it also name the on-call engineer.
+        conversation_history:
+          - { role: user, content: An agent that triages incidents. }
+        current_draft:
+          name: Incident Triager
+          description: Sorts new incidents by severity.
+          instructions: Assign a severity.
+
+    DraftStreamToken:
+      type: object
+      required: [text]
+      description: The data of a `draft.token` frame.
+      properties:
+        text: { type: string, description: A text delta from the model. }
+      example: { text: '{"name": "Inci' }
+
+    DraftStreamError:
+      type: object
+      required: [code, status, message]
+      description: >
+        The data of a `draft.error` frame, the last frame of a failed stream.
+        `status` is the HTTP status the one-shot route answers for the same
+        failure (422 an unusable draft, 502 the gateway hop failed, 500 the
+        agent schema could not be loaded).
+      properties:
+        code:
+          type: string
+          enum: [agent_draft_invalid, agent_draft_unparseable, agent_draft_cut_off, agent_schema_unavailable, gateway_failed]
+        status: { type: integer, enum: [422, 500, 502] }
+        message: { type: string }
+      example: { code: agent_draft_invalid, status: 422, message: "the draft does not match AgentDefinition: name (missing)" }
 
     ProjectContextDraft:
       type: object
@@ -23687,10 +23916,12 @@ paths:
             did not answer with JSON, was cut off mid-answer, or returned a
             draft that cannot be saved. Distinct from 502, which means the hop
             itself failed, and from 500, which would say this service is broken.
+            The draft is checked against AgentDefinition (getAgentSchema), the
+            same check the streaming route runs; `code` names the failure.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/DraftRefusedResponse'
         '502':
           description: >
             The LLM gateway is configured and did not complete the request.
@@ -23708,6 +23939,110 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PredictLLMUnavailableResponse'
+
+  /elitea_core/generate_application_draft_stream/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    post:
+      operationId: generateApplicationDraftStream
+      summary: Draft an agent conversationally, streamed as Server-Sent Events
+      description: |
+        Client contract 1.28 (ADR-0037 decision 4). The streaming twin of
+        generateApplicationDraft: one gateway completion per call, through
+        the same gRPC-over-mTLS hop (`GatewayService.ChatCompletions`,
+        server-streaming), billed to the caller against the project budget
+        like `predict_llm`. Nothing is saved: the client reviews the draft
+        and saves it through createApplication.
+
+        `conversation_history` carries the builder conversation so far and
+        `current_draft` the draft being improved, so a person can refine a
+        draft over several turns. Gated on
+        `models.applications.applications.create`, as the one-shot route.
+
+        FAILURES BEFORE THE STREAM OPENS answer a plain JSON status: 400 an
+        unusable body, 503 no LLM gateway configured. The stream then opens
+        at once, before the gateway answers, so the keepalive can hold the
+        connection while a reasoning model thinks. From then on the status
+        is 200 and a failure is the last frame, `draft.error`, whose
+        `status` is what the one-shot route answers for the same failure
+        (502 the gateway hop failed, 422 an unusable draft).
+
+        FRAMES (`event:`, each `data` one JSON object):
+        `draft.token` (DraftStreamToken: a model text delta, for display
+        only — it is the raw JSON the model writes), `draft.complete`
+        (ApplicationDraft: the full draft, truncated to the caps and
+        validated against AgentDefinition exactly as the one-shot route
+        does, then the stream ends), `draft.error` (DraftStreamError, then
+        the stream ends). Comment lines (`: keepalive`) keep an idle
+        connection open while the model thinks. A client must ignore an
+        unknown event type.
+      tags: [applications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateApplicationDraftStreamRequest'
+      responses:
+        '200':
+          description: The draft stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+              example: "event: draft.token\ndata: {\"text\":\"{\\\"name\\\": \\\"Inci\"}\n\nevent: draft.complete\ndata: {\"name\":\"Incident Triager\",\"description\":\"Sorts incidents.\",\"instructions\":\"Assign a severity.\",\"welcome_message\":\"\",\"conversation_starters\":[],\"suggested_toolkits\":[],\"suggested_mcp\":[],\"suggested_pipelines\":[],\"suggested_agents\":[],\"suggested_skills\":[]}\n\n"
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '413':
+          description: The request body is above the 1 MiB bound.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: >
+            No completion backend is composed because LLM_GATEWAY_URL is empty.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PredictLLMUnavailableResponse'
+
+  /elitea_core/agent_schema/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    get:
+      operationId: getAgentSchema
+      summary: The published agent schemas
+      description: |
+        Client contract 1.28 (ADR-0037 decision 5). The AgentDefinition and
+        LocalAgentDefinition components of this contract, as JSON Schema, and
+        a `schema_version` that changes exactly when one of them changes
+        (also the strong `ETag`). Both draft routes validate their draft
+        against this AgentDefinition before they answer. The route reads no
+        tenant state: every authorized project gets the same body. Gated on
+        `models.applications.applications.create`, the permission of the
+        builders that use it.
+      tags: [applications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: The two schemas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentSchemaResponse'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '500': { $ref: '#/components/responses/500' }
 
   /elitea_core/generate_project_context_draft/prompt_lib/{project_id}:
     parameters:

@@ -27,7 +27,7 @@ import { filterEmptyStrings, type AgentDraft, type SuggestedResource } from '../
  * (beyond the already-documented "no toolkit-validation endpoint" gap).
  * Only agent/pipeline association survives, via the REAL
  * `useUpdateApplicationRelation` endpoint. This is not a functional loss
- * in practice today: `../../lib/agentDraft.ts`'s `mapApplicationDraft`
+ * in practice today: `readDraft` (`@elitea/client-core/agent-builder`)
  * (the only draft source, and the endpoint it maps carries no resource
  * suggestions — see that file's own doc comment) always returns EMPTY
  * `suggested_toolkits`/`suggested_mcp`/`suggested_skills` arrays, so

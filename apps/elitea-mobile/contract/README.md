@@ -137,3 +137,10 @@ store, and an unarchived one is a row again.
 The app does not follow the project event stream, so `conversation_activity` events are not
 read: a transition reaches the list with the `changes_since` delta and the list's refetch on
 foreground or pull to refresh.
+
+## Client contract 1.28
+
+| Area | What |
+|---|---|
+| Create an agent | `generateApplicationDraftStream`: `POST /elitea_core/generate_application_draft_stream/prompt_lib/{project_id}` answers an event stream of `draft.token` frames, then one `draft.complete` (the validated draft) or one `draft.error {code, status, message}`; a refusal before it opens (400, 503) is plain JSON `{error, code}`. Not a `ResumableStream`: no event ids, a dropped stream is a failed draft (`src/features/agentBuilder/streamDraft.ts`, through the POST form of `src/api/sse/transport.ts`). Refine sends the last turns and the draft as edited (`conversation_history`, `current_draft`). |
+| Save | `createApplication` with the reviewed draft as an agent with a `base` version (`agentCreateBody`, `@elitea/client-core/agent-builder`), then a chat with it opens. Only the Elitea branch: a phone has no folder for an `AGENTS.md`. Offered on New chat ("Create an agent") when the workspace speaks 1.28. |

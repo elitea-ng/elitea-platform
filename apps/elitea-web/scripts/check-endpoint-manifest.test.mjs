@@ -786,7 +786,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 353 -> 354 (client contract 1.27): handOffChatExecutionSteering, the
 // hand-off of the turn_ended steering messages as the next message. The
 // manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 354;
+// 354 -> 356 (client contract 1.28, ADR-0037): generateApplicationDraftStream
+// and getAgentSchema, the conversational agent builder's streamed draft and
+// the published agent schemas.
+const GENERATED_OPERATION_COUNT = 356;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1004,8 +1007,13 @@ const GENERATED_OPERATION_COUNT = 354;
  * 283 -> 285 (client contract 1.26, issue 1187):
  * workspaceHandoff.changes and workspaceHandoff.diff, the Files changed
  * view of a cloud thread in the web chat (pages/chat). Generated.
+ *
+ * 285 -> 286 (client contract 1.28, ADR-0037):
+ * applications.generateAgentDraftStream, the streamed agent draft of the
+ * Build with AI builder (features/agents `useAgentDraftStream`). Handwritten:
+ * an SSE answer to a POST, read through `eliteaFetch`'s `stream` flag.
  */
-const MANIFEST_ENTRY_COUNT = 285;
+const MANIFEST_ENTRY_COUNT = 286;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {
