@@ -956,8 +956,9 @@
   "workspace.steer.editLabel": "Queued message",
   "workspace.steer.placeholder": "Add a message for the agent. It reads it after its current step.",
   "workspace.steer.remove": "Remove queued message",
+  "workspace.steer.retry": "Send again",
   "workspace.steer.save": "Save",
   "workspace.steer.stopAndSend": "Stop and send",
-  "workspace.steer.unsent": "The messages you queued did not start a new turn. Send them again: {{message}}",
+  "workspace.steer.unsent": "The messages you queued did not start a new turn. They are back in the message box: change them if you want, then send them again.",
   "workspace.steer.waiting": "The agent reads these after its current step:"
 }

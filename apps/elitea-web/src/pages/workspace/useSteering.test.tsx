@@ -98,13 +98,45 @@ describe('useSteering', () => {
     await waitFor(() => expect(sendNext).toHaveBeenCalledWith('queued\n\ndo this instead'));
   });
 
-  it('says so when the next turn did not start', async () => {
+  it('keeps the texts as unsent when the next turn did not start, and sends them again on retry', async () => {
     const ipc = createFakeWorkspaceIpc();
-    const { result } = await running(ipc, vi.fn(() => Promise.resolve(false)));
+    const sendNext = vi.fn<(prompt: string) => Promise<boolean>>().mockResolvedValue(false);
+    const { result } = await running(ipc, sendNext);
     act(() => {
       ipc.emit(ev(1, { kind: 'steer_dropped', payload: { steer_id: 's1', text: 'lost?', reason: 'turn_ended' } }));
       ipc.emit(ev(2, { kind: 'done', payload: DONE }));
     });
-    await waitFor(() => expect(result.current.steering.error).toContain('lost?'));
+    await waitFor(() => expect(result.current.steering.unsent?.text).toBe('lost?'));
+    expect(result.current.steering.error).toContain('back in the message box');
+    const firstId = result.current.steering.unsent?.id;
+    // A retry that fails keeps the same texts (the composer does not get them again).
+    let sent = true;
+    await act(async () => {
+      sent = (await result.current.steering.unsent?.onRetry('lost? edited')) ?? true;
+    });
+    expect(sent).toBe(false);
+    expect(sendNext).toHaveBeenLastCalledWith('lost? edited');
+    expect(result.current.steering.unsent?.id).toBe(firstId);
+    sendNext.mockResolvedValue(true);
+    await act(async () => {
+      sent = (await result.current.steering.unsent?.onRetry('lost? edited')) ?? false;
+    });
+    expect(sent).toBe(true);
+    expect(result.current.steering.unsent).toBeNull();
+    expect(result.current.steering.error).toBeNull();
+    expect(sendNext).toHaveBeenCalledTimes(3);
+  });
+
+  it('forgets the unsent texts once a new turn starts', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    const { result } = await running(ipc, vi.fn(() => Promise.resolve(false)));
+    act(() => {
+      ipc.emit(ev(1, { kind: 'steer_dropped', payload: { steer_id: 's1', text: 'later', reason: 'turn_ended' } }));
+      ipc.emit(ev(2, { kind: 'done', payload: DONE }));
+    });
+    await waitFor(() => expect(result.current.steering.unsent).not.toBeNull());
+    await act(() => result.current.turn.start(REQUEST));
+    expect(result.current.steering.unsent).toBeNull();
+    expect(result.current.steering.error).toBeNull();
   });
 });

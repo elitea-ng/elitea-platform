@@ -239,6 +239,7 @@ type CommitRequest struct {
 	Credential       Credential
 	ExecutionID      string
 	UserMessage      string
+	SteeringMessages []string // taken while the turn ran, in that order (steering.go)
 	AssistantMessage string
 	AssistantIsError bool
 	AssistantError   string
@@ -266,6 +267,7 @@ type CommitRecord struct {
 	Credential       Credential
 	ExecutionID      string
 	UserMessage      string
+	SteeringMessages []string // stored as user messages after the question
 	AssistantMessage string
 	// QuestionMeta and ResponseMeta are server-built JSON objects.
 	QuestionMeta  json.RawMessage
@@ -444,8 +446,8 @@ func (s *Service) Commit(ctx context.Context, request CommitRequest) (CommittedT
 	turn, err := s.store.CommitLocalTurn(ctx, CommitRecord{
 		ProjectID: request.ProjectID, ActorUserID: request.ActorUserID, Credential: request.Credential,
 		ExecutionID: request.ExecutionID, UserMessage: request.UserMessage,
-		AssistantMessage: request.AssistantMessage,
-		QuestionMeta:     questionMeta, ResponseMeta: responseMeta,
+		SteeringMessages: request.SteeringMessages, AssistantMessage: request.AssistantMessage,
+		QuestionMeta: questionMeta, ResponseMeta: responseMeta,
 		ToolCalls: request.ToolCalls, ThinkingSteps: request.ThinkingSteps, Digest: digest,
 	})
 	if err != nil {
@@ -464,7 +466,7 @@ func (s *Service) Commit(ctx context.Context, request CommitRequest) (CommittedT
 	}
 	if turn.Created {
 		s.record(ctx, request.ActorUserID, request.ProjectID, request.AuditRoute, started,
-			commitAuditAction(report), request.ExecutionID)
+			withSteering(commitAuditAction(report), request.SteeringMessages), request.ExecutionID)
 	}
 	return turn, nil
 }
@@ -514,7 +516,8 @@ func validCommit(request CommitRequest) bool {
 		!validText(request.AssistantError, MaxAssistantErrorBytes, true) ||
 		!validText(request.ModelName, MaxModelNameBytes, true) ||
 		len(request.ThinkingSteps) > MaxThinkingSteps ||
-		len(request.HITLExchanges) > MaxHITLExchanges {
+		len(request.HITLExchanges) > MaxHITLExchanges ||
+		!validSteeringMessages(request.SteeringMessages) {
 		return false
 	}
 	if !request.AssistantIsError && request.AssistantError != "" {
@@ -774,6 +777,7 @@ func commitDigest(request CommitRequest) ([32]byte, error) {
 	encoded, err := json.Marshal(struct {
 		ExecutionID      string            `json:"execution_id"`
 		UserMessage      string            `json:"user_message"`
+		SteeringMessages []string          `json:"steering_messages,omitempty"`
 		AssistantMessage string            `json:"assistant_message"`
 		AssistantIsError bool              `json:"assistant_is_error"`
 		AssistantError   string            `json:"assistant_error"`
@@ -784,7 +788,7 @@ func commitDigest(request CommitRequest) ([32]byte, error) {
 		HITLExchanges    []HITLExchange    `json:"hitl_exchanges"`
 		Report           LocalWorkReport   `json:"local_work"`
 	}{
-		request.ExecutionID, request.UserMessage, request.AssistantMessage,
+		request.ExecutionID, request.UserMessage, request.SteeringMessages, request.AssistantMessage,
 		request.AssistantIsError, request.AssistantError, request.ModelName,
 		contextSummary(request.ContextSummary), toolCalls, steps, exchanges, report,
 	})

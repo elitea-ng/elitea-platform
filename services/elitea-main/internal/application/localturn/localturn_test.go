@@ -351,3 +351,64 @@ func TestCommitStoresTheContextSummary(t *testing.T) {
 		t.Fatal("the digest sees the summary, not its whitespace")
 	}
 }
+
+func TestSteeringMessagesAreValidatedDigestedAndAudited(t *testing.T) {
+	base := CommitRequest{
+		ProjectID: 1, ActorUserID: 2, ExecutionID: strings.Repeat("a", 32), Credential: Credential{TokenID: "70"},
+		UserMessage: "q", AssistantMessage: "a", SteeringMessages: []string{"skip the tests", "only the build"},
+	}
+	if !validCommit(base) {
+		t.Fatal("a commit with steering messages is valid")
+	}
+	for name, steering := range map[string][]string{
+		"empty":     {""},
+		"blank":     {" \n\t"},
+		"NUL":       {"a\x00"},
+		"not UTF-8": {"\xff"},
+		"too long":  {strings.Repeat("x", MaxSteeringMessageBytes+1)},
+		"too many":  make([]string, MaxSteeringMessages+1),
+	} {
+		request := base
+		request.SteeringMessages = steering
+		if name == "too many" {
+			for i := range request.SteeringMessages {
+				request.SteeringMessages[i] = "x"
+			}
+		}
+		if validCommit(request) {
+			t.Errorf("%s steering messages are valid", name)
+		}
+	}
+	limit := base
+	limit.SteeringMessages = []string{strings.Repeat("x", MaxSteeringMessageBytes)}
+	if !validCommit(limit) {
+		t.Fatal("a steering message of exactly the limit is valid")
+	}
+
+	// No steering messages digest as a body did before the field existed;
+	// other texts or another order are another body.
+	plain := base
+	plain.SteeringMessages = nil
+	empty := base
+	empty.SteeringMessages = []string{}
+	dp, _ := commitDigest(plain)
+	if de, _ := commitDigest(empty); de != dp {
+		t.Fatal("absent and empty steering messages digest differently")
+	}
+	db, _ := commitDigest(base)
+	reordered := base
+	reordered.SteeringMessages = []string{"only the build", "skip the tests"}
+	if dr, _ := commitDigest(reordered); db == dp || dr == db {
+		t.Fatal("steering messages are not part of the digest in order")
+	}
+
+	// The audit names them by count and digest, first, never by text.
+	action := withSteering(commitAuditAction(boundReport(LocalWorkReport{})), base.SteeringMessages)
+	if !strings.HasPrefix(action, "local turn committed: 2 steering messages (content sha256 ") ||
+		strings.Contains(action, "skip the tests") || !strings.Contains(action, "28 bytes") {
+		t.Fatalf("audit action = %q", action)
+	}
+	if got := withSteering("local turn committed: 0 commands", nil); got != "local turn committed: 0 commands" {
+		t.Fatalf("audit action without steering = %q", got)
+	}
+}

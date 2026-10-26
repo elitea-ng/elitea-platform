@@ -31,7 +31,8 @@
  * the same for that prompt (`RunInCloudNotice`).
  *
  * While a local turn runs, a send steers it (`useSteering`): the text waits for the agent's next safe point
- * (`SteeringQueue`, with Edit and Remove), and what the turn did not take goes as the next turn.
+ * (`SteeringQueue`, with Edit and Remove), and what the turn did not take goes as the next turn. When that next
+ * turn does not start, the texts go back into the composer with "Send again" (`unsent`).
  */
 import { lazy, Suspense, useMemo, useState } from 'react';
 
@@ -89,7 +90,7 @@ function cloudBinding(cloud: CloudChat): Pick<WorkspaceComposerProps, 'canSend' 
   };
 }
 
-type SendBinding = Partial<Pick<WorkspaceComposerProps, 'placeholder' | 'showMode' | 'acceptImages' | 'onSteer' | 'onStopAndSend'>> & Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'>;
+type SendBinding = Partial<Pick<WorkspaceComposerProps, 'placeholder' | 'showMode' | 'acceptImages' | 'onSteer' | 'onStopAndSend' | 'unsent'>> & Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'>;
 
 /**
  * Where a message goes: the cloud copy, else the pipeline's cloud run (gated on that run alone, never on the local
@@ -138,9 +139,10 @@ function turnUsages(turn: WorkspaceTurn, recorded: readonly { turnId: string; us
 
 const NO_USAGE: NonNullable<Usage>[] = [];
 
-/** While a local turn runs, Send steers it and "Stop and send" is offered; otherwise neither. */
-function steeringProps(steering: Steering): Pick<WorkspaceComposerProps, 'onSteer' | 'onStopAndSend'> {
-  return steering.active ? { onSteer: steering.steer, onStopAndSend: steering.stopAndSend } : {};
+/** While a local turn runs, Send steers it and "Stop and send" is offered; after it, the texts that did not start a turn. */
+function steeringProps(steering: Steering): Pick<WorkspaceComposerProps, 'onSteer' | 'onStopAndSend' | 'unsent'> {
+  if (steering.active) return { onSteer: steering.steer, onStopAndSend: steering.stopAndSend };
+  return steering.unsent === null ? {} : { unsent: steering.unsent };
 }
 
 /** The local session can start a turn, or the running turn takes a steering message; never while the thread is away. */
@@ -204,7 +206,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     return sent;
   };
   const steering = useSteering(ipc, turn, (prompt) => sendHere(prompt, [], []));
-  const here: Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop' | 'onSteer' | 'onStopAndSend'> = {
+  const here: SendBinding = {
     canSend: canSendHere(session, steering, handoff.offLaptop),
     busy: turn.busy,
     onSend: sendHere,

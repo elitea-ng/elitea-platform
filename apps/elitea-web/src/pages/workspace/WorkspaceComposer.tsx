@@ -30,6 +30,7 @@
  *
  * Steering (`onSteer`): while a turn runs, the input stays open and Send queues the text against the turn
  * (images stay for the next turn). "Stop and send" (`onStopAndSend`) stops the turn and sends the text next.
+ * Texts that did not start the next turn (`unsent`) go back into the input, with "Send again" (`SteeringControls`).
  */
 import { useMemo, useRef, useState, type ComponentRef, type KeyboardEvent, type ReactNode } from 'react';
 
@@ -39,7 +40,6 @@ import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
 import SendIcon from '@mui/icons-material/Send';
 import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
 import IconButton from '@mui/material/IconButton';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
@@ -48,6 +48,7 @@ import { NewChatInput } from '@/features/chat-input';
 import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
 
 import { FooterControls } from './FooterControls';
+import { RetryUnsent, StopAndSend, useRestoredDraft, type UnsentSteers } from './SteeringControls';
 import type { ComposerSkill } from './useAgentSkills';
 import { useImageAttachments } from './useImageAttachments';
 import type { SentImages } from './useSendPrompt';
@@ -117,6 +118,8 @@ export interface WorkspaceComposerProps {
   onSteer?: ((text: string) => Promise<boolean>) | undefined;
   /** While `busy`: stop the turn, then send the text as the next turn. */
   onStopAndSend?: ((text: string) => Promise<boolean>) | undefined;
+  /** The texts that did not start the next turn: put into the input, with "Send again" while no turn runs. */
+  unsent?: UnsentSteers | undefined;
 }
 
 /** What `/steps <value>` asks for (`composer.stepsCommand`). */
@@ -150,18 +153,6 @@ function placeholderFor(readOnly: boolean, steering: boolean): string {
 /** Send steers the running turn: the page offers it and a turn runs. */
 const steersNow = (busy: boolean, onSteer: WorkspaceComposerProps['onSteer']): boolean => busy && onSteer !== undefined;
 
-/** "Stop and send": shown while a turn runs, when the page offers it (`shown`). */
-function StopAndSend({ shown, disabled, onClick }: { shown: boolean; disabled: boolean; onClick: () => void }): React.JSX.Element | null {
-  if (!shown) return null;
-  return (
-    <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-      <Button size="small" variant="outlined" color="error" data-testid="workspace-stop-and-send" disabled={disabled} onClick={onClick}>
-        {t('workspace.steer.stopAndSend', 'Stop and send')}
-      </Button>
-    </Box>
-  );
-}
-
 /** One "/" menu row: host commands under the menu's title, then a section per source, then the skills. */
 function slashItem(entry: SlashEntry): SuggestionItem {
   switch (entry.kind) {
@@ -187,8 +178,7 @@ function slashItem(entry: SlashEntry): SuggestionItem {
   }
 }
 
-/** What the start request names for the skill a message invokes: a version skill by name, a project skill by id. */
-/** The start request's `skills` for the skill a message invokes. */
+/** The start request's `skills` for the skill a message invokes: a version skill by name, a project skill by id. */
 export function skillPicks(skill: ComposerSkill | null): TurnStartRequest['skills'] {
   if (skill === null) return [];
   return [skill.project === true ? { source: 'project', id: skill.id } : skill.name];
@@ -217,6 +207,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   // What was picked with "@", in pick order (a folder keeps its trailing "/").
   const [picked, setPicked] = useState<string[]>([]);
   const attachments = useImageAttachments(ipc, workspaceId, takesImages(props.acceptImages, locked));
+  useRestoredDraft(inputRef, props.unsent, () => setHasDraft(true));
 
   const open = token !== null && !sameToken(token, dismissed) ? token : null;
   const files = useQuery({
@@ -345,6 +336,11 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     if (text.trim() !== '') void props.onStopAndSend?.(text).then((sent) => sent && clearInput());
   };
 
+  const retryUnsent = (): void => {
+    const text = inputRef.current?.getInputContent() ?? '';
+    if (text.trim() !== '') void props.unsent?.onRetry(text).then((sent) => sent && clearInput());
+  };
+
   return (
     <Box data-testid="workspace-composer" onFocus={props.onFocus} onPasteCapture={attachments.onPaste} sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       <composer.ImageStrip images={attachments.images} onRemove={attachments.remove} />
@@ -364,6 +360,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
         />
       )}
       <StopAndSend shown={steersNow(busy, props.onStopAndSend)} disabled={!hasDraft} onClick={stopAndSend} />
+      <RetryUnsent unsent={props.unsent} busy={busy} hasDraft={hasDraft} canSend={canSend} onClick={retryUnsent} />
       <NewChatInput
         ref={inputRef}
         state={{ isStreaming: busy, disabledSend: !canSend, disabledInput: locked, allowSendWhileStreaming: steering }}

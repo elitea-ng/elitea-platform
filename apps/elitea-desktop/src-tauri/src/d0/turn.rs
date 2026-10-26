@@ -2615,6 +2615,7 @@ impl AgentHost {
         }
         let body = CommitBody {
             user_message: user_message(&request.prompt, &images),
+            steering_messages: entry.steering.commit_messages(),
             assistant_message: assistant,
             tool_calls: recorder.tool_calls(),
             thinking_steps: recorder.thinking_steps(),
@@ -4583,6 +4584,10 @@ fn check_vision(
 #[derive(serde::Serialize)]
 struct CommitBody {
     user_message: Value,
+    /// The steering messages the agent took, in order (`steering.rs`):
+    /// the server stores them after the question.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    steering_messages: Vec<Value>,
     assistant_message: Value,
     tool_calls: ToolCalls,
     /// Each model step's reasoning (#1228), bounded (`recorder`).

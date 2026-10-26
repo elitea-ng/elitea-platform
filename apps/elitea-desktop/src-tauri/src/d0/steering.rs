@@ -13,6 +13,10 @@
 //! at a limit), each message that still waits is dropped with reason
 //! `turn_ended`, before `done`. The UI then sends them as the next turn.
 //!
+//! The commit of the turn carries the messages the agent took, in order
+//! (`steering_messages`, [`TurnSteering::commit_messages`]): the server
+//! stores them after the question, as the session has them.
+//!
 //! The queue and its events change under one lock, so the UI receives
 //! `steer_queued`, `steer_injected` and `steer_dropped` of one message in
 //! the order the queue saw them.
@@ -23,7 +27,7 @@ use adk_agent::SteeringSource;
 use adk_core::{Content, Event, InvocationContext};
 use adk_session::SessionService;
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::events::TurnEvents;
 use super::turn::TurnError;
@@ -32,6 +36,8 @@ use super::turn::TurnError;
 pub const MAX_PENDING: usize = 10;
 /// The largest message, in bytes of UTF-8.
 pub const MAX_TEXT_BYTES: usize = 16 * 1024;
+/// The most steering messages one commit carries (the server's bound).
+pub const MAX_COMMITTED: usize = 10;
 /// The author of a steering message's session event: the runner's own
 /// author for the person's message.
 const USER_AUTHOR: &str = "user";
@@ -69,6 +75,30 @@ fn checked(text: &str) -> Result<String, TurnError> {
     Ok(text.to_owned())
 }
 
+/// The texts as the server accepts them: no NUL (a space instead), none
+/// blank, at most [`MAX_COMMITTED`]. A turn that took more joins the rest
+/// into the last one with a blank line, cut to [`MAX_TEXT_BYTES`]: the
+/// commit keeps every text it can and is never refused for them.
+fn committed(texts: &[String]) -> Vec<String> {
+    let mut texts: Vec<String> = texts
+        .iter()
+        .map(|text| text.replace('\0', " "))
+        .filter(|text| !text.trim().is_empty())
+        .collect();
+    if texts.len() > MAX_COMMITTED {
+        let mut last = texts.split_off(MAX_COMMITTED - 1).join("\n\n");
+        if last.len() > MAX_TEXT_BYTES {
+            let mut end = MAX_TEXT_BYTES;
+            while !last.is_char_boundary(end) {
+                end -= 1;
+            }
+            last.truncate(end);
+        }
+        texts.push(last);
+    }
+    texts
+}
+
 /// One message that waits for the next safe point.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pending {
@@ -84,6 +114,8 @@ struct Queue {
     /// or injected.
     closed: bool,
     pending: Vec<Pending>,
+    /// The texts the agent took, in the order it took them.
+    injected: Vec<String>,
 }
 
 /// One turn's steering queue, with the turn's event stream.
@@ -215,7 +247,20 @@ impl TurnSteering {
                 json!({ "steer_id": pending.id, "text": pending.text }),
             );
         }
+        queue
+            .injected
+            .extend(taken.iter().map(|pending| pending.text.clone()));
         taken
+    }
+
+    /// The commit's `steering_messages`: the texts the agent took, in
+    /// order, as `{content}`. Empty when it took none.
+    #[must_use]
+    pub fn commit_messages(&self) -> Vec<Value> {
+        committed(&self.lock().injected)
+            .into_iter()
+            .map(|content| json!({ "content": content }))
+            .collect()
     }
 
     /// The messages that wait now, oldest first.
@@ -273,7 +318,6 @@ mod tests {
     use crate::d0::events::VecEmitter;
     use adk_core::{AdkError, Part};
     use adk_session::{CreateRequest, DeleteRequest, GetRequest, ListRequest, Session};
-    use serde_json::Value;
 
     fn steering() -> (Arc<VecEmitter>, TurnSteering) {
         let emitter = Arc::new(VecEmitter::default());
@@ -287,6 +331,41 @@ mod tests {
             .into_iter()
             .map(|event| (event.kind, event.payload))
             .collect()
+    }
+
+    #[test]
+    fn steering_commits_the_taken_texts_in_order() {
+        let (_, steering) = steering();
+        assert!(steering.commit_messages().is_empty());
+        steering.queue("first").unwrap();
+        steering.take();
+        let removed = steering.queue("removed").unwrap();
+        steering.update(&removed, None).unwrap();
+        steering.queue("second\0part").unwrap();
+        steering.take();
+        steering.queue("never taken").unwrap();
+        steering.end();
+        assert_eq!(
+            steering.commit_messages(),
+            vec![
+                json!({ "content": "first" }),
+                json!({ "content": "second part" })
+            ]
+        );
+    }
+
+    #[test]
+    fn steering_commit_joins_texts_past_the_bound_into_the_last() {
+        let mut texts: Vec<String> = (1..=12).map(|n| format!("m{n}")).collect();
+        texts.push("\0".into());
+        let joined = committed(&texts);
+        assert_eq!(joined.len(), MAX_COMMITTED);
+        assert_eq!(joined[8], "m9");
+        assert_eq!(joined[9], "m10\n\nm11\n\nm12");
+        let long = vec!["é".repeat(MAX_TEXT_BYTES / 2); MAX_COMMITTED + 1];
+        let cut = committed(&long);
+        assert_eq!(cut.len(), MAX_COMMITTED);
+        assert!(cut[9].len() <= MAX_TEXT_BYTES && cut[9].len() > MAX_TEXT_BYTES - 2);
     }
 
     #[test]

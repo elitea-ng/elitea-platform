@@ -11,20 +11,21 @@ import { AppProviders } from '@/app/providers/AppProviders';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { useDesktopLayout } from '@/widgets/desktop-shell';
 
+import type { UnsentSteers } from './SteeringControls';
 import { WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
 
 type Handler = (text: string) => Promise<boolean>;
 
 type OnSend = WorkspaceComposerProps['onSend'];
 
-async function mount(handlers: { onSend: OnSend; onSteer?: Handler; onStopAndSend?: Handler }) {
+async function mount(handlers: { onSend: OnSend; onSteer?: Handler; onStopAndSend?: Handler; unsent?: UnsentSteers }, busy = true) {
   useDesktopLayout.getState().setSession({ workspaceId: 'w1', newThread: () => undefined, togglePlanMode: () => undefined });
   const composer = (
     <WorkspaceComposer
       ipc={createFakeWorkspaceIpc()}
       workspaceId="w1"
       canSend
-      busy
+      busy={busy}
       planMode={false}
       onPlanModeChange={() => undefined}
       skills={[]}
@@ -32,6 +33,7 @@ async function mount(handlers: { onSend: OnSend; onSteer?: Handler; onStopAndSen
       onSend={handlers.onSend}
       onSteer={handlers.onSteer}
       onStopAndSend={handlers.onStopAndSend}
+      unsent={handlers.unsent}
       onStop={() => undefined}
       onCommand={() => undefined}
     />
@@ -75,5 +77,33 @@ describe('WorkspaceComposer steering', () => {
   it('shows no Stop and send when the page does not steer', async () => {
     await mount({ onSend: vi.fn<OnSend>() });
     expect(screen.queryByTestId('workspace-stop-and-send')).toBeNull();
+  });
+
+  it('puts the unsent texts into the input, and Send again sends the input as the person changed it', async () => {
+    const onRetry = vi.fn<Handler>().mockResolvedValue(true);
+    const onSend = vi.fn<OnSend>();
+    const input = await mount({ onSend, unsent: { id: 1, text: 'first\n\nsecond', onRetry } }, false);
+    await waitFor(() => expect(input).toHaveValue('first\n\nsecond'));
+    const retry = screen.getByTestId('workspace-steer-retry');
+    await waitFor(() => expect(retry).not.toBeDisabled());
+    await userEvent.type(input, ' now');
+    await userEvent.click(retry);
+    await waitFor(() => expect(onRetry).toHaveBeenCalledWith('first\n\nsecond now'));
+    expect(onSend).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue(''));
+  });
+
+  it('keeps the input when Send again did not start a turn', async () => {
+    const onRetry = vi.fn<Handler>().mockResolvedValue(false);
+    const input = await mount({ onSend: vi.fn<OnSend>(), unsent: { id: 1, text: 'later', onRetry } }, false);
+    await waitFor(() => expect(input).toHaveValue('later'));
+    await userEvent.click(screen.getByTestId('workspace-steer-retry'));
+    await waitFor(() => expect(onRetry).toHaveBeenCalledWith('later'));
+    expect(input).toHaveValue('later');
+  });
+
+  it('shows no Send again while a turn runs', async () => {
+    await mount({ onSend: vi.fn<OnSend>(), unsent: { id: 1, text: 'later', onRetry: vi.fn<Handler>() } });
+    expect(screen.queryByTestId('workspace-steer-retry')).toBeNull();
   });
 });

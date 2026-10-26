@@ -669,6 +669,8 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
         body["user_message"]["content"],
         "Write notes and file a bug"
     );
+    // No steering: the commit leaves `steering_messages` out.
+    assert!(body.get("steering_messages").is_none(), "{body}");
     assert_eq!(
         body["assistant_message"],
         json!({"content": "Done.", "model_name": "gpt-test"})
@@ -9497,6 +9499,20 @@ async fn a_steering_message_reaches_the_next_model_request_of_the_turn() {
         .position(|(role, content, _)| role == "user" && content == "Also add a README")
         .unwrap_or_else(|| panic!("{second:?}"));
     assert_eq!(second[steered - 1].0, "tool", "{second:?}");
+
+    // The commit carries the message after the question, as the session
+    // has it.
+    commits_settled(&h.host).await;
+    let commits = seen(&h.server, &format!("/{}", started.execution_id));
+    let commit = commits
+        .iter()
+        .find(|req| req.path.contains("/local_turn_commit/"))
+        .unwrap_or_else(|| panic!("no commit"));
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    assert_eq!(
+        body["steering_messages"],
+        json!([{ "content": "Also add a README" }])
+    );
 
     // The run ended: the turn takes no more messages.
     let late = h.host.steer(&started.turn_id, "too late").unwrap_err();
