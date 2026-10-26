@@ -15,12 +15,15 @@
 //!   compaction wraps the model, so it measures the request the elision
 //!   left and compacts only when that is still past its trigger.
 //! * **Budget.** [`ProviderBudget`] measures the body the gateway transport
-//!   sends ([`super::model::request_body`]), not an estimate of the adk
+//!   sends ([`super::model::request_body_in`]), not an estimate of the adk
 //!   contents.
-//! * **Summary model.** The agent's own model, through the same `/llm`
-//!   transport and execution id (spend is the turn's), bound quiet: the
-//!   webview sees no text or usage of it. No prompt-cache directives are
-//!   sent.
+//! * **Summary model.** The project's low-tier default model when the
+//!   catalogue lists one whose described input window (its context window,
+//!   or its `max_input_tokens` when smaller) is at least the agent's
+//!   ([`ModelFacts::summary_model`]), else the agent's own model; either
+//!   through the same `/llm` transport and execution id (spend is the
+//!   turn's), bound quiet: the webview sees no text or usage of it. No
+//!   prompt-cache directives are sent.
 //! * **Marker.** A compaction appends an adk `EventCompaction` to the
 //!   turn's session ([`ContextHost`]), placed after the last event it
 //!   covers: the next turn's history starts from the summary instead of
@@ -37,7 +40,7 @@ use adk_core::{Content, Event, EventCompaction, LlmRequest, Part};
 use adk_session::{GetRequest, SessionService};
 use async_trait::async_trait;
 use elitea_agent_runtime::context_budget::{
-    ModelRequestBudget, RequestContextBudget, RequestContextUsage,
+    ModelRequestBudget, RequestContextBudget, RequestContextUsage, estimate_tokens,
 };
 use elitea_agent_runtime::context_management::{
     Compaction, CompactionHost, CompactionPolicy, FileOp, FileTouch, SESSION_COMPACTION_KEY,
@@ -73,12 +76,48 @@ pub const MAX_MODEL_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 /// author; this one names who wrote it).
 pub const MARKER_AUTHOR: &str = "elitea_context_compaction";
 
-/// What a turn knows of its model from the catalogue: its context limits
-/// and whether its reasoning goes back to the provider (#1228).
-#[derive(Clone, Copy, Debug)]
+/// What a turn knows of its model from the catalogue: its context limits,
+/// whether its reasoning goes back to the provider (#1228) and whether it
+/// sees images (#1229; `false` when the catalogue was not read for it).
+#[derive(Clone, Debug)]
 pub struct ModelFacts {
     pub limits: ModelContextLimits,
     pub replay: ReasoningReplay,
+    pub vision: bool,
+    /// The project's low-tier default model, when the catalogue lists one.
+    pub low_tier: Option<LowTierModel>,
+}
+
+/// A low-tier model a compaction may summarise with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LowTierModel {
+    pub name: String,
+    pub limits: ModelContextLimits,
+    pub replay: ReasoningReplay,
+}
+
+impl ModelFacts {
+    /// The compaction's summary model other than the agent's own: the
+    /// low-tier default when its window is described and its input window
+    /// is at least the agent's `limits`' (the summary request is sized to
+    /// what the agent's model takes in); `None`: the agent's own model.
+    #[must_use]
+    pub fn summary_model(&self, limits: &ModelContextLimits) -> Option<&LowTierModel> {
+        self.low_tier.as_ref().filter(|model| {
+            !model.limits.context_window_fallback
+                && input_window(&model.limits) >= input_window(limits)
+        })
+    }
+}
+
+/// What a model takes in: its context window, or its `max_input_tokens`
+/// when smaller.
+fn input_window(limits: &ModelContextLimits) -> u32 {
+    limits
+        .max_input_tokens
+        .map_or(limits.context_window_tokens, |input| {
+            input.min(limits.context_window_tokens)
+        })
 }
 
 /// The facts of the turn's model (module docs), with at most one catalogue
@@ -107,15 +146,18 @@ pub async fn model_facts(
         .and_then(|value| serde_json::from_value::<ModelContextLimits>(value.clone()).ok())
         .filter(valid)
     {
-        let replay = from_hand.or(kept).map(|facts| facts.replay);
+        let known = from_hand.or(kept);
         return ModelFacts {
             limits: frozen,
-            replay: replay.unwrap_or_default(),
+            replay: known.as_ref().map(|facts| facts.replay).unwrap_or_default(),
+            vision: known.as_ref().is_some_and(|facts| facts.vision),
+            low_tier: known.and_then(|facts| facts.low_tier),
         };
     }
+    let kept_already = kept.is_some();
     if let Some(facts) = from_hand.or(kept) {
-        if let (Some(key), None) = (key, kept) {
-            caches.keep_limits(key, facts);
+        if let (Some(key), false) = (key, kept_already) {
+            caches.keep_limits(key, facts.clone());
         }
         return facts;
     }
@@ -126,11 +168,13 @@ pub async fn model_facts(
         return ModelFacts {
             limits: FALLBACK_LIMITS,
             replay: ReasoningReplay::Never,
+            vision: false,
+            low_tier: None,
         };
     };
     let facts = facts_of(&catalogue, model_name);
     if let Some(key) = key {
-        caches.keep_limits(key, facts);
+        caches.keep_limits(key, facts.clone());
     }
     facts
 }
@@ -144,6 +188,17 @@ fn facts_of(catalogue: &Catalogue, model_name: &str) -> ModelFacts {
             .and_then(|model| limits_of(&model.row))
             .unwrap_or(FALLBACK_LIMITS),
         replay: ReasoningReplay::of(model),
+        vision: model
+            .and_then(|model| model.row.get("supports_vision"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        low_tier: catalogue.low_tier_default().and_then(|model| {
+            Some(LowTierModel {
+                name: model.name.clone(),
+                limits: limits_of(&model.row)?,
+                replay: ReasoningReplay::of(Some(model)),
+            })
+        }),
     }
 }
 
@@ -212,31 +267,154 @@ pub fn policy(details: &Map<String, Value>) -> Option<CompactionPolicy> {
     }
 }
 
+/// What fills a measured request, in estimated tokens: each part of the
+/// provider body at [`estimate_tokens`]' rate (estimates, never content).
+/// `message_tokens` takes the rest of the request's estimate (the history,
+/// the host context and the body's own keys), so the parts add up to it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ContextParts {
+    /// The system message: the agent's instructions, the environment and
+    /// the project instructions.
+    pub system_tokens: u64,
+    /// The declarations of the host's and the agent's tools.
+    pub tool_tokens: u64,
+    /// The declarations of the person's local MCP tools (`mcp__`).
+    pub mcp_tool_tokens: u64,
+    /// The `load_skill` catalogue and the skills picked for the turn.
+    pub skill_tokens: u64,
+    /// The conversation: everything else.
+    pub message_tokens: u64,
+}
+
+/// The parts of the last request [`ProviderBudget`] measured, for the
+/// [`ContextHost`] that reports it.
+pub type MeasuredParts = Arc<Mutex<Option<ContextParts>>>;
+
+/// The tool that loads a skill from the agent's catalogue.
+const LOAD_SKILL: &str = "load_skill";
+
+fn encoded_len(value: &Value) -> usize {
+    serde_json::to_vec(value).map_or(0, |bytes| bytes.len())
+}
+
+/// The bytes of `text` in the picked skills' section
+/// ([`super::skills::SKILLS_HEADING`] to its end line).
+fn skill_section_len(text: &str) -> usize {
+    let Some(start) = text.find(super::skills::SKILLS_HEADING) else {
+        return 0;
+    };
+    let end = text[start..]
+        .find(super::skills::END_OF_SKILLS)
+        .map_or(text.len(), |at| {
+            start + at + super::skills::END_OF_SKILLS.len()
+        });
+    end - start
+}
+
+/// The parts of `body` (a provider body whose estimate is `estimated`).
+#[must_use]
+pub fn parts_of(body: &Value, estimated: u64) -> ContextParts {
+    let mut system = 0usize;
+    let mut skills = 0usize;
+    let mut tools = 0usize;
+    let mut mcp = 0usize;
+    for (at, message) in body["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        if at == 0 && message["role"] == "system" {
+            system += encoded_len(message);
+        } else if message["name"] == super::model::HOST_CONTEXT_NAME {
+            skills += message["content"].as_str().map_or(0, skill_section_len);
+        }
+    }
+    for tool in body["tools"].as_array().into_iter().flatten() {
+        let name = tool["function"]["name"].as_str().unwrap_or_default();
+        let len = encoded_len(tool);
+        if name.starts_with(elitea_local_tools::mcp::naming::PREFIX) {
+            mcp += len;
+        } else if name == LOAD_SKILL {
+            skills += len;
+        } else {
+            tools += len;
+        }
+    }
+    let system_tokens = estimate_tokens(system);
+    let tool_tokens = estimate_tokens(tools);
+    let mcp_tool_tokens = estimate_tokens(mcp);
+    let skill_tokens = estimate_tokens(skills);
+    let named = system_tokens + tool_tokens + mcp_tool_tokens + skill_tokens;
+    ContextParts {
+        system_tokens,
+        tool_tokens,
+        mcp_tool_tokens,
+        skill_tokens,
+        message_tokens: estimated.saturating_sub(named),
+    }
+}
+
 /// Measures the provider body [`super::model::GatewayModel`] sends.
 pub struct ProviderBudget {
     pub model: ModelRequest,
     pub budget: RequestContextBudget,
     /// As the transport sends history (#1228).
     pub replay: ReasoningReplay,
+    /// The turn's context message and cache breakpoints, as the transport
+    /// lays them out (#1227): the tail weighs what it sends.
+    pub tail: Option<Arc<super::model::TurnTail>>,
+    pub cache_hints: bool,
+    /// Where the parts of each measured request go.
+    pub parts: MeasuredParts,
 }
 
 impl ModelRequestBudget for ProviderBudget {
     fn measure(&self, request: &LlmRequest) -> adk_core::Result<RequestContextUsage> {
-        let body = super::model::request_body(&self.model, request, self.replay)?;
+        let body = super::model::request_body_in(
+            &self.model,
+            request,
+            super::model::Layout {
+                replay: self.replay,
+                images: super::model::Images::Measure,
+                tail: self.tail.as_deref(),
+                cache_hints: self.cache_hints,
+            },
+        )?;
         let encoded = serde_json::to_vec(&body)
             .map_err(|_| adk_core::AdkError::model("the model request could not be encoded"))?;
-        self.budget
-            .measure_provider_request(&encoded, MAX_MODEL_REQUEST_BYTES)
+        let usage = self
+            .budget
+            .measure_provider_request(&encoded, MAX_MODEL_REQUEST_BYTES)?;
+        *self
+            .parts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(parts_of(&body, usage.estimated_input));
+        Ok(usage)
     }
 }
 
-/// What the turn keeps of its compaction: the commit's summary.
+/// What the turn keeps of its compaction (the commit's summary), and
+/// whether its message went to the model.
 #[derive(Default)]
 pub struct TurnContext {
     compaction: Mutex<Option<Arc<StepCompaction>>>,
+    ran: std::sync::atomic::AtomicBool,
 }
 
 impl TurnContext {
+    /// The person's message passed its `UserPromptSubmit` hooks and the
+    /// run starts: the turn's `Stop` hooks run when it ends.
+    pub fn mark_ran(&self) {
+        self.ran.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[must_use]
+    pub fn ran(&self) -> bool {
+        self.ran.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     pub fn bind(&self, compaction: Arc<StepCompaction>) {
         *self
             .compaction
@@ -265,6 +443,11 @@ pub struct ContextHost {
     pub service: Arc<dyn SessionService>,
     pub session_id: String,
     pub limits: ModelContextLimits,
+    /// The parts of the request just measured ([`ProviderBudget::parts`]).
+    pub parts: MeasuredParts,
+    /// The estimate at which the step compaction starts
+    /// ([`CompactionPolicy::trigger_tokens`]).
+    pub compact_at: u64,
 }
 
 #[async_trait]
@@ -286,6 +469,12 @@ impl CompactionHost for ContextHost {
             },
             window_fallback: self.limits.context_window_fallback,
             compacted_at: None,
+            measured_at: None,
+            compact_at_tokens: self.compact_at,
+            parts: *self
+                .parts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
         });
     }
 
@@ -451,6 +640,50 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn a_request_is_split_into_its_parts_and_the_parts_add_up() {
+        let tail = format!(
+            "Today is Monday.\n{}\nUse the style.\n{}",
+            crate::d0::skills::SKILLS_HEADING,
+            crate::d0::skills::END_OF_SKILLS
+        );
+        let body = json!({
+            "model": "m",
+            "messages": [
+                {"role": "system", "content": "Be brief.".repeat(40)},
+                {"role": "user", "content": "earlier question"},
+                {"role": "user", "name": crate::d0::model::HOST_CONTEXT_NAME, "content": tail},
+                {"role": "user", "content": "now"},
+            ],
+            "tools": [
+                {"type": "function", "function": {"name": "read_file", "description": "x".repeat(80)}},
+                {"type": "function", "function": {"name": "mcp__fx__echo", "description": "y".repeat(40)}},
+                {"type": "function", "function": {"name": "load_skill", "description": "z".repeat(20)}},
+            ],
+        });
+        let estimated = estimate_tokens(serde_json::to_vec(&body).unwrap().len());
+        let parts = parts_of(&body, estimated);
+        assert!(parts.system_tokens > parts.tool_tokens, "{parts:?}");
+        assert!(parts.tool_tokens > parts.mcp_tool_tokens, "{parts:?}");
+        assert!(
+            parts.mcp_tool_tokens > 0 && parts.skill_tokens > 0,
+            "{parts:?}"
+        );
+        assert!(parts.message_tokens > 0, "{parts:?}");
+        assert_eq!(
+            parts.system_tokens
+                + parts.tool_tokens
+                + parts.mcp_tool_tokens
+                + parts.skill_tokens
+                + parts.message_tokens,
+            estimated
+        );
+        // A tail without picked skills counts as messages only.
+        assert_eq!(skill_section_len("Today is Monday."), 0);
+        // Parts never pass a smaller estimate.
+        assert_eq!(parts_of(&body, 1).message_tokens, 0);
+    }
+
+    #[test]
     fn catalogue_rows_give_limits_and_mark_what_they_lack() {
         let full = limits_of(&json!({"name": "m", "context_window": 200_000,
             "max_output_tokens": 32_000, "max_input_tokens": 180_000}))
@@ -468,6 +701,66 @@ mod tests {
         assert!(output_only.context_window_fallback && !output_only.max_output_fallback);
         assert!(limits_of(&json!({"context_window": -1})).is_none());
         assert!(limits_of(&json!({"context_window": 1000, "max_output_tokens": 1000})).is_none());
+    }
+
+    #[test]
+    fn summaries_go_to_the_low_tier_model_only_when_its_window_is_as_large() {
+        let catalogue = |low_window: Value| {
+            Catalogue::from_body(
+                &json!({
+                    "items": [
+                        {"name": "agent", "project_id": 1, "context_window": 200_000, "max_output_tokens": 32_000},
+                        {"name": "small", "project_id": 1, "context_window": low_window,
+                         "max_output_tokens": 8_000, "openai_compatible": false},
+                    ],
+                    "low_tier_default_model_name": "small",
+                    "low_tier_default_model_project_id": 1,
+                }),
+                1,
+            )
+        };
+        let facts = facts_of(&catalogue(json!(200_000)), "agent");
+        let low = facts.summary_model(&facts.limits).unwrap();
+        assert_eq!(low.name, "small");
+        assert_eq!(low.limits.max_output_tokens, 8_000);
+        assert_eq!(low.replay, ReasoningReplay::SignedBlocks);
+        // A smaller window, or one the catalogue does not describe: the
+        // agent's own model.
+        let smaller = facts_of(&catalogue(json!(128_000)), "agent");
+        assert!(smaller.low_tier.is_some());
+        assert!(smaller.summary_model(&smaller.limits).is_none());
+        let undescribed = facts_of(&catalogue(json!(null)), "agent");
+        assert!(undescribed.summary_model(&undescribed.limits).is_none());
+        // Measured against the limits the turn runs on (frozen ones too).
+        let frozen = ModelContextLimits {
+            context_window_tokens: 100_000,
+            ..facts.limits
+        };
+        assert!(smaller.summary_model(&frozen).is_some());
+        // The same window but a smaller input limit is too small; the
+        // agent's own input limit counts the same way.
+        let capped = Catalogue::from_body(
+            &json!({
+                "items": [
+                    {"name": "agent", "project_id": 1, "context_window": 200_000, "max_output_tokens": 32_000},
+                    {"name": "small", "project_id": 1, "context_window": 200_000,
+                     "max_output_tokens": 8_000, "max_input_tokens": 64_000},
+                ],
+                "low_tier_default_model_name": "small",
+                "low_tier_default_model_project_id": 1,
+            }),
+            1,
+        );
+        let capped = facts_of(&capped, "agent");
+        assert!(capped.summary_model(&capped.limits).is_none());
+        let agent_input = ModelContextLimits {
+            max_input_tokens: Some(64_000),
+            ..capped.limits
+        };
+        assert!(capped.summary_model(&agent_input).is_some());
+        // No low-tier default configured.
+        let none = facts_of(&Catalogue::default(), "agent");
+        assert!(none.summary_model(&FALLBACK_LIMITS).is_none());
     }
 
     #[test]

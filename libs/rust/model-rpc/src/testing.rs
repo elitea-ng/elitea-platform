@@ -265,6 +265,50 @@ impl ModelService for Bridge {
         }))
     }
 
+    async fn metered_admit(
+        &self,
+        request: tonic::Request<pb::MeteredAdmitRequest>,
+    ) -> Result<tonic::Response<pb::MeteredAdmitResponse>, Status> {
+        let (metadata, _, message) = request.into_parts();
+        let answer = self
+            .http(
+                Route::MeteredAdmit,
+                &metadata,
+                message.call.as_ref(),
+                "application/json",
+                &[],
+                Body::from(message.body),
+            )
+            .await?;
+        let (head, body) = whole(answer).await?;
+        Ok(tonic::Response::new(pb::MeteredAdmitResponse {
+            head: Some(head),
+            body,
+        }))
+    }
+
+    async fn metered_settle(
+        &self,
+        request: tonic::Request<pb::MeteredSettleRequest>,
+    ) -> Result<tonic::Response<pb::MeteredSettleResponse>, Status> {
+        let (metadata, _, message) = request.into_parts();
+        let answer = self
+            .http(
+                Route::MeteredSettle,
+                &metadata,
+                message.call.as_ref(),
+                "application/json",
+                &[],
+                Body::from(message.body),
+            )
+            .await?;
+        let (head, body) = whole(answer).await?;
+        Ok(tonic::Response::new(pb::MeteredSettleResponse {
+            head: Some(head),
+            body,
+        }))
+    }
+
     async fn image_generate(
         &self,
         request: tonic::Request<pb::ImageGenerateRequest>,

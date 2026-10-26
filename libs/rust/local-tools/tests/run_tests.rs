@@ -69,6 +69,7 @@ fn fixture(name: &str) -> (tempfile::TempDir, PathBuf, Arc<LocalSession>) {
     // the run either way.
     shell.sandbox.allow_unenforced = true;
     let session = LocalSession::open(SessionConfig {
+        spill_dir: None, // under data_dir
         root: root.clone(),
         session_id: "s".to_owned(),
         policy: LocalWorkPolicy {
@@ -85,6 +86,7 @@ fn fixture(name: &str) -> (tempfile::TempDir, PathBuf, Arc<LocalSession>) {
         deny_read: Vec::new(),
         app_id: None,
         budgets: elitea_local_tools::budget::Budgets::default(),
+        documents: elitea_local_tools::document::Documents::default(),
     })
     .expect("session");
     (dir, root, session)
@@ -128,7 +130,8 @@ async fn cargo_fixture_failure_reports_file_and_line() {
     );
     assert_eq!(
         (result["passed"].as_u64(), result["failed"].as_u64()),
-        (Some(1), Some(1))
+        (Some(1), Some(1)),
+        "{result}"
     );
     let failure = &result["failures"][0];
     assert_eq!(failure["name"], "tests::breaks", "{result}");

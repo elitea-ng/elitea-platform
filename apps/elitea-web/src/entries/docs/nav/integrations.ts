@@ -48,6 +48,7 @@ export const integrationsTab: NavTab = {
         { kind: 'page', slug: 'integrations/toolkits/sql_toolkit', title: 'SQL' },
         { kind: 'page', slug: 'integrations/toolkits/testIO_toolkit', title: 'TestIO' },
         { kind: 'page', slug: 'integrations/toolkits/testrail_toolkit', title: 'TestRail' },
+        { kind: 'page', slug: 'integrations/toolkits/web_search_toolkit', title: 'Web Search and Host Intelligence' },
         { kind: 'page', slug: 'integrations/toolkits/xray_toolkit', title: 'XRAY Cloud' },
         { kind: 'page', slug: 'integrations/toolkits/zephyr_enterprise_toolkit', title: 'Zephyr Enterprise' },
         { kind: 'page', slug: 'integrations/toolkits/zephyr_scale_toolkit', title: 'Zephyr Scale' },

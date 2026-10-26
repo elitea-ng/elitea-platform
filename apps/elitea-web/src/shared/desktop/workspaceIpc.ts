@@ -8,13 +8,18 @@
  * place for the two halves to drift apart.
  */
 import type { ContextMeter } from './contextMeter';
-import type { CustomCommand, TurnStartRequest } from './turnStart';
+import type { AttachedImage, CustomCommand, StoredImage, TurnStartRequest } from './turnStart';
 import type { HostInvoke } from './hostBridge';
 import type { PlanProposalPayload, PlanView } from './planIpc';
+import type { ProcessTurnEvent } from './processTypes';
+import type { SubAgentFinishedPayload, SubAgentInnerEvent, SubAgentStartedPayload } from './subAgentIpc';
 import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel } from './turnModel';
+import { threadForkCommands, type ThreadForkCommands } from './threadForkIpc';
+import type { UsagePayload, UsageTotalPayload } from './turnUsage';
 
 export type { ContextMeter } from './contextMeter';
-export type { CustomCommand, TurnCommand, TurnStartRequest } from './turnStart';
+export type { AttachedImage, CustomCommand, TurnCommand, TurnImagePick, TurnMode, TurnStartRequest } from './turnStart';
+export type { ThreadForkRequest } from './threadForkIpc';
 
 export interface Workspace {
   id: string;
@@ -121,7 +126,11 @@ export interface ApprovalRequestPayload {
   /** The rule's justification, shown in place of the classifier's reason. */
   justification?: string;
   can_remember: boolean;
+  /** `session`: "always" lasts until the app quits (host-intel tools, #1238). */
+  remember_scope?: 'session';
 }
+
+export type { SubAgentStatus } from './subAgentIpc';
 
 interface EventBase {
   turn_id: string;
@@ -144,6 +153,17 @@ export interface TurnDonePayload {
 export interface TurnStatus {
   state: 'running' | 'committing' | 'done';
   done: TurnDonePayload | null;
+}
+
+/** `model_retry`: the retry (from 1) of `max_attempts`, and what the failed call streamed. */
+export interface ModelRetryPayload {
+  attempt: number;
+  max_attempts: number;
+  code: string;
+  message: string;
+  delay_ms: number;
+  text_units: number;
+  thinking_units: number;
 }
 
 export type AgentEvent =
@@ -169,8 +189,9 @@ export type AgentEvent =
   | (EventBase & { kind: 'thinking_end'; payload: ThinkingEndPayload })
   | (EventBase & { kind: 'tool_call'; payload: { call_id: string; tool: string; args_summary: string; remote: boolean } })
   | (EventBase & { kind: 'tool_result'; payload: { call_id: string; ok: boolean; summary: string; truncated: boolean } })
-  /** One model call's usage: `prompt_tokens` is what it sent (the context in use), `completion_tokens` what it produced; `context` the call's request occupancy (the composer's meter). Absent when the gateway reports no usage. */
-  | (EventBase & { kind: 'usage'; payload: { prompt_tokens: number; completion_tokens: number; total_tokens: number; reasoning_tokens?: number; context?: ContextMeter } })
+  /** One of the turn's model calls (`turnUsage.ts`): `prompt_tokens` is what it sent (the context in use); `context` its request occupancy (the composer's meter). Absent when the gateway reports no usage. */
+  | (EventBase & { kind: 'usage'; payload: UsagePayload })
+  | (EventBase & { kind: 'usage_total'; payload: UsageTotalPayload })
   /** The request occupancy when its phase changes (`compacting` while a summary call runs, then `compacted`, then `measured`): the composer's meter between `usage` events. */
   | (EventBase & { kind: 'context'; payload: ContextMeter })
   | (EventBase & { kind: 'approval_request'; payload: ApprovalRequestPayload })
@@ -181,6 +202,20 @@ export type AgentEvent =
   | (EventBase & { kind: 'plan_proposed'; payload: PlanProposalPayload })
   /** The person accepted the plan: the session left plan mode and the turn goes on with every tool. */
   | (EventBase & { kind: 'plan_accepted'; payload: { call_id: string } })
+  /** A read-only sub-agent started under the turn's `spawn_agent` call `parent_call_id` (#1226; IPC.md "Sub-agents"). */
+  | (EventBase & { kind: 'subagent_started'; payload: SubAgentStartedPayload })
+  /** One of a sub-agent's own events: its `tool_call`, `tool_result` or `text_delta`, as `inner`. */
+  | (EventBase & { kind: 'subagent_event'; payload: { agent_id: string; inner: SubAgentInnerEvent } })
+  /** A sub-agent settled: once per run of it (a `send_input` that continues it settles again). */
+  | (EventBase & { kind: 'subagent_finished'; payload: SubAgentFinishedPayload })
+  /** A background process its `run_command` call started, its output and its end, while this turn runs (#1223). */
+  | (EventBase & ProcessTurnEvent)
+  /**
+   * A model call failed in a way another call may mend (a cut or stalled stream, the gateway unreachable, a 408,
+   * 409, 429 or 5xx) and is made again after `delay_ms`. `text_units` and `thinking_units` are what the failed call
+   * streamed (UTF-16 code units): they come off the end of the transcript.
+   */
+  | (EventBase & { kind: 'model_retry'; payload: ModelRetryPayload })
   | (EventBase & { kind: 'error'; payload: { code: string; message: string } })
   | (EventBase & { kind: 'done'; payload: TurnDonePayload })
   /** After `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again. */
@@ -204,25 +239,12 @@ export interface StoredTurn {
   /** What the turn changed, as it ended (`null` before it ended). */
   changes: ChangedFile[] | null;
   events_truncated: boolean;
+  /** The images the turn carried: thumbnails only. Absent for a turn recorded before images. */
+  images?: StoredImage[];
   /** `interrupted`: it never ended (the app quit while it ran). */
   state: 'done' | 'running' | 'interrupted';
   /** The host still keeps it: `turn_changes` / `checkpoint_restore` answer for it. */
   live: boolean;
-}
-
-/** What `thread_history_fork` copies (IPC.md "Thread history"). */
-export interface ThreadForkRequest {
-  workspaceId: string;
-  sourceConversationId: string;
-  targetConversationId: string;
-  targetConversationUuid: string;
-  /** The fork point's turn: the turns up to and including it are copied. Absent: every turn. */
-  upToTurnId?: string;
-  /**
-   * The fork answer's `forked_messages` (source message UUID → the copy's): the copied turns' `done`
-   * events name the new conversation's messages, so they can be fork points in turn.
-   */
-  messageIds?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -251,7 +273,7 @@ export function toWorkspaceIpcError(error: unknown): WorkspaceIpcError {
   return new WorkspaceIpcError('unknown', error instanceof Error ? error.message : 'Something went wrong.');
 }
 
-export interface WorkspaceIpc {
+export interface WorkspaceIpc extends ThreadForkCommands {
   open(): Promise<Workspace | null>;
   list(): Promise<Workspace[]>;
   remove(id: string): Promise<void>;
@@ -261,6 +283,12 @@ export interface WorkspaceIpc {
   /** The "/" menu's custom commands of the workspace and of the person's own folder, by name. */
   commands(workspaceId: string): Promise<CustomCommand[]>;
   startTurn(request: TurnStartRequest): Promise<TurnStarted>;
+  /** Attach the image file at `path` (absolute: a drop's, as `files_dropped` reports it) to the workspace's next turn; the host reads it confined and shrinks it. */
+  attachFile(workspaceId: string, path: string): Promise<AttachedImage>;
+  /** Attach a pasted image (`data`: base64, at most 10 MiB decoded). */
+  attachBytes(workspaceId: string, mime: string, data: string, name?: string): Promise<AttachedImage>;
+  /** Take an attached image off before it is sent. */
+  removeAttachment(workspaceId: string, token: string): Promise<void>;
   /** Send a turn's failed commit again (after `commit_failed`); resolves once it is saved. */
   retryCommit(executionId: string): Promise<void>;
   /** Have the host read ahead what a turn to this agent reads first (the composer got focus); starts nothing. */
@@ -279,12 +307,6 @@ export interface WorkspaceIpc {
   threadHistory(workspaceId: string, conversationId: string): Promise<StoredTurn[]>;
   /** Forget a thread's recorded turns (the conversation itself stays); resolves with how many. */
   deleteThreadHistory(workspaceId: string, conversationId: string): Promise<number>;
-  /**
-   * The local half of a fork (`thread_history_fork`): copy a thread's recorded turns, up to and including
-   * `upToTurnId` (all when absent), into the conversation the server fork made, in the same folder.
-   * Resolves with how many turns were copied (0 when this machine recorded none).
-   */
-  forkThreadHistory(request: ThreadForkRequest): Promise<number>;
   /** Subscribe to `agent://event`; resolves once the subscription is live, with its unsubscribe. */
   onEvent(handler: AgentEventHandler): Promise<() => void>;
 }
@@ -315,6 +337,10 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
       invoke<WorkspaceFile[]>('workspace_files', limit === undefined ? { workspace_id: workspaceId, query } : { workspace_id: workspaceId, query, limit }),
     commands: (workspaceId) => invoke<CustomCommand[]>('commands_list', { workspace_id: workspaceId }),
     startTurn: (request) => invoke<TurnStarted>('agent_turn_start', { ...request }),
+    attachFile: (workspaceId, path) => invoke<AttachedImage>('attachment_add', { workspace_id: workspaceId, path }),
+    attachBytes: (workspaceId, mime, data, name) =>
+      invoke<AttachedImage>('attachment_add_bytes', { workspace_id: workspaceId, mime, data, ...(name === undefined ? {} : { name }) }),
+    removeAttachment: (workspaceId, token) => invoke<void>('attachment_remove', { workspace_id: workspaceId, token }),
     prewarm: (request) => invoke<TurnPrewarmed>('agent_prewarm', { ...request }),
     retryCommit: (executionId) => invoke<void>('turn_commit_retry', { execution_id: executionId }),
     cancelTurn: (turnId) => invoke<void>('agent_turn_cancel', { turn_id: turnId }),
@@ -333,17 +359,7 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
       (await invoke<{ turns: StoredTurn[] }>('thread_history', { workspace_id: workspaceId, conversation_id: conversationId })).turns,
     deleteThreadHistory: async (workspaceId, conversationId) =>
       (await invoke<{ deleted: number }>('thread_history_delete', { workspace_id: workspaceId, conversation_id: conversationId })).deleted,
-    forkThreadHistory: async (request) =>
-      (
-        await invoke<{ copied: number }>('thread_history_fork', {
-          workspace_id: request.workspaceId,
-          source_conversation_id: request.sourceConversationId,
-          target_conversation_id: request.targetConversationId,
-          target_conversation_uuid: request.targetConversationUuid,
-          ...(request.upToTurnId === undefined ? {} : { up_to_turn_id: request.upToTurnId }),
-          ...(request.messageIds === undefined ? {} : { message_ids: request.messageIds }),
-        })
-      ).copied,
+    ...threadForkCommands(invoke),
     onEvent: (handler) => listen(AGENT_EVENT_CHANNEL, (payload) => handler(payload as AgentEvent)),
   };
 }

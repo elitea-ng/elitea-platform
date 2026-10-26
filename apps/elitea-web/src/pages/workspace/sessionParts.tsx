@@ -17,15 +17,20 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import { composer, describeWorkspaceError, replayView, TurnTranscript, type WorkspaceTurn } from '@/features/workspace';
+
 import type { CustomCommand, StoredTurn, Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
 import { copyText, modKey, selectInspectorShown, useContextMenu, useDesktopLayout } from '@/widgets/desktop-shell';
 
-import type { ForkPoint, SessionFork } from './useForkThread';
+import { CompactNotices } from './CompactNotices';
+import type { ForkMode, ForkPoint } from './useForkThread';
 import type { ComposerSkill } from './useAgentSkills';
 import type { SessionCommands } from './useSessionCommands';
 import type { ServerMessage, ThreadHistory } from './useThreadHistory';
+
+/** One thumbnail of a sent prompt, as the composer's image strip takes it. */
+type StripImage = NonNullable<React.ComponentProps<typeof composer.ImageStrip>['images']>[number];
 
 /** Links in the thread read as quiet app links, not underlined web ones. */
 const linkSx = (theme: Theme) => ({
@@ -98,20 +103,35 @@ export function firstError(startError: string | null, sendError: string | null, 
   return rebindError === null || rebindError === undefined ? null : describeWorkspaceError(rebindError);
 }
 
+/** "Fork from Here" and "Rewind to Here" of one fork point. */
+interface ForkActions {
+  fork: () => void;
+  rewind: () => void;
+}
+
+/** The menu's fork items: `undefined` = not offered, `null` = offered, disabled. */
+type ForkItems = ForkActions | null | undefined;
+
 /**
- * The native context menu of a message: Copy, and "Fork from here" when the
- * message can be a fork point (`fork`; `undefined` = not offered, `null` = offered, disabled).
+ * The native context menu of a message: Copy, and "Fork from Here" / "Rewind to Here" when the
+ * message can be a fork point (`fork`).
  */
-export function useCopyMenu(): (text: string, event: React.MouseEvent, fork?: (() => void) | null) => void {
+export function useCopyMenu(): (text: string, event: React.MouseEvent, fork?: ForkItems) => void {
   const showMenu = useContextMenu();
   return (text, event, fork) =>
     showMenu(event, [
       { id: 'copy', label: t('workspace.copy', 'Copy'), run: () => copyText(text) },
       ...(fork === undefined
         ? []
-        : [{ separator: true } as const, { id: 'fork', label: t('workspace.fork.fromHere', 'Fork from Here'), enabled: fork !== null, run: () => fork?.() }]),
+        : [
+            { separator: true } as const,
+            { id: 'fork', label: t('workspace.fork.fromHere', 'Fork from Here'), enabled: fork !== null, run: () => fork?.fork() },
+            { id: 'rewind', label: t('workspace.fork.rewindHere', 'Rewind to Here'), enabled: fork !== null, run: () => fork?.rewind() },
+          ]),
     ]);
 }
+
+type OnFork = ((point: ForkPoint, mode: ForkMode) => void) | undefined;
 
 /** A turn's fork point: its answer, the last message its `done` event names. */
 function turnForkPoint(turnId: string, done: { messageIds: readonly string[] } | undefined): ForkPoint | null {
@@ -120,10 +140,10 @@ function turnForkPoint(turnId: string, done: { messageIds: readonly string[] } |
 }
 
 /** What a turn's context menu forks: `undefined` when the thread offers no fork, `null` when this turn cannot be one. */
-const forkAction = (onFork: ((point: ForkPoint) => void) | undefined, point: ForkPoint | null): (() => void) | null | undefined =>
-  onFork === undefined ? undefined : point === null ? null : () => onFork(point);
+const forkAction = (onFork: OnFork, point: ForkPoint | null): ForkItems =>
+  onFork === undefined ? undefined : point === null ? null : { fork: () => onFork(point, 'fork'), rewind: () => onFork(point, 'rewind') };
 
-export function YourPrompt({ text, fork }: { text: string; fork?: (() => void) | null | undefined }): React.JSX.Element {
+export function YourPrompt({ text, fork, images }: { text: string; fork?: ForkItems; images?: readonly StripImage[] | undefined }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   return (
     <Box
@@ -138,6 +158,11 @@ export function YourPrompt({ text, fork }: { text: string; fork?: (() => void) |
         background: theme.vars.palette.background.userInputBackground,
       })}
     >
+      {images !== undefined && images.length > 0 && (
+        <Box sx={{ marginBottom: 1 }}>
+          <composer.ImageStrip images={images} />
+        </Box>
+      )}
       <Typography variant="bodyMedium" sx={{ whiteSpace: 'pre-wrap' }}>
         {text}
       </Typography>
@@ -217,13 +242,13 @@ export function ThreadIntro({
 const quietSx = (theme: Theme) => ({ color: theme.vars.palette.text.metrics });
 
 /** One recorded turn: its prompt, then its events replayed as the live transcript showed them. */
-function RecordedTurn({ stored, onFork }: { stored: StoredTurn; onFork: ((point: ForkPoint) => void) | undefined }): React.JSX.Element {
+function RecordedTurn({ stored, onFork }: { stored: StoredTurn; onFork: OnFork }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   const view = useMemo(() => replayView(stored.events), [stored.events]);
   const fork = forkAction(onFork, stored.state === 'running' ? null : turnForkPoint(stored.turn_id, view.done));
   return (
     <Box data-testid="history-turn" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-      <YourPrompt text={stored.prompt} fork={fork} />
+      <YourPrompt text={stored.prompt} fork={fork} images={stored.images} />
       <TurnTranscript view={view} busy={false} onCancel={() => undefined} onTextContextMenu={(text, event) => copyMenu(text, event, fork)} />
       {stored.state === 'interrupted' && view.done === undefined && (
         <Typography variant="bodySmall" sx={quietSx}>
@@ -239,7 +264,7 @@ function RecordedTurn({ stored, onFork }: { stored: StoredTurn; onFork: ((point:
   );
 }
 
-function ServerTurn({ message, onFork }: { message: ServerMessage; onFork: ((point: ForkPoint) => void) | undefined }): React.JSX.Element {
+function ServerTurn({ message, onFork }: { message: ServerMessage; onFork: OnFork }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   // A thread this computer has no record of forks on the server only (no turn to copy).
   const fork = forkAction(onFork, { messageId: message.id });
@@ -263,7 +288,7 @@ export function EarlierTurns({
   history: ThreadHistory;
   shown: ReadonlySet<string>;
   /** "Fork from here" on each message; absent = not offered. */
-  onFork?: ((point: ForkPoint) => void) | undefined;
+  onFork?: OnFork;
 }): React.JSX.Element | null {
   switch (history.kind) {
     case 'loading':
@@ -297,20 +322,20 @@ export function EarlierTurns({
 }
 
 /** Each turn started here, under the prompt that started it; the last one is live. ("Open in chat" is in the header.) */
-export function Exchanges({
-  turn,
-  prompts,
-  onFork,
-}: {
+export function Exchanges({ turn, prompts, promptImages, onFork, live }: {
   turn: WorkspaceTurn;
   prompts: readonly string[];
+  /** The thumbnails of each prompt's images, by the same index. */
+  promptImages: readonly (readonly StripImage[])[];
   /** "Fork from here" on each ended turn; absent = not offered. */
-  onFork?: ((point: ForkPoint) => void) | undefined;
+  onFork?: OnFork;
+  /** The live turn's "Retry" (its error) and "Continue" (its tool-call stop). */
+  live?: { onRetryTurn: () => void; onContinue: () => void };
 }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   const exchanges = [
-    ...turn.earlier.map((entry, index) => ({ key: entry.turnId, prompt: prompts[index], view: entry.view, live: false })),
-    ...(turn.turnId === null ? [] : [{ key: turn.turnId, prompt: prompts[turn.earlier.length], view: turn.view, live: true }]),
+    ...turn.earlier.map((entry, index) => ({ key: entry.turnId, prompt: prompts[index], images: promptImages[index], view: entry.view, live: false })),
+    ...(turn.turnId === null ? [] : [{ key: turn.turnId, prompt: prompts[turn.earlier.length], images: promptImages[turn.earlier.length], view: turn.view, live: true }]),
   ];
   return (
     <>
@@ -319,35 +344,18 @@ export function Exchanges({
         const fork = forkAction(onFork, exchange.live && turn.busy ? null : turnForkPoint(exchange.key, exchange.view.done));
         return (
         <Box key={exchange.key} sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-          {exchange.prompt !== undefined && <YourPrompt text={exchange.prompt} fork={fork} />}
+          {exchange.prompt !== undefined && <YourPrompt text={exchange.prompt} fork={fork} images={exchange.images} />}
           <TurnTranscript
             view={exchange.view}
             busy={exchange.live && turn.busy}
             onCancel={() => void turn.cancel()}
             onRetryCommit={(executionId) => turn.retryCommit(exchange.key, executionId)}
             onTextContextMenu={(text, event) => copyMenu(text, event, fork)}
+            {...(exchange.live ? live : {})}
           />
         </Box>
         );
       })}
-    </>
-  );
-}
-
-/** What the fork that opened this thread copied, and why the last fork from here did not happen. */
-export function ForkNotices({ fork }: { fork: SessionFork }): React.JSX.Element {
-  return (
-    <>
-      {fork.notice !== null && (
-        <Alert severity={fork.notice.severity} onClose={fork.dismissNotice} data-testid="fork-notice">
-          {fork.notice.text}
-        </Alert>
-      )}
-      {fork.error !== null && (
-        <Alert severity="error" onClose={fork.clearError} data-testid="fork-error">
-          {fork.error}
-        </Alert>
-      )}
     </>
   );
 }
@@ -370,16 +378,17 @@ export function SessionNotices({ error, commands, customCommands, skills }: Sess
           {t('workspace.undoNothing', 'The last turn here changed no files.')}
         </Alert>
       )}
+      {commands.notice === 'text' && (
+        <Alert severity="info" onClose={commands.closeNotice} data-testid="workspace-notice-text">
+          {commands.noticeText}
+        </Alert>
+      )}
       {commands.notice === 'modelFixed' && (
         <Alert severity="info" onClose={commands.closeNotice} data-testid="workspace-model-fixed">
           {t('workspace.model.fixed', 'This agent runs on its own model here: it pins its model, or this folder’s settings keep it.')}
         </Alert>
       )}
-      {commands.notice === 'compactNext' && (
-        <Alert severity="info" onClose={commands.closeNotice} data-testid="workspace-compact-next">
-          {t('workspace.compactNext', 'Your next message first summarizes this conversation, so the agent continues with more room.')}
-        </Alert>
-      )}
+      <CompactNotices commands={commands} />
     </>
   );
 }

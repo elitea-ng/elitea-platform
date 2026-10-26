@@ -3174,3 +3174,40 @@ async fn an_approved_effectful_sensitive_call_runs_once_at_the_root() {
         "a repeated approval never runs the effect again"
     );
 }
+
+/// Sub-agents (#1226) are bound last, over every toolset bound before them,
+/// and a child is never offered a tool that needs a confirmation (the
+/// workspace command's conditional entry included): it has no way to ask.
+/// The nested applications and Smart Tools Selection's meta-tools are not
+/// offered either.
+#[test]
+fn subagents_see_the_bound_toolsets_less_what_needs_a_person() {
+    let named = |name: &str| -> Arc<dyn Toolset> { Arc::new(BasicToolset::new(name, Vec::new())) };
+    let sensitive = SensitiveToolCatalog::default()
+        .with_workspace_command()
+        .expect("workspace command");
+    let seen = Arc::new(Mutex::new(None));
+    let record = Arc::clone(&seen);
+    let _runtime = OrdinaryRuntimeBindings::new(
+        vec![
+            named("github"),
+            named("elitea_nested_applications"),
+            named(elitea_agent_runtime::lazy_tools::TOOLSET_NAME),
+        ],
+        sensitive,
+        DelegatedAuthorizationCatalog::default(),
+        ApplicationRuntimeProjection::default(),
+    )
+    .with_workspace_toolset(named("local"))
+    .with_subagents(move |toolsets, excluded| {
+        let offered: Vec<String> = super::subagents::WorkerSubAgents::child_toolsets(toolsets)
+            .iter()
+            .map(|toolset| toolset.name().to_owned())
+            .collect();
+        *record.lock().expect("record") = Some((offered, excluded));
+        named(elitea_agent_runtime::subagents::TOOLSET_NAME)
+    });
+    let (offered, excluded) = seen.lock().expect("seen").take().expect("bound");
+    assert_eq!(offered, ["github", "local"]);
+    assert_eq!(excluded, ["run_command"]);
+}

@@ -38,7 +38,7 @@ describe('actionForAppCommand', () => {
     expect(actionForAppCommand({ id: 'workspace_opened', args: { workspace_id: 'w9' } })).toEqual({ type: 'workspaces_changed', workspaceId: 'w9' });
     expect(actionForAppCommand({ id: 'workspace_opened', args: { workspace_id: '' } })).toBeUndefined();
     expect(actionForAppCommand({ id: 'workspace_open_failed', args: { message: 'No access.' } })).toEqual({ type: 'notice', message: 'No access.' });
-    expect(actionForAppCommand({ id: 'files_dropped', args: { paths: ['/a.txt'] } })).toEqual({ type: 'files_dropped' });
+    expect(actionForAppCommand({ id: 'files_dropped', args: { paths: ['/a.txt'] } })).toEqual({ type: 'files_dropped', paths: ['/a.txt'] });
     expect(actionForAppCommand({ id: 'focus_turn', args: { workspace_id: 'w1', turn_id: 't' } })).toEqual({ type: 'open_workspace', workspaceId: 'w1' });
     expect(actionForAppCommand({ id: 'unknown' } as never)).toBeUndefined();
   });

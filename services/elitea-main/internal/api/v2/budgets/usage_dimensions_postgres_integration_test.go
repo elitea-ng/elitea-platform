@@ -349,3 +349,43 @@ func sumSpend(t *testing.T, rows []map[string]any) string {
 	}
 	return fmt.Sprintf("%d.%08d", cents/100_000_000, cents%100_000_000)
 }
+
+// TestUsageModelsIncludeToolRowsWithOperation is the #1238 half of the model
+// table: a metered tool settlement is a ledger row whose provider is the
+// vendor and whose model is the operation, listed beside the LLM rows with
+// its operation and units, and summed into the same totals.
+func TestUsageModelsIncludeToolRowsWithOperation(t *testing.T) {
+	pool, router := newBudgetsEnvironment(t)
+	admin := budgetAdminUser
+	plantUsageEvent(t, pool, "55555555-5555-5555-5555-555555555555", budgetProjectID, &admin,
+		"openai", "gpt-4o", 100, 200, "1.00", usageDay(6))
+	if _, err := pool.Exec(context.Background(), `
+INSERT INTO gateway.llm_usage_events
+    (event_id, project_id, user_id, provider, model, cost_usd, api_requests,
+     operation, units, unit, period_start, period_end, occurred_at)
+VALUES ($1, $2, $3, 'tavily', 'web_search', 0.008, 1, 'tool', 1, 'credit', $4, $5, $6)`,
+		"66666666-6666-6666-6666-666666666666", budgetProjectID, admin,
+		periodStart(), periodEnd(), usageDay(6)); err != nil {
+		t.Fatalf("plant tool usage event: %v", err)
+	}
+
+	recorder := budgetsDo(t, router, http.MethodGet,
+		fmt.Sprintf("/usage/prompt_lib/%d/usage", budgetProjectID), budgetAdminUser, nil)
+	requireStatus(t, recorder, http.StatusOK)
+	body := decodeMap(t, recorder)
+
+	models := rowsOf(t, body, "models")
+	if len(models) != 2 {
+		t.Fatalf("model table has %d rows, want the LLM row and the tool row", len(models))
+	}
+	wantString(t, models[0], "operation", "llm")
+	wantAbsent(t, models[0], "units")
+	wantString(t, models[1], "provider", "tavily")
+	wantString(t, models[1], "model", "web_search")
+	wantString(t, models[1], "operation", "tool")
+	wantNumber(t, models[1], "units", "1")
+	wantString(t, models[1], "unit", "credit")
+	wantNumber(t, models[1], "api_requests", "1")
+	wantNumber(t, models[1], "spend", "0.00800000")
+	wantNumber(t, body, "api_requests", "2")
+}

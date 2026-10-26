@@ -18,6 +18,9 @@ elitea-content-source = { path = "../content-source" }
 # (its `documents` feature turns on `elitea-doc-extract/documents`).
 elitea-doc-extract = { path = "../doc-extract" }
 elitea-engine-core = { path = "../engine-core" }
+# The repo map's personalized PageRank; no `leiden` (it pulls leiden-rs and
+# its rand, which the desktop does not need).
+elitea-graph-algos = { path = "../graph-algos", default-features = false }
 # The graph's node and edge order is insertion order (graph.json, search ties).
 indexmap = { version = "2.14.2", features = ["serde"] }
 # Entity ids are Python's md5 prefix; file hashes its sha256.

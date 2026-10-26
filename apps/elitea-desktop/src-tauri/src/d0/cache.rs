@@ -135,7 +135,7 @@ impl TurnCaches {
 
     #[must_use]
     pub fn limits(&self, key: &LimitsKey) -> Option<ModelFacts> {
-        locked(&self.limits).get(key).copied()
+        locked(&self.limits).get(key).cloned()
     }
 
     pub fn keep_limits(&self, key: LimitsKey, facts: ModelFacts) {

@@ -9,6 +9,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { getGetWorkspaceHandoffChangesMockHandler, getGetWorkspaceHandoffChangesResponseMock } from '@/shared/api/generated/chat/chat.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/api/sse/testing';
 import { resetConfigForTests } from '@/shared/config/get-config';
@@ -32,6 +33,8 @@ interface Served {
 function serve(options: { permissions?: string[]; info?: Record<string, unknown> } = {}): Served {
   const served: Served = { requests: [], erased: 0 };
   server.use(
+    // The Files changed count (the contract's example).
+    getGetWorkspaceHandoffChangesMockHandler(),
     http.get(`${BASE}/auth/permissions/prompt_lib/42`, () => HttpResponse.json((options.permissions ?? []).map((name) => ({ name, enabled: true })))),
     http.get(HANDOFF, () => HttpResponse.json(options.info ?? { state: 'CLOUD_IDLE', epoch: 2 })),
     http.delete(HANDOFF, () => {
@@ -59,6 +62,13 @@ beforeEach(() => configureGeneratedClient({ baseUrl: BASE }));
 afterEach(() => resetGeneratedClient());
 
 describe('CloudExecutorNotice', () => {
+  it('offers Files changed with what the cloud turns changed since the handoff', async () => {
+    serve();
+    mount();
+    // The example records three files since the handoff.
+    expect(await screen.findByTestId('cloud-files-changed-button')).toHaveTextContent('Files changed (3)');
+  });
+
   it('shows the Cloud executor badge', () => {
     serve();
     mount();
@@ -207,6 +217,27 @@ describe('CloudExecutorNotice live updates (ADR-0034 scope B)', () => {
     expect(await screen.findByText(/Take back requested/)).toBeInTheDocument();
     // The frame drove it: at most the one re-read it asked for, no poll.
     expect(reads - before).toBeLessThanOrEqual(1);
+  });
+
+  it('shows Files changed once the first cloud turn ends, on the frame of the turn', async () => {
+    const example = getGetWorkspaceHandoffChangesResponseMock();
+    let recorded = false;
+    serve({ info: { state: 'CLOUD_RUNNING', epoch: 2 } });
+    server.use(
+      getGetWorkspaceHandoffChangesMockHandler(() =>
+        recorded ? example : { ...example, head_sha: null, cumulative: null, cumulative_commit: null, turns: [] },
+      ),
+    );
+    mount();
+    await waitFor(() => {
+      expect(registry.getOpen().some((source) => source.url === `${BASE}/events/prompt_lib/42`)).toBe(true);
+    });
+    expect(await screen.findByTestId('cloud-executor-badge')).toBeInTheDocument();
+    expect(screen.queryByTestId('cloud-files-changed-button')).toBeNull();
+    // The turn ends: its record is in, and the thread's frame says the turn is over.
+    recorded = true;
+    registry.emit('workspace.handoff', JSON.stringify({ conversation_uuid: UUID, state: 'CLOUD_IDLE', epoch: 2, reclaim_pending: false }));
+    expect(await screen.findByTestId('cloud-files-changed-button')).toHaveTextContent('Files changed (3)');
   });
 
   it('keeps a mixed-case UUID on the wire, lowercases it in the read, so the frame still reaches the notice', async () => {

@@ -178,7 +178,7 @@ describe('the folder count and the marks', () => {
 });
 
 describe('localThreadActivity', () => {
-  const turn: TrackedTurn = { turnId: 't', workspaceId: 'w1', workspaceName: 'app', conversationId: '5', phase: 'running', startedAt: 1, tool: null, steps: 0, approvals: [], commit: 'none', finished: false, changedFiles: 0, usage: null };
+  const turn: TrackedTurn = { turnId: 't', workspaceId: 'w1', workspaceName: 'app', conversationId: '5', phase: 'running', startedAt: 1, tool: null, steps: 0, approvals: [], commit: 'none', finished: false, changedFiles: 0 };
 
   it('reads running, needs you, and the unread mark', () => {
     expect(localThreadActivity('5', undefined, { t: turn }, {}, undefined).state).toBe('running');

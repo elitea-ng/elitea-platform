@@ -177,6 +177,11 @@ type Querier interface {
 	// This file projects the existing 16-column tenant table; it does not define a
 	// replacement configuration store.
 	FindCurrentConfigurationByEliteaTitle(ctx context.Context, arg FindCurrentConfigurationByEliteaTitleParams) (FindCurrentConfigurationByEliteaTitleRow, error)
+	// The web search and host-intelligence toolkits (#1238) resolve a provider's
+	// key by TYPE: the project's own row of that type, else a shared row in the
+	// public project. The oldest row wins, so a second row of a type never
+	// changes which key an existing toolkit uses.
+	FindCurrentConfigurationByType(ctx context.Context, arg FindCurrentConfigurationByTypeParams) (FindCurrentConfigurationByTypeRow, error)
 	// The current Configurations -> LiteLLM model projection keys embedding
 	// models by data.name. A two-row sentinel lets the adapter reject duplicate
 	// mutable definitions instead of selecting one silently.
@@ -782,6 +787,7 @@ type Querier interface {
 	// The workspace bucket does not count against the artifact quota (ADR-0034
 	// decision 3): its size is bounded by max_project_workspace_gb instead.
 	SumArtifactProjectBytes(ctx context.Context, projectID int64) (int64, error)
+	SupersedePendingScheduledJobOccurrences(ctx context.Context, arg SupersedePendingScheduledJobOccurrencesParams) error
 	SupersedeScheduledJobRevision(ctx context.Context, arg SupersedeScheduledJobRevisionParams) error
 	TouchProvisionedAuthUser(ctx context.Context, arg TouchProvisionedAuthUserParams) (AuthCoreUser, error)
 	// notified_at resets to NULL on every retention change: a bucket already

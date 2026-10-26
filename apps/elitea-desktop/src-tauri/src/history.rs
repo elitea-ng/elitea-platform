@@ -30,8 +30,9 @@
 //! deletes its rows for every account.
 //!
 //! Bounds: one event's strings are cut at [`MAX_EVENT_STRING`] bytes, a
-//! turn's events at [`MAX_TURN_EVENT_BYTES`] (past it only `status`, `error`
-//! and `done` are kept, and the turn is marked `events_truncated`), its
+//! turn's events at [`MAX_TURN_EVENT_BYTES`] (past it only `status`, `error`,
+//! `usage_total` and `done` are kept, and the turn is marked
+//! `events_truncated`), its
 //! reasoning apart at [`MAX_TURN_THINKING_BYTES`] (past it, dropped), a turn's
 //! stored diffs at [`MAX_DIFF_BYTES`] each and [`MAX_CHANGES_BYTES`] in all,
 //! and a thread keeps its newest [`MAX_TURNS_PER_THREAD`] turns within
@@ -53,7 +54,8 @@
 //!         started_at INTEGER /* Unix ms */, finished_at INTEGER NULL,
 //!         changes TEXT NULL /* JSON FileChange[] */,
 //!         events_bytes INTEGER, events_truncated INTEGER /* 0|1 */,
-//!         turn_origin TEXT /* local | cloud (imported, ADR-0034) */)
+//!         turn_origin TEXT /* local | cloud (imported, ADR-0034) */,
+//!         images TEXT /* JSON StoredImage[] (#1229): name, type, size, thumbnail */)
 //! events (turn_id TEXT REFERENCES turns ON DELETE CASCADE, seq INTEGER,
 //!         kind TEXT, payload TEXT /* JSON */, PRIMARY KEY (turn_id, seq))
 //! ```
@@ -77,7 +79,7 @@ use crate::error::HostError;
 
 pub const FILE_NAME: &str = "threads.sqlite";
 /// `PRAGMA user_version` of the schema this build writes.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 /// A string inside one event's payload is cut to this many bytes.
 pub const MAX_EVENT_STRING: usize = 16 * 1024;
 /// One turn's stored events, in payload bytes.
@@ -101,6 +103,10 @@ pub const MAX_THREAD_BYTES: i64 = 32 * 1024 * 1024;
 pub const FLUSH_INTERVAL: Duration = Duration::from_millis(500);
 /// ...or once this many bytes of events are pending.
 pub const FLUSH_BYTES: usize = 64 * 1024;
+/// How long a writer with nothing pending may sit before it folds the WAL
+/// into the database (`wal_checkpoint(TRUNCATE)`): the `-wal` file
+/// otherwise keeps the turns' bytes on disk while the app sits open.
+pub const WAL_IDLE_CHECKPOINT: Duration = Duration::from_secs(30);
 /// Ops the writer's queue holds before a tap keeps them itself.
 pub const CHANNEL_CAPACITY: usize = 1024;
 
@@ -119,7 +125,8 @@ CREATE TABLE turns (
     changes TEXT,
     events_bytes INTEGER NOT NULL DEFAULT 0,
     events_truncated INTEGER NOT NULL DEFAULT 0,
-    turn_origin TEXT NOT NULL DEFAULT 'local'
+    turn_origin TEXT NOT NULL DEFAULT 'local',
+    images TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX turns_by_thread
     ON turns (origin, user_id, workspace_id, conversation_id, started_at);
@@ -141,6 +148,17 @@ pub struct Owner {
     pub user_id: i64,
 }
 
+/// An image a turn carried (#1229), as the history keeps it: never the
+/// image, only its name, type, size and a JPEG thumbnail of at most 64 KiB
+/// (`data:image/jpeg;base64,…`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct StoredImage {
+    pub name: String,
+    pub mime: String,
+    pub bytes: usize,
+    pub thumbnail: Option<String>,
+}
+
 /// A turn's row, written once its start succeeded.
 #[derive(Clone, Debug)]
 pub struct NewTurn {
@@ -152,6 +170,8 @@ pub struct NewTurn {
     /// As the person typed it (the "@" list is `mentions`, not inlined).
     pub prompt: String,
     pub mentions: Vec<String>,
+    /// The images the turn carried (#1229).
+    pub images: Vec<StoredImage>,
     pub started_at: i64,
 }
 
@@ -192,6 +212,8 @@ pub struct StoredTurn {
     pub conversation_uuid: Option<String>,
     pub prompt: String,
     pub mentions: Vec<String>,
+    /// The images the turn carried: thumbnails only (#1229).
+    pub images: Vec<StoredImage>,
     pub started_at: i64,
     pub finished_at: Option<i64>,
     pub events: Vec<StoredEvent>,
@@ -233,6 +255,27 @@ fn storage(what: &str, error: &rusqlite::Error) -> HostError {
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+/// The threads idle past the retention cutoff `?1` (Unix ms): every turn
+/// of the thread finished (a running turn, or one a crash left unfinished,
+/// keeps its thread) and the last one finished before the cutoff. One query
+/// for the Doctor's count and the repair's delete, so both see the same
+/// threads.
+const IDLE_THREADS: &str = "SELECT conversation_uuid FROM turns
+    WHERE conversation_uuid IS NOT NULL
+    GROUP BY conversation_uuid
+    HAVING COUNT(*) = COUNT(finished_at) AND MAX(finished_at) < ?1";
+
+/// The retention cutoff, in Unix ms: `idle_days` before now.
+fn retention_cutoff_ms(idle_days: u32) -> i64 {
+    let span = i64::try_from(
+        u128::from(idle_days)
+            .saturating_mul(86_400)
+            .saturating_mul(1_000),
+    )
+    .unwrap_or(i64::MAX);
+    now_ms().saturating_sub(span)
 }
 
 /// Cut `text` to at most `max` bytes on a character boundary, marking the cut.
@@ -327,7 +370,8 @@ pub(crate) fn inspect_private(path: &Path, what: &str) -> Result<(), HostError> 
 }
 /// One write for the history's writer thread.
 enum Op {
-    Begin(NewTurn),
+    /// Boxed: a turn's row is the largest op by far.
+    Begin(Box<NewTurn>),
     Event {
         turn_id: String,
         seq: u64,
@@ -357,6 +401,13 @@ enum Op {
         conversation_id: String,
         conversation_uuid: Option<String>,
     },
+    /// Remove the turns of every thread that sat idle past the cutoff
+    /// (retention, [`IDLE_THREADS`]). The server keeps the messages; the
+    /// turns' local recording goes. Answers with the number of threads.
+    PruneIdle {
+        cutoff_ms: i64,
+        ack: std::sync::mpsc::Sender<rusqlite::Result<usize>>,
+    },
     /// Commit what is pending, then answer.
     Flush(std::sync::mpsc::Sender<()>),
 }
@@ -370,7 +421,7 @@ impl Op {
             | Self::Truncated { turn_id }
             | Self::Changes { turn_id, .. }
             | Self::Finish { turn_id, .. } => Some(turn_id),
-            Self::Flush(_) => None,
+            Self::Flush(_) | Self::PruneIdle { .. } => None,
         }
     }
 
@@ -442,11 +493,18 @@ pub struct HistoryStore {
     writer: Mutex<Option<std::thread::JoinHandle<()>>>,
     /// Ops queued and not yet taken by the writer.
     queued: Arc<AtomicUsize>,
+    /// The writer's idle WAL checkpoint interval (reopens keep it).
+    idle_checkpoint: Duration,
 }
 
 /// Open the database at `path` (created owner-only first) and start a
-/// writer on it: the readers' connection and the writer.
-fn start(path: &Path, queued: &Arc<AtomicUsize>) -> Result<(Connection, Writing), HostError> {
+/// writer on it: the readers' connection and the writer. The idle interval
+/// of the writer's WAL checkpoint, as named by the opening store.
+fn start_at(
+    path: &Path,
+    queued: &Arc<AtomicUsize>,
+    idle_checkpoint: Duration,
+) -> Result<(Connection, Writing), HostError> {
     // Created owner-only BEFORE SQLite opens it, so it is never wider.
     match create_private_file(path) {
         Ok(_) => {}
@@ -458,13 +516,14 @@ fn start(path: &Path, queued: &Arc<AtomicUsize>) -> Result<(Connection, Writing)
     }
     let conn = open_connection(path)?;
     migrate(&conn)?;
+    crate::sessions::ensure_incremental_vacuum(&conn, "the thread history");
     let writer_conn = open_connection(path)?;
     let (sender, receiver) = std::sync::mpsc::channel();
     queued.store(0, Ordering::SeqCst);
     let counter = queued.clone();
     let thread = std::thread::Builder::new()
         .name("history-writer".into())
-        .spawn(move || Writer::new(writer_conn, counter).run(&receiver))
+        .spawn(move || Writer::new(writer_conn, counter).run(&receiver, idle_checkpoint))
         .map_err(|e| HostError::Storage(format!("could not start the history writer: {e}")))?;
     Ok((conn, Writing { sender, thread }))
 }
@@ -478,6 +537,17 @@ impl HistoryStore {
     /// The directory or file is refused (see the module docs), the file is
     /// not a database, or it was written by a newer schema.
     pub fn open(dir: &Path) -> Result<Self, HostError> {
+        Self::open_at(dir, WAL_IDLE_CHECKPOINT)
+    }
+
+    /// [`Self::open`] with the interval of the idle WAL checkpoint named:
+    /// tests run it short so the checkpoint does not wait the full
+    /// [`WAL_IDLE_CHECKPOINT`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::open`].
+    pub fn open_at(dir: &Path, idle_checkpoint: Duration) -> Result<Self, HostError> {
         create_private_dir(dir)?;
         // Canonical, so the no-follow open below refuses a symlinked FILE,
         // not a symlink higher up (macOS's `/var` is one).
@@ -485,7 +555,7 @@ impl HistoryStore {
         let path = dir.join(FILE_NAME);
         inspect(&path)?;
         let queued = Arc::new(AtomicUsize::new(0));
-        let (conn, writing) = start(&path, &queued)?;
+        let (conn, writing) = start_at(&path, &queued, idle_checkpoint)?;
         Ok(Self {
             dir,
             path,
@@ -493,6 +563,7 @@ impl HistoryStore {
             sender: RwLock::new(Some(writing.sender)),
             writer: Mutex::new(Some(writing.thread)),
             queued,
+            idle_checkpoint,
         })
     }
 
@@ -544,7 +615,7 @@ impl HistoryStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.close(&mut conn);
         let moved = move_files_aside(&self.dir, FILE_NAME, &history_files(&self.dir));
-        let started = start(&self.path, &self.queued);
+        let started = start_at(&self.path, &self.queued, self.idle_checkpoint);
         let (opened, writing) = match (&moved, started) {
             (_, Ok(started)) => started,
             (Err(_), Err(_)) => return moved,
@@ -570,6 +641,49 @@ impl HistoryStore {
             aside.display()
         );
         Ok(aside)
+    }
+
+    /// Give the file's free space back to the OS (the Doctor's
+    /// `history.vacuum`): deleted threads free pages the file would otherwise
+    /// keep. Stop the writer and the reader, `VACUUM` the file, and start
+    /// them again. The bytes the file held before.
+    ///
+    /// # Errors
+    ///
+    /// The file could not be vacuumed (the store is then reopened on it), or
+    /// the reopened history could not start (it stays closed until restart).
+    pub fn reclaim(&self) -> Result<u64, HostError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.close(&mut conn);
+        let before = crate::sessions::reclaim_database(&self.dir, FILE_NAME).map_err(|e| {
+            log::warn!("the thread history could not be reclaimed: {e}");
+            e
+        });
+        let started = start_at(&self.path, &self.queued, self.idle_checkpoint);
+        let (opened, writing) = match (&before, started) {
+            (_, Ok(started)) => started,
+            (Err(_), Err(_)) => return before,
+            (Ok(_), Err(error)) => {
+                return Err(HostError::Storage(format!(
+                    "a new history could not start after reclaim ({error}); restart Elitea"
+                )));
+            }
+        };
+        *conn = Some(opened);
+        *self
+            .sender
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(writing.sender);
+        *self
+            .writer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(writing.thread);
+        let before = before?;
+        log::warn!("diagnostics: reclaimed the thread history (it held {before} bytes)");
+        Ok(before)
     }
 
     /// [`Self::thread`] on a blocking thread, for an async caller: the
@@ -693,7 +807,8 @@ impl HistoryStore {
             let mut turns: Vec<StoredTurn> = {
                 let mut statement = conn.prepare(&format!(
                     "SELECT turn_id, conversation_id, conversation_uuid, prompt, mentions,
-                            started_at, finished_at, changes, events_truncated, turn_origin
+                            started_at, finished_at, changes, events_truncated, turn_origin,
+                            images
                      FROM turns
                      WHERE {THREAD}
                      ORDER BY started_at, rowid"
@@ -710,7 +825,9 @@ impl HistoryStore {
                         |row| {
                             let mentions: String = row.get(4)?;
                             let changes: Option<String> = row.get(7)?;
+                            let images: String = row.get(10)?;
                             Ok(StoredTurn {
+                                images: serde_json::from_str(&images).unwrap_or_default(),
                                 turn_id: row.get(0)?,
                                 conversation_id: row.get(1)?,
                                 conversation_uuid: row.get(2)?,
@@ -924,6 +1041,55 @@ impl HistoryStore {
         })
     }
 
+    /// The number of threads idle more than `idle_days` ([`IDLE_THREADS`]):
+    /// what [`Self::prune_idle`] would forget. The Doctor's retention check
+    /// counts these before it offers `threads.prune`.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be read.
+    pub fn idle_threads(&self, idle_days: u32) -> Result<usize, HostError> {
+        let cutoff_ms = retention_cutoff_ms(idle_days);
+        self.with("could not read the thread history", |conn| {
+            conn.query_row(
+                &format!("SELECT COUNT(*) FROM ({IDLE_THREADS})"),
+                params![cutoff_ms],
+                |row| row.get(0),
+            )
+        })
+    }
+
+    /// Remove every thread idle more than `idle_days` ([`IDLE_THREADS`]):
+    /// all its turns finished, the last before the cutoff. A thread with a
+    /// turn still running (or never finished) is kept. Answers with the
+    /// number of threads forgotten. The server keeps the messages; what only
+    /// this device recorded (the tool rows, approvals and file changes of
+    /// those turns) is gone for good, which is why the Doctor runs it only on
+    /// the person's confirm. Queued on the writer (after the queued turns),
+    /// so it sees the app's last turns.
+    ///
+    /// # Errors
+    ///
+    /// The writer stopped (the store is closed).
+    pub fn prune_idle(&self, idle_days: u32) -> Result<usize, HostError> {
+        // The prune goes through the writer, after everything queued so
+        // far: the app's in-flight turns are settled first, and the prune
+        // sees a quiet table. The cutoff, not the rows, travels the queue
+        // (durable messages carry bounded metadata, never data).
+        let cutoff_ms = retention_cutoff_ms(idle_days);
+        let (ack, done) = std::sync::mpsc::channel();
+        if !self.send(Op::PruneIdle { cutoff_ms, ack }) {
+            return Err(HostError::Storage(
+                "the thread history stopped before it could prune".into(),
+            ));
+        }
+        let pruned = done
+            .recv_timeout(Duration::from_secs(30))
+            .map_err(|_| HostError::Storage("the thread history writer did not prune".into()))?;
+        self.flush();
+        pruned.map_err(|e| HostError::Storage(format!("the thread history could not prune: {e}")))
+    }
+
     /// Copy one thread of `owner` into a new, empty thread of the same
     /// workspace (a fork, `thread_history_fork`): the source's turns, oldest
     /// first, up to and including `up_to_turn` (all of them when `None`),
@@ -1002,10 +1168,10 @@ impl HistoryStore {
                 tx.execute(
                     "INSERT INTO turns (turn_id, origin, user_id, workspace_id, conversation_id,
                          conversation_uuid, prompt, mentions, started_at, finished_at, changes,
-                         events_bytes, events_truncated, turn_origin)
+                         events_bytes, events_truncated, turn_origin, images)
                      SELECT ?1, origin, user_id, workspace_id, ?2, ?3, prompt, mentions,
                             started_at, finished_at, changes, events_bytes, events_truncated,
-                            turn_origin
+                            turn_origin, images
                      FROM turns WHERE turn_id = ?4",
                     params![new, target_id, target_uuid, old],
                 )?;
@@ -1142,6 +1308,13 @@ struct Writer {
     since: Option<Instant>,
     /// Turns a write failed for: their later ops are dropped.
     failed: HashSet<String>,
+    /// Committed batches: every 64th, the file gives its free pages back to
+    /// the OS (incremental vacuum, [`crate::sessions::ensure_incremental_vacuum`]).
+    commits: u64,
+    /// Something was written (a commit, a flush before a delete, a prune)
+    /// since the last idle checkpoint: an idle writer with nothing new
+    /// sleeps instead of checkpointing every interval.
+    dirty: bool,
 }
 
 impl Writer {
@@ -1153,14 +1326,33 @@ impl Writer {
             pending_bytes: 0,
             since: None,
             failed: HashSet::new(),
+            commits: 0,
+            dirty: false,
         }
     }
 
-    fn run(mut self, receiver: &Receiver<Op>) {
+    fn run(mut self, receiver: &Receiver<Op>, idle_checkpoint: Duration) {
         loop {
             let next = match self.since {
-                None => receiver.recv().map_err(|_| RecvTimeoutError::Disconnected),
+                None => {
+                    // Nothing pending: wait for an op, and fold the WAL into
+                    // the database when the queue has sat idle a while (the
+                    // `-wal` file otherwise keeps the turns' bytes on disk).
+                    match receiver.recv_timeout(idle_checkpoint) {
+                        Ok(op) => Ok(op),
+                        Err(RecvTimeoutError::Timeout) => {
+                            if self.dirty {
+                                self.checkpoint_wal();
+                                self.dirty = false;
+                            }
+                            Err(RecvTimeoutError::Timeout)
+                        }
+                        Err(RecvTimeoutError::Disconnected) => Err(RecvTimeoutError::Disconnected),
+                    }
+                }
                 Some(since) => {
+                    // Something pending: the flush timer already wakes the
+                    // writer on its own.
                     receiver.recv_timeout(FLUSH_INTERVAL.saturating_sub(since.elapsed()))
                 }
             };
@@ -1170,7 +1362,23 @@ impl Writer {
             match next {
                 Ok(Op::Flush(ack)) => {
                     self.commit();
+                    // A flush precedes the readers' deletes, which write
+                    // through the other connection.
+                    self.dirty = true;
                     let _ = ack.send(());
+                }
+                Ok(Op::PruneIdle { cutoff_ms, ack }) => {
+                    // Retention: settle the queued turns first (commit),
+                    // then prune in its own transaction and answer the
+                    // caller.
+                    self.commit();
+                    let pruned = prune_idle_threads(&self.conn, cutoff_ms);
+                    self.dirty = true;
+                    // A prune frees whole threads: give the pages back now.
+                    if let Err(error) = self.conn.pragma_update(None, "incremental_vacuum", 0) {
+                        log::warn!("the thread history could not vacuum: {error}");
+                    }
+                    let _ = ack.send(pruned);
                 }
                 Ok(op) => self.push(op),
                 Err(RecvTimeoutError::Timeout) => self.commit(),
@@ -1232,6 +1440,23 @@ impl Writer {
         if let Err(error) = tx.commit() {
             log::warn!("the thread history could not commit: {error}");
         }
+        self.commits += 1;
+        self.dirty = true;
+        // The pages a delete or a thread trim freed would otherwise stay in
+        // the file's free space, and the file would only grow.
+        if self.commits.is_multiple_of(64)
+            && let Err(error) = self.conn.pragma_update(None, "incremental_vacuum", 0)
+        {
+            log::warn!("the thread history could not vacuum: {error}");
+        }
+    }
+
+    /// Fold the WAL into the database, truncating the `-wal` file; log a
+    /// warning when it could not.
+    fn checkpoint_wal(&self) {
+        if let Err(error) = self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+            log::warn!("the thread history could not be checkpointed: {error}");
+        }
     }
 }
 
@@ -1240,6 +1465,26 @@ fn add_bytes(conn: &Connection, turn_id: &str, bytes: usize) -> rusqlite::Result
         "UPDATE turns SET events_bytes = events_bytes + ?2 WHERE turn_id = ?1",
         params![turn_id, i64::try_from(bytes).unwrap_or(i64::MAX)],
     )
+}
+
+/// Remove the threads idle past `cutoff_ms` ([`IDLE_THREADS`]), across
+/// every account and workspace (retention has no owner). A thread is its
+/// turns, there is no thread table; the turns' events go with them (`ON
+/// DELETE CASCADE`). One transaction, so the count is what was deleted.
+/// Answers with the number of threads forgotten.
+fn prune_idle_threads(conn: &Connection, cutoff_ms: i64) -> rusqlite::Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    let threads: usize = tx.query_row(
+        &format!("SELECT COUNT(*) FROM ({IDLE_THREADS})"),
+        params![cutoff_ms],
+        |row| row.get(0),
+    )?;
+    tx.execute(
+        &format!("DELETE FROM turns WHERE conversation_uuid IN ({IDLE_THREADS})"),
+        params![cutoff_ms],
+    )?;
+    tx.commit()?;
+    Ok(threads)
 }
 
 /// Rewrite the `message_ids` of the `done` events of `turn_id` through
@@ -1303,12 +1548,16 @@ fn insert_event(
 /// (an appended chunk), never an UPDATE of earlier text.
 fn apply(conn: &Connection, op: Op) -> rusqlite::Result<()> {
     match op {
+        // Intercepted on the queue before `apply` (it answers its caller in
+        // its own transaction), so it never reaches a write here.
+        Op::PruneIdle { .. } => Ok(()),
         Op::Begin(turn) => {
             let mentions = serde_json::to_string(&turn.mentions).unwrap_or_else(|_| "[]".into());
+            let images = serde_json::to_string(&turn.images).unwrap_or_else(|_| "[]".into());
             conn.execute(
                 "INSERT INTO turns (turn_id, origin, user_id, workspace_id, conversation_id,
-                     conversation_uuid, prompt, mentions, started_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                     conversation_uuid, prompt, mentions, started_at, images)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     turn.turn_id,
                     turn.owner.origin,
@@ -1319,6 +1568,7 @@ fn apply(conn: &Connection, op: Op) -> rusqlite::Result<()> {
                     turn.prompt,
                     mentions,
                     turn.started_at,
+                    images,
                 ],
             )
             .map(|_| ())
@@ -1490,10 +1740,18 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
                 "BEGIN; {SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not create the thread history", &e)),
-        // 2 (ADR-0034): turns imported from the cloud executor.
+        // 2 (ADR-0034): turns imported from the cloud executor. 3 (#1229):
+        // the images a turn carried.
         1 => conn
             .execute_batch(&format!(
                 "BEGIN; ALTER TABLE turns ADD COLUMN turn_origin TEXT NOT NULL DEFAULT 'local'; \
+                 ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]'; \
+                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+            ))
+            .map_err(|e| storage("could not upgrade the thread history", &e)),
+        2 => conn
+            .execute_batch(&format!(
+                "BEGIN; ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]'; \
                  PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not upgrade the thread history", &e)),
@@ -1568,7 +1826,7 @@ impl TurnTap {
             capped: false,
             backlog: VecDeque::new(),
         });
-        Self::queue(store, &mut recording, Op::Begin(turn));
+        Self::queue(store, &mut recording, Op::Begin(Box::new(turn)));
         for event in &buffered {
             Self::record(store, &mut recording, event);
         }
@@ -1665,7 +1923,15 @@ impl TurnTap {
             Self::queue(store, recording, op);
             return;
         }
-        let essential = matches!(event.kind, "status" | "error" | "done");
+        // A background process's streamed output (#1223) is live view only:
+        // the tool's own result carries what the model saw, and the stream
+        // would spend the turn's event budget on terminal noise.
+        if event.kind == "tool_output_delta" {
+            return;
+        }
+        // `usage_total` too: the thread's token totals are the sum of its
+        // turns' (#1227), which a long turn's cap must not lose.
+        let essential = matches!(event.kind, "status" | "error" | "done" | "usage_total");
         let payload = bounded(event.payload.clone()).to_string();
         if !essential
             && (recording.capped || recording.bytes + payload.len() > MAX_TURN_EVENT_BYTES)
@@ -1730,6 +1996,10 @@ impl EventEmitter for TurnTap {
         }
         self.inner.emit(event);
     }
+
+    fn emit_process(&self, event: crate::d0::processes::ProcessEvent) {
+        self.inner.emit_process(event);
+    }
 }
 
 #[cfg(test)]
@@ -1755,6 +2025,7 @@ mod tests {
             turn_id: turn_id.into(),
             prompt: "Fix the build".into(),
             mentions: vec!["src/main.rs".into()],
+            images: Vec::new(),
             started_at: now_ms(),
         }
     }
@@ -1820,6 +2091,176 @@ mod tests {
             json!({"committed": true, "conversation_id": "42", "message_ids": [], "changed_files": 1}),
         ));
         window.all()
+    }
+
+    #[test]
+    fn a_turns_images_are_kept_as_thumbnails_and_an_older_store_upgrades() {
+        let (root, store) = store();
+        let mut turn = new_turn(owner(1), "t1", "42");
+        turn.images = vec![StoredImage {
+            name: "shot.png".into(),
+            mime: "image/png".into(),
+            bytes: 1234,
+            thumbnail: Some("data:image/jpeg;base64,AAAA".into()),
+        }];
+        play(&store, turn.clone());
+        play(&store, new_turn(owner(1), "t2", "42"));
+        let turns = store.thread(&owner(1), "w1", "42").unwrap();
+        assert_eq!(turns[0].images, turn.images);
+        assert!(turns[1].images.is_empty());
+        // A store written before images (schema 2) gains the column.
+        store
+            .with("downgrade", |c| {
+                c.execute_batch("ALTER TABLE turns DROP COLUMN images; PRAGMA user_version = 2;")
+            })
+            .unwrap();
+        drop(store);
+        let reopened =
+            Arc::new(HistoryStore::open(&root.path().join("ai.elitea.desktop")).unwrap());
+        let turns = reopened.thread(&owner(1), "w1", "42").unwrap();
+        assert_eq!(turns.len(), 2);
+        assert!(turns[0].images.is_empty());
+    }
+
+    #[test]
+    fn an_existing_file_switches_to_incremental_vacuum_and_keeps_its_schema() {
+        let (root, store) = store();
+        play(&store, new_turn(owner(1), "t1", "42"));
+        // A file from before incremental vacuum: mode NONE, same schema.
+        store
+            .with("no vacuum mode", |c| {
+                c.execute_batch("PRAGMA auto_vacuum = NONE; VACUUM;")
+            })
+            .unwrap();
+        drop(store);
+        let path = root.path().join("ai.elitea.desktop").join(FILE_NAME);
+        let mode = |path: &Path| -> i64 {
+            rusqlite::Connection::open(path)
+                .unwrap()
+                .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+                .unwrap()
+        };
+        assert_eq!(mode(&path), 0, "the file starts without it");
+        let reopened =
+            Arc::new(HistoryStore::open(&root.path().join("ai.elitea.desktop")).unwrap());
+        assert_eq!(mode(&path), 2, "the open switched it to INCREMENTAL");
+        let version: i64 = rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION, "the schema version is untouched");
+        assert_eq!(reopened.thread(&owner(1), "w1", "42").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn reclaim_shrinks_the_file_and_keeps_what_is_left() {
+        let (_root, store) = store();
+        let me = owner(1);
+        play(&store, new_turn(me.clone(), "t1", "42"));
+        play(&store, new_turn(me.clone(), "t2", "42"));
+        assert_eq!(store.thread(&me, "w1", "42").unwrap().len(), 2);
+        store.delete_thread(&me, "w1", "42").unwrap();
+        // The Doctor's `history.vacuum`: stop the writer, VACUUM, start it
+        // again. The file held a whole deleted thread.
+        let before = store.reclaim().unwrap();
+        assert!(before > 0, "the file held bytes");
+        assert!(store.thread(&me, "w1", "42").unwrap().is_empty());
+        play(&store, new_turn(me.clone(), "t3", "42"));
+        assert_eq!(store.thread(&me, "w1", "42").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_new_file_is_vacuumed_incrementally() {
+        let (root, _store) = store();
+        let conn =
+            rusqlite::Connection::open(root.path().join("ai.elitea.desktop").join(FILE_NAME))
+                .unwrap();
+        let mode: i64 = conn
+            .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, 2, "2 = INCREMENTAL");
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn an_idle_writer_folds_its_wal_into_the_database() {
+        let root = tempfile::tempdir().unwrap();
+        let store =
+            Arc::new(HistoryStore::open_at(root.path(), Duration::from_millis(200)).unwrap());
+        let me = owner(1);
+        play(&store, new_turn(me.clone(), "t1", "42"));
+        store.flush();
+        // The turn's bytes are in the WAL now. Let the writer sit idle, and
+        // its idle checkpoint folds them back into the main file.
+        std::thread::sleep(Duration::from_millis(600));
+        let wal = store
+            .path()
+            .with_file_name(format!("{FILE_NAME}-wal"))
+            .metadata()
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        assert!(
+            wal <= 32,
+            "the idle checkpoint leaves no turn bytes in the wal (holds {wal})"
+        );
+        // The turn is still readable through the store.
+        assert_eq!(store.thread(&me, "w1", "42").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn retention_forgets_a_thread_idle_past_the_cutoff() {
+        let root = tempfile::tempdir().unwrap();
+        let store =
+            Arc::new(HistoryStore::open_at(root.path(), Duration::from_millis(200)).unwrap());
+        // The store's writer is idle; a second connection inserts three
+        // threads: one whose two turns finished days ago, one finished just
+        // now, and one with an old finished turn and a turn still running.
+        // A thread is its turns: there is no thread table.
+        {
+            let conn = rusqlite::Connection::open(store.path()).unwrap();
+            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL")
+                .unwrap();
+            let insert = |turn: &str, thread: &str, finished: Option<i64>| {
+                conn.execute(
+                    "INSERT INTO turns (turn_id, origin, user_id, workspace_id, conversation_id, conversation_uuid, prompt, mentions, started_at, finished_at, events_bytes)
+                     VALUES (?1, 'https://a.example', 1, 'w1', ?2, ?3, '', '[]', 0, ?4, 0)",
+                    rusqlite::params![turn, format!("t-{thread}"), format!("uuid-{thread}"), finished],
+                )
+                .unwrap();
+            };
+            let days_ago = |days: i64| Some(now_ms() - days * 86_400 * 1_000);
+            insert("turn-old-1", "old", days_ago(3));
+            insert("turn-old-2", "old", days_ago(2));
+            insert("turn-new", "new", Some(now_ms()));
+            insert("turn-live-1", "live", days_ago(3));
+            insert("turn-live-2", "live", None);
+        }
+        // The check counts the idle threads; the repair forgets the same.
+        assert_eq!(store.idle_threads(1).unwrap(), 1, "one thread is idle");
+        let pruned = store.prune_idle(1).unwrap();
+        assert_eq!(pruned, 1, "one thread (of two turns) is forgotten");
+        let threads = store.workspace_threads("w1").unwrap();
+        let uuids: Vec<&str> = threads.iter().map(|(_, _, u)| u.as_str()).collect();
+        assert!(
+            uuids.contains(&"uuid-live"),
+            "a thread with a running turn stays: {uuids:?}"
+        );
+        // The idle thread and its turns are gone; the fresh one stays.
+        let me = owner(1);
+        assert!(store.thread(&me, "w1", "t-old").unwrap().is_empty());
+        let threads = store.workspace_threads("w1").unwrap();
+        let uuids: Vec<&str> = threads.iter().map(|(_, _, u)| u.as_str()).collect();
+        assert!(
+            uuids.contains(&"uuid-new"),
+            "the fresh thread stays: {uuids:?}"
+        );
+        assert!(
+            !uuids.contains(&"uuid-old"),
+            "the idle thread goes: {uuids:?}"
+        );
     }
 
     #[test]

@@ -3,11 +3,13 @@
 //!
 //! * **Begin** (outside the sandbox): fetch the plan and the segment over the
 //!   runtime plane, check that the store is where the runtime context says it
-//!   is, verify and check out, re-scan for secrets (a finding fails the
-//!   turn), start the sandbox and move the tree in.
+//!   is, verify the chain and check out, re-scan for secrets (a finding fails
+//!   the turn), start the sandbox and move the tree in.
 //! * **Finish**: on a completed turn or a pause for input, move the tree out,
 //!   destroy the sandbox, commit (author `Elitea cloud executor`, trailers
-//!   `Elitea-Execution-Id` and `Elitea-Epoch`), build a COMPACT segment,
+//!   `Elitea-Execution-Id` and `Elitea-Epoch`), build the turn's segment — a
+//!   `PUSH` over the published head, or a `COMPACT` when the compaction
+//!   policy says the chain is long or large enough (ADR-0034 Phase 2) —
 //!   upload and publish with the expected old cloud ref. On a failed or
 //!   cancelled turn, destroy the sandbox and publish nothing.
 //!
@@ -21,7 +23,11 @@ use tokio::sync::Mutex;
 
 use crate::protocol::elitea::runtime::v1::WorkspaceClaimV1;
 
-use super::codec::{CodecError, SegmentExpectation, TurnCommit, WorkspaceCodec};
+use elitea_workspace_store::compaction::{ChainStats, Policy};
+
+use super::codec::{
+    CodecError, SegmentBudget, SegmentExpectation, SegmentFile, TurnCommit, WorkspaceCodec,
+};
 use super::context::WorkspaceRuntimeContext;
 use super::redact::{RedactingSandbox, SecretEnv};
 use super::sandbox::{
@@ -30,7 +36,8 @@ use super::sandbox::{
 };
 use super::scan::{ScanError, ScanLimits, scan_tree};
 use super::store::{
-    PublishSegment, REF_CLOUD, REF_HANDOFF_PREFIX, RefusalCode, StoreCallError, WorkspaceStore,
+    MAIN_MAX_SEGMENT_BYTES, PublishSegment, REF_CLOUD, REF_HANDOFF_PREFIX, RefusalCode,
+    StoreCallError, WorkspaceStore,
 };
 
 /// The commit author of every cloud turn.
@@ -117,6 +124,8 @@ pub(crate) struct WorkspaceRunFactory {
     defaults: WorkspaceRunDefaults,
     scratch_root: PathBuf,
     grant_binder: Option<GrantBinder>,
+    /// When a turn publishes a `COMPACT` instead of a `PUSH`.
+    compaction: Policy,
 }
 
 /// Turns a claim's sandbox authority into a grant source.
@@ -144,7 +153,16 @@ impl WorkspaceRunFactory {
             defaults,
             scratch_root,
             grant_binder: None,
+            compaction: Policy::from_env(),
         }
+    }
+
+    /// Replace the compaction policy read from the environment.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn with_compaction(mut self, compaction: Policy) -> Self {
+        self.compaction = compaction;
+        self
     }
 
     /// The claim-bound grant source of one turn (`None`: no authority, the
@@ -191,7 +209,7 @@ impl WorkspaceRunFactory {
             .prefix("elitea-workspace-")
             .tempdir_in(&self.scratch_root)
             .map_err(|_| WorkspaceRunError::Internal)?;
-        let segment_file = scratch.path().join("fetched.bundle");
+        let fetch_dir = scratch.path().join("fetched");
         // The turn's executor audit events (decision 12), claim-bound.
         let audit = super::audit::ExecutorAudit::spawn(
             Arc::clone(&self.store),
@@ -200,43 +218,54 @@ impl WorkspaceRunFactory {
         );
         let fetched = self
             .store
-            .fetch(&claim, 0, limits.max_segment_bytes, &segment_file)
+            .fetch(&claim, 0, MAIN_MAX_SEGMENT_BYTES, &fetch_dir)
             .await
             .map_err(WorkspaceRunError::Store)?;
-        let checkout = checkout_commit(context, &fetched.segment.refs)?;
+        let checkout = checkout_commit(context, &fetched.refs)?;
+        let mut chain_stats = ChainStats::of(
+            fetched
+                .segments
+                .iter()
+                .map(|segment| (segment.planned.kind.as_str(), segment.planned.bytes)),
+        );
         let git_dir = scratch.path().join("store.git");
         let worktree = scratch.path().join("in");
         for directory in [&git_dir, &worktree] {
             std::fs::create_dir_all(directory).map_err(|_| WorkspaceRunError::Internal)?;
         }
-        let expect = SegmentExpectation {
-            sha256: fetched.segment.sha256.clone(),
-            bytes: fetched.segment.bytes,
-            refs: fetched.segment.refs.clone(),
-            max_unpacked_bytes: limits.max_unpacked_bytes,
-            max_files: limits.max_files,
-            max_file_bytes: limits.max_file_bytes,
-        };
+        let chain: Vec<SegmentFile> = fetched
+            .segments
+            .iter()
+            .map(|segment| SegmentFile {
+                path: segment.path.clone(),
+                expect: SegmentExpectation {
+                    kind: segment.planned.kind.clone(),
+                    sha256: segment.planned.sha256.clone(),
+                    bytes: segment.planned.bytes,
+                    prerequisites: segment.planned.prerequisites.clone(),
+                    refs: segment.planned.refs.clone(),
+                    max_unpacked_bytes: limits.max_unpacked_bytes,
+                    max_files: limits.max_files,
+                    max_file_bytes: limits.max_file_bytes,
+                },
+            })
+            .collect();
+        let expect = chain
+            .last()
+            .map(|segment| segment.expect.clone())
+            .ok_or(WorkspaceRunError::StaleState)?;
         let codec = Arc::clone(&self.codec);
         let (hydrate_git, hydrate_tree, hydrate_checkout) =
             (git_dir.clone(), worktree.clone(), checkout.clone());
-        let segment = segment_file.clone();
-        let hydrate_expect = expect.clone();
         let hydrated = tokio::task::spawn_blocking(move || {
-            codec.hydrate(
-                &segment,
-                &hydrate_expect,
-                &hydrate_checkout,
-                &hydrate_git,
-                &hydrate_tree,
-            )
+            codec.hydrate(&chain, &hydrate_checkout, &hydrate_git, &hydrate_tree)
         })
         .await
         .map_err(|_| WorkspaceRunError::Internal)?
         .map_err(WorkspaceRunError::Codec)?;
-        // Verified and indexed into the quarantine: the file is not needed.
-        let _ = std::fs::remove_file(&segment_file);
-        let mut refs = fetched.segment.refs;
+        // Verified and indexed into the quarantine: the files are not needed.
+        let _ = std::fs::remove_dir_all(&fetch_dir);
+        let mut refs = fetched.refs;
         let mut expected_old = context.expected_old_cloud.clone();
         let (checkout, worktree) = if context.rewind {
             // Regenerate of the newest cloud turn (decision 7): the cloud
@@ -278,14 +307,18 @@ impl WorkspaceRunFactory {
             .await
             .map_err(WorkspaceRunError::Store)?;
             let request = PublishSegment {
+                kind: built.kind,
                 segment_sha256: built.sha256.clone(),
                 bytes: built.bytes,
+                prerequisites: built.prerequisites.clone(),
                 old_cloud: Some(cloud),
                 new_cloud: parent.clone(),
             };
             retry_once(|| self.store.publish(&claim, &request))
                 .await
                 .map_err(WorkspaceRunError::Store)?;
+            // The rewind is a COMPACT: it supersedes the chain.
+            chain_stats = chain_stats.after(built.kind, built.bytes);
             let _ = std::fs::remove_file(&out);
             tracing::info!(
                 event = "workspace.rewound",
@@ -408,6 +441,8 @@ impl WorkspaceRunFactory {
             epoch: context.epoch,
             execution_id: execution_id.to_owned(),
             max_segment_bytes: limits.max_segment_bytes,
+            compaction: self.compaction,
+            chain_stats,
             file_redactor,
             outcome: Mutex::new(None),
             wrap_up: Arc::default(),
@@ -501,6 +536,10 @@ pub(crate) struct WorkspaceTurn {
     epoch: u64,
     execution_id: String,
     max_segment_bytes: u64,
+    compaction: Policy,
+    /// The live chain after its `COMPACT`, as the turn found (or rewound)
+    /// it: what the compaction policy weighs.
+    chain_stats: ChainStats,
     /// The harvested values, for the end-of-turn file scan.
     file_redactor: Arc<super::file_redact::FileRedactor>,
     outcome: Mutex<Option<Result<Option<WorkspaceStamp>, WorkspaceRunError>>>,
@@ -678,42 +717,48 @@ impl WorkspaceTurn {
             author_email: COMMIT_AUTHOR_EMAIL.to_owned(),
             unix_seconds: chrono::Utc::now().timestamp(),
         };
-        let codec = Arc::clone(&self.codec);
-        let (git_dir, refs, max) = (
-            self.git_dir.clone(),
-            self.refs.clone(),
-            self.max_segment_bytes,
-        );
-        let segment_out = self.scratch.path().join("turn.bundle");
-        let built = tokio::task::spawn_blocking(move || {
-            codec.commit_and_bundle(&git_dir, &out, &commit, &refs, max, &segment_out)
-        })
-        .await
-        .map_err(|_| WorkspaceRunError::Internal)?
-        .map_err(WorkspaceRunError::Codec)?;
-
-        retry_once(|| {
-            self.store
-                .upload(&self.claim, &built.sha256, built.bytes, &built.path)
-        })
-        .await
-        .map_err(WorkspaceRunError::Store)?;
-        let request = PublishSegment {
-            segment_sha256: built.sha256.clone(),
-            bytes: built.bytes,
-            old_cloud: self.expected_old.clone(),
-            new_cloud: built.commit.clone(),
+        let budget = SegmentBudget {
+            max_segment_bytes: self.max_segment_bytes,
+            push_bytes: self.push_budget(),
         };
-        // A lost acknowledgement is retried as the SAME request: Main answers
-        // an identical replay with the original result.
-        let published = retry_once(|| self.store.publish(&self.claim, &request))
-            .await
-            .map_err(WorkspaceRunError::Store)?;
+        let (built, published) = match self.build_and_publish(&out, &commit, budget).await {
+            // Main refused the PUSH for good (its prerequisites are no longer
+            // the store's head, or the chain is at Main's bound): the same
+            // commit goes out once more as a COMPACT, which needs neither.
+            Err((
+                Some(push),
+                WorkspaceRunError::Store(StoreCallError::Rejected {
+                    code,
+                    retryable: false,
+                }),
+            )) if push == elitea_workspace_store::KIND_PUSH
+                && code
+                    == crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::ProtocolViolation
+                        as i32 =>
+            {
+                tracing::info!(
+                    event = "workspace.push_refused_compacting",
+                    execution_id = self.execution_id.as_str(),
+                    "Main refused the PUSH segment; the turn publishes a COMPACT"
+                );
+                let compact = SegmentBudget {
+                    push_bytes: None,
+                    ..budget
+                };
+                self.build_and_publish(&out, &commit, compact)
+                    .await
+                    .map_err(|(_, error)| error)?
+            }
+            other => other.map_err(|(_, error)| error)?,
+        };
+        self.record_changes(&built.commit).await;
         tracing::info!(
             event = "workspace.published",
             execution_id = self.execution_id.as_str(),
             epoch = self.epoch,
             seq = published.seq,
+            kind = built.kind,
+            bytes = built.bytes,
             paused = end == TurnEnd::Paused,
         );
         Ok(Some(WorkspaceStamp {
@@ -723,6 +768,127 @@ impl WorkspaceTurn {
             seq: published.seq,
             redactions,
         }))
+    }
+}
+
+impl WorkspaceTurn {
+    /// The bytes the turn's `PUSH` may take (`None`: publish a `COMPACT`):
+    /// what the policy leaves of the chain's byte bound, and never more than
+    /// the segment cap leaves after the chain's increments (so a fetched
+    /// chain stays within twice the segment cap, see `store.rs`).
+    fn push_budget(&self) -> Option<u64> {
+        if !self.compaction.allows_push(self.chain_stats) {
+            return None;
+        }
+        let policy = self
+            .compaction
+            .max_push_bytes
+            .saturating_sub(self.chain_stats.push_bytes);
+        let cap = self
+            .max_segment_bytes
+            .saturating_sub(self.chain_stats.push_bytes);
+        Some(policy.min(cap)).filter(|bytes| *bytes > 0)
+    }
+
+    /// Commit, write the segment `budget` allows, upload and publish it.
+    /// A failure carries the kind of the segment it was about (when one
+    /// was built).
+    async fn build_and_publish(
+        &self,
+        tree: &std::path::Path,
+        commit: &TurnCommit,
+        budget: SegmentBudget,
+    ) -> Result<
+        (super::codec::BuiltSegment, super::store::PublishedSegment),
+        (Option<&'static str>, WorkspaceRunError),
+    > {
+        let codec = Arc::clone(&self.codec);
+        let (git_dir, refs, tree, commit) = (
+            self.git_dir.clone(),
+            self.refs.clone(),
+            tree.to_path_buf(),
+            commit.clone(),
+        );
+        let segment_out = self.scratch.path().join("turn.bundle");
+        let built = tokio::task::spawn_blocking(move || {
+            codec.commit_and_bundle(&git_dir, &tree, &commit, &refs, budget, &segment_out)
+        })
+        .await
+        .map_err(|_| (None, WorkspaceRunError::Internal))?
+        .map_err(|error| (None, WorkspaceRunError::Codec(error)))?;
+        let failed = |error| (Some(built.kind), WorkspaceRunError::Store(error));
+        retry_once(|| {
+            self.store
+                .upload(&self.claim, &built.sha256, built.bytes, &built.path)
+        })
+        .await
+        .map_err(failed)?;
+        let request = PublishSegment {
+            kind: built.kind,
+            segment_sha256: built.sha256.clone(),
+            bytes: built.bytes,
+            prerequisites: built.prerequisites.clone(),
+            old_cloud: self.expected_old.clone(),
+            new_cloud: built.commit.clone(),
+        };
+        // A lost acknowledgement is retried as the SAME request: Main answers
+        // an identical replay with the original result.
+        let published = retry_once(|| self.store.publish(&self.claim, &request))
+            .await
+            .map_err(failed)?;
+        Ok((built, published))
+    }
+}
+
+/// The longest the end of a turn waits for its Files changed record.
+pub(super) const CHANGES_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl WorkspaceTurn {
+    /// Record the files the published `commit` changed (the web "Files
+    /// changed" view). Best effort: a failure is logged and the turn's
+    /// result is the publish's.
+    ///
+    /// It runs before the turn ends, not detached after it: Main accepts the
+    /// record only while this execution is the thread's running cloud turn
+    /// (`ResolveRunningTurn`: the claim's execution, `CLOUD_RUNNING`), its
+    /// commit is the cloud tip and its base the handoff snapshot, and it
+    /// saves under a share lock of the live handoff row. A record sent after
+    /// the turn's result would be refused, so instead it is bounded by
+    /// [`CHANGES_DEADLINE`]: the end of the turn waits at most that long.
+    async fn record_changes(&self, commit: &str) {
+        let stage =
+            match tokio::time::timeout(CHANGES_DEADLINE, self.try_record_changes(commit)).await {
+                Ok(Ok(())) => return,
+                Ok(Err(stage)) => stage,
+                Err(_) => "deadline",
+            };
+        tracing::warn!(
+            event = "workspace.changes_record_failed",
+            execution_id = self.execution_id.as_str(),
+            stage,
+            "the turn's changed files were not recorded; the turn is published"
+        );
+    }
+
+    async fn try_record_changes(&self, commit: &str) -> Result<(), &'static str> {
+        let base = super::changes::handoff_snapshot(&self.refs).ok_or("no_handoff_snapshot")?;
+        let (codec, git_dir, parent, commit) = (
+            Arc::clone(&self.codec),
+            self.git_dir.clone(),
+            self.parent.clone(),
+            commit.to_owned(),
+        );
+        // The computation is bounded (files, blob and diff budgets); a
+        // deadline that passes leaves it to finish on the blocking pool.
+        let changes =
+            tokio::task::spawn_blocking(move || codec.changes(&git_dir, &base, &parent, &commit))
+                .await
+                .map_err(|_| "compute")?
+                .map_err(|_| "compute")?;
+        self.store
+            .record_changes(&self.claim, &changes)
+            .await
+            .map_err(|_| "record")
     }
 }
 

@@ -32,6 +32,25 @@ export function usageSettingsHref(basePath: string): string {
   return `${normalizeBasename(basePath)}${USAGE_PATH}`;
 }
 
+/**
+ * @public The budget refusal code of a tool's error result, if it is one. A
+ * metered tool (web search, web fetch, host lookups; #1238) refused by the
+ * budget returns `{"error":{"code":"model_gateway.…","public_code":"PROJECT_BUDGET_EXHAUSTED",…}}`,
+ * the same public codes a refused model call fails the turn with, so the
+ * tool row offers the same way to Usage.
+ */
+export function toolResultBudgetCode(output: string | undefined): string | undefined {
+  if (output === undefined || !output.trimStart().startsWith('{')) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(output);
+    const error = (parsed as { readonly error?: { readonly public_code?: unknown } } | null)?.error;
+    const code = typeof error?.public_code === 'string' ? error.public_code : undefined;
+    return isBudgetFailureCode(code) ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** @public The Usage view for a budget refusal code: the member view for a member refusal. */
 export function budgetUsageHref(basePath: string, code: string | undefined): string {
   const href = usageSettingsHref(basePath);

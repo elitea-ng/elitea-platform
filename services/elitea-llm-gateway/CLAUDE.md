@@ -73,6 +73,10 @@ because each was a real bug found across 3 review rounds.
   MUST pin in the handler's goroutine (`pinHolds`). A mid-session re-check
   MUST stay check-only (`recheckVerdict` wraps `failmode.CheckOnly`): it
   reserves nothing and does not count the session's own hold.
+  A metered admit (`/llm/v1/metered/admit`, #1238) is followed by provider
+  spend AFTER its handler returns, so it pins its holds itself
+  (`meteredHolds`): the pin drops when that admission's settle has billed on
+  this replica, or when the admission expires. Do NOT drop it at the admit.
 - Budget gate runs **before** the provider on EVERY /llm endpoint (chat,
   responses, text, embeddings, images, messages). Adding a new endpoint? It MUST
   call checkBudget before dispatch and updateUsage after.

@@ -260,6 +260,34 @@ export const getListConfigurationModelsResponseMock = (
       faker.datatype.boolean(),
       undefined,
     ]),
+    input_cost_per_1m_tokens: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        null,
+      ]),
+      undefined,
+    ]),
+    output_cost_per_1m_tokens: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        null,
+      ]),
+      undefined,
+    ]),
+    cached_input_cost_per_1m_tokens: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        null,
+      ]),
+      undefined,
+    ]),
+    currency: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      undefined,
+    ]),
     data: faker.helpers.arrayElement([{}, undefined]),
   })),
   total: faker.number.int(),

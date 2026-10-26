@@ -1,0 +1,10 @@
+{
+ "status": 429,
+ "content_type": "application/json",
+ "body": {
+  "error": "Rate limit exceeded"
+ },
+ "headers": {
+  "retry-after": "7"
+ }
+}

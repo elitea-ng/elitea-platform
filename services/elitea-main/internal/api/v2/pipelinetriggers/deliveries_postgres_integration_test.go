@@ -16,6 +16,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 )
 
 func (h *harness) deliveryRows(t *testing.T, tokenID string) int {
@@ -325,5 +326,42 @@ func TestAStartRefusalThatIsNotTheInputIsNotBlamedOnTheInput(t *testing.T) {
 	}
 	if conversations := h.triggerConversations(t); conversations != 0 {
 		t.Fatalf("a refused start left %d trigger conversations behind", conversations)
+	}
+}
+
+// The same refusal against the participant key the tenant migrations ship
+// (#1429). This package's bootstrap schema (001_initial.sql) always declared
+// chat_participant_mapping's key with ON DELETE CASCADE, so the test above
+// passed while deployments (tenant 0123, no cascade) refused the bare DELETE
+// with 23503 and left the run conversation behind, unlogged. Here the key is
+// first given the shape the migrations produce (0123, then 0157).
+func TestARefusedStartLeavesNoConversationUnderTheShippedParticipantKey(t *testing.T) {
+	h := newHarness(t)
+	if err := dbtest.UseShippedParticipantKey(context.Background(), h.pool, homeSchema); err != nil {
+		t.Fatal(err)
+	}
+	_, tokenID, secret := h.mintTrigger(t, homeProject, homeSchema, "Nightly report", ownerUserID)
+	h.start.mu.Lock()
+	h.start.err = fmt.Errorf("%w: frozen version snapshot refused", agentexecutionapp.ErrInvalidCurrentAgentStart)
+	h.start.mu.Unlock()
+
+	response := h.do(t, http.MethodPost, inboundTarget(homeProject, tokenID), `{"input":"fine"}`,
+		map[string]string{"Authorization": "Bearer " + secret})
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body = %s", response.Code, response.Body.String())
+	}
+	if h.start.count() != 1 {
+		t.Fatalf("dispatches = %d, want 1: the run conversation must be built before the refusal", h.start.count())
+	}
+	if conversations := h.triggerConversations(t); conversations != 0 {
+		t.Fatalf("a refused start left %d trigger conversations behind", conversations)
+	}
+	var mappings int
+	if err := h.pool.QueryRow(context.Background(), fmt.Sprintf(
+		`SELECT count(*) FROM %s.chat_participant_mapping`, homeSchema)).Scan(&mappings); err != nil {
+		t.Fatal(err)
+	}
+	if mappings != 0 {
+		t.Fatalf("a refused start left %d participant mappings behind", mappings)
 	}
 }

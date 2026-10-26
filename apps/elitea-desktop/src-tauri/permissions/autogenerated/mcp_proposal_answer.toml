@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mcp-proposal-answer"
+description = "Enables the mcp_proposal_answer command without any pre-configured scope."
+commands.allow = ["mcp_proposal_answer"]
+
+[[permission]]
+identifier = "deny-mcp-proposal-answer"
+description = "Denies the mcp_proposal_answer command without any pre-configured scope."
+commands.deny = ["mcp_proposal_answer"]

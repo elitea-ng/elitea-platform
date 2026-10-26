@@ -18,18 +18,24 @@ function MockArtifactPreviewContent({
   kind,
   content,
   mode,
+  imageUrl,
+  pdfData,
   onChange,
   onDownload,
 }: {
   readonly kind: string;
   readonly content: string;
   readonly mode: string;
+  readonly imageUrl?: string;
+  readonly pdfData?: Blob;
   readonly onChange: (value: string) => void;
   readonly onDownload: () => void;
 }) {
   return (
     <div>
       <span>{kind}:{mode}</span>
+      {imageUrl !== undefined && <span>image:{imageUrl}</span>}
+      {pdfData !== undefined && <span>pdf:{pdfData.type}</span>}
       <textarea
         aria-label="preview editor"
         value={content}
@@ -177,6 +183,46 @@ describe('FilePreviewCanvas', () => {
     vi.mocked(getConfig).mockReturnValueOnce({ status: 'missing', missing: ['vite_server_url'], reasons: {} });
     await user.click(screen.getByRole('button', { name: 'Download file' }));
     expect(screen.getByRole('alert')).toHaveTextContent('Runtime configuration');
+  });
+
+  it('previews a PDF read-only from its fetched bytes', async () => {
+    const pdf = new Blob(['%PDF-1.7'], { type: 'application/pdf' });
+    vi.mocked(fetchArtifactBlob).mockResolvedValue({ ok: true, data: pdf, status: 200, headers: new Headers() });
+    renderPreview({ file: { ...file, id: 'report.pdf', key: 'docs/report.pdf', name: 'report.pdf' } });
+    expect(await screen.findByText('pdf:application/pdf')).toBeInTheDocument();
+    expect(fetchArtifactBlob).toHaveBeenCalledWith(expect.objectContaining({ filePath: 'docs/report.pdf' }));
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Code' })).not.toBeInTheDocument();
+  });
+
+  it('does not fetch a PDF over the size limit', () => {
+    renderPreview({ file: { ...file, id: 'big.pdf', key: 'big.pdf', name: 'big.pdf', size: 3 * 1024 * 1024 } });
+    expect(screen.getByText('pdf:rendered')).toBeInTheDocument();
+    expect(fetchArtifactBlob).not.toHaveBeenCalled();
+  });
+
+  it('shows an untyped SVG as an image/svg+xml object URL, and revokes it on unmount', async () => {
+    const svg = new Blob(['<svg xmlns="http://www.w3.org/2000/svg"/>'], { type: 'application/octet-stream' });
+    vi.mocked(fetchArtifactBlob).mockResolvedValue({ ok: true, data: svg, status: 200, headers: new Headers() });
+    const createObjectURL = vi.fn((_blob: Blob) => 'blob:svg-preview');
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL, revokeObjectURL }));
+    const { unmount } = renderWithProviders(
+      <FilePreviewCanvas
+        file={{ ...file, id: 'logo.svg', key: 'logo.svg', name: 'logo.svg' }}
+        projectId="p1"
+        bucket="docs"
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText('image:blob:svg-preview')).toBeInTheDocument();
+    expect(createObjectURL.mock.calls[0]?.[0].type).toBe('image/svg+xml');
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+    unmount();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:svg-preview');
+    vi.unstubAllGlobals();
   });
 
   it('keeps the preview open when deletion fails', async () => {

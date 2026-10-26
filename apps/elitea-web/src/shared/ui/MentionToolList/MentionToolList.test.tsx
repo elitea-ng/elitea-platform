@@ -24,6 +24,22 @@ describe('MentionToolList', () => {
     expect(getByText('read_file')).toBeInTheDocument();
   });
 
+  it('titles each run of rows that share a group, once', () => {
+    const grouped: MentionTool[] = [
+      { name: 'one', group: 'Agent skills' },
+      { name: 'two', group: 'Agent skills' },
+      { name: 'three', group: 'Project skills' },
+    ];
+    const { getAllByText, getByText } = renderWithTheme(<MentionToolList tools={grouped} toolkitName="Skill" onSelectTool={vi.fn()} highlightedIndex={-1} />);
+    expect(getAllByText('Agent skills')).toHaveLength(1);
+    expect(getByText('Project skills')).toBeInTheDocument();
+  });
+
+  it('shows no section title for rows without a group', () => {
+    const { queryByText } = renderWithTheme(<MentionToolList tools={TOOLS} toolkitName="GitHub" onSelectTool={vi.fn()} highlightedIndex={-1} />);
+    expect(queryByText('Project skills')).toBeNull();
+  });
+
   it('calls onSelectTool with the tool name when a row is clicked', () => {
     const onSelectTool = vi.fn();
     const { getByText } = renderWithTheme(

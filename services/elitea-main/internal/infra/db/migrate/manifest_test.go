@@ -732,7 +732,31 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 172: shared/0172_retire_legacy_admin_section_permissions.sql, the removal
 	// of `configuration.roles` and `projects.projects`, two legacy admin
 	// section names no code checks (the same rule as 0136). No new permission.
-	require.EqualValues(t, 172, Head(shared))
+	//
+	// 173: shared/0173_platform_routines.sql, elitea_runtime.platform_routines,
+	// the registry of the Go platform's recurring routines that the admin
+	// Schedules tab edits (#1369). A new table, no data, no permission.
+	//
+	// 174: shared/0174_gateway_metered_operations.sql, gateway.metered_operation_prices
+	// (seeded) and the operation, units and unit columns on llm_usage_events
+	// and llm_request_logs, plus cost_usd on the request log (#1238). No
+	// permission.
+	//
+	// 175: shared/0175_platform_routine_leases.sql, the lease_token,
+	// lease_holder and lease_expires_at columns on
+	// elitea_runtime.platform_routines: a routine pass holds a fenced lease on
+	// its row for as long as it runs (#1414). No data, no permission.
+	//
+	// 176: shared/0176_workspace_handoff_rest_pending.sql, the rest_pending
+	// column on elitea_runtime.workspace_handoffs: a release that left cloud
+	// turns not taken lets the owner's desktop take the rest back within the
+	// return grace (#1187). No data, no permission.
+	//
+	// 177: shared/0177_workspace_turn_changes.sql, the workspace_turn_changes
+	// and workspace_change_diffs tables in elitea_runtime: the files each
+	// cloud turn changed, which the worker records after it publishes, for
+	// the web Files changed view (#1187). No data, no permission.
+	require.EqualValues(t, 177, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -949,7 +973,19 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 154: tenant/0154_strip_toolkit_pgvector_configuration.sql, removes the
 	// retired `pgvector_configuration` key from elitea_tools.settings (#1359).
 	// Data only, no permission, so no shared sibling.
-	require.EqualValues(t, 154, Head(tenant))
+	// 155: tenant/0155_chat_conversation_fork_id_index.sql, a partial index on
+	// chat_conversations (author_id, meta->'forked_from'->>'fork_id') for the
+	// fork's fork_id replay lookup (#1420). An index, no permission.
+	// 156: tenant/0156_chat_conversation_local_child_index.sql, two partial
+	// indexes on chat_conversations WHERE source = 'local_child' for the
+	// cloud child turn's poll (child/parent execution id) and its start's
+	// replay lookup (parent execution id, idempotency key) (#1239). Indexes,
+	// no permission.
+	// 157: tenant/0157_chat_participant_mapping_conversation_cascade.sql,
+	// chat_participant_mapping.conversation_id's key to chat_conversations
+	// becomes ON DELETE CASCADE, the shape the dev bootstrap always had
+	// (#1429). No data, no permission.
+	require.EqualValues(t, 157, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

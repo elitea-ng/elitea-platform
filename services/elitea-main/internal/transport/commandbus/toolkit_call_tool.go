@@ -214,12 +214,13 @@ func toolkitCallToolWorkerCommand(
 		LimitsRevision:     dispatch.LimitsRevision,
 		CapabilityCommand: &runtimev1.WorkerCommandV1_ToolkitCallTool{
 			ToolkitCallTool: &runtimev1.ToolkitCallToolCommandV1{
-				ToolkitType:      dispatch.ToolkitType,
-				SettingsEntryId:  dispatch.SettingsEntryID,
-				ToolName:         dispatch.ToolName,
-				ArgumentsEntryId: dispatch.ArgumentsEntryID,
-				ToolkitId:        dispatch.ToolkitID,
-				ToolkitVersion:   dispatch.ToolkitVersion,
+				ToolkitType:            dispatch.ToolkitType,
+				SettingsEntryId:        dispatch.SettingsEntryID,
+				ToolName:               dispatch.ToolName,
+				ArgumentsEntryId:       dispatch.ArgumentsEntryID,
+				ToolkitId:              dispatch.ToolkitID,
+				ToolkitVersion:         dispatch.ToolkitVersion,
+				AttributionExecutionId: dispatch.AttributionExecutionID,
 			},
 		},
 	}, nil

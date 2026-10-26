@@ -37,7 +37,10 @@ package budgets
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
 
 const (
@@ -121,16 +124,14 @@ func (h *Handler) GetUsage(w http.ResponseWriter, r *http.Request) {
 // file, because the two endpoints serve the SAME numbers behind the SAME gate.
 // While only /usage redacted, a member refused the amounts here could read them
 // straight off /project_budget/prompt_lib/{id}/budget and the control was
-// decorative.
+// decorative. The rule itself is repos.AmountVisibility, which the model
+// catalogue's prices ask too, for the same reason.
 func (h *Handler) canSeeAmounts(ctx context.Context, projectID, userID int64) (bool, error) {
-	personal, err := h.isPersonalProject(ctx, projectID, userID)
+	visible, err := repos.NewAmountVisibility(h.pool).CanSeeAmounts(ctx, projectID, userID)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("budgets: %w", err)
 	}
-	if personal {
-		return true, nil
-	}
-	return h.isProjectAdmin(ctx, projectID, userID)
+	return visible, nil
 }
 
 // applyAmountVisibility stamps can_see_amounts and strips the cost fields when

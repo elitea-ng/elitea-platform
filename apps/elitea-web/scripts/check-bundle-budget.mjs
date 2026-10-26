@@ -15,7 +15,12 @@
  *   • each target's initial set comes from that target's own HTML — the entry
  *     `<script type="module">` plus every `<link rel="modulepreload">`, which
  *     is exactly what a browser fetches before first paint;
- *   • the route-chunk set is every other JavaScript file the target emitted.
+ *   • the route-chunk set is every other JavaScript file the target emitted,
+ *     `.mjs` included (Vite keeps a package's own `.mjs` extension, so a
+ *     `.js`-only scan would never see a bundled module worker);
+ *   • a Web Worker (`*.worker*`) runs off the main thread and is fetched only
+ *     when its feature opens, so it is held to `workerChunkKB` when the target
+ *     declares one, else to `routeChunkKB`.
  *
  * Every count has a floor, and the budget file must be present. A run that
  * finds no target, no HTML, no chunk or no budget FAILS. There is no
@@ -53,14 +58,14 @@ const fail = (message) => {
   process.exit(1);
 };
 
-/** Every .js file the target emitted, as paths relative to the target root. */
+/** Every .js and .mjs file the target emitted, as paths relative to the target root. */
 function javascriptFiles(root, prefix = '') {
   const out = [];
   for (const entry of readdirSync(root)) {
     const full = join(root, entry);
     if (statSync(full).isDirectory()) {
       out.push(...javascriptFiles(full, `${prefix}${entry}/`));
-    } else if (entry.endsWith('.js')) {
+    } else if (entry.endsWith('.js') || entry.endsWith('.mjs')) {
       out.push(`${prefix}${entry}`);
     }
   }
@@ -78,7 +83,7 @@ function initialChunks(html) {
   // names are case-insensitive. A case-sensitive read therefore misses <SCRIPT>
   // and SRC=, drops that chunk from the initial set, and makes the budget
   // report less than the browser fetches.
-  const attribute = /(?:src|href)="([^"]+\.js)"/gi;
+  const attribute = /(?:src|href)="([^"]+\.m?js)"/gi;
   const tags = html.match(/<(?:script|link)\b[^>]*>/gi) ?? [];
   for (const tag of tags) {
     if (/<link\b/i.test(tag) && !/rel="modulepreload"/i.test(tag)) continue;
@@ -180,14 +185,34 @@ function main() {
         `${name}: initial bundle is ${initialKiB.toFixed(1)} KiB gzip, over the ${limits.initialKB} KiB budget`,
       );
     }
-    if (limits.routeChunkKB !== undefined) {
-      for (const file of routeFiles) {
-        const size = gzipKiB(join(root, file));
-        if (size > limits.routeChunkKB) {
-          breaches.push(
-            `${name}: route chunk ${file} is ${size.toFixed(1)} KiB gzip, over the ${limits.routeChunkKB} KiB budget`,
-          );
-        }
+    // A per-chunk limit is matched by file-name prefix (`elk-<hash>.js` for the
+    // key `elk`) and wins over the route-chunk budget. An entry that matches
+    // no emitted chunk fails: a renamed or dropped chunk would otherwise leave
+    // a stale allowance behind.
+    const chunkLimits = limits.chunkLimits ?? {};
+    for (const key of Object.keys(chunkLimits)) {
+      if (!emitted.some((file) => basename(file).startsWith(`${key}-`))) {
+        fail(
+          `target ${name}: chunkLimits entry "${key}" matches no emitted chunk. ` +
+            'Remove the entry or correct its name; a limit that guards nothing is not a limit.',
+        );
+      }
+    }
+    for (const file of routeFiles) {
+      const worker = /\.worker\b/.test(basename(file));
+      const key = Object.keys(chunkLimits).find((prefix) => basename(file).startsWith(`${prefix}-`));
+      const limit =
+        key !== undefined
+          ? chunkLimits[key].kb
+          : worker
+            ? (limits.workerChunkKB ?? limits.routeChunkKB)
+            : limits.routeChunkKB;
+      if (limit === undefined) continue;
+      const size = gzipKiB(join(root, file));
+      if (size > limit) {
+        breaches.push(
+          `${name}: ${worker ? 'worker' : 'route chunk'} ${file} is ${size.toFixed(1)} KiB gzip, over the ${limit} KiB budget`,
+        );
       }
     }
   }

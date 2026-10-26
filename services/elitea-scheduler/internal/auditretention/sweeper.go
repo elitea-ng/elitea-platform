@@ -98,6 +98,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/routines"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -236,38 +237,9 @@ func (s *Sweeper) Window() time.Duration {
 	return time.Duration(s.cfg.RetentionDays) * 24 * time.Hour
 }
 
-// Run blocks until ctx is cancelled, sweeping once immediately and then on each
-// interval tick.
-//
-// The first pass is immediate rather than delayed by a whole interval: the
-// deployment this matters most to is the one upgrading with a table that has
-// never been swept, and making it wait an hour to start buys nothing. The pass
-// is bounded either way.
-func (s *Sweeper) Run(ctx context.Context) {
-	s.logger.Info("auditretention: sweeper started",
-		"window_days", s.cfg.RetentionDays,
-		"interval", s.cfg.Interval,
-		"batch_size", s.cfg.BatchSize,
-		"max_batches_per_pass", s.cfg.MaxBatchesPerPass)
-
-	s.runOnce(ctx)
-
-	ticker := time.NewTicker(s.cfg.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			s.logger.Info("auditretention: sweeper stopping")
-			return
-		case <-ticker.C:
-			s.runOnce(ctx)
-		}
-	}
-}
-
 // runOnce executes one pass under its own timeout, so a pass that meets a
 // wedged database cannot hold the loop past the next tick.
-func (s *Sweeper) runOnce(ctx context.Context) {
+func (s *Sweeper) runOnce(ctx context.Context) (string, error) {
 	passCtx, cancel := context.WithTimeout(ctx, s.passTimeout())
 	defer cancel()
 
@@ -284,12 +256,12 @@ func (s *Sweeper) runOnce(ctx context.Context) {
 			"window_days", s.cfg.RetentionDays,
 			"deleted_before_failure", stats.Deleted,
 			"batches", stats.Batches)
-		return
+		return routines.OutcomeError, err
 	}
 	if stats.Suppressed {
 		s.logger.Info("auditretention: maintenance mode is active; not sweeping",
 			"window_days", s.cfg.RetentionDays)
-		return
+		return routines.OutcomeMaintenance, nil
 	}
 
 	// One line per pass, always — this is the only place an operator sees that
@@ -314,7 +286,12 @@ func (s *Sweeper) runOnce(ctx context.Context) {
 			"max_batches_per_pass", s.cfg.MaxBatchesPerPass,
 			"batch_size", s.cfg.BatchSize)
 	}
+	return routines.OutcomeOK, nil
 }
+
+// Pass runs one pass and reports its outcome word; the routine registry loop
+// (libs/go/routines) calls it on the operator-configured schedule.
+func (s *Sweeper) Pass(ctx context.Context) (string, error) { return s.runOnce(ctx) }
 
 // passTimeout keeps a pass inside its own tick: half the interval, so a hung
 // pass has ended before the next one starts, with a floor for the very short

@@ -84,7 +84,12 @@ export function useShellActions(): (action: ShellAction) => void {
         },
         workspaces_changed: (a) => void refreshWorkspaces().then(() => openWorkspace(a.workspaceId)),
         notice: (a) => layout.setNotice(a.message === '' ? t('desktop.shell.openFolderFailed', 'That folder could not be opened.') : a.message),
-        files_dropped: () => layout.setNotice(t('desktop.shell.dropFolder', 'Drop a folder, not files, to open it as a workspace.')),
+        // A thread on screen takes dropped files as image attachments (the host refuses what is not an image, and says why).
+        files_dropped: (a) => {
+          const attach = layout.session?.attachFiles;
+          if (attach !== undefined && a.paths.length > 0) attach(a.paths);
+          else layout.setNotice(t('desktop.shell.dropFolder', 'Drop a folder, not files, to open it as a workspace.'));
+        },
       };
       (handlers[action.type] as (a: ShellAction) => void)(action);
     },

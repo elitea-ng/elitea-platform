@@ -134,6 +134,9 @@ func (fenceSeam) PutSegment(context.Context, workspaceruntime.ClaimRef, string, 
 func (fenceSeam) Publish(context.Context, workspaceruntime.ClaimRef, workspaceruntime.PublishRequest) (workspaceruntime.PublishResult, error) {
 	return workspaceruntime.PublishResult{}, nil
 }
+func (fenceSeam) RecordChanges(context.Context, workspaceruntime.ClaimRef, workspaceruntime.TurnChanges) error {
+	return nil
+}
 func (fenceSeam) EnvSecret(context.Context, workspaceruntime.ClaimRef) (map[string]string, error) {
 	return nil, nil
 }

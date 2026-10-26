@@ -10,6 +10,7 @@ describe('describeWorkspaceError', () => {
     expect(describeWorkspaceError({ code: 'agent_version_mismatch', message: 'raw' })).toMatch(/another version/);
     expect(describeWorkspaceError({ code: 'agent_not_in_conversation', message: 'raw' })).toMatch(/Start a new conversation/);
     expect(describeWorkspaceError({ code: 'turn_expired', message: 'raw' })).toMatch(/too old/);
+    expect(describeWorkspaceError({ code: 'pipeline_unsupported', message: 'raw' })).toMatch(/Run this one in the cloud/);
   });
 
   it("shows the host's own message for any other code, and a fallback for none", () => {

@@ -311,6 +311,16 @@ func (s *service) ListProviderVoices(ctx context.Context, in *gatewayv1.ListProv
 	return &gatewayv1.ListProviderVoicesResponse{Response: resp}, err
 }
 
+func (s *service) MeteredAdmit(ctx context.Context, in *gatewayv1.MeteredAdmitRequest) (*gatewayv1.MeteredAdmitResponse, error) {
+	resp, err := s.unary(ctx, in.GetRequest().GetHead(), bytes.NewReader(in.GetRequest().GetBody()))
+	return &gatewayv1.MeteredAdmitResponse{Response: resp}, err
+}
+
+func (s *service) MeteredSettle(ctx context.Context, in *gatewayv1.MeteredSettleRequest) (*gatewayv1.MeteredSettleResponse, error) {
+	resp, err := s.unary(ctx, in.GetRequest().GetHead(), bytes.NewReader(in.GetRequest().GetBody()))
+	return &gatewayv1.MeteredSettleResponse{Response: resp}, err
+}
+
 // GovernanceStatus serves GET /governance/status through the handler.
 func (s *service) GovernanceStatus(ctx context.Context, _ *gatewayv1.GovernanceStatusRequest) (*gatewayv1.GovernanceStatusResponse, error) {
 	resp, err := s.unary(ctx, &gatewayv1.HttpRequestHead{Method: http.MethodGet, Path: "/governance/status"}, nil)

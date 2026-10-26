@@ -5,16 +5,22 @@ import { useRef, useState } from 'react';
 
 import { describeWorkspaceError, type WorkspaceTurn } from '@/features/workspace';
 import type { TurnModelChoice } from '@/shared/desktop/turnModel';
-import type { TurnCommand, TurnStartRequest, Workspace } from '@/shared/desktop/workspaceIpc';
+import type { AttachedImage, TurnCommand, TurnImagePick, TurnMode, TurnStartRequest, Workspace } from '@/shared/desktop/workspaceIpc';
 
 import type { AgentSelection } from './useAgentSelection';
 import { useEnsureConversation } from './useEnsureConversation';
+
+/** The images a message carries: the tokens the host holds them by, and what the transcript shows of them. */
+export interface SentImages {
+  picks: TurnImagePick[];
+  shown: readonly Pick<AttachedImage, 'name' | 'thumbnail'>[];
+}
 
 export interface SendPrompt {
   canSend: boolean;
   sendError: string | null;
   /** `mentions`: the workspace paths the prompt references with "@"; `skills`: the skills it invokes with "/"; `compact`: `/compact` was asked for; `model`: the model chip's choice; `command`: the custom command it runs. */
-  send: (prompt: string, planMode: boolean, mentions: string[], skills?: TurnStartRequest['skills'], compact?: boolean, model?: TurnModelChoice, command?: TurnCommand) => Promise<boolean>;
+  send: (prompt: string, mode: TurnMode, mentions: string[], skills?: TurnStartRequest['skills'], compact?: boolean, model?: TurnModelChoice, command?: TurnCommand, images?: SentImages) => Promise<boolean>;
   /** The composer got focus with an agent selected: the host reads ahead what the send will need. */
   prewarm: () => void;
 }
@@ -35,11 +41,16 @@ function reusable(pending: PendingConversation | null, startsNew: boolean, key: 
   return startsNew && pending?.key === key ? pending : null;
 }
 
-function notifyStarted(onStarted: ((conversationId: string, prompt: string) => void) | undefined, conversationId: string, prompt: string): void {
-  if (onStarted !== undefined) onStarted(conversationId, prompt);
+function notifyStarted(onStarted: ((conversationId: string, prompt: string, images: SentImages['shown']) => void) | undefined, conversationId: string, prompt: string, images: SentImages['shown']): void {
+  if (onStarted !== undefined) onStarted(conversationId, prompt, images);
 }
 
 /** `/compact` only when asked for: the start request is otherwise as before. */
+/** `plan_mode`, and `bypass_approvals` only when it is on. */
+function modeFields(mode: TurnMode): Pick<TurnStartRequest, 'plan_mode' | 'bypass_approvals'> {
+  return mode === 'bypass' ? { plan_mode: false, bypass_approvals: true } : { plan_mode: mode === 'plan' };
+}
+
 function compactFlag(compact: boolean | undefined): { compact?: true } {
   return compact === true ? { compact: true } : {};
 }
@@ -47,6 +58,15 @@ function compactFlag(compact: boolean | undefined): { compact?: true } {
 /** A model only when one was chosen: without it the host runs the thread's kept model. */
 function modelField(model: TurnModelChoice | undefined): { model?: TurnModelChoice } {
   return model === undefined ? {} : { model };
+}
+
+/** The start request's `images`, only when the message carries some. */
+function imagesField(images: SentImages | undefined): { images?: TurnImagePick[] } {
+  return images === undefined || images.picks.length === 0 ? {} : { images: images.picks };
+}
+
+function shownOf(images: SentImages | undefined): SentImages['shown'] {
+  return images === undefined ? [] : images.shown;
 }
 
 /** The start request's `command`, only when the message runs one. */
@@ -60,7 +80,7 @@ export function useSendPrompt(
   projectId: number,
   selection: AgentSelection,
   turn: WorkspaceTurn,
-  onStarted?: (conversationId: string, prompt: string) => void,
+  onStarted?: (conversationId: string, prompt: string, images: SentImages['shown']) => void,
 ): SendPrompt {
   const ensureConversation = useEnsureConversation();
   const [sendError, setSendError] = useState<string | null>(null);
@@ -73,7 +93,7 @@ export function useSendPrompt(
   const agent = selection.agents.find((a) => a.id === selection.agentId);
   const version = selection.versions.find((v) => String(v.id) === selection.versionId);
 
-  const send = async (prompt: string, planMode: boolean, mentions: string[], skills: TurnStartRequest['skills'] = [], compact?: boolean, model?: TurnModelChoice, command?: TurnCommand): Promise<boolean> => {
+  const send = async (prompt: string, mode: TurnMode, mentions: string[], skills: TurnStartRequest['skills'] = [], compact?: boolean, model?: TurnModelChoice, command?: TurnCommand, images?: SentImages): Promise<boolean> => {
     if (agent === undefined || version === undefined || prompt.trim() === '' || turn.busy || inFlight.current) return false;
     inFlight.current = true;
     setSending(true);
@@ -104,19 +124,20 @@ export function useSendPrompt(
         application_id: Number(agent.id),
         version_id: version.id,
         prompt,
-        plan_mode: planMode,
+        ...modeFields(mode),
         mentions,
         skills,
         ...compactFlag(compact),
         ...modelField(model),
         ...commandField(command),
+        ...imagesField(images),
       });
       // A refused start (its reason is the turn's startError) keeps the
       // prompt and the person's conversation choice as they were.
       if (!started) return false;
       pending.current = null;
       selection.selectConversation(conversationId);
-      notifyStarted(onStarted, conversationId, prompt);
+      notifyStarted(onStarted, conversationId, prompt, shownOf(images));
       return true;
     } catch (error) {
       setSendError(describeWorkspaceError(error));

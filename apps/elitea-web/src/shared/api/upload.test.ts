@@ -17,21 +17,13 @@ import {
   chunkAckComplete,
   chunkAckInProgress,
   chunkAckSequence,
+  CHUNKED_FILE_UPLOADED,
+  SMALL_FILE_UPLOADED,
   smallFileOk,
   uploadNetworkError,
   uploadServerError,
 } from '../../test/msw/handlers/upload';
 import type { CapturedUploadRequest } from '../../test/msw/handlers/upload';
-/*
- * The acks are asserted against the FIXTURES rather than against a literal
- * copied out of them. A literal drifts silently when the backend's contract
- * changes: these four assertions spelled out the legacy Python
- * `{id, filename, size}` shape and went on passing after the Go port replaced
- * it with `{filepath, file_size}` at 201 — the exact staleness R-M4 exists to
- * surface, restated in a place R-M4 cannot see.
- */
-import chunkComplete201 from '../../test/msw/fixtures/upload/chunk-complete.201.json';
-import smallFile201 from '../../test/msw/fixtures/upload/small-file.201.json';
 
 import {
   CHUNK_SIZE,
@@ -294,7 +286,7 @@ describe('uploadChunk — fields, progress, credentials, DEV token', () => {
     expect(final.ok).toBe(true);
     if (!intermediate.ok || !final.ok) throw new Error('unreachable');
     expect(intermediate.data.status).toBe('in_progress');
-    expect(final.data).toEqual({ status: 'complete', data: chunkComplete201.body[0] });
+    expect(final.data).toEqual({ status: 'complete', data: CHUNKED_FILE_UPLOADED[0] });
   });
 });
 
@@ -339,7 +331,7 @@ describe('uploadSmallFile — 2 fields only (no chunk fields)', () => {
     server.use(smallFileOk());
     const appendSpy = vi.spyOn(FormData.prototype, 'append');
     const result = await uploadSmallFile({ baseUrl: '/api/v2', projectId: 'p1', conversationId: 'c1', file: makeBlob(10) });
-    expect(result).toEqual({ ok: true, data: smallFile201.body[0] });
+    expect(result).toEqual({ ok: true, data: SMALL_FILE_UPLOADED[0] });
     const keys = appendSpy.mock.calls.map(([key]) => key);
     expect(keys).toEqual(['file', 'overwrite_attachments']);
     expect(appendSpy.mock.calls[1]?.[1]).toBe('1');
@@ -368,7 +360,7 @@ describe('uploadFileWithProgress — small-file vs. chunked orchestration', () =
       baseUrl: '/api/v2', projectId: 'p1', conversationId: 'c1',
       file: makeBlob(1024), fileName: 'small.txt', fileId: 'file-1',
     });
-    expect(result).toEqual({ ok: true, data: smallFile201.body[0] });
+    expect(result).toEqual({ ok: true, data: SMALL_FILE_UPLOADED[0] });
   });
 
   it('normalizes an uppercase fileName extension on the single-shot path, even given a plain (non-File) Blob', async () => {
@@ -406,7 +398,7 @@ describe('uploadFileWithProgress — small-file vs. chunked orchestration', () =
       onProgress: (loaded, total) => progressCalls.push([loaded, total]),
     });
 
-    expect(result).toEqual({ ok: true, data: chunkComplete201.body[0] });
+    expect(result).toEqual({ ok: true, data: CHUNKED_FILE_UPLOADED[0] });
     expect(sink).toHaveLength(2); // 2 POSTs, one per chunk
     expect(progressCalls.length).toBeGreaterThanOrEqual(2); // at least one event per chunk
     const last = progressCalls[progressCalls.length - 1]!;

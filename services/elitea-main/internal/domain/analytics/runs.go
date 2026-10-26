@@ -53,7 +53,13 @@ type UsageFigures struct {
 	UnpricedCalls int64        `json:"unpriced_calls"`
 	InputCost     *json.Number `json:"input_cost,omitempty"`
 	OutputCost    *json.Number `json:"output_cost,omitempty"`
-	TotalCost     *json.Number `json:"total_cost,omitempty"`
+	// TotalCost is the model estimate plus ToolCost.
+	TotalCost *json.Number `json:"total_cost,omitempty"`
+	// ToolCalls are the metered tool operations (#1238: web search, fetch,
+	// host lookups) settled in the scope. ToolCost is what the gateway billed
+	// for them, not an estimate; it is absent when there was none.
+	ToolCalls int64        `json:"tool_calls"`
+	ToolCost  *json.Number `json:"tool_cost,omitempty"`
 }
 
 // ModelFigures is one (provider, model) inside a run.

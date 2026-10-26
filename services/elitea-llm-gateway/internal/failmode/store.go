@@ -359,7 +359,7 @@ func (s *Store) PersistOutageDelta(ctx context.Context, d OutageDelta) error {
 	// account for, and the gap would be invisible: the daily chart would simply
 	// be short, with no field saying so.
 	if d.Usage != nil {
-		if _, err := tx.ExecAffected(ctx, usageEventInsertSQL,
+		if _, err := tx.ExecAffected(ctx, usageEventStatement(d),
 			usageEventArgs(d)...,
 		); err != nil {
 			return fmt.Errorf("failmode: persist outage usage event: %w", err)
@@ -439,7 +439,7 @@ func (s *Store) PersistHealthyDelta(ctx context.Context, d OutageDelta) error {
 		}
 	}
 	if d.Usage != nil {
-		if _, err := tx.ExecAffected(ctx, usageEventInsertSQL,
+		if _, err := tx.ExecAffected(ctx, usageEventStatement(d),
 			usageEventArgs(d)...,
 		); err != nil {
 			return fmt.Errorf("failmode: persist healthy usage event: %w", err)
@@ -471,6 +471,36 @@ var usageEventInsertSQL = fmt.Sprintf(`INSERT INTO gateway.llm_usage_events
 		to_timestamp($9), to_timestamp($10), to_timestamp($11), $12)
 	ON CONFLICT (event_id) DO NOTHING`, NanoUSD)
 
+// meteredUsageEventInsertSQL is usageEventInsertSQL for a metered tool row
+// (#1238): the same row plus the operation, units and unit columns of shared
+// migration 0174. It is used only for a delta that names an operation, so a
+// gateway that runs ahead of that migration keeps writing every model row.
+// Mirrors the scheduler's meteredUsageEventSQL
+// (services/elitea-scheduler/internal/budgetwriteback/store.go).
+var meteredUsageEventInsertSQL = fmt.Sprintf(`INSERT INTO gateway.llm_usage_events
+		(event_id, project_id, user_id, provider, model,
+		 prompt_tokens, completion_tokens, cost_usd, period_start, period_end,
+		 occurred_at, execution_id, operation, units, unit)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric / %d,
+		to_timestamp($9), to_timestamp($10), to_timestamp($11), $12, $13, $14, $15)
+	ON CONFLICT (event_id) DO NOTHING`, NanoUSD)
+
+// UsageOperationTool marks a metered tool row (#1238). A model call carries no
+// operation, and the ledger's column default records it as "llm".
+const UsageOperationTool = "tool"
+
+// usageUnitBytes is the width of the unit column (shared migration 0174).
+const usageUnitBytes = 16
+
+// usageEventStatement is the ledger insert for d: the tool statement for a
+// metered tool row, the model statement otherwise.
+func usageEventStatement(d OutageDelta) string {
+	if d.Usage.Operation == UsageOperationTool {
+		return meteredUsageEventInsertSQL
+	}
+	return usageEventInsertSQL
+}
+
 // nullableExecutionID renders an absent execution id as SQL NULL. "This request
 // came from no execution" and "it came from an execution with an empty id" are
 // different claims, and only NULL makes the first one.
@@ -496,7 +526,7 @@ const (
 // usageEventArgs is usageEventInsertSQL's argument list for d, with every
 // bounded text column trimmed to its width.
 func usageEventArgs(d OutageDelta) []any {
-	return []any{
+	args := []any{
 		d.EventID, d.ProjectID, d.Usage.UserID,
 		requestlog.Truncate(d.Usage.Provider, usageProviderBytes),
 		requestlog.Truncate(d.Usage.Model, usageModelBytes),
@@ -504,6 +534,15 @@ func usageEventArgs(d OutageDelta) []any {
 		d.DeltaNanoUSD, d.PeriodStart, d.PeriodEnd, d.Usage.OccurredAtUnix,
 		nullableExecutionID(d.Usage.ExecutionID),
 	}
+	if d.Usage.Operation == UsageOperationTool {
+		units := d.Usage.Units
+		var unit any
+		if d.Usage.Unit != "" {
+			unit = requestlog.Truncate(d.Usage.Unit, usageUnitBytes)
+		}
+		args = append(args, UsageOperationTool, &units, unit)
+	}
+	return args
 }
 
 // UsageDimensions are the reporting dimensions of one billed request: who made
@@ -546,6 +585,14 @@ type UsageDimensions struct {
 	// chart would then show a day the period does not contain. Issue #214 is
 	// this platform's record of that class.
 	OccurredAtUnix int64
+	// Operation is UsageOperationTool for a metered tool operation (#1238) — a
+	// web search, a page fetch, a host query — and empty for a model call.
+	// Provider and Model then hold the vendor and the operation ("tavily",
+	// "web_search"), and Units counts what was billed in Unit ("request",
+	// "credit", "page"). Units and Unit are meaningless without Operation.
+	Operation string
+	Units     int64
+	Unit      string
 }
 
 // OutageDelta is a billed increment persisted to the durable tier while NATS is

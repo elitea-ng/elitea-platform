@@ -158,6 +158,37 @@ describe('LlmProxyUsagePanel', () => {
     expect(table).toHaveTextContent('$0.0000');
   });
 
+  // #1238: a metered tool row reuses the model columns (vendor as provider,
+  // operation as model) and has no tokens, so it is labelled as the tool and
+  // shows its billed units.
+  it('labels a tool row and shows its units instead of tokens', async () => {
+    useUsage({
+      ...FULL_REPORT,
+      models: [
+        { ...FULL_REPORT.models[0], operation: 'llm' },
+        {
+          key: 'tavily/web_search#tool',
+          label: 'web_search',
+          detail: 'tavily',
+          requests: 1,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0,
+          cost_usd: 0.008,
+          operation: 'tool',
+          units: 3,
+          unit: 'credit',
+        },
+      ],
+    });
+    renderAdminRoute(<LlmProxyUsagePanel />);
+
+    const table = await screen.findByTestId('llm-proxy-usage-models');
+    expect(table).toHaveTextContent('Web search · Tavily');
+    expect(table).toHaveTextContent('3 credits');
+    expect(table).toHaveTextContent('gpt-4o');
+  });
+
   it('discloses that member-less calls are outside the member breakdown', async () => {
     useUsage(FULL_REPORT);
     renderAdminRoute(<LlmProxyUsagePanel />);

@@ -135,6 +135,56 @@ query string of any URL are replaced with `[redacted]`.
 
 To collect: quit Elitea, zip the folder above, attach it to the report.
 
+## ACP agent mode (editors)
+
+`elitea-desktop --acp` runs the local agent as an
+[Agent Client Protocol](https://agentclientprotocol.com) v1 agent on stdio
+(`src-tauri/src/acp/`), so an editor such as Zed drives it: the editor shows
+the conversation, the tool calls and the permission prompts; the turn runs
+exactly as a workspace turn in the app (same tools, sandbox, deny list,
+approval rules, checkpoints and commit, `executed_by: desktop`). No window
+opens. Zed's `settings.json`:
+
+```json
+{
+  "agent_servers": {
+    "Elitea": {
+      "command": "/Applications/Elitea.app/Contents/MacOS/elitea-desktop",
+      "args": ["--acp"],
+      "env": { "ELITEA_PROJECT_ID": "1", "ELITEA_AGENT_ID": "5" }
+    }
+  }
+}
+```
+
+- **Sign-in and policy**: it starts only when the app is signed in
+  (`credentials.json`, re-read at every use because the app may rotate the
+  token meanwhile) and the cached policy allows local work; otherwise it
+  exits with the reason on stderr. It never signs in itself.
+- **Which agent**: the folder's project binding from the app, else
+  `ELITEA_PROJECT_ID` (the folder is then bound to it); the agent from
+  `ELITEA_AGENT_ID`, at `ELITEA_AGENT_VERSION_ID` or its default version.
+  Nothing is read from the opened folder as configuration.
+- **Sessions**: `session/new` opens the editor's folder as a workspace and
+  creates a Local work conversation (the folder's name only, never its
+  path); the session id is the conversation UUID, which `session/load`
+  reopens (replaying the turns this computer ran in it). One prompt at a
+  time per session (`busy`).
+- **Permissions**: only what the approval rules *ask* becomes a
+  `session/request_permission` (`allow_once`, `allow_always` only where the
+  answer would be remembered, `reject_once`); policy, plan-mode and rule
+  denials are final and never shown as a choice. An answer naming an option
+  that was not offered is a rejection.
+- **Modes**: `default` and `plan` (read-only tools, then a plan to accept),
+  applied from the next prompt.
+- **Not used**: the editor's `fs/*` and `terminal/*` (files and commands
+  stay under the workspace and the sandbox), MCP servers the editor passes
+  (never started), additional directories, audio prompts.
+- **Bounds**: a message is one line of at most 24 MiB; a prompt at most 256
+  blocks, 1 MiB of text and five images.
+- **Logs**: `elitea-acp.log` next to the app's log (stdout is the
+  protocol); same format, level and scrubbing.
+
 ## Registering the client
 
 The deployment must list this client in its `native_clients` configuration:
@@ -294,6 +344,20 @@ cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo
 Icons are the brand mark rasterised with
 `npx tauri icon ../elitea-web/public/brand/logo-mark.svg -o src-tauri/icons --fit contain`
 (keep the six files `tauri.conf.json` lists).
+
+## Document sidecar
+
+`read_document` extracts PDF, Office, OpenDocument, RTF, EPUB and e-mail text
+with xberg, which the host must not link (it turns on `serde_json/preserve_order`,
+ADR-0029 decision 2; `desktop_host_does_not_link_xberg` and the
+`cargo tree -e normal,features` step in `ci-desktop.yml` hold the line). The extractor is
+`doc-extract-sidecar/`, a binary with a lockfile of its own, run once per
+document under the session's sandbox (read-only, no network) by
+`elitea-local-tools`' `SidecarExtractor`. The release job builds it and Tauri
+bundles it as an `externalBin` (`src-tauri/tauri.sidecar.conf.json`, passed with
+`--config` so a plain `cargo build`/`cargo test` of the host needs no binary);
+it is signed and notarised with the app. `src/documents.rs` finds it beside the
+executable; a build without it reads text files only.
 
 ## Release signing and publishing
 

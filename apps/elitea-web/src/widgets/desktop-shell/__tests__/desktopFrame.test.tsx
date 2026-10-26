@@ -6,10 +6,11 @@
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
-import { recordThread, WorkspaceIpcProvider } from '@/features/workspace';
+import { readThreads, recordThread, WorkspaceIpcProvider } from '@/features/workspace';
 import { HandoffIpcProvider, rememberThreadUuid } from '@/features/workspace-handoff';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
@@ -20,6 +21,8 @@ import { createFakeHandoffIpc, type FakeHandoffIpc } from '@/shared/desktop/hand
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { clearNamespace } from '@/shared/lib/storage';
+
+import { server } from '../../../test/setup';
 
 import { AppIpcProvider, DesktopFrame, useDesktopLayout } from '../index';
 
@@ -92,6 +95,19 @@ describe('DesktopFrame sidebar', () => {
     // A folder collapses to its row.
     await user.click(within(folders[0] as HTMLElement).getAllByRole('button')[0] as HTMLElement);
     expect(within(folders[0] as HTMLElement).queryAllByTestId('shell-thread')).toHaveLength(0);
+  });
+
+  it('lists a rewound thread\'s earlier attempts under it, even after the rewound thread moved up', async () => {
+    recordThread('w1', { id: '77', title: 'fix the build', updatedAt: 1 });
+    recordThread('w1', { id: '78', title: 'quick overview', updatedAt: 2 });
+    recordThread('w1', { id: '88', title: 'fix the build (fork)', updatedAt: 3 }, '77');
+    recordThread('w1', { id: '78', title: 'quick overview', updatedAt: 4 });
+    recordThread('w1', { id: '88', title: 'fix the build (fork)', updatedAt: 5 });
+    mount();
+
+    const folders = await screen.findAllByTestId('shell-folder');
+    const threads = await within(folders[0] as HTMLElement).findAllByTestId('shell-thread');
+    expect(threads.map((thread) => thread.textContent)).toEqual(['fix the build (fork)', 'Earlier attempt: fix the build', 'quick overview']);
   });
 
   it('badges a thread that runs in the cloud or is on its way back, and no other', async () => {
@@ -181,8 +197,49 @@ describe('DesktopFrame context menus', () => {
     appIpc.chooseFromContextMenu('chat');
     fireEvent.contextMenu(thread);
     await waitFor(() => expect(appIpc.calls.contextMenus).toHaveLength(1));
-    expect((appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'))).toEqual(['Open', 'Open in chat', 'Copy Link']);
+    expect((appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'))).toEqual(['Open', 'Open in chat', 'Copy Link', 'Rename…']);
     await waitFor(() => expect(router.state.location.pathname).toBe('/chat/77'));
+  });
+
+  it('keeps the rename field open and says so when the server refuses the rename', async () => {
+    recordThread('w1', { id: '77', title: 'fix the build', updatedAt: 1 });
+    server.use(http.put('*/elitea_core/conversation/prompt_lib/:projectId/:conversationId', () => HttpResponse.json({ error: 'forbidden' }, { status: 403 })));
+    const appIpc: FakeAppIpc = createFakeAppIpc(MACOS_PLATFORM);
+    mount({ appIpc });
+    const folders = await screen.findAllByTestId('shell-folder');
+    appIpc.chooseFromContextMenu('rename');
+    fireEvent.contextMenu(await within(folders[0] as HTMLElement).findByTestId('shell-thread'));
+    const field = await screen.findByTestId('thread-rename');
+    fireEvent.change(field, { target: { value: 'Fix the CI build' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(await screen.findByTestId('thread-rename-error')).toBeInTheDocument();
+    expect(screen.getByTestId('thread-rename')).toHaveValue('Fix the CI build');
+    expect(readThreads('w1').find((x) => x.id === '77')?.title).toBe('fix the build');
+  });
+
+  it('renames a thread in place from its menu', async () => {
+    recordThread('w1', { id: '77', title: 'fix the build', updatedAt: 1 });
+    const renamed: unknown[] = [];
+    server.use(
+      http.put('*/elitea_core/conversation/prompt_lib/:projectId/:conversationId', async ({ request, params }) => {
+        renamed.push({ ...params, body: await request.json() });
+        return HttpResponse.json({ id: 77, name: 'Fix the CI build' });
+      }),
+    );
+    const appIpc: FakeAppIpc = createFakeAppIpc(MACOS_PLATFORM);
+    mount({ appIpc });
+    const folders = await screen.findAllByTestId('shell-folder');
+    const thread = await within(folders[0] as HTMLElement).findByTestId('shell-thread');
+    appIpc.chooseFromContextMenu('rename');
+    fireEvent.contextMenu(thread);
+    const field = await screen.findByTestId('thread-rename');
+    expect(field).toHaveValue('fix the build');
+    fireEvent.change(field, { target: { value: 'Fix the CI build' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    await waitFor(() => expect(readThreads('w1').find((x) => x.id === '77')).toMatchObject({ title: 'Fix the CI build', named: true }));
+    expect(renamed).toHaveLength(1);
+    expect(renamed[0]).toMatchObject({ projectId: '42', conversationId: '77', body: { name: 'Fix the CI build' } });
+    expect(await within(folders[0] as HTMLElement).findByText('Fix the CI build')).toBeInTheDocument();
   });
 
   it('pops the native menu on a folder row: reveal, copy, projects, remove', async () => {

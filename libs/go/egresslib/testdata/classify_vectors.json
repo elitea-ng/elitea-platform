@@ -1,0 +1,350 @@
+{
+ "_comment": "The egress address classification contract (#1238). Read by libs/go/egresslib/addrcheck (TestClassifyMatchesSharedVectors) and libs/rust/egress-guard (classify_matches_shared_vectors). verdict is public, private or forbidden; liftable is true when an allowlist entry naming the address may admit it (private only). Change both classifiers and this file together.",
+ "vectors": [
+  {
+   "ip": "93.184.216.34",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "8.8.8.8",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "1.1.1.1",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "2606:4700::1111",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "2a00:1450:4001:81c::200e",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "::ffff:93.184.216.34",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "64:ff9b::5db8:d822",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "2002:5db8:d822::1",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "172.15.255.255",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "172.32.0.1",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "100.63.255.255",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "100.128.0.1",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "198.17.255.255",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "198.20.0.1",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "223.255.255.255",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "192.0.1.1",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "fbff::1",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "fe00::1",
+   "verdict": "public",
+   "liftable": false
+  },
+  {
+   "ip": "127.0.0.1",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "127.9.9.9",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "::1",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "10.1.2.3",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "10.0.0.1",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "172.16.0.1",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "172.31.255.255",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "192.168.1.1",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "fc00::1",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "fd12::1",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "100.64.0.1",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "100.127.255.254",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "198.18.0.1",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "198.19.255.255",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "fec0::1",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "::ffff:127.0.0.1",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "::ffff:10.0.0.1",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "64:ff9b::a00:1",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "2002:c0a8:0101::1",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "2002:a00:1::1",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "0.0.0.0",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "::",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "0.1.2.3",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "169.254.169.254",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "169.254.0.1",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "fe80::1",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "febf::1",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "224.0.0.1",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "239.255.255.250",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "ff02::1",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "ff01::1",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "ff05::2",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "192.0.0.1",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "192.0.0.170",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "240.0.0.1",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "255.255.255.255",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "100.100.100.200",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "168.63.129.16",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "fd00:ec2::254",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "64:ff9b:1::1",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "100::1",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "2001::1",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "2001:0:4136:e378::1",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "::10.0.0.1",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "::8.8.8.8",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "::ffff:169.254.169.254",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "::ffff:0.0.0.0",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "64:ff9b::a9fe:a9fe",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "2002:a9fe:a9fe::1",
+   "verdict": "forbidden",
+   "liftable": false
+  },
+  {
+   "ip": "2002:7f00:1::1",
+   "verdict": "private",
+   "liftable": true
+  },
+  {
+   "ip": "64:ff9b::7f00:1",
+   "verdict": "private",
+   "liftable": true
+  }
+ ]
+}

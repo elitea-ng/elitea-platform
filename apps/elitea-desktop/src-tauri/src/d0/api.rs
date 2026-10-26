@@ -465,7 +465,8 @@ impl PlatformApi {
     /// The conversation's newest `limit` message groups, oldest first
     /// (`messages_limit`, the route `answering_participant` reads), and the
     /// tool steps of their answers: the transcript a desktop session is
-    /// rebuilt from (`seed.rs`).
+    /// rebuilt from (`seed.rs`). The third value is the detail's
+    /// `forked_from` (a rewind's branch summary rides on it).
     ///
     /// The tool steps come from the trace routes (`message_traces` lists them,
     /// `message_trace` gives a step's input and output); a deployment
@@ -486,6 +487,7 @@ impl PlatformApi {
         (
             Vec<Value>,
             std::collections::HashMap<i64, Vec<crate::seed::ToolStep>>,
+            Option<Value>,
         ),
         ApiError,
     > {
@@ -510,6 +512,7 @@ impl PlatformApi {
         // Newest first by default; the id is the creation order.
         groups.sort_by_key(|group| group.get("id").and_then(Value::as_i64).unwrap_or(i64::MAX));
         let mut steps = std::collections::HashMap::new();
+        let forked_from = detail.get("forked_from").filter(|v| v.is_object()).cloned();
         let numeric = numeric_id.or_else(|| number_of(detail.get("id")));
         let answers: Vec<i64> = groups
             .iter()
@@ -517,7 +520,7 @@ impl PlatformApi {
             .filter_map(|group| group.get("id").and_then(Value::as_i64))
             .collect();
         let (Some(numeric), false) = (numeric, answers.is_empty()) else {
-            return Ok((groups, steps));
+            return Ok((groups, steps, forked_from));
         };
         let ids = answers
             .iter()
@@ -548,7 +551,7 @@ impl PlatformApi {
                 log::warn!(
                     "the conversation's tool steps could not be listed; seeding messages only"
                 );
-                return Ok((groups, steps));
+                return Ok((groups, steps, forked_from));
             }
         };
         let rows = if total.is_some_and(|total| total > rows.len() as u64) {
@@ -619,7 +622,7 @@ impl PlatformApi {
         for step in fetched.into_iter().flatten() {
             steps.entry(step.message_group_id).or_default().push(step);
         }
-        Ok((groups, steps))
+        Ok((groups, steps, forked_from))
     }
 
     /// # Errors
@@ -719,6 +722,96 @@ impl PlatformApi {
             ),
             Some(body),
             &[("Idempotency-Key", idempotency_key)],
+        )
+        .await
+    }
+
+    /// `startLocalChildTurn` (#1239): a nested agent of the turn's agent,
+    /// started as a cloud child turn under the live turn `execution_id`.
+    ///
+    /// # Errors
+    ///
+    /// No answer arrived, or an id is not a path segment.
+    pub async fn child_turn_start(
+        &self,
+        project_id: i64,
+        execution_id: &str,
+        body: &Value,
+    ) -> Result<Answer, ApiError> {
+        let execution = path_segment(execution_id)?;
+        self.send(
+            Method::POST,
+            &format!("/api/v2/elitea_core/local_child_turn/prompt_lib/{project_id}/{execution}"),
+            Some(body),
+            &[],
+        )
+        .await
+    }
+
+    /// `readLocalChildTurn` (#1239): the child's state.
+    ///
+    /// # Errors
+    ///
+    /// No answer arrived, or an id is not a path segment.
+    pub async fn child_turn_read(
+        &self,
+        project_id: i64,
+        execution_id: &str,
+        child_execution_id: &str,
+    ) -> Result<Answer, ApiError> {
+        let execution = path_segment(execution_id)?;
+        let child = path_segment(child_execution_id)?;
+        self.send(
+            Method::GET,
+            &format!(
+                "/api/v2/elitea_core/local_child_turn/prompt_lib/{project_id}/{execution}/{child}"
+            ),
+            None,
+            &[],
+        )
+        .await
+    }
+
+    /// `continueChatExecution` (`agent.continue.hitl.v1`) on a child's
+    /// conversation: the person's decision on its pause.
+    ///
+    /// # Errors
+    ///
+    /// No answer arrived, or an id is not a path segment.
+    pub async fn child_turn_decide(
+        &self,
+        project_id: i64,
+        conversation_uuid: &str,
+        body: &Value,
+    ) -> Result<Answer, ApiError> {
+        let conversation = path_segment(conversation_uuid)?;
+        self.send(
+            Method::POST,
+            &format!(
+                "/api/v2/elitea_core/continue_predict/prompt_lib/{project_id}/{conversation}?execution_contract=agent.continue.hitl.v1"
+            ),
+            Some(body),
+            &[],
+        )
+        .await
+    }
+
+    /// `cancelChatExecution` on a child's answer: stops the child.
+    ///
+    /// # Errors
+    ///
+    /// No answer arrived, or an id is not a path segment.
+    pub async fn child_turn_cancel(
+        &self,
+        project_id: i64,
+        response_message_id: &str,
+    ) -> Result<Answer, ApiError> {
+        let response = path_segment(response_message_id)?;
+        self.send(
+            Method::DELETE,
+            &format!("/api/v2/elitea_core/task/prompt_lib/{project_id}/{response}"),
+            None,
+            &[],
         )
         .await
     }

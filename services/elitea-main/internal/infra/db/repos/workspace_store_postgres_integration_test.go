@@ -883,13 +883,13 @@ func TestPostgresWorkspaceStoreFetchRowsIsOneSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rows.HeadSeq != 1 || rows.Refs[workspacestore.RefHandoff1] != sha1Of("one") || rows.Newest == nil ||
-		rows.Newest.Seq != 1 || rows.Newest.SHA256 != firstSHA {
+	if rows.HeadSeq != 1 || rows.Refs[workspacestore.RefHandoff1] != sha1Of("one") || len(rows.Chain) != 1 ||
+		rows.Chain[0].Seq != 1 || rows.Chain[0].SHA256 != firstSHA {
 		t.Fatalf("fetch rows mixed two publishes: head %d, handoff/1 %s, newest %+v", rows.HeadSeq,
-			rows.Refs[workspacestore.RefHandoff1], rows.Newest)
+			rows.Refs[workspacestore.RefHandoff1], rows.Chain)
 	}
 	after, err := repo.FetchRows(ctx, fixture.thread, 0)
-	if err != nil || after.HeadSeq != 2 || after.Refs[workspacestore.RefHandoff1] != sha1Of("two") || after.Newest.SHA256 != secondSHA {
+	if err != nil || after.HeadSeq != 2 || after.Refs[workspacestore.RefHandoff1] != sha1Of("two") || len(after.Chain) != 1 || after.Chain[0].SHA256 != secondSHA {
 		t.Fatalf("the next fetch = %+v, %v", after, err)
 	}
 }

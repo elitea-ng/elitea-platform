@@ -245,7 +245,7 @@ fn seed(dir: &tempfile::TempDir, name: &str, content: &str) {
 
 fn read_all(ws: &Workspace, ledger: &ReadLedger, names: &[&str]) {
     for name in names {
-        read(ws, ledger, json!({ "path": name }), 1 << 20).expect("read");
+        read(ws, ledger, json!({ "path": name }), 1 << 20, false).expect("read");
     }
 }
 

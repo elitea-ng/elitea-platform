@@ -63,6 +63,8 @@ import type {
   NativeClientList,
   NativeClientWriteResult,
   OkResponse,
+  PlatformRoutine,
+  PlatformRoutineListResponse,
   PlatformSettings,
   ProjectCloudExecutorSwitch,
   PublishedAgentsListing,
@@ -362,6 +364,110 @@ export const getListBackgroundJobsResponseMock = (
 export const getCancelBackgroundJobResponseMock = (
   overrideResponse: Partial<Extract<OkResponse, object>> = {},
 ): OkResponse => ({ ok: faker.datatype.boolean(), ...overrideResponse });
+
+export const getListPlatformRoutinesResponseMock = (
+  overrideResponse: Partial<Extract<PlatformRoutineListResponse, object>> = {},
+): PlatformRoutineListResponse => ({
+  total: faker.number.int(),
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    owner: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    default_schedule: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    schedule_override: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      undefined,
+    ]),
+    schedule: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    min_interval_seconds: faker.number.int(),
+    enabled: faker.datatype.boolean(),
+    last_run_at: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        null,
+      ]),
+      undefined,
+    ]),
+    last_outcome: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      undefined,
+    ]),
+    next_run_at: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        null,
+      ]),
+      undefined,
+    ]),
+    updated_by: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      undefined,
+    ]),
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  ...overrideResponse,
+});
+
+export const getUpdatePlatformRoutineResponseMock = (
+  overrideResponse: Partial<Extract<PlatformRoutine, object>> = {},
+): PlatformRoutine => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  owner: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  default_schedule: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  schedule_override: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    undefined,
+  ]),
+  schedule: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  min_interval_seconds: faker.number.int(),
+  enabled: faker.datatype.boolean(),
+  last_run_at: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    undefined,
+  ]),
+  last_outcome: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    undefined,
+  ]),
+  next_run_at: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    undefined,
+  ]),
+  updated_by: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    undefined,
+  ]),
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
 
 export const getGetBrandingSettingsResponseMock = (
   overrideResponse: Partial<Extract<BrandingSettings, object>> = {},
@@ -1658,6 +1764,58 @@ export const getCancelBackgroundJobMockHandler = (
   );
 };
 
+export const getListPlatformRoutinesMockHandler = (
+  overrideResponse?:
+    | PlatformRoutineListResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<PlatformRoutineListResponse> | PlatformRoutineListResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/platform_routines/administration",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListPlatformRoutinesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUpdatePlatformRoutineMockHandler = (
+  overrideResponse?:
+    | PlatformRoutine
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<PlatformRoutine> | PlatformRoutine),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/admin/platform_routines/administration/:id",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUpdatePlatformRoutineResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetBrandingSettingsMockHandler = (
   overrideResponse?:
     | BrandingSettings
@@ -2206,6 +2364,8 @@ export const getAdminMock = () => [
   getBulkInviteMembersMockHandler(),
   getListBackgroundJobsMockHandler(),
   getCancelBackgroundJobMockHandler(),
+  getListPlatformRoutinesMockHandler(),
+  getUpdatePlatformRoutineMockHandler(),
   getGetBrandingSettingsMockHandler(),
   getSaveBrandingSettingsMockHandler(),
   getResetBrandingSettingsMockHandler(),

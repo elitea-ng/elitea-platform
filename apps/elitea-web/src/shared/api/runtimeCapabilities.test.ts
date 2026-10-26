@@ -16,6 +16,7 @@ const RUST: RuntimeCapabilities = {
     planner: true,
     lazy_tools_mode: true,
     attachments: true,
+    subagents: true,
   },
   hidden_toolkit_types: ['jira', 'confluence', 'testio'],
 };
@@ -31,6 +32,7 @@ describe('isInternalToolAvailable', () => {
     expect(isInternalToolAvailable(RUST, 'lazy_tools_mode')).toBe(true);
     expect(isInternalToolAvailable(RUST, 'attachments')).toBe(true);
     expect(isInternalToolAvailable(RUST, 'data_analysis')).toBe(true);
+    expect(isInternalToolAvailable(RUST, 'subagents')).toBe(true);
   });
 
   // A name absent from internal_tools must not read as unavailable just

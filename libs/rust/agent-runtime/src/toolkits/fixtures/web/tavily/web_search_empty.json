@@ -1,0 +1,12 @@
+{
+ "status": 200,
+ "content_type": "application/json",
+ "body": {
+  "query": "zzqx",
+  "results": [],
+  "response_time": "0.4",
+  "usage": {
+   "credits": 1
+  }
+ }
+}

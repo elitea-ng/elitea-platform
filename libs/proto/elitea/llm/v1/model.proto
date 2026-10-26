@@ -53,6 +53,15 @@ service ModelService {
   // ImageEdit is POST /llm/v1/images/edits. The multipart body streams: the
   // head first, then body chunks.
   rpc ImageEdit(stream ImageEditRequest) returns (ImageEditResponse);
+  // MeteredAdmit is POST /llm/v1/metered/admit (#1238): a metered tool
+  // operation asks the budget gate before its provider is called. Unlike the
+  // model RPCs, the execution id is REQUIRED and must verify: an id that would
+  // be dropped is refused (403 execution_not_attributable), because tool spend
+  // with no execution has no run to land on.
+  rpc MeteredAdmit(MeteredAdmitRequest) returns (MeteredAdmitResponse);
+  // MeteredSettle is POST /llm/v1/metered/settle: bills the units of an
+  // admitted operation, under the same execution-id rule.
+  rpc MeteredSettle(MeteredSettleRequest) returns (MeteredSettleResponse);
 }
 
 // ModelCall is who and what a call is for, beside the bearer in metadata.
@@ -164,6 +173,30 @@ message ImageEditRequest {
 }
 
 message ImageEditResponse {
+  ResponseHead head = 1;
+  bytes body = 2;
+}
+
+// MeteredAdmitRequest is one metered admission.
+message MeteredAdmitRequest {
+  ModelCall call = 1;
+  // body is the admit JSON (the gateway's metered-call contract).
+  bytes body = 2;
+}
+
+message MeteredAdmitResponse {
+  ResponseHead head = 1;
+  bytes body = 2;
+}
+
+// MeteredSettleRequest is one settlement of an admitted operation.
+message MeteredSettleRequest {
+  ModelCall call = 1;
+  // body is the settle JSON (the gateway's metered-call contract).
+  bytes body = 2;
+}
+
+message MeteredSettleResponse {
   ResponseHead head = 1;
   bytes body = 2;
 }

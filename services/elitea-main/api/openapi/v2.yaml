@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.17"
+  x-elitea-client-contract: "1.26"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -1232,8 +1232,24 @@ components:
       properties:
         provider:
           type: string
+          description: The model provider, or for a tool row the vendor (`tavily`).
         model:
           type: string
+          description: The model, or for a tool row the operation (`web_search`).
+        operation:
+          type: string
+          enum: [llm, tool]
+          description: |
+            `tool` for a metered tool operation, which bills per unit and has
+            no tokens; `llm` for a model call.
+        units:
+          type: integer
+          format: int64
+          description: Units a tool row consumed. Absent on an llm row.
+        unit:
+          type: string
+          enum: [request, credit, page]
+          description: What `units` counts. Absent on an llm row.
         spend:
           type: number
           nullable: true
@@ -1548,6 +1564,21 @@ components:
           type: number
         total_cost:
           type: number
+          description: >
+            The model estimate plus tool_cost. Present when a call is priced
+            or a metered tool operation was billed.
+        tool_calls:
+          type: integer
+          format: int64
+          description: >
+            Metered tool operations (web search, web fetch, host lookups)
+            settled in the scope. They are not model calls and carry no
+            tokens.
+        tool_cost:
+          type: number
+          description: >
+            What the gateway billed for tool_calls, an exact decimal. Billed,
+            not estimated. ABSENT when there was no tool call.
       description: >
         One scope's model calls, tokens and estimated cost, from
         gateway.llm_request_logs. Source internal/domain/analytics/runs.go.
@@ -1589,6 +1620,21 @@ components:
           type: number
         total_cost:
           type: number
+          description: >
+            The model estimate plus tool_cost. Present when a call is priced
+            or a metered tool operation was billed.
+        tool_calls:
+          type: integer
+          format: int64
+          description: >
+            Metered tool operations (web search, web fetch, host lookups)
+            settled in the scope. They are not model calls and carry no
+            tokens.
+        tool_cost:
+          type: number
+          description: >
+            What the gateway billed for tool_calls, an exact decimal. Billed,
+            not estimated. ABSENT when there was no tool call.
       description: One (provider, model) inside a run.
 
     AnalyticsRunUser:
@@ -1631,6 +1677,21 @@ components:
           type: number
         total_cost:
           type: number
+          description: >
+            The model estimate plus tool_cost. Present when a call is priced
+            or a metered tool operation was billed.
+        tool_calls:
+          type: integer
+          format: int64
+          description: >
+            Metered tool operations (web search, web fetch, host lookups)
+            settled in the scope. They are not model calls and carry no
+            tokens.
+        tool_cost:
+          type: number
+          description: >
+            What the gateway billed for tool_calls, an exact decimal. Billed,
+            not estimated. ABSENT when there was no tool call.
       description: One caller inside a run.
 
     AnalyticsAutomatedActivity:
@@ -1683,6 +1744,21 @@ components:
           type: number
         total_cost:
           type: number
+          description: >
+            The model estimate plus tool_cost. Present when a call is priced
+            or a metered tool operation was billed.
+        tool_calls:
+          type: integer
+          format: int64
+          description: >
+            Metered tool operations (web search, web fetch, host lookups)
+            settled in the scope. They are not model calls and carry no
+            tokens.
+        tool_cost:
+          type: number
+          description: >
+            What the gateway billed for tool_calls, an exact decimal. Billed,
+            not estimated. ABSENT when there was no tool call.
       description: >
         One unattended trigger origin's calls in the window (legacy issues
         6802 and 6881). These calls are excluded from every active-user figure
@@ -2349,6 +2425,39 @@ components:
           type: string
           format: uuid
           description: The UUID of the fork point message group, when there is one.
+        mode:
+          type: string
+          description: >
+            `fork` or `rewind` (forkConversation's `mode`). A fork made before
+            rewinds existed reads `fork`. A client lists the source of a
+            rewind under it as the earlier attempt.
+        cut_message_uuid:
+          type: string
+          format: uuid
+          description: >
+            The UUID of this conversation's copy of the fork point message
+            group, when there is one: the turns up to it are the copied
+            history. A desktop places a rewind's branch summary after it when
+            it rebuilds its session from the server.
+        branch_summary:
+          type: object
+          required: [version]
+          additionalProperties: true
+          description: >
+            getConversation of a rewind only. What the abandoned turns after
+            the fork point tried, in the runtime's shared v1 context summary
+            record (`version` 1, at most 32 KiB): the request's
+            `branch_summary`, or one the server built from those turns' text.
+          properties:
+            version:
+              type: integer
+              description: Always 1.
+          x-elitea-passthrough: >-
+            NOTE(W2): the runtime's v1 context summary record, stored as
+            `meta.forked_from.branch_summary` and served after the same shape
+            and size check the request passes
+            (internal/api/v2/conversations/fork_rewind.go:272
+            `annotateBranchSummary`).
         name:
           type: string
           description: >
@@ -2375,6 +2484,41 @@ components:
             " (fork)" added ("New conversation (fork)" when the source name is
             blank). Trimmed; blank, longer than 256 characters or with a
             control character answers 400.
+        mode:
+          type: string
+          description: >
+            `fork` (the default) or `rewind`. A rewind is a fork that also
+            records the abandoned turns after the fork point as
+            `forked_from.branch_summary`; it needs `message_id`. Any other
+            value answers 400.
+        branch_summary:
+          type: object
+          required: [version]
+          additionalProperties: true
+          description: >
+            A rewind's summary of the abandoned turns, in the runtime's shared
+            v1 context summary record (`version` 1, exactly its keys, at most
+            24 entries per array, 2048 bytes per string and 32 KiB in all).
+            Absent: the server builds one from those turns' text. With
+            another mode, or not a valid record, it answers 400.
+          properties:
+            version:
+              type: integer
+              description: Always 1.
+          x-elitea-passthrough: >-
+            NOTE(W2): the runtime's v1 context summary record, read from the
+            body map and checked for its keys, version and bounds
+            (internal/api/v2/conversations/fork_rewind.go:122
+            `validBranchSummary`) before it is stored.
+        fork_id:
+          type: string
+          format: uuid
+          description: >
+            An idempotency key. A request whose `fork_id` already made a fork
+            of the caller answers that fork (201, its row now, with an empty
+            `forked_messages`) and copies nothing; one that made a fork of
+            another source, fork point or mode answers 409
+            `fork_id_conflict`.
 
     ConversationListing:
       type: object
@@ -3398,6 +3542,20 @@ components:
           type: string
           description: Display name; ignored by the server.
 
+    ChatProjectSkillPick:
+      type: object
+      required: [source, id]
+      description: A project skill picked for one turn, by id.
+      properties:
+        source:
+          type: string
+          enum: [project]
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The skill's id (`listSkills`), at most 2147483647.
+
     ChatSendRequest:
       type: object
       description: >
@@ -3418,6 +3576,24 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/ChatStartAttachment'
+            skills:
+              type: array
+              maxItems: 5
+              description: >-
+                Project skills picked in the composer's `~` menu (client
+                contract 1.19): skills of the path's project that the answering
+                agent version does not carry. Each entry names the skill by id
+                only. The server reads the skill's `base` version itself under
+                the caller's permissions (`models.applications.skills.details`
+                and folder access); no skill text is accepted from the client.
+                A picked skill is applied to this turn, counts toward the
+                five skills a turn may invoke (with the `~name` skills of the
+                version) and toward their 64 KiB of instructions, and is not
+                added to the agent's `load_skill` catalogue. For
+                `agent.execute.application.v1` only. A repeated id, more than
+                five entries or another `source` answers 400.
+              items:
+                $ref: '#/components/schemas/ChatProjectSkillPick'
         project_id:
           type: integer
           format: int64
@@ -3858,6 +4034,12 @@ components:
         state: { type: string, description: 'LOCAL, HANDING_OFF, CLOUD_IDLE, CLOUD_RUNNING or RECLAIMING.' }
         epoch: { type: integer, format: int64 }
         reclaim_pending: { type: boolean }
+        rest_pending:
+          type: boolean
+          description: >-
+            Contract 1.25. True while the owner's desktop may take back the
+            cloud turns the last release left (LOCAL, within the return grace
+            `delete_after`), and during that take back (RECLAIMING).
         handoff_id: { type: string, format: uuid }
         device_name: { type: string }
         history_mode: { type: string }
@@ -3868,6 +4050,78 @@ components:
         updated_at: { type: string, format: date-time }
         delete_after: { type: string, format: date-time, nullable: true }
         workspace_bytes: { type: integer, format: int64 }
+    WorkspaceHandoffChanges:
+      type: object
+      description: >-
+        Contract 1.26. The files a cloud thread's turns changed. NOTE(W2):
+        internal/api/v2/workspacehandoff/changes.go:55 (`changesView`).
+      required: [complete, turns]
+      properties:
+        handoff_id: { type: string, format: uuid, nullable: true, description: 'The current handoff; null when the thread has none.' }
+        base_sha: { type: string, nullable: true, description: 'The handoff snapshot (`refs/elitea/handoff/N`) the cumulative set is measured from.' }
+        head_sha: { type: string, nullable: true, description: 'The cloud tip (`refs/elitea/cloud`); null before the first cloud turn.' }
+        complete:
+          type: boolean
+          description: Every turn from the snapshot to the tip has its changes recorded.
+        cumulative:
+          allOf:
+            - $ref: '#/components/schemas/WorkspaceChangeSet'
+          nullable: true
+          description: 'What the turns changed since the snapshot, as of `cumulative_commit`; null when no turn has a record.'
+        cumulative_commit: { type: string, nullable: true, description: 'The commit `cumulative` belongs to (read its diffs at it): `head_sha`, or the newest recorded turn when the tip has no record.' }
+        turns:
+          type: array
+          description: The cloud turns on the live chain, oldest first.
+          items:
+            $ref: '#/components/schemas/WorkspaceTurnChanges'
+    WorkspaceTurnChanges:
+      type: object
+      description: 'Contract 1.26. One cloud turn. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:55 (`changesView`).'
+      required: [commit, parent_sha, seq, created_at, changes]
+      properties:
+        commit: { type: string, description: 'The turn''s commit (40 hex).' }
+        parent_sha: { type: string, description: 'The commit it started from.' }
+        seq: { type: integer, format: int64, description: 'The store segment it was published in.' }
+        number: { type: integer, format: int64, nullable: true, description: 'The turn''s number on the live chain (1: the first cloud turn after the handoff); null when the worker could not tell.' }
+        response_message_id: { type: string, nullable: true, description: 'The chat answer the turn produced.' }
+        created_at: { type: string, format: date-time }
+        changes:
+          $ref: '#/components/schemas/WorkspaceChangeSet'
+    WorkspaceChangeSet:
+      type: object
+      description: 'Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:55 (`changesView`).'
+      required: [files, omitted_files, hidden_files, additions, deletions]
+      properties:
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkspaceChangedFile'
+        omitted_files: { type: integer, description: 'Changed files past the bound of 1000, counted and not listed.' }
+        hidden_files: { type: integer, description: 'Changed files the exclusions or the path deny list hide.' }
+        additions: { type: integer, description: 'The sum of the listed files'' counted added lines.' }
+        deletions: { type: integer, description: 'The sum of the listed files'' counted removed lines.' }
+    WorkspaceChangedFile:
+      type: object
+      description: 'Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:55 (`changesView`).'
+      required: [path, from_path, status, additions, deletions, binary, too_large, has_diff]
+      properties:
+        path: { type: string }
+        from_path: { type: string, nullable: true, description: 'The path before a `renamed` file; null otherwise.' }
+        status: { type: string, description: '`added`, `modified`, `deleted` or `renamed` (an exact rename).' }
+        additions: { type: integer, nullable: true, description: 'Added lines; null for a binary or too-large file.' }
+        deletions: { type: integer, nullable: true, description: 'Removed lines; null for a binary or too-large file.' }
+        binary: { type: boolean, description: 'A binary file or a symlink; listed without a diff.' }
+        too_large: { type: boolean, description: 'Too large to count or to keep a diff of.' }
+        has_diff: { type: boolean, description: 'getWorkspaceHandoffDiff answers a diff for it.' }
+    WorkspaceHandoffDiff:
+      type: object
+      description: 'Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:68 (`diff`).'
+      required: [commit, scope, path, diff]
+      properties:
+        commit: { type: string }
+        scope: { type: string, description: '`turn` or `cumulative`.' }
+        path: { type: string }
+        diff: { type: string, description: 'The unified diff, at most 48 KiB.' }
     WorkspaceHandoffErased:
       type: object
       description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:336 (`erase`).'
@@ -3897,6 +4151,14 @@ components:
       properties:
         epoch: { type: integer, format: int64 }
         device_id: { type: string }
+        rest:
+          type: boolean
+          description: >-
+            Contract 1.25. Take back the cloud turns the last release left
+            (`turns_not_taken` > 0): a released LOCAL thread within its return
+            grace moves to RECLAIMING with a new epoch, keeping the grace.
+            `epoch` is the LOCAL thread's. Absent or false is the take back of
+            a cloud thread.
     WorkspaceHandoffReclaimed:
       type: object
       description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:393 (`reclaim`).'
@@ -3928,6 +4190,15 @@ components:
         epoch: { type: integer, format: int64 }
         outcome: { type: string, description: '`applied`, `worktree` or `discarded`.' }
         applied_sha: { type: string, nullable: true }
+        turns_not_taken:
+          type: integer
+          minimum: 0
+          maximum: 1000
+          description: >-
+            Contract 1.25. How many cloud turns the take back did not apply
+            (take back up to turn k). More than zero keeps them for a rest
+            take back (reclaim with `rest`) until `cloud_copy_delete_after`.
+            The release of a rest take back keeps the first release's grace.
     WorkspaceHandoffReleased:
       type: object
       description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:447 (`release`).'
@@ -4013,7 +4284,12 @@ components:
       required: [epoch, kind, segment_sha256, bytes, refs, object_format]
       properties:
         epoch: { type: integer, format: int64 }
-        kind: { type: string, description: '`COMPACT` in this version.' }
+        kind:
+          type: string
+          description: >-
+            `COMPACT` (a full segment, no prerequisites; it supersedes every
+            earlier segment) or `PUSH` (incremental, on the live COMPACT; 1 to
+            8 sha1 `prerequisites`, each a current ref value of the thread).
         segment_sha256: { type: string }
         bytes: { type: integer, format: int64 }
         prerequisites:
@@ -4191,6 +4467,23 @@ components:
           type: array
           maxItems: 2000
           items: { type: string }
+        memories_saved:
+          type: array
+          maxItems: 500
+          description: >-
+            Client contract 1.20. The ids of the memories the turn's
+            save_memory calls created, in call order; absent when none. Stored
+            on `local_work` (at most 200, with `memories_saved_total`) and
+            counted in the commit's audit entry.
+          items: { type: integer, format: int64, minimum: 1 }
+        memories_deleted:
+          type: array
+          maxItems: 500
+          description: >-
+            Client contract 1.20. The ids of the memories the turn's
+            delete_memory calls removed, in call order; absent when none.
+            Stored and audited as `memories_saved` is.
+          items: { type: integer, format: int64, minimum: 1 }
     LocalTurnCommitRequest:
       type: object
       description: >-
@@ -4270,6 +4563,26 @@ components:
             $ref: '#/components/schemas/LocalTurnHITLExchange'
         local_work:
           $ref: '#/components/schemas/LocalTurnWorkReport'
+        context_summary:
+          type: object
+          required: [version]
+          additionalProperties: true
+          description: >-
+            Client contract 1.18. The latest context summary the turn's model
+            requests started from or made, in the runtime's shared v1 record
+            (`version` 1, at most 32 KiB). Stored as the answer's
+            `meta.context_summary`, for the cloud executor that takes the
+            thread over; absent or null leaves it out.
+          properties:
+            version:
+              type: integer
+              description: Always 1.
+          x-elitea-passthrough: >-
+            NOTE(W2): the runtime's v1 context summary record, read as
+            json.RawMessage (internal/api/v2/localturns/route.go:112) and
+            stored as sent after a shape and size check
+            (internal/application/localturn/localturn.go:558
+            `validContextSummary`).
     LocalTurnCommitted:
       type: object
       description: >-
@@ -4570,11 +4883,133 @@ components:
               x-elitea-passthrough: >-
                 NOTE(W2): the arguments to send again after authorising
                 (internal/api/v2/desktopops/remote_toolkit.go:627).
+    LocalChildTurnRequest:
+      type: object
+      additionalProperties: false
+      description: >-
+        One cloud child turn of a live local turn (issue 1239): a nested
+        agent of the turn's agent, run as an ordinary cloud turn. NOTE(W2):
+        internal/api/v2/desktopops/child_turn.go (`childTurnBody`).
+      required: [application_id, version_id, input, idempotency_key]
+      properties:
+        application_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The nested agent (an `application` tool's `application_id` in the turn's resolved version).
+        version_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Its version (the tool's `application_version_id`).
+        input:
+          type: string
+          minLength: 1
+          maxLength: 131072
+          description: The task the child is given, as its user message.
+        idempotency_key:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]+$'
+          description: One key per intended call, repeated on every retry; a retry never starts a second child.
+    LocalChildTurnStarted:
+      type: object
+      description: >-
+        The child turn admitted (or replayed). NOTE(W2):
+        internal/api/v2/desktopops/child_turn.go (`writeChildStarted`).
+      required: [child_execution_id, response_message_id, conversation_uuid, created]
+      properties:
+        child_execution_id:
+          type: string
+          description: The child's execution; readLocalChildTurn reads it by this id.
+        response_message_id:
+          type: string
+          format: uuid
+          description: The child's answer in its conversation (the chat stop and continue routes take it).
+        conversation_uuid:
+          type: string
+          format: uuid
+          description: The hidden child conversation (`source` `local_child`).
+        created:
+          type: boolean
+          description: False for a replay of an admitted child.
+    LocalChildTurnInterrupt:
+      type: object
+      description: >-
+        A child paused for a person's decision: the fields of its
+        `hitl_interrupt` (the chat HITL shape) the decision needs; the tool's
+        arguments are never relayed.
+      properties:
+        interrupt_id: { type: string, nullable: true }
+        guardrail_type: { type: string, nullable: true }
+        message: { type: string, nullable: true }
+        policy_message: { type: string, nullable: true }
+        action_label: { type: string, nullable: true }
+        available_actions:
+          type: array
+          nullable: true
+          items: { type: string }
+        tool_name: { type: string, nullable: true }
+        toolkit_name: { type: string, nullable: true }
+        toolkit_type: { type: string, nullable: true }
+    LocalChildToolCall:
+      type: object
+      required: [tool_name, is_error]
+      properties:
+        tool_name: { type: string }
+        is_error: { type: boolean }
+    LocalChildTurnUsage:
+      type: object
+      description: The model calls the gateway recorded for the child's executions.
+      required: [llm_calls, prompt_tokens, completion_tokens]
+      properties:
+        llm_calls: { type: integer, format: int64 }
+        prompt_tokens: { type: integer, format: int64 }
+        completion_tokens: { type: integer, format: int64 }
+    LocalChildTurnState:
+      type: object
+      description: >-
+        One read of a child turn. NOTE(W2):
+        internal/api/v2/desktopops/child_turn.go (`childTurnView`).
+      required: [status, child_execution_id, response_message_id, conversation_uuid, tool_calls_summary]
+      properties:
+        status:
+          type: string
+          enum: [running, completed, failed, interrupted, authorization_required, output_limit, cancelled]
+          description: >-
+            `interrupted`: paused for a decision (`interrupt`), answered with
+            continueChatExecution (`agent.continue.hitl.v1`) on the child
+            conversation; `authorization_required` and `output_limit`: paused
+            for what only the web chat answers; `cancelled`: the answer was
+            removed (a stop before any output).
+        child_execution_id:
+          type: string
+          description: The child's current execution (a resumed child runs under a new one).
+        response_message_id: { type: string, format: uuid }
+        conversation_uuid: { type: string, format: uuid }
+        output:
+          type: string
+          description: The child's answer (`completed`), at most 256 KiB.
+        output_truncated: { type: boolean }
+        error:
+          type: string
+          description: The runtime's bounded failure message (`failed`).
+        interrupt:
+          $ref: '#/components/schemas/LocalChildTurnInterrupt'
+        tool_calls_summary:
+          type: array
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/LocalChildToolCall'
+        usage:
+          $ref: '#/components/schemas/LocalChildTurnUsage'
     DesktopOperationError:
       type: object
       description: >-
         A refused desktop operation (resolveApplicationVersion,
-        executeRemoteToolkitTool). `error` is a machine code. NOTE(W2):
+        executeRemoteToolkitTool, startLocalChildTurn, readLocalChildTurn).
+        `error` is a machine code. NOTE(W2):
         internal/api/v2/desktopops/resolved_version.go:118 (`serve`).
       required: [error]
       properties:
@@ -4588,6 +5023,9 @@ components:
         internal/api/v2/agentexecution/route.go:558 (`writeStartError`) and
         :601 (`writeUnsupported`). `error` is a machine code for 409 and 422
         (`agent_regeneration_pending`, `agent_hitl_already_resolved`,
+        `project_skills_limit`, `project_skills_too_large`,
+        `project_skill_name_conflict`, `project_skill_unknown`,
+        `project_skills_forbidden`,
         `agent_authorization_already_resolved`,
         `agent_output_limit_already_resolved`, `unsupported_agent_execution`)
         and a message otherwise; the idempotency conflict is a 409 whose
@@ -5238,6 +5676,29 @@ components:
         storage_space: { $ref: '#/components/schemas/StatisticEntry' }
         data_retention_limit: { $ref: '#/components/schemas/StatisticEntry' }
 
+    GenerateConversationNameRequest:
+      type: object
+      required:
+        - expected_name
+      properties:
+        expected_name:
+          type: string
+          description: The name the client gave the conversation; the route renames only while the stored name is this one.
+          example: how do I rotate the gateway's TLS
+    GeneratedConversationName:
+      type: object
+      required:
+        - name
+        - renamed
+      properties:
+        name:
+          type: string
+          description: The conversation's name after the call (the generated title, or the name it kept).
+          example: Gateway TLS certificate rotation
+        renamed:
+          type: boolean
+          description: This call set the name.
+          example: true
     ErrorResponse:
       type: object
       required: [error]
@@ -5509,6 +5970,71 @@ components:
           description: >
             The per-source scan window was full, so older rows exist that this
             page cannot reach.
+
+    PlatformRoutine:
+      type: object
+      description: >
+        One recurring routine the platform runs: a scheduled job of
+        elitea-main or a worker of elitea-scheduler. `schedule` is what is in
+        force now - the operator's override when there is one, else the
+        default the code or chart supplies.
+      required:
+        - id
+        - owner
+        - description
+        - default_schedule
+        - schedule
+        - min_interval_seconds
+        - enabled
+        - updated_at
+      properties:
+        id: { type: string }
+        owner:
+          type: string
+          description: "`main` (elitea-main's scheduler) or `scheduler` (elitea-scheduler)."
+        description: { type: string }
+        default_schedule:
+          type: string
+          description: A Go duration (`30m`) or a five-field cron expression.
+        schedule_override:
+          type: string
+          nullable: true
+        schedule: { type: string }
+        min_interval_seconds:
+          type: integer
+          format: int64
+          description: The shortest gap an override may set. Zero means no bound.
+        enabled: { type: boolean }
+        last_run_at: { type: string, format: date-time, nullable: true }
+        last_outcome:
+          type: string
+          nullable: true
+          description: "`ok`, `error` or `maintenance`."
+        next_run_at: { type: string, format: date-time, nullable: true }
+        updated_by: { type: string, nullable: true }
+        updated_at: { type: string, format: date-time }
+
+    PlatformRoutineListResponse:
+      type: object
+      required: [total, rows]
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlatformRoutine'
+
+    PlatformRoutineUpdate:
+      type: object
+      additionalProperties: false
+      description: >
+        Absent fields are left alone. An empty `schedule` removes the override
+        and puts the default back in force.
+      properties:
+        enabled: { type: boolean }
+        schedule:
+          type: string
+          maxLength: 64
 
     OkResponse:
       type: object
@@ -9002,6 +9528,39 @@ components:
           type: boolean
           nullable: true
           description: '`reviewed` only.'
+        input_cost_per_1m_tokens:
+          type: number
+          nullable: true
+          description: >
+            `reviewed` only, and section=llm only. USD per 1M input tokens from
+            the gateway's price catalogue (gateway.gateway_models, the table the
+            budget gate prices with). Absent or null when the price is unknown
+            or when the caller may not see amounts (the budget routes'
+            can_see_amounts rule: the caller's personal project, or the project
+            admin role).
+        output_cost_per_1m_tokens:
+          type: number
+          nullable: true
+          description: >
+            `reviewed` only, and section=llm only. USD per 1M output tokens from
+            the gateway's price catalogue. Absent or null when unknown or when
+            the caller may not see amounts (the budget routes' can_see_amounts
+            rule).
+        cached_input_cost_per_1m_tokens:
+          type: number
+          nullable: true
+          description: >
+            `reviewed` only, and section=llm only. What the gateway charges per
+            1M cached input tokens, in USD; it applies no cache discount today,
+            so it equals the input price. Absent or null when unknown or when
+            the caller may not see amounts (the budget routes' can_see_amounts
+            rule).
+        currency:
+          type: string
+          nullable: true
+          description: >
+            `reviewed` only. The currency of the three cost fields, always
+            "USD". Present exactly when they are.
         data:
           type: object
           additionalProperties: true
@@ -9324,13 +9883,19 @@ components:
 
     UploadObjectResponse:
       type: object
-      required: [key, size_bytes, media_type, etag, created_at]
+      required: [key, size_bytes, media_type, etag, created_at, updated_at]
       properties:
         key: { type: string }
         size_bytes: { type: integer, format: int64 }
         media_type: { type: string }
         etag: { type: string }
         created_at: { type: string, format: date-time }
+        updated_at:
+          type: string
+          format: date-time
+          description: >
+            This write's time (artifacts/objects.go UploadObject); differs
+            from created_at when overwrite=true replaced an existing object.
 
     BatchDeleteObjectsRequest:
       type: object
@@ -12538,6 +13103,21 @@ components:
             the Hugging Face CDN (<base>/<repo>/resolve/<revision>/<file>).
             Empty (the default) is Hugging Face. Every file is checked against
             the SHA-256 the app pins.
+        web:
+          type: boolean
+          description: >-
+            Client contract 1.22. Local turns may use the web toolkit
+            (web_search, web_fetch), which sends the turn's queries and URLs to
+            third-party providers. Absent or false is off (the default); the
+            server also refuses a remote web call of a turn while it is false
+            (403 local_work_policy_refused).
+        host_intel:
+          type: boolean
+          description: >-
+            Client contract 1.22. Local turns may use the host_intel toolkit
+            (internet host search and lookup through Shodan). Absent or false
+            is off (the default); the server refuses a remote host_intel call
+            while it is false.
     InvalidQueryParameterError:
       type: object
       description: >-
@@ -15306,6 +15886,86 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  /admin/platform_routines/administration:
+    get:
+      operationId: listPlatformRoutines
+      summary: List the platform's recurring routines
+      description: >
+        The admin Schedules page. One row per routine registered by
+        elitea-main's scheduler and elitea-scheduler's workers. Gated on
+        `configuration.scheduling.schedules.view`.
+      tags: [admin]
+      responses:
+        '200':
+          description: Every registered routine
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformRoutineListResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500':
+          description: The registry could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: This deployment has no routine registry configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/platform_routines/administration/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      operationId: updatePlatformRoutine
+      summary: Switch a routine on or off, or change its schedule
+      description: >
+        Takes effect on the owner's next tick or poll, without a restart.
+        Gated on `configuration.scheduling.schedules.edit`; audited.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformRoutineUpdate'
+      responses:
+        '200':
+          description: The routine as stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformRoutine'
+        '400':
+          description: >
+            No field supplied, or a schedule that does not parse or fires more
+            often than the routine allows
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such routine
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The routine changed while it was being edited
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: This deployment has no routine registry configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
   /admin/branding/administration:
     # ADR-0024 decision 5: the typed editor of the brand pack's DATABASE
     # layer. The same rows the generic Configuration page's `branding`
@@ -17411,8 +18071,8 @@ paths:
         must be in the internal-tools catalogue the agent turn admits:
         `ask_user`, `attachments`, `data_analysis`, `image_generation`,
         `internal_mcp`, `lazy_tools_mode`, `planner`,
-        `project_context_builder`, `pyodide`, `skills_builder`, `swarm`. A
-        name outside it, a missing or non-array `internal_tools`, or any
+        `project_context_builder`, `pyodide`, `skills_builder`, `subagents`,
+        `swarm`. A name outside it, a missing or non-array `internal_tools`, or any
         other key answers 400 and writes nothing. Whether the configured
         worker runs a tool is a separate question (runtime capabilities).
 
@@ -17519,6 +18179,20 @@ paths:
         reply of the copy that is; without
         `message_id`, the newest message is the fork point. An editor Test
         conversation answers 409 `fork_not_supported`.
+
+        A rewind (`mode: rewind`, issue 1234) is a fork at an answer that
+        also records what the turns after it tried: `forked_from` names the
+        mode and the copy's fork point (`cut_message_uuid`), and
+        getConversation's `forked_from.branch_summary` is the request's
+        `branch_summary` or, without one, a summary the server builds from
+        the text of the turns it did not copy. The source is not changed: a
+        client lists it under the rewound conversation as the earlier
+        attempt. A Local work thread the cloud executor owns (ADR-0034)
+        answers 409 `thread_executor_is_cloud`; a fork of more than 1000
+        message groups answers 413 `fork_too_large`. Nothing is created
+        when the fork is refused. With `fork_id`, a retry answers the fork
+        the first request made. The audit trail records
+        `conversation.fork` or `conversation.rewind`.
       tags:
         - chat
         - client
@@ -17544,8 +18218,10 @@ paths:
           description: >
             A body that is not a JSON object, an invalid `name` (blank, longer
             than 256 characters or with a control character), a `message_id`
-            that is not a string, or a native client version that does not
-            parse (invalid_client_version).
+            that is not a string, an unknown `mode`, a rewind without
+            `message_id`, an invalid `branch_summary` (or one on a plain
+            fork), a `fork_id` that is not a UUID, or a native client version
+            that does not parse (invalid_client_version).
           content:
             application/json:
               schema:
@@ -17560,6 +18236,14 @@ paths:
           $ref: "#/components/responses/404"
         "409":
           $ref: "#/components/responses/409"
+        "413":
+          description: >
+            `fork_too_large`: the fork would copy more than 1000 message
+            groups. Fork from an earlier message.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "426":
           $ref: "#/components/responses/ClientUpgradeRequired"
         "500":
@@ -17811,6 +18495,79 @@ paths:
           $ref: "#/components/responses/ClientUpgradeRequired"
         "500":
           $ref: "#/components/responses/500"
+  /elitea_core/conversation_name/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The conversation's numeric id or its UUID; both resolve.
+    post:
+      operationId: generateConversationName
+      summary: Name a conversation from its first exchange
+      description: |
+        Client contract 1.24. Asks the project's default model for a short
+        title of the conversation, from its first question and first answer, and renames
+        the conversation to it. Needs `models.chat.conversation.update` and
+        access to the conversation, as a rename does. The call is billed to
+        the caller, like `predict_llm`.
+
+        `expected_name` is the name the client gave the conversation (a cut
+        of the first message). The route renames only while the stored name
+        is still that one, so it never overwrites a person's own rename: it
+        reads the name again after the model call. The answer is the name
+        the conversation has then, and whether this call set it. A
+        conversation without a question yet keeps its name. Other devices
+        get the new name through the `changes_since` delta, as with any
+        rename.
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateConversationNameRequest"
+      responses:
+        "200":
+          description: The conversation's name now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeneratedConversationName"
+        "400":
+          description: A body without `expected_name`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
+        "502":
+          description: The model gave no title. The name is not changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: No LLM gateway is configured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}:
     parameters:
       - $ref: "#/components/parameters/ProjectId"
@@ -18312,7 +19069,21 @@ paths:
               schema:
                 $ref: '#/components/schemas/ChatExecutionError'
         '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
+        '403':
+          description: >-
+            No permission to send in this project, or (`project_skills_forbidden`)
+            the body picks project skills and the caller may not read the
+            project's skills.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
+        '404':
+          description: '`project_skill_unknown`: a picked project skill does not exist in this project or is hidden from the caller.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatExecutionError'
         '409':
           description: The `question_id` was already used with a different body.
           content:
@@ -18332,7 +19103,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/ChatExecutionError'
         '422':
-          description: '`unsupported_agent_execution`: this turn cannot run on the current execution path.'
+          description: >-
+            `unsupported_agent_execution`: this turn cannot run on the current
+            execution path; or a refused skill pick: `project_skills_limit`
+            (more than five skills in the turn), `project_skills_too_large`
+            (more than 64 KiB of skill instructions) or
+            `project_skill_name_conflict` (a picked skill shares its name with a
+            different skill of the agent).
           content:
             application/json:
               schema:
@@ -19046,6 +19823,12 @@ paths:
         pending (202): the thread becomes RECLAIMING when the turn ends, or
         after 60 seconds, when the turn is cancelled. A native app token of the
         owner only.
+
+        Contract 1.25: with `rest`, a released LOCAL thread whose release left
+        turns not taken moves to RECLAIMING (200, a new epoch) within its
+        return grace; a retry answers the same RECLAIMING thread. Once the
+        grace runs out a rest take back that was never released returns to
+        LOCAL and the cloud copy is erased.
       tags: [chat, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'
@@ -19063,6 +19846,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkspaceHandoffReclaimed'
+              example:
+                state: RECLAIMING
+                epoch: 5
+                cloud_sha: 0123456789abcdef0123456789abcdef01234567
         '400':
           description: >-
             A malformed body (`invalid_handoff`), or an `X-Client-Version`
@@ -19105,7 +19892,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkspaceHandoffReclaimPending'
         '409':
-          description: '`stale_epoch`.'
+          description: >-
+            `stale_epoch`. With `rest`: `stale_epoch` also when the thread is
+            not a released LOCAL thread with turns not taken,
+            `handoff_erased` when its return grace is over or its cloud copy
+            was erased, `local_turn_in_progress` when a local turn is not
+            committed.
           content:
             application/json:
               schema:
@@ -19207,6 +19999,9 @@ paths:
         to LOCAL (a new epoch) with the take back's outcome, appends the event
         message, and keeps the cloud copy until `cloud_copy_delete_after` (the
         return grace). A retried release answers the same row.
+
+        Contract 1.25: `turns_not_taken` > 0 (take back up to turn k) keeps
+        the remaining cloud turns for a rest take back within the grace.
       tags: [chat, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'
@@ -19224,6 +20019,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkspaceHandoffReleased'
+              example:
+                state: LOCAL
+                epoch: 4
+                cloud_copy_delete_after: '2026-11-01T12:00:00Z'
         '400':
           description: >-
             A malformed body (`invalid_handoff`), or an `X-Client-Version`
@@ -19278,6 +20077,253 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkspaceHandoffError'
 
+  /elitea_core/workspace_handoff_changes/prompt_lib/{project_id}/{conversation_uuid}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_uuid
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The Local work thread's conversation UUID, lowercase canonical.
+    get:
+      operationId: getWorkspaceHandoffChanges
+      summary: Read the files a cloud thread's turns changed
+      description: |
+        Client contract 1.26 (ADR-0034 Phase 2, the Files changed view). The
+        files each cloud turn of the current handoff changed, oldest turn
+        first, and what all of them changed since the handoff snapshot
+        (`cumulative`), with a status, +/- line counts where the worker could
+        count them, and whether a diff is kept (`has_diff`; read it with
+        getWorkspaceHandoffDiff). The worker records them when it publishes a
+        turn; Main reads no git pack.
+
+        Only the turns on the live chain are listed: from the handoff
+        snapshot to `refs/elitea/cloud`, so a regenerated answer's earlier
+        attempt is not. `complete` is false when a turn on that chain has no
+        record (its record failed): the turns below it are still listed (the
+        walk resumes at the newest attempt under its turn `number`), and when
+        the tip itself has none, the turns and `cumulative` start at the
+        newest record (`cumulative_commit`).
+
+        A path that the thread's exclusions (the platform and project
+        patterns, the files excluded at send) or the path deny list match is
+        never listed, nor is a rename from or to one: it is counted in
+        `hidden_files`. As at the send, a file the exclusions match that was
+        explicitly included (`included_excluded`, when the policy allows
+        includes) is listed; the path deny list wins over an include. A
+        thread with no handoff answers no turns.
+
+        WHO. Any caller who may read the conversation (cookie or token, with
+        `models.chat.conversation.details`), as getWorkspaceHandoff.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The changes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffChanges'
+              example:
+                handoff_id: 6b1f3f0e-6a52-4d0b-9a55-7f3c2f2f7a10
+                base_sha: 3f2c1b0a9e8d7c6b5a493827161504f3e2d1c0b9
+                head_sha: 9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3
+                complete: true
+                cumulative_commit: 9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3
+                cumulative:
+                  additions: 14
+                  deletions: 3
+                  omitted_files: 0
+                  hidden_files: 0
+                  files:
+                    - path: src/parser.rs
+                      from_path: null
+                      status: modified
+                      additions: 12
+                      deletions: 3
+                      binary: false
+                      too_large: false
+                      has_diff: true
+                    - path: docs/parser.md
+                      from_path: null
+                      status: added
+                      additions: 2
+                      deletions: 0
+                      binary: false
+                      too_large: false
+                      has_diff: true
+                    - path: assets/logo.png
+                      from_path: null
+                      status: modified
+                      additions: null
+                      deletions: null
+                      binary: true
+                      too_large: false
+                      has_diff: false
+                turns:
+                  - commit: 9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3
+                    parent_sha: 3f2c1b0a9e8d7c6b5a493827161504f3e2d1c0b9
+                    seq: 2
+                    number: 1
+                    response_message_id: 0b5d2f6e-3c1a-4e8b-9f7d-2a6c4e8b1d3f
+                    created_at: '2026-10-25T12:00:00Z'
+                    changes:
+                      additions: 14
+                      deletions: 3
+                      omitted_files: 0
+                      hidden_files: 0
+                      files:
+                        - path: src/parser.rs
+                          from_path: null
+                          status: modified
+                          additions: 12
+                          deletions: 3
+                          binary: false
+                          too_large: false
+                          has_diff: true
+                        - path: docs/parser.md
+                          from_path: null
+                          status: added
+                          additions: 2
+                          deletions: 0
+                          binary: false
+                          too_large: false
+                          has_diff: true
+                        - path: assets/logo.png
+                          from_path: null
+                          status: modified
+                          additions: null
+                          deletions: null
+                          binary: true
+                          too_large: false
+                          has_diff: false
+        '400':
+          description: >-
+            A malformed path (`invalid_handoff`), or an `X-Client-Version`
+            that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: No project permission.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: No such conversation for this caller (`handoff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+  /elitea_core/workspace_handoff_diff/prompt_lib/{project_id}/{conversation_uuid}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_uuid
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The Local work thread's conversation UUID, lowercase canonical.
+    get:
+      operationId: getWorkspaceHandoffDiff
+      summary: Read one changed file's diff
+      description: |
+        Client contract 1.26 (ADR-0034 Phase 2). The unified diff (git's
+        format, 3 lines of context) the worker kept for one file of
+        getWorkspaceHandoffChanges: `scope=turn` with that turn's `commit`, or
+        `scope=cumulative` with `cumulative_commit`. A diff is at most 48 KiB; a file
+        with `has_diff` false has none (404 `diff_not_found`), and so has a
+        path getWorkspaceHandoffChanges hides. Who may read it is as for
+        getWorkspaceHandoffChanges.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: commit
+          in: query
+          required: true
+          schema: { type: string, pattern: '^[0-9a-f]{40}$' }
+          description: The turn's commit, or `head_sha` for the cumulative scope.
+        - name: scope
+          in: query
+          required: true
+          schema: { type: string }
+          description: '`turn` or `cumulative`.'
+        - name: path
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 4096 }
+          description: The file's path in the workspace, as listed.
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The diff.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffDiff'
+              example:
+                commit: 9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3
+                scope: turn
+                path: docs/parser.md
+                diff: |
+                  diff --git a/docs/parser.md b/docs/parser.md
+                  new file mode 100644
+                  --- /dev/null
+                  +++ b/docs/parser.md
+                  @@ -0,0 +1,2 @@
+                  +# Parser
+                  +The parser reads one token at a time.
+        '400':
+          description: >-
+            A malformed path or query (`invalid_handoff`), or an
+            `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: No project permission.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: >-
+            No such conversation for this caller (`handoff_not_found`), or no
+            diff of that file (`diff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
   /elitea_core/workspace_store_upload/prompt_lib/{project_id}/{conversation_uuid}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -19531,7 +20577,10 @@ paths:
             (with a `Retry-After: 1` header): another change to the thread is
             being saved; nothing was compared, so send the SAME publish again
             after the delay (it then answers the original result if the first
-            one committed).
+            one committed). Contract 1.25, a `PUSH`: `prerequisite_unknown`
+            (a prerequisite is not a current ref value of the thread, or the
+            thread has no live COMPACT) or `segment_chain_too_long` (the live
+            PUSH chain is at its cap; publish a COMPACT).
           headers:
             Retry-After:
               description: Seconds to wait before retrying; set for `thread_busy`.
@@ -19572,8 +20621,11 @@ paths:
       summary: Read the segments a reader needs
       description: |
         Client contract 1.8 (ADR-0034 decision 2). The fetch plan from
-        `since_seq`: in this version the newest COMPACT segment at or after it,
-        with a URL valid until `expires_at`, and the thread's refs.
+        `since_seq`, oldest first: the newest live COMPACT segment when it is
+        at or after `since_seq`, then every later live PUSH segment after
+        `since_seq` (contract 1.25; only PUSH segments when `since_seq` is
+        past the COMPACT). Each has a URL valid until `expires_at`; the plan
+        carries the thread's refs.
       tags: [chat, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'
@@ -20131,6 +21183,238 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RemoteToolkitCallResult'
+
+  /elitea_core/local_child_turn/prompt_lib/{project_id}/{execution_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: execution_id
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[0-9a-f]{32}$' }
+        description: The live local turn (startLocalTurn's `execution_id`) the child runs under.
+    post:
+      operationId: startLocalChildTurn
+      summary: Run a nested agent of a local turn as a cloud child turn
+      description: |
+        Issue 1239 (ADR-0029 decision 1). Starts a nested agent of the agent a
+        desktop runs locally as an ordinary cloud turn on a worker, in a
+        hidden child conversation (`source` `local_child`, `meta.is_hidden`,
+        `meta.parent_execution_id` naming the local turn). The desktop never
+        joins the worker protocol, and no credential of the child's toolkits
+        reaches it: the worker runs the child as it runs any chat turn.
+
+        WHO. Only a native access token or a personal access token; a browser
+        session answers 403 `local_child_turn_requires_token`. The caller
+        needs `models.chat.messages.create` in the project.
+
+        THE AUTHORITY OF THE PARENT TURN. `execution_id` must be a live local
+        turn of the caller (started by this caller in this project with the
+        same credential family, not committed, not past its deadline, local
+        work allowed), and the agent must be one of that turn's agent
+        version's own `application` tools (403 `child_agent_not_in_agent`
+        otherwise). A thread handed off to the cloud has no live local turn,
+        so it starts no child.
+
+        IDEMPOTENCY. One `idempotency_key` per intended call, repeated on every
+        retry: a retry answers the child the first attempt admitted
+        (`created: false`), never a second; the same key with another input
+        is 409 `idempotency_conflict`. At most 30 new children a minute per
+        caller on each server replica (429 `rate_limited`). Every start that
+        names an agent is audited with the parent and the child execution.
+
+        The answer streams nowhere: read the child with readLocalChildTurn,
+        stop it with cancelChatExecution on its `response_message_id`, answer
+        its pause with continueChatExecution on its conversation.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocalChildTurnRequest'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '202':
+          description: The child was admitted, or a retry found it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalChildTurnStarted'
+              # Served by the generated web test mock (orval useExamples) and
+              # validated against the schema by check-spec-examples.mjs.
+              example:
+                child_execution_id: 9b2f6c1e4d8a4f7b8c3e5a1d2f6b7c90
+                response_message_id: 3f1c2a4e-8b7d-4c6a-9e1f-2d3b4a5c6e7f
+                conversation_uuid: 7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d
+                created: true
+        '400':
+          description: >-
+            A malformed body or field (`invalid_local_child_turn`), or an
+            `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/DesktopOperationError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: No `models.chat.messages.create`, a session caller (`local_child_turn_requires_token`), local work turned off (`local_work_disabled`), or an agent the turn's agent does not nest (`child_agent_not_in_agent`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '404':
+          description: The local turn is not this caller's in this project (`local_turn_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '409':
+          description: The local turn is already committed (`local_turn_already_committed`), or the key started a child with another input (`idempotency_conflict`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '410':
+          description: The local turn passed its deadline (`local_turn_expired`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '413':
+          description: The body is larger than 132 KiB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '422':
+          description: The nested agent is a pipeline, or cannot be started on this deployment (`child_agent_unsupported`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '429':
+          description: Too many children from this caller (`rate_limited`); retry after Retry-After.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: This deployment runs no cloud agents (`local_child_turn_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '503':
+          description: Something could not be read or written right now (`local_child_turn_unavailable_now`); retry with the same key.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+
+  /elitea_core/local_child_turn/prompt_lib/{project_id}/{execution_id}/{child_execution_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: execution_id
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[0-9a-f]{32}$' }
+        description: The local turn the child was started under.
+      - name: child_execution_id
+        in: path
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }
+        description: startLocalChildTurn's `child_execution_id`.
+    get:
+      operationId: readLocalChildTurn
+      summary: Read a cloud child turn of a local turn
+      description: |
+        Issue 1239. The child's state: `running`, its answer (`completed`,
+        with a summary of its tool calls and its model usage), its failure,
+        or the pause it waits on. Only the caller who started the child,
+        under the local turn the path names, reads it (404
+        `local_child_turn_not_found` otherwise); the local turn need not
+        still be live. Token callers only, like the start.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The child's state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalChildTurnState'
+              # Served by the generated web test mock (orval useExamples) and
+              # validated against the schema by check-spec-examples.mjs.
+              example:
+                status: completed
+                child_execution_id: 9b2f6c1e4d8a4f7b8c3e5a1d2f6b7c90
+                response_message_id: 3f1c2a4e-8b7d-4c6a-9e1f-2d3b4a5c6e7f
+                conversation_uuid: 7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d
+                output: "PROJ-142 is open: the login page times out behind the proxy; assigned to the platform team."
+                output_truncated: false
+                tool_calls_summary:
+                  - tool_name: jira_get_issue
+                    is_error: false
+                usage:
+                  llm_calls: 2
+                  prompt_tokens: 1840
+                  completion_tokens: 212
+        '400':
+          description: A malformed id (`invalid_local_child_turn`), or an `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/DesktopOperationError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: No `models.chat.messages.create`, or a session caller (`local_child_turn_requires_token`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '404':
+          description: No such child of this caller under this local turn (`local_child_turn_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: This deployment runs no cloud agents (`local_child_turn_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '503':
+          description: The child cannot be read right now (`local_child_turn_unavailable_now`); retry.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
 
   /elitea_core/task/prompt_lib/{project_id}/{response_message_id}:
     parameters:
@@ -21408,8 +22692,11 @@ paths:
         internal/api/v2/memories/handler.go's Create (#870). Used both by
         Settings > Memory's "Add memory" control and by the chat message
         "Remember this" action (which additionally sends
-        `source_conversation_id`).
-      tags: [chat]
+        `source_conversation_id`). Client contract 1.20: the desktop's
+        `save_memory` tool (#1233) writes through it.
+      tags: [chat, client]
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
       requestBody:
         required: true
         content:
@@ -21417,6 +22704,8 @@ paths:
             schema:
               $ref: '#/components/schemas/MemoryEntryWriteRequest'
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         '201':
           description: The created memory.
           content:
@@ -22855,11 +24144,30 @@ paths:
             (apps/elitea-ui/src/api/applications.js:592).
       responses:
         '200':
-          description: Export document
+          description: >
+            Export document. JSON by default; with ?format=md the same
+            document rendered as markdown (eliteacore/export_markdown.go
+            writeMarkdownExport), served as an attachment. An application
+            with more than one version answers application/zip instead,
+            one markdown file per version.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApplicationExportResponse'
+            text/markdown:
+              schema: { type: string }
+              example: |-
+                ---
+                name: Exported Agent
+                description: A synthetic agent used by the export probe.
+                model: gpt-4o
+                temperature: 0.7
+                agent_type: react
+                ---
+
+                Answer the user's question.
+            application/zip:
+              schema: { type: string, format: binary }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
@@ -24511,6 +25819,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BucketListResponse'
+              # Served by the generated web test mock (orval useExamples) and
+              # validated against the schema by check-spec-examples.mjs.
+              example:
+                buckets:
+                  - name: demo-bucket
+                    type: local
+                    is_pinned: false
+                    tags: {}
+                    retention_days: null
+                    expires_at: null
+                    size_bytes: 128
+                    object_count: 1
+                    created_at: "2026-07-20T00:00:00Z"
+                    updated_at: "2026-07-20T00:00:00Z"
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
 
@@ -24671,6 +25993,44 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListObjectsResponse'
+              # A DeepWiki bucket: one wiki manifest and the five pages it
+              # names, under the wiki's own prefix. Served by the generated
+              # web test mock (orval useExamples) and validated against the
+              # schema by check-spec-examples.mjs.
+              example:
+                common_prefixes:
+                  - acme--notes-service--main/
+                objects:
+                  - key: acme--notes-service--main/wiki_manifest_20260101T000000Z-0000000a.json
+                    size_bytes: 2048
+                    media_type: "application/json"
+                    etag: "5f3a1c7e9b2d4a6c8e0f2a4b6c8d0e2f"
+                    modified_at: "2026-01-01T00:00:00Z"
+                  - key: acme--notes-service--main/wiki_pages/overview/getting-started.md
+                    size_bytes: 1536
+                    media_type: "text/markdown; charset=utf-8"
+                    etag: "00b2c3d4e5f60718293a4b5c6d7e8f9"
+                    modified_at: "2026-01-01T00:00:00Z"
+                  - key: acme--notes-service--main/wiki_pages/overview/architecture-data-flow.md
+                    size_bytes: 2240
+                    media_type: "text/markdown; charset=utf-8"
+                    etag: "01b2c3d4e5f60718293a4b5c6d7e8f9"
+                    modified_at: "2026-01-01T00:00:00Z"
+                  - key: acme--notes-service--main/wiki_pages/components/note-storage.md
+                    size_bytes: 2240
+                    media_type: "text/markdown; charset=utf-8"
+                    etag: "02b2c3d4e5f60718293a4b5c6d7e8f9"
+                    modified_at: "2026-01-01T00:00:00Z"
+                  - key: acme--notes-service--main/wiki_pages/components/search-ranking.md
+                    size_bytes: 1792
+                    media_type: "text/markdown; charset=utf-8"
+                    etag: "03b2c3d4e5f60718293a4b5c6d7e8f9"
+                    modified_at: "2026-01-01T00:00:00Z"
+                  - key: acme--notes-service--main/wiki_pages/components/bearer-tokens.md
+                    size_bytes: 1408
+                    media_type: "text/markdown; charset=utf-8"
+                    etag: "04b2c3d4e5f60718293a4b5c6d7e8f9"
+                    modified_at: "2026-01-01T00:00:00Z"
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404':
@@ -24712,6 +26072,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UploadObjectResponse'
+              example:
+                key: a.txt
+                size_bytes: 10
+                media_type: text/plain
+                etag: "dd7998b55ad2d8c4cca66901e7499ecf"
+                created_at: "2026-07-20T00:00:00Z"
+                updated_at: "2026-07-20T00:00:00Z"
         '400':
           description: Invalid request
           content:
@@ -27260,6 +28627,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SocialAuthorProfile'
+              example:
+                id: "42"
+                name: Example User
+                email: example.user@example.test
+                avatar: ""
+                description: ""
+                personal_project_id: "42"
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '426': { $ref: '#/components/responses/ClientUpgradeRequired' }

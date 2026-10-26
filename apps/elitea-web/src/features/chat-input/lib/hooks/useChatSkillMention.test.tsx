@@ -189,4 +189,76 @@ describe('useChatSkillMention', () => {
     expect(result.current.skillHighlightRanges).toEqual([{ start: 0, end: 6 }]);
     expect(result.current.committedMentions).toEqual([{ name: 'Alpha' }]);
   });
+
+  describe('project skills', () => {
+    function mockProjectSkills(items: readonly { id: number; name: string; description?: string }[], seen?: { count: number }): void {
+      server.use(
+        http.get(`${BASE}/elitea_core/skills/prompt_lib/proj-1`, () => {
+          if (seen) seen.count += 1;
+          return HttpResponse.json({ items, total: items.length, page: 1, page_size: 100, total_pages: 1 });
+        }),
+      );
+    }
+
+    it('lists the version’s skills first, then the project’s others, leaving out names the version carries', async () => {
+      mockSkills([{ id: 's-1', name: 'Alpha' }, { id: 's-2', name: 'Zeta' }]);
+      mockProjectSkills([{ id: 9, name: 'Triage', description: 't' }, { id: 7, name: 'alpha' }, { id: 8, name: 'Build' }]);
+      const chatInput = makeRef();
+      const { result } = renderHookWithProviders(() => useChatSkillMention({ chatInput, activeParticipant: AGENT_PARTICIPANT, projectId: 'proj-1' }));
+
+      act(() => result.current.onSkillInputChange('~'));
+      await waitFor(() => expect(result.current.filteredItems.map((i) => i.name)).toEqual(['Alpha', 'Zeta', 'Build', 'Triage']));
+      expect(result.current.filteredItems.map((i) => i.isProject)).toEqual([false, false, true, true]);
+    });
+
+    it('reads the project’s skills when an agent’s composer mounts, so a pasted ~Name resolves without the menu', async () => {
+      mockSkills([{ id: 's-1', name: 'Alpha' }]);
+      const seen = { count: 0 };
+      mockProjectSkills([{ id: 9, name: 'Triage' }], seen);
+      const chatInput = makeRef();
+      const { result } = renderHookWithProviders(() => useChatSkillMention({ chatInput, activeParticipant: AGENT_PARTICIPANT, projectId: 'proj-1' }));
+
+      await waitFor(() => expect(seen.count).toBe(1));
+      expect(result.current.skillPhase).toBe('idle');
+      await waitFor(() => expect(result.current.projectSkillIdsFor('please ~Triage this')).toEqual(['9']));
+    });
+
+    it('answers null for a ~ while the project’s skills are not read, and resolveProjectSkillIds reads them', async () => {
+      mockSkills([]);
+      server.use(http.get(`${BASE}/elitea_core/skills/prompt_lib/proj-1`, () => HttpResponse.json({ error: 'down' }, { status: 500 })));
+      const chatInput = makeRef();
+      const { result } = renderHookWithProviders(() => useChatSkillMention({ chatInput, activeParticipant: AGENT_PARTICIPANT, projectId: 'proj-1' }));
+
+      expect(result.current.projectSkillIdsFor('no skills named here')).toEqual([]);
+      expect(result.current.projectSkillIdsFor('use ~Triage')).toBeNull();
+      await expect(result.current.resolveProjectSkillIds('use ~Triage')).rejects.toBeDefined();
+
+      mockProjectSkills([{ id: 9, name: 'Triage' }]);
+      await expect(result.current.resolveProjectSkillIds('use ~Triage')).resolves.toEqual(['9']);
+    });
+
+    it('offers no project skills to a participant that is not an agent', () => {
+      const seen = { count: 0 };
+      mockProjectSkills([{ id: 9, name: 'Triage' }], seen);
+      const chatInput = makeRef();
+      const nonAgent: Participant = { id: 'part-2', entityName: 'toolkit', entityMeta: { id: 'tk-1', projectId: 'proj-1' } };
+      const { result } = renderHookWithProviders(() => useChatSkillMention({ chatInput, activeParticipant: nonAgent, projectId: 'proj-1' }));
+      act(() => result.current.onSkillInputChange('~'));
+      expect(result.current.filteredItems).toEqual([]);
+      expect(seen.count).toBe(0);
+    });
+
+    it('projectSkillIdsFor answers the ids of the project skills the text mentions, once each, and nothing for the version’s', async () => {
+      mockSkills([{ id: 's-1', name: 'Alpha' }]);
+      mockProjectSkills([{ id: 9, name: 'Triage' }, { id: 8, name: 'Build' }]);
+      const chatInput = makeRef();
+      const { result } = renderHookWithProviders(() => useChatSkillMention({ chatInput, activeParticipant: AGENT_PARTICIPANT, projectId: 'proj-1' }));
+      act(() => result.current.onSkillInputChange('~'));
+      await waitFor(() => expect(result.current.filteredItems).toHaveLength(3));
+
+      expect(result.current.projectSkillIdsFor('use ~Alpha then ~Triage and ~Triage, also ~Build')).toEqual(['9', '8']);
+      expect(result.current.projectSkillIdsFor('only ~Alpha')).toEqual([]);
+      expect(result.current.projectSkillIdsFor('~Unknown and Triage without a sigil')).toEqual([]);
+    });
+  });
 });

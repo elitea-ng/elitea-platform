@@ -135,17 +135,15 @@ struct Subset<'a> {
     listed: Vec<DocumentRef>,
 }
 
-#[allow(
-    clippy::unused_async_trait_impl,
-    reason = "synchronous file I/O inside async fns holds a tokio worker; moving it off the executor is tracked in #1377"
-)]
 impl ContentSource for Subset<'_> {
-    async fn list(&self) -> Result<Vec<DocumentRef>, SourceError> {
-        Ok(self.listed.clone())
+    fn list(&self) -> impl Future<Output = Result<Vec<DocumentRef>, SourceError>> + Send {
+        // No I/O: the batch was listed already.
+        std::future::ready(Ok(self.listed.clone()))
     }
 
     async fn fetch(&self, key: &str) -> Result<Document, SourceError> {
-        self.inner.fetch_now(key)
+        // On the blocking pool, as the folder source's own fetch.
+        self.inner.fetch(key).await
     }
 }
 
@@ -271,7 +269,8 @@ pub async fn ingest(
     mut stage: impl FnMut() -> Result<(), EngineError>,
 ) -> Result<(Outcome, Expansion), EngineError> {
     let listed = source
-        .list_now()
+        .list()
+        .await
         .map_err(|error| EngineError::new(ErrorType::Runtime, error.to_string()))?;
     let (previous, rereads, mut expansion) = expand(graph, &selection.name, &listed, previous);
     let previous: &BTreeMap<String, String> = &previous;

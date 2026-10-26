@@ -45,10 +45,6 @@ export const ToolInitialValues: Readonly<Record<string, ToolInitialValue>> = {
     description: 'custom tool',
     settings: {},
   },
-  [ToolTypes.browser.value]: {
-    type: ToolTypes.browser.value,
-    settings: { google_api_key: '', google_cse_id: '', selected_tools: selectedTools('browser') },
-  },
   [ToolTypes.confluence.value]: {
     type: ToolTypes.confluence.value,
     settings: {

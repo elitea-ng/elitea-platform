@@ -473,38 +473,23 @@ CROSS JOIN (VALUES
 WHERE r.name = 'admin' AND r.mode = 'administration'
 ON CONFLICT (role_id, permission) DO NOTHING;
 
--- Unit A14, Schedules & Tasks: a row of the platform cron table for the journey
--- to read and toggle.
+-- Schedules (#1369): one routine per browser project, for the journey to read,
+-- switch and re-time.
 --
--- `centry.schedule` is the table `services/elitea-scheduler` polls every minute,
--- so this row is deliberately INACTIVE and points at an `e2e.` function name
--- that no RPC handler answers: a stack that happens to run a scheduler must not
--- start dispatching anything because the E2E seed ran. The journey enables it,
--- re-reads, and disables it again so the run is repeatable.
--- ONE ROW PER BROWSER PROJECT. `fullyParallel` is on and chromium and webkit
--- run the same spec at the same time; `describe.configure({ mode: 'serial' })`
--- orders the tests WITHIN a project but not ACROSS them, so a single shared row
--- would have chromium's "enable, reload, assert enabled" racing webkit's
--- "assert disabled". There is no per-worker fixture that can partition a
--- platform-wide table, so the partition is seeded here instead.
--- \`centry.schedule\` has no unique constraint on \`name\` (it is the legacy
--- model, column for column), so \`ON CONFLICT DO NOTHING\` has no conflict to
--- detect and a second seed simply INSERTED the probe rows again. Two
--- identically named rows then made the listing's name button ambiguous and
--- every schedules journey failed Playwright strict mode. CI seeds once and
--- never saw it. Delete first.
-DELETE FROM centry.schedule WHERE name LIKE 'e2e_schedule_probe_%';
-INSERT INTO centry.schedule (name, project_id, cron, active, rpc_func, rpc_kwargs, last_run)
+-- `elitea_runtime.platform_routines` is the registry the owning processes
+-- register into when they start. These rows are owned by `scheduler`, and the
+-- E2E stack runs no elitea-scheduler (compose has no such service), so nothing
+-- ever executes them. ONE ROW PER BROWSER PROJECT: `fullyParallel` is on and
+-- chromium and webkit run the same spec at the same time, so a shared row would
+-- have one engine's toggle land between the other's write and its re-read.
+-- The upsert resets what a previous, interrupted run left behind.
+INSERT INTO elitea_runtime.platform_routines
+    (id, owner, description, default_schedule, min_interval_seconds, schedule_override, enabled)
 VALUES
-    ('e2e_schedule_probe_chromium', NULL, '0 4 * * *', false, 'e2e_schedule_probe_noop', '{}'::jsonb, NULL),
-    ('e2e_schedule_probe_webkit',   NULL, '0 4 * * *', false, 'e2e_schedule_probe_noop', '{}'::jsonb, NULL);
-
--- Idempotent re-seed: each journey leaves its row disabled with the original
--- cron, but a run interrupted mid-way would not, and the first assertion is
--- that it starts disabled.
-UPDATE centry.schedule
-SET active = false, cron = '0 4 * * *'
-WHERE name LIKE 'e2e_schedule_probe_%';
+    ('e2e.schedule.probe.chromium', 'scheduler', 'End-to-end probe routine (never runs).', '24h', 60, NULL, true),
+    ('e2e.schedule.probe.webkit',   'scheduler', 'End-to-end probe routine (never runs).', '24h', 60, NULL, true)
+ON CONFLICT (id) DO UPDATE
+SET schedule_override = NULL, enabled = true, last_run_at = NULL, last_outcome = NULL, next_run_at = NULL;
 
 -- Unit A14, App Requests: one PENDING access request per browser project, for
 -- the journey to read and decide.

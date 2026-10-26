@@ -5,17 +5,20 @@
 
 use std::path::Path;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::apply_patch::{self, Hunk, Pass};
-use crate::budget::{self, SpillStore};
+use crate::budget;
 use crate::edit::{self, EditMatch, EditSpec, Span, Unplaced, locate, snippet, splice};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::ledger::ReadLedger;
 use crate::patch;
+use crate::picture;
 use crate::workspace::{EntryKind, Intent, ReadFile, Workspace, WsPath, is_protected_name};
 
 /// The largest file the text tools read or write.
@@ -79,35 +82,47 @@ pub(crate) struct ReadArgs {
     pub limit: Option<usize>,
 }
 
+/// What `read_file` says of an image the model cannot see.
+pub const NO_VISION_HINT: &str = "this model cannot view images; describe what you need from the file name or ask the person, or use a model that can see images";
+/// What `read_file` says of a binary file that is not an image.
+pub const BINARY_HINT: &str = "not UTF-8 text; use read_document for documents";
+
 /// `read_file`: at most `max_bytes` of numbered lines (the token budget,
 /// never more than [`MAX_READ_OUTPUT`]), stopping at the last whole line;
-/// a line longer than a page is cut and continues at `next_column`.
+/// a line too long for a page is cut and continues at `next_column`.
+///
+/// A PNG, JPEG, WebP or GIF (sniffed from its bytes) is an image result
+/// ([`elitea_agent_runtime::image_result`]) when `vision` says the model can
+/// see images, and its metadata with a hint when it cannot. Any other
+/// binary file answers its size with [`BINARY_HINT`], not an error.
 pub(crate) fn read(
     workspace: &Workspace,
     ledger: &ReadLedger,
     args: Value,
     max_bytes: usize,
+    vision: bool,
 ) -> ToolResult<Value> {
     let args: ReadArgs = parse(args)?;
     let path = workspace.resolve(&args.path, Intent::Read)?;
     let file = workspace.read(&path, MAX_FILE_BYTES)?;
+    if picture::sniff(&file.bytes).is_some() {
+        return image_result(&file, vision);
+    }
     // Read as ingestion indexes it (a legacy encoding is decoded), so a file
     // the index holds can be read back. Editing stays UTF-8 only: writing a
     // decoded legacy file back would change its encoding.
     let has_nul = file.bytes[..file.bytes.len().min(8192)].contains(&0);
     let text = if has_nul || is_text(&file.bytes) {
         // UTF-8, or a NUL byte: binary, as before.
-        text_of(&file)?.to_owned()
+        match text_of(&file) {
+            Ok(text) => text.to_owned(),
+            Err(_) => return Ok(binary_result(&file)),
+        }
     } else {
-        elitea_doc_extract::decode_text(&file.bytes).map_err(|reason| {
-            ToolError::new(
-                ErrorCode::Binary,
-                format!(
-                    "`{}` is not text ({reason}); use read_document for documents",
-                    file.path
-                ),
-            )
-        })?
+        match elitea_doc_extract::decode_text(&file.bytes) {
+            Ok(text) => text,
+            Err(_) => return Ok(binary_result(&file)),
+        }
     };
     ledger.record(&file.path, file.stamp.clone());
     let mut page = budget::page(
@@ -123,6 +138,53 @@ pub(crate) fn read(
         map.insert("path".to_owned(), Value::String(file.path.display_string()));
     }
     Ok(page)
+}
+
+fn binary_result(file: &ReadFile) -> Value {
+    json!({
+        "kind": "binary",
+        "path": file.path.display_string(),
+        "bytes": file.bytes.len(),
+        "hint": BINARY_HINT,
+    })
+}
+
+/// `read_file` on an image: see [`read`].
+fn image_result(file: &ReadFile, vision: bool) -> ToolResult<Value> {
+    let path = file.path.display_string();
+    if !vision {
+        let kind = picture::sniff(&file.bytes);
+        let mut result = json!({
+            "kind": elitea_agent_runtime::image_result::IMAGE_KIND,
+            "path": path,
+            "mime": kind.map(picture::Kind::mime),
+            "bytes": file.bytes.len(),
+            "hint": NO_VISION_HINT,
+        });
+        if let Some((width, height)) = picture::dimensions(&file.bytes) {
+            result["width"] = json!(width);
+            result["height"] = json!(height);
+        }
+        return Ok(result);
+    }
+    let prepared = picture::prepare(&file.bytes).map_err(|error| {
+        let code = match error {
+            picture::PictureError::TooLarge(_) => ErrorCode::TooLarge,
+            _ => ErrorCode::Binary,
+        };
+        ToolError::new(code, format!("`{path}`: {}", error.message()))
+    })?;
+    let mut result = json!({
+        "kind": elitea_agent_runtime::image_result::IMAGE_KIND,
+        "path": path,
+        "mime": prepared.mime,
+        "bytes": prepared.bytes.len(),
+        "width": prepared.width,
+        "height": prepared.height,
+    });
+    result[elitea_agent_runtime::image_result::IMAGE_FIELD] =
+        Value::String(BASE64.encode(&prepared.bytes));
+    Ok(result)
 }
 
 #[derive(Deserialize)]
@@ -1556,53 +1618,6 @@ fn fuzzy_rank(pattern: &str, paths: impl Iterator<Item = WsPath>) -> Vec<(WsPath
         .collect()
 }
 
-#[derive(Deserialize)]
-pub(crate) struct DocumentArgs {
-    pub path: String,
-}
-
-/// `read_document`: text from PDF, Office, e-mail and HTML (with the
-/// `documents` feature), or text files; past `max_bytes` the head is shown
-/// and the whole text (up to [`MAX_DOCUMENT_OUTPUT`]) spilled.
-pub(crate) fn document(
-    workspace: &Workspace,
-    args: Value,
-    spill: &SpillStore,
-    max_bytes: usize,
-) -> ToolResult<Value> {
-    let args: DocumentArgs = parse(args)?;
-    let path = workspace.resolve(&args.path, Intent::Read)?;
-    let file = workspace.read(&path, MAX_DOCUMENT_BYTES)?;
-    let name = file.path.file_name().unwrap_or_default();
-    let mime = elitea_content_source::mime_of(name);
-    match elitea_doc_extract::extract(mime, &file.bytes) {
-        elitea_doc_extract::Extracted::Text { text, extractor } => {
-            let capped = budget::head(&text, MAX_DOCUMENT_OUTPUT);
-            let (shown, output_id, cut) = budget::spill_over(spill, capped, max_bytes);
-            let mut answer = json!({
-                "path": file.path.display_string(),
-                "mime_type": mime,
-                "extractor": extractor,
-                "text": shown,
-                "truncated": cut || capped.len() < text.len(),
-                "bytes": text.len(),
-            });
-            if let (Some(id), Value::Object(map)) = (output_id, &mut answer) {
-                map.insert("output_id".to_owned(), Value::String(id));
-            }
-            Ok(answer)
-        }
-        elitea_doc_extract::Extracted::Unsupported => Err(ToolError::new(
-            ErrorCode::Unsupported,
-            format!("this build cannot extract text from {mime}"),
-        )),
-        elitea_doc_extract::Extracted::Unreadable(reason) => Err(ToolError::new(
-            ErrorCode::Binary,
-            format!("`{path}` is unreadable as {mime}: {reason}"),
-        )),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -1624,7 +1639,7 @@ mod tests {
         ledger: &ReadLedger,
         args: serde_json::Value,
     ) -> crate::error::ToolResult<serde_json::Value> {
-        super::read(ws, ledger, args, ROOMY)
+        super::read(ws, ledger, args, ROOMY, false)
     }
 
     fn search(
@@ -1646,7 +1661,13 @@ mod tests {
         args: serde_json::Value,
     ) -> crate::error::ToolResult<serde_json::Value> {
         let spill = SpillStore::new(&ws.root().join("..").join("spill"), "t");
-        super::document(ws, args, &spill, ROOMY)
+        crate::document::read(
+            ws,
+            args,
+            &spill,
+            ROOMY,
+            &elitea_doc_extract::InProcessExtractor,
+        )
     }
 
     fn setup(deny: &[&str]) -> (tempfile::TempDir, Workspace, ReadLedger) {
@@ -1696,8 +1717,9 @@ mod tests {
         assert_eq!(page["content"], "     2\ttwo\n");
         assert_eq!(page["next_offset"], 3);
         std::fs::write(dir.path().join("bin"), [0u8, 1, 2, 3]).expect("bin");
-        let binary = read(&ws, &ledger, json!({ "path": "bin" })).expect_err("binary");
-        assert_eq!(binary.code(), ErrorCode::Binary);
+        let binary = read(&ws, &ledger, json!({ "path": "bin" })).expect("binary");
+        assert_eq!(binary["kind"], "binary");
+        assert_eq!(binary["bytes"], 4);
         assert_eq!(
             read(&ws, &ledger, json!({ "path": "../x" }))
                 .expect_err("escape")
@@ -1723,13 +1745,89 @@ mod tests {
             shown["content"].as_str().unwrap_or("").contains("返金"),
             "{shown}"
         );
-        // Binary with no NUL byte is still refused.
+        // Binary with no NUL byte is still not shown as text.
         let noise: Vec<u8> = (0..2000_usize)
             .map(|i| [1_u8, 2, 3, 0x81, 4][i % 5])
             .collect();
         std::fs::write(dir.path().join("noise"), noise).expect("noise");
-        let refused = read(&ws, &ledger, json!({ "path": "noise" })).expect_err("noise");
-        assert_eq!(refused.code(), ErrorCode::Binary);
+        let refused = read(&ws, &ledger, json!({ "path": "noise" })).expect("noise");
+        assert_eq!(refused["kind"], "binary");
+        assert!(refused.get("content").is_none());
+    }
+
+    fn png_file(dir: &tempfile::TempDir, name: &str, width: u32, height: u32) {
+        let image =
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(width, height, |x, y| {
+                image::Rgb([
+                    u8::try_from(x % 251).unwrap_or(0),
+                    u8::try_from(y % 241).unwrap_or(0),
+                    9,
+                ])
+            }));
+        image
+            .save_with_format(dir.path().join(name), image::ImageFormat::Png)
+            .expect("png");
+    }
+
+    #[test]
+    fn read_file_returns_image_part_when_vision() {
+        let (dir, ws, ledger) = setup(&[]);
+        // The extension lies: the type comes from the bytes.
+        png_file(&dir, "diagram.dat", 40, 30);
+        let shown =
+            super::read(&ws, &ledger, json!({ "path": "diagram.dat" }), ROOMY, true).expect("read");
+        assert_eq!(shown["kind"], "image");
+        assert_eq!(shown["mime"], "image/png");
+        assert_eq!(
+            (shown["width"].as_u64(), shown["height"].as_u64()),
+            (Some(40), Some(30))
+        );
+        let mut result = shown.clone();
+        let taken = elitea_agent_runtime::image_result::take_image(&mut result).expect("image");
+        let bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, taken.base64)
+                .expect("base64");
+        assert_eq!(
+            bytes,
+            std::fs::read(dir.path().join("diagram.dat")).expect("file")
+        );
+        assert_eq!(result["bytes"], bytes.len());
+    }
+
+    #[test]
+    fn read_file_on_an_image_without_vision_returns_metadata_and_a_hint() {
+        let (dir, ws, ledger) = setup(&[]);
+        png_file(&dir, "shot.png", 40, 30);
+        let shown = read(&ws, &ledger, json!({ "path": "shot.png" })).expect("read");
+        assert_eq!(shown["kind"], "image");
+        assert_eq!(shown["mime"], "image/png");
+        assert_eq!(shown["width"], 40);
+        assert_eq!(shown["hint"], super::NO_VISION_HINT);
+        assert!(shown.get("image_base64").is_none());
+    }
+
+    #[test]
+    fn read_file_on_binary_returns_metadata() {
+        let (dir, ws, ledger) = setup(&[]);
+        std::fs::write(dir.path().join("blob.bin"), [0u8, 159, 146, 150]).expect("blob");
+        let shown = read(&ws, &ledger, json!({ "path": "blob.bin" })).expect("read");
+        assert_eq!(shown["kind"], "binary");
+        assert_eq!(shown["bytes"], 4);
+        assert_eq!(shown["hint"], super::BINARY_HINT);
+    }
+
+    #[test]
+    fn read_file_shrinks_a_large_image_and_still_honours_path_deny() {
+        let (dir, ws, ledger) = setup(&["secret.png"]);
+        png_file(&dir, "wide.png", 3000, 100);
+        png_file(&dir, "secret.png", 10, 10);
+        let shown =
+            super::read(&ws, &ledger, json!({ "path": "wide.png" }), ROOMY, true).expect("read");
+        assert_eq!(shown["width"], 2048);
+        assert_eq!(shown["height"], 68);
+        let denied = super::read(&ws, &ledger, json!({ "path": "secret.png" }), ROOMY, true)
+            .expect_err("denied");
+        assert_eq!(denied.code(), ErrorCode::Denied);
     }
 
     #[test]

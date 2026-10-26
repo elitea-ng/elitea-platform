@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
@@ -89,6 +90,10 @@ type Service struct {
 	newID   func() (string, error)
 	logger  *slog.Logger
 
+	// maxPushChain is the hard cap of live PUSH segments after the live
+	// COMPACT (DefaultMaxPushChain unless WithMaxPushChain set another).
+	maxPushChain int
+
 	mu           sync.Mutex
 	orphanCursor int64
 	names        sync.Map
@@ -109,9 +114,21 @@ func NewService(repo Repository, buckets Buckets, limits LimitsSource, audit Aud
 	}
 	return &Service{
 		repo: repo, buckets: buckets, limits: limits, audit: audit,
-		now: time.Now, newID: newGrantID, logger: logger,
+		now: time.Now, newID: newGrantID, logger: logger, maxPushChain: DefaultMaxPushChain,
 	}, nil
 }
+
+// WithMaxPushChain sets the hard cap of live PUSH segments after a thread's
+// live COMPACT; a value below 1 keeps DefaultMaxPushChain.
+func (s *Service) WithMaxPushChain(limit int) *Service {
+	if limit > 0 {
+		s.maxPushChain = limit
+	}
+	return s
+}
+
+// MaxPushChain answers the hard cap of live PUSH segments after a COMPACT.
+func (s *Service) MaxPushChain() int { return s.maxPushChain }
 
 // WithClock replaces the clock (tests).
 func (s *Service) WithClock(now func() time.Time) *Service {
@@ -559,9 +576,8 @@ func validatePublish(request PublishRequest) error {
 		}
 		return ErrInvalid
 	}
-	// Phase 1: COMPACT segments only, which have no prerequisites.
-	if request.Kind != KindCompact || len(request.Prerequisites) != 0 {
-		return ErrInvalid
+	if err := validateKind(request.Kind, request.Prerequisites); err != nil {
+		return err
 	}
 	seen := map[string]bool{}
 	for _, ref := range request.Refs {
@@ -570,6 +586,20 @@ func validatePublish(request PublishRequest) error {
 			return ErrInvalid
 		}
 		seen[ref.Name] = true
+	}
+	return nil
+}
+
+// validateKind checks a segment's kind against its prerequisites: a COMPACT
+// has none; a PUSH has 1..MaxPrerequisites distinct sha1 commits. Any other
+// kind is refused.
+//
+// The rule is the executor transport's (workspaceruntime.ValidPrerequisites),
+// so the edge and gRPC paths cannot drift; the Rust in-memory store keeps
+// its own copy (workspace-store memory.rs is_push).
+func validateKind(kind string, prerequisites []string) error {
+	if !workspaceruntime.ValidPrerequisites(kind, prerequisites) {
+		return ErrInvalid
 	}
 	return nil
 }
@@ -590,6 +620,7 @@ func (s *Service) Publish(ctx context.Context, request PublishRequest) (PublishR
 		s.audit.StoreEvent(ctx, AuditEvent{
 			Name: "store.publish", Thread: request.Thread, UserID: request.Caller.UserID,
 			Writer: request.Caller.Writer, Epoch: request.Epoch, Seq: result.Seq,
+			Kind: request.Kind, Prerequisites: len(request.Prerequisites),
 			SHA256: request.SHA256, Bytes: request.Bytes, Count: len(request.Refs),
 			Started: started, Succeeded: true,
 		})
@@ -661,6 +692,7 @@ func publishSignature(request PublishRequest) string {
 	b.WriteString(string(request.Caller.Writer))
 	b.WriteString("|" + strconv.FormatInt(request.Caller.UserID, 10) + "|" + request.Caller.ExecutionID)
 	b.WriteString("|" + strconv.FormatInt(request.Epoch, 10) + "|" + request.SHA256 + "|" + strconv.FormatInt(request.Bytes, 10))
+	b.WriteString("|" + request.Kind + "|" + strings.Join(request.Prerequisites, ","))
 	for _, ref := range request.Refs {
 		old := "-"
 		if ref.Old != nil {
@@ -695,18 +727,28 @@ func (s *Service) publishOnce(ctx context.Context, request PublishRequest) (Publ
 		// recorded. The transaction decides whether the refs match.
 		physical = existing.PhysicalBucket
 	} else {
-		if err := quotaAllows(pre.ProjectBytes, pre.ThreadBytes, request.Bytes, limits); err != nil {
+		// A COMPACT supersedes the thread's live segments, so they are left
+		// out of the fast path; a PUSH supersedes nothing.
+		own := pre.ThreadBytes
+		if request.Kind == KindPush {
+			own = 0
+		}
+		if err := quotaAllows(pre.ProjectBytes, own, request.Bytes, limits); err != nil {
 			return PublishResult{}, err
 		}
 		if err := s.verifyObject(ctx, request, key); err != nil {
 			return PublishResult{}, err
 		}
 	}
+	prerequisites := request.Prerequisites
+	if prerequisites == nil {
+		prerequisites = []string{}
+	}
 	return s.repo.Publish(ctx, PublishRecord{
 		Thread: request.Thread, Caller: request.Caller, Epoch: request.Epoch, Kind: request.Kind,
-		SHA256: request.SHA256, Bytes: request.Bytes, Prerequisites: []string{},
+		SHA256: request.SHA256, Bytes: request.Bytes, Prerequisites: prerequisites,
 		Refs: request.Refs, ObjectKey: key, PhysicalBucket: physical,
-		MaxProjectBytes: limits.MaxProjectWorkspaceBytes,
+		MaxProjectBytes: limits.MaxProjectWorkspaceBytes, MaxPushChain: s.maxPushChain,
 	})
 }
 
@@ -777,6 +819,7 @@ func (s *Service) refused(ctx context.Context, request PublishRequest, started t
 	s.audit.StoreEvent(ctx, AuditEvent{
 		Name: "store.publish_refused", Thread: request.Thread, UserID: request.Caller.UserID,
 		Writer: request.Caller.Writer, Epoch: request.Epoch, SHA256: request.SHA256,
+		Kind: request.Kind, Prerequisites: len(request.Prerequisites),
 		Bytes: request.Bytes, Reason: refusalReason(err), Started: started,
 	})
 }
@@ -791,6 +834,7 @@ func refusalReason(err error) string {
 		{ErrSegmentMissing, "segment_missing"}, {ErrChecksumMismatch, "checksum_mismatch"},
 		{ErrUnsupportedObjectFormat, "unsupported_object_format"}, {ErrSegmentTooLarge, "segment_too_large"},
 		{ErrQuotaExceeded, "workspace_quota_exceeded"}, {ErrThreadBusy, "thread_busy"},
+		{ErrPrerequisiteUnknown, "prerequisite_unknown"}, {ErrChainTooLong, "segment_chain_too_long"},
 	} {
 		if errors.Is(err, known.err) {
 			return known.reason
@@ -818,8 +862,11 @@ type FetchPlan struct {
 	Segments []FetchSegment
 }
 
-// Plan answers the fetch plan. Phase 1: the newest COMPACT at or after
-// sinceSeq, alone.
+// Plan answers the fetch plan: the minimal chain from sinceSeq to the head,
+// oldest first. That is the newest live COMPACT and every later live PUSH,
+// or, for a reader that already holds a state after that COMPACT (sinceSeq
+// past its seq), only the PUSH segments after sinceSeq. A COMPACT-only
+// thread answers its one COMPACT, as Phase 1 did.
 func (s *Service) Plan(ctx context.Context, thread Thread, caller Caller, sinceSeq int64) (FetchPlan, error) {
 	if !validThread(thread) || !validCaller(caller) || sinceSeq < 0 {
 		return FetchPlan{}, ErrInvalid
@@ -843,22 +890,20 @@ func (s *Service) Plan(ctx context.Context, thread Thread, caller Caller, sinceS
 	if plan.Refs == nil {
 		plan.Refs = map[string]string{}
 	}
-	if rows.Newest == nil {
-		return plan, nil
+	for _, segment := range rows.Chain {
+		url, expires, err := s.readURL(ctx, thread, segment)
+		if err != nil {
+			return FetchPlan{}, err
+		}
+		prerequisites := segment.Prerequisites
+		if prerequisites == nil {
+			prerequisites = []string{}
+		}
+		plan.Segments = append(plan.Segments, FetchSegment{
+			Seq: segment.Seq, Kind: segment.Kind, SHA256: segment.SHA256, Bytes: segment.Bytes,
+			Prerequisites: prerequisites, Refs: segment.Refs, URL: url, ExpiresAt: expires,
+		})
 	}
-	segment := *rows.Newest
-	url, expires, err := s.readURL(ctx, thread, segment)
-	if err != nil {
-		return FetchPlan{}, err
-	}
-	prerequisites := segment.Prerequisites
-	if prerequisites == nil {
-		prerequisites = []string{}
-	}
-	plan.Segments = append(plan.Segments, FetchSegment{
-		Seq: segment.Seq, Kind: segment.Kind, SHA256: segment.SHA256, Bytes: segment.Bytes,
-		Prerequisites: prerequisites, Refs: segment.Refs, URL: url, ExpiresAt: expires,
-	})
 	return plan, nil
 }
 

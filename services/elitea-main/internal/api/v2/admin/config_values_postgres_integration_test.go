@@ -734,6 +734,11 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 	//	                    native token response, and the 426 minimum-version
 	//	                    gate (apimw.ClientVersion and the native token
 	//	                    endpoint) — ADR-0025 WP4
+	//	web_search        → platformconfig.LoadWebSearchSettings, read by
+	//	                    runtimecomposition's currentWebProviderSource on
+	//	                    every web / host_intel toolkit resolution: which
+	//	                    providers are enabled, the default search provider,
+	//	                    and the direct-fetch switch and domain lists (#1238)
 	want := map[string]bool{
 		"resources": true, "mcp_configuration": true, "branding": true,
 		"agent_publishing": true, "skill_publishing": true,
@@ -744,6 +749,8 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		// ADR-0034: every send and cloud turn claim reads it
 		// (workspacehandoff.PolicyService).
 		"cloud_executor": true,
+		// #1238: every web and host_intel toolkit resolution reads it.
+		"web_search": true,
 	}
 	for id := range want {
 		if !available[id] {

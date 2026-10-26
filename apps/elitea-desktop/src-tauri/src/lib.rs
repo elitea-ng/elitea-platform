@@ -5,6 +5,7 @@
 //! stored sign-in (an owner-only credentials file), the loopback sign-in listener, the token endpoint. Remote
 //! content is never loaded into the privileged webview (see `window.rs`).
 
+mod acp;
 mod activity;
 mod app_events;
 mod attention;
@@ -15,20 +16,27 @@ mod credentials_file;
 mod d0;
 mod discovery;
 mod doctor;
+mod documents;
 mod embeddings;
 mod error;
 mod handoff;
 mod handoff_settings;
 mod history;
+mod hooks;
+mod hooks_commands;
 mod index;
 mod local_commands;
 mod logging;
 mod loopback;
+mod lsp_commands;
+mod mcp;
+mod mcp_commands;
 mod menu;
 mod models;
 mod net;
 mod pkce;
 mod platform;
+mod process_commands;
 mod rules;
 mod seed;
 mod sessions;
@@ -37,6 +45,8 @@ mod store;
 mod tokens;
 mod window;
 mod workspaces;
+mod worktree_commands;
+mod worktrees;
 
 #[cfg(test)]
 mod testutil;
@@ -68,13 +78,13 @@ use crate::workspaces::WorkspaceStore;
 use elitea_local_index::embedding::{EmbedConfig, EmbedStatus, Embedding};
 
 /// The credentials file's slots (src/credentials_file.rs).
-const SESSION_SLOT: &str = "device-session";
+pub(crate) const SESSION_SLOT: &str = "device-session";
 /// Sign-outs whose server revoke did not get through, retried at launch.
-const PENDING_REVOKE_SLOT: &str = "pending-revoke";
+pub(crate) const PENDING_REVOKE_SLOT: &str = "pending-revoke";
 
 /// Baked in at build time when a deployment's own build registers a different
 /// client id (`ELITEA_DESKTOP_CLIENT_ID=... tauri build`); see the README.
-const BUILD_CLIENT_ID: Option<&str> = option_env!("ELITEA_DESKTOP_CLIENT_ID");
+pub(crate) const BUILD_CLIENT_ID: Option<&str> = option_env!("ELITEA_DESKTOP_CLIENT_ID");
 
 struct SystemBrowser(tauri::AppHandle);
 
@@ -87,6 +97,13 @@ impl BrowserOpener for SystemBrowser {
             .open_url(url, None::<&str>)
             .map_err(|_| HostError::Browser)
     }
+}
+
+/// `elitea-desktop --acp`: the local agent as an Agent Client Protocol
+/// agent on stdio, without a window (src/acp). Returns the exit code.
+#[must_use]
+pub fn run_acp() -> i32 {
+    acp::run()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -154,7 +171,7 @@ pub fn run() {
                 Some(config_dir.clone()),
                 Some(data_dir.clone()),
                 log_dir.clone(),
-                cache_dir,
+                cache_dir.clone(),
             ]);
             let app_id = sandbox_app_id(app.config());
             let host_deny = Arc::new(elitea_local_tools::deny::DenyList::for_session(
@@ -337,6 +354,7 @@ pub fn run() {
                     app_id,
                     user_rules_dir: Some(config_dir.clone()),
                     user_commands_dir: Some(config_dir.join("commands")),
+                    cache_dir: cache_dir.clone(),
                 })
                 .map_err(|error| error.message)?,
             );
@@ -366,6 +384,11 @@ pub fn run() {
             .map_err(|error| error.message)?;
             let handoff = Arc::new(handoff);
             app.manage(handoff::HandoffState(handoff.clone()));
+            let doctor_files = SettingsFiles::new(config_dir.clone());
+            let history_retention_days = match doctor_files.settings() {
+                Ok(settings) => crate::settings::history_retention_days(&settings),
+                Err(_) => crate::settings::DEFAULT_HISTORY_RETENTION_DAYS,
+            };
             app.manage(Arc::new(doctor::Doctor {
                 local: doctor::LocalDoctor {
                     hooks: Arc::new(AppDoctorHooks {
@@ -379,9 +402,18 @@ pub fn run() {
                     workspaces: workspaces.clone(),
                     history: history.clone(),
                     sessions: sessions.clone(),
+                    cache_dir,
+                    history_retention_days,
                 },
                 auth: auth.clone(),
             }));
+            let worktrees = Arc::new(worktrees::WorktreeHost::new(
+                agents.clone(),
+                workspaces.clone(),
+            ));
+            agents.set_worktrees(&worktrees);
+            worktrees.register_all();
+            app.manage(worktrees);
             app.manage(LocalState {
                 workspaces,
                 history,
@@ -414,6 +446,13 @@ pub fn run() {
             local_commands::workspace_open,
             local_commands::workspace_list,
             local_commands::workspace_remove,
+            worktree_commands::worktree_create,
+            worktree_commands::worktree_list,
+            worktree_commands::worktree_diff,
+            worktree_commands::worktree_remove,
+            worktree_commands::worktree_merge_preflight,
+            worktree_commands::worktree_merge_apply,
+            worktree_commands::worktree_merge_undo,
             local_commands::workspace_bind_project,
             local_commands::workspace_agent_settings_get,
             local_commands::workspace_agent_settings_set,
@@ -424,6 +463,9 @@ pub fn run() {
             local_commands::rules_explain,
             local_commands::rules_import_proposed,
             local_commands::agent_turn_start,
+            local_commands::attachment_add,
+            local_commands::attachment_add_bytes,
+            local_commands::attachment_remove,
             local_commands::agent_prewarm,
             local_commands::turn_commit_retry,
             local_commands::agent_turn_cancel,
@@ -436,8 +478,26 @@ pub fn run() {
             local_commands::session_info,
             local_commands::checkpoint_restore,
             local_commands::checkpoint_preview,
+            local_commands::checkpoint_after,
             local_commands::reveal_path,
             local_commands::open_path,
+            process_commands::process_list,
+            process_commands::process_read,
+            process_commands::process_write,
+            process_commands::process_resize,
+            process_commands::process_kill,
+            process_commands::process_pin,
+            mcp_commands::mcp_list,
+            mcp_commands::mcp_save,
+            mcp_commands::mcp_remove,
+            mcp_commands::mcp_restart,
+            mcp_commands::mcp_status,
+            mcp_commands::mcp_proposal_answer,
+            hooks_commands::hooks_list,
+            hooks_commands::hooks_save,
+            hooks_commands::hooks_set_enabled,
+            hooks_commands::hooks_proposal_answer,
+            lsp_commands::lsp_status,
             index::index_status,
             index::index_open,
             index::index_enable,
@@ -448,6 +508,8 @@ pub fn run() {
             models::index_embeddings_set,
             models::index_embeddings_status,
             models::index_embeddings_rebuild,
+            models::index_estimate,
+            models::index_embeddings_caps_set,
             models::index_models,
             models::index_model_download,
             models::index_model_cancel,
@@ -502,6 +564,11 @@ fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
         if let Some(history) = &local.history {
             history.flush();
         }
+        // Background processes the agent started end with the app (#1223):
+        // `SIGTERM`, then `SIGKILL` to what still runs 2 s later.
+        local
+            .agents
+            .stop_all_processes_blocking(elitea_local_tools::process::TERM_GRACE);
         // A turn's commit runs after its `done`: the exit waits (bounded)
         // for those queued or running; one still pending after that, or kept
         // after it failed, is not saved; its execution expires on the server.

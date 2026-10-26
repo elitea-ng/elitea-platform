@@ -735,7 +735,7 @@ var currentAuthorableInternalTools = map[string]bool{
 	"ask_user": true, "attachments": true, "data_analysis": true,
 	"image_generation": true, "internal_mcp": true, "lazy_tools_mode": true,
 	"planner": true, "project_context_builder": true, "pyodide": true,
-	"skills_builder": true, "swarm": true,
+	"skills_builder": true, "subagents": true, "swarm": true,
 }
 
 func (repository *CurrentAgentStartRepository) ResolveCurrentAdhoc(

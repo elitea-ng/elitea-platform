@@ -28,9 +28,10 @@ import { useSelectedProject } from '@/widgets/app-shell';
 import { useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import type { ChangeSet, DecidedApproval } from './sessionTypes';
+import { useThreadName } from './useThreadName';
 import { useAgentSelection, type AgentSelection } from './useAgentSelection';
 import { useBindableProjects } from './useBindableProjects';
-import { useSendPrompt, type SendPrompt } from './useSendPrompt';
+import { useSendPrompt, type SendPrompt, type SentImages } from './useSendPrompt';
 import { useSessionCommands, type SessionCommands } from './useSessionCommands';
 import { useThreadHistory, type ThreadHistory } from './useThreadHistory';
 
@@ -132,6 +133,8 @@ export interface ThreadSession extends Pick<SendPrompt, 'canSend' | 'sendError' 
   commands: SessionCommands;
   run: (command: WorkspaceCommandId) => void;
   prompts: readonly string[];
+  /** The images each of `prompts` carried (thumbnails), by the same index. */
+  promptImages: readonly SentImages['shown'][];
   decided: readonly DecidedApproval[];
   answer: (requestId: string, decision: ApprovalDecision, feedback?: string) => void;
   /** The agent's checklist for the Plan tab. */
@@ -153,6 +156,7 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
   const raw = useAgentSelection(workspace.id, projectId);
   const turn = useWorkspaceTurn(ipc);
   const [prompts, setPrompts] = useState<string[]>([]);
+  const [promptImages, setPromptImages] = useState<SentImages['shown'][]>([]);
   const [decided, setDecided] = useState<DecidedApproval[]>([]);
   const projects = useFolderProject(projectId);
   const { selectProject } = useSelectedProject();
@@ -169,6 +173,7 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
     if (running !== undefined) {
       setAdopted(running.turn_id);
       setPrompts([running.prompt]);
+      setPromptImages([running.images ?? []]);
       turn.adopt(running.turn_id, running.events);
     }
   }
@@ -190,15 +195,17 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
   const newThread = (): void => void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: workspace.id }, search: {} });
   const selection = threadAware(raw, newThread);
 
-  const onStarted = (id: string, prompt: string): void => {
+  const onStarted = (id: string, prompt: string, images: SentImages['shown']): void => {
     setPrompts((current) => [...current, prompt]);
+    setPromptImages((current) => [...current, images]);
     const known = readThreads(workspace.id).find((thread) => thread.id === id);
-    recordThread(workspace.id, { id, title: known?.title ?? prompt, updatedAt: Date.now() });
+    recordThread(workspace.id, { id, title: known?.title ?? prompt, updatedAt: Date.now(), ...(known?.named === true ? { named: true } : {}) });
     void queryClient.invalidateQueries({ queryKey: threadsQueryKey(workspace.id) });
     if (id !== conversationId) onAdopt(id);
   };
   const { canSend, sendError, send, prewarm } = useSendPrompt(workspace, projectId, raw, turn, onStarted);
   const done = turn.view.done;
+  useThreadName(workspace.id, projectId, conversationId, done);
   const changeSets = changeSetsOf(history, shown, turn, prompts);
   const localTurns = history.kind === 'local' ? history.turns : undefined;
   const recordedPlans = useMemo(() => recordedPlansOf(localTurns), [localTurns]);
@@ -207,7 +214,10 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
   const commands = useSessionCommands(selection, turn, undoTurnId !== null);
 
   const run = (command: WorkspaceCommandId): void => {
-    if ((command === 'clear' || command === 'new') && !turn.busy) setPrompts([]);
+    if ((command === 'clear' || command === 'new') && !turn.busy) {
+      setPrompts([]);
+      setPromptImages([]);
+    }
     commands.run(command);
   };
   useShellRegistration(workspace.id, newThread, run);
@@ -244,6 +254,7 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
     commands,
     run,
     prompts,
+    promptImages,
     decided,
     answer,
     plan: threadPlan(recordedPlans, shown, turn),

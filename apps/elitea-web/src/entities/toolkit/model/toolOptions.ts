@@ -14,13 +14,6 @@
  * §3.5 400-line-per-file budget.
  */
 export const ToolOptionsByType: Readonly<Record<string, readonly { readonly label: string; readonly value: string }[]>> = {
-  browser: [
-    { label: 'Wiki', value: 'wiki' },
-    { label: 'Single URL Crawler', value: 'single_url_crawler' },
-    { label: 'Multi URL Crawler', value: 'multi_url_crawler' },
-    { label: 'Get HTML Content', value: 'get_html_content' },
-    { label: 'Google', value: 'google' },
-  ],
   xray_cloud: [
     { label: 'Get tests', value: 'get_tests' },
     { label: 'Create test', value: 'create_test' },

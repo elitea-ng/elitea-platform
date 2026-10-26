@@ -19,6 +19,7 @@ import (
 	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	workspacehandoffapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/workspacehandoff"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacechanges"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceexecutor"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
@@ -41,6 +42,8 @@ type workspaceHandoffComposition struct {
 	Route   http.Handler
 	Handoff *workspacehandoff.Service
 	Store   *workspacestore.Service
+	// Changes keeps and serves the Files changed records of cloud turns.
+	Changes *workspacechanges.Service
 	// Encryption is the startup answer for storage encryption at rest
 	// (workspaceEncryption*), which the admin form shows.
 	Encryption string
@@ -84,7 +87,15 @@ type workspaceHandoffInputs struct {
 	EncryptionAttested bool
 	// ExecutorConfigured is workspaceExecutorConfiguredEnv, nil when unset.
 	ExecutorConfigured *bool
+	// MaxPushChain is workspaceMaxPushChainEnv: the hard cap of live PUSH
+	// segments after a thread's COMPACT, 0 for the default.
+	MaxPushChain int
 }
+
+// workspaceMaxPushChainEnv lowers the store's hard cap of live PUSH segments
+// after a thread's COMPACT (1 to workspacestore.DefaultMaxPushChain; the
+// worker's fetch plan frame is sized for the default).
+const workspaceMaxPushChainEnv = "ELITEA_WORKSPACE_MAX_PUSH_CHAIN"
 
 // composeWorkspaceHandoff builds the desktop ⇄ cloud handoff (ADR-0034). It
 // needs a database, an object store and the credential plane; without any of
@@ -160,6 +171,7 @@ func composeWorkspaceHandoff(
 	if err != nil {
 		return workspaceHandoffComposition{}, err
 	}
+	store.WithMaxPushChain(inputs.MaxPushChain)
 	handoffRepo, err := dbrepos.NewWorkspaceHandoffsRepository(pool)
 	if err != nil {
 		return workspaceHandoffComposition{}, err
@@ -191,12 +203,22 @@ func composeWorkspaceHandoff(
 	// Live state changes for the web app and the desktop (scope B); nil when
 	// the deployment has no live-update plane, and the clients poll.
 	handoff.WithStateEvents(liveEvents)
-	route, err := workspacehandoffapi.NewRoute(handoff, store, dbrepos.NewConversationsRepo(pool), groupAuth,
-		legacyrbac.NewPostgresResolver(pool))
+	// The Files changed view (ADR-0034 Phase 2): what the worker records after
+	// each cloud turn, filtered by the policy the handoff service answers.
+	changesRepo, err := dbrepos.NewWorkspaceChangesRepository(pool)
 	if err != nil {
 		return workspaceHandoffComposition{}, err
 	}
-	return workspaceHandoffComposition{Route: route, Handoff: handoff, Store: store, Encryption: encryption}, nil
+	changes, err := workspacechanges.NewService(changesRepo, handoffRepo, handoff, logger)
+	if err != nil {
+		return workspaceHandoffComposition{}, err
+	}
+	route, err := workspacehandoffapi.NewRoute(handoff, store, dbrepos.NewConversationsRepo(pool), groupAuth,
+		legacyrbac.NewPostgresResolver(pool), workspacehandoffapi.WithChanges(changes))
+	if err != nil {
+		return workspaceHandoffComposition{}, err
+	}
+	return workspaceHandoffComposition{Route: route, Handoff: handoff, Store: store, Changes: changes, Encryption: encryption}, nil
 }
 
 // checkWorkspaceEncryption asks the backend first. Only a backend that cannot
@@ -331,6 +353,13 @@ func workspaceStorageFromEnv(ctx context.Context, cfg storage.Config, lookup fun
 		}
 		inputs.ExecutorConfigured = &configured
 	}
+	if raw, ok := lookup(workspaceMaxPushChainEnv); ok && raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > workspacestore.DefaultMaxPushChain {
+			return inputs, fmt.Errorf("%s must be an integer from 1 to %d", workspaceMaxPushChainEnv, workspacestore.DefaultMaxPushChain)
+		}
+		inputs.MaxPushChain = limit
+	}
 	dedicated, _ := lookup("STORAGE_WORKSPACE_BUCKET")
 	if dedicated == "" || dedicated == cfg.Container {
 		return inputs, nil
@@ -441,6 +470,9 @@ func composeWorkspaceExecutor(pool *pgxpool.Pool, handoff workspaceHandoffCompos
 	adapter, err := workspaceexecutor.New(handoff.Handoff, handoff.Store, workspaceThreads{repo: repo}, parsed, logger)
 	if err != nil {
 		return workspaceExecutorComposition{}, err
+	}
+	if handoff.Changes != nil {
+		adapter.WithChanges(handoff.Changes)
 	}
 	return workspaceExecutorComposition{adapter: adapter}, nil
 }

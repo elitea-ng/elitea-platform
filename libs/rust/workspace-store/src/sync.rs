@@ -14,6 +14,10 @@
 //!   checked against the plan's size and SHA-256. A URL refused as expired
 //!   or gone, or bytes that do not match, fetch the plan again (a stale
 //!   plan); after the last round, an integrity failure.
+//! * [`fetch_chain`]: the same for the whole chain (a `COMPACT` and the
+//!   `PUSH` segments after it, [`crate::chain::check_plan`]), every segment
+//!   checked against the plan; verify it with
+//!   [`crate::chain::verify_chain_into`].
 
 use std::time::Duration;
 
@@ -291,6 +295,57 @@ pub async fn fetch_latest(
             Err(error) => return Err(error),
         }
         tracing::debug!(code = last.code(), "fetch plan stale; fetching it again");
+    }
+    Err(match last {
+        StoreError::Integrity(message) => StoreError::Integrity(message),
+        other => StoreError::Integrity(format!("the plan's segment could not be fetched: {other}")),
+    })
+}
+
+/// The thread's whole live chain: the plan (its shape checked) and every
+/// segment's bytes, in the plan's order, each checked against the plan's
+/// size and SHA-256. A segment URL refused as expired or gone, or bytes that
+/// do not match, fetch the plan again; a `COMPACT`-only thread answers a
+/// one-segment chain.
+///
+/// # Errors
+///
+/// [`StoreError::Integrity`] for a plan out of shape or bytes that never
+/// match, [`StoreError::Unsupported`] for an unknown segment kind, or the
+/// transport's errors.
+pub async fn fetch_chain(
+    transport: &dyn StoreTransport,
+    backoff: Backoff,
+) -> Result<(FetchPlan, Vec<Vec<u8>>), StoreError> {
+    let mut last = StoreError::Integrity("the store holds no segment".into());
+    'rounds: for _round in 0..FETCH_ROUNDS {
+        let plan = retry(backoff, || transport.fetch_plan(0)).await?;
+        crate::chain::check_plan(&plan)?;
+        let mut bytes = Vec::with_capacity(plan.segments.len());
+        for segment in &plan.segments {
+            match retry(backoff, || transport.get(&segment.url)).await {
+                Ok(got)
+                    if got.len() as u64 == segment.bytes && sha256_hex(&got) == segment.sha256 =>
+                {
+                    bytes.push(got);
+                }
+                Ok(_) => {
+                    last = StoreError::Integrity(format!(
+                        "segment {}'s bytes do not match the plan's SHA-256 or size",
+                        segment.seq
+                    ));
+                    tracing::debug!(code = last.code(), "fetch plan stale; fetching it again");
+                    continue 'rounds;
+                }
+                Err(error) if expired(&error) => {
+                    last = error;
+                    tracing::debug!(code = last.code(), "fetch plan stale; fetching it again");
+                    continue 'rounds;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        return Ok((plan, bytes));
     }
     Err(match last {
         StoreError::Integrity(message) => StoreError::Integrity(message),

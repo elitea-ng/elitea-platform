@@ -87,6 +87,9 @@ pub(crate) struct OrdinaryNativeAgentAssembler {
     /// The platform object client the Office families (`pptx`, `docx`, `xlsx`) read and write
     /// documents with (ADR-0032); `None` leaves them out as unsupported.
     office_runtime: Option<Arc<OfficeRuntime>>,
+    /// The web families' egress allowlist and fetch origin (#1238); `None`
+    /// leaves `web` and `host_intel` toolkits refusing every call.
+    web_runtime: Option<Arc<crate::transport::metering::WebRuntime>>,
     /// The cloud executor (ADR-0034): `None` on a worker that cannot run a
     /// handed-off thread's turn, which then fails such a turn.
     workspace_runs: Option<Arc<crate::workspace_run::turn::WorkspaceRunFactory>>,
@@ -129,6 +132,7 @@ impl OrdinaryNativeAgentAssembler {
             index_runtime: None,
             toolkit_model_call_cap: crate::transport::model_text::DEFAULT_TOOLKIT_MODEL_CALLS,
             office_runtime: None,
+            web_runtime: None,
             workspace_runs: None,
         }
     }
@@ -151,6 +155,16 @@ impl OrdinaryNativeAgentAssembler {
         office_runtime: Option<Arc<OfficeRuntime>>,
     ) -> Self {
         self.office_runtime = office_runtime;
+        self
+    }
+
+    /// Lend the web families' runtime (#1238).
+    #[must_use]
+    pub(crate) fn with_web_runtime(
+        mut self,
+        web_runtime: Option<Arc<crate::transport::metering::WebRuntime>>,
+    ) -> Self {
+        self.web_runtime = web_runtime;
         self
     }
 
@@ -420,6 +434,33 @@ impl OrdinaryNativeAgentAssembler {
         };
         let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
         tracing::Span::current().record("output_continuation", output_continuation);
+        // The read-only sub-agents (#1226): on the toggle, and on every
+        // cloud-executor workspace turn. Bound last, so a child is offered
+        // the read-only tools of every toolset above.
+        let runtime =
+            if profile.internal_tools().subagents_enabled() || context.workspace().is_some() {
+                let (adapter, _) = model_adapter(&profile);
+                let invocation = model_invocation(&profile, "", output_continuation);
+                let facade = Arc::clone(&self.model_facade);
+                let context = Arc::clone(&context);
+                let model_project_id = profile.model_project_id();
+                runtime.with_subagents(move |toolsets, excluded| {
+                    super::subagents::toolset(
+                        super::subagents::WorkerSubAgents {
+                            facade,
+                            context,
+                            adapter,
+                            model_project_id,
+                            invocation,
+                            toolsets: super::subagents::WorkerSubAgents::child_toolsets(toolsets),
+                            config: std::sync::OnceLock::new(),
+                        },
+                        excluded,
+                    )
+                })
+            } else {
+                runtime
+            };
         let model = self.bind_model(
             &profile,
             &runtime.instruction_suffix(profile.instructions()),
@@ -537,6 +578,14 @@ impl OrdinaryNativeAgentAssembler {
                 artifact_authority = artifact_authority.with_office(office);
             }
         }
+        // The web families (#1238) meter every provider call through the
+        // gateway under this claim; built only when the snapshot has one.
+        if let Some(web) = self.web_runtime.as_ref()
+            && snapshot_carries_web_family(tool_snapshot)
+        {
+            artifact_authority =
+                artifact_authority.with_web(web.host(&self.model_facade, &context, None));
+        }
         // The index tools (ADR-0030 I1) act under the same claim: its vector
         // token, its redeemed context for the query embedding, and a chat
         // model bound on the agent's own model for the step-back tools. The
@@ -634,6 +683,7 @@ impl OrdinaryNativeAgentAssembler {
             elitea_agent_runtime::planner::TOOLSET_NAME.to_owned(),
             elitea_agent_runtime::lazy_tools::TOOLSET_NAME.to_owned(),
             "elitea_nested_applications".to_owned(),
+            elitea_agent_runtime::subagents::TOOLSET_NAME.to_owned(),
         ]);
         let frozen = freeze_toolsets(toolsets, "elitea_ordinary_tool_binding")
             .await
@@ -890,25 +940,8 @@ impl OrdinaryNativeAgentAssembler {
         context: &crate::transport::runtime_context::ClaimScopedEliteaContext,
         output_continuation: bool,
     ) -> Result<BoundModelFacade, NativeAgentAssemblyError> {
-        let invocation = ModelInvocation {
-            response_schema: None,
-            allow_text_continuation: false,
-            context_budget: profile.context_budget(),
-            model_name: profile.model_name().to_owned(),
-            system_instruction: system_instruction.to_owned(),
-            max_tokens: profile.max_tokens(),
-            reasoning_effort: profile
-                .reasoning_effort()
-                .map(|effort| continuation_reasoning_effort(effort, output_continuation)),
-            temperature: profile.temperature(),
-            max_model_turns: profile.step_limit(),
-        };
-        let (adapter, adapter_name) = match profile.model_provider() {
-            OrdinaryModelProvider::OpenAiChat => {
-                (ModelAdapterKind::OpenAiCompatible, "openai_compatible")
-            }
-            OrdinaryModelProvider::NativeAnthropic => (ModelAdapterKind::Anthropic, "anthropic"),
-        };
+        let invocation = model_invocation(profile, system_instruction, output_continuation);
+        let (adapter, adapter_name) = model_adapter(profile);
         tracing::Span::current().record("model_adapter", adapter_name);
         tracing::Span::current().record("model_project_id", profile.model_project_id());
         tracing::Span::current().record("stage", "model_binding");
@@ -921,6 +954,39 @@ impl OrdinaryNativeAgentAssembler {
                 profile.summary_model(),
             )
             .map_err(model_binding_error)
+    }
+}
+
+/// The agent's model call: its model and generation controls, and its turns.
+fn model_invocation(
+    profile: &super::assembly::OrdinaryNoToolProfile,
+    system_instruction: &str,
+    output_continuation: bool,
+) -> ModelInvocation {
+    ModelInvocation {
+        response_schema: None,
+        allow_text_continuation: false,
+        context_budget: profile.context_budget(),
+        model_name: profile.model_name().to_owned(),
+        system_instruction: system_instruction.to_owned(),
+        max_tokens: profile.max_tokens(),
+        reasoning_effort: profile
+            .reasoning_effort()
+            .map(|effort| continuation_reasoning_effort(effort, output_continuation)),
+        temperature: profile.temperature(),
+        max_model_turns: profile.step_limit(),
+    }
+}
+
+/// The facade adapter for the agent's model provider, and its span name.
+fn model_adapter(
+    profile: &super::assembly::OrdinaryNoToolProfile,
+) -> (ModelAdapterKind, &'static str) {
+    match profile.model_provider() {
+        OrdinaryModelProvider::OpenAiChat => {
+            (ModelAdapterKind::OpenAiCompatible, "openai_compatible")
+        }
+        OrdinaryModelProvider::NativeAnthropic => (ModelAdapterKind::Anthropic, "anthropic"),
     }
 }
 
@@ -1111,6 +1177,14 @@ struct DirectToolsets {
 /// `pptx`, `docx`, `xlsx`) or one that reads and writes files through the same
 /// host (`imagegen`; `sharepoint`, whose `upload_file` reads artifacts and
 /// whose readers turn documents into text).
+/// Whether a configured `web` or `host_intel` toolkit is in the snapshot.
+pub(super) fn snapshot_carries_web_family(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
+    snapshot.iter().any(|reference| {
+        reference.kind() == FrozenToolKind::Configured
+            && matches!(reference.tool_type(), "web" | "host_intel")
+    })
+}
+
 pub(super) fn snapshot_carries_office_family(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
     snapshot.iter().any(|reference| {
         reference.kind() == FrozenToolKind::Configured

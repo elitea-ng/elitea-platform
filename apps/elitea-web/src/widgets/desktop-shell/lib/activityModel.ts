@@ -33,8 +33,6 @@ export interface Activity {
   workspaceId: string | null;
   conversationId: string | null;
   turnId: string | null;
-  /** Tokens, for a turn that reported usage ("12.4K context · 1.2K out"); empty otherwise. */
-  stats: string;
   /** The action's target for the popover's cancel: a turn id, a workspace id or a conversation uuid. */
   cancelKey: string | null;
 }
@@ -42,14 +40,6 @@ export interface Activity {
 const RANK: Record<ActivityKind, number> = { approval: 0, turn: 1, commit: 2, handoff: 3, cloud: 4, index: 5 };
 
 const where = (turn: TrackedTurn): string => turn.workspaceName ?? '';
-
-const compact = (value: number): string => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
-
-/** "12.4K context · 1.2K out"; empty until the gateway reported usage. The window's size is not reported, so no percentage. */
-function statsOf(turn: TrackedTurn): string {
-  if (turn.usage === null) return '';
-  return t('desktop.island.tokens', '{{context}} context · {{out}} out', { context: compact(turn.usage.contextTokens), out: compact(turn.usage.outputTokens) });
-}
 
 function phaseLabel(turn: TrackedTurn): string {
   if (turn.tool !== null) return t('desktop.island.tool', 'Running {{tool}}', { tool: turn.tool });
@@ -68,7 +58,7 @@ function phaseLabel(turn: TrackedTurn): string {
 }
 
 function turnActivities(turn: TrackedTurn): Activity[] {
-  const base = { workspaceId: turn.workspaceId, conversationId: turn.conversationId, turnId: turn.turnId, progress: null, cancelKey: turn.turnId, stats: statsOf(turn) };
+  const base = { workspaceId: turn.workspaceId, conversationId: turn.conversationId, turnId: turn.turnId, progress: null, cancelKey: turn.turnId };
   const out: Activity[] = [];
   const [first] = turn.approvals;
   if (first !== undefined) {
@@ -95,7 +85,7 @@ function turnActivities(turn: TrackedTurn): Activity[] {
 
 type FeedFacts = Pick<ActivityFeedState, 'turns' | 'indexes' | 'sends' | 'cloud'> & Partial<Pick<ActivityFeedState, 'cloudRuns'>>;
 
-const NO_TARGET = { workspaceId: null, conversationId: null, turnId: null, stats: '' } as const;
+const NO_TARGET = { workspaceId: null, conversationId: null, turnId: null } as const;
 
 function sendActivity(send: TrackedSend): Activity {
   return {

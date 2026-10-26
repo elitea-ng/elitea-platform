@@ -34,6 +34,11 @@
 //! * A cancelled turn leaves nothing ([`SessionStore::finish_turn`]); a turn
 //!   the server refused marks the session for re-seeding, and a turn that
 //!   never finished (a crash) is dropped when the session is next opened.
+//! * The file gives its freed space back to the OS: it is kept under
+//!   incremental vacuum ([`ensure_incremental_vacuum`], applied at open and
+//!   independent of the schema version), and the Doctor's `sessions.vacuum`
+//!   ([`SessionStore::reclaim`]) folds it down when the file has grown
+//!   ahead of its sessions.
 //!
 //! One thread owns the SQLite connection ([`SessionStore`] is an actor):
 //! the turn path awaits a reply and never blocks a runtime worker on SQLite,
@@ -59,7 +64,13 @@
 //!           response_message_id TEXT NULL, invocation_id TEXT, author TEXT,
 //!           event TEXT /* adk Event JSON */, bytes INTEGER,
 //!           PRIMARY KEY (session_key, seq)) WITHOUT ROWID
+//! seed_skips (session_key TEXT PRIMARY KEY,
+//!             group_ids TEXT /* JSON array of message-group ids */)
 //! ```
+//!
+//! `seed_skips` (schema 2) holds the server's message groups a re-seed
+//! leaves out: the cloud turns after the one a partial take-back stopped at
+//! (#1187), which the server still holds but the thread never took back.
 //!
 //! `server_cursor` is the conversation's message-group COUNT when the
 //! session last agreed with the server (the conversation detail every turn
@@ -69,7 +80,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -93,9 +104,13 @@ use crate::history::{inspect_private, move_files_aside};
 
 pub const FILE_NAME: &str = "sessions.sqlite";
 /// `PRAGMA user_version` of the schema this build writes.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 /// What one session may hold in all (event JSON bytes).
 pub const MAX_SESSION_BYTES: i64 = 32 * 1024 * 1024;
+/// How long a store may be idle before it folds its WAL into the database
+/// (`wal_checkpoint(TRUNCATE)`): the `-wal` file otherwise keeps the turn's
+/// bytes on disk long after the turn is written.
+pub const WAL_IDLE_CHECKPOINT: Duration = Duration::from_secs(30);
 /// A tool response is stored cut at this many bytes: the cap the server
 /// keeps for a step's output (`d0/recorder.rs` `MAX_TOOL_OUTPUT`).
 pub const MAX_TOOL_RESPONSE_BYTES: usize = 64 * 1024;
@@ -138,7 +153,35 @@ CREATE TABLE events (
     PRIMARY KEY (session_key, seq)
 ) WITHOUT ROWID;
 CREATE INDEX events_by_turn ON events (session_key, turn_execution_id);
+CREATE TABLE seed_skips (
+    session_key TEXT PRIMARY KEY NOT NULL,
+    group_ids TEXT NOT NULL
+);
 ";
+
+/// Schema 1 to 2: the seed boundary of a partial take-back.
+const MIGRATE_1_TO_2: &str = "
+BEGIN;
+CREATE TABLE IF NOT EXISTS seed_skips (
+    session_key TEXT PRIMARY KEY NOT NULL,
+    group_ids TEXT NOT NULL
+);
+PRAGMA user_version = 2;
+COMMIT;
+";
+
+fn read_skips(conn: &Connection, key: &str) -> rusqlite::Result<Vec<i64>> {
+    let text: Option<String> = conn
+        .query_row(
+            "SELECT group_ids FROM seed_skips WHERE session_key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(text
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default())
+}
 
 fn storage(what: &str, error: &rusqlite::Error) -> HostError {
     HostError::Storage(format!("{what}: {error}"))
@@ -204,6 +247,42 @@ pub struct NewEvent {
     pub event: Event,
 }
 
+/// A thread's framing nonce (#1227): 128 random bits drawn when the session
+/// is created and again whenever it is re-seeded from the server, kept only
+/// in this store. Every turn of the thread frames its untrusted blocks under
+/// it (`d0/framing.rs`), so the system prompt stays byte-identical from turn
+/// to turn and the provider's prompt cache keeps it. Never logged: `Debug`
+/// does not print it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ThreadNonce([u8; 16]);
+
+impl ThreadNonce {
+    /// A fresh one.
+    #[must_use]
+    pub fn fresh() -> Self {
+        Self(rand::random())
+    }
+
+    /// The stored bytes, when they are a usable nonce (16 bytes, not all
+    /// zero: a row the adk `create` path made holds a zero placeholder).
+    fn from_stored(bytes: &[u8]) -> Option<Self> {
+        let bytes: [u8; 16] = bytes.try_into().ok()?;
+        (bytes != [0; 16]).then_some(Self(bytes))
+    }
+
+    /// As the framing writes it: 32 lowercase hex digits.
+    #[must_use]
+    pub fn hex(&self) -> String {
+        self.0.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+}
+
+impl std::fmt::Debug for ThreadNonce {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ThreadNonce(..)")
+    }
+}
+
 /// What opening a session found.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionState {
@@ -214,6 +293,8 @@ pub struct SessionState {
     /// The `path_deny` fingerprint differed: the tool-response bodies were
     /// dropped and the re-seed must not bring them back.
     pub bodies_dropped: bool,
+    /// The thread's framing nonce (a re-seed draws another: [`SessionStore::seed`]).
+    pub nonce: ThreadNonce,
 }
 
 /// `session_info`'s answer.
@@ -293,6 +374,8 @@ pub struct SessionStore {
     sender: RwLock<Option<Sender<Job>>>,
     thread: Mutex<Option<std::thread::JoinHandle<()>>>,
     active: Arc<Active>,
+    /// The idle WAL checkpoint interval (a reclaim's restart keeps it).
+    idle_checkpoint: Duration,
 }
 
 fn open_connection(path: &Path) -> Result<Connection, HostError> {
@@ -320,6 +403,9 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
                 "BEGIN; {SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not create the session store", &e)),
+        1 => conn
+            .execute_batch(MIGRATE_1_TO_2)
+            .map_err(|e| storage("could not upgrade the session store", &e)),
         SCHEMA_VERSION => Ok(()),
         newer => Err(HostError::Storage(format!(
             "the session store was written by a newer version of the app (schema {newer})"
@@ -330,6 +416,12 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
 /// Open the database at `path` (created owner-only first) and start the
 /// thread that owns its connection.
 fn start(path: &Path) -> Result<Writing, HostError> {
+    start_at(path, WAL_IDLE_CHECKPOINT)
+}
+
+/// [`start`] with the interval of the idle WAL checkpoint named: tests run
+/// it short so the checkpoint does not wait the full [`WAL_IDLE_CHECKPOINT`].
+fn start_at(path: &Path, idle_checkpoint: Duration) -> Result<Writing, HostError> {
     // Created owner-only BEFORE SQLite opens it, so it is never wider.
     match create_private_file(path) {
         Ok(_) => {}
@@ -344,20 +436,55 @@ fn start(path: &Path) -> Result<Writing, HostError> {
     }
     let conn = open_connection(path)?;
     migrate(&conn)?;
+    ensure_incremental_vacuum(&conn, "the session store");
     let (sender, receiver) = std::sync::mpsc::channel::<Job>();
     let thread = std::thread::Builder::new()
         .name("session-store".into())
-        .spawn(move || run_jobs(conn, &receiver))
+        .spawn(move || run_jobs(conn, &receiver, idle_checkpoint))
         .map_err(|e| HostError::Storage(format!("could not start the session store: {e}")))?;
     Ok(Writing { sender, thread })
 }
 
-fn run_jobs(mut conn: Connection, receiver: &Receiver<Job>) {
-    while let Ok(job) = receiver.recv() {
+fn run_jobs(mut conn: Connection, receiver: &Receiver<Job>, idle_checkpoint: Duration) {
+    let mut jobs: u64 = 0;
+    // A job ran since the last checkpoint: an idle store with nothing new
+    // sleeps instead of checkpointing every interval.
+    let mut dirty = false;
+    loop {
+        let job = match receiver.recv_timeout(idle_checkpoint) {
+            Ok(job) => job,
+            Err(RecvTimeoutError::Timeout) => {
+                // Idle for a while: fold the WAL into the database, so the
+                // `-wal` file does not hold the turn's bytes on disk while
+                // the app sits open.
+                if dirty {
+                    checkpoint_wal(&conn);
+                    dirty = false;
+                }
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
         job(&mut conn);
+        jobs += 1;
+        dirty = true;
+        // Incremental vacuum: the pages a trim freed would
+        // otherwise stay in the file's free space, and the store would only
+        // grow.
+        if jobs.is_multiple_of(64)
+            && let Err(error) = conn.pragma_update(None, "incremental_vacuum", 0)
+        {
+            log::warn!("the session store could not vacuum: {error}");
+        }
     }
     // The queue closed: fold the WAL into the database before the file may
     // be moved or read by another process (the Doctor).
+    checkpoint_wal(&conn);
+}
+
+/// Fold the WAL into the database, truncating the `-wal` file; log a
+/// warning when it could not (the store then closes without it).
+fn checkpoint_wal(conn: &Connection) {
     if let Err(error) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
         log::warn!("the session store could not be checkpointed: {error}");
     }
@@ -365,6 +492,154 @@ fn run_jobs(mut conn: Connection, receiver: &Receiver<Job>) {
 
 fn closed() -> HostError {
     HostError::Storage("the session store is closed; restart Elitea".into())
+}
+
+/// `PRAGMA auto_vacuum` of a file under incremental vacuum.
+const INCREMENTAL: i64 = 2;
+/// The largest file [`ensure_incremental_vacuum`] switches at open (its
+/// one `VACUUM` stays well under a second); a larger one waits for the
+/// Doctor's shrink.
+pub const AUTO_SWITCH_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// A file this large and half free pages is worth a shrink.
+pub const SHRINK_MIN_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Put the database on `conn` under incremental vacuum, so the pages a trim
+/// or a delete frees can go back to the OS (`PRAGMA incremental_vacuum`).
+/// A file created without it (every file before this mode, and a new file:
+/// opening it in WAL mode writes its header first) only switches over
+/// through a full `VACUUM`, which runs here once. It is best effort: a
+/// `VACUUM` that fails (the disk is full, another process is mid-write
+/// past the busy timeout) is logged and the store opens as it was; the next
+/// open tries again. It never touches `user_version`, so an older build
+/// still opens the file. A file larger than [`AUTO_SWITCH_MAX_BYTES`] is
+/// left as it is, so a launch never waits on a long `VACUUM`: the Doctor
+/// offers its shrink ([`DbSpace::shrink_advised`]), which switches it.
+pub(crate) fn ensure_incremental_vacuum(conn: &Connection, what: &str) {
+    match conn.query_row("PRAGMA auto_vacuum", [], |row| row.get::<_, i64>(0)) {
+        Ok(INCREMENTAL) => return,
+        Ok(_) => {}
+        Err(error) => {
+            log::warn!("{what} could not read its vacuum mode: {error}");
+            return;
+        }
+    }
+    let bytes = conn
+        .query_row(
+            "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_or(u64::MAX, |bytes| u64::try_from(bytes).unwrap_or(0));
+    if bytes > AUTO_SWITCH_MAX_BYTES {
+        log::info!(
+            "{what} holds {bytes} bytes, too many to vacuum at launch; the Doctor offers the shrink"
+        );
+        return;
+    }
+    let started = std::time::Instant::now();
+    let switched = conn
+        .pragma_update(None, "auto_vacuum", "INCREMENTAL")
+        .and_then(|()| conn.execute_batch("VACUUM"));
+    match switched {
+        Ok(()) => log::info!(
+            "{what} now gives freed space back (vacuumed in {:?})",
+            started.elapsed()
+        ),
+        Err(error) => log::warn!(
+            "{what} could not switch to incremental vacuum; it opens as it was and tries again next time: {error}"
+        ),
+    }
+}
+
+/// `VACUUM` the database in `dir` while no connection of this process holds
+/// it: the file's free space returns to the OS, and a file not yet under
+/// incremental vacuum takes it with it. The bytes it held before.
+/// A missing database holds nothing.
+///
+/// # Errors
+///
+/// The file refused the vacuum (it is not a database, or the disk could
+/// not be written).
+pub fn reclaim_database(dir: &Path, file_name: &str) -> Result<u64, HostError> {
+    let path = canonical_dir(dir).join(file_name);
+    let before = fs::symlink_metadata(&path)
+        .map(|meta| meta.len())
+        .unwrap_or_default();
+    if before == 0 {
+        return Ok(before);
+    }
+    let conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(|e| storage("could not open the database", &e))?;
+    conn.busy_timeout(Duration::from_secs(5))
+        .map_err(|e| storage("could not open the database", &e))?;
+    conn.execute_batch(
+        "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA auto_vacuum = INCREMENTAL; VACUUM;",
+    )
+    .map_err(|e| storage("could not reclaim the database", &e))?;
+    Ok(before)
+}
+
+/// `dir` canonical, as [`SessionStore::open`] makes it: the no-follow open
+/// then refuses a symlinked FILE, not a symlink higher up (macOS's `/var`
+/// is one). As given when it cannot be resolved (the open then fails).
+fn canonical_dir(dir: &Path) -> PathBuf {
+    fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
+}
+
+/// What a store file holds, for the Doctor's space checks.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DbSpace {
+    /// The file's size on disk.
+    pub bytes: u64,
+    /// The share of its pages that are free (`0.0..=1.0`).
+    pub free_fraction: f64,
+    /// Under incremental vacuum: freed pages go back on their own.
+    pub incremental: bool,
+}
+
+impl DbSpace {
+    /// The one rule both Doctor checks use to offer a shrink: a file of at
+    /// least [`SHRINK_MIN_BYTES`] with half or more of it free pages, or a
+    /// file too large to switch at open ([`AUTO_SWITCH_MAX_BYTES`]) that is
+    /// not yet under incremental vacuum (the shrink switches it).
+    #[must_use]
+    pub fn shrink_advised(&self) -> bool {
+        (self.bytes >= SHRINK_MIN_BYTES && self.free_fraction >= 0.5)
+            || (!self.incremental && self.bytes > AUTO_SWITCH_MAX_BYTES)
+    }
+}
+
+/// What the SQLite database at `dir/file_name` holds ([`DbSpace`]). All
+/// zero when the file is missing, not a database, empty, or the query
+/// fails. Opened read-only through a no-follow connection, separate from
+/// the store's own.
+pub fn database_space(dir: &Path, file_name: &str) -> DbSpace {
+    let path = canonical_dir(dir).join(file_name);
+    let bytes = fs::symlink_metadata(&path)
+        .map(|meta| meta.len())
+        .unwrap_or_default();
+    let Ok(conn) = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    ) else {
+        return DbSpace::default();
+    };
+    let read = |pragma: &str| conn.query_row(pragma, [], |row| row.get::<_, i64>(0));
+    match (
+        read("PRAGMA page_count"),
+        read("PRAGMA freelist_count"),
+        read("PRAGMA auto_vacuum"),
+    ) {
+        (Ok(pages), Ok(free), Ok(mode)) if pages > 0 => DbSpace {
+            bytes,
+            free_fraction: free as f64 / pages as f64,
+            incremental: mode == INCREMENTAL,
+        },
+        _ => DbSpace::default(),
+    }
 }
 
 impl SessionStore {
@@ -375,19 +650,31 @@ impl SessionStore {
     /// The directory or file is refused (see the module docs), the file is
     /// not a database, or it was written by a newer schema.
     pub fn open(dir: &Path) -> Result<Self, HostError> {
+        Self::open_at(dir, WAL_IDLE_CHECKPOINT)
+    }
+
+    /// [`Self::open`] with the interval of the idle WAL checkpoint named:
+    /// tests run it short so the checkpoint does not wait the full
+    /// [`WAL_IDLE_CHECKPOINT`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::open`].
+    pub fn open_at(dir: &Path, idle_checkpoint: Duration) -> Result<Self, HostError> {
         create_private_dir(dir)?;
         // Canonical, so the no-follow open refuses a symlinked FILE, not a
         // symlink higher up (macOS's `/var` is one).
         let dir = fs::canonicalize(dir).map_err(|e| HostError::Storage(e.to_string()))?;
         let path = dir.join(FILE_NAME);
         inspect_private(&path, "the session store")?;
-        let writing = start(&path)?;
+        let writing = start_at(&path, idle_checkpoint)?;
         Ok(Self {
             dir,
             path,
             sender: RwLock::new(Some(writing.sender)),
             thread: Mutex::new(Some(writing.thread)),
             active: Arc::new(Active::default()),
+            idle_checkpoint,
         })
     }
 
@@ -495,6 +782,45 @@ impl SessionStore {
         Ok(aside)
     }
 
+    /// Give the file's free space back to the OS (the Doctor's
+    /// `sessions.vacuum`): the store is a cache the server conversation
+    /// rebuilds, and trims free pages it cannot reclaim on its own, so the
+    /// file would only grow. Close it, `VACUUM` it and reopen it. The bytes
+    /// the file held before (how much could be given back).
+    ///
+    /// # Errors
+    ///
+    /// The file could not be vacuumed (the store is then reopened on it), or
+    /// the reopened store could not start (it stays closed until restart).
+    pub fn reclaim(&self) -> Result<u64, HostError> {
+        self.close();
+        let before = reclaim_database(&self.dir, FILE_NAME).map_err(|e| {
+            log::warn!("the session store could not be reclaimed: {e}");
+            e
+        });
+        let started = start_at(&self.path, self.idle_checkpoint);
+        let writing = match (&before, started) {
+            (_, Ok(writing)) => writing,
+            (Err(_), Err(_)) => return before,
+            (Ok(_), Err(error)) => {
+                return Err(HostError::Storage(format!(
+                    "a new session store could not start after reclaim ({error}); restart Elitea"
+                )));
+            }
+        };
+        *self
+            .sender
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(writing.sender);
+        *self
+            .thread
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(writing.thread);
+        let before = before?;
+        log::warn!("diagnostics: reclaimed the session store (it held {before} bytes)");
+        Ok(before)
+    }
+
     /// Open the session of `identity` for a turn: created when missing,
     /// re-keyed to `policy_fp` (a different `path_deny` drops the tool
     /// responses' bodies and marks the session for re-seeding), and cleared
@@ -515,15 +841,15 @@ impl SessionStore {
         let busy = self.active.lock().contains_key(&key);
         self.call("could not open the session", move |conn| {
             let tx = conn.transaction()?;
-            let row: Option<(i64, Option<String>, String)> = tx
+            let row: Option<(i64, Option<String>, String, Vec<u8>)> = tx
                 .query_row(
-                    "SELECT seeded_from_server, server_cursor, policy_fp
+                    "SELECT seeded_from_server, server_cursor, policy_fp, thread_nonce
                      FROM sessions WHERE session_key = ?1",
                     params![key],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )
                 .optional()?;
-            let state = if let Some((seeded, cursor, stored_fp)) = row {
+            let state = if let Some((seeded, cursor, stored_fp, stored_nonce)) = row {
                 if !busy {
                     // An earlier turn that never ended (no answer id).
                     tx.execute(
@@ -547,14 +873,26 @@ impl SessionStore {
                     params![key],
                     |row| row.get(0),
                 )?;
+                let nonce = match ThreadNonce::from_stored(&stored_nonce) {
+                    Some(nonce) => nonce,
+                    None => {
+                        let nonce = ThreadNonce::fresh();
+                        tx.execute(
+                            "UPDATE sessions SET thread_nonce = ?2 WHERE session_key = ?1",
+                            params![key, nonce.0.to_vec()],
+                        )?;
+                        nonce
+                    }
+                };
                 SessionState {
                     seeded_from_server: seeded != 0 && !changed,
                     server_cursor: if changed { None } else { cursor },
                     events: usize::try_from(events).unwrap_or_default(),
                     bodies_dropped: changed,
+                    nonce,
                 }
             } else {
-                let nonce: [u8; 16] = rand::random();
+                let nonce = ThreadNonce::fresh();
                 tx.execute(
                     "INSERT INTO sessions (session_key, deployment, user_id, project_id,
                          conversation_uuid, thread_nonce, seeded_from_server, created_at,
@@ -566,7 +904,7 @@ impl SessionStore {
                         identity.user_id,
                         identity.project_id,
                         identity.conversation_uuid,
-                        nonce.to_vec(),
+                        nonce.0.to_vec(),
                         now_ms(),
                         fp
                     ],
@@ -576,6 +914,7 @@ impl SessionStore {
                     server_cursor: None,
                     events: 0,
                     bodies_dropped: false,
+                    nonce,
                 }
             };
             tx.commit()?;
@@ -588,6 +927,8 @@ impl SessionStore {
     /// folded) and mark it seeded as of `cursor`. The session state under
     /// the keys in `carry` (the thread's own settings, which the server's
     /// transcript does not hold) stays as the replaced events left it.
+    /// A re-seed draws the thread a new framing nonce, which it returns: the
+    /// rebuilt history starts a new prompt prefix anyway.
     ///
     /// # Errors
     ///
@@ -598,8 +939,10 @@ impl SessionStore {
         events: Vec<NewEvent>,
         cursor: Option<String>,
         carry: &'static [&'static str],
-    ) -> Result<(), HostError> {
+    ) -> Result<ThreadNonce, HostError> {
         let key = key.to_owned();
+        let nonce = ThreadNonce::fresh();
+        let stored = nonce.0.to_vec();
         self.call("could not seed the session", move |conn| {
             let tx = conn.transaction()?;
             let mut carried = Carried::default();
@@ -620,14 +963,16 @@ impl SessionStore {
             }
             trim(&tx, &key)?;
             tx.execute(
-                "UPDATE sessions SET seeded_from_server = 1, server_cursor = ?2, updated_at = ?3
+                "UPDATE sessions SET seeded_from_server = 1, server_cursor = ?2, updated_at = ?3,
+                     thread_nonce = ?4
                  WHERE session_key = ?1",
-                params![key, cursor, now_ms()],
+                params![key, cursor, now_ms(), stored],
             )?;
             refresh_bytes(&tx, &key)?;
             tx.commit()
         })
-        .await
+        .await?;
+        Ok(nonce)
     }
 
     /// Mark the session of this conversation for re-seeding (a take-back
@@ -650,6 +995,89 @@ impl SessionStore {
                 params![key],
             )?;
             Ok(changed > 0)
+        })
+        .await
+    }
+
+    /// Leave the server's message groups `group_ids` out of every later
+    /// seed of this conversation's session (added to any already left
+    /// out): the cloud turns after the one a partial take-back stopped at.
+    /// Kept whether or not the session exists yet.
+    ///
+    /// # Errors
+    ///
+    /// The store could not be written.
+    pub async fn skip_on_seed(
+        &self,
+        deployment: &str,
+        user_id: i64,
+        conversation_uuid: &str,
+        group_ids: Vec<i64>,
+    ) -> Result<(), HostError> {
+        let key = session_key(deployment, user_id, conversation_uuid);
+        self.call("could not keep the seed boundary", move |conn| {
+            let tx = conn.transaction()?;
+            let mut ids = read_skips(&tx, &key)?;
+            ids.extend(group_ids);
+            ids.sort_unstable();
+            ids.dedup();
+            let text = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into());
+            tx.execute(
+                "INSERT INTO seed_skips (session_key, group_ids) VALUES (?1, ?2)
+                 ON CONFLICT (session_key) DO UPDATE SET group_ids = excluded.group_ids",
+                params![key, text],
+            )?;
+            tx.commit()
+        })
+        .await
+    }
+
+    /// Seed the message groups `group_ids` again (taken out of what
+    /// [`Self::skip_on_seed`] left out): the remaining cloud turns were
+    /// taken back after all.
+    ///
+    /// # Errors
+    ///
+    /// The store could not be written.
+    pub async fn unskip_on_seed(
+        &self,
+        deployment: &str,
+        user_id: i64,
+        conversation_uuid: &str,
+        group_ids: Vec<i64>,
+    ) -> Result<(), HostError> {
+        let key = session_key(deployment, user_id, conversation_uuid);
+        self.call("could not keep the seed boundary", move |conn| {
+            let tx = conn.transaction()?;
+            let mut ids = read_skips(&tx, &key)?;
+            ids.retain(|id| !group_ids.contains(id));
+            if ids.is_empty() {
+                tx.execute(
+                    "DELETE FROM seed_skips WHERE session_key = ?1",
+                    params![key],
+                )?;
+            } else {
+                let text = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into());
+                tx.execute(
+                    "UPDATE seed_skips SET group_ids = ?2 WHERE session_key = ?1",
+                    params![key, text],
+                )?;
+            }
+            tx.commit()
+        })
+        .await
+    }
+
+    /// The message groups a seed of session `key` leaves out
+    /// ([`Self::skip_on_seed`]).
+    ///
+    /// # Errors
+    ///
+    /// The store could not be read.
+    pub async fn seed_skips(&self, key: &str) -> Result<Vec<i64>, HostError> {
+        let key = key.to_owned();
+        self.call("could not read the seed boundary", move |conn| {
+            read_skips(conn, &key)
         })
         .await
     }
@@ -742,6 +1170,10 @@ impl SessionStore {
     ) -> Result<bool, HostError> {
         let key = session_key(deployment, user_id, conversation_uuid);
         self.call("could not delete the session", move |conn| {
+            conn.execute(
+                "DELETE FROM seed_skips WHERE session_key = ?1",
+                params![key],
+            )?;
             Ok(conn.execute("DELETE FROM sessions WHERE session_key = ?1", params![key])? > 0)
         })
         .await
@@ -754,6 +1186,7 @@ impl SessionStore {
     /// The store could not be written.
     pub fn delete_all(&self) -> Result<usize, HostError> {
         self.call_blocking("could not delete the sessions", |conn| {
+            conn.execute("DELETE FROM seed_skips", [])?;
             conn.execute("DELETE FROM sessions", [])
         })
     }
@@ -889,6 +1322,16 @@ pub fn bounded(mut event: Event) -> Event {
                 } => {
                     function_response.inline_data.clear();
                     function_response.file_data.clear();
+                    // An image a tool returned (read_file, #1229) is kept
+                    // for the run that read it, not in the store: its
+                    // metadata stays, the bytes do not.
+                    if let std::borrow::Cow::Owned(without) =
+                        elitea_agent_runtime::image_result::without_image(
+                            &function_response.response,
+                        )
+                    {
+                        function_response.response = without;
+                    }
                     let text = function_response.response.to_string();
                     if text.len() > MAX_TOOL_RESPONSE_BYTES {
                         let mut end = MAX_TOOL_RESPONSE_BYTES;

@@ -49,6 +49,47 @@
 //! | `run_command` that is destructive, asks for the network or `full-access`, or would run unconfined: its sandbox cannot hide what it denies (no sandbox on a host that allows unenforced ones, Landlock alone, a bubblewrap walk cut at its cap; [`ToolCall::unconfined`], decided per command, from the sandbox chosen for it) | asked |
 //! | `run_tests` | as `run_command` (the test command it runs): no network, allowed; `network: true` asked, until "always allow" for that runner kind in this workspace |
 //! | `exit_plan_mode` (offered in the `Plan` profile only) | asked every time, as `accept` / `decline`; decided before layers 3–4, which never apply to it; denied outside `Plan` |
+//! | `run_command` with `background` or `tty` (#1223) | as `run_command` (the classifier, the sandbox mode, the network) |
+//! | `run_command` with `loopback` ([`ToolCall::loopback`]) | asked; "always allow" is remembered in the choice store for that program and argv prefix in this workspace (with the loopback, within its sandbox and network), never written as a prefix rule; a workspace or user allow rule does not cover the loopback; where the sandbox cannot keep it to loopback (Landlock alone) it is unconfined: asked every time |
+//! | `run_command` with `keep_alive: "session"` ([`ToolCall::keep_alive`]) | asked, once per process: never remembered |
+//! | `diagnostics` ([`ToolKind::Diagnostics`], #1236) | allowed (read-only; kept in plan mode). The language servers behind it start without a question: always read-only, without the network, only where the sandbox is fully enforced, and only while the policy allows commands ([`crate::lsp`]) |
+//! | `process_output`, `process_wait`, `process_list` ([`ToolKind::ProcessRead`]) | allowed (read-only; kept in plan mode) |
+//! | `process_write` ([`ToolKind::ProcessWrite`]) | allowed into the session's own processes (each was allowed when it started, and keeps its sandbox); the text is classified like a command line, line by line (a destructive line, e.g. `rm -rf` typed into a shell, is asked; a `command_deny` match is denied); never remembered |
+//! | `process_kill` ([`ToolKind::ProcessKill`]) | allowed (the session's own processes only) |
+//! | starting a local MCP server ([`ToolKind::McpStart`], #1230) | allowed when its sandbox hides what the session denies and its network is off; a server with the network is asked once per app session; one its sandbox cannot confine is asked at every start; a `forbidden` (or `prompt`) prefix rule matching its command and arguments refuses (asks); never remembered |
+//! | the `workspace_index` tools (`elitea-local-index`: `search_workspace`, `repo_map`, the Inventory-named reads) | allowed (read-only; kept in plan mode). They are not session tools, so no call reaches this engine: the host offers them only while the policy's `local_index` is on, and they read through the confined workspace (`path_deny`, the deny list) |
+//! | an MCP tool ([`ToolKind::McpCall`]) | asked on first use per (server, tool); "always allow" is remembered for that server's tool in this workspace (the choice store); a tool the person marked read-only (or whose read-only hint they trust) is allowed, and is the only kind plan mode keeps |
+//! | `search_memory` ([`ToolKind::SearchMemory`], #1233) | allowed (it only reads; kept in plan mode) |
+//! | `save_memory` ([`ToolKind::SaveMemory`]) | allowed (the transcript shows the saved text; the person deletes it in Settings → Memory); denied in plan mode |
+//! | `delete_memory` ([`ToolKind::DeleteMemory`]) | asked every time (it removes data the person may have saved on the web); never remembered; denied in plan mode |
+//! | `web_search`, `web_fetch` of a remote `web` toolkit ([`ToolKind::WebRead`], #1238) | allowed (read-only; kept in plan mode); the transcript shows the query or URL |
+//! | `internet_host_search`, `internet_host_lookup` of a remote `host_intel` toolkit ([`ToolKind::HostIntel`]) | asked; "approve for this session" ([`RulesEngine::remember_for_session`]) answers the rest of the app session, never a workspace rule; kept in plan mode |
+//! | one of the person's hooks running ([`crate::hooks`], #1237) | not asked (the person wrote it in host data); sandboxed as configured, capped by the policy; never run when the policy turns the shell off, or where its sandbox cannot hide what the session denies |
+//! | a repository-proposed hook (`.elitea/hooks.json`, `.claude/settings.json`) | never runs until the person trusts it (copied into host data for that file's digest); a changed file asks again |
+//! | a `PreToolUse` hook's `deny` | the call is refused (`hook_denied`) after layers 1–2, before layer 3 |
+//! | a `PreToolUse` hook's `ask` ([`HOOK_ASK_PAYLOAD_KEY`]) | an allow from layers 3–5 is asked instead; never remembered; a deny stays a deny |
+//! | a `PreToolUse` hook's `allow` | changes nothing: hooks tighten, never loosen |
+//! | a `PreToolUse` hook's `modified_input` | checked against the tool's schema, then decided by every layer like the model's own input |
+//! | a nested agent of the agent (#1239: a cloud child turn, `startLocalChildTurn`) | allowed and shown as a sub-agent lane. It is not a session tool, so no call reaches this engine: it runs in the cloud under the person's own grants, and the child's sensitive tools pause on the platform and are confirmed through the same approval card as a remote toolkit call; not offered in plan mode |
+//!
+//! The policy ceiling for both MCP rows is `local_mcp`: off (or absent),
+//! every start and every call is denied. `path_deny` cannot be enforced
+//! inside a server's own reads beyond the sandbox, which already masks the
+//! `path_deny` paths.
+//!
+//! The web rows' ceilings are `web` and `host_intel`: off (or absent),
+//! every call is denied and the host does not offer the tools. They run on
+//! a cloud worker through `remote_toolkit_call`; the server refuses them
+//! too while the policy is off.
+//!
+//! The memory rows' ceiling is `memory_write`: off (or absent), a save or a
+//! delete is denied (the host does not offer them either); a search needs
+//! only `allowed`. The memory tools are the runtime's
+//! ([`elitea_agent_runtime::memory_tools`]): their approval requests carry
+//! [`elitea_agent_runtime::memory_tools::APPROVAL_PAYLOAD_KEY`], which
+//! [`RuleApprovals`] reads as the matching [`ToolKind`]. Workspace rules and
+//! remembered choices do not apply to them (a memory names no path or
+//! command); only these defaults do.
 //!
 //! Layers 1 and 2 only tighten these defaults. Layers 3 and 4 can also
 //! loosen them: a workspace allow or a remembered choice allows a call the
@@ -82,6 +123,14 @@ use crate::execpolicy::{
 use crate::policy::{LocalWorkPolicy, SandboxMode};
 use crate::workspace::{CASE_INSENSITIVE_FS, Intent, Workspace, nfc};
 
+/// Why a loopback command is asked.
+const LOOPBACK_REASON: &str =
+    "listening on or connecting to localhost (127.0.0.1, ::1) needs your approval";
+
+/// Why keeping a process past its turn is asked.
+const KEEP_ALIVE_REASON: &str =
+    "keeping this process running after the turn ends needs your approval";
+
 /// The payload key a local tool call travels under in an
 /// [`ApprovalRequest`]; requests without it (HITL nodes) go straight to the
 /// prompt.
@@ -89,6 +138,15 @@ pub const PAYLOAD_KEY: &str = "local_tool_call";
 
 /// Approve, and remember the choice for this workspace.
 pub const APPROVE_ALWAYS: &str = "approve_always";
+
+/// The payload key a `PreToolUse` hook's ask travels under (`{hook,
+/// reason}`, the reason the hook's own text, for the person), beside
+/// [`PAYLOAD_KEY`]: [`RuleApprovals`] asks a call the rules would allow.
+pub const HOOK_ASK_PAYLOAD_KEY: &str = "hook_ask";
+
+/// Approve, and remember the choice until the app quits (the host-intel
+/// tools: [`RulesEngine::remember_for_session`]).
+pub const APPROVE_SESSION: &str = "approve_session";
 
 /// The payload key the plan an `exit_plan_mode` call proposes travels under
 /// (`{plan}`, Markdown), beside [`PAYLOAD_KEY`].
@@ -111,6 +169,11 @@ pub enum PermissionProfile {
     /// Read-only tools and `exit_plan_mode` only, until the person accepts
     /// the plan.
     Plan,
+    /// Build, but every call that would be asked runs without the
+    /// question ([`Source::Bypass`]): the person chose to run unattended.
+    /// The policy ceiling and every deny (a forbidden rule's included) stay
+    /// final, and a `PreToolUse` hook's ask is still asked.
+    Bypass,
 }
 
 /// The local tools, as the rules name them.
@@ -141,6 +204,33 @@ pub enum ToolKind {
     /// session leaves [`PermissionProfile::Plan`]) or declines it. Offered
     /// in plan mode only; never remembered, never answered by a rule.
     ExitPlanMode,
+    /// `process_output`, `process_wait`, `process_list`: reading the
+    /// session's background processes (#1223).
+    ProcessRead,
+    /// `process_write`: text typed into one of the session's processes,
+    /// classified like a command line ([`ToolCall::command`]).
+    ProcessWrite,
+    /// `process_kill`: stopping one of the session's processes.
+    ProcessKill,
+    /// Starting one of the person's local MCP servers (#1230): its command
+    /// and arguments in [`ToolCall::command`], its sandbox and network.
+    McpStart,
+    /// Calling a tool of a local MCP server ([`ToolCall::mcp`]).
+    McpCall,
+    /// `search_memory`: reading the person's saved memories (#1233).
+    SearchMemory,
+    /// `save_memory`: saving one memory to the platform.
+    SaveMemory,
+    /// `delete_memory`: deleting one of the person's memories.
+    DeleteMemory,
+    /// `diagnostics` (#1236): what the session's language servers report
+    /// for a file, or for the files the session changed.
+    Diagnostics,
+    /// `web_search` / `web_fetch` of a remote `web` toolkit (#1238).
+    WebRead,
+    /// `internet_host_search` / `internet_host_lookup` of a remote
+    /// `host_intel` toolkit.
+    HostIntel,
 }
 
 impl ToolKind {
@@ -156,6 +246,37 @@ impl ToolKind {
                 | Self::ReadOutput
                 | Self::ReadDocument
                 | Self::GitRead
+                | Self::ProcessRead
+                | Self::SearchMemory
+                | Self::Diagnostics
+                | Self::WebRead
+                | Self::HostIntel
+        )
+    }
+
+    /// Whether it is a remote web or host-intel tool.
+    #[must_use]
+    pub const fn is_web(self) -> bool {
+        matches!(self, Self::WebRead | Self::HostIntel)
+    }
+
+    /// The web kind of a remote toolkit's `type`, if it is one.
+    #[must_use]
+    pub fn web_toolkit(toolkit_type: &str) -> Option<Self> {
+        match toolkit_type {
+            "web" => Some(Self::WebRead),
+            "host_intel" => Some(Self::HostIntel),
+            _ => None,
+        }
+    }
+
+    /// Whether the tool works on the session's background processes (offered
+    /// with the shell only).
+    #[must_use]
+    pub const fn is_process(self) -> bool {
+        matches!(
+            self,
+            Self::ProcessRead | Self::ProcessWrite | Self::ProcessKill
         )
     }
 
@@ -167,15 +288,57 @@ impl ToolKind {
     }
 
     /// Whether [`PermissionProfile::Plan`] offers the tool: the read-only
-    /// ones and `exit_plan_mode`.
+    /// ones and `exit_plan_mode`. (An MCP tool is kept when the person
+    /// marked it read-only: decided per call, [`McpTarget::read_only`].)
     #[must_use]
     pub const fn plan_allows(self) -> bool {
         self.is_read_only() || matches!(self, Self::ExitPlanMode)
     }
+
+    /// Whether it is about a local MCP server.
+    #[must_use]
+    pub const fn is_mcp(self) -> bool {
+        matches!(self, Self::McpStart | Self::McpCall)
+    }
+
+    /// Whether it is one of the runtime's memory tools.
+    #[must_use]
+    pub const fn is_memory(self) -> bool {
+        matches!(
+            self,
+            Self::SearchMemory | Self::SaveMemory | Self::DeleteMemory
+        )
+    }
+
+    /// The memory tool named `name`, as the runtime names it.
+    #[must_use]
+    pub fn memory_tool(name: &str) -> Option<Self> {
+        use elitea_agent_runtime::memory_tools::{DELETE_MEMORY, SAVE_MEMORY, SEARCH_MEMORY};
+        match name {
+            SEARCH_MEMORY => Some(Self::SearchMemory),
+            SAVE_MEMORY => Some(Self::SaveMemory),
+            DELETE_MEMORY => Some(Self::DeleteMemory),
+            _ => None,
+        }
+    }
+}
+
+/// Which local MCP server (and tool) a call is about.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct McpTarget {
+    /// The server's name in the person's configuration.
+    pub server: String,
+    /// The tool's name as the server lists it; `None` for a start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// The person marked the tool read-only (or trusts the server's hint).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub read_only: bool,
 }
 
 /// One tool call, as the rules see it.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[allow(clippy::struct_excessive_bools)] // independent facts the rules weigh
 pub struct ToolCall {
     pub tool: ToolKind,
     /// Workspace paths it touches (as the tool resolved them).
@@ -201,6 +364,23 @@ pub struct ToolCall {
     /// "always allow" is remembered for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runner: Option<String>,
+    /// For [`ToolKind::RunCommand`]: it asks to listen on and connect to the
+    /// loopback addresses ([`crate::sandbox::SandboxRequest::loopback`]).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub loopback: bool,
+    /// For [`ToolKind::RunCommand`]: it asks to keep its background process
+    /// running past the turn (`keep_alive: "session"`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub keep_alive: bool,
+    /// For [`ToolKind::McpStart`] and [`ToolKind::McpCall`]: the server and
+    /// tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<McpTarget>,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl ToolCall {
@@ -214,6 +394,9 @@ impl ToolCall {
             network: false,
             unconfined: false,
             runner: None,
+            loopback: false,
+            keep_alive: false,
+            mcp: None,
         }
     }
 
@@ -242,6 +425,10 @@ pub enum Source {
     User,
     Remembered,
     Default,
+    /// A `PreToolUse` hook asked ([`HOOK_ASK_PAYLOAD_KEY`]).
+    Hook,
+    /// [`PermissionProfile::Bypass`] allowed a call another layer asked.
+    Bypass,
 }
 
 impl From<RuleScope> for Source {
@@ -380,6 +567,10 @@ pub struct RememberedChoice {
     /// runner's test commands in this workspace, whatever their arguments.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runner: Option<String>,
+    /// A command choice made with the loopback ([`ToolCall::loopback`]):
+    /// it covers the same command with the loopback too.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub loopback: bool,
 }
 
 /// Where remembered choices live (the host's data directory).
@@ -489,10 +680,14 @@ pub struct RulesEngine {
     choices: Arc<dyn ChoiceStore>,
     /// The [`PermissionProfile`]: `true` is [`PermissionProfile::Plan`].
     plan: AtomicBool,
+    /// `true` is [`PermissionProfile::Bypass`].
+    bypass: AtomicBool,
     /// Whether every command runs in an enforced sandbox (off when the
     /// host lets commands run unenforced): routine commands are allowed
     /// only then.
     confined: bool,
+    /// The person approved the host-intel tools for this app session.
+    host_intel_session: AtomicBool,
 }
 
 fn path_glob(glob: &str) -> Option<GlobMatcher> {
@@ -593,6 +788,8 @@ impl RulesEngine {
             sink: RwLock::new(None),
             choices,
             plan: AtomicBool::new(false),
+            bypass: AtomicBool::new(false),
+            host_intel_session: AtomicBool::new(false),
             confined: true,
         })
     }
@@ -656,12 +853,16 @@ impl RulesEngine {
     pub fn set_profile(&self, profile: PermissionProfile) {
         self.plan
             .store(profile == PermissionProfile::Plan, Ordering::SeqCst);
+        self.bypass
+            .store(profile == PermissionProfile::Bypass, Ordering::SeqCst);
     }
 
     #[must_use]
     pub fn profile(&self) -> PermissionProfile {
         if self.plan.load(Ordering::SeqCst) {
             PermissionProfile::Plan
+        } else if self.bypass.load(Ordering::SeqCst) {
+            PermissionProfile::Bypass
         } else {
             PermissionProfile::Build
         }
@@ -673,10 +874,69 @@ impl RulesEngine {
         self.profile() == PermissionProfile::Plan
     }
 
-    /// Decide one call.
+    /// Whether layers 1 (the policy ceiling) and 2 (plan mode) refuse
+    /// `call` outright: such a call runs no hook. A test run without a
+    /// command is judged by its switches (its command is planned later).
+    #[must_use]
+    pub fn refused_before_hooks(&self, call: &ToolCall) -> bool {
+        if self.plan_mode() && !call.tool.plan_allows() {
+            return true;
+        }
+        if call.tool.runs_commands() && call.command.is_none() {
+            return !(self.policy.allowed && self.policy.shell)
+                || call.sandbox_mode() > self.policy.max_sandbox_mode
+                || (call.network && !self.policy.network);
+        }
+        self.policy_ceiling(call).is_some()
+    }
+
+    /// `decision` with a `PreToolUse` hook's ask applied: an allow becomes
+    /// a question; an ask or a deny stays what it is.
+    #[must_use]
+    pub fn with_hook_ask(decision: Decision, hook: &str) -> Decision {
+        if decision.verdict == Verdict::Allow {
+            Decision::new(
+                Verdict::Ask,
+                Source::Hook,
+                format!("your hook `{hook}` asks for your approval"),
+            )
+        } else {
+            decision
+        }
+    }
+
+    /// Decide one call. In [`PermissionProfile::Bypass`] an ask is an
+    /// allow; a deny stays a deny.
     #[must_use]
     pub fn decide(&self, call: &ToolCall) -> Decision {
+        let decision = self.decide_by_layers(call);
+        if decision.verdict == Verdict::Ask && self.profile() == PermissionProfile::Bypass {
+            return Decision {
+                rule: decision.rule,
+                ..Decision::new(
+                    Verdict::Allow,
+                    Source::Bypass,
+                    format!(
+                        "bypass mode allows what would be asked ({})",
+                        decision.reason
+                    ),
+                )
+            };
+        }
+        decision
+    }
+
+    /// Decide one call by its layers, without [`PermissionProfile::Bypass`]
+    /// (what the rules say: a rules panel's explanation).
+    #[must_use]
+    pub fn decide_by_layers(&self, call: &ToolCall) -> Decision {
         if let Some(decision) = self.policy_ceiling(call) {
+            return decision;
+        }
+        if call.tool.is_mcp() {
+            return self.decide_mcp(call);
+        }
+        if let Some(decision) = self.decide_service(call) {
             return decision;
         }
         if call.tool == ToolKind::ExitPlanMode {
@@ -704,7 +964,13 @@ impl RulesEngine {
             );
         }
         let shape = call.command.as_deref().map(analyse);
-        let risk = call.tool.runs_commands().then(|| self.command_risk(call));
+        let risk = if call.tool.runs_commands() {
+            Some(self.command_risk(call))
+        } else if call.tool == ToolKind::ProcessWrite {
+            Some(self.input_risk(call))
+        } else {
+            None
+        };
         // A command that may run unconfined is the person's call every time:
         // neither a workspace allow nor a remembered choice vouches for it.
         let unconfined = self.runs_unconfined(call);
@@ -725,12 +991,30 @@ impl RulesEngine {
                     ),
                 );
             }
+            // A rule names a command, never the loopback: only the person's
+            // remembered choice vouches for that (or the person, now).
+            let simple = shape.as_ref().is_none_or(CommandShape::is_simple);
+            if decision.verdict == Verdict::Allow
+                && (call.keep_alive
+                    || (call.loopback && !(simple && self.remembered(call, shape.as_ref()))))
+            {
+                return Decision::new(
+                    Verdict::Ask,
+                    Source::Default,
+                    if call.keep_alive {
+                        KEEP_ALIVE_REASON
+                    } else {
+                        LOOPBACK_REASON
+                    },
+                );
+            }
             return decision;
         }
         let simple = shape.as_ref().is_none_or(CommandShape::is_simple);
         if simple
             && !unconfined
-            && call.tool != ToolKind::GitCommit
+            && !call.keep_alive
+            && !matches!(call.tool, ToolKind::GitCommit | ToolKind::ProcessWrite)
             && self.remembered(call, shape.as_ref())
         {
             return Decision::new(
@@ -746,6 +1030,7 @@ impl RulesEngine {
             }
             (_, Some(Risk::Routine)) => allow("a routine command in the sandbox"),
             (ToolKind::GitCommit, None) => allow("commits never stage denied paths"),
+            (ToolKind::ProcessKill, None) => allow("the session's own processes may be stopped"),
             (tool, None) if tool.is_read_only() => allow("read-only tools are allowed"),
             (_, None) => {
                 allow("changes inside the workspace are allowed; the checkpoint undoes them")
@@ -761,6 +1046,12 @@ impl RulesEngine {
         }
         if call.network {
             return Risk::Destructive("network access needs your approval".to_owned());
+        }
+        if call.loopback {
+            return Risk::Destructive(LOOPBACK_REASON.to_owned());
+        }
+        if call.keep_alive {
+            return Risk::Destructive(KEEP_ALIVE_REASON.to_owned());
         }
         if self.runs_unconfined(call) {
             return Risk::Destructive(
@@ -778,6 +1069,29 @@ impl RulesEngine {
         )
     }
 
+    /// Text typed into a process, as the classifier sees command lines: each
+    /// line on its own (a shell runs them one by one), the first
+    /// destructive one asked.
+    fn input_risk(&self, call: &ToolCall) -> Risk {
+        let (cwd, _) = self.resolution(call);
+        call.command
+            .as_deref()
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                assess(
+                    line,
+                    Place {
+                        root: self.policy_paths.root(),
+                        cwd: &cwd,
+                    },
+                )
+            })
+            .find(|risk| matches!(risk, Risk::Destructive(_)))
+            .unwrap_or(Risk::Routine)
+    }
+
     fn policy_ceiling(&self, call: &ToolCall) -> Option<Decision> {
         let deny = |reason: String| Some(Decision::new(Verdict::Deny, Source::Policy, reason));
         if !self.policy.allowed {
@@ -792,6 +1106,43 @@ impl RulesEngine {
             if let Some(error) = denied {
                 return deny(error.message().to_owned());
             }
+        }
+        if call.tool.is_web() {
+            return self.web_ceiling(call);
+        }
+        if call.tool.is_memory() {
+            if call.tool != ToolKind::SearchMemory && !self.policy.memory_write {
+                return deny("saving and deleting memories is disabled by policy".to_owned());
+            }
+            return None;
+        }
+        if call.tool.is_mcp() {
+            if !self.policy.local_mcp {
+                return deny("local MCP servers are disabled by policy".to_owned());
+            }
+            if call.network && !self.policy.network {
+                return deny("network access is disabled by policy".to_owned());
+            }
+            return None;
+        }
+        if call.tool.is_process() {
+            if !self.policy.shell {
+                return deny("the shell is disabled by policy".to_owned());
+            }
+            // A line the policy denies is denied typed into a shell too.
+            let typed = call.command.as_deref().unwrap_or_default();
+            if let Some(argv) = typed
+                .lines()
+                .flat_map(|line| analyse(line).segments())
+                .find(|argv| {
+                    self.command_deny
+                        .iter()
+                        .any(|pattern| pattern.matches_name(argv))
+                })
+            {
+                return deny(format!("`{}` is denied by policy", argv.join(" ")));
+            }
+            return None;
         }
         if !call.tool.runs_commands() {
             return None;
@@ -878,7 +1229,7 @@ impl RulesEngine {
     /// The command prefix rules' decision (workspace file, then the
     /// person's; the strongest wins, the first of equals).
     fn prefix_rules(&self, call: &ToolCall, shape: Option<&CommandShape>) -> Option<Decision> {
-        if !call.tool.runs_commands() {
+        if !(call.tool.runs_commands() || call.tool == ToolKind::McpStart) {
             return None;
         }
         let shape = shape?;
@@ -1039,6 +1390,7 @@ impl RulesEngine {
             choice.tool == call.tool
                 && call.sandbox_mode() <= choice.sandbox.unwrap_or(SandboxMode::WorkspaceWrite)
                 && (!call.network || choice.network)
+                && (!call.loopback || choice.loopback)
                 && match (&choice.command, argv) {
                     (Some(prefix), Some(argv)) => CommandPattern::from_tokens(prefix.clone())
                         .is_some_and(|pattern| pattern.matches_in(argv, &cwd, &search)),
@@ -1110,6 +1462,20 @@ impl RulesEngine {
         if let Some(refusal) = self.never_remembered(call) {
             return Err(refusal);
         }
+        if call.tool == ToolKind::McpCall {
+            // The server's tool, in the choice store: never a prefix rule.
+            let key = call.mcp.as_ref().and_then(mcp_choice_key);
+            return self.choices.remember(RememberedChoice {
+                tool: ToolKind::McpCall,
+                command: key,
+                paths: None,
+                glob: None,
+                sandbox: None,
+                network: false,
+                runner: None,
+                loopback: false,
+            });
+        }
         if call.tool == ToolKind::RunTests {
             // The runner kind, never a prefix rule: the person approved
             // "cargo's tests here", whatever filter comes next.
@@ -1125,6 +1491,7 @@ impl RulesEngine {
                 sandbox: call.sandbox,
                 network: call.network,
                 runner: Some(runner),
+                loopback: false,
             });
         }
         let command = match call.command.as_deref().map(analyse) {
@@ -1156,7 +1523,9 @@ impl RulesEngine {
                 return Err(compound_refusal());
             }
         };
-        if let (Some(tokens), Some(sink)) = (&command, self.rule_sink()) {
+        // A loopback choice stays in the choice store: a prefix rule has no
+        // loopback bound, and a rule must never vouch for it.
+        if let (Some(tokens), Some(sink), false) = (&command, self.rule_sink(), call.loopback) {
             match self.remember_as_rule(call, tokens.clone(), sink.as_ref()) {
                 Ok(()) => return Ok(()),
                 // A refused or broken rules file is left alone; the choice
@@ -1194,6 +1563,7 @@ impl RulesEngine {
             sandbox: call.sandbox,
             network: call.network,
             runner: None,
+            loopback: call.loopback,
         })
     }
 }
@@ -1258,6 +1628,18 @@ impl RulesEngine {
     /// compound command, or a command that would run unconfined. The one precondition [`Self::can_remember`] and
     /// [`Self::remember`] share.
     fn never_remembered(&self, call: &ToolCall) -> Option<ToolError> {
+        if call.tool.is_web() {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "the web tools follow the defaults; host intelligence is approved for a session",
+            ));
+        }
+        if call.tool.is_memory() {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "memory calls follow the defaults; a delete is asked every time",
+            ));
+        }
         if call.tool == ToolKind::ExitPlanMode {
             return Some(ToolError::new(
                 ErrorCode::Denied,
@@ -1272,6 +1654,31 @@ impl RulesEngine {
         }
         if call.tool == ToolKind::RunTests && call.runner.is_none() {
             return Some(ToolError::invalid("a test run names its runner"));
+        }
+        if call.tool == ToolKind::ProcessWrite {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "what is typed into a process is asked every time",
+            ));
+        }
+        if call.tool == ToolKind::McpStart {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "starting a server is asked when it starts; it is never remembered",
+            ));
+        }
+        if call.tool == ToolKind::McpCall {
+            return call
+                .mcp
+                .as_ref()
+                .is_none_or(|target| target.tool.is_none())
+                .then(|| ToolError::invalid("an MCP call names its server and tool"));
+        }
+        if call.keep_alive {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "keeping a process past its turn is asked for each process",
+            ));
         }
         if self.runs_unconfined(call) {
             return Some(ToolError::new(
@@ -1297,6 +1704,172 @@ impl RulesEngine {
     #[must_use]
     pub fn can_remember(&self, call: &ToolCall) -> bool {
         self.never_remembered(call).is_none()
+    }
+}
+
+/// A remembered MCP choice's key: `[server, tool]` in
+/// [`RememberedChoice::command`].
+fn mcp_choice_key(target: &McpTarget) -> Option<Vec<String>> {
+    Some(vec![target.server.clone(), target.tool.clone()?])
+}
+
+impl RulesEngine {
+    /// The memory rows of the default table, under the policy ceiling
+    /// (checked by [`Self::decide`] first).
+    /// The rows of the tools that are not workspace tools (memory, web):
+    /// only their defaults apply.
+    fn decide_service(&self, call: &ToolCall) -> Option<Decision> {
+        if call.tool.is_memory() {
+            Some(self.decide_memory(call))
+        } else if call.tool.is_web() {
+            Some(self.decide_web(call))
+        } else {
+            None
+        }
+    }
+
+    /// The web rows' policy ceiling: `web` and `host_intel`, off when absent.
+    fn web_ceiling(&self, call: &ToolCall) -> Option<Decision> {
+        let (on, what) = if call.tool == ToolKind::WebRead {
+            (self.policy.web, "the web tools")
+        } else {
+            (self.policy.host_intel, "the host intelligence tools")
+        };
+        (!on).then(|| {
+            Decision::new(
+                Verdict::Deny,
+                Source::Policy,
+                format!("{what} are disabled by policy"),
+            )
+        })
+    }
+
+    /// The web rows of the default table (#1238), under the policy ceiling.
+    /// Both kinds only read, so plan mode keeps them.
+    fn decide_web(&self, call: &ToolCall) -> Decision {
+        if call.tool == ToolKind::WebRead {
+            return Decision::new(
+                Verdict::Allow,
+                Source::Default,
+                "web search and fetch only read; the transcript shows the query or URL",
+            );
+        }
+        if self.host_intel_session.load(Ordering::SeqCst) {
+            return Decision::new(
+                Verdict::Allow,
+                Source::Remembered,
+                "you approved the host intelligence tools for this session",
+            );
+        }
+        Decision::new(
+            Verdict::Ask,
+            Source::Default,
+            "a host intelligence lookup sends the query or address to a third party",
+        )
+    }
+
+    /// "Approve for this session": only the host-intel tools, and only until
+    /// the app quits (nothing is written).
+    ///
+    /// # Errors
+    ///
+    /// Any other tool: it is remembered with [`Self::remember`] or not at all.
+    pub fn remember_for_session(&self, call: &ToolCall) -> ToolResult<()> {
+        if call.tool != ToolKind::HostIntel {
+            return Err(ToolError::new(
+                ErrorCode::Denied,
+                "only the host intelligence tools are approved for a session",
+            ));
+        }
+        self.host_intel_session.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn decide_memory(&self, call: &ToolCall) -> Decision {
+        if call.tool == ToolKind::SearchMemory {
+            return Decision::new(
+                Verdict::Allow,
+                Source::Default,
+                "searching saved memories only reads",
+            );
+        }
+        if self.plan_mode() {
+            return Decision::new(
+                Verdict::Deny,
+                Source::PlanMode,
+                "plan mode allows read-only tools until the plan is accepted",
+            );
+        }
+        if call.tool == ToolKind::SaveMemory {
+            return Decision::new(
+                Verdict::Allow,
+                Source::Default,
+                "a saved memory is shown in the transcript and can be deleted in Settings",
+            );
+        }
+        Decision::new(
+            Verdict::Ask,
+            Source::Default,
+            "deleting removes a memory you may have saved on the web",
+        )
+    }
+
+    /// The MCP rows of the default table, under the policy ceiling (checked
+    /// by [`Self::decide`] first).
+    fn decide_mcp(&self, call: &ToolCall) -> Decision {
+        let ask = |reason: &str| Decision::new(Verdict::Ask, Source::Default, reason);
+        let allow = |reason: &str| Decision::new(Verdict::Allow, Source::Default, reason);
+        let Some(target) = call.mcp.as_ref() else {
+            return Decision::new(Verdict::Deny, Source::Default, "no MCP server named");
+        };
+        if call.tool == ToolKind::McpStart {
+            // The person's prefix rules see the server's command line; only
+            // a rule that tightens applies (an allow never vouches for the
+            // network or a missing sandbox).
+            let shape = call.command.as_deref().map(analyse);
+            if let Some(decision) = self.prefix_rules(call, shape.as_ref())
+                && decision.verdict != Verdict::Allow
+            {
+                return decision;
+            }
+            if !self.confined || call.unconfined {
+                return ask(
+                    "this server would run without a sandbox hiding credentials and the app's data",
+                );
+            }
+            if call.network {
+                return ask("a server with network access is confirmed when it starts");
+            }
+            return allow("a configured server, started in the sandbox");
+        }
+        if self.plan_mode() && !target.read_only {
+            return Decision::new(
+                Verdict::Deny,
+                Source::PlanMode,
+                "plan mode allows only MCP tools you marked read-only until the plan is accepted",
+            );
+        }
+        if let Some(decision) = self.path_rules(call, None, None) {
+            return decision;
+        }
+        if target.read_only {
+            return allow("tools you marked read-only are allowed");
+        }
+        let key = mcp_choice_key(target);
+        if key.is_some()
+            && self
+                .choices
+                .list()
+                .iter()
+                .any(|choice| choice.tool == ToolKind::McpCall && choice.command == key)
+        {
+            return Decision::new(
+                Verdict::Allow,
+                Source::Remembered,
+                "you chose to always allow this here",
+            );
+        }
+        ask("the first use of this MCP tool here needs your approval")
     }
 }
 
@@ -1339,6 +1912,24 @@ impl RuleApprovals {
     }
 }
 
+/// A runtime memory tool's request ([`elitea_agent_runtime::memory_tools`]),
+/// as the rules see it: its [`ToolKind`], also put under [`PAYLOAD_KEY`] so
+/// the host's prompt describes it like any local call.
+fn memory_call(request: &mut ApprovalRequest) -> Option<ToolCall> {
+    use elitea_agent_runtime::memory_tools::APPROVAL_PAYLOAD_KEY;
+    let tool = request
+        .payload
+        .get(APPROVAL_PAYLOAD_KEY)?
+        .get("tool")?
+        .as_str()
+        .and_then(ToolKind::memory_tool)?;
+    let call = ToolCall::new(tool);
+    if let Value::Object(payload) = &mut request.payload {
+        payload.insert(PAYLOAD_KEY.to_owned(), json!(call));
+    }
+    Some(call)
+}
+
 /// A decision answered inline, as the model sees it (a repository's
 /// justification left out).
 fn decided(action: &str, decision: &Decision) -> ApprovalOutcome {
@@ -1363,11 +1954,21 @@ impl ApprovalChannel for RuleApprovals {
             .payload
             .get(PAYLOAD_KEY)
             .cloned()
-            .and_then(|value| serde_json::from_value::<ToolCall>(value).ok());
+            .and_then(|value| serde_json::from_value::<ToolCall>(value).ok())
+            .or_else(|| memory_call(&mut request));
         let Some(call) = call else {
             return self.prompt.request(request).await;
         };
-        let decision = self.engine.decide(&call);
+        let hook_ask = request
+            .payload
+            .get(HOOK_ASK_PAYLOAD_KEY)
+            .and_then(|asked| asked.get("hook"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let mut decision = self.engine.decide(&call);
+        if let Some(hook) = &hook_ask {
+            decision = RulesEngine::with_hook_ask(decision, hook);
+        }
         match decision.verdict {
             Verdict::Allow => Ok(decided("approve", &decision)),
             Verdict::Deny => Ok(decided("reject", &decision)),
@@ -1384,7 +1985,8 @@ impl ApprovalChannel for RuleApprovals {
                 }
             }
             Verdict::Ask => {
-                let rememberable = self.engine.can_remember(&call);
+                // A hook asks every time: "always" would answer nothing.
+                let rememberable = hook_ask.is_none() && self.engine.can_remember(&call);
                 request.available_actions = if rememberable {
                     vec![
                         "approve".to_owned(),
@@ -1471,6 +2073,10 @@ mod tests {
             index_local_embeddings: false,
             index_remote_embeddings: false,
             index_model_mirror_url: String::new(),
+            local_mcp: true,
+            memory_write: true,
+            web: true,
+            host_intel: true,
         }
     }
 
@@ -1632,6 +2238,7 @@ mod tests {
             ToolKind::FindFiles,
             ToolKind::ReadOutput,
             ToolKind::ReadDocument,
+            ToolKind::Diagnostics,
             ToolKind::GitRead,
             ToolKind::WriteFile,
             ToolKind::EditFile,
@@ -2154,6 +2761,7 @@ mod tests {
             ToolKind::FindFiles,
             ToolKind::ReadOutput,
             ToolKind::ReadDocument,
+            ToolKind::Diagnostics,
             ToolKind::GitRead,
         ] {
             assert!(kind.plan_allows());
@@ -2521,6 +3129,7 @@ mod tests {
                 sandbox: None,
                 network: false,
                 runner: None,
+                loopback: false,
             })
             .expect("legacy");
         assert_eq!(
@@ -2629,6 +3238,7 @@ mod tests {
                 sandbox: None,
                 network: false,
                 runner: None,
+                loopback: false,
             })
             .expect("remember");
         let reopened = JsonFileChoices::open(path).expect("reopen");
@@ -2761,6 +3371,47 @@ mod tests {
     }
 
     const NONE: &str = r#"{"version":1}"#;
+
+    /// Bypass turns an ask into an allow and keeps every deny: the policy
+    /// ceiling's, a forbidden rule's and plan mode's.
+    #[test]
+    fn bypass_allows_what_would_be_asked_and_keeps_every_deny() {
+        let (_dir, engine) = engine_with_rules(
+            policy(),
+            r#"{"version":1,"rules":[
+              {"pattern":["npm","publish"],"decision":"forbidden"},
+              {"pattern":["git","reset"],"decision":"prompt"}]}"#,
+            NONE,
+        );
+        assert_eq!(verdict(&engine, &shell("git reset --hard")).0, Verdict::Ask);
+        engine.set_profile(PermissionProfile::Bypass);
+        assert_eq!(engine.profile(), PermissionProfile::Bypass);
+        assert!(!engine.plan_mode());
+        let bypassed = engine.decide(&shell("git reset --hard"));
+        assert_eq!(
+            (bypassed.verdict, bypassed.source),
+            (Verdict::Allow, Source::Bypass)
+        );
+        assert!(bypassed.rule.is_some(), "the rule that asked is kept");
+        assert_eq!(
+            verdict(&engine, &shell("npm publish")),
+            (Verdict::Deny, Source::Workspace)
+        );
+        assert_eq!(
+            verdict(&engine, &shell("rm -rf build")),
+            (Verdict::Deny, Source::Policy)
+        );
+        assert_eq!(
+            verdict(&engine, &ToolCall::new(ToolKind::ExitPlanMode)),
+            (Verdict::Deny, Source::PlanMode)
+        );
+        assert_eq!(
+            verdict(&engine, &file(ToolKind::WriteFile, "a")),
+            (Verdict::Allow, Source::Default)
+        );
+        engine.set_profile(PermissionProfile::Build);
+        assert_eq!(verdict(&engine, &shell("git reset --hard")).0, Verdict::Ask);
+    }
 
     #[test]
     fn user_and_workspace_prefix_rules_decide_with_their_justification() {
@@ -3138,6 +3789,105 @@ mod tests {
         );
     }
 
+    /// #1223: loopback is asked by default, whatever an allow rule says;
+    /// "always allow" is remembered (in the choice store, never as a rule)
+    /// for that program and prefix only, and never covers another command.
+    #[test]
+    fn loopback_is_asked_by_default() {
+        let (_dir, engine) = engine_with(
+            policy(),
+            vec![WorkspaceRule {
+                tools: vec![ToolKind::RunCommand],
+                command: Some("python3".to_owned()),
+                path: None,
+                verdict: Verdict::Allow,
+            }],
+        );
+        let sink = Arc::new(VecSink::default());
+        engine.set_rule_sink(Some(sink.clone()));
+        let loopback = |command: &str| ToolCall {
+            loopback: true,
+            ..shell(command)
+        };
+        let server = loopback("python3 -m http.server 8000");
+        assert_eq!(
+            verdict(&engine, &shell("python3 -m http.server")).0,
+            Verdict::Allow
+        );
+        assert_eq!(verdict(&engine, &server), (Verdict::Ask, Source::Default));
+        assert!(engine.decide(&server).reason.contains("localhost"));
+        assert!(engine.can_remember(&server));
+        engine
+            .remember(&server, Some("python3 -m http.server"))
+            .expect("remembered");
+        assert!(
+            sink.0.lock().expect("lock").rules().is_empty(),
+            "never a rule"
+        );
+        assert_eq!(
+            verdict(&engine, &loopback("python3 -m http.server 9000")).0,
+            Verdict::Allow
+        );
+        assert_eq!(
+            verdict(&engine, &loopback("curl -sf http://127.0.0.1:8000")).0,
+            Verdict::Ask
+        );
+        assert_eq!(
+            verdict(&engine, &loopback("python3 other.py")).0,
+            Verdict::Ask
+        );
+        // Keeping a process past its turn: asked, every time.
+        let kept = ToolCall {
+            keep_alive: true,
+            ..shell("python3 -m http.server 8000")
+        };
+        assert_eq!(verdict(&engine, &kept).0, Verdict::Ask);
+        assert!(!engine.can_remember(&kept));
+        // The policy ceiling holds for the process tools too.
+        let mut off = policy();
+        off.shell = false;
+        let (_dir, closed) = engine_with(off, Vec::new());
+        assert_eq!(
+            verdict(&closed, &ToolCall::new(ToolKind::ProcessRead)),
+            (Verdict::Deny, Source::Policy)
+        );
+    }
+
+    #[test]
+    fn process_write_of_a_destructive_line_is_asked() {
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        let typed = |text: &str| ToolCall {
+            command: Some(text.to_owned()),
+            paths: vec![".".to_owned()],
+            ..ToolCall::new(ToolKind::ProcessWrite)
+        };
+        assert_eq!(verdict(&engine, &typed("1+1\n")).0, Verdict::Allow);
+        assert_eq!(verdict(&engine, &typed("ls -la\n")).0, Verdict::Allow);
+        assert_eq!(
+            verdict(&engine, &typed("echo hi\ngit reset --hard HEAD~3\n")),
+            (Verdict::Ask, Source::Default)
+        );
+        assert!(!engine.can_remember(&typed("git reset --hard HEAD~3\n")));
+        // A command_deny program typed into a shell is denied.
+        assert_eq!(
+            verdict(&engine, &typed("rm -rf build\n")),
+            (Verdict::Deny, Source::Policy)
+        );
+        for tool in [ToolKind::ProcessRead, ToolKind::ProcessKill] {
+            assert_eq!(verdict(&engine, &ToolCall::new(tool)).0, Verdict::Allow);
+        }
+        engine.set_profile(PermissionProfile::Plan);
+        assert_eq!(
+            verdict(&engine, &ToolCall::new(ToolKind::ProcessRead)).0,
+            Verdict::Allow
+        );
+        assert_eq!(verdict(&engine, &typed("1+1\n")).0, Verdict::Deny);
+        assert_eq!(
+            verdict(&engine, &ToolCall::new(ToolKind::ProcessKill)).0,
+            Verdict::Deny
+        );
+    }
+
     #[derive(Default)]
     struct VecSink(Mutex<crate::execpolicy::RuleSet>);
 
@@ -3320,6 +4070,7 @@ mod tests {
             sandbox: Some(SandboxMode::ReadOnly),
             network: true,
             runner: None,
+            loopback: false,
         };
         let rule = super::choice_as_rule(&choice).expect("a command choice");
         assert_eq!(rule.display_pattern(), "/usr/bin/make test");
@@ -3337,6 +4088,7 @@ mod tests {
             sandbox: None,
             network: false,
             runner: None,
+            loopback: false,
         };
         assert!(super::choice_as_rule(&file_choice).is_none());
     }
@@ -3377,5 +4129,275 @@ mod tests {
         assert_eq!(seen[0].payload["justification"], "Make may install things.");
         assert_eq!(seen[0].payload["rule"], "workspace#2");
         assert_eq!(seen[0].payload["source"], "workspace");
+    }
+
+    fn mcp_call(tool: &str, read_only: bool) -> ToolCall {
+        ToolCall {
+            mcp: Some(super::McpTarget {
+                server: "gh".to_owned(),
+                tool: Some(tool.to_owned()),
+                read_only,
+            }),
+            ..ToolCall::new(ToolKind::McpCall)
+        }
+    }
+
+    fn mcp_start(command: &str, network: bool, unconfined: bool) -> ToolCall {
+        ToolCall {
+            command: Some(command.to_owned()),
+            network,
+            unconfined,
+            mcp: Some(super::McpTarget {
+                server: "gh".to_owned(),
+                tool: None,
+                read_only: false,
+            }),
+            ..ToolCall::new(ToolKind::McpStart)
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_call_is_asked_on_first_use() {
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        let engine = Arc::new(engine);
+        assert_eq!(
+            verdict(&engine, &mcp_call("create_issue", false)),
+            (Verdict::Ask, Source::Default)
+        );
+        assert!(engine.can_remember(&mcp_call("create_issue", false)));
+        let prompt = Arc::new(ScriptedPrompt {
+            answer: ApprovalOutcome::Decided {
+                action: super::APPROVE_ALWAYS.to_owned(),
+                value: json!({}),
+            },
+            seen: Mutex::new(Vec::new()),
+        });
+        let channel = RuleApprovals::new(engine.clone(), prompt.clone());
+        let first = channel
+            .request(request(&mcp_call("create_issue", false)))
+            .await
+            .expect("ask");
+        assert!(
+            matches!(first, ApprovalOutcome::Decided { ref action, .. } if action == "approve")
+        );
+        assert_eq!(prompt.seen.lock().expect("lock").len(), 1);
+        assert!(
+            prompt.seen.lock().expect("lock")[0]
+                .available_actions
+                .contains(&super::APPROVE_ALWAYS.to_owned())
+        );
+        // Remembered for that server's tool in this workspace, not others.
+        assert_eq!(
+            verdict(&engine, &mcp_call("create_issue", false)),
+            (Verdict::Allow, Source::Remembered)
+        );
+        assert_eq!(
+            verdict(&engine, &mcp_call("delete_repo", false)),
+            (Verdict::Ask, Source::Default)
+        );
+    }
+
+    #[test]
+    fn memory_defaults_allow_search_and_save_and_ask_delete() {
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        let search = ToolCall::new(ToolKind::SearchMemory);
+        let save = ToolCall::new(ToolKind::SaveMemory);
+        let delete = ToolCall::new(ToolKind::DeleteMemory);
+        assert_eq!(verdict(&engine, &search), (Verdict::Allow, Source::Default));
+        assert_eq!(verdict(&engine, &save), (Verdict::Allow, Source::Default));
+        assert_eq!(verdict(&engine, &delete), (Verdict::Ask, Source::Default));
+        assert!(
+            !engine.can_remember(&delete),
+            "a delete is asked every time"
+        );
+        engine.set_profile(PermissionProfile::Plan);
+        assert_eq!(verdict(&engine, &search), (Verdict::Allow, Source::Default));
+        assert_eq!(verdict(&engine, &save), (Verdict::Deny, Source::PlanMode));
+        assert_eq!(verdict(&engine, &delete), (Verdict::Deny, Source::PlanMode));
+    }
+
+    #[test]
+    fn memory_write_off_denies_save_and_delete_but_not_search() {
+        let off = LocalWorkPolicy {
+            memory_write: false,
+            ..policy()
+        };
+        let (_dir, engine) = engine_with(off, Vec::new());
+        for tool in [ToolKind::SaveMemory, ToolKind::DeleteMemory] {
+            assert_eq!(
+                verdict(&engine, &ToolCall::new(tool)),
+                (Verdict::Deny, Source::Policy)
+            );
+        }
+        assert_eq!(
+            verdict(&engine, &ToolCall::new(ToolKind::SearchMemory)),
+            (Verdict::Allow, Source::Default)
+        );
+    }
+
+    #[test]
+    fn web_rows_follow_policy_defaults_and_plan_mode() {
+        let off = LocalWorkPolicy {
+            web: false,
+            host_intel: false,
+            ..policy()
+        };
+        let (_dir, engine) = engine_with(off, Vec::new());
+        for tool in [ToolKind::WebRead, ToolKind::HostIntel] {
+            assert_eq!(
+                verdict(&engine, &ToolCall::new(tool)),
+                (Verdict::Deny, Source::Policy)
+            );
+        }
+        let on = LocalWorkPolicy {
+            web: true,
+            host_intel: true,
+            ..policy()
+        };
+        let (_dir, engine) = engine_with(on, Vec::new());
+        engine.set_profile(PermissionProfile::Plan);
+        assert_eq!(
+            verdict(&engine, &ToolCall::new(ToolKind::WebRead)),
+            (Verdict::Allow, Source::Default)
+        );
+        let host = ToolCall::new(ToolKind::HostIntel);
+        assert_eq!(verdict(&engine, &host), (Verdict::Ask, Source::Default));
+        assert!(
+            engine.remember(&host, None).is_err(),
+            "never a workspace choice"
+        );
+        assert!(
+            engine
+                .remember_for_session(&ToolCall::new(ToolKind::WebRead))
+                .is_err()
+        );
+        engine.remember_for_session(&host).unwrap();
+        assert_eq!(
+            verdict(&engine, &host),
+            (Verdict::Allow, Source::Remembered)
+        );
+        assert_eq!(
+            ToolKind::web_toolkit("host_intel"),
+            Some(ToolKind::HostIntel)
+        );
+        assert_eq!(ToolKind::web_toolkit("github"), None);
+    }
+
+    #[tokio::test]
+    async fn the_channel_reads_a_runtime_memory_request_as_its_tool_kind() {
+        use elitea_agent_runtime::memory_tools::{
+            APPROVAL_PAYLOAD_KEY, DELETE_MEMORY, SAVE_MEMORY,
+        };
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        let prompt = Arc::new(ScriptedPrompt {
+            answer: ApprovalOutcome::Decided {
+                action: "approve".to_owned(),
+                value: json!({}),
+            },
+            seen: Mutex::new(Vec::new()),
+        });
+        let channel = RuleApprovals::new(Arc::new(engine), prompt.clone());
+        let memory = |call: serde_json::Value| ApprovalRequest {
+            subject: "call-1".to_owned(),
+            message: "memory".to_owned(),
+            available_actions: vec!["approve".to_owned(), "reject".to_owned()],
+            payload: json!({ APPROVAL_PAYLOAD_KEY: call }),
+        };
+        // A save is allowed by the rules: the person is not asked.
+        let saved = channel
+            .request(memory(json!({"tool": SAVE_MEMORY, "content": "uses pnpm"})))
+            .await
+            .expect("save");
+        assert!(
+            matches!(saved, ApprovalOutcome::Decided { ref action, .. } if action == "approve")
+        );
+        assert!(prompt.seen.lock().expect("lock").is_empty());
+        // A delete is asked, approve or reject only, described as a local call.
+        channel
+            .request(memory(json!({"tool": DELETE_MEMORY, "id": 4})))
+            .await
+            .expect("delete");
+        let seen = prompt.seen.lock().expect("lock");
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].available_actions, ["approve", "reject"]);
+        assert_eq!(seen[0].payload[PAYLOAD_KEY]["tool"], "delete_memory");
+        assert_eq!(seen[0].payload[APPROVAL_PAYLOAD_KEY]["id"], 4);
+    }
+
+    #[test]
+    fn mcp_read_only_tool_is_allowed_in_plan_mode() {
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        assert_eq!(
+            verdict(&engine, &mcp_call("search_issues", true)),
+            (Verdict::Allow, Source::Default)
+        );
+        engine.set_profile(PermissionProfile::Plan);
+        assert_eq!(
+            verdict(&engine, &mcp_call("search_issues", true)),
+            (Verdict::Allow, Source::Default)
+        );
+        assert_eq!(
+            verdict(&engine, &mcp_call("create_issue", false)),
+            (Verdict::Deny, Source::PlanMode)
+        );
+    }
+
+    #[test]
+    fn local_mcp_off_denies_every_mcp_call() {
+        let off = LocalWorkPolicy {
+            local_mcp: false,
+            ..policy()
+        };
+        let (_dir, engine) = engine_with(off, Vec::new());
+        for call in [
+            mcp_call("search_issues", true),
+            mcp_call("create_issue", false),
+            mcp_start("/usr/bin/gh-mcp stdio", false, false),
+        ] {
+            assert_eq!(verdict(&engine, &call), (Verdict::Deny, Source::Policy));
+        }
+        assert!(!LocalWorkPolicy::default().local_mcp, "absent is off");
+    }
+
+    #[test]
+    fn mcp_starts_ask_for_the_network_and_a_missing_sandbox_and_honour_prefix_rules() {
+        let (_dir, engine) = engine_with_rules(
+            LocalWorkPolicy {
+                network: true,
+                ..policy()
+            },
+            r#"{"version":1,"rules":[{"pattern":["/usr/bin/bad-mcp"],"decision":"forbidden"}]}"#,
+            NONE,
+        );
+        assert_eq!(
+            verdict(&engine, &mcp_start("/usr/bin/gh-mcp stdio", false, false)),
+            (Verdict::Allow, Source::Default)
+        );
+        assert_eq!(
+            verdict(&engine, &mcp_start("/usr/bin/gh-mcp stdio", true, false)),
+            (Verdict::Ask, Source::Default)
+        );
+        assert_eq!(
+            verdict(&engine, &mcp_start("/usr/bin/gh-mcp stdio", false, true)),
+            (Verdict::Ask, Source::Default)
+        );
+        assert_eq!(
+            verdict(
+                &engine,
+                &mcp_start("/usr/bin/bad-mcp --stdio", false, false)
+            )
+            .0,
+            Verdict::Deny
+        );
+        assert!(!engine.can_remember(&mcp_start("/usr/bin/gh-mcp", false, false)));
+        let offline = LocalWorkPolicy {
+            network: false,
+            ..policy()
+        };
+        let (_dir, engine) = engine_with(offline, Vec::new());
+        assert_eq!(
+            verdict(&engine, &mcp_start("/usr/bin/gh-mcp", true, false)),
+            (Verdict::Deny, Source::Policy)
+        );
     }
 }

@@ -116,6 +116,13 @@ func NewRouterWithLog(h *llmproxy.Handler, recorder *requestlog.Recorder) http.H
 		// becomes a lister in that file and no caller changes. See
 		// llmproxy/listprovidervoices.go.
 		r.Post("/list_provider_voices", h.ListProviderVoices)
+
+		// Metered-call surface (#1238): a metered tool operation (a web
+		// search, a page fetch, a host query) is admitted by the same budget
+		// gate as a model call before its provider is called, and billed
+		// through the same path afterwards. See llmproxy/metered.go.
+		r.Post("/metered/admit", h.MeteredAdmit)
+		r.Post("/metered/settle", h.MeteredSettle)
 	})
 
 	return r

@@ -261,6 +261,22 @@ func (s *Service) ListProviderVoices(ctx context.Context, in *gatewayv1.ListProv
 	return &gatewayv1.ListProviderVoicesResponse{Response: resp}, nil
 }
 
+func (s *Service) MeteredAdmit(ctx context.Context, in *gatewayv1.MeteredAdmitRequest) (*gatewayv1.MeteredAdmitResponse, error) {
+	resp, err := s.serveUnary(ctx, s.llm, routeMeteredAdmit, in.GetRequest())
+	if err != nil {
+		return nil, err
+	}
+	return &gatewayv1.MeteredAdmitResponse{Response: resp}, nil
+}
+
+func (s *Service) MeteredSettle(ctx context.Context, in *gatewayv1.MeteredSettleRequest) (*gatewayv1.MeteredSettleResponse, error) {
+	resp, err := s.serveUnary(ctx, s.llm, routeMeteredSettle, in.GetRequest())
+	if err != nil {
+		return nil, err
+	}
+	return &gatewayv1.MeteredSettleResponse{Response: resp}, nil
+}
+
 // routeGovernanceStatus is the one route of the status handler.
 var routeGovernanceStatus = route{methods: []string{http.MethodGet}, paths: []string{"/governance/status"}}
 

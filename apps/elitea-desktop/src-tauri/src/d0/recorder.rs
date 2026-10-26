@@ -126,6 +126,9 @@ struct State {
     before: BTreeMap<String, Option<Vec<u8>>>,
     /// `(from, to)` of renames a patch made.
     renames: Vec<(String, String)>,
+    /// The memories this turn saved and deleted (#1233), in call order.
+    memories_saved: Vec<u64>,
+    memories_deleted: Vec<u64>,
     /// What each changed file held when the turn ended ([`Recorder::seal`]);
     /// a file that could not be read then is missing.
     after: BTreeMap<String, PostState>,
@@ -166,11 +169,28 @@ impl Recorder {
         });
     }
 
-    /// A tool call is about to begin: recorded, unless the turn already
-    /// holds [`MAX_TOOL_CALLS`] (then `false`: the call must not run, as
-    /// the commit could not carry it).
+    /// A turn's own tool call, for the recorder's tests.
+    #[cfg(test)]
     #[must_use]
     pub fn tool_started(&self, run_id: &str, tool_name: &str, inputs: &Value) -> bool {
+        self.tool_started_under(run_id, tool_name, inputs, None)
+    }
+
+    /// A tool call is about to begin: recorded, unless the turn already
+    /// holds [`MAX_TOOL_CALLS`] (then `false`: the call must not run, as
+    /// the commit could not carry it). A call made under another agent (a
+    /// sub-agent's, #1226) has `hierarchy`: its `parent_agent_call_id`,
+    /// `parent_agent_path`, `sibling_ordinal` and `parent_agent_name`, the
+    /// shape the cloud worker writes for a nested agent's calls. It counts
+    /// toward the cap like any call.
+    #[must_use]
+    pub fn tool_started_under(
+        &self,
+        run_id: &str,
+        tool_name: &str,
+        inputs: &Value,
+        hierarchy: Option<&Map<String, Value>>,
+    ) -> bool {
         let mut entry = Map::new();
         entry.insert("run_id".into(), json!(run_id));
         entry.insert("tool_name".into(), json!(tool_name));
@@ -183,6 +203,9 @@ impl Recorder {
             },
         );
         entry.insert("timestamp_start".into(), json!(now()));
+        if let Some(hierarchy) = hierarchy {
+            entry.extend(hierarchy.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
         self.with(|state| {
             if state.steps.len() >= MAX_TOOL_CALLS {
                 return false;
@@ -281,6 +304,16 @@ impl Recorder {
                 if let Some(code) = result.get("exit_code").and_then(Value::as_i64) {
                     entry["exit_code"] = json!(code);
                 }
+                // A background process (#1223): its id, and its state as the
+                // turn left it (`process_ended` brings it up to date).
+                if let Some(id) = result.get("process_id").and_then(Value::as_str) {
+                    entry["background"] = json!(true);
+                    entry["process_id"] = json!(id);
+                    entry["tty"] = json!(result.get("tty").and_then(Value::as_bool) == Some(true));
+                    if let Some(status) = result.get("status").and_then(Value::as_str) {
+                        entry["status"] = json!(status);
+                    }
+                }
                 state.commands.push(entry);
             }
             if let Some(level) = result.get("enforcement").and_then(Value::as_str) {
@@ -301,6 +334,48 @@ impl Recorder {
                     && let Some(note) = result.get("enforcement_note").and_then(Value::as_str)
                 {
                     state.enforcement_note = Some(note.to_owned());
+                }
+            }
+        });
+    }
+
+    /// A call to one of the person's local MCP servers (#1230), from its
+    /// result: listed with the commands (the server's audit keeps
+    /// `command`), as `mcp <server> <tool>`, never with its arguments.
+    pub fn mcp_call(&self, result: &Value) {
+        let text = |key: &str| result.get(key).and_then(Value::as_str).unwrap_or_default();
+        let (server, tool) = (text("server"), text("tool"));
+        if server.is_empty() || tool.is_empty() {
+            return;
+        }
+        self.with(|state| {
+            if state.commands.len() < MAX_COMMANDS {
+                state.commands.push(json!({
+                    "command": format!("mcp {server} {tool}"),
+                    "mcp": {
+                        "server": server,
+                        "tool": tool,
+                        "read_only": result.get("read_only") == Some(&Value::Bool(true)),
+                    },
+                    "status": text("status"),
+                }));
+            }
+        });
+    }
+
+    /// A background process's state at the turn's end: its command entry
+    /// gets the final `status` and `exit_code` (a pinned or kept one is
+    /// still `running`).
+    pub fn process_ended(&self, info: &elitea_local_tools::process::ProcessInfo) {
+        self.with(|state| {
+            let entry = state
+                .commands
+                .iter_mut()
+                .find(|entry| entry["process_id"].as_str() == Some(info.process_id.as_str()));
+            if let Some(entry) = entry {
+                entry["status"] = json!(info.status);
+                if let Some(code) = info.exit_code {
+                    entry["exit_code"] = json!(code);
                 }
             }
         });
@@ -336,19 +411,41 @@ impl Recorder {
 
     /// The commit's `tool_calls` map, keyed by run id, in the model's call
     /// order (a call the model's answer did not name keeps its start
-    /// order, after the named ones).
+    /// order, after the named ones). A sub-agent's calls follow the
+    /// `spawn_agent` call that started it, in their start order.
     #[must_use]
     pub fn tool_calls(&self) -> ToolCalls {
         self.with(|state| {
             let position = |id: &str| state.planned.iter().position(|known| known == id);
+            let order = |(id, entry): &Step| {
+                position(id)
+                    .or_else(|| {
+                        entry
+                            .get("parent_agent_call_id")
+                            .and_then(Value::as_str)
+                            .and_then(position)
+                    })
+                    .unwrap_or(usize::MAX)
+            };
             let mut steps: Vec<(usize, &Step)> = state.steps.iter().enumerate().collect();
-            steps.sort_by_key(|(started, (id, _))| (position(id).unwrap_or(usize::MAX), *started));
+            steps.sort_by_key(|(started, step)| (order(step), *started));
             ToolCalls(steps.into_iter().map(|(_, step)| step.clone()).collect())
         })
         .unwrap_or_default()
     }
 
-    /// The commit's `local_work` report.
+    /// A memory this turn saved (`save_memory`).
+    pub fn memory_saved(&self, id: u64) {
+        self.with(|state| state.memories_saved.push(id));
+    }
+
+    /// A memory this turn deleted (`delete_memory`).
+    pub fn memory_deleted(&self, id: u64) {
+        self.with(|state| state.memories_deleted.push(id));
+    }
+
+    /// The commit's `local_work` report: `memories_saved` and
+    /// `memories_deleted` only when the turn saved or deleted one.
     #[must_use]
     pub fn work_report(&self, sandbox_mode: &str) -> Value {
         self.with(|state| {
@@ -362,6 +459,12 @@ impl Recorder {
             }
             if let Some(note) = &state.enforcement_note {
                 report["enforcement_note"] = json!(note);
+            }
+            if !state.memories_saved.is_empty() {
+                report["memories_saved"] = json!(state.memories_saved);
+            }
+            if !state.memories_deleted.is_empty() {
+                report["memories_deleted"] = json!(state.memories_deleted);
             }
             report
         })
@@ -616,6 +719,24 @@ mod tests {
         // A file the turn did not change cannot be vouched for.
         std::fs::write(dir.path().join("other.txt"), "x").unwrap();
         assert!(!recorder.unchanged_since_turn(&workspace, "other.txt"));
+    }
+
+    #[test]
+    fn mcp_calls_are_reported_without_their_arguments() {
+        let recorder = Recorder::default();
+        recorder.mcp_call(&json!({
+            "server": "fx", "tool": "echo", "read_only": true, "status": "ok",
+            "text": "the secret answer",
+        }));
+        recorder.mcp_call(&json!({ "status": "ok" }));
+        let report = recorder.work_report("workspace-write");
+        assert_eq!(report["commands"].as_array().map(Vec::len), Some(1));
+        assert_eq!(report["commands"][0]["command"], "mcp fx echo");
+        assert_eq!(
+            report["commands"][0]["mcp"],
+            json!({"server": "fx", "tool": "echo", "read_only": true})
+        );
+        assert!(!report.to_string().contains("secret"));
     }
 
     #[test]

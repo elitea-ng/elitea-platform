@@ -119,7 +119,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: apps/elitea-desktop/src-tauri
+          workspaces: |
+            apps/elitea-desktop/src-tauri
+            apps/elitea-desktop/doc-extract-sidecar
 
       - name: Check formatting
         working-directory: apps/elitea-desktop/src-tauri
@@ -134,6 +136,33 @@ jobs:
       - name: Run tests
         working-directory: apps/elitea-desktop/src-tauri
         run: cargo test --locked --all-targets
+
+      # The host never links the document extractor: xberg turns on
+      # serde_json `preserve_order` (ADR-0029 decision 2). A feature in the
+      # host's own graph would fail the guard test above at runtime; this
+      # fails it at the source, naming the dependent. `-e normal` leaves out
+      # build dependencies (tauri-build and a grammar's build script turn the
+      # feature on for themselves; none of that is linked into the app).
+      - name: The host does not turn on serde_json preserve_order
+        working-directory: apps/elitea-desktop/src-tauri
+        run: |
+          tree="$(cargo tree --locked -e normal,features -i serde_json)"
+          if printf '%s\n' "$tree" | grep -q 'preserve_order'; then
+            printf '%s\n' "$tree"
+            echo "::error::serde_json/preserve_order is enabled in the desktop host's graph; documents are extracted by apps/elitea-desktop/doc-extract-sidecar"
+            exit 1
+          fi
+
+      # The document sidecar (ADR-0029 decision 4): its own workspace and
+      # lockfile, so its xberg stays out of the host. Built and tested here;
+      # the release job bundles it as the app's externalBin.
+      - name: Document sidecar (fmt, clippy, tests)
+        working-directory: apps/elitea-desktop/doc-extract-sidecar
+        run: |
+          bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked --all-targets
 
       # The local workspace index the host links (ADR-0029 decision 7): its
       # own tests (the shared GraphStore conformance suite over SQLite, the

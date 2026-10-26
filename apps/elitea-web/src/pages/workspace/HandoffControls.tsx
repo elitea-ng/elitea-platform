@@ -6,13 +6,22 @@
 
 
 import { ChangedFilesCard, useWorkspaceIpc } from '@/features/workspace';
-import { CloudThreadBanner, EraseCloudCopyDialog, HandoffSettingsDialog, SendToCloudDialog, TakeBackDialog } from '@/features/workspace-handoff';
+import {
+  CloudThreadBanner,
+  EraseCloudCopyDialog,
+  HandoffSettingsDialog,
+  RemainingTurnsBanner,
+  SendToCloudDialog,
+  TakeBackDialog,
+} from '@/features/workspace-handoff';
 
 import type { ThreadHandoff } from './useThreadHandoff';
 
-/** Above the composer, while the thread is not running here. */
+/** Above the composer, while the thread is not running here; or while later cloud turns can still be taken back. */
 export function HandoffBanner({ handoff }: { handoff: ThreadHandoff }): React.JSX.Element | null {
-  if (!handoff.offLaptop || handoff.status === undefined) return null;
+  if (handoff.status === undefined) return null;
+  // Renders nothing unless later cloud turns can still be taken back here.
+  if (!handoff.offLaptop) return <RemainingTurnsBanner status={handoff.status} onTakeBack={() => handoff.open('takeBackRest')} />;
   return <CloudThreadBanner status={handoff.status} onTakeBack={() => handoff.open('takeBack')} onErase={() => handoff.open('erase')} />;
 }
 
@@ -38,11 +47,13 @@ export function HandoffDialogs({ handoff, workspaceId, projectId }: { handoff: T
     case 'settings':
       return <HandoffSettingsDialog open ipc={ipc} workspaceId={workspaceId} onClose={handoff.close} />;
     case 'takeBack':
+    case 'takeBackRest':
       return (
         <TakeBackDialog
           open
           ipc={ipc}
           conversationUuid={uuid}
+          rest={dialog === 'takeBackRest'}
           onClose={handoff.close}
           onSettled={handoff.moved}
           // The diffs of what the take back writes, read-only like a recorded turn's.

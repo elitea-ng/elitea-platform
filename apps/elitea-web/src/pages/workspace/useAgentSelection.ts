@@ -1,7 +1,8 @@
 /**
  * Which agent (and version) and which conversation the session talks to.
- * Only the BOUND project's agents are offered; a pipeline is not an agent
- * here, so the listing is filtered to `classic`.
+ * Only the BOUND project's agents are offered: its `classic` agents, then its
+ * pipelines (#1239 A3). A pipeline does not run on this computer: picking one
+ * makes the composer run it in the cloud (`isCloudOnlyPick`, `useRunInCloud`).
  *
  * The agent and version last used in a workspace are remembered per
  * workspace and project (`el.desktop.workspace.<id>.agent`) and picked
@@ -67,6 +68,8 @@ export interface AgentSelection {
   versionId: string;
   /** '' means "start a new conversation on first send". */
   conversationId: string;
+  /** The ids of `agents` listed as pipelines: they run only in the cloud. Absent = none. */
+  pipelineIds?: ReadonlySet<string>;
   loading: boolean;
   /** The bound project's agent list was answered and holds none. */
   empty: boolean;
@@ -74,6 +77,15 @@ export interface AgentSelection {
   selectVersion(id: string): void;
   selectConversation(id: string): void;
 }
+
+/** The pick runs only in the cloud: a pipeline (listed as one, or its version is one). */
+export function isCloudOnlyPick(selection: AgentSelection): boolean {
+  if (selection.agentId === '') return false;
+  if (selection.pipelineIds?.has(selection.agentId) === true) return true;
+  return selection.versions.find((v) => String(v.id) === selection.versionId)?.agentType === 'pipeline';
+}
+
+const EMPTY_IDS: ReadonlySet<string> = new Set();
 
 export function useAgentSelection(workspaceId: string, projectId: number | null): AgentSelection {
   const project = projectId === null ? '' : String(projectId);
@@ -83,7 +95,15 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
   const [conversationId, setConversationId] = useState('');
 
   const agentsQuery = useListApplications(project, { agents_type: 'classic', limit: 100 }, { query: { enabled } });
-  const agents = useMemo(() => unwrapList<Application>(agentsQuery.data, 'workspace.agents'), [agentsQuery.data]);
+  const pipelinesQuery = useListApplications(project, { agents_type: 'pipeline', limit: 100 }, { query: { enabled } });
+  const classic = useMemo(() => unwrapList<Application>(agentsQuery.data, 'workspace.agents'), [agentsQuery.data]);
+  const pipelines = useMemo(() => unwrapList<Application>(pipelinesQuery.data, 'workspace.pipelines'), [pipelinesQuery.data]);
+  // The agents, then the pipelines not already listed (an application is one or the other).
+  const { agents, pipelineIds } = useMemo(() => {
+    const known = new Set(classic.map((a) => a.id));
+    const extra = pipelines.filter((p) => !known.has(p.id));
+    return { agents: [...classic, ...extra], pipelineIds: extra.length === 0 ? EMPTY_IDS : new Set(extra.map((p) => p.id)) };
+  }, [classic, pipelines]);
 
   const detailQuery = useGetApplication(project, Number(agentId), { query: { enabled: enabled && agentId !== '' } });
   const versions = useMemo<VersionChoice[]>(() => {
@@ -131,8 +151,10 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
     agentId,
     versionId,
     conversationId,
+    pipelineIds,
     loading: agentsQuery.isPending && enabled,
-    empty: enabled && agentsQuery.isSuccess && agents.length === 0,
+    // Empty once both lists answered with nothing (a failed pipeline list counts as none).
+    empty: enabled && agentsQuery.isSuccess && !pipelinesQuery.isPending && agents.length === 0,
     // A conversation holds its agent on one version: another agent or
     // version starts a new conversation (else the next send is refused with
     // agent_not_in_conversation / agent_version_mismatch).

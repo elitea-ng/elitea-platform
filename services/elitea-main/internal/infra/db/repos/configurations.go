@@ -20,6 +20,7 @@ import (
 
 type currentConfigurationQueries interface {
 	FindCurrentConfigurationByEliteaTitle(context.Context, sqlcgen.FindCurrentConfigurationByEliteaTitleParams) (sqlcgen.FindCurrentConfigurationByEliteaTitleRow, error)
+	FindCurrentConfigurationByType(context.Context, sqlcgen.FindCurrentConfigurationByTypeParams) (sqlcgen.FindCurrentConfigurationByTypeRow, error)
 	FindCurrentEmbeddingConfigurations(context.Context, sqlcgen.FindCurrentEmbeddingConfigurationsParams) ([]sqlcgen.FindCurrentEmbeddingConfigurationsRow, error)
 	ListCurrentConfigurationOptionCandidates(context.Context, sqlcgen.ListCurrentConfigurationOptionCandidatesParams) ([]sqlcgen.ListCurrentConfigurationOptionCandidatesRow, error)
 	ListCurrentConfigurationTypes(context.Context, sqlcgen.ListCurrentConfigurationTypesParams) ([]string, error)
@@ -141,6 +142,65 @@ func (r *CurrentConfigurationsRepository) FindByEliteaTitle(
 			return errors.New("current configuration title lookup returned a row outside its authorized scope")
 		}
 		data, err := decodeCurrentConfigurationJSON(row.Data, "expansion data")
+		if err != nil {
+			return err
+		}
+		configuration = configurationapp.CurrentExpansionConfiguration{
+			UUID:      row.ConfigurationUuid,
+			ProjectID: row.ProjectID,
+			Type:      row.Type,
+			Data:      data,
+		}
+		found = true
+		return nil
+	})
+	if err != nil {
+		return configurationapp.CurrentExpansionConfiguration{}, false, err
+	}
+	return configuration, found, nil
+}
+
+// FindByType returns the oldest configuration of one type in one authorized
+// project, for the web provider resolution (#1238); sharedOnly is the
+// public-project fallback. Like FindByEliteaTitle it reads no secret.
+func (r *CurrentConfigurationsRepository) FindByType(
+	ctx context.Context,
+	projectID int32,
+	configurationType string,
+	sharedOnly bool,
+) (configurationapp.CurrentExpansionConfiguration, bool, error) {
+	if ctx == nil || projectID <= 0 || configurationType == "" ||
+		len(configurationType) > configurationapp.MaxCurrentExpansionIdentifierLength {
+		return configurationapp.CurrentExpansionConfiguration{}, false, configurationapp.ErrInvalidCurrentExpansion
+	}
+	if err := ctx.Err(); err != nil {
+		return configurationapp.CurrentExpansionConfiguration{}, false, err
+	}
+	var configuration configurationapp.CurrentExpansionConfiguration
+	found := false
+	err := r.projects.WithinProjectTx(ctx, int64(projectID), pgx.TxOptions{
+		IsoLevel:   pgx.ReadCommitted,
+		AccessMode: pgx.ReadOnly,
+	}, func(tx sqlExecutor) error {
+		queries, err := r.queries(tx)
+		if err != nil {
+			return err
+		}
+		row, err := queries.FindCurrentConfigurationByType(ctx, sqlcgen.FindCurrentConfigurationByTypeParams{
+			ProjectID:  projectID,
+			Type:       configurationType,
+			SharedOnly: sharedOnly,
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("find current configuration row by type: %w", err)
+		}
+		if row.ProjectID != projectID || row.Type != configurationType || (sharedOnly && !row.Shared) {
+			return errors.New("current configuration type lookup returned a row outside its authorized scope")
+		}
+		data, err := decodeCurrentConfigurationJSON(row.Data, "provider data")
 		if err != nil {
 			return err
 		}

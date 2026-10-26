@@ -5948,6 +5948,75 @@ mod internal_tools_graph {
             "{read}"
         );
     }
+
+    /// The Sub-agents toggle binds the four tools; a child spawned and waited
+    /// for in one round runs on the agent's model with its own prompt and
+    /// only the read-only tools (here: none, so no tools at all), and its
+    /// report is the parent's `wait_agent` answer. Off, none of it exists.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_subagents_toggle_binds_the_four_tools_and_a_child_reports_back() {
+        let spawn_and_wait = || {
+            let calls = serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_spawn","type":"function","function":{
+                    "name":"spawn_agent",
+                    "arguments":serde_json::json!({"task":"Find the answer."}).to_string()}},
+                {"index":1,"id":"call_wait","type":"function","function":{
+                    "name":"wait_agent","arguments":"{}"}}]},"finish_reason":null}]});
+            let raw = format!(
+                "data: {calls}\n\ndata: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: {{\"choices\":[],\"usage\":{{\"prompt_tokens\":3,\"completion_tokens\":2}}}}\n\ndata: [DONE]\n\n"
+            );
+            test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
+        };
+        let (runtime_context, _) = runtime_context_client();
+        let (assembler, captured) = assembler_with(
+            vec![
+                TestModelGatewayOutcome::Response(spawn_and_wait()),
+                TestModelGatewayOutcome::Response(text_response("The answer is 42.")),
+                TestModelGatewayOutcome::Response(text_response("Done.")),
+            ],
+            runtime_context,
+            Arc::new(InMemorySessionService::new()),
+        );
+        run(
+            &assembler,
+            &with_toggles(AgentExecutionKind::Adhoc, &["subagents"]),
+        )
+        .await;
+        let seen = requests(&captured);
+        assert_eq!(seen.len(), 3);
+        let mut names = tool_names(&seen[0]);
+        names.sort();
+        assert_eq!(
+            names,
+            ["close_agent", "send_input", "spawn_agent", "wait_agent"]
+        );
+        // The child: the runtime's preamble, its task, no tools.
+        assert!(
+            system_text(&seen[1]).starts_with("You are a read-only sub-agent"),
+            "{}",
+            system_text(&seen[1])
+        );
+        assert_eq!(tool_names(&seen[1]), Vec::<String>::new());
+        let results = tool_results(&seen[2]);
+        assert!(results[0].contains("\"running\""), "{results:?}");
+        assert!(
+            results[1].contains("The answer is 42.") && results[1].contains("\"completed\""),
+            "{results:?}"
+        );
+
+        let (runtime_context, _) = runtime_context_client();
+        let (assembler, captured) = assembler_with(
+            vec![TestModelGatewayOutcome::Response(text_response("Hi."))],
+            runtime_context,
+            Arc::new(InMemorySessionService::new()),
+        );
+        run(&assembler, &with_toggles(AgentExecutionKind::Adhoc, &[])).await;
+        assert!(
+            tool_names(&requests(&captured)[0])
+                .iter()
+                .all(|name| !elitea_agent_runtime::subagents::TOOL_NAMES.contains(&name.as_str()))
+        );
+    }
 }
 
 /// A data-changing nested tool that never returns: a Worker that stops inside

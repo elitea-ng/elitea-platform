@@ -20,6 +20,7 @@ handoff = ["dep:elitea-workspace-store", "dep:regex"]
 # runtime pins the same line.
 adk-core = { version = "~2.2.0", default-features = false }
 async-trait = "0.1.92"
+base64 = "0.23.1"
 elitea-agent-runtime = { path = "../agent-runtime" }
 elitea-content-source = { path = "../content-source" }
 elitea-doc-extract = { path = "../doc-extract" }
@@ -28,9 +29,24 @@ globset = "0.4.20"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
 ignore = "0.4.33"
+# Images the model can see (`picture`): sniffed from the bytes, decoded and
+# re-encoded to the size limits. No default features: no rayon, no serde, no
+# format beyond the four the providers take (MIT OR Apache-2.0).
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 # find_files' fuzzy ranking: the matcher nucleo 0.5 re-exports (MPL-2.0,
 # linked unmodified; no serde_json, no threads), as Codex's file search uses.
 nucleo-matcher = "0.3.1"
+# The language servers' protocol types (`lsp`, #1236; MIT, with
+# fluent-uri MIT and serde_repr MIT OR Apache-2.0). The JSON-RPC framing is
+# the crate's own: async-lsp 0.2.4 links lsp-types 0.95 and futures' I/O
+# traits, not tokio's pipes.
+lsp-types = "0.97.0"
+# The stdio MCP client (`mcp`, #1230): the same rmcp the runtime links
+# through adk-tool, over the child's pipes (MIT; no new crate).
+rmcp = { version = "3.5.0", default-features = false, features = ["client", "transport-async-rw"] }
+# Background processes on a pseudo-terminal (`process`, #1223): wezterm's
+# PTY spawn for macOS and Linux (MIT; no serde, no TLS).
+portable-pty = "0.9.0"
 # run_tests' junit reports (pytest, Surefire, Gradle). No default features:
 # no serde, no encoding; it expands no DTD entity.
 quick-xml = { version = "0.42.0", default-features = false }
@@ -45,6 +61,9 @@ tokio = { version = "1.53.1", features = ["io-util", "macros", "process", "rt", 
 tracing = "0.1.44"
 # Path comparisons the way APFS makes them (NFC/NFD-insensitive).
 unicode-normalization = "0.1.25"
+# A terminal process's rendered screen, what the model reads of an
+# interactive program (`process`; MIT, no serde).
+vt100 = "0.18.1"
 
 # Every file operation walks the workspace from a directory descriptor with
 # O_NOFOLLOW (openat/mkdirat/renameat), so a symlink swapped in mid-call

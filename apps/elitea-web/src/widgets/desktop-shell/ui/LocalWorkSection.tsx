@@ -8,8 +8,11 @@
  * The cloud badges of the visible thread rows (every open folder's shown
  * threads that have a known UUID) come from ONE batched
  * `handoff_status_many` read for the whole section.
+ *
+ * An open git folder also lists its parallel tasks (task worktrees) under its
+ * threads; that panel is loaded on first use.
  */
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -30,23 +33,22 @@ import Tooltip from '@mui/material/Tooltip';
 import type { Project } from '@/entities/project';
 import { readThreadUuids, useHandoffIpc, useHandoffLiveEvents, useHandoffStatusMany } from '@/features/workspace-handoff';
 import { readThreads, threadsQueryKey, useWorkspaceIpc } from '@/features/workspace';
+import { WorktreesPanel } from '@/features/workspace-worktrees';
 import type { HandoffStatus } from '@/shared/desktop/handoffIpc';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
-import { activityGlyph, activityTitleBold } from '@/shared/lib/conversationActivity';
-import { ActivityGroupSummary, ConversationActivityGlyph } from '@/shared/ui/ConversationActivity';
+import { ActivityGroupSummary } from '@/shared/ui/ConversationActivity';
 
 import type { ShellAction } from '../lib/shellActions';
-import { conversationLink, copyText } from '../lib/conversationLink';
 import { folderContextActions } from '../lib/folderMenu';
 import { useAppIpc } from '../model/appIpcContext';
-import { useLocalNeedsYouCount, useLocalThreadActivity, useLocalThreadUnreadTracking } from '../model/localThreadActivity';
+import { useLocalNeedsYouCount, useLocalThreadUnreadTracking } from '../model/localThreadActivity';
 import { useContextMenu, type ContextAction } from '../model/useContextMenu';
 import { WORKSPACE_LIST_KEY } from '../model/useShellActions';
 import type { ShellLocation } from '../model/useShellLocation';
 import { ProjectPickerSheet } from './ProjectPickerSheet';
 import { CHILD_INDENT, ShellRow, SectionCaption } from './rows';
-import { ThreadCloudBadge } from './ThreadCloudBadge';
+import { LocalThreadRow } from './LocalThreadRow';
 import { modKey } from './shortcutLabel';
 
 const THREADS_SHOWN = 8;
@@ -65,6 +67,13 @@ type WorkspaceThread = ReturnType<typeof readThreads>[number];
 
 const shownThreads = (list: readonly WorkspaceThread[], all: boolean): readonly WorkspaceThread[] => (all ? list : list.slice(0, THREADS_SHOWN));
 
+/** Each thread, then the earlier attempts a rewind left under it; an attempt whose thread is gone stands alone. */
+function nestedThreads(list: readonly WorkspaceThread[]): WorkspaceThread[] {
+  const listed = new Set(list.map((thread) => thread.id));
+  const under = (id: string) => list.filter((thread) => thread.earlierAttemptOf === id);
+  return list.filter((thread) => thread.earlierAttemptOf === undefined || !listed.has(thread.earlierAttemptOf)).flatMap((thread) => [thread, ...under(thread.id)]);
+}
+
 interface FolderThreadsProps extends Omit<SectionProps, 'projects'> {
   workspace: Workspace;
   all: boolean;
@@ -73,57 +82,18 @@ interface FolderThreadsProps extends Omit<SectionProps, 'projects'> {
   statuses: Readonly<Record<string, HandoffStatus>>;
 }
 
-/** A thread's native context menu: open it, open it in the web chat, copy its link. */
-function threadActions(workspace: Workspace, thread: WorkspaceThread, run: SectionProps['run']): ContextAction[] {
-  const link = conversationLink(thread.id);
-  return [
-    { id: 'open', label: t('desktop.menu.open', 'Open'), run: () => run({ type: 'open_workspace', workspaceId: workspace.id, conversationId: thread.id }) },
-    { id: 'chat', label: t('workspace.openInChat', 'Open in chat'), run: () => run({ type: 'go', to: `/chat/${thread.id}` }) },
-    { id: 'link', label: t('workspace.copyLink', 'Copy Link'), enabled: link !== null, run: () => link !== null && copyText(link) },
-  ];
-}
-
-interface ThreadRowProps {
-  readonly workspace: Workspace;
-  readonly thread: WorkspaceThread;
-  readonly uuid: string | undefined;
-  readonly selected: boolean;
-  readonly run: SectionProps['run'];
-  readonly status: HandoffStatus | undefined;
-}
-
-/** One thread: its title (bold while unread), its activity glyph, and its cloud badge. */
-function ThreadRow({ workspace, thread, uuid, selected, run, status }: ThreadRowProps): React.JSX.Element {
-  const showMenu = useContextMenu();
-  const activity = useLocalThreadActivity(thread.id, uuid);
-  const glyph = <ConversationActivityGlyph kind={activityGlyph(activity)} />;
-  return (
-    <ShellRow
-      testId="shell-thread"
-      onContextMenu={(event) => showMenu(event, threadActions(workspace, thread, run))}
-      indent={CHILD_INDENT}
-      label={thread.title === '' ? t('desktop.shell.untitledThread', 'Untitled thread') : thread.title}
-      selected={selected}
-      bold={!selected && activityTitleBold(activity)}
-      status={glyph}
-      onClick={() => run({ type: 'open_workspace', workspaceId: workspace.id, conversationId: thread.id })}
-      trailing={uuid === undefined ? undefined : <ThreadCloudBadge status={status} />}
-    />
-  );
-}
-
 function FolderThreads({ workspace, location, run, all, onToggleAll, statuses }: FolderThreadsProps): React.JSX.Element {
   const threads = useQuery(threadsQuery(workspace.id));
   // The UUIDs the thread pages read (handoff is keyed by them), to badge a row without opening it.
   const uuids = readThreadUuids(workspace.id);
-  const list: WorkspaceThread[] = threads.data ?? [];
+  const list: WorkspaceThread[] = nestedThreads(threads.data ?? []);
   const shown = shownThreads(list, all);
   const here = location.workspaceId === workspace.id;
   return (
     <Box component="ul" sx={{ margin: 0, padding: 0, listStyle: 'none' }} aria-label={t('desktop.shell.threadsOf', 'Threads in {{name}}', { name: workspace.name })}>
       {shown.map((thread) => (
         <li key={thread.id}>
-          <ThreadRow
+          <LocalThreadRow
             workspace={workspace}
             thread={thread}
             uuid={uuids[thread.id]}
@@ -352,6 +322,11 @@ export function LocalWorkSection({ location, run, projects }: SectionProps): Rea
                   onToggleAll={() => toggleIn(setExpandedAll, workspace.id)}
                   statuses={statuses}
                 />
+              )}
+              {open && workspace.is_git && (
+                <Suspense fallback={null}>
+                  <WorktreesPanel workspaceId={workspace.id} workspaceName={workspace.name} />
+                </Suspense>
               )}
             </li>
           );

@@ -47,6 +47,7 @@ fn fixture() -> (Fixture, PathBuf) {
     shell.home = Some(home.clone());
     shell.sandbox.allow_unenforced = true;
     let session = LocalSession::open(SessionConfig {
+        spill_dir: None, // under data_dir
         root: home.clone(),
         session_id: "s".to_owned(),
         policy: LocalWorkPolicy {
@@ -64,6 +65,7 @@ fn fixture() -> (Fixture, PathBuf) {
         deny_read: vec![home.join("xdg-config/elitea")],
         app_id: Some(APP_ID.to_owned()),
         budgets: elitea_local_tools::budget::Budgets::default(),
+        documents: elitea_local_tools::document::Documents::default(),
     })
     .expect("session");
     (Fixture { _dir: dir, session }, home)
@@ -182,6 +184,7 @@ async fn a_home_workspace_spills_and_the_spill_dir_stays_hidden() {
     shell.home = Some(home.clone());
     shell.sandbox.allow_unenforced = true;
     let session = LocalSession::open(SessionConfig {
+        spill_dir: None, // under data_dir
         root: home.clone(),
         session_id: "w1".to_owned(),
         policy: LocalWorkPolicy {
@@ -196,6 +199,7 @@ async fn a_home_workspace_spills_and_the_spill_dir_stays_hidden() {
         deny_read: Vec::new(),
         app_id: Some(APP_ID.to_owned()),
         budgets: elitea_local_tools::budget::Budgets::default(),
+        documents: elitea_local_tools::document::Documents::default(),
     })
     .expect("session");
     session.set_conversation(Some("42"));
@@ -243,4 +247,87 @@ async fn a_home_workspace_spills_and_the_spill_dir_stays_hidden() {
         )
         .await;
     assert_eq!(search["files"], json!(["big.md"]), "{search}");
+}
+
+/// A host that names a cache directory (the desktop app does): the spilled
+/// output lands under it, not the data directory, and the cache directory
+/// stays on the deny list (the agent still cannot read, list, find or
+/// search it).
+#[tokio::test]
+async fn a_cache_dir_holds_the_spill_and_stays_hidden() {
+    let dir = tempfile::tempdir().expect("dir");
+    let base = std::fs::canonicalize(dir.path()).expect("canonical");
+    let home = base.join("home");
+    let data_dir = home.join("Library/Application Support/ai.elitea.desktop/workspaces/w1");
+    let cache_dir = home.join("Library/Caches/ai.elitea.desktop");
+    let big: String = (0..8_000)
+        .map(|n| "SPILL-MARKER line ".to_owned() + &n.to_string() + "\n")
+        .collect();
+    plant(&home, "big.md", &big);
+    let mut shell = ShellConfig::new(base.join("tmp"));
+    shell.home = Some(home.clone());
+    shell.sandbox.allow_unenforced = true;
+    let session = LocalSession::open(SessionConfig {
+        spill_dir: Some(cache_dir.clone()),
+        root: home.clone(),
+        session_id: "w1".to_owned(),
+        policy: LocalWorkPolicy {
+            allowed: true,
+            ..LocalWorkPolicy::default()
+        },
+        settings: WorkspaceSettings::default(),
+        choices: Arc::new(MemoryChoices::default()),
+        prompt: Arc::new(DeferringPrompt),
+        data_dir: data_dir.clone(),
+        shell: Some(shell),
+        deny_read: Vec::new(),
+        app_id: Some(APP_ID.to_owned()),
+        budgets: elitea_local_tools::budget::Budgets::default(),
+        documents: elitea_local_tools::document::Documents::default(),
+    })
+    .expect("session");
+    session.set_conversation(Some("42"));
+    let document = session
+        .call("read_document", "c1", json!({ "path": "big.md" }))
+        .await;
+    assert_eq!(document["status"], "ok", "{document}");
+    let id = document["output_id"].as_str().expect("spilled").to_owned();
+    let spilled = session
+        .spill_store()
+        .conversation_dir()
+        .join(format!("{id}.txt"));
+    assert!(
+        spilled.starts_with(&cache_dir),
+        "the spill lives in the cache dir: {}",
+        spilled.display()
+    );
+    assert!(
+        !spilled.starts_with(&data_dir),
+        "the spill is not under the data dir: {}",
+        spilled.display()
+    );
+    assert!(spilled.exists());
+    let page = session
+        .call(
+            "read_output",
+            "c2",
+            json!({ "output_id": id, "offset": 7_000 }),
+        )
+        .await;
+    assert_eq!(page["status"], "ok", "{page}");
+    // The cache directory is on the deny list: the agent's file tools still
+    // cannot reach the spill.
+    let relative = spilled
+        .strip_prefix(&home)
+        .expect("inside")
+        .display()
+        .to_string();
+    for tool in ["read_file", "read_document"] {
+        let refused = session.call(tool, "c3", json!({ "path": relative })).await;
+        assert_eq!(refused["code"], "local_tools.denied", "{tool}: {refused}");
+    }
+    let found = session
+        .call("find_files", "c4", json!({ "pattern": "**/out-*" }))
+        .await;
+    assert_eq!(found["files"], json!([]), "{found}");
 }

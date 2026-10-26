@@ -30,7 +30,8 @@ use crate::sqlite_store::{DocumentStat, Staged, Stats};
 use elitea_content_source::{
     Acl, ContentSource, Document, DocumentRef, SourceError, content_version, mime_of,
 };
-use elitea_inventory_core::ingest::files::Selection;
+use elitea_doc_extract::{DocumentExtractor, PageRange};
+use elitea_inventory_core::ingest::files::{Selection, Skipped};
 use elitea_local_tools::files::{MAX_FILE_BYTES, relative, walker};
 use elitea_local_tools::workspace::{Workspace, WsPath};
 use serde_json::Map;
@@ -43,18 +44,38 @@ use std::sync::{Arc, Mutex, PoisonError};
 /// and its one source's status key.
 pub const SOURCE_NAME: &str = "workspace";
 
+/// The extractor a source reads PDF and Office files with.
+#[derive(Clone)]
+struct Documents(Arc<dyn DocumentExtractor>);
+
+impl std::fmt::Debug for Documents {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Documents")
+    }
+}
+
+/// The text of each file fetched, by key: `(version, text)`.
+type Texts = HashMap<String, (String, String)>;
+
 /// The files of one workspace.
+///
+/// Every field is shared (`Arc`) so that `handle` can hand a copy
+/// of the source to the blocking pool: the [`ContentSource`] futures walk
+/// and read there, not on the async runtime's threads.
 #[derive(Debug)]
 pub struct LocalFolderSource {
     workspace: Arc<Workspace>,
-    previous: HashMap<String, DocumentStat>,
-    selection: Option<Selection>,
-    seen: Mutex<Stats>,
-    hashed: AtomicUsize,
-    reads: AtomicUsize,
+    previous: Arc<HashMap<String, DocumentStat>>,
+    selection: Option<Arc<Selection>>,
+    seen: Arc<Mutex<Stats>>,
+    hashed: Arc<AtomicUsize>,
+    reads: Arc<AtomicUsize>,
     /// The text of every file fetched, when chunking is on: `(version,
     /// text)` by key, cut into chunks by [`Self::take_staged`].
-    staged: Option<Mutex<HashMap<String, (String, String)>>>,
+    staged: Option<Arc<Mutex<Texts>>>,
+    /// Reads PDF, Office and e-mail files as text (the desktop's sandboxed
+    /// sidecar). Without one those files are left out, as they always were.
+    documents: Option<Documents>,
 }
 
 /// The version a listing gives a file it did not read: its size and mtime,
@@ -81,20 +102,47 @@ impl LocalFolderSource {
     pub fn new(workspace: Arc<Workspace>) -> Self {
         Self {
             workspace,
-            previous: HashMap::new(),
+            previous: Arc::default(),
             selection: None,
-            seen: Mutex::default(),
-            hashed: AtomicUsize::new(0),
-            reads: AtomicUsize::new(0),
+            seen: Arc::default(),
+            hashed: Arc::default(),
+            reads: Arc::default(),
             staged: None,
+            documents: None,
         }
+    }
+
+    /// The same source (its counters, stat record and staged texts), for a
+    /// closure the blocking pool runs.
+    fn handle(&self) -> Self {
+        Self {
+            workspace: Arc::clone(&self.workspace),
+            previous: Arc::clone(&self.previous),
+            selection: self.selection.clone(),
+            seen: Arc::clone(&self.seen),
+            hashed: Arc::clone(&self.hashed),
+            reads: Arc::clone(&self.reads),
+            staged: self.staged.clone(),
+            documents: self.documents.clone(),
+        }
+    }
+
+    /// Read PDF, Office, e-mail and e-book files as text through
+    /// `extractor` (the same one `read_document` uses, with the same limits):
+    /// they are listed, and fetched as `text/plain` holding the pages in
+    /// order. A file the extractor cannot read fails its own fetch and no
+    /// other. Not chunked by [`Self::chunking`]: that stays for text and code.
+    #[must_use]
+    pub fn with_documents(mut self, extractor: Arc<dyn DocumentExtractor>) -> Self {
+        self.documents = Some(Documents(extractor));
+        self
     }
 
     /// Cut every file it fetches into search chunks, from the very bytes
     /// handed to ingestion ([`Self::take_staged`]).
     #[must_use]
     pub fn chunking(mut self) -> Self {
-        self.staged = Some(Mutex::default());
+        self.staged = Some(Arc::default());
         self
     }
 
@@ -141,7 +189,7 @@ impl LocalFolderSource {
     /// `previous` recorded, instead of reading and hashing it again.
     #[must_use]
     pub fn with_previous(mut self, previous: HashMap<String, DocumentStat>) -> Self {
-        self.previous = previous;
+        self.previous = Arc::new(previous);
         self
     }
 
@@ -149,7 +197,7 @@ impl LocalFolderSource {
     /// (ingestion counts them as skipped) with an empty version, never read.
     #[must_use]
     pub fn selecting(mut self, selection: Selection) -> Self {
-        self.selection = Some(selection);
+        self.selection = Some(Arc::new(selection));
         self
     }
 
@@ -183,9 +231,37 @@ impl LocalFolderSource {
     }
 
     fn admitted(&self, key: &str, mime: &str) -> bool {
-        self.selection
-            .as_ref()
-            .is_none_or(|selection| selection.admit_document(key, mime).is_ok())
+        self.selection.as_ref().is_none_or(|selection| {
+            selection.admit_document(key, mime).is_ok()
+                // A format the loader never listed is admitted when the
+                // source has an extractor for it, unless a list excludes it.
+                || (self.documents.is_some()
+                    && elitea_doc_extract::is_document_type(mime)
+                    && matches!(selection.admit(key), Err(Skipped::UnsupportedExtension)))
+        })
+    }
+
+    /// The text of a document file, when this source reads it with an
+    /// extractor: its pages in order.
+    fn document_text(&self, mime: &str, bytes: &[u8]) -> Option<Result<String, SourceError>> {
+        let documents = self.documents.as_ref()?;
+        if !elitea_doc_extract::is_document_type(mime) {
+            return None;
+        }
+        Some(
+            documents
+                .0
+                .extract(mime, bytes.to_vec(), &PageRange::ALL)
+                .map(|paged| {
+                    paged
+                        .pages
+                        .iter()
+                        .map(|page| page.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n\n")
+                })
+                .map_err(|failure| unavailable(failure.to_string())),
+        )
     }
 
     /// The listing, synchronously (it walks the disk; it reads no file).
@@ -275,32 +351,41 @@ impl LocalFolderSource {
                 .unwrap_or_else(PoisonError::into_inner)
                 .insert(key.to_owned(), (version.clone(), text));
         }
+        let mut mime = mime_of(key).to_owned();
+        let mut bytes = read.bytes;
+        if let Some(text) = self.document_text(&mime, &bytes) {
+            // The version stays the file's own hash; what ingestion parses
+            // is its text.
+            bytes = text?.into_bytes();
+            "text/plain".clone_into(&mut mime);
+        }
         Ok(Document {
             reference: DocumentRef {
                 key: key.to_owned(),
                 version,
-                mime: mime_of(key).to_owned(),
+                mime,
                 size: read.stamp.len,
                 acl: Acl::Project,
             },
             title: path.file_name().unwrap_or(key).to_owned(),
             uri: None,
-            bytes: read.bytes,
+            bytes,
             metadata: Map::new(),
         })
     }
 }
 
-#[allow(
-    clippy::unused_async_trait_impl,
-    reason = "synchronous file I/O inside async fns holds a tokio worker; moving it off the executor is tracked in #1377"
-)]
+/// The walk and the reads run on the blocking pool
+/// ([`elitea_content_source::blocking`]); a fetch whose future is dropped
+/// while it reads still counts its read and stages its text.
 impl ContentSource for LocalFolderSource {
     async fn list(&self) -> Result<Vec<DocumentRef>, SourceError> {
-        self.list_now()
+        let source = self.handle();
+        elitea_content_source::blocking(move || source.list_now()).await
     }
 
     async fn fetch(&self, key: &str) -> Result<Document, SourceError> {
-        self.fetch_now(key)
+        let (source, key) = (self.handle(), key.to_owned());
+        elitea_content_source::blocking(move || source.fetch_now(&key)).await
     }
 }

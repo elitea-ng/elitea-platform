@@ -89,6 +89,10 @@ type Handler struct {
 	// WithPATExpiryNotifier is applied, and the route answers 503 while it is
 	// — never 200 with zero produced, which would read as "nobody was due".
 	patExpiryNotifier PATExpiryNotifier
+	// The recurring-routine registry behind `Admin › Schedules`
+	// (platform_routines.go). Nil unless WithPlatformRoutines is applied, and
+	// the routes answer 503 while it is.
+	platformRoutines PlatformRoutineStore
 }
 
 // Option configures a Handler at construction time.

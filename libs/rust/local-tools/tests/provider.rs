@@ -155,6 +155,7 @@ fn fixture(policy: LocalWorkPolicy) -> Fixture {
     // enforcement on macOS.
     shell.sandbox.allow_unenforced = true;
     let session = LocalSession::open(SessionConfig {
+        spill_dir: None, // under data_dir
         root,
         session_id: "conv-1".to_owned(),
         policy,
@@ -166,6 +167,7 @@ fn fixture(policy: LocalWorkPolicy) -> Fixture {
         deny_read: Vec::new(),
         app_id: None,
         budgets: elitea_local_tools::budget::Budgets::default(),
+        documents: elitea_local_tools::document::Documents::default(),
     })
     .expect("session");
     let provider = LocalToolProvider::new(session.clone());

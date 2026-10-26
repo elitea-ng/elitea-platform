@@ -72,6 +72,11 @@ const (
 	// (`<base>/<repo>/resolve/<revision>/<file>`). Empty: Hugging Face. The
 	// app checks every file against the SHA-256 it pins, whatever serves it.
 	KeyNativeLocalWorkIndexModelMirrorURL = "local_work_index_model_mirror_url"
+	// KeyNativeLocalWorkWeb and KeyNativeLocalWorkHostIntel let a local turn
+	// use the web toolkit and the host_intel toolkit (#1238). Absent is off:
+	// both send the turn's queries to third-party providers.
+	KeyNativeLocalWorkWeb       = "local_work_web"
+	KeyNativeLocalWorkHostIntel = "local_work_host_intel"
 )
 
 // MaxModelMirrorURLBytes bounds KeyNativeLocalWorkIndexModelMirrorURL.
@@ -143,8 +148,9 @@ func ValidLocalWorkPattern(pattern string) bool {
 }
 
 // LocalWorkPolicy is the `local_work` group of the policy (ADR-0029 decision
-// 6). The desktop enforces it. The server enforces only `allowed`: it refuses
-// a local turn start when it is false. Field order is the JSON key order.
+// 6). The desktop enforces it. The server enforces `allowed` (it refuses a
+// local turn start when it is false), and `web` and `host_intel` on the
+// remote toolkit calls of a turn. Field order is the JSON key order.
 type LocalWorkPolicy struct {
 	// Allowed: local work (agent turns that run on the user's machine) is
 	// permitted. Off unless an administrator enables it.
@@ -184,6 +190,10 @@ type LocalWorkPolicy struct {
 	// IndexModelMirrorURL: where the on-device embedding models are
 	// downloaded from; empty is Hugging Face.
 	IndexModelMirrorURL string `json:"index_model_mirror_url"`
+	// Web: local turns may use the web toolkit (web_search, web_fetch).
+	Web bool `json:"web"`
+	// HostIntel: local turns may use the host_intel toolkit (Shodan).
+	HostIntel bool `json:"host_intel"`
 }
 
 // DefaultLocalWorkPolicy is the group of a deployment that never saved it:
@@ -209,6 +219,8 @@ func DefaultLocalWorkPolicy() LocalWorkPolicy {
 		IndexLocalEmbeddings:  true,
 		IndexRemoteEmbeddings: false,
 		IndexModelMirrorURL:   "",
+		Web:                   false,
+		HostIntel:             false,
 	}
 }
 
@@ -230,6 +242,8 @@ func localWorkPolicyFromValues(values Values) LocalWorkPolicy {
 	policy.CloudHandoff = values.Bool(KeyNativeLocalWorkCloudHandoff, policy.CloudHandoff)
 	policy.IndexLocalEmbeddings = values.Bool(KeyNativeLocalWorkIndexLocalEmbeddings, policy.IndexLocalEmbeddings)
 	policy.IndexRemoteEmbeddings = values.Bool(KeyNativeLocalWorkIndexRemoteEmbeddings, policy.IndexRemoteEmbeddings)
+	policy.Web = values.Bool(KeyNativeLocalWorkWeb, policy.Web)
+	policy.HostIntel = values.Bool(KeyNativeLocalWorkHostIntel, policy.HostIntel)
 	if mirror, ok := values[KeyNativeLocalWorkIndexModelMirrorURL].(string); ok && ValidModelMirrorURL(mirror) {
 		policy.IndexModelMirrorURL = mirror
 	}

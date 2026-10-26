@@ -12,6 +12,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -91,13 +92,35 @@ func TestAMemberWithNoNameRendersAsItsID(t *testing.T) {
 // it.
 func TestAModelSliceKeepsItsProviderSeparate(t *testing.T) {
 	slice, err := scanUsageModel(scanning(
-		"openai", "gpt-4o", int64(9), int64(100), int64(50), int64(150), 2.5,
+		"openai", "gpt-4o", int64(9), int64(100), int64(50), int64(150), 2.5, "llm", int64(0), "",
 	))
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
 	if slice.Key != "openai/gpt-4o" || slice.Label != "gpt-4o" || slice.Detail != "openai" {
 		t.Errorf("slice = %+v, want a provider-qualified key and an unqualified label", slice)
+	}
+	if slice.Operation != "llm" || slice.Units != nil || slice.Unit != "" {
+		t.Errorf("slice = %+v, want an llm row with no units", slice)
+	}
+}
+
+// TestUsageModelsIncludeToolRowsWithOperation pins the tool half of the
+// table (#1238): a metered operation is a row whose provider is the vendor
+// and whose model is the operation, labelled as a tool and carrying units.
+func TestUsageModelsIncludeToolRowsWithOperation(t *testing.T) {
+	slice, err := scanUsageModel(scanning(
+		"tavily", "web_search", int64(1), int64(0), int64(0), int64(0), 0.008, "tool", int64(1), "credit",
+	))
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if slice.Operation != "tool" || slice.Units == nil || *slice.Units != 1 || slice.Unit != "credit" ||
+		slice.Label != "web_search" || slice.Detail != "tavily" || slice.Key != "tavily/web_search#tool" {
+		t.Errorf("slice = %+v, want a tool row with its units", slice)
+	}
+	if !strings.Contains(usageModelsSQL, "GROUP BY provider, model, operation, unit") {
+		t.Error("the model table does not group on the operation, so a tool row could merge into a model row")
 	}
 }
 

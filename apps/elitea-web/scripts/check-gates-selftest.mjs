@@ -23,16 +23,18 @@
  * production run uses too.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
 import { stripJsonc } from './lib/jsonc.mjs';
-import { checkFixtureFreshness, checkHandlerSource } from './lib/mock-rules-core.mjs';
+import { checkHandlerSource } from './lib/mock-rules-core.mjs';
+import { checkSpecExamples } from './lib/spec-examples-core.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const yaml = createRequire(import.meta.url)('js-yaml');
 const APP = resolve(SCRIPT_DIR, '..');
 const FIXTURES = join(APP, 'tools', 'lint-rules', 'fixtures');
 const BIN = (name) => join(APP, 'node_modules', '.bin', name);
@@ -241,7 +243,7 @@ for (const [id, mechanism, tag] of OXLINT_CASES) {
   recordDelegated('THEME/7-brand-pack', 'vitest brand-pack contract test (§4.6 check 7; theme-gate invokes when present)', 'unit T1');
 }
 
-// ── section 6: R-M3 / R-M5 (vitest fixtures booting the REAL src/test/setup.ts) ──
+// ── section 6: R-M5 (vitest fixtures booting the REAL src/test/setup.ts) ──
 {
   const run = (file) =>
     spawnSync(
@@ -259,20 +261,9 @@ for (const [id, mechanism, tag] of OXLINT_CASES) {
   );
   if (rm5Fail.status === 0) console.error(`\n[R-M5] unmocked request was NOT fenced:\n${rm5Fail.stdout}${rm5Fail.stderr}`);
   if (rm5Pass.status !== 0) console.error(`\n[R-M5] handled request failed:\n${rm5Pass.stdout}${rm5Pass.stderr}`);
-
-  const rm3Fail = run('tools/lint-rules/fixtures/msw/rm3-fail.test.ts');
-  const rm3Pass = run('tools/lint-rules/fixtures/msw/rm3-pass.test.ts');
-  record(
-    'R-M3',
-    'registerValidatedHandlers zod check at registration (src/test/msw/register.ts)',
-    rm3Fail.status !== 0 && (rm3Fail.stdout + rm3Fail.stderr).includes('R-M3'),
-    rm3Pass.status === 0,
-  );
-  if (rm3Fail.status === 0) console.error(`\n[R-M3] schema-violating registration was NOT rejected:\n${rm3Fail.stdout}${rm3Fail.stderr}`);
-  if (rm3Pass.status !== 0) console.error(`\n[R-M3] valid registration failed:\n${rm3Pass.stdout}${rm3Pass.stderr}`);
 }
 
-// ── section 7: R-M2 / R-M4 (scripts/lib/mock-rules-core.mjs on fixtures) ──
+// ── section 7: R-M2 (scripts/lib/mock-rules-core.mjs on fixtures) ──
 {
   const badSource = readFileSync(join(FIXTURES, 'msw', 'handlers-bad.ts'), 'utf8');
   const goodSource = readFileSync(join(FIXTURES, 'msw', 'handlers-good.ts'), 'utf8');
@@ -280,25 +271,25 @@ for (const [id, mechanism, tag] of OXLINT_CASES) {
   const rm2Green = checkHandlerSource('handlers-good.ts', goodSource);
   record(
     'R-M2',
-    'mock-rules-core checkHandlerSource (inline literal bodies; CI wiring lands with M1 check-handlers.mjs)',
-    rm2Red.length > 0,
+    'check-handlers.mjs (bodies: generated mock or typed constant; no inline literal, no JSON)',
+    rm2Red.length >= 2,
     rm2Green.length === 0,
   );
+}
 
-  const stale = JSON.parse(readFileSync(join(FIXTURES, 'msw', 'stale.fixture.json'), 'utf8'));
-  const rm4Red = checkFixtureFreshness('stale.fixture.json', stale);
-  // The GREEN fixture is generated at run time — a checked-in "fresh" fixture
-  // would itself go stale within 30 days and rot this self-test.
-  const tmp = mkdtempSync(join(tmpdir(), 'f2-rm4-'));
-  const freshFile = join(tmp, 'fresh.fixture.json');
-  writeFileSync(freshFile, JSON.stringify({ recordedAt: new Date().toISOString(), body: {} }));
-  const rm4Green = checkFixtureFreshness('fresh.fixture.json', JSON.parse(readFileSync(freshFile, 'utf8')));
-  rmSync(tmp, { recursive: true, force: true });
+// ── section 7b: R-M3 (scripts/lib/spec-examples-core.mjs on fixture specs) ──
+// R-M3 was a runtime zod check of each hand-written JSON fixture. Those
+// fixtures are gone: a mock body is now a contract example (checked here,
+// against its schema) or a typed constant (checked by tsc).
+{
+  const load = (name) => yaml.load(readFileSync(join(FIXTURES, 'spec-examples', name), 'utf8'), { schema: yaml.CORE_SCHEMA });
+  const rm3Red = checkSpecExamples(load('bad.yaml'));
+  const rm3Green = checkSpecExamples(load('good.yaml'));
   record(
-    'R-M4',
-    'mock-rules-core checkFixtureFreshness 30d (CI wiring lands with M1 check-fixture-freshness.mjs)',
-    rm4Red.length > 0,
-    rm4Green.length === 0,
+    'R-M3',
+    'check-spec-examples.mjs (v2.yaml example/examples vs their schema, Ajv)',
+    rm3Red.findings.length > 0,
+    rm3Green.checked > 0 && rm3Green.findings.length === 0,
   );
 }
 

@@ -76,6 +76,14 @@ func NewExecutionAttributionVerifier(pool *pgxpool.Pool) *ExecutionAttributionVe
 // started it (tokenID: the native device session's anchor token, stable
 // across access-token rotation, or the PAT; nativeClientID). A runtime
 // execution is not: its worker calls with the actor's token, whichever it is.
+//
+// The third rule is a remote toolkit call's (#1238, shared 0174): the worker
+// running a toolkit.call_tool.v1 execution for a desktop turn sends that turn
+// as the execution of its metered web calls. The id is accepted only when
+// Main recorded it as the attribution of such an execution that is live, of
+// this project and actor, while local work is allowed. The worker's word is
+// never enough: the recording is made by the remote toolkit route after it
+// verified the turn.
 func (v *ExecutionAttributionVerifier) VerifyExecution(ctx context.Context, projectID, userID, tokenID, nativeClientID, executionID string) (bool, error) {
 	if v == nil || v.pool == nil {
 		return false, nil
@@ -84,7 +92,8 @@ func (v *ExecutionAttributionVerifier) VerifyExecution(ctx context.Context, proj
 	if err != nil || project < 1 || userID == "" || executionID == "" {
 		return false, nil
 	}
-	localAllowed := tokenID != "" && v.localWorkAllowed(ctx)
+	localWork := v.localWorkAllowed(ctx)
+	localAllowed := tokenID != "" && localWork
 	var ok bool
 	if err := v.pool.QueryRow(ctx, `
 SELECT EXISTS (
@@ -110,7 +119,18 @@ SELECT EXISTS (
           (l.committed_at IS NULL AND l.expires_at > now())
           OR l.committed_at > now() - `+attributionSlackSQL+`
       )
-)`, executionID, project, userID, localAllowed, tokenID, nativeClientID).Scan(&ok); err != nil {
+) OR EXISTS (
+    -- A remote toolkit call of that turn (shared 0174): the call execution
+    -- is live and carries the turn as its recorded attribution.
+    SELECT 1
+    FROM elitea_runtime.execution_jobs AS c
+    WHERE $7::boolean
+      AND c.attribution_execution_id = $1
+      AND c.capability_id = 'toolkit.call_tool.v1'
+      AND (c.resource_project_id = $2 OR c.projection_project_id = $2)
+      AND c.actor_id = $3
+      AND (c.settled_at IS NULL OR c.settled_at > now() - `+attributionSlackSQL+`)
+)`, executionID, project, userID, localAllowed, tokenID, nativeClientID, localWork).Scan(&ok); err != nil {
 		return false, fmt.Errorf("verify execution attribution: %w", err)
 	}
 	return ok, nil

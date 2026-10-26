@@ -259,9 +259,8 @@ const (
 //     a SEPARATE PROCESS that cannot see a DB row this service writes).
 //     `ai_project_allowed_domains` is deployment-mounted YAML read once at
 //     startup (internal/authcomposition/config.go). The four
-//     `*_scheduling_{enabled,cron}` fields are centry.schedule rows the admin
-//     "Schedules & Tasks" page already edits
-//     (internal/api/v2/scheduling/schedules.go). The rest belong to
+//     `*_scheduling_{enabled,cron}` fields are routine schedules the admin
+//     "Schedules" page edits (internal/api/v2/admin/platform_routines.go). The rest belong to
 //     the legacy indexer's mounted YAML. A save on this page could reach none
 //     of them.
 //   - `admin_panel` declared zero fields — the same subject as Advanced above,
@@ -287,6 +286,7 @@ func configSections() []map[string]any {
 		nativeClientsSection(),
 		nativeClientPolicySection(),
 		cloudExecutorSection(),
+		webSearchSection(),
 		resourcesSection(),
 		dedicatedBannerSection(),
 		brandingSection(),

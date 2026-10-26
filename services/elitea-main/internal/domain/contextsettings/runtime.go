@@ -1,6 +1,9 @@
 package contextsettings
 
-import "maps"
+import (
+	"encoding/json"
+	"maps"
+)
 
 // BudgetMode selects a combined window. Empty legacy selections resolve to Balanced.
 type BudgetMode string
@@ -29,6 +32,11 @@ type RuntimeSettings struct {
 	PreserveRecentMessages int        `json:"preserve_recent_messages"`
 	PreserveSystemMessages bool       `json:"preserve_system_messages"`
 	SummaryInstructions    string     `json:"summary_instructions"`
+	// SessionCompaction is the agent version's own
+	// `context_settings.session_compaction` (#1368), forwarded so the worker
+	// compacts the root the way the desktop does; absent, it keeps its
+	// durable compaction. Admission sets it, never the stored strategy.
+	SessionCompaction json.RawMessage `json:"session_compaction,omitempty"`
 }
 
 // Runtime separates authored selection from runtime authority. Disabled policies

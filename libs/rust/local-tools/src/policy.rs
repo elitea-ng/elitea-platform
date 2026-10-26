@@ -2,10 +2,10 @@
 //! 6), as far as local tools read it.
 //!
 //! The desktop receives the policy with every token response and enforces
-//! it here; the server cannot verify what a client did. Fields this crate
-//! does not use (`local_mcp`, `memory_write`, `cloud_sync`) are ignored when
-//! deserialising. Every default fails closed (`local_index` too: the server
-//! sends `true` by default, a policy without the field turns it off).
+//! it here; the server cannot verify what a client did. A field this crate
+//! does not use (`cloud_sync`) is ignored when deserialising. Every default
+//! fails closed (`local_index` and `memory_write` too: the server sends
+//! `true` by default, a policy without the field turns it off).
 
 use serde::{Deserialize, Serialize};
 
@@ -83,6 +83,23 @@ pub struct LocalWorkPolicy {
     /// on-device embedding models are downloaded from instead of Hugging
     /// Face (an https base laid out as its CDN). Empty: Hugging Face.
     pub index_model_mirror_url: String,
+    /// `local_work_local_mcp` (ADR-0029 decision 4, #1230): the person's
+    /// own stdio MCP servers may run on this device ([`crate::mcp`]). Only
+    /// with `allowed`; off when absent, and turning it off stops them.
+    pub local_mcp: bool,
+    /// `local_work_memory_write` (ADR-0029 decision 8, #1233): a local turn
+    /// may save and delete the person's memories (`save_memory`,
+    /// `delete_memory`). Recall and `search_memory` never depend on it. Off
+    /// when absent: the tools are not offered and their calls are denied.
+    pub memory_write: bool,
+    /// `local_work_web` (#1238): local turns may call a remote `web` toolkit
+    /// (`web_search`, `web_fetch`), which sends queries and URLs to
+    /// third-party providers. Off when absent: the tools are not offered and
+    /// the server refuses the calls.
+    pub web: bool,
+    /// `local_work_host_intel` (#1238): local turns may call a remote
+    /// `host_intel` toolkit (Shodan). Off when absent.
+    pub host_intel: bool,
 }
 
 impl Default for LocalWorkPolicy {
@@ -100,6 +117,10 @@ impl Default for LocalWorkPolicy {
             index_local_embeddings: false,
             index_remote_embeddings: false,
             index_model_mirror_url: String::new(),
+            local_mcp: false,
+            memory_write: false,
+            web: false,
+            host_intel: false,
         }
     }
 }
@@ -113,7 +134,7 @@ mod tests {
         let policy: LocalWorkPolicy = serde_json::from_value(serde_json::json!({
             "allowed": true,
             "max_sandbox_mode": "full-access",
-            "memory_write": true,
+            "cloud_sync": true,
             "local_index": false
         }))
         .expect("parse");
@@ -151,7 +172,37 @@ mod tests {
             mirror.index_model_mirror_url,
             "https://mirror.example.com/hf"
         );
+        assert!(!policy.local_mcp, "absent is off");
+        let mcp: LocalWorkPolicy =
+            serde_json::from_value(serde_json::json!({"allowed": true, "local_mcp": true}))
+                .expect("parse");
+        assert!(mcp.local_mcp);
         assert!(SandboxMode::ReadOnly < SandboxMode::WorkspaceWrite);
         assert!(SandboxMode::WorkspaceWrite < SandboxMode::FullAccess);
+    }
+
+    #[test]
+    fn web_and_host_intel_absent_are_off() {
+        let absent: LocalWorkPolicy =
+            serde_json::from_value(serde_json::json!({"allowed": true})).unwrap();
+        assert!(!absent.web && !absent.host_intel);
+        assert!(!LocalWorkPolicy::default().web);
+        let on: LocalWorkPolicy = serde_json::from_value(
+            serde_json::json!({"allowed": true, "web": true, "host_intel": true}),
+        )
+        .unwrap();
+        assert!(on.web && on.host_intel);
+    }
+
+    #[test]
+    fn memory_write_absent_is_off() {
+        let absent: LocalWorkPolicy =
+            serde_json::from_value(serde_json::json!({"allowed": true})).expect("parse");
+        assert!(!absent.memory_write);
+        assert!(!LocalWorkPolicy::default().memory_write);
+        let on: LocalWorkPolicy =
+            serde_json::from_value(serde_json::json!({"allowed": true, "memory_write": true}))
+                .expect("parse");
+        assert!(on.memory_write);
     }
 }

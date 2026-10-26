@@ -128,7 +128,7 @@ afterEach(() => {
 describe('the desktop inspector, composed', () => {
   it('holds a thread\'s tabs in one panel, and only the chat\'s on a chat', async () => {
     const { router } = mount('/workspaces/w1?conversation=77');
-    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index']));
+    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index', 'Context']));
     expect(screen.getAllByTestId('desktop-inspector')).toHaveLength(1);
     // The thread draws no panel of its own any more.
     expect(screen.queryByTestId('session-panel')).toBeNull();
@@ -143,7 +143,7 @@ describe('the desktop inspector, composed', () => {
     expect(within(inspector()).getByRole('tab', { name: 'Approvals' })).toHaveFocus();
     expect(await within(inspector()).findByText(/Nothing was asked of you/)).toBeInTheDocument();
     fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'End' });
-    expect(await within(inspector()).findByTestId('index-panel')).toBeInTheDocument();
+    expect(await within(inspector()).findByTestId('context-panel-empty')).toBeInTheDocument();
 
     await act(() => router.navigate({ to: '/chat/$conversationId', params: { conversationId: '72' } }));
     await waitFor(() => expect(tabsOf(0)).toEqual(['Conversation']));
@@ -154,13 +154,13 @@ describe('the desktop inspector, composed', () => {
   it('stacks a second group, moves tabs between the groups, closes and reopens one, and remembers it per page', async () => {
     const user = userEvent.setup();
     mount('/workspaces/w1?conversation=77');
-    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index']));
+    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index', 'Context']));
 
     // Right-click a chip: move it to a new bottom group.
     fireEvent.contextMenu(within(inspector()).getByRole('tab', { name: 'Index' }));
     await user.click(await screen.findByRole('menuitem', { name: 'Move Index to bottom group' }));
     await waitFor(() => expect(tabsOf(1)).toEqual(['Index']));
-    expect(tabsOf(0)).toEqual(['Changes', 'Approvals']);
+    expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Context']);
     expect(within(screen.getByTestId('inspector-group-1')).getByTestId('index-panel')).toBeInTheDocument();
     expect(within(screen.getByTestId('inspector-group-0')).getByText(/No changes yet/)).toBeInTheDocument();
     expect(persisted().inspector['local']?.groups.map((group) => group.tabs)).toEqual([['changes', 'approvals'], ['index']]);
@@ -174,18 +174,18 @@ describe('the desktop inspector, composed', () => {
     fireEvent.keyDown(within(inspector()).getByRole('tab', { name: 'Index' }), { key: 'F10', shiftKey: true });
     await user.click(await screen.findByRole('menuitem', { name: 'Move Index to top group' }));
     await waitFor(() => expect(screen.queryByTestId('inspector-tabs-1')).toBeNull());
-    expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index']);
+    expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index', 'Context']);
     expect(screen.queryByRole('separator', { name: 'Resize inspector groups' })).toBeNull();
 
     // × hides a tab; the ⋯ menu lists every tab and reopens it.
     await user.click(within(inspector()).getByRole('button', { name: 'Close Approvals' }));
-    expect(tabsOf(0)).toEqual(['Changes', 'Index']);
+    expect(tabsOf(0)).toEqual(['Changes', 'Index', 'Context']);
     await user.click(within(inspector()).getByRole('button', { name: 'Inspector options' }));
     const reopen = await screen.findByRole('menuitemcheckbox', { name: 'Approvals' });
     expect(reopen).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByRole('menuitemcheckbox', { name: 'Changes' })).toHaveAttribute('aria-checked', 'true');
     await user.click(reopen);
-    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index']));
+    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index', 'Context']));
     expect(within(inspector()).getByRole('tab', { name: 'Approvals' })).toHaveAttribute('aria-selected', 'true');
 
     // The chat keeps its own layout.
@@ -195,7 +195,7 @@ describe('the desktop inspector, composed', () => {
   it('maps "Index settings…" to activating the Index tab, opening the panel', async () => {
     const user = userEvent.setup();
     mount('/workspaces/w1?conversation=77');
-    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index']));
+    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index', 'Context']));
     await user.click(within(inspector()).getByRole('button', { name: 'Hide inspector' }));
     await waitFor(() => expect(screen.queryByTestId('desktop-inspector')).toBeNull());
     act(() => useDesktopLayout.getState().showInspector('index'));
@@ -206,7 +206,7 @@ describe('the desktop inspector, composed', () => {
   it('maximizes over the main column until Esc', async () => {
     const user = userEvent.setup();
     mount('/workspaces/w1?conversation=77');
-    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index']));
+    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index', 'Context']));
     await user.click(within(inspector()).getByRole('button', { name: 'Maximize' }));
     expect(inspector()).toHaveAttribute('data-maximized');
     expect(screen.getByRole('main', { hidden: true })).toHaveStyle({ display: 'none' });
@@ -234,7 +234,7 @@ describe('the desktop inspector, composed', () => {
     const openExternal = vi.fn<(url: string) => Promise<void>>().mockResolvedValue();
     const uninstall = installExternalLinks({ openExternal }, 'https://elitea.example', document, window);
     const { appIpc } = mount('/workspaces/w1?conversation=77');
-    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index']));
+    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index', 'Context']));
 
     await user.click(within(inspector()).getByRole('button', { name: 'Open in new window' }));
     expect(open).toHaveBeenCalledWith('about:blank#elitea-panel=changes', 'elitea-panel-changes', expect.any(String));
@@ -277,9 +277,9 @@ describe('the desktop inspector, composed', () => {
   it('brings the panel back, tabs and all, after every tab was closed', async () => {
     const user = userEvent.setup();
     mount('/workspaces/w1?conversation=77');
-    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index']));
+    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index', 'Context']));
     const closeAll = async (): Promise<void> => {
-      for (const name of ['Changes', 'Approvals', 'Index']) await user.click(within(inspector()).getByRole('button', { name: `Close ${name}` }));
+      for (const name of ['Changes', 'Approvals', 'Index', 'Context']) await user.click(within(inspector()).getByRole('button', { name: `Close ${name}` }));
       await waitFor(() => expect(screen.queryByTestId('desktop-inspector')).toBeNull());
     };
 
@@ -289,13 +289,13 @@ describe('the desktop inspector, composed', () => {
     expect(useDesktopLayout.getState().inspectorMaximized).toBe(false);
     expect(screen.getByRole('main')).toHaveStyle({ display: 'flex' });
     await user.click(screen.getByRole('button', { name: 'Show inspector' }));
-    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index']));
+    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index', 'Context']));
     expect(inspector()).not.toHaveAttribute('data-maximized');
 
     // ⌘⌥\ (the shell's toggle) does the same, in one press.
     await closeAll();
     act(() => useDesktopLayout.getState().toggleInspector());
-    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index']));
+    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index', 'Context']));
     // So does "Index settings…" (showInspector), which reopens the one tab asked for.
     await closeAll();
     act(() => useDesktopLayout.getState().showInspector('index'));

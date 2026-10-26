@@ -80,6 +80,9 @@ type PublishRecord struct {
 	Refs           []RefUpdate
 	ObjectKey      string
 	PhysicalBucket string
+	// MaxPushChain is the most live PUSH segments the thread may hold after
+	// its live COMPACT; a PUSH past it answers ErrChainTooLong.
+	MaxPushChain int
 	// MaxProjectBytes is the project's workspace ceiling. The transaction
 	// re-checks it under a per-project lock (the check before the
 	// transaction is only a fast path); 0 skips the re-check.
@@ -95,12 +98,15 @@ type PublishResult struct {
 	Replayed bool
 }
 
-// FetchRows is what a fetch plan reads.
+// FetchRows is what a fetch plan reads, from one snapshot.
 type FetchRows struct {
 	HeadSeq int64
 	Refs    map[string]string
-	// Newest is the newest live COMPACT at or after since_seq, nil when none.
-	Newest *SegmentRow
+	// Chain is the minimal chain from since_seq to the head, oldest first:
+	// the newest live COMPACT and every later live PUSH, or, when the reader
+	// already holds a state after that COMPACT (since_seq > its seq), only
+	// the live PUSH segments after since_seq.
+	Chain []SegmentRow
 }
 
 // ObjectSweep is a segment the sweeper claimed for object deletion. Shared is
@@ -153,7 +159,7 @@ type Repository interface {
 	ClaimSupersededObjects(ctx context.Context, before time.Time, limit int) ([]ObjectSweep, error)
 	ReleaseObjectSweep(ctx context.Context, ids []int64) error
 	// KeyHasLiveObject reports whether a segment row still needs the object
-	// at key (its object is not deleted).
+	// at key (its object is not deleted) or an open upload grant targets it.
 	KeyHasLiveObject(ctx context.Context, projectID int64, key string) (bool, error)
 	// RetireThreadSegments marks every segment of the thread superseded and
 	// object-deleted and removes its refs (the thread erasure's row half).
@@ -171,16 +177,20 @@ type Audit interface {
 // AuditEvent is one store audit event (decision 12): counts, sizes, shas,
 // writers and reasons, never file contents.
 type AuditEvent struct {
-	Name      string // store.publish, store.publish_refused, store.integrity_failed, store.gc
-	Thread    Thread
-	UserID    int64
-	Writer    Writer
-	Epoch     int64
-	Seq       int64
-	SHA256    string
-	Bytes     int64
-	Reason    string
-	Count     int
-	Started   time.Time
-	Succeeded bool
+	Name string // store.publish, store.publish_refused, store.integrity_failed, store.gc
+	// Kind is the segment kind of a publish (COMPACT or PUSH), "" otherwise;
+	// Prerequisites the number of its prerequisites.
+	Kind          string
+	Prerequisites int
+	Thread        Thread
+	UserID        int64
+	Writer        Writer
+	Epoch         int64
+	Seq           int64
+	SHA256        string
+	Bytes         int64
+	Reason        string
+	Count         int
+	Started       time.Time
+	Succeeded     bool
 }

@@ -35,7 +35,7 @@ export function parseDataFile(content: string, type: 'csv' | 'tsv'): ArtifactDat
   };
 }
 
-export type ArtifactPreviewKind = 'markdown' | 'csv' | 'tsv' | 'mermaid' | 'image' | 'text' | 'docx' | 'unsupported';
+export type ArtifactPreviewKind = 'markdown' | 'csv' | 'tsv' | 'mermaid' | 'image' | 'pdf' | 'text' | 'docx' | 'unsupported';
 
 const DEDICATED_KIND_EXTENSIONS: ReadonlyMap<string, ArtifactPreviewKind> = new Map([
   ['md', 'markdown'], ['markdown', 'markdown'],
@@ -43,9 +43,21 @@ const DEDICATED_KIND_EXTENSIONS: ReadonlyMap<string, ArtifactPreviewKind> = new 
   ['tsv', 'tsv'],
   ['mermaid', 'mermaid'], ['mmd', 'mermaid'],
   ['docx', 'docx'], ['doc', 'docx'],
+  ['pdf', 'pdf'],
 ]);
 
-const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'tiff', 'tif', 'apng', 'avif']);
+/** The image kinds and the MIME type each is shown with. */
+const IMAGE_MIME_TYPES: ReadonlyMap<string, string> = new Map([
+  ['png', 'image/png'], ['apng', 'image/apng'],
+  ['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'],
+  ['gif', 'image/gif'],
+  ['webp', 'image/webp'],
+  ['svg', 'image/svg+xml'],
+  ['bmp', 'image/bmp'],
+  ['ico', 'image/x-icon'],
+  ['tiff', 'image/tiff'], ['tif', 'image/tiff'],
+  ['avif', 'image/avif'],
+]);
 
 /** Ported from apps/elitea-ui/src/utils/filePreview.js's PREVIEWABLE_EXTENSIONS (minus the extensions handled by their own dedicated kinds above: md/markdown, csv, tsv, mermaid/mmd, docx/doc, and the image set). */
 const TEXT_EXTENSIONS = new Set([
@@ -102,7 +114,21 @@ export function artifactPreviewKind(filename: string): ArtifactPreviewKind {
   const extension = basename.includes('.') ? (basename.split('.').pop() ?? '') : '';
   const dedicated = DEDICATED_KIND_EXTENSIONS.get(extension);
   if (dedicated !== undefined) return dedicated;
-  if (IMAGE_EXTENSIONS.has(extension)) return 'image';
+  if (IMAGE_MIME_TYPES.has(extension)) return 'image';
   if (TEXT_EXTENSIONS.has(extension) || TEXT_SPECIAL_FILENAMES.has(basename)) return 'text';
   return 'unsupported';
+}
+
+/**
+ * The image as the preview shows it: typed from the file name when the stored
+ * type is not an image one. An object stored as `application/octet-stream`
+ * (an upload that sent no type) still renders as a raster image, because the
+ * browser sniffs those, but never as SVG: an `<img>` shows SVG only when the
+ * blob says `image/svg+xml`. It stays in `<img>`, where SVG runs no script.
+ */
+export function artifactImageBlob(blob: Blob, filename: string): Blob {
+  if (blob.type.startsWith('image/')) return blob;
+  const lower = filename.toLowerCase();
+  const type = IMAGE_MIME_TYPES.get(lower.includes('.') ? (lower.split('.').pop() ?? '') : '');
+  return type === undefined ? blob : new Blob([blob], { type });
 }

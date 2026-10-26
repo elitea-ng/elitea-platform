@@ -53,6 +53,8 @@ const (
 	embeddingsPath      = "/llm/v1/embeddings"
 	imageGeneratePath   = "/llm/v1/images/generations"
 	imageEditPath       = "/llm/v1/images/edits"
+	meteredAdmitPath    = "/llm/v1/metered/admit"
+	meteredSettlePath   = "/llm/v1/metered/settle"
 )
 
 // RefusalTrailer is the trailer that carries an llmv1.ModelRefusal.
@@ -163,6 +165,27 @@ func (s *Server) ImageGenerate(ctx context.Context, request *llmv1.ImageGenerate
 		return nil, err
 	}
 	return &llmv1.ImageGenerateResponse{Head: head, Body: body}, nil
+}
+
+// MeteredAdmit serves POST /llm/v1/metered/admit (#1238). The pipeline
+// refuses a metered call whose execution id does not verify (403
+// execution_not_attributable) instead of dropping the id.
+func (s *Server) MeteredAdmit(ctx context.Context, request *llmv1.MeteredAdmitRequest) (*llmv1.MeteredAdmitResponse, error) {
+	head, body, err := s.serveUnary(ctx, meteredAdmitPath, request.GetCall(), "application/json", bytes.NewReader(request.GetBody()))
+	if err != nil {
+		return nil, err
+	}
+	return &llmv1.MeteredAdmitResponse{Head: head, Body: body}, nil
+}
+
+// MeteredSettle serves POST /llm/v1/metered/settle (#1238), under the same
+// execution-id rule as MeteredAdmit.
+func (s *Server) MeteredSettle(ctx context.Context, request *llmv1.MeteredSettleRequest) (*llmv1.MeteredSettleResponse, error) {
+	head, body, err := s.serveUnary(ctx, meteredSettlePath, request.GetCall(), "application/json", bytes.NewReader(request.GetBody()))
+	if err != nil {
+		return nil, err
+	}
+	return &llmv1.MeteredSettleResponse{Head: head, Body: body}, nil
 }
 
 // ImageEdit serves POST /llm/v1/images/edits. The multipart body streams in

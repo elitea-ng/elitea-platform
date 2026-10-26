@@ -110,6 +110,16 @@ async fn assert_refused(fixture: &Fixture, probe: &str, secret: &str) {
 }
 
 async fn sh(fixture: &Fixture, command: &str, mode: SandboxMode, network: bool) -> CommandOutput {
+    sh_loopback(fixture, command, mode, network, false).await
+}
+
+async fn sh_loopback(
+    fixture: &Fixture,
+    command: &str,
+    mode: SandboxMode,
+    network: bool,
+    loopback: bool,
+) -> CommandOutput {
     let output = run(
         &fixture.workspace,
         &fixture.config,
@@ -119,6 +129,7 @@ async fn sh(fixture: &Fixture, command: &str, mode: SandboxMode, network: bool) 
             timeout: None,
             mode,
             network,
+            loopback,
         },
     )
     .await
@@ -487,6 +498,70 @@ async fn network_is_blocked_when_denied_and_open_when_allowed() {
     drop(listener);
 }
 
+/// #1223: without the loopback switch a command reaches nothing on
+/// localhost, its own listener included.
+#[tokio::test]
+async fn loopback_off_denies_localhost_connect() {
+    if !available() {
+        return;
+    }
+    let fixture = fixture();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
+    let port = listener.local_addr().expect("addr").port();
+    let probe = format!("/usr/bin/nc -z -G 3 127.0.0.1 {port}");
+    let denied = sh_loopback(&fixture, &probe, SandboxMode::WorkspaceWrite, false, false).await;
+    assert_ne!(denied.exit_code, Some(0), "{}", denied.stdout);
+    let own = sh_loopback(
+        &fixture,
+        "/usr/bin/nc -l 127.0.0.1 0",
+        SandboxMode::WorkspaceWrite,
+        false,
+        false,
+    )
+    .await;
+    assert_ne!(own.exit_code, Some(0), "listened without loopback");
+    drop(listener);
+}
+
+/// #1223: with the loopback switch a command serves and connects on
+/// localhost, and still reaches nothing else.
+#[tokio::test]
+async fn loopback_on_allows_localhost_but_not_external() {
+    if !available() {
+        return;
+    }
+    let fixture = fixture();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
+    let port = listener.local_addr().expect("addr").port();
+    let probe = format!("/usr/bin/nc -z -G 3 127.0.0.1 {port}");
+    let reached = sh_loopback(&fixture, &probe, SandboxMode::WorkspaceWrite, false, true).await;
+    assert_eq!(reached.exit_code, Some(0), "{}", reached.stderr);
+    drop(listener);
+
+    // Its own server and client in one command.
+    let served = sh_loopback(
+        &fixture,
+        "/usr/bin/python3 -c 'import socket; s = socket.socket(); s.bind((\"127.0.0.1\", 0)); \
+         s.listen(1); c = socket.create_connection(s.getsockname()); print(\"served\")'",
+        SandboxMode::WorkspaceWrite,
+        false,
+        true,
+    )
+    .await;
+    assert_eq!(served.exit_code, Some(0), "{}", served.stderr);
+    assert!(served.stdout.contains("served"), "{}", served.stdout);
+
+    let external = sh_loopback(
+        &fixture,
+        "/usr/bin/nc -z -G 3 1.1.1.1 443",
+        SandboxMode::WorkspaceWrite,
+        false,
+        true,
+    )
+    .await;
+    assert_ne!(external.exit_code, Some(0), "loopback reached the network");
+}
+
 /// M5: checkpoint refs and objects live in `.git`, so a sandboxed command
 /// cannot forge or rewrite a checkpoint the person would restore.
 #[tokio::test]
@@ -525,4 +600,367 @@ async fn checkpoint_refs_and_objects_are_out_of_reach() {
             .count(),
         refs_before
     );
+}
+
+/// An executable script standing in for the document sidecar.
+fn script(dir: &Path, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    let path = dir.join("fake-sidecar.sh");
+    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("script");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    path
+}
+
+fn extractor_for<'a>(
+    fixture: &'a Fixture,
+    program: &'a Path,
+    request: &'a elitea_local_tools::sandbox::SandboxRequest,
+) -> elitea_local_tools::document::SidecarExtractor<'a> {
+    elitea_local_tools::document::SidecarExtractor::new(program, request, &fixture.config.sandbox)
+}
+
+/// The sidecar's profile (read-only, network off, the session's deny list)
+/// refuses what a crafted document could ask the parser to do: read the
+/// stored sign-in, write a file, open a socket (loopback included).
+#[test]
+fn the_document_sidecar_runs_read_only_without_network_or_credentials() {
+    use elitea_doc_extract::{DocumentExtractor as _, PageRange};
+
+    if !available() {
+        return;
+    }
+    let fixture = fixture();
+    let data = fixture.config.deny_read.first().cloned().expect("data dir");
+    std::fs::create_dir_all(data.join("checkpoints")).expect("data");
+    plant(
+        &data.join("checkpoints/credentials.json"),
+        "SECRET-REFRESH-TOKEN",
+    );
+    let data = std::fs::canonicalize(data).expect("canonical");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
+    listener.set_nonblocking(true).expect("nonblocking");
+    let port = listener.local_addr().expect("addr").port();
+    let target = fixture.workspace.root().join("written-by-sidecar");
+    let program = script(
+        &fixture.outside,
+        &format!(
+            r#"cat > /dev/null
+read_out=$(cat '{creds}' 2>&1 | tr -d '"\n')
+write_out=$(touch '{target}' 2>&1 | tr -d '"\n')
+net_out=$(/usr/bin/nc -z -G 2 127.0.0.1 {port} >/dev/null 2>&1 && echo connected || echo blocked)
+printf '{{"ok":true,"extractor":"fake","page_count":1,"pages":[{{"n":1,"text":"read=%s|write=%s|net=%s"}}]}}' "$read_out" "$write_out" "$net_out""#,
+            creds = data.join("checkpoints/credentials.json").display(),
+            target = target.display(),
+        ),
+    );
+    let request = elitea_local_tools::shell::sandbox_request(
+        &fixture.workspace,
+        &fixture.config,
+        SandboxMode::ReadOnly,
+        false,
+    )
+    .expect("request");
+    let extractor = extractor_for(&fixture, &program, &request);
+    let paged = extractor
+        .extract("application/pdf", b"%PDF-1.4".to_vec(), &PageRange::ALL)
+        .expect("the fake sidecar answered");
+    let text = &paged.pages[0].text;
+    assert!(text.contains("Operation not permitted"), "{text}");
+    assert!(!text.contains("SECRET-REFRESH-TOKEN"), "{text}");
+    assert!(text.contains("net=blocked"), "{text}");
+    assert!(
+        text.contains("write=") && !target.exists(),
+        "the sidecar wrote a file: {text}"
+    );
+    assert!(
+        matches!(
+            listener.accept(),
+            Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock
+        ),
+        "the sidecar reached loopback"
+    );
+}
+
+/// A sidecar that hangs is stopped at the limit, with its process group, and
+/// one that dies without an answer is an error: neither takes the host down.
+#[test]
+fn the_document_sidecar_that_hangs_or_dies_is_an_error() {
+    use elitea_doc_extract::{DocumentExtractor as _, ExtractFailure, PageRange};
+
+    if !available() {
+        return;
+    }
+    let fixture = fixture();
+    let request = elitea_local_tools::shell::sandbox_request(
+        &fixture.workspace,
+        &fixture.config,
+        SandboxMode::ReadOnly,
+        false,
+    )
+    .expect("request");
+
+    let hang = script(&fixture.outside, "sleep 30 &\nsleep 30");
+    let started = std::time::Instant::now();
+    let slow = extractor_for(&fixture, &hang, &request)
+        .with_timeout(std::time::Duration::from_secs(1))
+        .extract("application/pdf", b"x".to_vec(), &PageRange::ALL);
+    assert!(matches!(slow, Err(ExtractFailure::Timeout(_))), "{slow:?}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+
+    let dies = script(&fixture.outside, "exit 3");
+    let crashed = extractor_for(&fixture, &dies, &request).extract(
+        "application/pdf",
+        b"x".to_vec(),
+        &PageRange::ALL,
+    );
+    assert!(
+        matches!(crashed, Err(ExtractFailure::Unreadable(_))),
+        "{crashed:?}"
+    );
+
+    let answers = script(
+        &fixture.outside,
+        r#"cat > /dev/null
+printf '{"ok":false,"error":"unsupported","message":"no"}'"#,
+    );
+    let refused = extractor_for(&fixture, &answers, &request).extract(
+        "application/pdf",
+        b"x".to_vec(),
+        &PageRange::ALL,
+    );
+    assert_eq!(refused, Err(ExtractFailure::Unsupported));
+}
+
+/// Task worktrees A and B of one repository, where the desktop puts them
+/// (under its denied data), and commands confined to A as A's session runs
+/// them: `(fixture rooted at A, the repository's top, B)`.
+fn worktree_fixture() -> (Fixture, PathBuf, PathBuf) {
+    use elitea_local_tools::git::Repo;
+    let dir = tempfile::tempdir().expect("dir");
+    let base = std::fs::canonicalize(dir.path()).expect("canonical");
+    let home = base.join("home");
+    let repo_top = base.join("repo");
+    std::fs::create_dir_all(&repo_top).expect("repo");
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .current_dir(&repo_top)
+            .args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo_top.join("a.txt"), "a\n").expect("a");
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "init"]);
+    let data = home.join("Library/Application Support/ai.elitea.desktop/workspaces/w1");
+    let worktrees = data.join("worktrees");
+    std::fs::create_dir_all(&worktrees).expect("worktrees");
+    let main = Repo::discover(
+        &repo_top,
+        &elitea_local_tools::sandbox::SandboxConfig::default(),
+        std::sync::Arc::new(elitea_local_tools::deny::DenyList::new([])),
+    )
+    .expect("discover")
+    .expect("repo");
+    let mut made = Vec::new();
+    for name in ["aaaa1111", "bbbb2222"] {
+        let created = elitea_local_tools::worktree::create(
+            &main,
+            &worktrees.join(name),
+            name,
+            &format!("elitea/{name}"),
+            "HEAD",
+        )
+        .expect("create");
+        made.push(created.entry.worktree);
+    }
+    let sibling = made.pop().expect("b");
+    let own = made.pop().expect("a");
+    let workspace = Workspace::open(&own, &[]).expect("open");
+    let mut config = ShellConfig::new(data.join("tmp/session"));
+    config.deny_read.push(data.clone());
+    // What the desktop adds for a worktree session: every task worktree of
+    // the workspace (its own is the writable root, opened again).
+    config.deny_read.push(worktrees);
+    config.home = Some(home.clone());
+    config.app_id = Some(APP_ID.to_owned());
+    (
+        Fixture {
+            outside: base.join("outside"),
+            home,
+            _dir: dir,
+            workspace,
+            config,
+        },
+        repo_top,
+        sibling,
+    )
+}
+
+/// #1235: a command in a task worktree writes its own folder, never the
+/// repository's shared objects, refs or worktree admin directories.
+#[tokio::test]
+async fn worktree_command_cannot_write_shared_refs() {
+    if !available() {
+        return;
+    }
+    let (fixture, top, _) = worktree_fixture();
+    let own = sh(
+        &fixture,
+        "echo mine > mine.txt && cat mine.txt a.txt",
+        SandboxMode::WorkspaceWrite,
+        false,
+    )
+    .await;
+    assert_eq!(own.exit_code, Some(0), "{}", own.stderr);
+    assert_eq!(own.stdout, "mine\na\n");
+    let common = top.join(".git");
+    for probe in [
+        "git update-ref refs/heads/forged HEAD".to_owned(),
+        "echo x | git hash-object -w --stdin".to_owned(),
+        format!("touch {}", quoted(&common.join("refs/heads/forged"))),
+        format!("touch {}", quoted(&common.join("objects/forged"))),
+        format!(
+            "touch {}",
+            quoted(&common.join("worktrees/aaaa1111/forged"))
+        ),
+        format!(
+            "echo x > {}",
+            quoted(&common.join("worktrees/aaaa1111/HEAD"))
+        ),
+        "echo x > .git".to_owned(),
+    ] {
+        let output = sh(&fixture, &probe, SandboxMode::WorkspaceWrite, false).await;
+        assert_ne!(output.exit_code, Some(0), "`{probe}` succeeded");
+    }
+    assert!(!common.join("refs/heads/forged").exists());
+    assert!(!common.join("objects/forged").exists());
+    assert!(!common.join("worktrees/aaaa1111/forged").exists());
+}
+
+/// #1235: a command in task worktree A cannot read worktree B, which lives
+/// beside it in the host's data.
+#[tokio::test]
+async fn worktree_command_cannot_read_sibling_worktree() {
+    if !available() {
+        return;
+    }
+    let (fixture, _, sibling) = worktree_fixture();
+    plant(&sibling.join("secret.txt"), "SIBLING-SECRET-9");
+    assert_refused(
+        &fixture,
+        &format!("cat {}", quoted(&sibling.join("secret.txt"))),
+        "SIBLING-SECRET-9",
+    )
+    .await;
+    let output = sh(
+        &fixture,
+        &format!("echo x > {}", quoted(&sibling.join("a.txt"))),
+        SandboxMode::WorkspaceWrite,
+        false,
+    )
+    .await;
+    assert_ne!(output.exit_code, Some(0), "wrote the sibling worktree");
+    assert_eq!(
+        std::fs::read_to_string(sibling.join("a.txt")).expect("a"),
+        "a\n"
+    );
+}
+
+/// #1420: what is denied inside a task worktree (a `path_deny` match, a
+/// deny-list file) stays unreadable although the worktree, which lives in
+/// the denied data, is opened again: for the worktree's own commands (its
+/// writable root) and for host git (a readable root).
+#[tokio::test]
+async fn denied_files_inside_an_opened_worktree_stay_unreadable() {
+    if !available() {
+        return;
+    }
+    let (mut fixture, _, _) = worktree_fixture();
+    let own = fixture.workspace.root().to_path_buf();
+    fixture.workspace = Workspace::open(&own, &[".env".to_owned()]).expect("open");
+    fixture.config.deny_read.push(own.join("secret.txt"));
+    plant(&own.join(".env"), "ENV-SECRET-3");
+    plant(&own.join("secret.txt"), "LISTED-SECRET-4");
+    let readable = sh(&fixture, "cat a.txt", SandboxMode::WorkspaceWrite, false).await;
+    assert_eq!(readable.exit_code, Some(0), "{}", readable.stderr);
+    assert_refused(&fixture, "cat .env", "ENV-SECRET-3").await;
+    assert_refused(&fixture, "cat secret.txt", "LISTED-SECRET-4").await;
+
+    // Host git's view: the worktree a readable root inside the denied data.
+    let data = own.parent().and_then(Path::parent).expect("data");
+    let request = elitea_local_tools::sandbox::SandboxRequest {
+        deny_paths: vec![data.to_path_buf(), own.join("secret.txt")],
+        readable_roots: vec![own.clone()],
+        ..elitea_local_tools::sandbox::SandboxRequest::new(SandboxMode::ReadOnly, false)
+    };
+    let cat = |file: &str| {
+        let prepared = elitea_local_tools::sandbox::prepare(
+            &request,
+            &["/bin/cat".to_owned(), own.join(file).display().to_string()],
+            &elitea_local_tools::sandbox::SandboxConfig::default(),
+        )
+        .expect("prepare");
+        std::process::Command::new(&prepared.program)
+            .args(&prepared.args)
+            .output()
+            .expect("run")
+    };
+    let opened = cat("a.txt");
+    assert!(opened.status.success(), "{opened:?}");
+    let denied = cat("secret.txt");
+    assert!(!denied.status.success(), "read the denied file");
+    assert!(!String::from_utf8_lossy(&denied.stdout).contains("LISTED-SECRET-4"));
+}
+
+/// A hook (#1237) runs under the same sandbox as a command: it cannot read
+/// the credentials under the home or the session's data, whatever its
+/// sandbox mode, and its environment is built from nothing.
+#[tokio::test]
+async fn hook_process_cannot_read_credentials() {
+    use elitea_local_tools::hooks::{
+        Hook, HookCall, HookEnv, HookEvent, HookSet, RunResult, Scope,
+    };
+    use elitea_local_tools::policy::LocalWorkPolicy;
+
+    if !available() {
+        return;
+    }
+    let fixture = fixture();
+    plant(&fixture.home.join(".ssh/id_ed25519"), "hook-secret-key");
+    let probe = format!(
+        "cat {}/.ssh/id_ed25519; echo exit=$?; env",
+        quoted(&fixture.home)
+    );
+    let mut hook = Hook::new(
+        "probe",
+        HookEvent::Stop,
+        vec!["/bin/sh".to_owned(), "-c".to_owned(), probe],
+    );
+    hook.sandbox = SandboxMode::WorkspaceWrite;
+    let hooks = HookSet::new();
+    hooks.configure(vec![(Scope::User, hook)]);
+    let policy = LocalWorkPolicy {
+        allowed: true,
+        shell: true,
+        max_sandbox_mode: SandboxMode::WorkspaceWrite,
+        ..LocalWorkPolicy::default()
+    };
+    let env = HookEnv {
+        workspace: &fixture.workspace,
+        shell: &fixture.config,
+        policy: &policy,
+        session_id: "s1",
+        conversation: None,
+    };
+    let outcome = hooks.run(&env, HookCall::event(HookEvent::Stop)).await;
+    assert_eq!(outcome.runs[0].result, RunResult::Annotated, "{outcome:?}");
+    let text = &outcome.annotations[0].1;
+    assert!(!text.contains("hook-secret-key"), "{text}");
+    assert!(!text.contains("exit=0"), "{text}");
+    assert!(text.contains("ELITEA_HOOK_ID=probe"), "{text}");
+    assert!(!text.contains("CARGO_MANIFEST_DIR"), "{text}");
 }

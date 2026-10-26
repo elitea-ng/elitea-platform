@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/elitea-ng/elitea-platform/libs/go/observability"
+	"github.com/elitea-ng/elitea-platform/libs/go/routines"
 	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/auditretention"
 	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/authstateretention"
 	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/budgetwriteback"
@@ -75,6 +77,10 @@ func main() {
 	// and with it went this daemon's only use of Redis.
 	maintenanceSwitch := maintenance.New(pool)
 
+	// The operator registry (#1369): every worker below runs through it, so an
+	// administrator can switch one off or change its schedule without a restart.
+	routineStore := routines.NewStore(pool)
+
 	// Health server
 	writeBackStatus := budgetwriteback.NewStatus()
 	mux := newHealthMux(health.New(pool), writeBackStatus)
@@ -108,7 +114,9 @@ func main() {
 			syncer := pricesync.NewSyncer(pricesync.NewPoolDB(pool), sources, logger)
 			worker := pricesync.NewWorker(syncer, cfg.PriceSyncInterval, logger)
 			slog.Info("starting price-sync worker", "interval", cfg.PriceSyncInterval, "sources", len(sources))
-			go worker.Run(ctx)
+			go runRoutine(ctx, routineStore, logger, "scheduler.price_sync",
+				"Refreshes the model price catalogue from the configured sources.",
+				cfg.PriceSyncInterval, time.Minute, worker.Pass)
 		}
 	}
 
@@ -143,7 +151,9 @@ func main() {
 	default:
 		slog.Info("starting audit retention sweeper",
 			"window_days", cfg.AuditRetentionDays, "interval", cfg.AuditRetentionInterval)
-		go auditSweeper.Run(ctx)
+		go runRoutine(ctx, routineStore, logger, "scheduler.audit_retention",
+			"Deletes audit events older than the retention window.",
+			cfg.AuditRetentionInterval, time.Minute, auditSweeper.Pass)
 	}
 
 	// Incremental-sync tombstone retention (ADR-0025 WP6, elitea-main tenant
@@ -160,7 +170,9 @@ func main() {
 			slog.Warn("SYNC_TOMBSTONE_RETENTION_DAYS is below the cursor window elitea-main serves; raised to the floor",
 				"configured_days", cfg.SyncTombstoneRetentionDays, "floor_days", syncretention.MinimumRetentionDays)
 		}
-		go syncSweeper.Run(ctx)
+		go runRoutine(ctx, routineStore, logger, "scheduler.sync_tombstone_retention",
+			"Deletes incremental-sync tombstones older than the cursor window.",
+			syncretention.DefaultInterval, time.Minute, syncSweeper.Pass)
 	}
 
 	// Native authorization retention (ADR-0025 WP2, elitea-main shared 0141):
@@ -173,7 +185,9 @@ func main() {
 	if nativeSweeper, nativeErr := nativeauthretention.New(pool, nativeauthretention.Config{}, logger); nativeErr != nil {
 		slog.Error("native auth retention sweep did not start", "err", nativeErr)
 	} else {
-		go nativeSweeper.Run(ctx)
+		go runRoutine(ctx, routineStore, logger, "scheduler.native_auth_retention",
+			"Deletes expired native authorization tokens, requests and idle token families.",
+			nativeauthretention.DefaultInterval, time.Minute, nativeSweeper.Pass)
 	}
 
 	// Browser sign-in state retention (elitea-main shared 0153 and 0117):
@@ -188,7 +202,9 @@ func main() {
 		slog.Error("auth state retention sweep did not start; the sign-in state tables grow without bound",
 			"err", authStateErr)
 	} else {
-		go authStateSweeper.Run(ctx)
+		go runRoutine(ctx, routineStore, logger, "scheduler.auth_state_retention",
+			"Deletes expired browser sign-in sessions, login transactions and attempt windows.",
+			authstateretention.DefaultInterval, time.Minute, authStateSweeper.Pass)
 	}
 
 	// Budget write-back consumer (design §8.6): drains GATEWAY_BUDGET_DELTAS
@@ -259,4 +275,41 @@ func newHealthMux(healthz, writeBackStatus http.Handler) *http.ServeMux {
 	mux.Handle("/readyz/budget-writeback", writeBackStatus)
 	mux.Handle("/metrics", budgetwriteback.MetricsHandler())
 	return mux
+}
+
+// runRoutine runs one worker on the schedule the routine registry holds. def is
+// the worker's code/env default; an operator's override wins over it.
+func runRoutine(
+	ctx context.Context,
+	store routines.Backend,
+	logger *slog.Logger,
+	id, description string,
+	defaultInterval, minInterval time.Duration,
+	pass routines.Pass,
+) {
+	loop := &routines.Loop{
+		Backend: store,
+		Def: routines.Definition{
+			ID:              id,
+			Owner:           routines.OwnerScheduler,
+			Description:     description,
+			DefaultSchedule: intervalText(defaultInterval),
+			MinInterval:     minInterval,
+		},
+		Logger: logger,
+	}
+	loop.Run(ctx, pass)
+}
+
+// intervalText renders a duration the way an operator writes one: "1h", not
+// "1h0m0s".
+func intervalText(d time.Duration) string {
+	text := d.String()
+	if strings.HasSuffix(text, "m0s") {
+		text = strings.TrimSuffix(text, "0s")
+	}
+	if strings.HasSuffix(text, "h0m") {
+		text = strings.TrimSuffix(text, "0m")
+	}
+	return text
 }

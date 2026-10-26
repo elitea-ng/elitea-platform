@@ -996,6 +996,15 @@ pub fn forget_conversation_outputs(data_dir: &Path, session_id: &str, conversati
     SpillStore::new(data_dir, session_id).forget_conversation(conversation);
 }
 
+/// How many bytes of `text` [`spill_over`] shows of it within `max_bytes`.
+pub(crate) fn shown_len(text: &str, max_bytes: usize) -> usize {
+    if text.len() <= max_bytes {
+        text.len()
+    } else {
+        head(text, max_bytes.saturating_sub(MARKER_ROOM)).len()
+    }
+}
+
 /// `text` within `max_bytes`: unchanged when it fits; else its head, the
 /// whole spilled. The shown text, the output id, and whether it was cut.
 pub(crate) fn spill_over(
@@ -1122,6 +1131,7 @@ mod tests {
             &ReadLedger::new(),
             json!({ "path": "big.txt" }),
             budget,
+            false,
         )
         .expect("read");
         let content = read["content"].as_str().expect("content");
@@ -1140,6 +1150,7 @@ mod tests {
             &ReadLedger::new(),
             json!({ "path": "big.txt", "offset": next }),
             budget,
+            false,
         )
         .expect("page");
         assert_eq!(again["start_line"].as_u64(), Some(next));
@@ -1206,6 +1217,7 @@ mod tests {
                     &ReadLedger::new(),
                     json!({ "path": "one.txt", "offset": offset, "column": column }),
                     budget,
+                    false,
                 )
                 .expect("read")
             },

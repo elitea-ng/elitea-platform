@@ -1,6 +1,7 @@
 package configurations
 
 import (
+	"encoding/json"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,6 +46,15 @@ type CurrentModelCatalogItem struct {
 	HighTier              *bool `json:"high_tier,omitempty"`
 	OpenAICompatible      *bool `json:"openai_compatible,omitempty"`
 	Default               bool  `json:"default"`
+
+	// The price fields are the gateway's own catalogue price for this model
+	// (model_prices.go), served on section=llm items only and only to a caller
+	// who may see amounts. Every one is absent when the price is unknown, so
+	// an unpriced item keeps the shape it had before they existed.
+	InputCostPer1MTokens       *json.Number `json:"input_cost_per_1m_tokens,omitempty"`
+	OutputCostPer1MTokens      *json.Number `json:"output_cost_per_1m_tokens,omitempty"`
+	CachedInputCostPer1MTokens *json.Number `json:"cached_input_cost_per_1m_tokens,omitempty"`
+	Currency                   *string      `json:"currency,omitempty"`
 
 	// Grant is the row's platform GRANT SCOPE, read off its `data` object by
 	// the adapter (model_grant.go). It never reaches the wire: it is the rule

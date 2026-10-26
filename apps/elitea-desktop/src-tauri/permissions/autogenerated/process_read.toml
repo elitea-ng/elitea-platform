@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-process-read"
+description = "Enables the process_read command without any pre-configured scope."
+commands.allow = ["process_read"]
+
+[[permission]]
+identifier = "deny-process-read"
+description = "Denies the process_read command without any pre-configured scope."
+commands.deny = ["process_read"]

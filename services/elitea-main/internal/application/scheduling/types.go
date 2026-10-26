@@ -90,6 +90,15 @@ type Job struct {
 	Schedule Schedule
 	Timeout  time.Duration
 	Handler  Handler
+
+	// Description, Cadence and MinInterval describe the job to the operator
+	// registry (see Controls). Cadence is the text of Schedule: a registry row
+	// shows and edits text, and Schedule alone cannot be printed. A job with an
+	// empty Cadence is not offered to the registry and keeps running on its
+	// code schedule.
+	Description string
+	Cadence     string
+	MinInterval time.Duration
 }
 
 func (j Job) validate(leaseDuration time.Duration) error {
@@ -172,6 +181,10 @@ type Store interface {
 		[]OccurrenceSeed,
 		time.Time,
 	) error
+	// DisableAndAdvance supersedes the job's pending occurrences that no
+	// replica holds a live lease on and advances the cursor to the supplied
+	// time, under the same fence as MaterializeAndAdvance.
+	DisableAndAdvance(context.Context, PlanningClaim, time.Time) error
 	ClaimPage(
 		context.Context,
 		[]RegisteredJob,
@@ -182,6 +195,38 @@ type Store interface {
 	) ([]ClaimedOccurrence, error)
 	Complete(context.Context, ClaimedOccurrence, Outcome) error
 	ReleaseForRetry(context.Context, ClaimedOccurrence, string, time.Duration) error
+}
+
+// Control is an operator's standing instruction for one job.
+type Control struct {
+	// Enabled false stops the job from being planned or claimed.
+	Enabled bool
+	// Schedule replaces the job's registered schedule when non-nil.
+	Schedule Schedule
+	// NextRunAt is the next run the registry shows, so the runner rewrites it
+	// only when it changes.
+	NextRunAt *time.Time
+}
+
+// RoutineReport is what a runner tells the registry after a tick. Zero fields
+// are not written.
+type RoutineReport struct {
+	JobID string
+	// NextRunAt is the job's next planned occurrence, for display.
+	NextRunAt time.Time
+	// RanAt and Outcome describe a finished occurrence.
+	RanAt   time.Time
+	Outcome string
+}
+
+// Controls is the operator registry (issue #1369) a Runner consults. Register
+// is called with every job that has a Cadence; Resolve returns the standing
+// instruction per job id; Report records what happened. A job the registry
+// does not know yet resolves as enabled on its code schedule.
+type Controls interface {
+	Register(context.Context, []Job) error
+	Resolve(context.Context) (map[string]Control, error)
+	Report(context.Context, RoutineReport) error
 }
 
 // Config owns all scheduler resource bounds.

@@ -30,6 +30,24 @@ type CurrentModelCatalogReader interface {
 
 var _ CurrentModelCatalogReader = (*configurationapp.CurrentModelCatalogService)(nil)
 
+// ModelPriceReader resolves the gateway catalogue price of each named model for
+// a caller, keyed by catalogue name. It applies the budget routes'
+// can_see_amounts rule itself: a caller who may not see amounts for the project
+// gets no prices, and a name it cannot price unambiguously is absent.
+type ModelPriceReader interface {
+	ModelPrices(ctx context.Context, projectID, userID int64, names []string) (map[string]configurationapp.ModelPrice, error)
+}
+
+// CurrentModelCatalogOption configures optional route dependencies.
+type CurrentModelCatalogOption func(*currentModelCatalogHandler)
+
+// WithModelPrices serves section=llm items with their gateway price to a
+// caller who may see amounts. Without it (or with a nil reader) no item
+// carries a price.
+func WithModelPrices(prices ModelPriceReader) CurrentModelCatalogOption {
+	return func(handler *currentModelCatalogHandler) { handler.prices = prices }
+}
+
 // CurrentModelCatalogRoute preserves the current GET wire contract while
 // correcting the current endpoint's missing explicit authorization decorator.
 // configurations.configurations.list is already granted to the normal
@@ -43,6 +61,7 @@ func NewCurrentModelCatalogRoute(
 	publicProjectID int32,
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
+	options ...CurrentModelCatalogOption,
 ) (*CurrentModelCatalogRoute, error) {
 	if reader == nil || publicProjectID <= 0 ||
 		!authConfig.CredentialPlaneComposed() || permissions == nil {
@@ -52,6 +71,11 @@ func NewCurrentModelCatalogRoute(
 	handler := &currentModelCatalogHandler{
 		reader:          reader,
 		publicProjectID: publicProjectID,
+	}
+	for _, option := range options {
+		if option != nil {
+			option(handler)
+		}
 	}
 	route := http.Handler(http.HandlerFunc(handler.get))
 	route = apimw.RequireResolvedPermissionsForProject(
@@ -78,6 +102,7 @@ func (route *CurrentModelCatalogRoute) ServeHTTP(w http.ResponseWriter, r *http.
 type currentModelCatalogHandler struct {
 	reader          CurrentModelCatalogReader
 	publicProjectID int32
+	prices          ModelPriceReader
 }
 
 func (h *currentModelCatalogHandler) get(w http.ResponseWriter, r *http.Request) {
@@ -120,5 +145,39 @@ func (h *currentModelCatalogHandler) get(w http.ResponseWriter, r *http.Request)
 		}
 		return
 	}
+	if modelSection == configurationapp.CurrentModelSectionLLM {
+		h.applyPrices(r, projectID, response.Items)
+	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+// applyPrices stamps the gateway price onto the llm items a caller who may see
+// amounts is served. It never fails the catalogue: this is the model picker's
+// read (#293), and a price is an annotation on it, so a failed price or
+// visibility read is logged and the items are served unpriced.
+func (h *currentModelCatalogHandler) applyPrices(
+	r *http.Request, projectID int32, items []configurationapp.CurrentModelCatalogItem,
+) {
+	if h.prices == nil || len(items) == 0 {
+		return
+	}
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		return
+	}
+	userID, ok := user.OwningUserID()
+	if !ok {
+		return
+	}
+	names := make([]string, 0, len(items))
+	for _, item := range items {
+		names = append(names, item.Name)
+	}
+	prices, err := h.prices.ModelPrices(r.Context(), int64(projectID), userID, names)
+	if err != nil {
+		slog.WarnContext(r.Context(), "model catalog price read failed; serving unpriced",
+			"project_id", projectID, "error", err)
+		return
+	}
+	configurationapp.ApplyModelPrices(items, prices)
 }

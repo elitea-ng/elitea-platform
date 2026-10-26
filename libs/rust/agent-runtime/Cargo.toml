@@ -60,6 +60,9 @@ async-trait = "0.1.92"
 base64 = "0.23.1"
 bytes = "1.12.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde"] }
+# The `web` family's direct fetch dials through the Rust twin of Main's
+# egress guard (#1238).
+elitea-egress-guard = { path = "../egress-guard" }
 # The provider clients the toolkit families share with the indexing
 # connectors (ADR-0030 decision 3), over this crate's reqwest 0.12 (rustls on
 # ring): the connectors crate names no TLS stack of its own.

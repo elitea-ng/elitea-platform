@@ -49,6 +49,7 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 
 import { UsageWindowSelect } from './LlmProxyModelsPanel';
+import { meteredRowLabel, meteredUnitsLabel } from './meteredToolLabels';
 import {
   useAdminLlmUsage,
   type LlmUsageDay,
@@ -232,19 +233,26 @@ function UsageBreakdown({
               </TableRow>
             </TableHead>
             <TableBody>
-              {rows.map((row) => (
-                <TableRow key={row.key}>
-                  <TableCell>{row.label}</TableCell>
-                  <TableCell>
-                    <Typography variant="bodySmall" color="text.secondary">
-                      {row.detail}
-                    </Typography>
-                  </TableCell>
-                  <TableCell align="right">{countLabel(row.requests)}</TableCell>
-                  <TableCell align="right">{countLabel(row.total_tokens)}</TableCell>
-                  <TableCell align="right">{costLabel(row.cost_usd)}</TableCell>
-                </TableRow>
-              ))}
+              {rows.map((row) => {
+                // A metered tool row has no tokens: it is labelled as the
+                // tool and shows the units it was billed in.
+                const tool = row.operation === 'tool';
+                return (
+                  <TableRow key={row.key} data-operation={row.operation}>
+                    <TableCell>{tool ? meteredRowLabel(row.label, row.detail) : row.label}</TableCell>
+                    <TableCell>
+                      <Typography variant="bodySmall" color="text.secondary">
+                        {row.detail}
+                      </Typography>
+                    </TableCell>
+                    <TableCell align="right">{countLabel(row.requests)}</TableCell>
+                    <TableCell align="right">
+                      {tool ? meteredUnitsLabel(row.units ?? 0, row.unit) : countLabel(row.total_tokens)}
+                    </TableCell>
+                    <TableCell align="right">{costLabel(row.cost_usd)}</TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </TableContainer>

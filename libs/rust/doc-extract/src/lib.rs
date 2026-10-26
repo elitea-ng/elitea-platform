@@ -21,6 +21,13 @@
 //! Code is text here; its structure is the code parsers' job, not this
 //! crate's.
 
+mod paged;
+pub mod wire;
+
+pub use paged::{
+    DocumentExtractor, ExtractFailure, InProcessExtractor, Page, PageRange, PagedText,
+};
+
 use elitea_content_source::is_text;
 #[cfg(feature = "html")]
 use std::sync::{Arc, Condvar, Mutex, mpsc};
@@ -514,8 +521,8 @@ mod documents {
 
 #[cfg(feature = "documents")]
 pub use documents::{
-    DocumentError, DocumentLimits, DocumentText, EXTRACTION_STACK_BYTES, EmbeddedImage,
-    ImageLimits, ImagesSkipped, MEDIA_WORK_FACTOR, PDF_PICTURE_MAX_INPUT_BYTES,
+    DocumentError, DocumentLimits, DocumentPage, DocumentText, EXTRACTION_STACK_BYTES,
+    EmbeddedImage, ImageLimits, ImagesSkipped, MEDIA_WORK_FACTOR, PDF_PICTURE_MAX_INPUT_BYTES,
     PDF_PICTURE_MAX_PAGES, PDF_PICTURE_MAX_TEXT_BYTES, PDF_PICTURES_PER_PAGE, cooperative_timeout,
     extract_document, extract_document_on_this_thread,
 };
@@ -585,6 +592,10 @@ mod documents {
         /// extraction is then exactly what it was before pictures were
         /// asked for, and no picture is read.
         pub images: Option<ImageLimits>,
+        /// Return each page's (slide's, sheet's) text apart in
+        /// [`DocumentText::pages`] as well as the whole in
+        /// [`DocumentText::text`]. Off (the default): `pages` is empty.
+        pub pages: bool,
     }
 
     impl Default for DocumentLimits {
@@ -594,6 +605,7 @@ mod documents {
                 max_content_bytes: MAX_CONTENT_BYTES,
                 timeout: Duration::from_secs(TIMEOUT_SECONDS),
                 images: None,
+                pages: false,
             }
         }
     }
@@ -659,6 +671,18 @@ mod documents {
         /// [`DocumentLimits::images`] asked for them.
         pub images: Vec<EmbeddedImage>,
         pub images_skipped: ImagesSkipped,
+        /// The text of each page the parser found, in order, when
+        /// [`DocumentLimits::pages`] asked for them. Empty when the format
+        /// has no pages (the whole is [`Self::text`]).
+        pub pages: Vec<DocumentPage>,
+    }
+
+    /// One page's text of a paged document.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct DocumentPage {
+        /// 1-based, as the parser numbers it.
+        pub number: u32,
+        pub text: String,
     }
 
     /// Why a document gave no text. Each variant is a reason a caller can
@@ -813,6 +837,13 @@ mod documents {
         let mut per_page = None;
         let mut pdf_probe = false;
         let mut config = base(limits.timeout);
+        if limits.pages {
+            config.pages = Some(xberg::PageConfig {
+                extract_pages: true,
+                insert_page_markers: false,
+                ..xberg::PageConfig::default()
+            });
+        }
         if let Some(images) = &limits.images {
             match picture_work(mime, &bytes, images) {
                 // A PDF's page count is not known before it is read: a first
@@ -852,11 +883,25 @@ mod documents {
                     if document.content.trim().is_empty() && images.is_empty() {
                         return Err(DocumentError::NoText);
                     }
+                    let pages = if limits.pages {
+                        document
+                            .pages
+                            .iter()
+                            .flatten()
+                            .map(|page| DocumentPage {
+                                number: page.page_number,
+                                text: page.content.clone(),
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
                     Ok(DocumentText {
                         text: document.content,
                         extractor: "xberg",
                         images,
                         images_skipped,
+                        pages,
                     })
                 }
                 None => Err(DocumentError::NoText),

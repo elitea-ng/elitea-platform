@@ -19,6 +19,10 @@ export interface WorkspaceThread {
   title: string;
   /** Epoch ms of the last turn started in it. */
   updatedAt: number;
+  /** A rewound thread's source: the id of the thread it was rewound into, listed under it as the earlier attempt. */
+  earlierAttemptOf?: string;
+  /** The title is the conversation's own name (generated, renamed, or read back from the server): it is not generated again. */
+  named?: boolean;
 }
 
 export interface LastLocation {
@@ -29,13 +33,22 @@ export interface LastLocation {
 
 const MAX_THREADS = 50;
 const MAX_TITLE = 80;
+/** The longest name a rename (and so a thread's title from the server) has. */
+const MAX_NAME = 256;
 const threadsKey = (workspaceId: string): string => `desktop.workspace.${workspaceId}.threads`;
 const LAST_LOCATION_KEY = 'desktop.lastLocation';
 
 function isThread(raw: unknown): raw is WorkspaceThread {
   if (typeof raw !== 'object' || raw === null) return false;
-  const { id, title, updatedAt } = raw as Record<string, unknown>;
-  return typeof id === 'string' && id !== '' && typeof title === 'string' && typeof updatedAt === 'number';
+  const { id, title, updatedAt, earlierAttemptOf, named } = raw as Record<string, unknown>;
+  return (
+    typeof id === 'string' &&
+    id !== '' &&
+    typeof title === 'string' &&
+    typeof updatedAt === 'number' &&
+    (earlierAttemptOf === undefined || typeof earlierAttemptOf === 'string') &&
+    (named === undefined || typeof named === 'boolean')
+  );
 }
 
 function validThreads(raw: unknown): WorkspaceThread[] {
@@ -52,14 +65,42 @@ export function readThreads(workspaceId: string): WorkspaceThread[] {
   }
 }
 
-/** Puts `thread` first (new, or moved up with its new title/time); keeps the newest `MAX_THREADS`. */
-export function recordThread(workspaceId: string, thread: WorkspaceThread): WorkspaceThread[] {
+/** Where `thread` goes in `list`: first, or (a rewind) in its source's place with the source right under it. */
+function placed(list: readonly WorkspaceThread[], thread: WorkspaceThread, rewoundFrom: string | undefined): WorkspaceThread[] {
+  const others = list.filter((t) => t.id !== thread.id);
+  const at = rewoundFrom === undefined ? -1 : others.findIndex((t) => t.id === rewoundFrom);
+  if (at < 0) return [thread, ...others];
+  // The source's own earlier attempts move with it, under the new thread.
+  const source = others[at] as WorkspaceThread;
+  const attempts = others.filter((t) => t.earlierAttemptOf === source.id);
+  const rest = others.filter((t, index) => index !== at && t.earlierAttemptOf !== source.id);
+  rest.splice(Math.min(at, rest.length), 0, thread, { ...source, earlierAttemptOf: thread.id }, ...attempts.map((t) => ({ ...t, earlierAttemptOf: thread.id })));
+  return rest;
+}
+
+/**
+ * Puts `thread` first (new, or moved up with its new title/time); keeps the newest `MAX_THREADS`. With
+ * `rewoundFrom` (a rewind), the new thread takes its source's place and the source is listed under it as the
+ * earlier attempt.
+ */
+export function recordThread(workspaceId: string, thread: WorkspaceThread, rewoundFrom?: string): WorkspaceThread[] {
   const title = thread.title.trim().slice(0, MAX_TITLE);
-  const next = [{ ...thread, title }, ...readThreads(workspaceId).filter((t) => t.id !== thread.id)].slice(0, MAX_THREADS);
+  const next = placed(readThreads(workspaceId), { ...thread, title }, rewoundFrom).slice(0, MAX_THREADS);
   try {
     createStorage('local').setJSON(threadsKey(workspaceId), next);
   } catch {
     // Storage unavailable: the thread is simply not remembered.
+  }
+  return next;
+}
+
+/** Gives thread `id` the conversation's name `title` in place (its place and time stay); marks it named. */
+export function renameThread(workspaceId: string, id: string, title: string): WorkspaceThread[] {
+  const next = readThreads(workspaceId).map((thread) => (thread.id === id ? { ...thread, title: title.trim().slice(0, MAX_NAME), named: true } : thread));
+  try {
+    createStorage('local').setJSON(threadsKey(workspaceId), next);
+  } catch {
+    // Storage unavailable: the name shows again after the next read from the server.
   }
   return next;
 }

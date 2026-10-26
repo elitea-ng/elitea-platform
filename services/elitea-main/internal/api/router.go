@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"github.com/elitea-ng/elitea-platform/libs/go/routines"
 	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/emailsettings"
 	"net/http"
@@ -55,7 +56,6 @@ import (
 	v2projectinfo "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
 	v2projects "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/projects"
 	v2promptcontextreads "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
-	v2scheduling "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/scheduling"
 	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/sharedchat"
 	v2skillpublish "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skillpublish"
@@ -619,6 +619,11 @@ type RouterConfig struct {
 	// case. Composed wherever a database is configured; 501 where no toolkit
 	// worker is.
 	CurrentRemoteToolkit http.Handler
+	// CurrentChildTurns serves startLocalChildTurn and readLocalChildTurn
+	// (issue 1239): a desktop local turn's nested agent run as a cloud
+	// child. Composed wherever a database is configured; 501 where no agent
+	// plane is.
+	CurrentChildTurns http.Handler
 	// PlatformMCPTools is the bridge CurrentRemoteToolkit runs a platform MCP
 	// server's tool through (issue 1231); the router binds it to the MCP
 	// server it builds (mountMCPServerRoutes). Nil when not composed.
@@ -1886,7 +1891,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			WithReasoningModels(defaults).
 			WithEvents(cfg.DomainEvents).
 			WithReadEvents(cfg.ConversationActivity).
-			WithAttachmentExtractionWarmer(cfg.AttachmentExtractionWarmer)
+			WithAttachmentExtractionWarmer(cfg.AttachmentExtractionWarmer).
+			WithNamer(conversationNamer(cfg.PredictCompleter))
 		if cfg.Pool != nil {
 			convHandler.WithParticipantCandidates(dbrepos.NewParticipantCandidatesRepo(cfg.Pool))
 		}
@@ -2152,6 +2158,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						runs: dbrepos.NewEvalRunsRepo(cfg.Pool),
 					}),
 				)
+			}
+			if cfg.Pool != nil {
+				adminOptions = append(adminOptions,
+					admin.WithPlatformRoutines(routines.NewStore(cfg.Pool)))
 			}
 			adminHandler := admin.NewHandler(
 				cfg.Pool,
@@ -2627,6 +2637,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					adminHandler.RunPATExpiryNotices,
 				)
 
+				// Admin › Schedules — the recurring routines the platform runs
+				// (#1369). Gated on the permission pair the screen has always
+				// declared; static `administration` segment as above.
+				r.With(central("configuration.scheduling.schedules.view")).
+					Get("/platform_routines/administration", adminHandler.PlatformRoutines)
+				r.With(central("configuration.scheduling.schedules.edit")).
+					Put("/platform_routines/administration/{id}", adminHandler.UpdatePlatformRoutine)
+
 				// Regular app admin endpoints (with projectID)
 				//
 				// #130: POST/PUT/DELETE used to be mounted onto coreHandler.Users
@@ -2939,45 +2957,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					})
 				})
 			})
-
-			// === Scheduling ===
-			//
-			// The platform cron table (unit A14). The PUT had no route at all
-			// until this unit, so the admin Schedules tab's active switch and
-			// inline cron editor had nothing behind them; the GET had a route
-			// but read pipeline-trigger metadata out of the tenant schema and
-			// short-circuited on the `projectID=0` the admin page sends. See
-			// internal/api/v2/scheduling/schedules.go.
-			//
-			// Gated on the permissions the legacy runtime declares for the same handlers
-			// (legacy/plugins/scheduling/api/v2/schedules.py):
-			// `configuration.scheduling.schedules.view` and `…edit`.
-			//
-			// Registered as two pairs because the GATE differs, not the
-			// handler — the same split the admin user writes needed above.
-			// `legacyrbac.PostgresResolver` answers the `{mode}` routes purely
-			// from the caller's membership OF THAT PROJECT, and an operator
-			// disabling a PLATFORM job (`project_id IS NULL`) is a member of no
-			// project at all, so a project-scoped resolver would refuse every
-			// legitimate admin caller. The `administration` segment is STATIC so
-			// chi's trie prefers it, leaving the project routes untouched.
-			schedulingHandler := v2scheduling.NewHandler(cfg.Pool)
-			r.With(apimw.RequireCentralPermissions(
-				permissionResolver, platformauth.PermissionModeAdministration,
-				"configuration.scheduling.schedules.view",
-			)).Get("/scheduling/schedules/administration/{projectID}", schedulingHandler.AdministrationSchedules)
-			r.With(apimw.RequireCentralPermissions(
-				permissionResolver, platformauth.PermissionModeAdministration,
-				"configuration.scheduling.schedules.edit",
-			)).Put("/scheduling/schedules/administration/{projectID}", schedulingHandler.AdministrationSchedulesUpdate)
-			r.With(apimw.RequireResolvedPermissions(
-				permissionResolver, platformauth.PermissionModeDefault,
-				"configuration.scheduling.schedules.view",
-			)).Get("/scheduling/schedules/{mode}/{projectID}", schedulingHandler.Schedules)
-			r.With(apimw.RequireResolvedPermissions(
-				permissionResolver, platformauth.PermissionModeDefault,
-				"configuration.scheduling.schedules.edit",
-			)).Put("/scheduling/schedules/{mode}/{projectID}", schedulingHandler.SchedulesUpdate)
 
 			// === Configurations ===
 			//
@@ -3646,6 +3625,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Get("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Get)
 					r.With(projectPermission("models.chat.conversation.update")).
 						Put("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Update)
+					// A title from the first exchange (the project's default
+					// model): a rename, under the rename's permission. It
+					// renames only a name the client still states as its own.
+					r.With(projectPermission("models.chat.conversation.update")).
+						Post("/conversation_name/prompt_lib/{projectID}/{conversationID}", convHandler.GenerateName)
 					// Client contract 1.15: `meta.internal_tools` alone, in one
 					// statement, under the PUT's permission (internal_tools.go).
 					r.With(projectPermission("models.chat.conversation.update")).
@@ -5069,6 +5053,39 @@ func configurationSecretSealer(pool *pgxpool.Pool) v2configs.SecretSealer {
 		return nil
 	}
 	return sealer
+}
+
+// conversationNamer adapts the shared predict completer to the
+// conversations package's NameCompleter (POST /conversation_name). A nil
+// completer answers nil: the route then answers 503.
+func conversationNamer(completer v2predict.Completer) v2convs.NameCompleter {
+	if completer == nil {
+		return nil
+	}
+	return conversationNameCompleter{completer: completer}
+}
+
+// conversationNameCompleter names a conversation through the shared predict
+// completer: the project's default model, the caller's identity and budget.
+type conversationNameCompleter struct {
+	completer v2predict.Completer
+}
+
+func (c conversationNameCompleter) Complete(ctx context.Context, request v2convs.NameRequest) (string, error) {
+	// A title is a few words: a low temperature keeps it plain, and the
+	// output cap bounds what one naming call can cost.
+	temperature := 0.2
+	maxTokens := 40
+	return c.completer.Complete(ctx, v2predict.CompletionRequest{
+		ProjectID: request.ProjectID,
+		UserID:    request.UserID,
+		Messages: []v2predict.Message{
+			{Role: "system", Content: request.System},
+			{Role: "user", Content: request.User},
+		},
+		Temperature: &temperature,
+		MaxTokens:   &maxTokens,
+	})
 }
 
 // publishAIValidator adapts the predict gateway hop onto the four fields the

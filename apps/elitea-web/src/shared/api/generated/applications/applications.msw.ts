@@ -4054,256 +4054,8 @@ export const getValidateApplicationVersionResponseMock = (
   ...overrideResponse,
 });
 
-export const getExportApplicationResponseMock = (
-  overrideResponse: Partial<Extract<ApplicationExportResponse, object>> = {},
-): ApplicationExportResponse => ({
-  ok: faker.datatype.boolean(),
-  applications: Array.from(
-    { length: faker.number.int({ min: 1, max: 10 }) },
-    (_, i) => i + 1,
-  ).map(() => ({
-    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    description: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    type: faker.helpers.arrayElement(["agent", "pipeline"] as const),
-    import_uuid: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    versions: Array.from(
-      { length: faker.number.int({ min: 1, max: 10 }) },
-      (_, i) => i + 1,
-    ).map(() => ({
-      id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      status: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      application_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      author_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      agent_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      instructions: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      welcome_message: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      llm_settings: {
-        model_name: faker.helpers.arrayElement([
-          faker.string.alpha({ length: { min: 10, max: 20 } }),
-          undefined,
-        ]),
-        model_project_id: faker.helpers.arrayElement([
-          faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            faker.number.int(),
-          ]),
-          undefined,
-        ]),
-        temperature: faker.helpers.arrayElement([
-          faker.number.float({ fractionDigits: 2 }),
-          undefined,
-        ]),
-        max_tokens: faker.helpers.arrayElement([faker.number.int(), undefined]),
-        top_p: faker.helpers.arrayElement([
-          faker.number.float({ fractionDigits: 2 }),
-          undefined,
-        ]),
-        reasoning_effort: faker.helpers.arrayElement([
-          faker.string.alpha({ length: { min: 10, max: 20 } }),
-          undefined,
-        ]),
-      },
-      conversation_starters: Array.from(
-        { length: faker.number.int({ min: 1, max: 10 }) },
-        (_, i) => i + 1,
-      ).map(() => ({})),
-      meta: {
-        ...{
-          step_limit: faker.helpers.arrayElement([
-            faker.helpers.arrayElement([faker.number.int(), null]),
-            undefined,
-          ]),
-          icon_meta: faker.helpers.arrayElement([{}, undefined]),
-          category: faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            undefined,
-          ]),
-          source_version_id: faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            undefined,
-          ]),
-          parent_entity_id: faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            undefined,
-          ]),
-          parent_project_id: faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            undefined,
-          ]),
-          parent_author_id: faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            undefined,
-          ]),
-          variables: faker.helpers.arrayElement([
-            Array.from(
-              { length: faker.number.int({ min: 1, max: 10 }) },
-              (_, i) => i + 1,
-            ).map(() => ({
-              name: faker.helpers.arrayElement([
-                faker.helpers.arrayElement([
-                  faker.string.alpha({ length: { min: 10, max: 20 } }),
-                  null,
-                ]),
-                undefined,
-              ]),
-              value: faker.helpers.arrayElement([
-                faker.helpers.arrayElement([
-                  faker.string.alpha({ length: { min: 10, max: 20 } }),
-                  null,
-                ]),
-                undefined,
-              ]),
-            })),
-            undefined,
-          ]),
-          attachment_storage: faker.helpers.arrayElement([
-            {
-              toolkit_id: faker.helpers.arrayElement([
-                faker.string.alpha({ length: { min: 10, max: 20 } }),
-                undefined,
-              ]),
-            },
-            undefined,
-          ]),
-          notes: faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            undefined,
-          ]),
-          internal_tools: faker.helpers.arrayElement([
-            Array.from(
-              { length: faker.number.int({ min: 1, max: 10 }) },
-              (_, i) => i + 1,
-            ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-            undefined,
-          ]),
-        },
-      },
-      tools: Array.from(
-        { length: faker.number.int({ min: 1, max: 10 }) },
-        (_, i) => i + 1,
-      ).map(() => ({
-        import_uuid: faker.string.alpha({ length: { min: 10, max: 20 } }),
-        selected_tools: {},
-      })),
-      variables: Array.from(
-        { length: faker.number.int({ min: 1, max: 10 }) },
-        (_, i) => i + 1,
-      ).map(() => ({
-        name: faker.helpers.arrayElement([
-          faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            null,
-          ]),
-          undefined,
-        ]),
-        value: faker.helpers.arrayElement([
-          faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            null,
-          ]),
-          undefined,
-        ]),
-      })),
-      tags: Array.from(
-        { length: faker.number.int({ min: 1, max: 10 }) },
-        (_, i) => i + 1,
-      ).map(() => ({
-        id: faker.helpers.arrayElement([faker.number.int(), undefined]),
-        name: faker.helpers.arrayElement([
-          faker.helpers.arrayElement([
-            faker.string.alpha({ length: { min: 10, max: 20 } }),
-            null,
-          ]),
-          undefined,
-        ]),
-        data: faker.helpers.arrayElement([{}, undefined]),
-      })),
-      skills: Array.from(
-        { length: faker.number.int({ min: 1, max: 10 }) },
-        (_, i) => i + 1,
-      ).map(() => ({
-        import_uuid: faker.string.alpha({ length: { min: 10, max: 20 } }),
-        entity_type: faker.helpers.arrayElement(["agent"] as const),
-        version_name: faker.helpers.arrayElement([
-          faker.string.alpha({ length: { min: 10, max: 20 } }),
-          undefined,
-        ]),
-      })),
-      is_forked: faker.datatype.boolean(),
-      import_version_uuid: faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        undefined,
-      ]),
-    })),
-    owner_id: faker.helpers.arrayElement([
-      faker.string.alpha({ length: { min: 10, max: 20 } }),
-      undefined,
-    ]),
-    original_exported: faker.helpers.arrayElement([
-      faker.datatype.boolean(),
-      undefined,
-    ]),
-    shared_id: faker.helpers.arrayElement([
-      faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        null,
-      ]),
-      undefined,
-    ]),
-    shared_owner_id: faker.helpers.arrayElement([
-      faker.helpers.arrayElement([
-        faker.string.alpha({ length: { min: 10, max: 20 } }),
-        null,
-      ]),
-      undefined,
-    ]),
-  })),
-  toolkits: Array.from(
-    { length: faker.number.int({ min: 1, max: 10 }) },
-    (_, i) => i + 1,
-  ).map(() => ({
-    id: faker.number.int(),
-    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    type: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    import_uuid: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    settings: {},
-  })),
-  skills: faker.helpers.arrayElement([
-    Array.from(
-      { length: faker.number.int({ min: 1, max: 10 }) },
-      (_, i) => i + 1,
-    ).map(() => ({
-      entity: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      import_uuid: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      description: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      owner_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      meta: {},
-      versions: Array.from(
-        { length: faker.number.int({ min: 1, max: 10 }) },
-        (_, i) => i + 1,
-      ).map(() => ({
-        id: faker.number.int(),
-        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-        instructions: faker.string.alpha({ length: { min: 10, max: 20 } }),
-        author_id: faker.number.int(),
-        meta: {},
-        tags: Array.from(
-          { length: faker.number.int({ min: 1, max: 10 }) },
-          (_, i) => i + 1,
-        ).map(() => ({
-          name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-          data: {},
-        })),
-      })),
-    })),
-    undefined,
-  ]),
-  ...overrideResponse,
-});
+export const getExportApplicationResponseMock = () =>
+  (() => ({ ok: true, applications: [], toolkits: [] }))();
 
 export const getConvertLegacyApplicationResponseMock = (
   overrideResponse: Partial<Extract<ExportConverterResponse, object>> = {},
@@ -7228,9 +6980,15 @@ export const getValidateApplicationVersionMockHandler = (
 export const getExportApplicationMockHandler = (
   overrideResponse?:
     | ApplicationExportResponse
+    | string
+    | ArrayBuffer
     | ((
         info: Parameters<Parameters<typeof http.get>[1]>[0],
-      ) => Promise<ApplicationExportResponse> | ApplicationExportResponse),
+      ) =>
+        | Promise<ApplicationExportResponse | string | ArrayBuffer>
+        | ApplicationExportResponse
+        | string
+        | ArrayBuffer),
   options?: RequestHandlerOptions,
 ) => {
   return http.get(
@@ -7238,13 +6996,18 @@ export const getExportApplicationMockHandler = (
     async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
       await delay(0);
 
-      return HttpResponse.json(
+      const binaryBody =
         overrideResponse !== undefined
           ? typeof overrideResponse === "function"
             ? await overrideResponse(info)
             : overrideResponse
-          : getExportApplicationResponseMock(),
-        { status: 200 },
+          : getExportApplicationResponseMock();
+      return HttpResponse.arrayBuffer(
+        binaryBody instanceof ArrayBuffer ? binaryBody : new ArrayBuffer(0),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/octet-stream" },
+        },
       );
     },
     options,

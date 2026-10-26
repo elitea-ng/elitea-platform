@@ -35,6 +35,12 @@ impl ReadLedger {
         }
     }
 
+    /// What was recorded for `path`, if anything.
+    #[must_use]
+    pub fn recorded(&self, path: &WsPath) -> Option<FileStamp> {
+        self.seen.lock().ok()?.get(path).cloned()
+    }
+
     /// Forget one path (after the agent deletes it).
     pub fn forget(&self, path: &WsPath) {
         if let Ok(mut seen) = self.seen.lock() {

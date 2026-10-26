@@ -19,6 +19,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacechanges"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
@@ -66,6 +67,11 @@ type Resources struct {
 	DiskBytes       uint64
 }
 
+// Changes keeps a turn's Files changed record (*workspacechanges.Service).
+type Changes interface {
+	Record(ctx context.Context, handoff workspacehandoff.Handoff, executionID string, seq int64, changes workspaceruntime.TurnChanges) error
+}
+
 // Adapter implements workspaceruntime.Store, TurnResolver, PolicyEvaluator
 // and TurnLifecycle.
 type Adapter struct {
@@ -73,7 +79,15 @@ type Adapter struct {
 	objects   Objects
 	threads   Threads
 	resources Resources
+	changes   Changes
 	logger    *slog.Logger
+}
+
+// WithChanges composes the Files changed recorder; without it RecordChanges
+// answers ErrUnavailable and the worker publishes all the same.
+func (a *Adapter) WithChanges(changes Changes) *Adapter {
+	a.changes = changes
+	return a
 }
 
 var (
@@ -318,7 +332,7 @@ func (a *Adapter) Publish(ctx context.Context, claim workspaceruntime.ClaimRef, 
 	}
 	result, err := a.objects.Publish(ctx, workspacestore.PublishRequest{
 		Thread: threadOf(handoff), Caller: caller, Epoch: handoff.Epoch, Kind: request.Kind,
-		SHA256: request.SegmentSHA256, Bytes: int64(request.Bytes), Prerequisites: []string{},
+		SHA256: request.SegmentSHA256, Bytes: int64(request.Bytes), Prerequisites: append([]string{}, request.Prerequisites...),
 		Refs: refs, ObjectFormat: request.ObjectFormat,
 	})
 	if err != nil {
@@ -353,6 +367,33 @@ func (a *Adapter) RecordEvent(ctx context.Context, claim workspaceruntime.ClaimR
 		return err
 	}
 	return storeError(a.handoffs.RecordExecutorEvent(ctx, threadOf(handoff), handoff.Epoch, claim.ExecutionID, event.Kind, event.Attrs))
+}
+
+// RecordChanges keeps the running turn's Files changed record: only for the
+// commit the turn published (the thread's cloud tip) measured from the
+// thread's handoff snapshot. The record was checked once, at the transport
+// boundary (workspaceruntime.SanitizeTurnChanges).
+func (a *Adapter) RecordChanges(ctx context.Context, claim workspaceruntime.ClaimRef, changes workspaceruntime.TurnChanges) error {
+	handoff, _, err := a.running(ctx, claim)
+	if err != nil {
+		return err
+	}
+	if handoff.CloudSHA == nil || *handoff.CloudSHA != changes.Commit ||
+		handoff.HandoffSHA == nil || *handoff.HandoffSHA != changes.Base {
+		return workspaceruntime.Refuse(workspaceruntime.RefusalRefConflict)
+	}
+	if a.changes == nil {
+		return workspaceruntime.ErrUnavailable
+	}
+	err = a.changes.Record(ctx, handoff, claim.ExecutionID, handoff.LastSeq, changes)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, workspacechanges.ErrNotFound):
+		return workspaceruntime.Refuse(workspaceruntime.RefusalStaleEpoch)
+	default:
+		return workspaceruntime.ErrUnavailable
+	}
 }
 
 // ---- TurnLifecycle ----
@@ -447,7 +488,10 @@ func storeError(err error) error {
 		return workspaceruntime.Refuse(workspaceruntime.RefusalSegmentTooLarge)
 	case errors.Is(err, workspacestore.ErrQuotaExceeded):
 		return workspaceruntime.Refuse(workspaceruntime.RefusalQuotaExceeded)
-	case errors.Is(err, workspacestore.ErrInvalid), errors.Is(err, workspacehandoff.ErrInvalid):
+	case errors.Is(err, workspacestore.ErrInvalid), errors.Is(err, workspacehandoff.ErrInvalid),
+		// A PUSH on an unknown prerequisite or past the chain cap: the
+		// worker's own bug, never worth a retry of the same request.
+		errors.Is(err, workspacestore.ErrPrerequisiteUnknown), errors.Is(err, workspacestore.ErrChainTooLong):
 		return workspaceruntime.ErrInvalidRequest
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err

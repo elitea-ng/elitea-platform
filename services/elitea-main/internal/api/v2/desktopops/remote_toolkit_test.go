@@ -638,3 +638,55 @@ func TestRemoteToolkitRequiresAnIdempotencyKeyAndNeverRunsAReplayTwice(t *testin
 		t.Fatalf("replay: status = %d, body %s", response.Code, response.Body)
 	}
 }
+
+// TestRemoteToolkitStampsAttributionExecutionID is #1238: a remote call runs
+// as its own toolkit.call_tool execution, so the run carries the verified
+// local turn's id for its metered web spend to be attributed to the turn.
+func TestRemoteToolkitStampsAttributionExecutionID(t *testing.T) {
+	runs := &fakeToolRuns{outcome: toolkitcalltoolapp.RunOutcome{
+		ExecutionID: "e1", Status: toolkitcalltoolapp.RunStatusOK, ResultJSON: `{}`,
+		ToolkitType: "web", ToolName: "web_search",
+	}}
+	h, turns, authorizer, _ := remoteHandler(runs, "rust")
+	turns.turn.Web = true
+	authorizer.grant.ToolkitType = "web"
+	response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL,
+		remoteBody(`"tool_name":"web_search","arguments":{"query":"tokio"}`), desktopToken(), h.serve)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	if runs.request.AttributionExecutionID != remoteExecution {
+		t.Fatalf("attribution = %q, want the turn %q", runs.request.AttributionExecutionID, remoteExecution)
+	}
+}
+
+// TestRemoteToolkitRefusesWebWhenLocalWorkWebOff and its host_intel twin pin
+// the server half of local_work.web / local_work.host_intel (absent = off):
+// the call is refused before anything runs.
+func TestRemoteToolkitRefusesWebWhenLocalWorkWebOff(t *testing.T) {
+	assertLocalWorkPolicyRefuses(t, "web", "web_search")
+}
+
+func TestRemoteToolkitRefusesHostIntelWhenPolicyOff(t *testing.T) {
+	assertLocalWorkPolicyRefuses(t, "host_intel", "internet_host_lookup")
+}
+
+func assertLocalWorkPolicyRefuses(t *testing.T, toolkitType, toolName string) {
+	t.Helper()
+	runs := &fakeToolRuns{}
+	h, turns, authorizer, recorder := remoteHandler(runs, "rust")
+	// The other toolkit's switch is on; it must not open this one.
+	turns.turn.Web, turns.turn.HostIntel = toolkitType != "web", toolkitType != "host_intel"
+	authorizer.grant.ToolkitType = toolkitType
+	response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL,
+		remoteBody(`"tool_name":"`+toolName+`","arguments":{}`), desktopToken(), h.serve)
+	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), localWorkPolicyRefused) {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	if runs.calls != 0 {
+		t.Fatal("a refused call reached the run")
+	}
+	if len(recorder.events) != 1 || !strings.Contains(recorder.events[0].Action, "policy_refused") {
+		t.Fatalf("audit = %+v", recorder.events)
+	}
+}

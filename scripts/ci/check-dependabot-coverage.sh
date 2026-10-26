@@ -49,6 +49,7 @@ libs/rust/agent-runtime/Cargo.toml member of the libs/rust workspace: the /libs/
 libs/rust/code-parsers/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/engine-core/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/engine-sidecar/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+libs/rust/egress-guard/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/graph-algos/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/inventory-core/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/llm-wire/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
@@ -110,6 +111,8 @@ fi
 configured=$(awk '
   /^[[:space:]]+directory:/      { sub(/^[[:space:]]+directory:[[:space:]]*/, ""); print; next }
   /^[[:space:]]+directories:/    { inlist = 1; next }
+  # A comment inside the list (a note on one directory) does not end it.
+  inlist && /^[[:space:]]*#/     { next }
   inlist && /^[[:space:]]+-[[:space:]]*\//  { sub(/^[[:space:]]+-[[:space:]]*/, ""); print; next }
   inlist && !/^[[:space:]]+-/    { inlist = 0 }
 ' "$CONFIG" | sed -E 's|^/?||; s|/$||')

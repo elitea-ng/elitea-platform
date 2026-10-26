@@ -12,6 +12,8 @@
 //!   start/commit, remote toolkit call) over HTTPS with the native token;
 //! * [`cache`] — the session's in-memory caches of the agent versions and
 //!   the conversations' answering participants (a warm turn's one round trip);
+//! * [`attachments`] — the images attached to a turn (#1229): checked,
+//!   bounded and held in memory;
 //! * [`catalogue`] — the project's chat models a turn's chosen model is
 //!   checked against, and the family flag of reasoning replay (#1228);
 //! * [`commits`] — a turn's commit after its `done`, one FIFO lane per
@@ -19,8 +21,16 @@
 //! * [`definition`] — what D0 runs, and the refusals for what it does not;
 //! * [`model`] — `ModelTransport` over `/llm` (llm-wire + reqwest);
 //! * [`remote_tools`] — `RemoteToolkit` tools (decision 3);
+//! * [`child_agent`] — nested agents as cloud child turns (#1239);
 //! * [`approvals`] — the person's prompt, bridged to the UI over IPC;
+//! * [`memory`] — the person's memories as the runtime's `MemoryStore`
+//!   (#1233), over the public memory routes;
 //! * [`tools`] — the per-tool events, steps and before-images;
+//! * [`subagents`] — the runtime's sub-agents on a workspace turn (#1226);
+//! * [`processes`] — a workspace's background processes on the turn's
+//!   stream and the `process://event` channel (#1223);
+//! * [`lsp`] — a workspace's language servers (#1236): their settings and
+//!   the `lsp://event` channel;
 //! * [`recorder`] — what the commit and the changed-files card report;
 //! * [`events`] — the `agent://event` stream;
 //! * [`mentions`] — the "@" file picker and a turn's referenced paths;
@@ -38,21 +48,27 @@
 
 pub mod api;
 pub mod approvals;
+pub mod attachments;
 pub mod cache;
 pub mod catalogue;
+pub mod child_agent;
 pub mod commits;
 pub mod context;
 pub mod definition;
 pub mod environment;
 pub mod events;
 pub mod framing;
+pub mod lsp;
+pub mod memory;
 pub mod mentions;
 pub mod model;
+pub mod processes;
 pub mod recorder;
 pub mod remote_tools;
 pub mod session;
 pub mod skills;
 pub mod slash_commands;
+pub mod subagents;
 pub mod tools;
 pub mod turn;
 

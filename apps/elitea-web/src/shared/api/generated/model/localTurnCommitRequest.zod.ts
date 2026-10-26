@@ -98,6 +98,14 @@ export const LocalTurnCommitRequest = zod
       .max(localTurnCommitRequestHitlExchangesMax)
       .optional(),
     local_work: LocalTurnWorkReport.optional(),
+    context_summary: zod
+      .object({
+        version: zod.int().describe("Always 1."),
+      })
+      .optional()
+      .describe(
+        "Client contract 1.18. The latest context summary the turn's model requests started from or made, in the runtime's shared v1 record (`version` 1, at most 32 KiB). Stored as the answer's `meta.context_summary`, for the cloud executor that takes the thread over; absent or null leaves it out.",
+      ),
   })
   .describe(
     "Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:96 (`commitBody`). One JSON value of at most 8 MiB.",
