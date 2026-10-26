@@ -10,7 +10,7 @@ ran=0
 expect() {
   local want_stack="$1" want_model="$2" label="$3"; shift 3
   local out
-  out="$(printf '%s\n' "$@" | bash "$filter" 2>/dev/null)"
+  out="$(printf '%s\n' "$@" | bash "$filter" 2>/dev/null | grep -E '^reaches-(stack|model)=')"
   ran=$((ran + 1))
   if [ "$out" != "$(printf 'reaches-stack=%s\nreaches-model=%s' "$want_stack" "$want_model")" ]; then
     echo "FAIL: $label — got: $(echo "$out" | tr '\n' ' ')"
@@ -42,6 +42,41 @@ expect true false "docs plus one Go file" "README.md" "services/elitea-main/cmd/
 expect true true  "the gateway" "services/elitea-llm-gateway/main.go"
 expect true true  "the e2e workflow" ".github/workflows/ci-web-e2e.yml"
 expect true true  "worker docs (under services/, so not prose-only)" "services/elitea-worker-rust/docs/x.md"
+
+# The handoff journey's own signal (third line): decided on every changed
+# path, the desktop host's included.
+expect_handoff() {
+  local want="$1" label="$2"; shift 2
+  local out
+  out="$(printf '%s\n' "$@" | bash "$filter" 2>/dev/null | grep '^reaches-handoff=')"
+  ran=$((ran + 1))
+  if [ "$out" != "reaches-handoff=$want" ]; then
+    echo "FAIL: $label — got: $out"
+    fails=$((fails + 1))
+  else
+    echo "ok:   $label"
+  fi
+}
+expect_handoff true "the desktop handoff host (skipped by the stack lanes)" "apps/elitea-desktop/src-tauri/src/handoff/mod.rs"
+expect_handoff true "the live tests" "apps/elitea-desktop/src-tauri/src/handoff_live_tests.rs"
+expect_handoff true "the cloud-turn simulator" "services/elitea-main/cmd/handoff-live-cloudturn/main.go"
+expect_handoff true "the store service" "services/elitea-main/internal/application/workspacestore/service.go"
+expect_handoff true "the shared workspace store crate" "libs/rust/workspace-store/src/sync.rs"
+expect_handoff true "the lane's script" "deploy/scripts/handoff-live.sh"
+expect_handoff true "empty list" 
+expect_handoff false "a web page" "apps/elitea-web/src/pages/a.tsx"
+expect_handoff true "any desktop host source (the lane builds the whole crate)" "apps/elitea-desktop/src-tauri/src/tray.rs"
+expect_handoff true "a shared crate the host links" "libs/rust/agent-runtime/src/lib.rs"
+expect_handoff true "the pinned toolchain" "rust-toolchain.toml"
+expect_handoff true "the toolchain assertion" "scripts/ci/assert-rust-toolchain.sh"
+expect_handoff true "the stack wrapper" "deploy/scripts/standalone-stack.sh"
+expect_handoff true "the rust-agent overlay" "deploy/docker-compose.standalone-rust-agent.yml"
+expect_handoff true "the lane's overlay" "deploy/docker-compose.handoff-live.yml"
+expect_handoff true "the image action" ".github/actions/stack-images/action.yml"
+expect_handoff true "the executor adapter" "services/elitea-main/internal/application/workspaceexecutor/adapter.go"
+expect_handoff true "the compose detection helper" "apps/elitea-web/scripts/lib/compose-detect.sh"
+expect_handoff false "an unrelated desktop-adjacent file" "apps/elitea-desktop/README.md"
+expect_handoff false "docs only" "README.md"
 
 # The compose-referenced helm list is READ, not written: against a fixture
 # compose dir that references a different helm file, that file reaches the

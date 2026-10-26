@@ -319,9 +319,18 @@ async fn cloud_turn_args(h: &LiveHarness, uuid: &str) -> Vec<String> {
     );
     std::fs::write(dir.join("README.md"), "hello from the cloud\n").unwrap();
     std::fs::write(dir.join("src/cloud.rs"), "pub fn c() {}\n").unwrap();
+    // A file the project's exclusion hides from the web (`secrets/**`): it is
+    // recorded, counted as hidden and has no diff to read.
+    std::fs::create_dir_all(dir.join("secrets")).unwrap();
+    std::fs::write(dir.join("secrets/cloud.txt"), "made in the cloud\n").unwrap();
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-q", "-m", "cloud turn 1"]);
     let commit = git(&dir, &["rev-parse", "HEAD"]);
+    // What the worker records for the web's Files changed: the turn's files
+    // against the handoff snapshot (the first turn, so the turn's and the
+    // cumulative sets are the same).
+    let changes = h.app.path().join(format!("changes-{uuid}.json"));
+    std::fs::write(&changes, changed_files(&dir).to_string()).unwrap();
     git(&dir, &["update-ref", "refs/elitea/cloud", "HEAD"]);
     let out = h.app.path().join(format!("cloud-{uuid}.bundle"));
     let mut args = vec!["bundle", "create", "-q", out.to_str().unwrap()];
@@ -337,7 +346,196 @@ async fn cloud_turn_args(h: &LiveHarness, uuid: &str) -> Vec<String> {
         out.to_string_lossy().into_owned(),
         "-commit".into(),
         commit,
+        "-changes".into(),
+        changes.to_string_lossy().into_owned(),
     ]
+}
+
+/// The first cloud turn's files as the worker's `WorkspaceRecordChanges`
+/// carries them, in both scopes: the status from `git diff --name-status -M`,
+/// the counts from `--numstat -M` (a binary file has `-` counts: no
+/// additions or deletions, `binary` set) and the unified diff per file,
+/// against the handoff snapshot.
+fn changed_files(dir: &std::path::Path) -> Value {
+    let base = "refs/elitea/handoff/1";
+    let names = git(dir, &["diff", "--name-status", "-M", base, "HEAD"]);
+    let numstat = git(dir, &["diff", "--numstat", "-M", base, "HEAD"]);
+    let name_rows: Vec<&str> = names.lines().filter(|l| !l.is_empty()).collect();
+    let count_rows: Vec<&str> = numstat.lines().filter(|l| !l.is_empty()).collect();
+    assert_eq!(
+        name_rows.len(),
+        count_rows.len(),
+        "name-status and numstat list the same files:\n{names}\n{numstat}"
+    );
+    let mut files = Vec::new();
+    for scope in ["turn", "cumulative"] {
+        for (name_row, count_row) in name_rows.iter().zip(&count_rows) {
+            let mut cols = name_row.split('\t');
+            let code = cols.next().unwrap_or_default();
+            let first = cols
+                .next()
+                .unwrap_or_else(|| panic!("name-status row: {name_row:?}"));
+            let (status, from_path, path) = match code.chars().next() {
+                Some('A') => ("added", "", first),
+                Some('D') => ("deleted", "", first),
+                Some('R') => (
+                    "renamed",
+                    first,
+                    cols.next()
+                        .unwrap_or_else(|| panic!("rename row: {name_row:?}")),
+                ),
+                Some('M' | 'T') => ("modified", "", first),
+                _ => panic!("unhandled name-status row: {name_row:?}"),
+            };
+            let mut counts = count_row.split('\t');
+            let added = counts.next().unwrap_or_default();
+            let removed = counts.next().unwrap_or_default();
+            let binary = added == "-" && removed == "-";
+            let count = |text: &str| -> Value {
+                if binary {
+                    return Value::Null;
+                }
+                json!(
+                    text.parse::<u32>()
+                        .unwrap_or_else(|_| panic!("numstat row: {count_row:?}"))
+                )
+            };
+            let mut diff_args = vec!["diff", "-M", base, "HEAD", "--"];
+            if !from_path.is_empty() {
+                diff_args.push(from_path);
+            }
+            diff_args.push(path);
+            let diff = if binary {
+                String::new()
+            } else {
+                git(dir, &diff_args)
+            };
+            files.push(json!({
+                "scope": scope, "path": path, "from_path": from_path, "status": status,
+                "additions": count(added), "deletions": count(removed),
+                "binary": binary, "diff": diff,
+            }));
+        }
+    }
+    Value::Array(files)
+}
+
+/// The web's reads of a cloud thread, as the browser makes them: the
+/// handoff banner state, the Files changed list and one file's diff, then
+/// the conversation with the cloud turn in it.
+async fn web_reads_the_cloud_turn(h: &LiveHarness, uuid: &str, turn: &Value) {
+    let live = &h.live;
+    let (code, state) = raw(
+        live,
+        &live.token,
+        Method::GET,
+        &state_path(live, uuid),
+        None,
+    )
+    .await;
+    assert_eq!(code, 200, "{state}");
+    assert_eq!(state["state"], "CLOUD_IDLE", "{state}");
+    assert_eq!(state["cloud_sha"], turn["cloud_sha"], "{state}");
+
+    let changes_path = format!(
+        "/api/v2/elitea_core/workspace_handoff_changes/prompt_lib/{}/{uuid}",
+        live.project
+    );
+    let (code, view) = raw(live, &live.token, Method::GET, &changes_path, None).await;
+    assert_eq!(code, 200, "{view}");
+    assert_eq!(view["complete"], true, "{view}");
+    assert_eq!(view["head_sha"], turn["cloud_sha"], "{view}");
+    let turns = view["turns"].as_array().unwrap();
+    assert_eq!(turns.len(), 1, "{view}");
+    assert_eq!(turns[0]["number"], 1, "{view}");
+    assert_eq!(
+        turns[0]["response_message_id"], turn["answer_uuid"],
+        "the turn belongs to the cloud answer: {view}"
+    );
+    let cumulative = view["cumulative"]["files"].as_array().unwrap();
+    let paths: Vec<&str> = cumulative
+        .iter()
+        .filter_map(|f| f["path"].as_str())
+        .collect();
+    assert_eq!(paths.len(), 2, "{view}");
+    for path in ["README.md", "src/cloud.rs"] {
+        assert!(paths.contains(&path), "{path} in {paths:?}");
+    }
+    assert_eq!(
+        view["cumulative"]["hidden_files"], 1,
+        "secrets/cloud.txt is hidden by the project exclusion: {view}"
+    );
+    assert!(!paths.contains(&"secrets/cloud.txt"), "{paths:?}");
+    assert_eq!(view["cumulative"]["omitted_files"], 0, "{view}");
+    let added = cumulative
+        .iter()
+        .find(|f| f["path"] == "src/cloud.rs")
+        .unwrap();
+    assert_eq!(added["status"], "added");
+    assert_eq!(added["has_diff"], true);
+
+    let diff_path = format!(
+        "/api/v2/elitea_core/workspace_handoff_diff/prompt_lib/{}/{uuid}",
+        live.project
+    );
+    let commit = view["cumulative_commit"].as_str().unwrap();
+    let (code, diff) = raw(
+        live,
+        &live.token,
+        Method::GET,
+        &format!("{diff_path}?commit={commit}&scope=cumulative&path=README.md"),
+        None,
+    )
+    .await;
+    assert_eq!(code, 200, "{diff}");
+    assert!(
+        diff["diff"]
+            .as_str()
+            .unwrap()
+            .contains("+hello from the cloud"),
+        "{diff}"
+    );
+    let (code, _) = raw(
+        live,
+        &live.token,
+        Method::GET,
+        &format!("{diff_path}?commit={commit}&scope=cumulative&path=.env"),
+        None,
+    )
+    .await;
+    assert_eq!(code, 404, "a file that was never recorded has no diff");
+    let (code, _) = raw(
+        live,
+        &live.token,
+        Method::GET,
+        &format!("{diff_path}?commit={commit}&scope=cumulative&path=secrets/cloud.txt"),
+        None,
+    )
+    .await;
+    assert_eq!(code, 404, "a hidden path has no diff");
+
+    // The conversation shows the cloud answer, produced by the executor.
+    let (code, conversation) = raw(
+        live,
+        &live.token,
+        Method::GET,
+        &format!(
+            "/api/v2/elitea_core/messages/prompt_lib/{}/{uuid}",
+            live.project
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(code, 200, "{conversation}");
+    let text = conversation.to_string();
+    assert!(
+        text.contains(turn["answer_uuid"].as_str().unwrap()),
+        "{text}"
+    );
+    assert!(
+        text.contains("Done: README.md and src/cloud.rs changed."),
+        "{text}"
+    );
 }
 
 async fn server_state(h: &LiveHarness, uuid: &str) -> Value {
@@ -537,6 +735,7 @@ async fn live_send_cloud_turn_take_back_import_and_undo() {
     let status = h.host.status(&uuid, None).await.unwrap();
     assert_eq!(status["state"], "CLOUD_IDLE");
     assert!(status["cloud_sha"].is_string());
+    web_reads_the_cloud_turn(&h, &uuid, &turn).await;
 
     // 4. take back: reclaim, preflight with diffs, apply, release, import.
     assert_eq!(
@@ -617,7 +816,7 @@ async fn live_send_cloud_turn_take_back_import_and_undo() {
     let turns = h.history.thread(&owner, &h.workspace_id, &uuid).unwrap();
     assert_eq!(turns.len(), 1, "{turns:?}");
     assert_eq!(turns[0].origin, "cloud");
-    assert_eq!(turns[0].prompt, "Make it greet the cloud");
+    assert_eq!(turns[0].prompt, "change the README");
     assert_eq!(
         turns[0].turn_id,
         format!("cloud:{}", turn["answer_uuid"].as_str().unwrap())

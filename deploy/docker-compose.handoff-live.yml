@@ -1,0 +1,33 @@
+# Cloud handoff journey overlay (ADR-0034) for docker-compose.standalone-full.yml.
+#
+#   deploy/scripts/handoff-live.sh run
+#
+# What it changes, and why each line is needed:
+#
+#   rustfs  RUSTFS_SSE_S3_MASTER_KEY: Send to cloud stays off until Main reads
+#           a default-encryption rule off the bucket (ADR-0034 decision 4), and
+#           RustFS answers "no rule" for an unkeyed store. A key must exist
+#           BEFORE the rule is added (the script adds it: objects written
+#           under one key cannot be read after it changes). A throwaway key,
+#           only ever on this disposable stack.
+#           The published port lets the host reach the store: the cloud-turn
+#           simulator (services/elitea-main/cmd/handoff-live-cloudturn) plays
+#           the executor and writes segments from the runner, and the script
+#           sets the bucket rule through it.
+#   elitea-main
+#           S3_PRESIGN=false: the desktop (the test, on the runner) cannot
+#           resolve the in-network `rustfs:9000` a presigned URL names, so it
+#           streams segments through Main instead (Cloud executor on
+#           Kubernetes, "S3 presign").
+#           AWS_REQUEST_CHECKSUM_CALCULATION=when_required: RustFS refuses a
+#           checksummed part into an encrypted bucket (same page, step 2).
+services:
+  rustfs:
+    environment:
+      RUSTFS_SSE_S3_MASTER_KEY: "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE="
+    ports:
+      - "127.0.0.1:${HANDOFF_RUSTFS_PORT:-19000}:9000"
+  elitea-main:
+    environment:
+      S3_PRESIGN: "false"
+      AWS_REQUEST_CHECKSUM_CALCULATION: "when_required"
