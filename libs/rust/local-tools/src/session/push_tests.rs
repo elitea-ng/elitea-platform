@@ -4,6 +4,11 @@
 //! not asked; the policy's deny list still refuses it; and a sandboxed
 //! command still cannot write `.git/hooks`.
 //!
+//! Review of #1445: the remote, branch and URLs are resolved before the
+//! rules and the person see the push; every push URL must pass; a
+//! rejection reads apart from other failures; the shell switch gates it;
+//! branch names are argv tokens.
+//!
 //! A unit test, not an integration one: it pushes to a local bare
 //! repository, a transport only the crate's own tests allow.
 
@@ -75,7 +80,7 @@ struct Fixture {
 
 /// A repository with one commit ahead of its bare `origin`, a session
 /// whose prompt answers `action`, and `policy` on top of local work with
-/// the shell and the network on.
+/// the network on.
 fn fixture(action: &'static str, policy: LocalWorkPolicy) -> Fixture {
     let dir = tempfile::tempdir().expect("dir");
     let base = std::fs::canonicalize(dir.path()).expect("canonical");
@@ -109,7 +114,6 @@ fn fixture(action: &'static str, policy: LocalWorkPolicy) -> Fixture {
         session_id: "s".to_owned(),
         policy: LocalWorkPolicy {
             allowed: true,
-            shell: true,
             network: true,
             ..policy
         },
@@ -133,6 +137,14 @@ fn fixture(action: &'static str, policy: LocalWorkPolicy) -> Fixture {
     }
 }
 
+/// Local work's shell on (the fixture adds `allowed` and the network).
+fn shell_on() -> LocalWorkPolicy {
+    LocalWorkPolicy {
+        shell: true,
+        ..LocalWorkPolicy::default()
+    }
+}
+
 fn remote_head(fixture: &Fixture) -> String {
     git(&fixture.remote, &["rev-parse", "refs/heads/main"])
 }
@@ -144,7 +156,7 @@ async fn push(fixture: &Fixture, args: Value) -> Value {
 #[tokio::test]
 async fn bypass_mode_pushes_through_git_push_without_asking() {
     // A prompt that would refuse: bypass mode must not reach it.
-    let fixture = fixture("reject", LocalWorkPolicy::default());
+    let fixture = fixture("reject", shell_on());
     let before = remote_head(&fixture);
     fixture.session.set_profile(PermissionProfile::Bypass);
     let result = push(&fixture, json!({})).await;
@@ -167,7 +179,7 @@ async fn bypass_mode_pushes_through_git_push_without_asking() {
 
 #[tokio::test]
 async fn a_push_is_asked_outside_bypass_mode() {
-    let fixture = fixture("reject", LocalWorkPolicy::default());
+    let fixture = fixture("reject", shell_on());
     let before = remote_head(&fixture);
     let result = push(&fixture, json!({ "remote": "origin", "branch": "main" })).await;
     assert_eq!(result["code"], "local_tools.rejected", "{result}");
@@ -181,26 +193,20 @@ async fn the_policy_deny_list_refuses_a_push_in_bypass_mode() {
         "approve",
         LocalWorkPolicy {
             command_deny: vec!["git push".to_owned()],
-            ..LocalWorkPolicy::default()
+            ..shell_on()
         },
     );
     let before = remote_head(&fixture);
     fixture.session.set_profile(PermissionProfile::Bypass);
     let result = push(&fixture, json!({})).await;
-    assert_eq!(result["code"], "local_tools.rejected", "{result}");
-    assert!(
-        result["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("denied by policy")),
-        "{result}"
-    );
+    assert!(denied_by_policy(&result), "{result}");
     assert_eq!(remote_head(&fixture), before);
     assert!(fixture.prompt.seen.lock().expect("lock").is_empty());
 }
 
 #[tokio::test]
 async fn only_a_configured_remote_and_a_local_branch_are_pushed() {
-    let fixture = fixture("approve", LocalWorkPolicy::default());
+    let fixture = fixture("approve", shell_on());
     fixture.session.set_profile(PermissionProfile::Bypass);
     for args in [
         json!({ "remote": "/tmp/elsewhere.git" }),
@@ -219,7 +225,7 @@ async fn only_a_configured_remote_and_a_local_branch_are_pushed() {
 /// checks off, it would see the person's token).
 #[tokio::test]
 async fn a_repository_http_setting_refuses_the_push() {
-    let fixture = fixture("approve", LocalWorkPolicy::default());
+    let fixture = fixture("approve", shell_on());
     git(
         &fixture.root,
         &["config", "http.proxy", "http://127.0.0.1:9"],
@@ -235,7 +241,7 @@ async fn a_repository_http_setting_refuses_the_push() {
 /// sandboxed command still cannot plant a hook, bypass mode or not.
 #[tokio::test]
 async fn the_shell_points_at_git_push_and_still_cannot_write_hooks() {
-    let fixture = fixture("approve", LocalWorkPolicy::default());
+    let fixture = fixture("approve", shell_on());
     fixture.session.set_profile(PermissionProfile::Bypass);
     let result = fixture
         .session
@@ -267,5 +273,183 @@ async fn the_shell_points_at_git_push_and_still_cannot_write_hooks() {
         std::fs::read_to_string(&config).expect("config"),
         config_before,
         "a sandboxed command wrote .git/config"
+    );
+}
+
+fn messages(fixture: &Fixture) -> Vec<String> {
+    fixture
+        .prompt
+        .seen
+        .lock()
+        .expect("lock")
+        .iter()
+        .map(|request| request.message.clone())
+        .collect()
+}
+
+fn denied_by_policy(result: &Value) -> bool {
+    result["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("denied by policy"))
+}
+
+/// A push without a branch is judged as the push it will be: a deny of
+/// `git push origin main` refuses `git_push {}` on main.
+#[tokio::test]
+async fn a_push_without_a_branch_is_judged_with_the_current_branch() {
+    let fixture = fixture(
+        "approve",
+        LocalWorkPolicy {
+            command_deny: vec!["git push origin main".to_owned()],
+            ..shell_on()
+        },
+    );
+    let before = remote_head(&fixture);
+    fixture.session.set_profile(PermissionProfile::Bypass);
+    let result = push(&fixture, json!({})).await;
+    assert!(denied_by_policy(&result), "{result}");
+    assert_eq!(remote_head(&fixture), before);
+}
+
+/// The approval names the branch, the remote and every URL it pushes to.
+#[tokio::test]
+async fn the_question_names_the_branch_and_every_push_url() {
+    let fixture = fixture("approve", shell_on());
+    let second = fixture.remote.with_file_name("mirror.git");
+    std::fs::create_dir_all(&second).expect("mirror");
+    git(&second, &["init", "-q", "--bare"]);
+    let first = fixture.remote.display().to_string();
+    git(
+        &fixture.root,
+        &["remote", "set-url", "--add", "--push", "origin", &first],
+    );
+    let mirror = second.display().to_string();
+    git(
+        &fixture.root,
+        &["remote", "set-url", "--add", "--push", "origin", &mirror],
+    );
+    let result = push(&fixture, json!({})).await;
+    assert_eq!(result["status"], "ok", "{result}");
+    let asked = messages(&fixture);
+    assert_eq!(asked.len(), 1);
+    assert!(asked[0].contains("push main to origin"), "{asked:?}");
+    assert!(
+        asked[0].contains(&first) && asked[0].contains(&mirror),
+        "{asked:?}"
+    );
+    let head = git(&fixture.root, &["rev-parse", "HEAD"]);
+    assert_eq!(git(&second, &["rev-parse", "refs/heads/main"]), head);
+}
+
+/// Every push URL must be https or ssh (here: or a local path, the tests'
+/// transport): one http URL among them refuses the push.
+#[tokio::test]
+async fn one_refused_push_url_refuses_the_push() {
+    let fixture = fixture("approve", shell_on());
+    let first = fixture.remote.display().to_string();
+    git(
+        &fixture.root,
+        &["remote", "set-url", "--add", "--push", "origin", &first],
+    );
+    git(
+        &fixture.root,
+        &[
+            "remote",
+            "set-url",
+            "--add",
+            "--push",
+            "origin",
+            "http://127.0.0.1:9/r.git",
+        ],
+    );
+    let before = remote_head(&fixture);
+    fixture.session.set_profile(PermissionProfile::Bypass);
+    let result = push(&fixture, json!({})).await;
+    assert_eq!(result["code"], "local_tools.invalid_argument", "{result}");
+    assert!(
+        result.to_string().contains("not an https or ssh URL"),
+        "{result}"
+    );
+    assert_eq!(remote_head(&fixture), before);
+}
+
+/// A rejection says which ref and why, so the agent can tell it from an
+/// authentication or network failure.
+#[tokio::test]
+async fn a_rejected_push_reports_the_rejection() {
+    let fixture = fixture("approve", shell_on());
+    // Someone else pushed first: the local branch is behind and ahead.
+    let other = fixture.remote.with_file_name("other");
+    git(
+        fixture.remote.parent().expect("base"),
+        &[
+            "clone",
+            "-q",
+            &fixture.remote.display().to_string(),
+            "other",
+        ],
+    );
+    std::fs::write(other.join("c.txt"), "c\n").expect("c");
+    git(&other, &["add", "-A"]);
+    git(&other, &["commit", "-q", "-m", "theirs"]);
+    git(&other, &["push", "-q", "origin", "main"]);
+    fixture.session.set_profile(PermissionProfile::Bypass);
+    let result = push(&fixture, json!({})).await;
+    assert_eq!(result["code"], "local_tools.git", "{result}");
+    let message = result["message"].as_str().expect("message");
+    assert!(
+        message.contains("!\trefs/heads/main:refs/heads/main"),
+        "{message}"
+    );
+    assert!(message.contains("rejected"), "{message}");
+}
+
+/// Like every tool that starts a process, `git_push` needs the shell.
+#[tokio::test]
+async fn without_the_shell_git_push_is_not_offered() {
+    let fixture = fixture(
+        "approve",
+        LocalWorkPolicy {
+            shell: false,
+            ..shell_on()
+        },
+    );
+    assert!(
+        !fixture
+            .session
+            .available_tools()
+            .iter()
+            .any(|tool| tool.name == "git_push")
+    );
+    fixture.session.set_profile(PermissionProfile::Bypass);
+    let before = remote_head(&fixture);
+    let result = push(&fixture, json!({})).await;
+    assert_ne!(result["status"], "ok", "{result}");
+    assert_eq!(remote_head(&fixture), before);
+}
+
+/// Branch names are argv tokens to the rules: `a|rm` is not an `rm`
+/// segment, and `fix/it's` neither breaks the analysis nor slips past.
+#[tokio::test]
+async fn branch_names_are_judged_as_tokens() {
+    let fixture = fixture(
+        "approve",
+        LocalWorkPolicy {
+            command_deny: vec!["rm".to_owned()],
+            ..shell_on()
+        },
+    );
+    git(&fixture.root, &["branch", "a|rm"]);
+    git(&fixture.root, &["branch", "fix/it's"]);
+    fixture.session.set_profile(PermissionProfile::Bypass);
+    let result = push(&fixture, json!({ "branch": "a|rm" })).await;
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_eq!(result["branch"], "a|rm");
+    let result = push(&fixture, json!({ "branch": "fix/it's" })).await;
+    assert_eq!(result["status"], "ok", "{result}");
+    let head = git(&fixture.root, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        git(&fixture.remote, &["rev-parse", "refs/heads/fix/it's"]),
+        head
     );
 }

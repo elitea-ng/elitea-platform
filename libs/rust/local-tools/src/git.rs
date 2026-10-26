@@ -220,11 +220,33 @@ pub fn redact_url_credentials(text: &str) -> String {
     out
 }
 
+/// What a push would do, resolved before anyone is asked: the remote, the
+/// local branch and every URL it pushes to (credentials redacted).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PushTarget {
+    pub remote: String,
+    pub branch: String,
+    pub urls: Vec<String>,
+}
+
+impl PushTarget {
+    /// The command it is, as the rules judge it: `git push <remote>
+    /// <branch>`.
+    #[must_use]
+    pub fn argv(&self) -> Vec<String> {
+        vec![
+            "git".to_owned(),
+            "push".to_owned(),
+            self.remote.clone(),
+            self.branch.clone(),
+        ]
+    }
+}
+
 /// What a push did.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Pushed {
-    pub remote: String,
-    pub branch: String,
+    pub target: PushTarget,
     /// git's porcelain report, URL credentials redacted, capped.
     pub report: String,
 }
@@ -294,6 +316,20 @@ fn refuse_dangerous(name: &str, entries: &[ConfigEntry]) -> ToolResult<()> {
         if let Some(reason) = dangerous_key(&entry.key, entry.value.as_deref()) {
             return Err(unsafe_repo(format!(
                 "the repository's .git/{name} sets `{}` ({reason}), which would run code in the host's git",
+                entry.key
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a push when `.git/<name>` sets what [`push_dangerous_key`] names.
+fn refuse_push_dangerous(name: &str, entries: &[ConfigEntry]) -> ToolResult<()> {
+    for entry in entries {
+        if let Some(reason) = push_dangerous_key(&entry.key) {
+            return Err(unsafe_repo(format!(
+                "the repository's .git/{name} sets `{}` ({reason}), which a push with your \
+                 credentials must not use",
                 entry.key
             )));
         }
@@ -1153,6 +1189,12 @@ impl Repo {
     ///
     /// [`ErrorCode::UnsafeRepository`] with the reason.
     pub fn check(&self) -> ToolResult<()> {
+        self.check_for(false)
+    }
+
+    /// [`Repo::check`]; for a push (`push`), the local config may not set
+    /// what [`push_dangerous_key`] refuses either.
+    fn check_for(&self, push: bool) -> ToolResult<()> {
         if self.is_linked_worktree() {
             // The pointer is read again on every call: a worktree whose
             // `.git` now points elsewhere is not the one that was trusted.
@@ -1219,6 +1261,9 @@ impl Repo {
                 unsafe_repo(format!(".git/{name} cannot be parsed safely: {reason}"))
             })?;
             refuse_dangerous(name, &ours)?;
+            if push {
+                refuse_push_dangerous(name, &ours)?;
+            }
             if self.verified_config(name, &text) {
                 continue;
             }
@@ -1518,26 +1563,24 @@ impl Repo {
         (vec![self.common_dir.clone()], protected)
     }
 
-    /// Push `branch` (the current branch when `None`) to the configured
-    /// remote `remote` (`origin` when `None`), as `git push <remote>
-    /// refs/heads/<branch>:refs/heads/<branch>`, never forced. See the
-    /// module's *Pushing* section for what keeps it safe.
+    /// Resolve a push before anyone is asked: the remote (`origin` when
+    /// `None`; a configured one), the branch (the current one when `None`;
+    /// an existing local one) and every URL the remote pushes to
+    /// (`git remote get-url --push --all`), each of which must be `https` or
+    /// `ssh`. The repository is checked as for a push.
     ///
     /// # Errors
     ///
     /// [`ErrorCode::UnsafeRepository`] for a repository or config a push
     /// must not use; [`ErrorCode::InvalidArgument`] for an unknown remote,
-    /// a branch that is not a local one, or a remote URL whose transport
-    /// is not `https` or `ssh`; [`ErrorCode::Git`] when git fails (its
-    /// message redacted).
-    pub fn push(
+    /// a branch that is not a local one, or a push URL whose transport is
+    /// not `https` or `ssh`.
+    pub fn push_target(
         &self,
         remote: Option<&str>,
         branch: Option<&str>,
-        set_upstream: bool,
-    ) -> ToolResult<Pushed> {
-        self.check()?;
-        self.check_push_config()?;
+    ) -> ToolResult<PushTarget> {
+        self.check_for(true)?;
         let remote = remote.unwrap_or("origin");
         let remotes = self.git(&self.top).text(&["remote"])?;
         if remote.starts_with('-') || !remotes.lines().any(|name| name == remote) {
@@ -1578,15 +1621,44 @@ impl Repo {
                 "`{branch}` is not a local branch"
             )));
         }
-        let url = self
+        let listed = self
             .git(&self.top)
-            .text(&["remote", "get-url", "--push", remote])?;
-        if !push_url_allowed(&url, cfg!(test)) {
+            .text(&["remote", "get-url", "--push", "--all", remote])?;
+        let urls: Vec<&str> = listed.lines().filter(|url| !url.is_empty()).collect();
+        if urls.is_empty() {
+            return Err(ToolError::invalid(format!("`{remote}` has no push URL")));
+        }
+        if let Some(refused) = urls.iter().find(|url| !push_url_allowed(url, cfg!(test))) {
             return Err(ToolError::invalid(format!(
                 "`{remote}` pushes to {}, which is not an https or ssh URL",
-                redact_url_credentials(&url)
+                redact_url_credentials(refused)
             )));
         }
+        Ok(PushTarget {
+            remote: remote.to_owned(),
+            branch,
+            urls: urls.iter().map(|url| redact_url_credentials(url)).collect(),
+        })
+    }
+
+    /// Push `target` (from [`Repo::push_target`], the one the person
+    /// approved) as `git push <remote> refs/heads/<b>:refs/heads/<b>`, never
+    /// forced. It is resolved again first: a remote whose URLs changed since
+    /// is refused. See the module's *Pushing* section for what keeps it safe.
+    ///
+    /// # Errors
+    ///
+    /// As [`Repo::push_target`]; [`ErrorCode::Git`] when git fails, with
+    /// its rejection and error lines (credentials redacted).
+    pub fn push(&self, target: &PushTarget, set_upstream: bool) -> ToolResult<Pushed> {
+        let now = self.push_target(Some(&target.remote), Some(&target.branch))?;
+        if now != *target {
+            return Err(ToolError::new(
+                ErrorCode::Git,
+                format!("`{}` changed since the push was approved", target.remote),
+            ));
+        }
+        let full = format!("refs/heads/{}", target.branch);
         let refspec = format!("{full}:{full}");
         let mut args = vec![
             "push",
@@ -1597,63 +1669,28 @@ impl Repo {
         if set_upstream {
             args.push("--set-upstream");
         }
-        args.extend([remote, refspec.as_str()]);
-        let output = self.spawn_push(&args).map_err(|error| {
-            ToolError::new(error.code(), redact_url_credentials(error.message()))
-        })?;
+        args.extend([target.remote.as_str(), refspec.as_str()]);
+        let output = self.spawn_push(&args)?;
         let (report, _) = capped(&output);
         Ok(Pushed {
-            remote: remote.to_owned(),
-            branch,
+            target: now,
             report: redact_url_credentials(report.trim_end()),
         })
     }
 
-    /// The local config keys a push refuses ([`push_dangerous_key`]),
-    /// besides what [`Repo::check`] refuses for every call.
-    fn check_push_config(&self) -> ToolResult<()> {
-        let mut files = vec![
-            ("config", self.common_dir.join("config")),
-            ("config.worktree", self.common_dir.join("config.worktree")),
-        ];
-        if self.is_linked_worktree() {
-            files.push((
-                "worktree config.worktree",
-                self.git_dir.join("config.worktree"),
-            ));
-        }
-        for (name, path) in files {
-            let Some(text) = read_config_file(&path, name)? else {
-                continue;
-            };
-            let entries = parse_config(&text).map_err(|reason| {
-                unsafe_repo(format!(".git/{name} cannot be parsed safely: {reason}"))
-            })?;
-            if let Some((entry, reason)) = entries
-                .iter()
-                .find_map(|entry| push_dangerous_key(&entry.key).map(|reason| (entry, reason)))
-            {
-                return Err(unsafe_repo(format!(
-                    "the repository's .git/{name} sets `{}` ({reason}), which a push with your \
-                     credentials must not use",
-                    entry.key
-                )));
-            }
-        }
-        Ok(())
-    }
-
     /// Run a push: hardened, without the file-system sandbox (the person's
     /// credential helper and `ssh` must read their credentials, and git
-    /// updates the remote-tracking refs), with the network.
+    /// updates the remote-tracking refs), with the network. A failure
+    /// carries git's porcelain rejections (`!` lines) and its error lines,
+    /// so a rejected push reads apart from an authentication or network
+    /// failure.
     fn spawn_push(&self, args: &[&str]) -> ToolResult<Vec<u8>> {
         let mut command = Command::new(git_binary()?);
         command
             .current_dir(&self.top)
             .args(push_hardening(cfg!(test)))
-            .args(args)
-            .env_clear()
-            .envs(host_git_environment());
+            .args(args);
+        self.pin_environment(&mut command);
         // The person's agent, temporary directory and proxy: what their
         // `ssh` and credential helper need, nothing the repository sets.
         for name in [
@@ -1674,23 +1711,38 @@ impl Repo {
                 command.env(name, value);
             }
         }
+        command.env("GCM_INTERACTIVE", "never");
+        let (status, out, err) = run_collect(command, None, PUSH_TIMEOUT, "push")?;
+        if status.success() {
+            return Ok(out);
+        }
+        Err(ToolError::new(ErrorCode::Git, push_failure(&out, &err)))
+    }
+
+    /// The environment every host git process starts from: nothing of the
+    /// parent's but [`host_git_environment`], then the git variables pinned
+    /// (the directories the check resolved, no system config, no prompt).
+    fn pin_environment(&self, command: &mut Command) {
         command
+            .env_clear()
+            .envs(host_git_environment())
             .env("GIT_DIR", &self.git_dir)
             .env("GIT_WORK_TREE", &self.top)
             .env("LC_ALL", "C")
             .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GCM_INTERACTIVE", "never")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_ATTR_NOSYSTEM", "1")
             .env("GIT_NO_REPLACE_OBJECTS", "1")
             .env("GIT_PROTOCOL_FROM_USER", "0");
         if self.is_linked_worktree() {
+            // git reads `commondir` only when this is unset: the shared
+            // directory is the one the check resolved, never what the
+            // file says now.
             command.env("GIT_COMMON_DIR", &self.common_dir);
         }
         if let Some(global) = &self.global_config {
             command.env("GIT_CONFIG_GLOBAL", global);
         }
-        run_bounded(command, None, PUSH_TIMEOUT, "push", false)
     }
 
     /// A git call in this repository, from `cwd` (inside the work tree).
@@ -1868,30 +1920,9 @@ impl<'a> Git<'a> {
         };
         let prepared = prepare(&request, &words, &config)?;
         let mut command = Command::new(&prepared.program);
-        command
-            .current_dir(self.cwd)
-            .args(&prepared.args)
-            .env_clear()
-            .envs(host_git_environment());
-        command
-            .env("GIT_DIR", &self.repo.git_dir)
-            .env("GIT_WORK_TREE", &self.repo.top)
-            .env("LC_ALL", "C")
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_ATTR_NOSYSTEM", "1")
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .env("GIT_NO_REPLACE_OBJECTS", "1")
-            .env("GIT_PROTOCOL_FROM_USER", "0");
-        if self.repo.is_linked_worktree() {
-            // git reads `commondir` only when this is unset: the shared
-            // directory is the one the check resolved, never what the
-            // file says now.
-            command.env("GIT_COMMON_DIR", &self.repo.common_dir);
-        }
-        if let Some(global) = &self.repo.global_config {
-            command.env("GIT_CONFIG_GLOBAL", global);
-        }
+        command.current_dir(self.cwd).args(&prepared.args);
+        self.repo.pin_environment(&mut command);
+        command.env("GIT_OPTIONAL_LOCKS", "0");
         for (name, value) in &self.env {
             command.env(name, value);
         }
@@ -1945,14 +1976,67 @@ fn drain<R: std::io::Read + Send + 'static>(mut reader: R, cap: usize) -> mpsc::
 }
 
 /// Spawn `command` in its own process group, feed `stdin`, and kill the
-/// group at `timeout`.
+/// group at `timeout`: the raw output on success, else the first error
+/// line.
 fn run_bounded(
-    mut command: Command,
+    command: Command,
     stdin: Option<&[u8]>,
     timeout: Duration,
     what: &str,
     exit_one_ok: bool,
 ) -> ToolResult<Vec<u8>> {
+    let (status, out, err) = run_collect(command, stdin, timeout, what)?;
+    if status.success() || (exit_one_ok && status.code() == Some(1)) {
+        Ok(out)
+    } else {
+        let stderr = String::from_utf8_lossy(&err);
+        let first = stderr
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("fatal") || line.starts_with("error"))
+            .or_else(|| stderr.lines().next())
+            .unwrap_or("git failed")
+            .trim();
+        Err(ToolError::new(
+            ErrorCode::Git,
+            format!("git {what}: {first}"),
+        ))
+    }
+}
+
+/// Lines of a failed push's message, at most.
+const PUSH_FAILURE_LINES: usize = 20;
+
+/// A failed push, for the agent: the porcelain rejections (`!` lines of
+/// stdout: which ref and why) and git's `fatal`, `error` and `hint` lines,
+/// URL credentials redacted.
+fn push_failure(out: &[u8], err: &[u8]) -> String {
+    let out = String::from_utf8_lossy(out);
+    let err = String::from_utf8_lossy(err);
+    let lines: Vec<&str> = out
+        .lines()
+        .filter(|line| line.starts_with('!'))
+        .chain(err.lines().map(str::trim).filter(|line| {
+            line.starts_with("fatal") || line.starts_with("error") || line.starts_with("hint")
+        }))
+        .take(PUSH_FAILURE_LINES)
+        .collect();
+    let text = if lines.is_empty() {
+        err.lines().next().unwrap_or("git failed").trim().to_owned()
+    } else {
+        lines.join("\n")
+    };
+    redact_url_credentials(&format!("git push failed:\n{text}"))
+}
+
+/// Spawn `command` in its own process group, feed `stdin`, kill the group
+/// at `timeout`, and collect its status, stdout and stderr.
+fn run_collect(
+    mut command: Command,
+    stdin: Option<&[u8]>,
+    timeout: Duration,
+    what: &str,
+) -> ToolResult<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {
     use std::os::unix::process::CommandExt as _;
     command
         .stdin(if stdin.is_some() {
@@ -2009,24 +2093,7 @@ fn run_bounded(
             .and_then(|receiver| receiver.recv_timeout(Duration::from_secs(2)).ok())
             .unwrap_or_default()
     };
-    let out = collect(stdout);
-    let err = collect(stderr);
-    if status.success() || (exit_one_ok && status.code() == Some(1)) {
-        Ok(out)
-    } else {
-        let stderr = String::from_utf8_lossy(&err);
-        let first = stderr
-            .lines()
-            .map(str::trim)
-            .find(|line| line.starts_with("fatal") || line.starts_with("error"))
-            .or_else(|| stderr.lines().next())
-            .unwrap_or("git failed")
-            .trim();
-        Err(ToolError::new(
-            ErrorCode::Git,
-            format!("git {what}: {first}"),
-        ))
-    }
+    Ok((status, collect(stdout), collect(stderr)))
 }
 
 /// A revision argument the model may pass: a commit, never an option and
@@ -2776,5 +2843,25 @@ mod tests {
             "To https://github.com/o/r"
         );
         assert_eq!(redact("no url"), "no url");
+    }
+
+    /// A failed push keeps the porcelain rejection and git's error lines,
+    /// credentials redacted; noise (progress, `To` lines) is left out.
+    #[test]
+    fn a_failed_push_reports_rejections_and_errors() {
+        let out = b"To https://u:tok@host/r.git\n!\trefs/heads/main:refs/heads/main\t[rejected] (fetch first)\nDone\n";
+        let err = b"error: failed to push some refs to 'https://u:tok@host/r.git'\nhint: Updates were rejected\n";
+        let text = super::push_failure(out, err);
+        assert!(text.contains("[rejected] (fetch first)"), "{text}");
+        assert!(text.contains("error: failed to push some refs"), "{text}");
+        assert!(text.contains("hint: Updates were rejected"), "{text}");
+        assert!(!text.contains("tok"), "{text}");
+        assert!(!text.contains("Done"), "{text}");
+        let auth = super::push_failure(
+            b"",
+            b"fatal: Authentication failed for 'https://host/r.git/'\n",
+        );
+        assert!(auth.contains("fatal: Authentication failed"), "{auth}");
+        assert!(!auth.contains('!'), "{auth}");
     }
 }

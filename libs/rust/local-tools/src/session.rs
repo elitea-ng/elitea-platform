@@ -618,6 +618,20 @@ struct GitArgs {
     max_count: Option<u32>,
 }
 
+/// `word` as a shell would need it written to read it back as one word:
+/// for showing an argv, never for running it.
+fn shell_word(word: &str) -> String {
+    if !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:@%+=,".contains(c))
+    {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
+}
+
 fn parse<T: for<'de> Deserialize<'de>>(args: Value) -> ToolResult<T> {
     serde_json::from_value(args)
         .map_err(|error| ToolError::invalid(format!("bad arguments: {error}")))
@@ -1161,7 +1175,13 @@ impl LocalSession {
                 std::iter::once(&DIAGNOSTICS)
                     .filter(|_| self.lsp.offered(&self.workspace, policy.shell)),
             )
-            .chain(std::iter::once(&GIT_PUSH).filter(|_| policy.network))
+            // Only where the host serves it (not the cloud runner, whose
+            // worker pushes), and like every tool that starts a process,
+            // only with the shell.
+            .chain(
+                std::iter::once(&GIT_PUSH)
+                    .filter(|_| self.shell.host_push && policy.shell && policy.network),
+            )
             .filter(|tool| !(tool.kind.runs_commands() || tool.kind.is_process()) || policy.shell)
             .filter(|tool| {
                 !matches!(
@@ -1768,7 +1788,9 @@ impl LocalSession {
     /// .git" and hands to the person. Full access with the network is no
     /// sandbox, so such a command runs as asked.
     fn sandboxed_push(&self, command: &str, mode: SandboxMode, network: bool) -> Option<ToolError> {
-        if (mode == SandboxMode::FullAccess && network) || !crate::classify::names_git_push(command)
+        if !self.shell.host_push
+            || (mode == SandboxMode::FullAccess && network)
+            || !crate::classify::names_git_push(command)
         {
             return None;
         }
@@ -1842,6 +1864,7 @@ impl LocalSession {
             loopback: args.loopback,
             keep_alive: keep_alive == KeepAlive::Session,
             mcp: None,
+            argv: None,
         };
         let message = match (background, args.tty) {
             (_, true) => "run a command on a terminal",
@@ -2097,37 +2120,52 @@ impl LocalSession {
                 )));
             }
         }
-        let mut words = vec![
-            "git".to_owned(),
-            "push".to_owned(),
-            remote.clone().unwrap_or_else(|| "origin".to_owned()),
-        ];
-        words.extend(branch.clone());
+        // The remote, the branch and the URLs are resolved before anyone is
+        // asked: the rules judge, and the person sees, the push it will be.
+        let target = self
+            .blocking(move |this| {
+                this.git_repo()?
+                    .push_target(remote.as_deref(), branch.as_deref())
+            })
+            .await?;
+        let words = target.argv();
         let mut call = ToolCall::new(ToolKind::GitPush);
-        call.command = Some(words.join(" "));
+        call.command = Some(
+            words
+                .iter()
+                .map(|word| shell_word(word))
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+        call.argv = Some(words);
         call.network = true;
         let prompt = format!(
-            "push {} to {}",
-            branch.as_deref().unwrap_or("the current branch"),
-            remote.as_deref().unwrap_or("origin")
+            "push {} to {} ({})",
+            target.branch,
+            target.remote,
+            target.urls.join(", ")
         );
         self.authorize(call_id, call, &prompt).await?;
+        let set_upstream = args.set_upstream;
         self.blocking(move |this| {
-            let repo = match (this.checkpoints.repo(), this.checkpoints.git_refusal()) {
-                (Some(repo), _) => repo,
-                (None, Some(refusal)) => return Err(refusal.clone()),
-                (None, None) => {
-                    return Err(ToolError::new(ErrorCode::Git, "the folder is not in git"));
-                }
-            };
-            let pushed = repo.push(remote.as_deref(), branch.as_deref(), args.set_upstream)?;
+            let pushed = this.git_repo()?.push(&target, set_upstream)?;
             Ok(json!({
-                "remote": pushed.remote,
-                "branch": pushed.branch,
+                "remote": pushed.target.remote,
+                "branch": pushed.target.branch,
+                "urls": pushed.target.urls,
                 "report": pushed.report,
             }))
         })
         .await
+    }
+
+    /// The session's repository, or why there is none.
+    fn git_repo(&self) -> ToolResult<&crate::git::Repo> {
+        match (self.checkpoints.repo(), self.checkpoints.git_refusal()) {
+            (Some(repo), _) => Ok(repo),
+            (None, Some(refusal)) => Err(refusal.clone()),
+            (None, None) => Err(ToolError::new(ErrorCode::Git, "the folder is not in git")),
+        }
     }
 
     async fn git_read(

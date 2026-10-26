@@ -600,21 +600,16 @@ fn git_subcommand_at(args: &[String]) -> Option<usize> {
 }
 
 fn git_risk(args: &[String]) -> Option<String> {
-    let mut index = 0;
-    while let Some(word) = args.get(index) {
-        if !word.starts_with('-') {
-            break;
-        }
-        if GIT_VALUED.contains(&word.as_str()) {
-            let value = args.get(index + 1).map_or("", String::as_str);
-            if word == "-c" && (value.starts_with("alias.") || value.contains('!')) {
-                return ask("`git -c` defines a command");
-            }
-            index += 1;
-        }
-        index += 1;
+    let index = git_subcommand_at(args);
+    let options = &args[..index.unwrap_or(args.len())];
+    if options
+        .windows(2)
+        .any(|pair| pair[0] == "-c" && (pair[1].starts_with("alias.") || pair[1].contains('!')))
+    {
+        return ask("`git -c` defines a command");
     }
-    let sub = args.get(index)?.as_str();
+    let index = index?;
+    let sub = args[index].as_str();
     let rest = &args[index + 1..];
     let reason = match sub {
         "push" => "pushes to a remote",

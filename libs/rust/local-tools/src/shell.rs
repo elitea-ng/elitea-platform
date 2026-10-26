@@ -111,6 +111,11 @@ pub struct ShellConfig {
     /// The longest a background process runs before it is stopped
     /// (`timed_out`); 4 hours by default.
     pub max_process_wall: Duration,
+    /// Offer `git_push` (the host's git with the person's credentials) and
+    /// point a sandboxed `git push` at it. On by default; the cloud
+    /// executor's runner turns it off (its worker pushes, and its tool set
+    /// has no `git_push`).
+    pub host_push: bool,
 }
 
 impl ShellConfig {
@@ -138,6 +143,7 @@ impl ShellConfig {
             git_global_config: None,
             background_processes: true,
             max_process_wall: Duration::from_hours(4),
+            host_push: true,
         }
     }
 
