@@ -26,8 +26,10 @@
 //!    worktree itself (a workspace the person opened), see
 //!    [`trust_worktree_parent`], or a task worktree the host created and
 //!    recorded itself, see [`register_worktree`]; its repository's `.git`
-//!    is then checked as below) at the work tree's top, with no `commondir`, no
-//!    `modules/`, no alternates, and a local config (and `config.worktree`)
+//!    is then checked as below) at the work tree's top, with no `commondir`,
+//!    no alternates, no submodules once `modules/` or a `submodule.*`
+//!    section suggests some (a stale `modules/` or section of submodules
+//!    since removed is accepted), and a local config (and `config.worktree`)
 //!    that this module parses itself and git's own reader lists (reading
 //!    config runs no code; includes are not followed): both must agree on
 //!    the sections and neither may see a dangerous key family
@@ -418,10 +420,35 @@ fn is_false(value: Option<&str>) -> bool {
 /// Why a repository-local config key is refused, if it is.
 ///
 /// Whole sections that run code or redirect git (`filter`, `include`,
-/// `includeIf`, `alias`, `credential`, `protocol`, `url`, `submodule`,
-/// `gpg`, `pager`), any `*.textconv`, `*.command`, `*.cmd`, `*.driver`,
-/// and the single keys that run programs or move the work tree. Signing
-/// and signature switches and `core.fsmonitor` pass when they are false.
+/// `includeIf`, `alias`, `credential`, `protocol`, `url`, `gpg`, `pager`),
+/// any `*.textconv`, `*.command`, `*.cmd`, `*.driver`, and the single keys
+/// that run programs or move the work tree. Signing and signature switches
+/// and `core.fsmonitor` pass when they are false.
+///
+/// Two families pass that once were refused:
+///
+/// * `core.hooksPath` (husky's `.husky`, or `.git/hooks` spelled out): a
+///   hook runs only when git looks in the hooks path, and every host git
+///   process gets `-c core.hooksPath=/dev/null` from [`HARDENING`] in
+///   [`Git::spawn`], which beats every config file. `Git::spawn` is the
+///   only way this crate and the desktop run git on a repository (the one
+///   other `git` process, [`valid_ref_name`], reads no repository); the
+///   workspace store reads objects with gix's object and pack crates,
+///   which run no hooks. So the repository's hooks path is never looked
+///   in, whatever it says. The agent's own `git` in its shell is a command
+///   like any other: sandboxed, and running the default `.git/hooks` with
+///   or without this key.
+/// * `submodule.<name>.<key>` for the keys `git submodule init` writes
+///   (`url`, `active`, `branch`, `shallow`, `ignore`,
+///   `fetchRecurseSubmodules`) and `update` naming a strategy
+///   (`checkout`, `rebase`, `merge`, `none`): none of them runs anything
+///   by itself, only a `git submodule` command reads them, and the host
+///   never runs one (no host call names `submodule`; [`HARDENING`] sets
+///   `submodule.recurse=false`). [`Repo::check`] still refuses the
+///   section unless the repository has no submodules (left over from
+///   submodules since removed). `update = !<command>`, any other value of
+///   `update`, any other key and the top-level `submodule.*` keys stay
+///   refused.
 #[must_use]
 pub fn dangerous_key(key: &str, value: Option<&str>) -> Option<&'static str> {
     let section = key.split('.').next().unwrap_or_default();
@@ -433,7 +460,7 @@ pub fn dangerous_key(key: &str, value: Option<&str>) -> Option<&'static str> {
         "alias" => return Some("an alias"),
         "credential" => return Some("a credential helper"),
         "protocol" | "url" => return Some("a transport setting"),
-        "submodule" => return Some("a submodule"),
+        "submodule" => return submodule_key(name, has_subsection, value),
         "gpg" => return Some("a gpg program"),
         "pager" => return Some("a pager"),
         _ => {}
@@ -450,7 +477,6 @@ pub fn dangerous_key(key: &str, value: Option<&str>) -> Option<&'static str> {
         "core.fsmonitor" => Some("an fsmonitor command"),
         "commit.gpgsign" | "tag.gpgsign" | "log.showsignature" => Some("signing"),
         "core.worktree" => Some("core.worktree"),
-        "core.hookspath" => Some("a hooks path"),
         "core.sshcommand" | "core.gitproxy" => Some("an ssh or proxy command"),
         "core.askpass" => Some("an askpass program"),
         "core.editor" | "sequence.editor" => Some("an editor"),
@@ -470,6 +496,28 @@ pub fn dangerous_key(key: &str, value: Option<&str>) -> Option<&'static str> {
 /// (relative entries are ignored). On macOS the `/usr/bin/git` shim is
 /// resolved to the developer tools' git, which runs without `xcrun`'s
 /// cache files.
+/// Why a `submodule.*` key is refused, if it is (see [`dangerous_key`]).
+fn submodule_key(name: &str, has_subsection: bool, value: Option<&str>) -> Option<&'static str> {
+    if !has_subsection {
+        return Some("a submodule setting");
+    }
+    match name {
+        "url" | "active" | "branch" | "shallow" | "ignore" | "fetchrecursesubmodules" => None,
+        "update"
+            if value.is_some_and(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "checkout" | "rebase" | "merge" | "none"
+                )
+            }) =>
+        {
+            None
+        }
+        "update" => Some("a submodule update command"),
+        _ => Some("a submodule setting"),
+    }
+}
+
 /// The text of a config file (`name` labels it in refusals); `None` when
 /// there is none.
 fn read_config_file(path: &Path, name: &str) -> ToolResult<Option<String>> {
@@ -845,6 +893,9 @@ pub struct Repo {
     attributes_checked: Arc<Mutex<Option<[u8; 32]>>>,
     /// How many full attribute scans ran (tests).
     attribute_scans: Arc<AtomicUsize>,
+    /// The [`Repo::submodule_key`] of the last look for submodules that
+    /// found none: the same key again needs no `ls-files`/`ls-tree`.
+    submodules_checked: Arc<Mutex<Option<[u8; 32]>>>,
 }
 
 impl Repo {
@@ -894,6 +945,7 @@ impl Repo {
             verified: Arc::default(),
             attributes_checked: Arc::default(),
             attribute_scans: Arc::default(),
+            submodules_checked: Arc::default(),
         };
         repo.check()?;
         Ok(Some(repo))
@@ -925,6 +977,7 @@ impl Repo {
             verified: Arc::default(),
             attributes_checked: Arc::default(),
             attribute_scans: Arc::default(),
+            submodules_checked: Arc::default(),
         };
         repo.check()?;
         Ok(repo)
@@ -959,6 +1012,7 @@ impl Repo {
             verified: Arc::default(),
             attributes_checked: Arc::default(),
             attribute_scans: Arc::default(),
+            submodules_checked: Arc::default(),
         };
         repo.check()?;
         Ok(repo)
@@ -1065,13 +1119,7 @@ impl Repo {
                 )));
             }
         }
-        let modules = self.common_dir.join("modules");
-        if std::fs::read_dir(&modules).is_ok_and(|mut entries| entries.next().is_some()) {
-            return Err(unsafe_repo(format!(
-                "the repository has submodules with their own git directories ({}); if those submodules are gone, delete the leftover folders there",
-                modules.display()
-            )));
-        }
+        let mut submodule_sections = false;
         let mut configs = vec![
             ("config".to_owned(), self.common_dir.join("config")),
             (
@@ -1094,6 +1142,7 @@ impl Repo {
                 unsafe_repo(format!(".git/{name} cannot be parsed safely: {reason}"))
             })?;
             refuse_dangerous(name, path, &ours)?;
+            submodule_sections |= ours.iter().any(|entry| entry.key.starts_with("submodule."));
             if self.verified_config(name, &text) {
                 continue;
             }
@@ -1117,7 +1166,121 @@ impl Repo {
                 verified.push((name.to_owned(), text));
             }
         }
+        self.check_submodules(submodule_sections)
+    }
+
+    /// The submodule rule of [`Self::check`]; `submodule_sections`: a
+    /// local config sets `submodule.*`.
+    fn check_submodules(&self, submodule_sections: bool) -> ToolResult<()> {
+        // Submodule git directories (`.git/modules`) and `submodule.*`
+        // sections are accepted only while the repository has no
+        // submodules: no `.gitmodules` entry and no gitlink in the index
+        // or in `HEAD`'s tree. Then nothing leads git into them: a git
+        // directory under `modules/` is used only for a gitlink, and the
+        // host also passes `submodule.recurse=false`,
+        // `diff.ignoreSubmodules=all` and never runs `git submodule`. That
+        // is a clone whose submodules were removed (`git rm` leaves both
+        // behind). The agent cannot make one live: its commands cannot
+        // write `.git` (no index entry, no gitlink), and a `.gitmodules` it
+        // writes in the work tree only turns this into a refusal. Asked
+        // only after the config passed, since it runs git.
+        let modules = self.common_dir.join("modules");
+        let module_dirs =
+            std::fs::read_dir(&modules).is_ok_and(|mut entries| entries.next().is_some());
+        if (module_dirs || submodule_sections)
+            && let Some(found) = self.present_submodule()?
+        {
+            return Err(unsafe_repo(if module_dirs {
+                format!(
+                    "the repository has submodules with their own git directories ({}): {found}",
+                    modules.display()
+                )
+            } else {
+                format!(
+                    "the repository's .git/config configures submodules and it has them: {found}"
+                )
+            }));
+        }
         Ok(())
+    }
+
+    /// A submodule the repository has, described (`None`: it has none):
+    /// an entry of `.gitmodules`, or a gitlink in the index or in `HEAD`'s
+    /// tree. A `.gitmodules` that cannot be read or parsed counts as one.
+    fn present_submodule(&self) -> ToolResult<Option<String>> {
+        let key = self.submodule_key();
+        if self
+            .submodules_checked
+            .lock()
+            .is_ok_and(|checked| *checked == Some(key))
+        {
+            return Ok(None);
+        }
+        let gitmodules = self.top.join(".gitmodules");
+        if std::fs::symlink_metadata(&gitmodules).is_ok() {
+            let declared = read_config_file(&gitmodules, ".gitmodules")
+                .ok()
+                .flatten()
+                .and_then(|text| parse_config(&text).ok())
+                .is_none_or(|entries| {
+                    entries
+                        .iter()
+                        .any(|entry| entry.key.starts_with("submodule."))
+                });
+            if declared {
+                return Ok(Some(format!("{} declares one", gitmodules.display())));
+            }
+        }
+        // `ls-files --stage` and `ls-tree` both print `<mode> …\t<path>`.
+        let gitlink = |listing: &[u8]| {
+            listing.split(|byte| *byte == 0).find_map(|line| {
+                let line = String::from_utf8_lossy(line);
+                let (meta, path) = line.split_once('\t')?;
+                meta.starts_with("160000 ").then(|| path.to_owned())
+            })
+        };
+        let index = self.git(&self.top).spawn(&["ls-files", "--stage", "-z"])?;
+        if let Some(path) = gitlink(&index) {
+            return Ok(Some(format!("{path} is a submodule in the index")));
+        }
+        let tree = self.git(&self.top).exit_one_ok().spawn(&[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "HEAD^{tree}",
+        ])?;
+        let tree = String::from_utf8_lossy(&tree).trim().to_owned();
+        if !tree.is_empty() {
+            let listing =
+                self.git(&self.top)
+                    .spawn(&["ls-tree", "-r", "-z", "--full-tree", &tree])?;
+            if let Some(path) = gitlink(&listing) {
+                return Ok(Some(format!("{path} is a submodule in HEAD")));
+            }
+        }
+        if let Ok(mut checked) = self.submodules_checked.lock() {
+            *checked = Some(key);
+        }
+        Ok(None)
+    }
+
+    /// What [`Self::present_submodule`]'s answer depends on: the index,
+    /// `HEAD` and the ref it names, `packed-refs` and `.gitmodules`, by
+    /// their file metadata.
+    fn submodule_key(&self) -> [u8; 32] {
+        let mut hash = Sha256::new();
+        for name in ["index", "HEAD"] {
+            hash_stat(&mut hash, &self.git_dir.join(name));
+        }
+        hash_stat(&mut hash, &self.common_dir.join("packed-refs"));
+        if let Ok(head) = std::fs::read_to_string(self.git_dir.join("HEAD")) {
+            if let Some(reference) = head.trim().strip_prefix("ref: ") {
+                hash_stat(&mut hash, &self.common_dir.join(reference));
+            }
+            hash.update(head.as_bytes());
+        }
+        hash_stat(&mut hash, &self.top.join(".gitmodules"));
+        hash.finalize().into()
     }
 
     /// Whether git already agreed on exactly this text of `name`.
@@ -1290,28 +1453,8 @@ impl Repo {
     /// directories, ignored ones included) and `info/attributes`, by
     /// size, times and inode.
     fn attribute_key(&self, drivers: &BTreeSet<(String, String)>, paths: &[u8]) -> [u8; 32] {
-        use std::os::unix::fs::MetadataExt as _;
         let mut hash = Sha256::new();
-        let mut stat = |path: &Path| {
-            hash.update(path.as_os_str().as_encoded_bytes());
-            hash.update([0]);
-            match std::fs::symlink_metadata(path) {
-                Ok(meta) => {
-                    for number in [
-                        meta.len(),
-                        meta.ino(),
-                        meta.mode().into(),
-                        meta.mtime().cast_unsigned(),
-                        meta.mtime_nsec().cast_unsigned(),
-                        meta.ctime().cast_unsigned(),
-                        meta.ctime_nsec().cast_unsigned(),
-                    ] {
-                        hash.update(number.to_le_bytes());
-                    }
-                }
-                Err(_) => hash.update([0xff]),
-            }
-        };
+        let mut stat = |path: &Path| hash_stat(&mut hash, path);
         let mut dirs = BTreeSet::new();
         dirs.insert(PathBuf::new());
         for path in paths.split(|byte| *byte == 0) {
@@ -1407,6 +1550,29 @@ impl Repo {
             worktree: false,
             exit_one_ok: false,
         }
+    }
+}
+
+/// Feed `path` and its metadata (or its absence) to `hash`.
+fn hash_stat(hash: &mut Sha256, path: &Path) {
+    use std::os::unix::fs::MetadataExt as _;
+    hash.update(path.as_os_str().as_encoded_bytes());
+    hash.update([0]);
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => {
+            for number in [
+                meta.len(),
+                meta.ino(),
+                meta.mode().into(),
+                meta.mtime().cast_unsigned(),
+                meta.mtime_nsec().cast_unsigned(),
+                meta.ctime().cast_unsigned(),
+                meta.ctime_nsec().cast_unsigned(),
+            ] {
+                hash.update(number.to_le_bytes());
+            }
+        }
+        Err(_) => hash.update([0xff]),
     }
 }
 
@@ -1991,35 +2157,169 @@ mod tests {
     /// and how to clear it, never a guess about who owns it.
     #[test]
     fn refusals_name_the_path_and_the_way_out() {
-        // Leftover submodule git directories (submodules since removed).
         let (_dir, base, _repo) = repo();
         let top = base.join("repo");
-        let modules = top.join(".git/modules");
-        std::fs::create_dir_all(modules.join("apps/old-ui")).expect("modules");
+        git(&top, &["config", "core.sshCommand", "touch x"]);
         let error = discover(&top).expect_err("refused");
         assert_eq!(error.code(), ErrorCode::UnsafeRepository);
-        assert!(
-            error.message().contains(&modules.display().to_string())
-                && error.message().contains("delete the leftover folders"),
-            "{}",
-            error.message()
-        );
-        assert!(!error.message().contains("another user"));
-        std::fs::remove_dir_all(&modules).expect("clean");
-
-        // A config key that runs code: the file and the key are named.
-        git(&top, &["config", "core.hooksPath", ".husky"]);
-        let error = discover(&top).expect_err("refused");
         let config = top.join(".git/config");
         assert!(
             error.message().contains(&format!("({})", config.display()))
-                && error.message().contains("`core.hookspath`")
+                && error.message().contains("`core.sshcommand`")
                 && error.message().contains("remove it from that file"),
             "{}",
             error.message()
         );
-        git(&top, &["config", "--unset", "core.hooksPath"]);
+        assert!(!error.message().contains("another user"));
+        git(&top, &["config", "--unset", "core.sshCommand"]);
         discover(&top).expect("trusted again").expect("found");
+    }
+
+    /// A gitlink at `path` in the index of `top` (a submodule as `git
+    /// submodule add` leaves it, without fetching anything).
+    fn add_gitlink(top: &Path, path: &str) {
+        git(
+            top,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("160000,{},{path}", "1".repeat(40)),
+            ],
+        );
+    }
+
+    /// The owner's clone as it is: `.git/modules` and `[submodule "…"]`
+    /// sections left behind by submodules since removed, and
+    /// `core.hooksPath` naming `.git/hooks`. Nothing there can run in host
+    /// git, so it is accepted; the hooks path never runs (the marker its
+    /// hooks would write stays absent through the host's own calls).
+    #[test]
+    fn a_clone_with_stale_submodule_leftovers_and_a_hooks_path_is_accepted() {
+        let (_dir, base, _repo) = repo();
+        let top = base.join("repo");
+        std::fs::write(top.join("a.txt"), "a").expect("write");
+        git(&top, &["add", "a.txt"]);
+        git(&top, &["commit", "-q", "-m", "a"]);
+        let marker = base.join("ran");
+        let module = top.join(".git/modules/apps/old-ui");
+        std::fs::create_dir_all(&module).expect("modules");
+        std::fs::write(
+            module.join("config"),
+            format!("[core]\n\tfsmonitor = touch {}\n", marker.display()),
+        )
+        .expect("module config");
+        for (key, value) in [
+            (
+                "submodule.apps/old-ui.url",
+                "https://example.com/old-ui.git",
+            ),
+            ("submodule.apps/old-ui.active", "true"),
+            ("submodule.apps/old-ui.update", "rebase"),
+        ] {
+            git(&top, &["config", key, value]);
+        }
+        let hooks = top.join(".git/hooks");
+        git(
+            &top,
+            &["config", "core.hooksPath", &hooks.display().to_string()],
+        );
+        for hook in ["reference-transaction", "post-index-change", "pre-commit"] {
+            let path = hooks.join(hook);
+            std::fs::write(&path, format!("#!/bin/sh\ntouch {}\n", marker.display()))
+                .expect("hook");
+            std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .expect("chmod");
+        }
+        let repo = discover(&top).expect("trusted").expect("found");
+        // The check is cached until the index or HEAD changes: twice is
+        // the same answer.
+        repo.check().expect("still trusted");
+        let dot_git = top.join(".git");
+        std::fs::write(top.join("a.txt"), "b").expect("change");
+        repo.git(&top)
+            .writes(std::slice::from_ref(&dot_git))
+            .run(&["add", "a.txt"])
+            .expect("index write");
+        repo.git(&top)
+            .writes(std::slice::from_ref(&dot_git))
+            .run(&["update-ref", "refs/elitea/probe", "HEAD"])
+            .expect("ref update");
+        assert!(!marker.exists(), "a repository hook or module config ran");
+    }
+
+    /// A submodule the repository really has keeps it refused when its git
+    /// directory or its config section is there.
+    #[test]
+    fn a_repository_with_a_real_submodule_is_refused() {
+        // In the index, with its git directory.
+        let (_dir, base, _repo) = repo();
+        let top = base.join("repo");
+        let modules = top.join(".git/modules");
+        std::fs::create_dir_all(modules.join("sub")).expect("modules");
+        add_gitlink(&top, "sub");
+        let error = discover(&top).expect_err("refused");
+        assert_eq!(error.code(), ErrorCode::UnsafeRepository);
+        assert!(
+            error.message().contains(&modules.display().to_string())
+                && error.message().contains("sub is a submodule in the index"),
+            "{}",
+            error.message()
+        );
+
+        // Committed, then gone from the index: HEAD still has it.
+        git(&top, &["commit", "-q", "-m", "sub"]);
+        git(&top, &["rm", "-q", "--cached", "sub"]);
+        let error = discover(&top).expect_err("refused");
+        assert!(
+            error.message().contains("sub is a submodule in HEAD"),
+            "{}",
+            error.message()
+        );
+
+        // Declared in .gitmodules, configured, no git directory.
+        let (_dir, base, _repo) = repo();
+        let top = base.join("repo");
+        std::fs::write(
+            top.join(".gitmodules"),
+            "[submodule \"sub\"]\n\tpath = sub\n\turl = ../sub\n",
+        )
+        .expect("gitmodules");
+        git(&top, &["config", "submodule.sub.url", "../sub"]);
+        let error = discover(&top).expect_err("refused");
+        assert!(
+            error.message().contains(".gitmodules declares one"),
+            "{}",
+            error.message()
+        );
+        // Declared but never initialised (no section, no git directory):
+        // nothing leads host git into it, as before.
+        git(&top, &["config", "--remove-section", "submodule.sub"]);
+        discover(&top).expect("trusted").expect("found");
+    }
+
+    /// `submodule.<name>.update = !<command>` (and every submodule key
+    /// beyond the ones `git submodule init` writes) stays refused, stale
+    /// or not.
+    #[test]
+    fn a_submodule_update_command_is_refused() {
+        for (key, value) in [
+            ("submodule.old.update", "!touch x"),
+            ("submodule.old.update", "anything-else"),
+            ("submodule.old.foo", "x"),
+            ("submodule.recurse", "true"),
+        ] {
+            let (_dir, base, _repo) = repo();
+            let top = base.join("repo");
+            git(&top, &["config", key, value]);
+            let error = discover(&top).expect_err("refused");
+            assert_eq!(error.code(), ErrorCode::UnsafeRepository, "{key}");
+            assert!(
+                error.message().contains("submodule"),
+                "{key}: {}",
+                error.message()
+            );
+        }
     }
 
     /// A worktree `.git` another uid owns is still refused (the
@@ -2195,7 +2495,9 @@ mod tests {
             "credential.helper",
             "protocol.allow",
             "url.x.insteadof",
-            "submodule.m.url",
+            "submodule.m.update",
+            "submodule.m.foo",
+            "submodule.recurse",
             "gpg.program",
             "gpg.ssh.program",
             "diff.x.textconv",
@@ -2207,10 +2509,20 @@ mod tests {
             "core.askpass",
             "core.editor",
             "core.pager",
-            "core.hookspath",
             "pager.log",
         ] {
             assert!(dangerous_key(key, Some("x")).is_some(), "{key}");
+        }
+        assert!(dangerous_key("submodule.m.update", Some("!touch x")).is_some());
+        assert!(dangerous_key("submodule.m.update", None).is_some());
+        for (key, value) in [
+            ("core.hookspath", ".husky"),
+            ("submodule.m.url", "../m"),
+            ("submodule.m.active", "true"),
+            ("submodule.m.update", "Rebase"),
+            ("submodule.m.fetchrecursesubmodules", "false"),
+        ] {
+            assert!(dangerous_key(key, Some(value)).is_none(), "{key}");
         }
         assert!(dangerous_key("commit.gpgsign", Some("true")).is_some());
         assert!(dangerous_key("commit.gpgsign", Some("false")).is_none());
