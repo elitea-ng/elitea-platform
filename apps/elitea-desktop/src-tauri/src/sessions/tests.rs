@@ -1202,3 +1202,52 @@ async fn the_seed_boundary_is_kept_and_upgraded_from_schema_one() {
         .unwrap();
     assert_eq!(store.seed_skips(&key).await.unwrap(), Vec::<i64>::new());
 }
+
+#[test]
+fn one_shrink_rule_for_both_doctor_checks() {
+    let mib = 1024 * 1024;
+    let space = |bytes: u64, free_fraction: f64, incremental: bool| DbSpace {
+        bytes,
+        free_fraction,
+        incremental,
+    };
+    assert!(
+        space(200 * mib, 0.6, true).shrink_advised(),
+        "large and half free"
+    );
+    assert!(
+        !space(200 * mib, 0.1, true).shrink_advised(),
+        "large but in use"
+    );
+    assert!(!space(10 * mib, 0.9, true).shrink_advised(), "small");
+    assert!(
+        space(80 * mib, 0.0, false).shrink_advised(),
+        "too large to switch at open, not yet incremental: the shrink switches it"
+    );
+    assert!(
+        !space(10 * mib, 0.0, false).shrink_advised(),
+        "the open switches it"
+    );
+}
+
+#[tokio::test]
+async fn the_doctors_shrink_switches_a_file_to_incremental_vacuum() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let store = SessionStore::open(dir.path()).unwrap();
+        store
+            .open_session(&identity(1, "https://a.example"), "fp")
+            .await
+            .unwrap();
+    }
+    // A file too large to switch at open stays in mode NONE; the shrink is
+    // what switches it.
+    {
+        let conn = rusqlite::Connection::open(dir.path().join(FILE_NAME)).unwrap();
+        conn.execute_batch("PRAGMA auto_vacuum = NONE; VACUUM;")
+            .unwrap();
+    }
+    assert!(!database_space(dir.path(), FILE_NAME).incremental);
+    assert!(reclaim_database(dir.path(), FILE_NAME).unwrap() > 0);
+    assert!(database_space(dir.path(), FILE_NAME).incremental);
+}

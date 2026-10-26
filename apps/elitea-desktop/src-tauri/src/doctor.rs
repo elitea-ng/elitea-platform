@@ -592,16 +592,7 @@ impl LocalDoctor {
                 "The thread history is not open; it will be at the next start.".into(),
             );
         };
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let cutoff_ms = now_ms.saturating_sub(
-            i64::try_from(
-                u128::from(days)
-                    .saturating_mul(86_400)
-                    .saturating_mul(1_000),
-            )
-            .unwrap_or(i64::MAX),
-        );
-        match store.idle_threads(cutoff_ms) {
+        match store.idle_threads(days) {
             Ok(0) => Check::new(
                 ID,
                 TITLE,
@@ -631,60 +622,48 @@ impl LocalDoctor {
 
     /// What is eating the app's data directory (`data.space`): the size of
     /// the data dir and of its two databases, each database's free-page
-    /// fraction (trimmed space not yet returned to the disk), and the
-    /// spilled outputs in the cache dir. It warns, and offers the vacuum
-    /// repair, when a database holds half or more of itself free and is at
-    /// least 100 MiB.
+    /// share (trimmed space not yet returned to the disk), and the spilled
+    /// outputs (`<cache>/sessions` only, not the webview's cache). It warns
+    /// when a store's shrink is advised ([`sessions::DbSpace::shrink_advised`]);
+    /// the shrink itself is offered on that store's own check, by the same
+    /// rule, so both stores can be offered at once.
     fn data_space_check(&self) -> Check {
         const ID: &str = "data.space";
         const TITLE: &str = "What the data directory holds";
         let data = dir_bytes(&self.data_dir);
-        let sessions_bytes = fs::symlink_metadata(self.sessions_path())
-            .map(|m| m.len())
-            .unwrap_or(0);
-        let history_bytes = fs::symlink_metadata(self.history_path())
-            .map(|m| m.len())
-            .unwrap_or(0);
-        let sessions_free = self
-            .sessions
-            .as_ref()
-            .map(|state| state.store().free_page_fraction())
-            .unwrap_or(0.0);
-        let history_free = self
-            .history
-            .as_ref()
-            .map(|store| store.free_page_fraction())
-            .unwrap_or(0.0);
-        // Only the spills (`<cache>/sessions`): the rest of the cache dir is
-        // the webview's, not the app's to count.
+        let sessions = sessions::database_space(&self.data_dir, sessions::FILE_NAME);
+        let history = sessions::database_space(&self.data_dir, history::FILE_NAME);
         let spill = self
             .cache_dir
             .as_ref()
             .map(|dir| dir_bytes(&dir.join("sessions")))
             .unwrap_or(0);
         let message = format!(
-            "The data directory holds {data} ({} session memory, {} thread history); {} of spilled outputs in the cache dir. {:.0}% of the session memory and {:.0}% of the history are free pages.",
-            sessions_bytes,
-            history_bytes,
-            spill,
-            sessions_free * 100.0,
-            history_free * 100.0,
+            "The data directory holds {data} bytes ({} session memory, {} thread history); {spill} bytes of spilled outputs in the cache dir. {:.0}% of the session memory and {:.0}% of the history are free pages.",
+            sessions.bytes,
+            history.bytes,
+            sessions.free_fraction * 100.0,
+            history.free_fraction * 100.0,
         );
-        // A database that is at least 100 MiB and half free pages holds
-        // trimmed space it has not given back: offer the vacuum.
-        let sessions_vacuum = sessions_bytes >= 100 * 1024 * 1024 && sessions_free >= 0.5;
-        let history_vacuum = history_bytes >= 100 * 1024 * 1024 && history_free >= 0.5;
-        if sessions_vacuum {
-            return Check::new(ID, TITLE, Status::Warn, message).fix(
-                "sessions.vacuum",
-                "Give the trimmed stores their space back",
-            );
+        let advised: Vec<&str> = [
+            (sessions.shrink_advised(), "Agent session memory"),
+            (history.shrink_advised(), "Thread history"),
+        ]
+        .into_iter()
+        .filter_map(|(advised, title)| advised.then_some(title))
+        .collect();
+        if advised.is_empty() {
+            return Check::new(ID, TITLE, Status::Ok, message);
         }
-        if history_vacuum {
-            return Check::new(ID, TITLE, Status::Warn, message)
-                .fix("history.vacuum", "Give the trimmed stores their space back");
-        }
-        Check::new(ID, TITLE, Status::Ok, message)
+        Check::new(
+            ID,
+            TITLE,
+            Status::Warn,
+            format!(
+                "{message} Shrink {} from its own check to give the free space back.",
+                advised.join(" and ")
+            ),
+        )
     }
 
     /// The agent's session memory (`sessions.sqlite`): untrusted, loose,
@@ -776,23 +755,18 @@ impl LocalDoctor {
             ),
             Ok(_) => {
                 // Trimmed and deleted rows free pages; a file not yet under
-                // incremental vacuum (its switch failed at open) keeps them.
-                // A large file that is mostly free pages offers the shrink;
-                // one that uses what it holds does not (a VACUUM would give
-                // nothing back).
-                let bytes = fs::symlink_metadata(path)
-                    .map(|meta| meta.len())
-                    .unwrap_or_default();
-                if db.reclaims
-                    && bytes >= 100 * 1024 * 1024
-                    && sessions::database_free_page_fraction(&self.data_dir, db.file_name) >= 0.5
-                {
+                // incremental vacuum keeps them. One rule with `data.space`
+                // ([`sessions::DbSpace::shrink_advised`]).
+                let space = sessions::database_space(&self.data_dir, db.file_name);
+                let bytes = space.bytes;
+                if db.reclaims && space.shrink_advised() {
                     return Check::new(
                         id,
                         title,
                         Status::Ok,
                         format!(
-                            "Opens and passes its integrity check. The file holds {bytes} bytes, half or more of it free pages; the shrink gives that space back to the disk and keeps the {}.",
+                            "Opens and passes its integrity check. The file holds {bytes} bytes, {:.0}% of it free pages; the shrink gives that space back to the disk and keeps the {}.",
+                            space.free_fraction * 100.0,
                             db.noun
                         ),
                     )
@@ -1207,10 +1181,10 @@ impl LocalDoctor {
             )
         })?;
         let days = self.history_retention_days;
-        let pruned = store.prune_idle(days)?;
-        log::info!("diagnostics: pruned {pruned} idle thread(s), retention {days} days");
+        let threads = store.prune_idle(days)?;
+        log::info!("diagnostics: forgot {threads} idle thread(s), retention {days} days");
         Ok(format!(
-            "Forgotten {pruned} thread(s) idle more than {days} days. The server keeps the messages."
+            "Forgot {threads} thread(s) idle more than {days} days. The server keeps their messages."
         ))
     }
 }
@@ -1641,8 +1615,16 @@ pub struct Doctor {
 impl Doctor {
     /// `scope`: `local` checks this computer's files only (no network);
     /// anything else adds the deployment, the session and the policy.
-    pub async fn run(&self, scope: Option<&str>) -> Vec<Check> {
-        let mut checks = self.local.checks();
+    pub async fn run(self: &Arc<Self>, scope: Option<&str>) -> Vec<Check> {
+        // The local checks read files, walk the data directory and open the
+        // stores: off the async workers.
+        let doctor = self.clone();
+        let mut checks = tokio::task::spawn_blocking(move || doctor.local.checks())
+            .await
+            .unwrap_or_else(|error| {
+                log::warn!("diagnostics: the local checks stopped: {error}");
+                Vec::new()
+            });
         if scope != Some("local") {
             checks.extend(remote_checks(&self.auth).await);
         }

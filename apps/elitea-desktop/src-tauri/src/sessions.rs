@@ -374,6 +374,8 @@ pub struct SessionStore {
     sender: RwLock<Option<Sender<Job>>>,
     thread: Mutex<Option<std::thread::JoinHandle<()>>>,
     active: Arc<Active>,
+    /// The idle WAL checkpoint interval (a reclaim's restart keeps it).
+    idle_checkpoint: Duration,
 }
 
 fn open_connection(path: &Path) -> Result<Connection, HostError> {
@@ -492,6 +494,15 @@ fn closed() -> HostError {
     HostError::Storage("the session store is closed; restart Elitea".into())
 }
 
+/// `PRAGMA auto_vacuum` of a file under incremental vacuum.
+const INCREMENTAL: i64 = 2;
+/// The largest file [`ensure_incremental_vacuum`] switches at open (its
+/// one `VACUUM` stays well under a second); a larger one waits for the
+/// Doctor's shrink.
+pub const AUTO_SWITCH_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// A file this large and half free pages is worth a shrink.
+pub const SHRINK_MIN_BYTES: u64 = 100 * 1024 * 1024;
+
 /// Put the database on `conn` under incremental vacuum, so the pages a trim
 /// or a delete frees can go back to the OS (`PRAGMA incremental_vacuum`).
 /// A file created without it (every file before this mode, and a new file:
@@ -500,9 +511,10 @@ fn closed() -> HostError {
 /// `VACUUM` that fails (the disk is full, another process is mid-write
 /// past the busy timeout) is logged and the store opens as it was; the next
 /// open tries again. It never touches `user_version`, so an older build
-/// still opens the file.
+/// still opens the file. A file larger than [`AUTO_SWITCH_MAX_BYTES`] is
+/// left as it is, so a launch never waits on a long `VACUUM`: the Doctor
+/// offers its shrink ([`DbSpace::shrink_advised`]), which switches it.
 pub(crate) fn ensure_incremental_vacuum(conn: &Connection, what: &str) {
-    const INCREMENTAL: i64 = 2;
     match conn.query_row("PRAGMA auto_vacuum", [], |row| row.get::<_, i64>(0)) {
         Ok(INCREMENTAL) => return,
         Ok(_) => {}
@@ -510,6 +522,19 @@ pub(crate) fn ensure_incremental_vacuum(conn: &Connection, what: &str) {
             log::warn!("{what} could not read its vacuum mode: {error}");
             return;
         }
+    }
+    let bytes = conn
+        .query_row(
+            "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_or(u64::MAX, |bytes| u64::try_from(bytes).unwrap_or(0));
+    if bytes > AUTO_SWITCH_MAX_BYTES {
+        log::info!(
+            "{what} holds {bytes} bytes, too many to vacuum at launch; the Doctor offers the shrink"
+        );
+        return;
     }
     let started = std::time::Instant::now();
     let switched = conn
@@ -548,35 +573,66 @@ pub fn reclaim_database(dir: &Path, file_name: &str) -> Result<u64, HostError> {
         OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )
     .map_err(|e| storage("could not open the database", &e))?;
-    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")
-        .map_err(|e| storage("could not reclaim the database", &e))?;
+    conn.busy_timeout(Duration::from_secs(5))
+        .map_err(|e| storage("could not open the database", &e))?;
+    conn.execute_batch(
+        "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA auto_vacuum = INCREMENTAL; VACUUM;",
+    )
+    .map_err(|e| storage("could not reclaim the database", &e))?;
     Ok(before)
 }
 
-/// The fraction of the SQLite database at `dir/file_name` that is free
-/// pages (`0.0..=1.0`): what a trimmed store still holds that it does not
-/// use. `0.0` when the file is missing, not a database, empty, or the
-/// query fails (the check shows `0` then). Opened read-only through a
-/// no-follow connection, on a separate connection from the store's writer.
-pub fn database_free_page_fraction(dir: &Path, file_name: &str) -> f64 {
+/// What a store file holds, for the Doctor's space checks.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DbSpace {
+    /// The file's size on disk.
+    pub bytes: u64,
+    /// The share of its pages that are free (`0.0..=1.0`).
+    pub free_fraction: f64,
+    /// Under incremental vacuum: freed pages go back on their own.
+    pub incremental: bool,
+}
+
+impl DbSpace {
+    /// The one rule both Doctor checks use to offer a shrink: a file of at
+    /// least [`SHRINK_MIN_BYTES`] with half or more of it free pages, or a
+    /// file too large to switch at open ([`AUTO_SWITCH_MAX_BYTES`]) that is
+    /// not yet under incremental vacuum (the shrink switches it).
+    #[must_use]
+    pub fn shrink_advised(&self) -> bool {
+        (self.bytes >= SHRINK_MIN_BYTES && self.free_fraction >= 0.5)
+            || (!self.incremental && self.bytes > AUTO_SWITCH_MAX_BYTES)
+    }
+}
+
+/// What the SQLite database at `dir/file_name` holds ([`DbSpace`]). All
+/// zero when the file is missing, not a database, empty, or the query
+/// fails. Opened read-only through a no-follow connection, separate from
+/// the store's own.
+pub fn database_space(dir: &Path, file_name: &str) -> DbSpace {
     let path = dir.join(file_name);
-    let conn = match Connection::open_with_flags(
+    let bytes = fs::symlink_metadata(&path)
+        .map(|meta| meta.len())
+        .unwrap_or_default();
+    let Ok(conn) = Connection::open_with_flags(
         &path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    ) {
-        Ok(conn) => conn,
-        Err(_) => return 0.0,
+    ) else {
+        return DbSpace::default();
     };
-    let (pages, free): (i64, i64) = match (
-        conn.query_row("PRAGMA page_count;", rusqlite::params![], |row| row.get(0)),
-        conn.query_row("PRAGMA freelist_count;", rusqlite::params![], |row| {
-            row.get(0)
-        }),
+    let read = |pragma: &str| conn.query_row(pragma, [], |row| row.get::<_, i64>(0));
+    match (
+        read("PRAGMA page_count"),
+        read("PRAGMA freelist_count"),
+        read("PRAGMA auto_vacuum"),
     ) {
-        (Ok(pages), Ok(free)) if pages > 0 => (pages, free),
-        _ => return 0.0,
-    };
-    free as f64 / pages as f64
+        (Ok(pages), Ok(free), Ok(mode)) if pages > 0 => DbSpace {
+            bytes,
+            free_fraction: free as f64 / pages as f64,
+            incremental: mode == INCREMENTAL,
+        },
+        _ => DbSpace::default(),
+    }
 }
 
 impl SessionStore {
@@ -588,15 +644,6 @@ impl SessionStore {
     /// not a database, or it was written by a newer schema.
     pub fn open(dir: &Path) -> Result<Self, HostError> {
         Self::open_at(dir, WAL_IDLE_CHECKPOINT)
-    }
-
-    /// The fraction of this database that is free pages (`0.0..=1.0`): what
-    /// a trimmed store still holds that it does not use. `0.0` when the
-    /// file is empty or the query fails. The space check shows it next to
-    /// the file size; a large fraction is the hint for the
-    /// `sessions.vacuum` repair.
-    pub fn free_page_fraction(&self) -> f64 {
-        database_free_page_fraction(&self.dir, FILE_NAME)
     }
 
     /// [`Self::open`] with the interval of the idle WAL checkpoint named:
@@ -620,6 +667,7 @@ impl SessionStore {
             sender: RwLock::new(Some(writing.sender)),
             thread: Mutex::new(Some(writing.thread)),
             active: Arc::new(Active::default()),
+            idle_checkpoint,
         })
     }
 
@@ -743,7 +791,7 @@ impl SessionStore {
             log::warn!("the session store could not be reclaimed: {e}");
             e
         });
-        let started = start(&self.path);
+        let started = start_at(&self.path, self.idle_checkpoint);
         let writing = match (&before, started) {
             (_, Ok(writing)) => writing,
             (Err(_), Err(_)) => return before,
