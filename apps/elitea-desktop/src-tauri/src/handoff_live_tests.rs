@@ -816,7 +816,7 @@ async fn live_send_cloud_turn_take_back_import_and_undo() {
     let turns = h.history.thread(&owner, &h.workspace_id, &uuid).unwrap();
     assert_eq!(turns.len(), 1, "{turns:?}");
     assert_eq!(turns[0].origin, "cloud");
-    assert_eq!(turns[0].prompt, "Make it greet the cloud");
+    assert_eq!(turns[0].prompt, "change the README");
     assert_eq!(
         turns[0].turn_id,
         format!("cloud:{}", turn["answer_uuid"].as_str().unwrap())
