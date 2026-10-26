@@ -348,9 +348,34 @@ still waits is sent as `steer_dropped` with reason `turn_ended`, before
 `usage_total` and `done`; the UI then sends their texts, joined with a
 blank line, as the next turn. The commit of the turn keeps its own prompt
 as the user message: the server conversation does not get the injected
-messages. ACP (`src/acp/`) does not steer: a prompt for a session that
-runs a turn is still refused with `busy` (a client cancels, then sends a
-new prompt).
+messages.
+
+ACP (`src/acp/`) steers with the same queue. A `session/prompt` that
+arrives while a turn of its session runs is not refused: its text goes into
+that turn's steering queue, and the agent takes it at the next safe point,
+as above. Each `session/prompt` request still gets exactly one response:
+
+- The turn took it (`steer_injected`): the output after it streams as
+  `session/update`s of the running turn (no `user_message_chunk` is sent
+  for it: the client shows the prompt it sent). Its `PromptResponse` is
+  sent when the turn ends, with the turn's `stopReason` (or the turn's
+  JSON-RPC error, when the turn failed).
+- The turn ended first (`steer_dropped` `turn_ended`, or the turn could not
+  take it any more): it runs as the next prompt turn of the session, as if
+  it had arrived then, and is answered when that turn ends. Several such
+  prompts keep their order: the oldest runs as the turn, the others steer
+  it.
+- A `session/cancel` while it waits: it is answered `stopReason:
+  "cancelled"` (one the turn already took gets the turn's answer, which is
+  `cancelled` when the cancel stopped the turn).
+
+A prompt that steers is text blocks only: an image, audio, a resource or a
+resource link, or a slash command (`/compact`, a custom command) is refused
+with `-32602` invalid params (send it when the turn ends). Beyond the
+queue's bounds (10 prompts waiting, 16 KiB of text) the prompt is refused
+with the refusal ACP used before for a running session (`data.code`
+`busy`), so no prompt is lost without an answer. `session/load` of a
+session that runs a turn is still refused with `busy`.
 
 **One round trip before the first token.** The host keeps, for the app's
 session only (never on disk; dropped on sign-out, a new sign-in or another

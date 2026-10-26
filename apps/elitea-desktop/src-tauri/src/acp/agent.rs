@@ -11,6 +11,12 @@
 //! back through the same broker the desktop UI answers. A policy deny, a
 //! plan-mode deny or a rule's deny never reaches the client: the engine
 //! decides those before anything is asked.
+//!
+//! A `session/prompt` that arrives while a turn of its session runs steers
+//! that turn (IPC.md, "Steering"): its text goes into the turn's steering
+//! queue, the agent takes it at the next safe point, and the prompt is
+//! answered when the turn ends, with the turn's stop reason. A prompt the
+//! turn did not take runs as the next turn of the session.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -42,6 +48,7 @@ use crate::d0::approvals::UiDecision;
 use crate::d0::attachments::{ImagePick, ImageSource};
 use crate::d0::events::{AgentEvent, EventEmitter};
 use crate::d0::slash_commands::CommandPick;
+use crate::d0::steering;
 use crate::d0::turn::{AgentHost, TurnError, TurnRequest};
 use crate::workspaces::WorkspaceStore;
 
@@ -246,6 +253,31 @@ struct TurnSlot {
     turn_id: Option<String>,
     /// A cancel that arrived before the turn had an id.
     cancel: bool,
+    /// The prompts that arrived while the turn ran, oldest first.
+    waiting: Vec<Waiter>,
+}
+
+/// A `session/prompt` that arrived while a turn of its session ran: a
+/// steering message of that turn. Its request waits for `reply`.
+struct Waiter {
+    text: String,
+    /// Its id in the running turn's steering queue. `None` while no turn
+    /// has it in its queue (no turn id yet, or the turn ended first).
+    steer_id: Option<String>,
+    /// The turn took it (`steer_injected`): it is answered with the turn.
+    injected: bool,
+    /// A `session/cancel` arrived while it waited.
+    cancelled: bool,
+    reply: oneshot::Sender<Reply>,
+}
+
+/// What a waiting prompt gets when the turn ends.
+enum Reply {
+    /// Its answer: the turn's, or `cancelled`.
+    Answer(Result<Value, RpcError>),
+    /// The turn did not take it: it runs as the next turn. Its request now
+    /// holds the session's `running` flag.
+    RunNext,
 }
 
 impl Session {
@@ -284,14 +316,70 @@ impl Session {
     }
 }
 
-/// Releases a session's `running` flag and its turn slot however the
-/// prompt ends.
-struct Running<'a>(&'a Session);
+/// Holds a session's `running` flag for one prompt turn. [`Self::settle`]
+/// answers the prompts that waited and gives the flag to the oldest one the
+/// turn did not take. If the prompt stops without `settle` (a panic), the
+/// drop releases the flag; each waiting prompt then gets an error answer.
+struct Running<'a> {
+    session: &'a Session,
+    settled: bool,
+}
+
+impl<'a> Running<'a> {
+    fn new(session: &'a Session) -> Self {
+        Self {
+            session,
+            settled: false,
+        }
+    }
+
+    /// The turn ended with `result`. A prompt the turn took gets the same
+    /// result. A prompt that waited when `session/cancel` arrived gets
+    /// `cancelled`. The oldest other prompt runs as the next turn, and
+    /// the prompts after it wait for that turn.
+    fn settle(&mut self, result: &Result<Value, RpcError>) {
+        self.settled = true;
+        let cancelled = to_value(&PromptResponse {
+            stop_reason: StopReason::Cancelled,
+        });
+        let mut slot = self.session.slot();
+        let mut next = Vec::new();
+        for waiter in std::mem::take(&mut slot.waiting) {
+            if waiter.injected {
+                let _ = waiter.reply.send(Reply::Answer(result.clone()));
+            } else if waiter.cancelled {
+                let _ = waiter.reply.send(Reply::Answer(cancelled.clone()));
+            } else {
+                next.push(waiter);
+            }
+        }
+        slot.turn_id = None;
+        slot.cancel = false;
+        let mut next = next.into_iter();
+        while let Some(first) = next.next() {
+            if first.reply.send(Reply::RunNext).is_ok() {
+                // The flag stays set: the next turn's request has it now.
+                slot.waiting = next
+                    .map(|mut waiter| {
+                        waiter.steer_id = None;
+                        waiter
+                    })
+                    .collect();
+                return;
+            }
+        }
+        self.session.running.store(false, Ordering::SeqCst);
+    }
+}
 
 impl Drop for Running<'_> {
     fn drop(&mut self) {
-        *self.0.slot() = TurnSlot::default();
-        self.0.running.store(false, Ordering::SeqCst);
+        if self.settled {
+            return;
+        }
+        let mut slot = self.session.slot();
+        *slot = TurnSlot::default();
+        self.session.running.store(false, Ordering::SeqCst);
     }
 }
 
@@ -481,6 +569,11 @@ impl Connection {
 
     fn cancel(&self, session: &Session) {
         let mut slot = session.slot();
+        // The prompts that wait now are answered `cancelled`, unless the
+        // turn took one: that one gets the turn's answer.
+        for waiter in &mut slot.waiting {
+            waiter.cancelled = true;
+        }
         match slot.turn_id.clone() {
             Some(turn_id) => {
                 if let Err(error) = self.config.agents.cancel(&turn_id) {
@@ -935,18 +1028,125 @@ impl Connection {
     async fn prompt(self: &Arc<Self>, params: Value) -> Result<Value, RpcError> {
         let request: PromptRequest = parse(params)?;
         let session = self.session(&request.session_id)?;
-        if session
-            .running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            return Err(RpcError::refused(
-                "busy",
-                "This session is already running a prompt.",
-            ));
+        let blocks = request.prompt;
+        loop {
+            if session
+                .running
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                break;
+            }
+            // A turn of the session runs: this prompt steers it.
+            let text = steering_text(&session, &blocks)?;
+            let reply = {
+                let mut slot = session.slot();
+                // The turn ended and released the session before the lock:
+                // try to run this prompt as a turn.
+                if !session.running.load(Ordering::SeqCst) {
+                    continue;
+                }
+                self.queue_waiter(&mut slot, text)?
+            };
+            match reply.await {
+                Ok(Reply::Answer(result)) => return result,
+                Ok(Reply::RunNext) => break,
+                Err(_) => {
+                    return Err(RpcError::refused(
+                        "turn_ended",
+                        "The turn stopped before it answered this prompt.",
+                    ));
+                }
+            }
         }
-        let _running = Running(&session);
-        let input = self.prompt_input(&session, request.prompt).await?;
+        let mut running = Running::new(&session);
+        let result = self.run_prompt(&session, blocks).await;
+        running.settle(&result);
+        result
+    }
+
+    /// Queue a prompt that arrived while a turn runs. With a turn id, its
+    /// text goes into the turn's steering queue now; else the turn takes
+    /// it when it gets its id ([`Self::steer_waiting`]).
+    fn queue_waiter(
+        &self,
+        slot: &mut TurnSlot,
+        text: String,
+    ) -> Result<oneshot::Receiver<Reply>, RpcError> {
+        let waiting = slot.waiting.iter().filter(|w| !w.injected).count();
+        if waiting >= steering::MAX_PENDING {
+            return Err(busy(format!(
+                "This session is running a prompt, and {} prompts wait for it already.",
+                steering::MAX_PENDING
+            )));
+        }
+        let (sender, receiver) = oneshot::channel();
+        let mut waiter = Waiter {
+            text,
+            steer_id: None,
+            injected: false,
+            cancelled: false,
+            reply: sender,
+        };
+        if let Some(turn_id) = slot.turn_id.clone() {
+            match self.config.agents.steer(&turn_id, &waiter.text) {
+                Ok(steer_id) => waiter.steer_id = Some(steer_id),
+                Err(error) if error.code == "steer_queue_full" => {
+                    return Err(busy(error.message));
+                }
+                Err(error) if error.code == "steer_invalid" => {
+                    return Err(RpcError::invalid_params(error.message));
+                }
+                // The turn is ending: the prompt runs as the next turn.
+                Err(error) => log::debug!("acp: a prompt waits for the next turn ({})", error.code),
+            }
+        }
+        slot.waiting.push(waiter);
+        Ok(receiver)
+    }
+
+    /// The turn `turn_id` now runs: queue each waiting prompt that no turn
+    /// has, oldest first.
+    fn steer_waiting(&self, slot: &mut TurnSlot, turn_id: &str) {
+        for waiter in &mut slot.waiting {
+            if waiter.steer_id.is_some() || waiter.injected || waiter.cancelled {
+                continue;
+            }
+            match self.config.agents.steer(turn_id, &waiter.text) {
+                Ok(steer_id) => waiter.steer_id = Some(steer_id),
+                Err(error) => log::info!("acp: a prompt was not steered ({})", error.code),
+            }
+        }
+    }
+
+    /// `steer_injected`: the turn took a waiting prompt; it is answered
+    /// with the turn. `steer_dropped`: the turn ended first; the prompt
+    /// runs as the next turn.
+    fn steered(session: &Session, kind: &str, payload: &Value) {
+        let Some(steer_id) = payload.get("steer_id").and_then(Value::as_str) else {
+            return;
+        };
+        let mut slot = session.slot();
+        if let Some(waiter) = slot
+            .waiting
+            .iter_mut()
+            .find(|waiter| waiter.steer_id.as_deref() == Some(steer_id))
+        {
+            if kind == "steer_injected" {
+                waiter.injected = true;
+            } else {
+                waiter.steer_id = None;
+            }
+        }
+    }
+
+    /// One prompt turn of `session`, whose `running` flag the caller holds.
+    async fn run_prompt(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+        blocks: Vec<ContentBlock>,
+    ) -> Result<Value, RpcError> {
+        let input = self.prompt_input(session, blocks).await?;
         let tokens: Vec<String> = input.images.iter().map(|pick| pick.token.clone()).collect();
         let started = self
             .config
@@ -989,13 +1189,18 @@ impl Connection {
             // answer the prompt with an error once it settles.
             if slot.cancel || dropped {
                 let _ = self.config.agents.cancel(&turn_id);
+            } else {
+                self.steer_waiting(&mut slot, &turn_id);
             }
         }
         let mut mapper = Mapper::default();
         while let Some(event) = events.recv().await {
             match event.kind {
-                "approval_request" => self.ask(&session, &mapper, &event.payload),
-                "plan_proposed" => self.propose(&session, &event.payload),
+                "approval_request" => self.ask(session, &mapper, &event.payload),
+                "plan_proposed" => self.propose(session, &event.payload),
+                "steer_injected" | "steer_dropped" => {
+                    Self::steered(session, event.kind, &event.payload);
+                }
                 "plan_accepted" => {
                     session.plan.store(false, Ordering::SeqCst);
                     self.notify(
@@ -1521,6 +1726,47 @@ fn slash_command(text: &str, session: &Session) -> (bool, Option<CommandPick>) {
     } else {
         (false, None)
     }
+}
+
+/// The text of a prompt that steers a running turn: text blocks only, at
+/// most the steering queue's bound, and not a slash command (a command
+/// runs as its own turn).
+fn steering_text(session: &Session, blocks: &[ContentBlock]) -> Result<String, RpcError> {
+    if blocks.is_empty() || blocks.len() > MAX_PROMPT_BLOCKS {
+        return Err(RpcError::invalid_params(format!(
+            "a prompt has 1 to {MAX_PROMPT_BLOCKS} content blocks"
+        )));
+    }
+    let mut text = String::new();
+    for block in blocks {
+        let ContentBlock::Text(content) = block else {
+            return Err(RpcError::invalid_params(
+                "a prompt sent while a turn runs steers it and can only be text; send images, files and audio when the turn ends",
+            ));
+        };
+        text.push_str(&content.text);
+        if text.len() > steering::MAX_TEXT_BYTES {
+            return Err(busy(format!(
+                "This session is running a prompt; a prompt sent now is at most {} KiB.",
+                steering::MAX_TEXT_BYTES / 1024
+            )));
+        }
+    }
+    if text.trim().is_empty() {
+        return Err(RpcError::invalid_params("the prompt is empty"));
+    }
+    let (compact, command) = slash_command(&text, session);
+    if compact || command.is_some() {
+        return Err(RpcError::invalid_params(
+            "a slash command cannot steer a running turn; send it when the turn ends",
+        ));
+    }
+    Ok(text)
+}
+
+/// The refusal of a prompt that the running turn cannot take.
+fn busy(message: impl Into<String>) -> RpcError {
+    RpcError::refused("busy", message)
 }
 
 /// Client-supplied MCP servers and extra folders are never used: noted in
