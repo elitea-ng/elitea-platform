@@ -122,6 +122,20 @@ impl SensitiveToolPolicy {
             policy_message: "This command is destructive or reaches outside the workspace (a recursive delete, a history rewrite or push, a publish, privilege, or a write outside the workspace). Approve it to run it in the cloud workspace.".into(),
         }
     }
+
+    /// The cloud executor's `open_pull_request` (ADR-0034 decision 10,
+    /// amendment 2026-10-26): it writes a branch and a pull request on the
+    /// user's forge, so it is asked as a server HITL interrupt on every call
+    /// unless the policy lets pull requests open without an approval.
+    #[must_use]
+    pub fn workspace_pull_request() -> Self {
+        Self {
+            toolkit_type: "github".into(),
+            toolkit_name: "workspace".into(),
+            action_name: "open_pull_request".into(),
+            policy_message: "The agent wants to push a new branch with this thread's changes to the folder's GitHub repository and open a pull request. Approve it to open the pull request.".into(),
+        }
+    }
 }
 
 impl ToolAdmissionPolicy {

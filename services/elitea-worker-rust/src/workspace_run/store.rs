@@ -23,7 +23,8 @@ use tonic::transport::Channel;
 use crate::protocol::elitea::runtime::v1::{
     RuntimeErrorCodeV1, RuntimeErrorV1, WorkspaceClaimV1, WorkspaceEnvSecretFrameV1,
     WorkspaceEnvSecretRequestV1, WorkspaceExecutorEventKindV1, WorkspaceFetchFrameV1,
-    WorkspaceFetchPlanRequestV1, WorkspacePublishRequestV1, WorkspacePublishResponseV1,
+    WorkspaceFetchPlanRequestV1, WorkspaceForgeCredentialRequestV1,
+    WorkspaceForgeCredentialResponseV1, WorkspacePublishRequestV1, WorkspacePublishResponseV1,
     WorkspaceRecordEventRequestV1, WorkspaceRecordEventResponseV1, WorkspaceRefUpdateV1,
     WorkspaceRefV1, WorkspaceRefusalCodeV1, WorkspaceRefusalV1, WorkspaceUploadFrameV1,
     WorkspaceUploadHeaderV1, WorkspaceUploadResponseV1, workspace_env_secret_frame_v1,
@@ -74,6 +75,10 @@ pub(crate) enum RefusalCode {
     UnsupportedObjectFormat,
     SegmentTooLarge,
     QuotaExceeded,
+    /// `WorkspaceForgeCredential`: the thread has no pull-request credential.
+    NoForgeCredential,
+    /// `WorkspaceForgeCredential`: the policy no longer allows pull requests.
+    PullRequestsDisabled,
 }
 
 impl RefusalCode {
@@ -89,6 +94,8 @@ impl RefusalCode {
             Self::UnsupportedObjectFormat => "unsupported_object_format",
             Self::SegmentTooLarge => "segment_too_large",
             Self::QuotaExceeded => "workspace_quota_exceeded",
+            Self::NoForgeCredential => "no_forge_credential",
+            Self::PullRequestsDisabled => "pull_requests_disabled",
         }
     }
 
@@ -103,6 +110,8 @@ impl RefusalCode {
             WorkspaceRefusalCodeV1::UnsupportedObjectFormat => Self::UnsupportedObjectFormat,
             WorkspaceRefusalCodeV1::SegmentTooLarge => Self::SegmentTooLarge,
             WorkspaceRefusalCodeV1::QuotaExceeded => Self::QuotaExceeded,
+            WorkspaceRefusalCodeV1::NoForgeCredential => Self::NoForgeCredential,
+            WorkspaceRefusalCodeV1::PullRequestsDisabled => Self::PullRequestsDisabled,
             WorkspaceRefusalCodeV1::Unspecified => return None,
         })
     }
@@ -240,6 +249,18 @@ pub(crate) trait WorkspaceStore: Send + Sync {
 
     /// The thread's harvested env (contract 6.4); empty when it has none.
     async fn env_secret(&self, claim: &WorkspaceClaimV1) -> Result<SecretEnv, StoreCallError>;
+
+    /// The thread's pull-request credential (ADR-0034 decision 10,
+    /// amendment 2026-10-26): the GitHub configuration's data as JSON text,
+    /// zeroized on drop. Redeemed only when `open_pull_request` runs.
+    async fn forge_credential(
+        &self,
+        _claim: &WorkspaceClaimV1,
+    ) -> Result<zeroize::Zeroizing<String>, StoreCallError> {
+        Err(StoreCallError::Malformed(
+            "this store serves no forge credential",
+        ))
+    }
 
     /// Record one executor audit event of the running turn (decision 12).
     async fn record_event(
@@ -417,6 +438,31 @@ pub(crate) fn refused(refusal: &WorkspaceRefusalV1) -> StoreCallError {
             current: ref_map(&refusal.current).unwrap_or_default(),
         },
         None => StoreCallError::Malformed("the workspace refusal is unknown"),
+    }
+}
+
+/// The most bytes of a forge credential (Main's
+/// `workspaceruntime.MaxForgeCredentialBytes`).
+pub(crate) const MAX_FORGE_CREDENTIAL_BYTES: usize = 32 * 1_024;
+
+/// Reads a `WorkspaceForgeCredential` answer: exactly one of a JSON object,
+/// a refusal or a rejection. The text is moved into zeroizing storage; the
+/// response's own copy is wiped by the caller dropping it.
+pub(crate) fn read_forge_credential(
+    response: &mut WorkspaceForgeCredentialResponseV1,
+) -> Result<zeroize::Zeroizing<String>, StoreCallError> {
+    let text = zeroize::Zeroizing::new(std::mem::take(&mut response.github_configuration_json));
+    match (&response.refusal, &response.rejection, text.is_empty()) {
+        (Some(refusal), None, true) => Err(refused(refusal)),
+        (None, Some(rejection), true) => Err(rejected(rejection)),
+        (None, None, false)
+            if text.len() <= MAX_FORGE_CREDENTIAL_BYTES && text.starts_with('{') =>
+        {
+            Ok(text)
+        }
+        _ => Err(StoreCallError::Malformed(
+            "the forge credential answer is malformed",
+        )),
     }
 }
 
@@ -963,6 +1009,22 @@ impl WorkspaceStore for GrpcWorkspaceStore {
             .map_err(|_| StoreCallError::Transport { retryable: true })?
     }
 
+    async fn forge_credential(
+        &self,
+        claim: &WorkspaceClaimV1,
+    ) -> Result<zeroize::Zeroizing<String>, StoreCallError> {
+        let mut client = self.client.clone();
+        let request = WorkspaceForgeCredentialRequestV1 {
+            claim: Some(claim.clone()),
+        };
+        let mut response = timeout(self.deadline, client.workspace_forge_credential(request))
+            .await
+            .map_err(|_| StoreCallError::Transport { retryable: true })?
+            .map_err(|status| status_error(&status))?
+            .into_inner();
+        read_forge_credential(&mut response)
+    }
+
     async fn record_event(
         &self,
         claim: &WorkspaceClaimV1,
@@ -1417,6 +1479,76 @@ mod tests {
         cap: Duration::from_millis(4),
         attempts: 5,
     };
+
+    #[test]
+    fn a_forge_credential_answer_is_exactly_one_of_its_three_forms() {
+        use crate::protocol::elitea::runtime::v1::WorkspaceForgeCredentialResponseV1;
+        let mut ok = WorkspaceForgeCredentialResponseV1 {
+            github_configuration_json:
+                r#"{"base_url":"https://api.github.com","access_token":"t"}"#.to_owned(),
+            ..Default::default()
+        };
+        let text = read_forge_credential(&mut ok).expect("a credential");
+        assert!(text.contains("access_token"));
+        assert!(
+            ok.github_configuration_json.is_empty(),
+            "moved out of the response"
+        );
+        let mut none = WorkspaceForgeCredentialResponseV1 {
+            refusal: Some(WorkspaceRefusalV1 {
+                code: WorkspaceRefusalCodeV1::NoForgeCredential as i32,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(matches!(
+            read_forge_credential(&mut none),
+            Err(StoreCallError::Refused {
+                code: RefusalCode::NoForgeCredential,
+                ..
+            })
+        ));
+        let mut off = WorkspaceForgeCredentialResponseV1 {
+            refusal: Some(WorkspaceRefusalV1 {
+                code: WorkspaceRefusalCodeV1::PullRequestsDisabled as i32,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            read_forge_credential(&mut off)
+                .err()
+                .map(|error| error.code()),
+            Some("pull_requests_disabled")
+        );
+        for mut malformed in [
+            WorkspaceForgeCredentialResponseV1::default(),
+            WorkspaceForgeCredentialResponseV1 {
+                github_configuration_json: "[]".to_owned(),
+                ..Default::default()
+            },
+            WorkspaceForgeCredentialResponseV1 {
+                github_configuration_json: format!(
+                    "{{{}}}",
+                    " ".repeat(MAX_FORGE_CREDENTIAL_BYTES)
+                ),
+                ..Default::default()
+            },
+            WorkspaceForgeCredentialResponseV1 {
+                github_configuration_json: "{}".to_owned(),
+                refusal: Some(WorkspaceRefusalV1 {
+                    code: WorkspaceRefusalCodeV1::NoForgeCredential as i32,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ] {
+            assert!(matches!(
+                read_forge_credential(&mut malformed),
+                Err(StoreCallError::Malformed(_))
+            ));
+        }
+    }
 
     #[test]
     fn aborted_is_thread_busy_and_retryable_never_a_conflict() {

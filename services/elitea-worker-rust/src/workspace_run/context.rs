@@ -75,6 +75,29 @@ pub(crate) struct WorkspaceRuntimeContext {
     /// (which named none): the rewind goes to the first parent.
     #[serde(default)]
     pub(crate) rewind_to: Option<String>,
+    /// Whether the turn may open a pull request (ADR-0034 decision 10,
+    /// amendment 2026-10-26): `off`, `ask` (a person approves each one) or
+    /// `allow`. Absent from an older Main: `ask`.
+    #[serde(default)]
+    pub(crate) pull_requests: PullRequestMode,
+    /// The thread's owner chose a GitHub credential for its pull requests:
+    /// the worker redeems it over `WorkspaceForgeCredential` when the tool
+    /// runs. The credential is never in this field.
+    #[serde(default)]
+    pub(crate) pull_request_credential: bool,
+}
+
+/// The pull-request switch of the `workspace` field.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum PullRequestMode {
+    /// No `open_pull_request`.
+    Off,
+    /// Each pull request is a HITL interrupt before it is opened.
+    #[default]
+    Ask,
+    /// Pull requests open without an approval.
+    Allow,
 }
 
 /// The egress modes Main serves.
@@ -338,6 +361,8 @@ pub(crate) fn fixture() -> WorkspaceRuntimeContext {
             reason: String::new(),
         }),
         rewind_to: None,
+        pull_requests: PullRequestMode::Ask,
+        pull_request_credential: false,
     }
 }
 
@@ -363,8 +388,8 @@ pub(crate) fn proxy_fixture() -> WorkspaceRuntimeContext {
 #[cfg(test)]
 mod tests {
     use super::{
-        EgressMode, ProxyToken, TEST_TOKEN, WorkspaceRuntimeContext, fixture, proxy_fixture,
-        proxy_host_port,
+        EgressMode, ProxyToken, PullRequestMode, TEST_TOKEN, WorkspaceRuntimeContext, fixture,
+        proxy_fixture, proxy_host_port,
     };
 
     fn raw() -> serde_json::Value {
@@ -406,6 +431,30 @@ mod tests {
         let mut missing = raw();
         missing.as_object_mut().expect("object").remove("shell");
         assert!(serde_json::from_value::<WorkspaceRuntimeContext>(missing).is_err());
+    }
+
+    /// Main serves the pull-request switch and the credential flag; an older
+    /// Main serves neither (ask, no credential).
+    #[test]
+    fn the_pull_request_switch_parses() {
+        for (wire, mode) in [
+            ("off", PullRequestMode::Off),
+            ("ask", PullRequestMode::Ask),
+            ("allow", PullRequestMode::Allow),
+        ] {
+            let mut raw = raw();
+            raw["pull_requests"] = serde_json::json!(wire);
+            raw["pull_request_credential"] = serde_json::json!(true);
+            let parsed: WorkspaceRuntimeContext = serde_json::from_value(raw).expect("parsed");
+            assert_eq!(parsed.pull_requests, mode);
+            assert!(parsed.pull_request_credential);
+        }
+        let parsed: WorkspaceRuntimeContext = serde_json::from_value(raw()).expect("parsed");
+        assert_eq!(parsed.pull_requests, PullRequestMode::Ask);
+        assert!(!parsed.pull_request_credential);
+        let mut unknown = raw();
+        unknown["pull_requests"] = serde_json::json!("always");
+        assert!(serde_json::from_value::<WorkspaceRuntimeContext>(unknown).is_err());
     }
 
     #[test]

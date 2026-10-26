@@ -410,11 +410,22 @@ impl OrdinaryNativeAgentAssembler {
                 } else {
                     runtime
                 };
-                // ADR-0034 decision 10: open_pull_request, only with an
-                // upstream and a bound GitHub toolkit.
-                let pull_request = if field.has_upstream {
+                // ADR-0034 decision 10 (amended 2026-10-26): open_pull_request,
+                // only with an upstream, a policy that allows it, and a
+                // credential: the owner's choice for the thread (redeemed per
+                // call, outside the sandbox) or a bound GitHub toolkit.
+                let pull_request = if field.has_upstream
+                    && field.pull_requests != crate::workspace_run::context::PullRequestMode::Off
+                {
                     use elitea_agent_runtime::toolkits::workspace_pull_request as pr;
                     pr::open_pull_request_toolset(
+                        field.pull_request_credential.then(|| {
+                            pr::ThreadCredential::new(Arc::new(
+                                crate::workspace_run::tools::TurnCredentialSource::new(Arc::clone(
+                                    turn,
+                                )),
+                            ))
+                        }),
                         pr::github_pull_request_targets(&tool_snapshot),
                         Arc::new(crate::workspace_run::tools::TurnDiffSource::new(
                             Arc::clone(turn),
@@ -430,6 +441,16 @@ impl OrdinaryNativeAgentAssembler {
                     None
                 };
                 match pull_request {
+                    // A person approves each pull request unless the policy
+                    // lets them open without one.
+                    Some(toolset)
+                        if field.pull_requests
+                            == crate::workspace_run::context::PullRequestMode::Ask =>
+                    {
+                        runtime
+                            .with_workspace_toolset(toolset)
+                            .with_workspace_pull_request_approval()?
+                    }
                     Some(toolset) => runtime.with_workspace_toolset(toolset),
                     None => runtime,
                 }

@@ -158,6 +158,39 @@ impl SensitiveToolCatalog {
         Ok(self)
     }
 
+    /// Add the cloud executor's `open_pull_request` (ADR-0034 decision 10,
+    /// amendment 2026-10-26) as a name-wide confirmation: every call is a
+    /// HITL interrupt, and an approved call that an earlier continuation
+    /// dispatched without a recorded outcome is never run again (a second
+    /// branch and pull request), like any other writing tool.
+    ///
+    /// # Errors
+    ///
+    /// Another tool already has the name (as for the workspace command).
+    pub(crate) fn with_workspace_pull_request(mut self) -> Result<Self, NativeAgentAssemblyError> {
+        const TOOLKIT: &str = "workspace";
+        const TOOL: &str =
+            elitea_agent_runtime::toolkits::workspace_pull_request::OPEN_PULL_REQUEST;
+        let entry = SensitiveToolEntry {
+            policy: SensitiveToolPolicy::workspace_pull_request(),
+            read_only: false,
+            conditional: false,
+        };
+        let identity = SensitiveToolIdentity {
+            toolkit_name: TOOLKIT.into(),
+            tool_name: TOOL.into(),
+        };
+        if self.scoped_entries.contains_key(&identity)
+            || self.provider_entries.contains_key(TOOL)
+            || self.other_provider_names.contains(TOOL)
+        {
+            return Err(invalid_configuration());
+        }
+        self.scoped_entries.insert(identity, entry.clone());
+        self.provider_entries.insert(TOOL.into(), entry);
+        Ok(self)
+    }
+
     #[must_use]
     pub(crate) fn policy_for(&self, tool_name: &str) -> Option<&SensitiveToolPolicy> {
         self.provider_entries
@@ -697,6 +730,36 @@ mod tests {
             SensitiveToolCatalog::default()
                 .with_other_tool("kit", "run_command", false)
                 .with_workspace_command()
+                .is_err()
+        );
+    }
+
+    /// ADR-0034 decision 10 (amended 2026-10-26): `open_pull_request` is
+    /// confirmed on every call, never re-run after a dispatch, and never
+    /// takes over another tool's name.
+    #[test]
+    fn the_cloud_pull_request_is_confirmed_on_every_call() {
+        let catalog = SensitiveToolCatalog::default()
+            .with_workspace_command()
+            .expect("workspace command")
+            .with_workspace_pull_request()
+            .expect("pull request");
+        assert!(catalog.tool_names().any(|name| name == "open_pull_request"));
+        assert!(
+            !catalog.tool_names().any(|name| name == "run_command"),
+            "the command stays conditional"
+        );
+        assert_eq!(
+            catalog.reruns_after_dispatch("open_pull_request"),
+            Some(false)
+        );
+        let policy = catalog.policy_for("open_pull_request").expect("policy");
+        assert_eq!(policy.action_name(), "open_pull_request");
+        assert!(catalog.with_workspace_pull_request().is_err());
+        assert!(
+            SensitiveToolCatalog::default()
+                .with_other_tool("kit", "open_pull_request", false)
+                .with_workspace_pull_request()
                 .is_err()
         );
     }

@@ -363,6 +363,22 @@ impl OrdinaryRuntimeBindings {
         Ok(self)
     }
 
+    /// Ask a person before each `open_pull_request` of the cloud executor
+    /// (ADR-0034 decision 10, amendment 2026-10-26): the tool joins the
+    /// sensitive catalog as a name-wide entry, so its interrupt is projected,
+    /// approved and resumed like any sensitive tool's.
+    ///
+    /// # Errors
+    ///
+    /// Another tool of the turn already has the name.
+    pub(crate) fn with_workspace_pull_request_approval(
+        mut self,
+    ) -> Result<Self, NativeAgentAssemblyError> {
+        self.sensitive_tools =
+            std::mem::take(&mut self.sensitive_tools).with_workspace_pull_request()?;
+        Ok(self)
+    }
+
     #[must_use]
     fn with_tool_call_confirmation(
         mut self,

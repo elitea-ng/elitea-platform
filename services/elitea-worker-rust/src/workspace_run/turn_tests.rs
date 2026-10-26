@@ -823,6 +823,7 @@ async fn executor_audit_events_reach_main_and_never_fail_the_turn() {
         branch: "elitea/cloud-1".to_owned(),
         base: "main".to_owned(),
         number: 42,
+        url: "https://github.com/o/r/pull/42".to_owned(),
         files: 3,
         upstream_sha: "u".repeat(40),
     };
@@ -838,8 +839,9 @@ async fn executor_audit_events_reach_main_and_never_fail_the_turn() {
         super::audit::ExecutorEvent::PullRequestOpened {
             files: 3,
             number: 42,
+            url: Some(url),
             ..
-        }
+        } if url == "https://github.com/o/r/pull/42"
     ));
 }
 

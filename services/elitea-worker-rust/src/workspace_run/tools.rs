@@ -167,6 +167,60 @@ impl elitea_agent_runtime::toolkits::workspace_pull_request::WorkspaceDiffSource
     }
 }
 
+/// The thread's pull-request credential (amendment 2026-10-26): redeemed
+/// from Main per `open_pull_request` call, outside the sandbox, and handed to
+/// the GitHub family in process. A refusal is mapped to a data-free reason.
+pub(crate) struct TurnCredentialSource {
+    turn: Arc<super::turn::WorkspaceTurn>,
+}
+
+impl TurnCredentialSource {
+    #[must_use]
+    pub(crate) fn new(turn: Arc<super::turn::WorkspaceTurn>) -> Self {
+        Self { turn }
+    }
+}
+
+/// How a store refusal reads to the tool. Main answers a reference that no
+/// longer resolves as `no_forge_credential` too: the owner chooses again.
+pub(crate) fn credential_unavailable(
+    error: &super::store::StoreCallError,
+) -> elitea_agent_runtime::toolkits::workspace_pull_request::CredentialUnavailable {
+    use super::store::{RefusalCode, StoreCallError};
+    use elitea_agent_runtime::toolkits::workspace_pull_request::CredentialUnavailable;
+    match error {
+        StoreCallError::Refused {
+            code: RefusalCode::NoForgeCredential,
+            ..
+        } => CredentialUnavailable::NotChosen,
+        StoreCallError::Refused {
+            code: RefusalCode::PullRequestsDisabled,
+            ..
+        } => CredentialUnavailable::Disabled,
+        _ => CredentialUnavailable::Failed,
+    }
+}
+
+#[async_trait]
+impl elitea_agent_runtime::toolkits::workspace_pull_request::ThreadCredentialSource
+    for TurnCredentialSource
+{
+    async fn github_configuration(
+        &self,
+    ) -> Result<
+        zeroize::Zeroizing<String>,
+        elitea_agent_runtime::toolkits::workspace_pull_request::CredentialUnavailable,
+    > {
+        self.turn.forge_credential().await.map_err(|error| {
+            tracing::warn!(
+                event = "pull_request.credential_unavailable",
+                reason = error.code(),
+            );
+            credential_unavailable(&error)
+        })
+    }
+}
+
 /// `pull_request.opened` (decision 12): identifiers and counts, never file
 /// contents. Main records the audit row from this event.
 pub(crate) struct LogPullRequestAudit {
@@ -216,7 +270,7 @@ impl elitea_agent_runtime::toolkits::workspace_pull_request::PullRequestAudit
                 branch: event.branch.clone(),
                 base: event.base.clone(),
                 number: event.number,
-                url: None,
+                url: Some(event.url.clone()),
                 files: u32::try_from(event.files).unwrap_or(u32::MAX),
             });
         }

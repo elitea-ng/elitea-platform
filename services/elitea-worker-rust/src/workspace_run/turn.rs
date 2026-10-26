@@ -568,6 +568,19 @@ impl WorkspaceTurn {
         Arc::clone(&self.wrap_up)
     }
 
+    /// The thread's pull-request credential (ADR-0034 decision 10,
+    /// amendment 2026-10-26), redeemed from Main under the turn's claim.
+    /// Held by the caller for one tool call; never written anywhere.
+    ///
+    /// # Errors
+    ///
+    /// Main refused it (none chosen, pull requests off) or could not answer.
+    pub(crate) async fn forge_credential(
+        &self,
+    ) -> Result<zeroize::Zeroizing<String>, super::store::StoreCallError> {
+        self.store.forge_credential(&self.claim).await
+    }
+
     /// The pull-request diff (ADR-0034 decision 10), computed here from the
     /// turn's own repository: U from the verified quarantine, the workspace
     /// as it is now, moved out of the sandbox and redacted exactly as the
