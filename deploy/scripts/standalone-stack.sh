@@ -2,6 +2,8 @@
 # Wrapper for the full standalone stack (deploy/docker-compose.standalone-full.yml).
 #
 #   certs        generate local mTLS + runtime-plane material (idempotent)
+#   compose ARGS run a raw compose command (exec, restart, ps...) with the
+#                stack's project and overlays
 #   build        rebuild the stack's images from source (`up` reuses existing
 #                tags, so a code change needs this first)
 #   up           bring the stack up and wait for healthy. It starts postgres
@@ -997,6 +999,12 @@ case "${1:-}" in
 
   down)
     $COMPOSE_BIN $COMPOSE_F down --remove-orphans "${@:2}"
+    ;;
+
+  compose)
+    # Any other compose verb (exec, restart, ps, ...) against the stack's own
+    # project and its one overlay list, so a caller never rebuilds -p/-f.
+    $COMPOSE_BIN $COMPOSE_F "${@:2}"
     ;;
 
   seed)

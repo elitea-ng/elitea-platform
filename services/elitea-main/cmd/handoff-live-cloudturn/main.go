@@ -55,6 +55,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacechanges"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceexecutor"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
@@ -214,14 +215,47 @@ func compose(ctx context.Context, pool *pgxpool.Pool) (*workspacehandoff.Service
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return handoff, store, &changesRecorder{changes: changes, handoffs: handoffRepo}, nil
+	// The worker's runtime-plane boundary: the same adapter Main composes
+	// (cmd/elitea-main/workspace_handoff.go), so the record passes its running
+	// turn, epoch, cloud tip and base checks.
+	adapter, err := workspaceexecutor.New(handoff, store, simThreads{repo: handoffRepo},
+		workspaceexecutor.Resources{TurnWallSeconds: 3600}, logger)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	adapter.WithChanges(changes)
+	return handoff, store, &changesRecorder{adapter: adapter, handoffs: handoffRepo}, nil
 }
 
-// changesRecorder is what the worker's WorkspaceRecordChanges adapter does
-// after a cloud turn: resolve the thread's handoff and keep the turn's files.
+// changesRecorder is what the worker's WorkspaceRecordChanges does after a
+// cloud turn: sanitize the record at the transport boundary, then hand it to
+// the executor adapter, which resolves the running turn and keeps the files.
 type changesRecorder struct {
-	changes  *workspacechanges.Service
+	adapter  *workspaceexecutor.Adapter
 	handoffs *dbrepos.WorkspaceHandoffsRepository
+}
+
+// simThreads is workspaceexecutor.Threads over the handoffs repository, as
+// Main's own composition has it.
+type simThreads struct {
+	repo *dbrepos.WorkspaceHandoffsRepository
+}
+
+func (t simThreads) Read(ctx context.Context, thread workspacehandoff.Thread) (workspacehandoff.Handoff, bool, error) {
+	return t.repo.Read(ctx, thread)
+}
+
+func (t simThreads) Execution(ctx context.Context, executionID string, generation uint64) (workspaceexecutor.Execution, bool, error) {
+	execution, ok, err := t.repo.CloudTurnExecution(ctx, executionID, generation)
+	return workspaceexecutor.Execution(execution), ok, err
+}
+
+func (t simThreads) FinishedCloudTurns(ctx context.Context, limit int) ([]workspacehandoff.Handoff, error) {
+	return t.repo.FinishedCloudTurns(ctx, limit)
+}
+
+func (t simThreads) ReclaimPending(ctx context.Context, executionID string) (bool, error) {
+	return t.repo.ReclaimPending(ctx, executionID)
 }
 
 // changedFile is one entry of the -changes file.
@@ -252,8 +286,14 @@ func recordChanges(
 		return fmt.Errorf("decode the changes file: %w", err)
 	}
 	handoff, ok, err := recorder.handoffs.Read(ctx, thread)
-	if err != nil || !ok || handoff.HandoffSHA == nil {
-		return fmt.Errorf("read the handoff to record its changes: found=%v err=%v", ok, err)
+	if err != nil {
+		return fmt.Errorf("read the handoff to record its changes: %w", err)
+	}
+	if !ok {
+		return errors.New("read the handoff to record its changes: the thread has no handoff row")
+	}
+	if handoff.HandoffSHA == nil {
+		return errors.New("the handoff has no snapshot (HandoffSHA is nil): the first cloud turn has nothing to measure from")
 	}
 	turn := workspaceruntime.TurnChanges{Commit: commit, Parent: *handoff.HandoffSHA, Base: *handoff.HandoffSHA, Depth: 1}
 	for _, entry := range entries {
@@ -262,8 +302,15 @@ func recordChanges(
 			Additions: entry.Additions, Deletions: entry.Deletions, Binary: entry.Binary, TooLarge: entry.TooLarge, Diff: entry.Diff,
 		})
 	}
-	if err := recorder.changes.Record(ctx, handoff, executionID, seq, turn); err != nil {
-		return fmt.Errorf("record the turn's changes: %w", err)
+	turn, err = workspaceruntime.SanitizeTurnChanges(turn)
+	if err != nil {
+		return fmt.Errorf("the turn's changes fail the transport boundary check: %w", err)
+	}
+	claim := workspaceruntime.ClaimRef{
+		ExecutionID: executionID, ThreadUUID: thread.ConversationUUID, Epoch: uint64(handoff.Epoch),
+	}
+	if err := recorder.adapter.RecordChanges(ctx, claim, turn); err != nil {
+		return fmt.Errorf("record the turn's changes (seq %d): %w", seq, err)
 	}
 	return nil
 }

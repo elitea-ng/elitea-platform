@@ -123,25 +123,13 @@ on:
       - "docker-bake.hcl"
       # The `handoff-journey` job's own subjects (ADR-0034): the desktop host's
       # handoff code and the live tests it runs, the crates the host links for
-      # it, and the simulator that plays the cloud executor. The desktop
+      # it (libs/rust/** above), and the simulator that plays the cloud
+      # executor (services/** is already named). The desktop
       # paths are outside the stack lanes (e2e-lane-filter.sh), so only that
       # job runs on a change that touches nothing else.
       - "apps/elitea-desktop/src-tauri/**"
       - "rust-toolchain.toml"
       - "scripts/ci/assert-rust-toolchain.sh"
-      - "libs/rust/workspace-store/**"
-      - "libs/rust/local-tools/**"
-      - "libs/rust/platform-rpc/**"
-      - "libs/rust/agent-runtime/**"
-      - "libs/rust/llm-wire/**"
-      - "libs/rust/connectors/**"
-      - "libs/rust/content-source/**"
-      - "libs/rust/doc-extract/**"
-      - "libs/rust/engine-core/**"
-      - "libs/rust/code-parsers/**"
-      - "libs/rust/inventory-core/**"
-      - "libs/rust/local-index/**"
-      - "libs/rust/vendor/**"
       # The `native-client-conformance` job's own subject: the black-box
       # ADR-0025 suite it runs against the stack.
       - "conformance/nativeclient/**"
@@ -215,6 +203,11 @@ jobs:
     # this job SKIPPED and build in-job instead (.github/actions/stack-images).
     # And only when a lane will run: the same reaches-stack gate the lanes
     # carry (`model-path-changes`), so a docs-only pull request builds nothing.
+    # reaches-handoff also builds: the `handoff-journey` lane brings up the
+    # WHOLE standalone stack (`up` has no service list) and pulls by digest,
+    # asserting every image its compose files build, so a handoff-only change
+    # needs exactly the images of docker-compose.standalone-full.yml plus the
+    # rust-agent overlay, which is what these two jobs build and nothing else.
     needs: &build-once-needs model-path-changes
     if: &build-once-if >-
       (needs.model-path-changes.outputs.reaches-stack == 'true' ||

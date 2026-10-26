@@ -65,7 +65,17 @@ expect_handoff true "the shared workspace store crate" "libs/rust/workspace-stor
 expect_handoff true "the lane's script" "deploy/scripts/handoff-live.sh"
 expect_handoff true "empty list" 
 expect_handoff false "a web page" "apps/elitea-web/src/pages/a.tsx"
-expect_handoff false "an unrelated desktop file" "apps/elitea-desktop/src-tauri/src/tray.rs"
+expect_handoff true "any desktop host source (the lane builds the whole crate)" "apps/elitea-desktop/src-tauri/src/tray.rs"
+expect_handoff true "a shared crate the host links" "libs/rust/agent-runtime/src/lib.rs"
+expect_handoff true "the pinned toolchain" "rust-toolchain.toml"
+expect_handoff true "the toolchain assertion" "scripts/ci/assert-rust-toolchain.sh"
+expect_handoff true "the stack wrapper" "deploy/scripts/standalone-stack.sh"
+expect_handoff true "the rust-agent overlay" "deploy/docker-compose.standalone-rust-agent.yml"
+expect_handoff true "the lane's overlay" "deploy/docker-compose.handoff-live.yml"
+expect_handoff true "the image action" ".github/actions/stack-images/action.yml"
+expect_handoff true "the executor adapter" "services/elitea-main/internal/application/workspaceexecutor/adapter.go"
+expect_handoff true "the compose detection helper" "apps/elitea-web/scripts/lib/compose-detect.sh"
+expect_handoff false "an unrelated desktop-adjacent file" "apps/elitea-desktop/README.md"
 expect_handoff false "docs only" "README.md"
 
 # The compose-referenced helm list is READ, not written: against a fixture

@@ -37,14 +37,15 @@ export HANDOFF_RUSTFS_PORT="${HANDOFF_RUSTFS_PORT:-19000}"
 export STANDALONE_PG_PORT="${STANDALONE_PG_PORT:-15433}"
 export STANDALONE_OVERLAY="${REPO_ROOT}/deploy/docker-compose.handoff-live.yml${STANDALONE_OVERLAY:+ ${STANDALONE_OVERLAY}}"
 PERSONA="${HANDOFF_LIVE_PERSONA:-e2e-chat@autotest.local}"
-COMPOSE_BIN="${COMPOSE_BIN:-docker compose}"
-COMPOSE_F="-p ${STANDALONE_PROJECT} -f ${REPO_ROOT}/deploy/docker-compose.standalone-full.yml"
-for overlay in ${STANDALONE_OVERLAY}; do COMPOSE_F="${COMPOSE_F} -f ${overlay}"; done
-# Declared before the first compose call, as standalone-stack.sh does.
+# shellcheck source=../../apps/elitea-web/scripts/lib/compose-detect.sh
+. "${REPO_ROOT}/apps/elitea-web/scripts/lib/compose-detect.sh"
+detect_compose_bin
 export COMPOSE_BIN
 
+# Every compose call goes through standalone-stack.sh, which owns the project
+# and the one overlay list (base, the Rust agent, STANDALONE_OVERLAY).
 stack() { "${REPO_ROOT}/deploy/scripts/standalone-stack.sh" "$@"; }
-psql_main() { $COMPOSE_BIN $COMPOSE_F exec -T postgres psql -v ON_ERROR_STOP=1 -At -U elitea -d elitea "$@"; }
+psql_main() { stack compose exec -T postgres psql -v ON_ERROR_STOP=1 -At -U elitea -d elitea "$@"; }
 
 # Main answers HTTP again (any status: a connection failure is code 000).
 wait_main() {
@@ -149,6 +150,7 @@ run_tests() {
   echo "→ Running the handoff live tests (project ${project})…"
   (
     cd "${REPO_ROOT}/apps/elitea-desktop/src-tauri"
+    [ -n "${HANDOFF_LIVE_TARGET_DIR:-}" ] && export CARGO_TARGET_DIR="${HANDOFF_LIVE_TARGET_DIR}"
     cargo test --locked --lib handoff::tests::live -- --ignored --test-threads=1 --nocapture
   )
 }
@@ -188,7 +190,7 @@ case "${1:-}" in
     stack up
     stack seed
     encrypt_bucket
-    $COMPOSE_BIN $COMPOSE_F restart elitea-main
+    stack compose restart elitea-main
     wait_main
     build_sim
     run_tests

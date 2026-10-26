@@ -319,6 +319,10 @@ async fn cloud_turn_args(h: &LiveHarness, uuid: &str) -> Vec<String> {
     );
     std::fs::write(dir.join("README.md"), "hello from the cloud\n").unwrap();
     std::fs::write(dir.join("src/cloud.rs"), "pub fn c() {}\n").unwrap();
+    // A file the project's exclusion hides from the web (`secrets/**`): it is
+    // recorded, counted as hidden and has no diff to read.
+    std::fs::create_dir_all(dir.join("secrets")).unwrap();
+    std::fs::write(dir.join("secrets/cloud.txt"), "made in the cloud\n").unwrap();
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-q", "-m", "cloud turn 1"]);
     let commit = git(&dir, &["rev-parse", "HEAD"]);
@@ -348,26 +352,68 @@ async fn cloud_turn_args(h: &LiveHarness, uuid: &str) -> Vec<String> {
 }
 
 /// The first cloud turn's files as the worker's `WorkspaceRecordChanges`
-/// carries them, in both scopes: `git diff --numstat` for the counts and the
-/// unified diff per file, against the handoff snapshot.
+/// carries them, in both scopes: the status from `git diff --name-status -M`,
+/// the counts from `--numstat -M` (a binary file has `-` counts: no
+/// additions or deletions, `binary` set) and the unified diff per file,
+/// against the handoff snapshot.
 fn changed_files(dir: &std::path::Path) -> Value {
-    let numstat = git(dir, &["diff", "--numstat", "refs/elitea/handoff/1", "HEAD"]);
+    let base = "refs/elitea/handoff/1";
+    let names = git(dir, &["diff", "--name-status", "-M", base, "HEAD"]);
+    let numstat = git(dir, &["diff", "--numstat", "-M", base, "HEAD"]);
+    let name_rows: Vec<&str> = names.lines().filter(|l| !l.is_empty()).collect();
+    let count_rows: Vec<&str> = numstat.lines().filter(|l| !l.is_empty()).collect();
+    assert_eq!(
+        name_rows.len(),
+        count_rows.len(),
+        "name-status and numstat list the same files:\n{names}\n{numstat}"
+    );
     let mut files = Vec::new();
     for scope in ["turn", "cumulative"] {
-        for line in numstat.lines() {
-            let mut cols = line.split('\t');
-            let added: u32 = cols.next().unwrap().parse().unwrap();
-            let removed: u32 = cols.next().unwrap().parse().unwrap();
-            let path = cols.next().unwrap();
-            let status = if path == "src/cloud.rs" {
-                "added"
-            } else {
-                "modified"
+        for (name_row, count_row) in name_rows.iter().zip(&count_rows) {
+            let mut cols = name_row.split('\t');
+            let code = cols.next().unwrap_or_default();
+            let first = cols
+                .next()
+                .unwrap_or_else(|| panic!("name-status row: {name_row:?}"));
+            let (status, from_path, path) = match code.chars().next() {
+                Some('A') => ("added", "", first),
+                Some('D') => ("deleted", "", first),
+                Some('R') => (
+                    "renamed",
+                    first,
+                    cols.next()
+                        .unwrap_or_else(|| panic!("rename row: {name_row:?}")),
+                ),
+                Some('M' | 'T') => ("modified", "", first),
+                _ => panic!("unhandled name-status row: {name_row:?}"),
             };
-            let diff = git(dir, &["diff", "refs/elitea/handoff/1", "HEAD", "--", path]);
+            let mut counts = count_row.split('\t');
+            let added = counts.next().unwrap_or_default();
+            let removed = counts.next().unwrap_or_default();
+            let binary = added == "-" && removed == "-";
+            let count = |text: &str| -> Value {
+                if binary {
+                    return Value::Null;
+                }
+                json!(
+                    text.parse::<u32>()
+                        .unwrap_or_else(|_| panic!("numstat row: {count_row:?}"))
+                )
+            };
+            let mut diff_args = vec!["diff", "-M", base, "HEAD", "--"];
+            if !from_path.is_empty() {
+                diff_args.push(from_path);
+            }
+            diff_args.push(path);
+            let diff = if binary {
+                String::new()
+            } else {
+                git(dir, &diff_args)
+            };
             files.push(json!({
-                "scope": scope, "path": path, "status": status,
-                "additions": added, "deletions": removed, "diff": diff,
+                "scope": scope, "path": path, "from_path": from_path, "status": status,
+                "additions": count(added), "deletions": count(removed),
+                "binary": binary, "diff": diff,
             }));
         }
     }
@@ -415,7 +461,11 @@ async fn web_reads_the_cloud_turn(h: &LiveHarness, uuid: &str, turn: &Value) {
     for path in ["README.md", "src/cloud.rs"] {
         assert!(paths.contains(&path), "{path} in {paths:?}");
     }
-    assert_eq!(view["cumulative"]["hidden_files"], 0, "{view}");
+    assert_eq!(
+        view["cumulative"]["hidden_files"], 1,
+        "secrets/cloud.txt is hidden by the project exclusion: {view}"
+    );
+    assert!(!paths.contains(&"secrets/cloud.txt"), "{paths:?}");
     assert_eq!(view["cumulative"]["omitted_files"], 0, "{view}");
     let added = cumulative
         .iter()
@@ -454,6 +504,15 @@ async fn web_reads_the_cloud_turn(h: &LiveHarness, uuid: &str, turn: &Value) {
     )
     .await;
     assert_eq!(code, 404, "a file that was never recorded has no diff");
+    let (code, _) = raw(
+        live,
+        &live.token,
+        Method::GET,
+        &format!("{diff_path}?commit={commit}&scope=cumulative&path=secrets/cloud.txt"),
+        None,
+    )
+    .await;
+    assert_eq!(code, 404, "a hidden path has no diff");
 
     // The conversation shows the cloud answer, produced by the executor.
     let (code, conversation) = raw(

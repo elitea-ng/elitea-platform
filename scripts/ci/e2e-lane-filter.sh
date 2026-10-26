@@ -60,9 +60,21 @@ MD_PROSE='^([^/]+|docs/.+|\.github/.+)\.md$'
 COMPOSE_DIR="${COMPOSE_DIR:-deploy}"
 
 # What the handoff journey runs, in the desktop and in Main. Keep it a
-# superset of the files the lane builds from: it is only ever too wide, never
-# too narrow, because a miss is a lane that stops gating.
-HANDOFF='^(apps/elitea-desktop/src-tauri/(src/(handoff|workspaces|history|d0/api)|IPC\.md|Cargo\.(toml|lock))|libs/rust/(workspace-store|local-tools|platform-rpc)/|libs/proto/|services/elitea-main/(cmd/handoff-live-cloudturn/|internal/(application/(workspacehandoff|workspacestore|workspacechanges|workspaceruntime|nativeauth)|api/v2/workspacehandoff|nativeauth|transport/runtimegrpc/workspace|platformconfig/|infra/db/repos/workspace_)|migrations/)|deploy/(docker-compose\.handoff-live\.yml|scripts/handoff-live\.sh)|\.github/workflows/ci-web-e2e\.yml|scripts/ci/e2e-lane-filter)'
+# superset of the files the lane builds and runs from: the whole desktop host
+# crate (not just handoff*.rs), every shared Rust crate it links, the stack
+# wrapper, compose files and image actions the lane brings up,
+# and Main's handoff packages. It is only ever too wide, never too narrow, because a miss is a lane that stops gating.
+HANDOFF='^('\
+'apps/elitea-desktop/src-tauri/|'\
+'libs/(rust|proto)/|rust-toolchain\.toml$|scripts/ci/assert-rust-toolchain\.sh$|'\
+'apps/elitea-web/scripts/lib/compose-detect\.sh$|'\
+'deploy/(scripts/(standalone-stack|handoff-live)\.sh|scripts/lib/|docker-compose\.(standalone-full|standalone-rust-agent|handoff-live)\.yml)|'\
+'\.github/(actions/(stack-images|build-stack-images|pull-stack-images)/|workflows/ci-web-e2e\.yml)|'\
+'scripts/ci/(e2e-lane-filter|stack-images)|'\
+'services/elitea-main/(cmd/handoff-live-cloudturn/|migrations/|'\
+'internal/(application/(workspacehandoff|workspacestore|workspacechanges|workspaceruntime|workspaceexecutor|nativeauth)/|'\
+'api/v2/workspacehandoff|nativeauth|transport/runtimegrpc/workspace|platformconfig/|infra/db/repos/workspace_))'\
+')'
 
 # Every deploy/helm path a compose file references, as a repository path.
 # A compose file names it relative to deploy/ (`./helm/...`).
