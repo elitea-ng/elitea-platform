@@ -1032,7 +1032,7 @@ func checkVersionComposition(ctx context.Context, q relationReader, schema, appl
 	} else if agentType != "" {
 		kind = applicationcomposition.KindAgent
 	}
-	if kind == stored.Kind && !(instructionsWritten && kind == applicationcomposition.KindPipeline) {
+	if kind == stored.Kind && (!instructionsWritten || kind != applicationcomposition.KindPipeline) {
 		return nil
 	}
 	saved := stored

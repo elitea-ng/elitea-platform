@@ -40,6 +40,7 @@ import { BASE_URL } from '../../playwright.config';
 import {
   AUTOTEST_PREFIX,
   createAgentThroughForm,
+  createAgentWithVersion,
   expectStoredAssistantAnswer,
   fillComposer,
 } from '../fixtures/api';
@@ -124,33 +125,33 @@ test('internal tools all on, agent-as-tool attached — and the agent still answ
   // the detach ALONE and require a 2xx; that passed against the handler that
   // answered 201 whatever it deleted, so it asserted nothing at all.
   //
-  // AND THE DETACH IS LOAD-BEARING FOR STEP 4. This spec attaches the agent
-  // to ITSELF (one agent, exercised as both ends of the relation), and a
-  // SELF-referencing nested tool is refused at admission — the send answers
-  // 422 because the nesting walk repeats the agent's own key at hop two
-  // ("circular reference", `walkCurrentApplicationNesting` in
-  // services/elitea-main/internal/infra/db/repos/agent_nesting.go — NOT the
-  // freeze, which admits the row's shape fine). So the relation is exercised
-  // in both directions and removed before the turn. The agent-as-tool TURN
-  // with a DISTINCT child — which the runtime serves — is
-  // chat.nested-agent.spec.ts's job.
-  const relation = await page.request.patch(
-    `${BASE_URL}/api/v2/elitea_core/application_relation/prompt_lib/${projectId}/${agentId}/${versionId}`,
-    { data: { application_id: Number(agentId), version_id: Number(versionId), has_relation: true } },
-  );
+  // The agent attaching ITSELF is a circular reference, refused where it is
+  // made (FU-244, PLAN §8.8) and written nowhere, so the relation is exercised
+  // with a distinct child. It is detached before the turn: the agent-as-tool
+  // TURN is chat.nested-agent.spec.ts's job.
+  const relationURL = (childId: string, childVersionId: string): string =>
+    `${BASE_URL}/api/v2/elitea_core/application_relation/prompt_lib/${projectId}/${childId}/${childVersionId}`;
+  const selfAttach = await page.request.patch(relationURL(agentId, versionId), {
+    data: { application_id: Number(agentId), version_id: Number(versionId), has_relation: true },
+  });
+  expect(selfAttach.status(), 'an agent attached to itself must be refused').toBe(400);
+  expect(((await selfAttach.json()) as { code?: string }).code).toBe('APPLICATION_COMPOSITION_INVALID');
+
+  const child = await createAgentWithVersion(page.request, `${name}-child`, {}, String(projectId));
+  const relation = await page.request.patch(relationURL(child.id, child.versionId), {
+    data: { application_id: Number(agentId), version_id: Number(versionId), has_relation: true },
+  });
   expect(relation.status(), 'the relation route must be writable').toBeLessThan(300);
-  const relationList = await page.request.get(
-    `${BASE_URL}/api/v2/elitea_core/application_relation/prompt_lib/${projectId}/${agentId}/${versionId}`,
-  );
+  const relationList = await page.request.get(relationURL(agentId, versionId));
   expect(relationList.ok()).toBe(true);
-  const detached = await page.request.patch(
-    `${BASE_URL}/api/v2/elitea_core/application_relation/prompt_lib/${projectId}/${agentId}/${versionId}`,
-    { data: { application_id: Number(agentId), version_id: Number(versionId), has_relation: false } },
-  );
+  const detached = await page.request.patch(relationURL(child.id, child.versionId), {
+    data: { application_id: Number(agentId), version_id: Number(versionId), has_relation: false },
+  });
   expect(
     detached.status(),
     'the detach must find the row the attach wrote — a 404 here means the attach was a no-op',
   ).toBeLessThan(300);
+  await page.request.delete(`${BASE_URL}/api/v2/elitea_core/application/prompt_lib/${projectId}/${child.id}`);
 
   // ── 4. Chat: both participants, and an admitted, answered turn ─────────
   const conversationCreated = page.waitForResponse(

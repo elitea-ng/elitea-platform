@@ -41,7 +41,7 @@ EliteaUI's depth-aware gate fed by Main.
 ## Business behaviour
 
 - **Current platform (reference only).** Attaching an agent as a tool when the child already reaches the parent is
-  refused at the attach with a readable message (`pylon_main/plugins/elitea_core/utils/application_tools.py:1057-1107`,
+  refused at the attach with a readable message (the legacy runtime's `elitea_core` application tools,
   "Adding this agent would create a circular reference"); publish validation reports circular and too-deep sub-agent
   trees (`utils/publish_utils.py:422,668`). EliteaUI phrases the refusal (`mapAssociationError`); the Web port already
   carries that mapping (`apps/elitea-web/src/features/agents/lib/associationError.ts`), but Main had lost the backend

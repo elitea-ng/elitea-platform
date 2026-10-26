@@ -11,6 +11,8 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/projectaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicproject"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -344,11 +346,13 @@ func checkParticipantComposition(ctx context.Context, q relationReader, conversa
 }
 
 // participantSchema authorizes the project a participant names before its
-// composition is read there. The caller is a member of the conversation's
-// project (the conversation route authorizes it), so that project is read as
-// is; the catalogue project is readable only for a version it publishes, as a
-// catalogue start requires; any other project is refused as not found, and no
-// read is made in it. An absent project is the conversation's own.
+// composition is read there. The conversation's own project is read as is (the
+// conversation route authorized the caller for it). Another project is read
+// only when the caller may act inside it (projectaccess.Membership, the rule of
+// the HTTP project gate), or when it is the catalogue project and the version
+// is published there, which every caller may use. Anything else is refused as
+// not found before any read in that project; every failure refuses. An absent
+// project is the conversation's own.
 func participantSchema(ctx context.Context, q relationReader, conversationSchema string, project any, root applicationcomposition.Identity) (string, error) {
 	if project == nil {
 		return conversationSchema, nil
@@ -363,6 +367,17 @@ func participantSchema(ctx context.Context, q relationReader, conversationSchema
 	}
 	if ownerSchema == conversationSchema {
 		return conversationSchema, nil
+	}
+	actor, err := chatauthority.Actor(ctx)
+	if err != nil {
+		return "", errParticipantNotFound
+	}
+	var member bool
+	if err := q.QueryRow(ctx, "SELECT "+projectaccess.Membership(1, 2), owner, actor).Scan(&member); err != nil {
+		return "", fmt.Errorf("conversations: participant project access: %w", err)
+	}
+	if member {
+		return ownerSchema, nil
 	}
 	if owner != int64(publicproject.ID()) {
 		return "", errParticipantNotFound
