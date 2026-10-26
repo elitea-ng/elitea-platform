@@ -34,6 +34,11 @@
 //! * A cancelled turn leaves nothing ([`SessionStore::finish_turn`]); a turn
 //!   the server refused marks the session for re-seeding, and a turn that
 //!   never finished (a crash) is dropped when the session is next opened.
+//! * The file gives its freed space back to the OS: it is kept under
+//!   incremental vacuum ([`ensure_incremental_vacuum`], applied at open and
+//!   independent of the schema version), and the Doctor's `sessions.vacuum`
+//!   ([`SessionStore::reclaim`]) folds it down when the file has grown
+//!   ahead of its sessions.
 //!
 //! One thread owns the SQLite connection ([`SessionStore`] is an actor):
 //! the turn path awaits a reply and never blocks a runtime worker on SQLite,
@@ -75,7 +80,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -102,6 +107,10 @@ pub const FILE_NAME: &str = "sessions.sqlite";
 pub const SCHEMA_VERSION: i64 = 2;
 /// What one session may hold in all (event JSON bytes).
 pub const MAX_SESSION_BYTES: i64 = 32 * 1024 * 1024;
+/// How long a store may be idle before it folds its WAL into the database
+/// (`wal_checkpoint(TRUNCATE)`): the `-wal` file otherwise keeps the turn's
+/// bytes on disk long after the turn is written.
+pub const WAL_IDLE_CHECKPOINT: Duration = Duration::from_secs(30);
 /// A tool response is stored cut at this many bytes: the cap the server
 /// keeps for a step's output (`d0/recorder.rs` `MAX_TOOL_OUTPUT`).
 pub const MAX_TOOL_RESPONSE_BYTES: usize = 64 * 1024;
@@ -365,6 +374,8 @@ pub struct SessionStore {
     sender: RwLock<Option<Sender<Job>>>,
     thread: Mutex<Option<std::thread::JoinHandle<()>>>,
     active: Arc<Active>,
+    /// The idle WAL checkpoint interval (a reclaim's restart keeps it).
+    idle_checkpoint: Duration,
 }
 
 fn open_connection(path: &Path) -> Result<Connection, HostError> {
@@ -405,6 +416,12 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
 /// Open the database at `path` (created owner-only first) and start the
 /// thread that owns its connection.
 fn start(path: &Path) -> Result<Writing, HostError> {
+    start_at(path, WAL_IDLE_CHECKPOINT)
+}
+
+/// [`start`] with the interval of the idle WAL checkpoint named: tests run
+/// it short so the checkpoint does not wait the full [`WAL_IDLE_CHECKPOINT`].
+fn start_at(path: &Path, idle_checkpoint: Duration) -> Result<Writing, HostError> {
     // Created owner-only BEFORE SQLite opens it, so it is never wider.
     match create_private_file(path) {
         Ok(_) => {}
@@ -419,20 +436,55 @@ fn start(path: &Path) -> Result<Writing, HostError> {
     }
     let conn = open_connection(path)?;
     migrate(&conn)?;
+    ensure_incremental_vacuum(&conn, "the session store");
     let (sender, receiver) = std::sync::mpsc::channel::<Job>();
     let thread = std::thread::Builder::new()
         .name("session-store".into())
-        .spawn(move || run_jobs(conn, &receiver))
+        .spawn(move || run_jobs(conn, &receiver, idle_checkpoint))
         .map_err(|e| HostError::Storage(format!("could not start the session store: {e}")))?;
     Ok(Writing { sender, thread })
 }
 
-fn run_jobs(mut conn: Connection, receiver: &Receiver<Job>) {
-    while let Ok(job) = receiver.recv() {
+fn run_jobs(mut conn: Connection, receiver: &Receiver<Job>, idle_checkpoint: Duration) {
+    let mut jobs: u64 = 0;
+    // A job ran since the last checkpoint: an idle store with nothing new
+    // sleeps instead of checkpointing every interval.
+    let mut dirty = false;
+    loop {
+        let job = match receiver.recv_timeout(idle_checkpoint) {
+            Ok(job) => job,
+            Err(RecvTimeoutError::Timeout) => {
+                // Idle for a while: fold the WAL into the database, so the
+                // `-wal` file does not hold the turn's bytes on disk while
+                // the app sits open.
+                if dirty {
+                    checkpoint_wal(&conn);
+                    dirty = false;
+                }
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
         job(&mut conn);
+        jobs += 1;
+        dirty = true;
+        // Incremental vacuum: the pages a trim freed would
+        // otherwise stay in the file's free space, and the store would only
+        // grow.
+        if jobs.is_multiple_of(64)
+            && let Err(error) = conn.pragma_update(None, "incremental_vacuum", 0)
+        {
+            log::warn!("the session store could not vacuum: {error}");
+        }
     }
     // The queue closed: fold the WAL into the database before the file may
     // be moved or read by another process (the Doctor).
+    checkpoint_wal(&conn);
+}
+
+/// Fold the WAL into the database, truncating the `-wal` file; log a
+/// warning when it could not (the store then closes without it).
+fn checkpoint_wal(conn: &Connection) {
     if let Err(error) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
         log::warn!("the session store could not be checkpointed: {error}");
     }
@@ -440,6 +492,154 @@ fn run_jobs(mut conn: Connection, receiver: &Receiver<Job>) {
 
 fn closed() -> HostError {
     HostError::Storage("the session store is closed; restart Elitea".into())
+}
+
+/// `PRAGMA auto_vacuum` of a file under incremental vacuum.
+const INCREMENTAL: i64 = 2;
+/// The largest file [`ensure_incremental_vacuum`] switches at open (its
+/// one `VACUUM` stays well under a second); a larger one waits for the
+/// Doctor's shrink.
+pub const AUTO_SWITCH_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// A file this large and half free pages is worth a shrink.
+pub const SHRINK_MIN_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Put the database on `conn` under incremental vacuum, so the pages a trim
+/// or a delete frees can go back to the OS (`PRAGMA incremental_vacuum`).
+/// A file created without it (every file before this mode, and a new file:
+/// opening it in WAL mode writes its header first) only switches over
+/// through a full `VACUUM`, which runs here once. It is best effort: a
+/// `VACUUM` that fails (the disk is full, another process is mid-write
+/// past the busy timeout) is logged and the store opens as it was; the next
+/// open tries again. It never touches `user_version`, so an older build
+/// still opens the file. A file larger than [`AUTO_SWITCH_MAX_BYTES`] is
+/// left as it is, so a launch never waits on a long `VACUUM`: the Doctor
+/// offers its shrink ([`DbSpace::shrink_advised`]), which switches it.
+pub(crate) fn ensure_incremental_vacuum(conn: &Connection, what: &str) {
+    match conn.query_row("PRAGMA auto_vacuum", [], |row| row.get::<_, i64>(0)) {
+        Ok(INCREMENTAL) => return,
+        Ok(_) => {}
+        Err(error) => {
+            log::warn!("{what} could not read its vacuum mode: {error}");
+            return;
+        }
+    }
+    let bytes = conn
+        .query_row(
+            "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_or(u64::MAX, |bytes| u64::try_from(bytes).unwrap_or(0));
+    if bytes > AUTO_SWITCH_MAX_BYTES {
+        log::info!(
+            "{what} holds {bytes} bytes, too many to vacuum at launch; the Doctor offers the shrink"
+        );
+        return;
+    }
+    let started = std::time::Instant::now();
+    let switched = conn
+        .pragma_update(None, "auto_vacuum", "INCREMENTAL")
+        .and_then(|()| conn.execute_batch("VACUUM"));
+    match switched {
+        Ok(()) => log::info!(
+            "{what} now gives freed space back (vacuumed in {:?})",
+            started.elapsed()
+        ),
+        Err(error) => log::warn!(
+            "{what} could not switch to incremental vacuum; it opens as it was and tries again next time: {error}"
+        ),
+    }
+}
+
+/// `VACUUM` the database in `dir` while no connection of this process holds
+/// it: the file's free space returns to the OS, and a file not yet under
+/// incremental vacuum takes it with it. The bytes it held before.
+/// A missing database holds nothing.
+///
+/// # Errors
+///
+/// The file refused the vacuum (it is not a database, or the disk could
+/// not be written).
+pub fn reclaim_database(dir: &Path, file_name: &str) -> Result<u64, HostError> {
+    let path = canonical_dir(dir).join(file_name);
+    let before = fs::symlink_metadata(&path)
+        .map(|meta| meta.len())
+        .unwrap_or_default();
+    if before == 0 {
+        return Ok(before);
+    }
+    let conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(|e| storage("could not open the database", &e))?;
+    conn.busy_timeout(Duration::from_secs(5))
+        .map_err(|e| storage("could not open the database", &e))?;
+    conn.execute_batch(
+        "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA auto_vacuum = INCREMENTAL; VACUUM;",
+    )
+    .map_err(|e| storage("could not reclaim the database", &e))?;
+    Ok(before)
+}
+
+/// `dir` canonical, as [`SessionStore::open`] makes it: the no-follow open
+/// then refuses a symlinked FILE, not a symlink higher up (macOS's `/var`
+/// is one). As given when it cannot be resolved (the open then fails).
+fn canonical_dir(dir: &Path) -> PathBuf {
+    fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
+}
+
+/// What a store file holds, for the Doctor's space checks.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DbSpace {
+    /// The file's size on disk.
+    pub bytes: u64,
+    /// The share of its pages that are free (`0.0..=1.0`).
+    pub free_fraction: f64,
+    /// Under incremental vacuum: freed pages go back on their own.
+    pub incremental: bool,
+}
+
+impl DbSpace {
+    /// The one rule both Doctor checks use to offer a shrink: a file of at
+    /// least [`SHRINK_MIN_BYTES`] with half or more of it free pages, or a
+    /// file too large to switch at open ([`AUTO_SWITCH_MAX_BYTES`]) that is
+    /// not yet under incremental vacuum (the shrink switches it).
+    #[must_use]
+    pub fn shrink_advised(&self) -> bool {
+        (self.bytes >= SHRINK_MIN_BYTES && self.free_fraction >= 0.5)
+            || (!self.incremental && self.bytes > AUTO_SWITCH_MAX_BYTES)
+    }
+}
+
+/// What the SQLite database at `dir/file_name` holds ([`DbSpace`]). All
+/// zero when the file is missing, not a database, empty, or the query
+/// fails. Opened read-only through a no-follow connection, separate from
+/// the store's own.
+pub fn database_space(dir: &Path, file_name: &str) -> DbSpace {
+    let path = canonical_dir(dir).join(file_name);
+    let bytes = fs::symlink_metadata(&path)
+        .map(|meta| meta.len())
+        .unwrap_or_default();
+    let Ok(conn) = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    ) else {
+        return DbSpace::default();
+    };
+    let read = |pragma: &str| conn.query_row(pragma, [], |row| row.get::<_, i64>(0));
+    match (
+        read("PRAGMA page_count"),
+        read("PRAGMA freelist_count"),
+        read("PRAGMA auto_vacuum"),
+    ) {
+        (Ok(pages), Ok(free), Ok(mode)) if pages > 0 => DbSpace {
+            bytes,
+            free_fraction: free as f64 / pages as f64,
+            incremental: mode == INCREMENTAL,
+        },
+        _ => DbSpace::default(),
+    }
 }
 
 impl SessionStore {
@@ -450,19 +650,31 @@ impl SessionStore {
     /// The directory or file is refused (see the module docs), the file is
     /// not a database, or it was written by a newer schema.
     pub fn open(dir: &Path) -> Result<Self, HostError> {
+        Self::open_at(dir, WAL_IDLE_CHECKPOINT)
+    }
+
+    /// [`Self::open`] with the interval of the idle WAL checkpoint named:
+    /// tests run it short so the checkpoint does not wait the full
+    /// [`WAL_IDLE_CHECKPOINT`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::open`].
+    pub fn open_at(dir: &Path, idle_checkpoint: Duration) -> Result<Self, HostError> {
         create_private_dir(dir)?;
         // Canonical, so the no-follow open refuses a symlinked FILE, not a
         // symlink higher up (macOS's `/var` is one).
         let dir = fs::canonicalize(dir).map_err(|e| HostError::Storage(e.to_string()))?;
         let path = dir.join(FILE_NAME);
         inspect_private(&path, "the session store")?;
-        let writing = start(&path)?;
+        let writing = start_at(&path, idle_checkpoint)?;
         Ok(Self {
             dir,
             path,
             sender: RwLock::new(Some(writing.sender)),
             thread: Mutex::new(Some(writing.thread)),
             active: Arc::new(Active::default()),
+            idle_checkpoint,
         })
     }
 
@@ -568,6 +780,45 @@ impl SessionStore {
             aside.display()
         );
         Ok(aside)
+    }
+
+    /// Give the file's free space back to the OS (the Doctor's
+    /// `sessions.vacuum`): the store is a cache the server conversation
+    /// rebuilds, and trims free pages it cannot reclaim on its own, so the
+    /// file would only grow. Close it, `VACUUM` it and reopen it. The bytes
+    /// the file held before (how much could be given back).
+    ///
+    /// # Errors
+    ///
+    /// The file could not be vacuumed (the store is then reopened on it), or
+    /// the reopened store could not start (it stays closed until restart).
+    pub fn reclaim(&self) -> Result<u64, HostError> {
+        self.close();
+        let before = reclaim_database(&self.dir, FILE_NAME).map_err(|e| {
+            log::warn!("the session store could not be reclaimed: {e}");
+            e
+        });
+        let started = start_at(&self.path, self.idle_checkpoint);
+        let writing = match (&before, started) {
+            (_, Ok(writing)) => writing,
+            (Err(_), Err(_)) => return before,
+            (Ok(_), Err(error)) => {
+                return Err(HostError::Storage(format!(
+                    "a new session store could not start after reclaim ({error}); restart Elitea"
+                )));
+            }
+        };
+        *self
+            .sender
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(writing.sender);
+        *self
+            .thread
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(writing.thread);
+        let before = before?;
+        log::warn!("diagnostics: reclaimed the session store (it held {before} bytes)");
+        Ok(before)
     }
 
     /// Open the session of `identity` for a turn: created when missing,

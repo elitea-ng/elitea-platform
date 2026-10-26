@@ -73,6 +73,13 @@ pub struct SessionConfig {
     /// The host's data directory: copy checkpoints and the session's
     /// temporary directory live under it.
     pub data_dir: PathBuf,
+    /// Where the session's spilled outputs live: the host's CACHE directory
+    /// (spills are ephemeral: kept for [`crate::budget::SPILL_RETENTION`],
+    /// bounded, and a gone id is an expected answer). `None`: under
+    /// `data_dir` (hosts without a cache directory, the library's tests).
+    /// The host keeps this directory on the session's deny list, as it does
+    /// its data directory.
+    pub spill_dir: Option<PathBuf>,
     /// Command settings; `None`: defaults, with the temporary directory
     /// under `data_dir` and no Linux sandbox helper.
     pub shell: Option<ShellConfig>,
@@ -756,6 +763,19 @@ impl LocalSession {
         }
         shell.deny_read.extend(config.deny_read);
         shell.deny_read.push(config.data_dir.clone());
+        // The spill files live in the host's cache directory, not its data
+        // directory: spills are ephemeral (kept for
+        // [`crate::budget::SPILL_RETENTION`], bounded, and a gone id is an
+        // expected answer), and the cache may be cleared without the app
+        // noticing. The host keeps it on the deny list, as it does the data
+        // directory.
+        let spill_base = config
+            .spill_dir
+            .clone()
+            .unwrap_or_else(|| config.data_dir.clone());
+        if spill_base != config.data_dir {
+            shell.deny_read.push(spill_base.clone());
+        }
         // A task worktree the host registered lives in the host's data: its
         // folder (and only its own) is opened again for the file tools, as
         // the sandbox opens it again for commands (its writable root).
@@ -788,8 +808,18 @@ impl LocalSession {
         // What an earlier session of this id spilled (before a policy
         // change, or an app restart) stays readable within its retention:
         // the conversations' history names those ids. Expired ones go now.
-        let spill = SpillStore::new(&config.data_dir, &config.session_id);
+        // Under the cache directory when the host names one (spills are
+        // ephemeral), else under the data directory.
+        let spill = SpillStore::new(&spill_base, &config.session_id);
         spill.sweep();
+        // Spills an earlier build left under the data directory are no
+        // longer readable (the ids resolve under the cache directory now):
+        // they go at once instead of staying on disk forever.
+        if spill_base != config.data_dir {
+            SpillStore::new(&config.data_dir, &config.session_id)
+                .with_retention(Duration::ZERO)
+                .sweep();
+        }
         Ok(Arc::new(Self {
             workspace,
             ledger: ReadLedger::new(),

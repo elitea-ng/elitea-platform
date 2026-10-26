@@ -132,6 +132,7 @@ fn fixture_with(
     });
     let choices = Arc::new(MemoryChoices::default());
     let session = LocalSession::open(SessionConfig {
+        spill_dir: None, // under data_dir
         root: root.clone(),
         session_id: "s".to_owned(),
         policy: LocalWorkPolicy {

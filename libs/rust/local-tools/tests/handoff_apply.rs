@@ -1485,6 +1485,7 @@ mod shared_engine {
 
     fn session(root: &Path, data: &Path, id: &str) -> Arc<LocalSession> {
         LocalSession::open(SessionConfig {
+            spill_dir: None, // under data_dir
             root: root.to_path_buf(),
             session_id: id.to_owned(),
             policy: LocalWorkPolicy {

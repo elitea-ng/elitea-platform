@@ -211,6 +211,7 @@ async fn live_harness() -> LiveHarness {
             app_id: None,
             user_rules_dir: None,
             user_commands_dir: None,
+            cache_dir: None,
         })
         .unwrap(),
     );

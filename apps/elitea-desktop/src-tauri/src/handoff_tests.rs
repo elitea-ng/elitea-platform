@@ -581,6 +581,7 @@ async fn harness_full(
             app_id: None,
             user_rules_dir: None,
             user_commands_dir: None,
+            cache_dir: None,
         })
         .unwrap(),
     );

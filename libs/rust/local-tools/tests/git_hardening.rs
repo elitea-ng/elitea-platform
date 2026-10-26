@@ -108,6 +108,7 @@ async fn exercise_at(root: &Path, planted: &Planted) -> (Checkpoints, Value) {
         let _ = checkpoints.restore(info.seq);
     }
     let session = LocalSession::open(SessionConfig {
+        spill_dir: None, // under data_dir
         root: root.to_path_buf(),
         session_id: "s1".to_owned(),
         policy: LocalWorkPolicy {

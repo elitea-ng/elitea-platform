@@ -918,6 +918,118 @@ async fn move_aside_keeps_the_old_file_and_starts_fresh() {
 }
 
 #[tokio::test]
+async fn reclaim_keeps_the_events_and_reopens() {
+    let (_dir, store) = open();
+    let sessions = store.store();
+    let me = identity(1, "https://a.example");
+    let key = me.key();
+    sessions.open_session(&me, "fp").await.unwrap();
+    sessions
+        .seed(
+            &key,
+            vec![
+                new("i", text_event("i", "user", "user", "hi")),
+                new("i", text_event("i", "agent", "model", "hello")),
+            ],
+            Some("0".into()),
+            &[],
+        )
+        .await
+        .unwrap();
+    let held = sessions.rows(&key).await.unwrap();
+    assert_eq!(held.len(), 2, "the events were stored");
+    // The Doctor's `sessions.vacuum`: close, VACUUM, reopen.
+    let before = sessions.reclaim().unwrap();
+    assert!(before > 0, "the file held bytes");
+    let back = sessions.rows(&key).await.unwrap();
+    assert_eq!(back.len(), 2, "the events survived the shrink");
+}
+
+#[tokio::test]
+async fn new_files_are_vacuumed_incrementally() {
+    let (dir, store) = open();
+    store
+        .store()
+        .open_session(&identity(1, "https://a.example"), "fp")
+        .await
+        .unwrap();
+    let conn = rusqlite::Connection::open(dir.path().join(FILE_NAME)).unwrap();
+    let mode: i64 = conn
+        .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(mode, 2, "2 = INCREMENTAL");
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION);
+}
+
+#[tokio::test]
+async fn an_existing_file_switches_to_incremental_vacuum_and_keeps_its_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(FILE_NAME);
+    {
+        let store = SessionStore::open(dir.path()).unwrap();
+        store
+            .open_session(&identity(1, "https://a.example"), "fp")
+            .await
+            .unwrap();
+    }
+    // A file from before incremental vacuum: mode NONE, same schema.
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("PRAGMA auto_vacuum = NONE; VACUUM;")
+            .unwrap();
+    }
+    let mode = || -> i64 {
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+            .unwrap()
+    };
+    assert_eq!(mode(), 0, "the file starts without it");
+    let store = SessionStore::open(dir.path()).unwrap();
+    assert_eq!(mode(), 2, "the open switched it to INCREMENTAL");
+    let version: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION, "the schema version is untouched");
+    drop(store);
+}
+
+#[tokio::test]
+async fn an_idle_store_folds_its_wal_into_the_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(FILE_NAME);
+    // A short idle interval: the checkpoint runs long before 30 seconds.
+    let store = SessionStore::open_at(dir.path(), Duration::from_millis(200)).unwrap();
+    let me = identity(1, "https://a.example");
+    let key = me.key();
+    store.open_session(&me, "fp").await.unwrap();
+    store
+        .seed(
+            &key,
+            vec![new("i", text_event("i", "user", "user", "hi"))],
+            Some("0".into()),
+            &[],
+        )
+        .await
+        .unwrap();
+    // The turn's bytes are in the WAL now. Let the store sit idle, and its
+    // idle checkpoint folds them back into the main file.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let wal = std::fs::symlink_metadata(path.with_file_name(format!("{FILE_NAME}-wal")))
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    assert!(
+        wal <= 32,
+        "the idle checkpoint leaves no turn bytes in the wal (holds {wal})"
+    );
+    drop(store);
+}
+
+#[tokio::test]
 async fn the_adk_service_creates_lists_and_deletes() {
     let (_dir, state) = open();
     let service = state.sessions();
@@ -1089,4 +1201,53 @@ async fn the_seed_boundary_is_kept_and_upgraded_from_schema_one() {
         .await
         .unwrap();
     assert_eq!(store.seed_skips(&key).await.unwrap(), Vec::<i64>::new());
+}
+
+#[test]
+fn one_shrink_rule_for_both_doctor_checks() {
+    let mib = 1024 * 1024;
+    let space = |bytes: u64, free_fraction: f64, incremental: bool| DbSpace {
+        bytes,
+        free_fraction,
+        incremental,
+    };
+    assert!(
+        space(200 * mib, 0.6, true).shrink_advised(),
+        "large and half free"
+    );
+    assert!(
+        !space(200 * mib, 0.1, true).shrink_advised(),
+        "large but in use"
+    );
+    assert!(!space(10 * mib, 0.9, true).shrink_advised(), "small");
+    assert!(
+        space(80 * mib, 0.0, false).shrink_advised(),
+        "too large to switch at open, not yet incremental: the shrink switches it"
+    );
+    assert!(
+        !space(10 * mib, 0.0, false).shrink_advised(),
+        "the open switches it"
+    );
+}
+
+#[tokio::test]
+async fn the_doctors_shrink_switches_a_file_to_incremental_vacuum() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let store = SessionStore::open(dir.path()).unwrap();
+        store
+            .open_session(&identity(1, "https://a.example"), "fp")
+            .await
+            .unwrap();
+    }
+    // A file too large to switch at open stays in mode NONE; the shrink is
+    // what switches it.
+    {
+        let conn = rusqlite::Connection::open(dir.path().join(FILE_NAME)).unwrap();
+        conn.execute_batch("PRAGMA auto_vacuum = NONE; VACUUM;")
+            .unwrap();
+    }
+    assert!(!database_space(dir.path(), FILE_NAME).incremental);
+    assert!(reclaim_database(dir.path(), FILE_NAME).unwrap() > 0);
+    assert!(database_space(dir.path(), FILE_NAME).incremental);
 }

@@ -171,7 +171,7 @@ pub fn run() {
                 Some(config_dir.clone()),
                 Some(data_dir.clone()),
                 log_dir.clone(),
-                cache_dir,
+                cache_dir.clone(),
             ]);
             let app_id = sandbox_app_id(app.config());
             let host_deny = Arc::new(elitea_local_tools::deny::DenyList::for_session(
@@ -354,6 +354,7 @@ pub fn run() {
                     app_id,
                     user_rules_dir: Some(config_dir.clone()),
                     user_commands_dir: Some(config_dir.join("commands")),
+                    cache_dir: cache_dir.clone(),
                 })
                 .map_err(|error| error.message)?,
             );
@@ -383,6 +384,11 @@ pub fn run() {
             .map_err(|error| error.message)?;
             let handoff = Arc::new(handoff);
             app.manage(handoff::HandoffState(handoff.clone()));
+            let doctor_files = SettingsFiles::new(config_dir.clone());
+            let history_retention_days = match doctor_files.settings() {
+                Ok(settings) => crate::settings::history_retention_days(&settings),
+                Err(_) => crate::settings::DEFAULT_HISTORY_RETENTION_DAYS,
+            };
             app.manage(Arc::new(doctor::Doctor {
                 local: doctor::LocalDoctor {
                     hooks: Arc::new(AppDoctorHooks {
@@ -396,6 +402,8 @@ pub fn run() {
                     workspaces: workspaces.clone(),
                     history: history.clone(),
                     sessions: sessions.clone(),
+                    cache_dir,
+                    history_retention_days,
                 },
                 auth: auth.clone(),
             }));

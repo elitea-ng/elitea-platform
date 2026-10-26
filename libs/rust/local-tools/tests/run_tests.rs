@@ -69,6 +69,7 @@ fn fixture(name: &str) -> (tempfile::TempDir, PathBuf, Arc<LocalSession>) {
     // the run either way.
     shell.sandbox.allow_unenforced = true;
     let session = LocalSession::open(SessionConfig {
+        spill_dir: None, // under data_dir
         root: root.clone(),
         session_id: "s".to_owned(),
         policy: LocalWorkPolicy {
