@@ -25,7 +25,7 @@ import { projectScope } from '@/lib/abortRegistry';
 import { log } from '@/lib/log';
 import { parseFrame } from '@/features/chat/frames';
 import { INITIAL_TURN, isTurnTerminal, reduceTurn, withSteering, type TurnState } from '@/features/chat/turnReducer';
-import { STEERING_DROP_REASON, STEERING_ERROR, STEERING_STATE, joinSteeringTexts, leftoverSteering, type SteeringItem } from '@elitea/client-core/stream';
+import { STEERING_ERROR, STEERING_STATE, isSteeringCarryOver, joinSteeringTexts, leftoverSteering, type SteeringItem } from '@elitea/client-core/stream';
 import { registerWipeHook } from '@/security/endSession';
 import { getSession } from '@/state/session';
 
@@ -82,19 +82,15 @@ export interface LiveTurn {
   /**
    * The steering messages that THIS device queued against the answer
    * (client contract 1.27). Only these are sent again as the next message
-   * when the turn ends before the worker injects them.
+   * when the turn ends before the worker injects them. A message that the
+   * server carried from an older answer of this device to this answer is
+   * here too.
    */
   ownSteering?: string[];
   /** The server refused steering for this turn (`steering_not_supported`, a pipeline). */
   steeringUnsupported?: boolean;
   /** A rate-limited steering message goes again at this time (epoch ms); null when none waits. */
   steeringRetryAt?: number | null;
-  /**
-   * Steering messages that the server did not send, because the user sent a
-   * newer message first (`steer.dropped`, `reason: superseded`). The thread
-   * shows their texts until the user closes the note. Nothing sends them.
-   */
-  steeringSuperseded?: { id: string; content: string }[];
 }
 
 /** What a message sent while the answer runs came to (client contract 1.27). */
@@ -195,6 +191,31 @@ function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 /** Answers from a gateway in front of a workspace that is down (DEF-R3). */
+/**
+ * The steering messages that THIS device queued, by id: the answer that holds
+ * each one now. In memory only. A carry-over moves a message to the author's
+ * newer answer, which is another `TurnController`; this map tells the newer
+ * one that the message is this device's own, also when the older turn
+ * already settled.
+ */
+const ownSteeringAnswers = new Map<string, string>();
+const MAX_OWN_STEERING = 200;
+
+function rememberOwnSteering(id: string, answer: string): void {
+  ownSteeringAnswers.delete(id);
+  ownSteeringAnswers.set(id, answer);
+  for (const oldest of ownSteeringAnswers.keys()) {
+    if (ownSteeringAnswers.size <= MAX_OWN_STEERING) break;
+    ownSteeringAnswers.delete(oldest);
+  }
+}
+
+/** False when the server carried the message to another answer than `answer`. */
+function ownsSteeringHere(id: string, answer: string | null): boolean {
+  const holder = ownSteeringAnswers.get(id);
+  return holder === undefined || answer === null || holder === answer;
+}
+
 /** The waits before the steering list is read again while own messages still show `pending` at the turn end. */
 const SETTLE_RETRY_MS = [1_500, 4_000] as const;
 
@@ -443,7 +464,10 @@ export class TurnController {
     if (this.state.steeringRetryAt != null) this.update({ steeringRetryAt: null });
     if (result.ok) {
       const item = result.item;
-      if (item) this.update({ ownSteering: [...(this.state.ownSteering ?? []), item.id], turn: withSteering(this.state.turn, [item]) });
+      if (item) {
+        rememberOwnSteering(item.id, responseMessageId);
+        this.update({ ownSteering: [...(this.state.ownSteering ?? []), item.id], turn: withSteering(this.state.turn, [item]) });
+      }
       // The turn settled while the POST was on its way: the end-of-turn rule must still see this message.
       if (item && this.steeringSettled) void this.settleSteering(true);
       return 'queued';
@@ -501,27 +525,22 @@ export class TurnController {
     return "Couldn't remove the message. Try again.";
   }
 
-  /** Ids that were superseded before, so a replayed event does not show a closed note again. */
-  private readonly supersededSeen = new Set<string>();
-
   /**
-   * A steering message that the server did not send: the user sent a newer
-   * message first. The event comes on the stream of the newer turn and names
-   * the OLD answer, so it is taken whatever answer it names. It is final, so
-   * this device does not hand it off.
+   * A carry-over (client contract 1.27): the user sent a newer message before
+   * the hand-off of an older answer, so the server moved the leftover messages
+   * to this (newer) answer. A message that this device queued under the older
+   * answer stays this device's own: the end-of-turn rule of THIS answer hands
+   * it off, and the rule of the older answer does not (`ownsSteeringHere`).
    */
-  private addSuperseded(item: SteeringItem): void {
-    if (this.supersededSeen.has(item.id)) return;
-    this.supersededSeen.add(item.id);
-    this.update({
-      ownSteering: (this.state.ownSteering ?? []).filter((id) => id !== item.id),
-      ...(item.content.trim() === '' ? {} : { steeringSuperseded: [...(this.state.steeringSuperseded ?? []), { id: item.id, content: item.content }] }),
-    });
-  }
-
-  /** The user closed the note of the superseded messages. */
-  dismissSuperseded(): void {
-    if ((this.state.steeringSuperseded ?? []).length > 0) this.update({ steeringSuperseded: [] });
+  private adoptCarriedSteering(item: SteeringItem): void {
+    const answer = this.state.execution?.responseMessageId ?? null;
+    if (answer === null || item.responseMessageId !== answer || (this.state.ownSteering ?? []).includes(item.id)) return;
+    const from = ownSteeringAnswers.get(item.id);
+    if (from === undefined || !isSteeringCarryOver(from, item)) return;
+    rememberOwnSteering(item.id, answer);
+    this.update({ ownSteering: [...(this.state.ownSteering ?? []), item.id] });
+    // This turn already ended: the end-of-turn rule must still see the message.
+    if (this.steeringSettled) void this.settleSteering(true);
   }
 
   /** Reads the answer's steering list again (after a lost race with the injection). */
@@ -569,11 +588,12 @@ export class TurnController {
   private async settleSteering(again = false): Promise<void> {
     if (this.steeringSettled && !again) return;
     this.steeringSettled = true;
-    const own = new Set(this.state.ownSteering ?? []);
     const late = this.afterTurn.splice(0);
     const responseMessageId = this.state.execution?.responseMessageId ?? null;
+    // A message that the server carried to a newer answer is not this answer's any more.
+    const own = new Set((this.state.ownSteering ?? []).filter((id) => ownsSteeringHere(id, responseMessageId)));
     const items = own.size > 0 ? await this.settledSteeringList(own) : this.state.turn.steering;
-    const leftovers = leftoverSteering(items, own, false);
+    const leftovers = leftoverSteering(items, own, false).filter((item) => ownsSteeringHere(item.id, responseMessageId));
     let handed: SteeringItem[] = [];
     if (responseMessageId !== null && (leftovers.length > 0 || this.handoffKey !== null)) {
       const key = (this.handoffKey ??= newSteeringKey());
@@ -770,7 +790,7 @@ export class TurnController {
         const before = this.state.turn;
         const turn = reduceTurn(before, frame);
         if (turn !== before) this.update({ turn });
-        if (frame.kind === 'steer' && frame.reason === STEERING_DROP_REASON.Superseded) this.addSuperseded(frame.item);
+        if (frame.kind === 'steer') this.adoptCarriedSteering(frame.item);
         if (turn.refreshRequests > before.refreshRequests) this.deps.onRefreshNeeded?.();
         if (isTurnTerminal(frame)) {
           ended = true;
@@ -846,6 +866,7 @@ export function setLiveTurn(key: string, controller: TurnController | null): voi
 export function clearLiveTurns(): void {
   for (const controller of liveTurns.values()) controller.detach();
   liveTurns.clear();
+  ownSteeringAnswers.clear();
   notifyRegistry();
 }
 

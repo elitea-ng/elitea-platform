@@ -6,7 +6,7 @@ import { editSteering, handOffSteering, listSteering, queueSteering, removeSteer
 import { parseFrame } from '@/features/chat/frames';
 import { steeringRows } from '@/features/chat/SteeringRows';
 import { TurnController } from '@/features/chat/turnController';
-import { steerOutcomeText, supersededSteeringText } from '@/features/chat/useTurn';
+import { steerOutcomeText } from '@/features/chat/useTurn';
 import { steeringWaitText } from '@/features/chat/useSteeringWaitText';
 import { abortAll } from '@/lib/abortRegistry';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
@@ -144,11 +144,6 @@ describe('steer frames', () => {
     expect(parseFrame({ event: 'steer.dropped', data: JSON.stringify({ ...EXAMPLE, reason: 'removed' }), id: '2' })).toMatchObject({
       kind: 'steer',
       item: { state: 'removed' },
-    });
-    expect(parseFrame({ event: 'steer.dropped', data: JSON.stringify({ ...EXAMPLE, state: 'removed', reason: 'superseded' }), id: '4' })).toMatchObject({
-      kind: 'steer',
-      item: { state: 'removed' },
-      reason: 'superseded',
     });
     expect(parseFrame({ event: 'steer.injected', data: '{}', id: '3' })).toEqual({ kind: 'invalid', event: 'steer.injected' });
   });
@@ -320,25 +315,83 @@ describe('TurnController steering', () => {
     t.c.detach();
   });
 
-  it('superseded: a newer message came first, so the text shows in a note, the item hides, and nothing is sent', async () => {
-    // The newer turn's stream carries the event; its response_message_id is the OLD answer.
-    const old = { ...EXAMPLE, id: '6a7b8c9d-0e1f-4a2b-8c3d-4e5f6a7b8c9d', response_message_id: '1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f', state: 'removed' as const };
-    const { c, stream, seen, onLeftover } = await streaming(() => json({ items: [] }));
-    stream.connections[0].push(sse('steer.dropped', { ...old, reason: 'superseded' }, 1));
-    stream.connections[0].push(sse('steer.dropped', { ...old, id: '0f1e2d3c-4b5a-4968-8776-655443322110', reason: 'removed' }, 2));
-    await flush();
-    expect(c.getSnapshot().turn.steering.map((s) => s.state)).toEqual(['removed', 'removed']);
-    expect(steeringRows(c.getSnapshot().turn.steering, new Set())).toEqual([]);
-    expect(c.getSnapshot().steeringSuperseded).toEqual([{ id: old.id, content: old.content }]);
-    expect(supersededSteeringText(c.getSnapshot().steeringSuperseded)).toBe(`Not sent: you sent a newer message first.\n\n${old.content}`);
-    // Closed: a replay of the same event does not show the note again.
-    c.dismissSuperseded();
-    stream.connections[0].push(sse('steer.dropped', { ...old, reason: 'superseded' }, 1));
-    await flush();
-    expect(supersededSteeringText(c.getSnapshot().steeringSuperseded)).toBeNull();
-    expect(onLeftover).not.toHaveBeenCalled();
-    expect(seen.filter((s) => s.path.endsWith('/steering') || s.path.endsWith('/handoff'))).toEqual([]);
-    c.detach();
+  describe('carry-over: a newer message came before the hand-off', () => {
+    // The server moved the leftover message to the author's newer answer: the same id, revision + 1.
+    const NEWER = '9e8d7c6b-5a49-4382-9170-6f5e4d3c2b1a';
+    const NEWER_ROUTE = `/api/v2/elitea_core/task/prompt_lib/${P}/${NEWER}/steering`;
+    const carried = (state: SteeringMessage['state']): SteeringMessage => ({ ...EXAMPLE, response_message_id: NEWER, revision: EXAMPLE.revision + 1, state });
+
+    /** The newer turn of the same conversation: its answer is NEWER. */
+    async function newerTurn(steering: (method: string, path: string) => Response) {
+      const seen: Seen[] = [];
+      const fetch: BaseFetch = async (input) => {
+        const path = new URL(input.url).pathname;
+        seen.push({ method: input.method, path, key: input.headers.get('Idempotency-Key'), body: null });
+        if (path.startsWith(NEWER_ROUTE)) return steering(input.method, path);
+        return json({ execution_id: 'e2', events_url: `/api/v2/executions/${P}/e2/events`, response_message_id: NEWER, created: true });
+      };
+      const stream = fakeStreamTransport();
+      const onLeftover = jest.fn();
+      const c = new TurnController(
+        prepareTurn({ projectId: P, conversationUuid: CONV, participantId: 3, userInput: 'and now the docs', questionId: '5b1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1c' }),
+        { client: createApiClient({ origin: FAKE_ORIGIN, auth: { kind: 'session' }, fetch }), transport: stream.transport, appState: null, sleep: async () => {}, random: () => 0.5, onSettle: async () => {}, onLeftover },
+      );
+      void c.start();
+      await flush();
+      return { c, stream, seen, onLeftover };
+    }
+
+    it('the newer turn takes the message as this device\'s own and hands it off; the older turn does not', async () => {
+      // The older turn: its list no longer holds the message, so its end-of-turn rule sends nothing.
+      const older = await streaming((method) => (method === 'POST' ? json(EXAMPLE, 202) : json({ items: [] })));
+      await expect(older.c.steer(EXAMPLE.content)).resolves.toBe('queued');
+      older.stream.connections[0].push(sse('execution.node_event', { type: 'pipeline_finish', content: 'done' }, 1));
+      await flush();
+      expect(older.seen.filter((s) => s.path === HANDOFF)).toEqual([]);
+      expect(older.onLeftover).not.toHaveBeenCalled();
+
+      const newer = await newerTurn((method, path) => {
+        if (path === `${NEWER_ROUTE}/handoff`) return json({ items: [carried('handed_off')] });
+        return json({ items: [carried('turn_ended')] });
+      });
+      newer.stream.connections[0].push(sse('steer.queued', carried('pending'), 1));
+      await flush();
+      expect(newer.c.getSnapshot().ownSteering).toEqual([EXAMPLE.id]);
+      expect(steeringRows(newer.c.getSnapshot().turn.steering, new Set()).map((s) => [s.id, s.state, s.revision])).toEqual([[EXAMPLE.id, 'pending', 2]]);
+      newer.stream.connections[0].push(sse('execution.node_event', { type: 'pipeline_finish', content: 'done' }, 2));
+      await flush();
+      expect(newer.seen.filter((s) => s.path === `${NEWER_ROUTE}/handoff`)).toHaveLength(1);
+      expect(newer.onLeftover).toHaveBeenCalledTimes(1);
+      expect(newer.onLeftover).toHaveBeenCalledWith(EXAMPLE.content);
+    });
+
+    it('the older turn still settling does not hand off a message that moved; a message of another device is not taken', async () => {
+      let release: () => void = () => {};
+      const waiting = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      // The older list shows the message pending, so its rule waits and reads again.
+      const lists = [json({ items: [EXAMPLE] }), json({ items: [{ ...EXAMPLE, state: 'turn_ended' }] })];
+      const older = await streaming(
+        (method, path) => (path === HANDOFF ? json({ items: [HANDED] }) : method === 'POST' ? json(EXAMPLE, 202) : (lists.shift() ?? json({ items: [] }))),
+        () => waiting,
+      );
+      await expect(older.c.steer(EXAMPLE.content)).resolves.toBe('queued');
+      older.stream.connections[0].push(sse('execution.node_event', { type: 'pipeline_finish', content: 'done' }, 1));
+      await flush();
+
+      const newer = await newerTurn(() => json({ items: [] }));
+      newer.stream.connections[0].push(sse('steer.queued', carried('pending'), 1));
+      newer.stream.connections[0].push(sse('steer.queued', { ...carried('pending'), id: '2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f', content: 'From the other phone.' }, 2));
+      await flush();
+      expect(newer.c.getSnapshot().ownSteering).toEqual([EXAMPLE.id]);
+
+      release();
+      await flush();
+      expect(older.seen.filter((s) => s.path === HANDOFF)).toEqual([]);
+      expect(older.onLeftover).not.toHaveBeenCalled();
+      newer.c.detach();
+    });
   });
 
   it('the composer hint counts the wait down in whole seconds', () => {

@@ -15,6 +15,7 @@ import { DEFAULT_BRAND_PACK, buildEliteaTheme } from '@/shared/brand';
 import {
   getHandOffChatExecutionSteeringMockHandler,
   getHandOffChatExecutionSteeringResponseMock,
+  getListChatExecutionSteeringMockHandler,
   getListChatExecutionSteeringResponseMock,
   getRemoveChatExecutionSteeringMockHandler,
   getSteerChatExecutionMockHandler,
@@ -321,49 +322,52 @@ describe('SteeringMessages', () => {
   });
 });
 
-describe('useChatSteering — superseded (the user sent a newer message first)', () => {
-  // The frame comes on the stream of the NEWER turn, but its response_message_id names the OLD answer.
-  const superseded = { ...row({ state: 'removed' }), reason: 'superseded' };
+describe('useChatSteering — carry-over to the newer answer', () => {
+  // The user sent a newer message before the hand-off: the server moved the leftover message to the newer answer.
+  const NEWER = '9e8d7c6b-5a49-4382-9170-6f5e4d3c2b1a';
+  const carried = (state: SteeringMessage['state']) => row({ response_message_id: NEWER, revision: EXAMPLE.revision + 1, state });
+  const own = () => useChatSteeringStore.getState().own;
+  const idsUnder = (answer: string) => useChatSteeringStore.getState().items[answer]?.map((item) => item.id);
 
-  it('hides the item, drops the own record and shows the text in the notice of this conversation only', () => {
+  beforeEach(() => {
     useChatSteeringStore.getState().addOwn(RESPONSE, { projectId: '7', conversationKey: KEY }, EXAMPLE.id);
     act(() => { applySteeringEvent('steer.queued', EXAMPLE); });
-    const here = setup();
-    const other = setup({ conversationKey: 'conv-other' });
-    act(() => { applySteeringEvent('steer.dropped', superseded, 'conv-other'); });
-    expect(useChatSteeringStore.getState().items[RESPONSE]?.[0]?.state).toBe('removed');
-    expect(useChatSteeringStore.getState().own[RESPONSE]).toBeUndefined();
-    // The own record names the conversation that queued the message; it wins over the stream's key.
-    expect(here.result.current.superseded).toEqual([{ id: EXAMPLE.id, content: EXAMPLE.content, conversationKey: KEY }]);
-    expect(other.result.current.superseded).toEqual([]);
-    expect(here.send).not.toHaveBeenCalled();
-    expect(here.queueAfterTurn).not.toHaveBeenCalled();
   });
 
-  it('uses the key of the stream for a message of another tab, and reason removed shows no notice', () => {
-    const { result } = setup();
-    act(() => { applySteeringEvent('steer.dropped', { ...superseded, id: 'r', reason: 'removed' }, KEY); });
-    expect(result.current.superseded).toEqual([]);
-    act(() => { applySteeringEvent('steer.dropped', superseded, KEY); });
-    expect(result.current.superseded.map((entry) => entry.content)).toEqual([EXAMPLE.content]);
+  it('moves the item and this tab’s ownership (also in sessionStorage) to the newer answer; an old replay does not move it back', () => {
+    act(() => { applySteeringEvent('steer.queued', carried('pending')); });
+    expect(idsUnder(RESPONSE)).toEqual([]);
+    expect(useChatSteeringStore.getState().items[NEWER]).toEqual([expect.objectContaining({ id: EXAMPLE.id, state: 'pending', revision: EXAMPLE.revision + 1 })]);
+    expect(own()[RESPONSE]).toBeUndefined();
+    expect(own()[NEWER]).toEqual({ projectId: '7', conversationKey: KEY, ids: [EXAMPLE.id] });
+    expect(sessionStorage.getItem('el.chat.steeringOwn')).toContain(NEWER);
+    act(() => { applySteeringEvent('steer.queued', EXAMPLE); });
+    expect(idsUnder(RESPONSE)).toEqual([]);
+    expect(own()[NEWER]?.ids).toEqual([EXAMPLE.id]);
   });
 
-  it('a closed notice does not come back when the stream replays the event', () => {
-    const { result } = setup();
-    act(() => { applySteeringEvent('steer.dropped', superseded, KEY); });
-    act(() => { result.current.dismissSuperseded(); });
-    expect(result.current.superseded).toEqual([]);
-    act(() => { applySteeringEvent('steer.dropped', superseded, KEY); });
-    expect(result.current.superseded).toEqual([]);
+  it('keeps the ownership when the settle of the old answer forgot the id before the frame came', () => {
+    useChatSteeringStore.getState().forget(RESPONSE, [EXAMPLE.id]);
+    useChatSteeringStore.getState().dropOwn(RESPONSE, [EXAMPLE.id]);
+    act(() => { applySteeringEvent('steer.queued', carried('pending')); });
+    expect(own()[NEWER]?.ids).toEqual([EXAMPLE.id]);
   });
 
-  it('sends a text again only when the user asks, and takes it off the notice', () => {
-    const { result, send } = setup({ isStreaming: false });
-    act(() => { applySteeringEvent('steer.dropped', superseded, KEY); });
-    const [entry] = result.current.superseded;
-    if (entry === undefined) throw new Error('no superseded entry');
-    act(() => { result.current.resendSuperseded(entry); });
-    expect(send).toHaveBeenCalledWith(EXAMPLE.content);
-    expect(result.current.superseded).toEqual([]);
+  it('the hand-off of the NEWER answer sends the carried message; the old answer is not handed off', async () => {
+    const answers: string[] = [];
+    server.use(
+      getListChatExecutionSteeringMockHandler(({ params }) => ({ ...getListChatExecutionSteeringResponseMock(), items: params['responseMessageId'] === NEWER ? [carried('turn_ended')] : [] })),
+      getHandOffChatExecutionSteeringMockHandler(({ params }) => {
+        answers.push(String(params['responseMessageId']));
+        return { ...getHandOffChatExecutionSteeringResponseMock(), items: [carried('handed_off')] };
+      }),
+    );
+    const { queueAfterTurn } = setup({ isStreaming: false });
+    // The newer turn already ended: the frame comes as turn_ended, and the end-of-turn rule runs again.
+    act(() => { applySteeringEvent('steer.queued', carried('turn_ended')); });
+    await waitFor(() => { expect(queueAfterTurn).toHaveBeenCalledWith(EXAMPLE.content); });
+    expect(answers).toEqual([NEWER]);
+    expect(queueAfterTurn).toHaveBeenCalledTimes(1);
+    await waitFor(() => { expect(own()[NEWER]).toBeUndefined(); });
   });
 });

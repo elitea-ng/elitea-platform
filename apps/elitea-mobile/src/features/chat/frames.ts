@@ -6,9 +6,7 @@ import {
   STEERING_STATE,
   parseEventData,
   parseSteeringMessage,
-  steeringDropReason,
   type SseEvent,
-  type SteeringDropReason,
   type SteeringItem,
 } from '@elitea/client-core/stream';
 
@@ -54,11 +52,9 @@ export type Frame =
   /**
    * A steering message of this turn (client contract 1.27): `steer.queued`,
    * `steer.injected` or `steer.dropped`. A dropped message has the state
-   * `removed`, and `reason` is the drop reason (`removed` or `superseded`);
-   * `reason` is null for the other events. A `superseded` message can name
-   * an older answer than the turn of this stream.
+   * `removed`.
    */
-  | { kind: 'steer'; event: string; item: SteeringItem; reason: SteeringDropReason | null }
+  | { kind: 'steer'; event: string; item: SteeringItem }
   /** Another event name (index ingest, configuration validation, future ones). */
   | { kind: 'other'; event: string }
   /** Data that is not valid JSON or does not match the schema. */
@@ -80,15 +76,12 @@ export function parseFrame(event: SseEvent): Frame {
     }
     default: {
       if (!STEERING_EVENTS.has(event.event)) return { kind: 'other', event: event.event };
-      const data = parseEventData(event.data);
-      const item = parseSteeringMessage(data);
+      const item = parseSteeringMessage(parseEventData(event.data));
       if (item === undefined) return { kind: 'invalid', event: event.event };
-      const dropped = event.event === EXECUTION_EVENT.steerDropped;
       return {
         kind: 'steer',
         event: event.event,
-        item: dropped ? { ...item, state: STEERING_STATE.Removed } : item,
-        reason: dropped ? steeringDropReason(data) : null,
+        item: event.event === EXECUTION_EVENT.steerDropped ? { ...item, state: STEERING_STATE.Removed } : item,
       };
     }
   }

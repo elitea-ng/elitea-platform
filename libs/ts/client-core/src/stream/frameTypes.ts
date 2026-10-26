@@ -30,7 +30,10 @@ export const EXECUTION_EVENT = {
   indexIngestCompleted: 'index.ingest.completed',
   /**
    * Client contract 1.27: a steering message is queued, or its pending text
-   * was edited. `data` is one `SteeringMessage` (state `pending`).
+   * was edited. `data` is one `SteeringMessage` (state `pending`). It also
+   * comes when the server carries a leftover message of an older answer to
+   * the author's newer answer: the same `id`, the newer
+   * `response_message_id` and a higher `revision`.
    */
   steerQueued: 'steer.queued',
   /**
@@ -61,15 +64,9 @@ export type SteeringState = (typeof STEERING_STATE)[keyof typeof STEERING_STATE]
  * The `reason` of a `steer.dropped` event (client contract 1.27).
  *
  * - `removed`: the author removed the pending message.
- * - `superseded`: the turn ended before injection, and the author sent a
- *   newer message in the conversation first. The server does not send the
- *   message. The event comes on the stream of the author's newer turn, but
- *   its `response_message_id` names the OLD answer. A client hides the item
- *   and tells the user that the text was not sent.
  */
 export const STEERING_DROP_REASON = {
   Removed: 'removed',
-  Superseded: 'superseded',
 } as const;
 
 export type SteeringDropReason = (typeof STEERING_DROP_REASON)[keyof typeof STEERING_DROP_REASON];

@@ -4987,7 +4987,5 @@
   "chatMessages.steering.removeFailed": "The message could not be removed. Try again.",
   "chatMessages.steering.save": "Save",
   "chatMessages.steering.stopAndSend": "Stop and send",
-  "widgets.chatBox.steeringNoticeClose": "Close",
-  "widgets.chatBox.steeringSuperseded": "Not sent: you sent a newer message first.",
-  "widgets.chatBox.steeringSupersededResend": "Send again"
+  "widgets.chatBox.steeringNoticeClose": "Close"
 }

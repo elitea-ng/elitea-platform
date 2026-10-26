@@ -13,10 +13,19 @@
  * reload (`sessionStorage`), with the Idempotency-Key of an open hand-off
  * (so a retry after a reload gets the same answer). The lists themselves do not: after a reload the
  * GET of the list and the SSE replay fill them again.
+ *
+ * CARRY-OVER. When the author sent a newer message before the hand-off, the
+ * server moves the leftover messages of the old answer to the newer answer
+ * (`steer.queued`: the same id, the newer `response_message_id`, a higher
+ * `revision`). `apply` then moves the item AND this tab's ownership of the id
+ * to the newer answer, so the hand-off of the newer answer sends it, and the
+ * hand-off of the old answer does not. The settle of the old answer can
+ * forget an id before the frame comes, so `released` keeps the ids that this
+ * tab owned last, for this page life.
  */
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 
-import { EXECUTION_EVENT, STEERING_DROP_REASON, STEERING_STATE, mergeSteeringAll, parseSteeringMessage, steeringDropReason, type SteeringItem } from '@elitea/client-core/stream';
+import { EXECUTION_EVENT, STEERING_STATE, foldSteeringByAnswer, isSteeringCarryOver, parseSteeringMessage, type SteeringItem } from '@elitea/client-core/stream';
 
 import type { ExecutionEventData } from '@/shared/api/sse';
 import { createStorage } from '@/shared/lib/storage';
@@ -31,11 +40,12 @@ export interface OwnSteeringRecord {
   readonly handoffKey?: string;
 }
 
-/** A steering message that the server did not send: the author sent a newer message first. */
-export interface SupersededSteering {
-  readonly id: string;
-  readonly content: string;
-  /** The A17 queue key of the conversation that shows the notice. */
+/** An id that this tab owned and forgot, with the answer and the record it had. */
+interface ReleasedSteering {
+  readonly from: string;
+  /** The revision that the tab knew last, if it still had the item. */
+  readonly revision?: number;
+  readonly projectId: string;
   readonly conversationKey: string;
 }
 
@@ -44,6 +54,11 @@ interface ChatSteeringState {
   readonly own: Readonly<Record<string, OwnSteeringRecord>>;
   /** Answers whose turn refused steering (`steering_not_supported`, a pipeline). */
   readonly unsupported: Readonly<Record<string, true>>;
+  /** Own ids that `dropOwn` forgot, by id (in memory only): a later carry-over of one is still this tab's. */
+  readonly released: Readonly<Record<string, ReleasedSteering>>;
+  /** Counts the own items that came to an answer by a carry-over; a change starts the end-of-turn rule again. */
+  readonly carried: number;
+  /** Folds items into the list of the answer. A carry-over moves the item and its ownership (see the file comment). */
   readonly apply: (responseMessageId: string, incoming: readonly SteeringItem[]) => void;
   readonly addOwn: (responseMessageId: string, record: Omit<OwnSteeringRecord, 'ids' | 'handoffKey'>, id: string) => void;
   /** Forgets own ids (sent again, or final). The record goes when it has no ids. */
@@ -51,13 +66,6 @@ interface ChatSteeringState {
   /** Removes items from the view (they became the next message). */
   readonly forget: (responseMessageId: string, ids: readonly string[]) => void;
   readonly markUnsupported: (responseMessageId: string) => void;
-  /** Superseded messages (`steer.dropped`, `reason: superseded`) that the notice shows. */
-  readonly superseded: readonly SupersededSteering[];
-  /** Ids that were superseded before, so a replayed event does not show a closed notice again. */
-  readonly supersededSeen: readonly string[];
-  readonly addSuperseded: (entry: SupersededSteering) => void;
-  /** Closes the notice of these ids. */
-  readonly dismissSuperseded: (ids: readonly string[]) => void;
   /** Keeps (a string) or forgets (`undefined`) the key of the open hand-off of the answer. */
   readonly setHandoffKey: (responseMessageId: string, key: string | undefined) => void;
 }
@@ -65,7 +73,7 @@ interface ChatSteeringState {
 const STORAGE_KEY = 'chat.steeringOwn';
 const MAX_RECORDS = 50;
 const MAX_IDS = 30;
-const MAX_SEEN = 200;
+const MAX_RELEASED = 200;
 
 function session(): ReturnType<typeof createStorage> | undefined {
   try {
@@ -111,10 +119,47 @@ export function createChatSteeringStore(): ChatSteeringStore {
       items: {},
       own: parseOwnRecords(session()?.getJSON<unknown>(STORAGE_KEY)),
       unsupported: {},
+      released: {},
+      carried: 0,
       apply: (responseMessageId, incoming) => {
         if (incoming.length === 0) return;
-        const items = get().items;
-        set({ items: { ...items, [responseMessageId]: mergeSteeringAll(items[responseMessageId] ?? [], incoming) } });
+        const { items, own, released, carried } = get();
+        const { lists, moved } = foldSteeringByAnswer(items, responseMessageId, incoming);
+        const nextOwn = { ...own };
+        const nextReleased = { ...released };
+        let adopted = 0;
+        // This tab owned the id under another answer: now it owns it under this answer.
+        const take = (id: string, record: Pick<OwnSteeringRecord, 'projectId' | 'conversationKey'>): void => {
+          const target = nextOwn[responseMessageId];
+          const ids = target?.ids ?? [];
+          if (!ids.includes(id)) nextOwn[responseMessageId] = { projectId: record.projectId, conversationKey: record.conversationKey, ...target, ids: [...ids, id].slice(-MAX_IDS) };
+          delete nextReleased[id];
+          adopted += 1;
+        };
+        for (const move of moved) {
+          const from = nextOwn[move.from];
+          if (from?.ids.includes(move.id)) {
+            const left = from.ids.filter((id) => id !== move.id);
+            if (left.length === 0) delete nextOwn[move.from];
+            else nextOwn[move.from] = { ...from, ids: left };
+            take(move.id, from);
+          } else {
+            const gone = nextReleased[move.id];
+            if (gone !== undefined) take(move.id, gone);
+          }
+        }
+        // The settle of the old answer forgot the item and the id first: the released record still knows the owner.
+        for (const item of incoming) {
+          const gone = nextReleased[item.id];
+          const here = (lists[responseMessageId] ?? []).some((held) => held.id === item.id);
+          if (gone !== undefined && here && isSteeringCarryOver(gone.from, item, gone.revision)) take(item.id, gone);
+        }
+        if (adopted === 0) {
+          set({ items: lists });
+          return;
+        }
+        saveOwn(nextOwn);
+        set({ items: lists, own: nextOwn, released: nextReleased, carried: carried + adopted });
       },
       addOwn: (responseMessageId, record, id) => {
         const own = get().own;
@@ -130,6 +175,13 @@ export function createChatSteeringStore(): ChatSteeringStore {
         const left = current.ids.filter((id) => !ids.includes(id));
         if (left.length === 0) delete own[responseMessageId];
         else own[responseMessageId] = { ...current, ids: left };
+        const released = { ...get().released };
+        for (const id of current.ids.filter((owned) => ids.includes(owned))) {
+          const revision = get().items[responseMessageId]?.find((item) => item.id === id)?.revision;
+          delete released[id];
+          released[id] = { from: responseMessageId, projectId: current.projectId, conversationKey: current.conversationKey, ...(revision === undefined ? {} : { revision }) };
+        }
+        set({ released: Object.fromEntries(Object.entries(released).slice(-MAX_RELEASED)) });
         writeOwn(own);
       },
       forget: (responseMessageId, ids) => {
@@ -147,16 +199,6 @@ export function createChatSteeringStore(): ChatSteeringStore {
       },
       markUnsupported: (responseMessageId) => {
         set({ unsupported: { ...get().unsupported, [responseMessageId]: true } });
-      },
-      superseded: [],
-      supersededSeen: [],
-      addSuperseded: (entry) => {
-        const { superseded, supersededSeen } = get();
-        if (supersededSeen.includes(entry.id)) return;
-        set({ superseded: [...superseded, entry].slice(-MAX_IDS), supersededSeen: [...supersededSeen, entry.id].slice(-MAX_SEEN) });
-      },
-      dismissSuperseded: (ids) => {
-        set({ superseded: get().superseded.filter((entry) => !ids.includes(entry.id)) });
       },
     };
   });
@@ -184,26 +226,14 @@ export const useChatSteeringStore = Object.assign(useChatSteeringStoreHook, {
 
 /**
  * Folds one steering SSE frame into the store. `steer.dropped` carries the
- * message plus `reason` (`removed` or `superseded`); it is shown as removed
- * whatever state the frame names. A frame that is not a `SteeringMessage` is skipped.
- *
- * `superseded`: the turn ended first, and the author sent a newer message
- * before the hand-off, so the server did not send this one. The frame comes
- * on the stream of the NEWER turn, but its `response_message_id` names the
- * OLD answer. The item goes to the list of that old answer (hidden), and the
- * text goes to the notice of `conversationKey` (the conversation of the
- * stream), so the user can send it again. The message is final, so this tab
- * no longer owns it.
+ * message plus `reason` (`removed`); it is shown as removed whatever state
+ * the frame names. A `steer.queued` frame can name a newer answer than the
+ * item had (a carry-over): `apply` moves it. A frame that is not a
+ * `SteeringMessage` is skipped.
  */
-export function applySteeringEvent(event: string, frame: ExecutionEventData, conversationKey?: string): void {
+export function applySteeringEvent(event: string, frame: ExecutionEventData): void {
   const parsed = parseSteeringMessage(frame);
   if (parsed === undefined) return;
-  const dropped = event === EXECUTION_EVENT.steerDropped;
-  const item = dropped ? { ...parsed, state: STEERING_STATE.Removed } : parsed;
-  const store = useChatSteeringStore.getState();
-  store.apply(item.responseMessageId, [item]);
-  if (!dropped || steeringDropReason(frame) !== STEERING_DROP_REASON.Superseded) return;
-  const key = store.own[item.responseMessageId]?.conversationKey ?? conversationKey;
-  store.dropOwn(item.responseMessageId, [item.id]);
-  if (key !== undefined && item.content.trim() !== '') store.addSuperseded({ id: item.id, content: item.content, conversationKey: key });
+  const item = event === EXECUTION_EVENT.steerDropped ? { ...parsed, state: STEERING_STATE.Removed } : parsed;
+  useChatSteeringStore.getState().apply(item.responseMessageId, [item]);
 }

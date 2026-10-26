@@ -8,8 +8,14 @@
  * the POST/PATCH answers, the `GET .../steering` list and the `steer.*` SSE
  * events. These helpers do the folding, so that both clients apply the same
  * rules.
+ *
+ * CARRY-OVER. When the author sent a newer message before the hand-off of
+ * an older answer, the server moves the leftover messages of the older answer
+ * to the newer answer (`steer.queued` on the newer turn's stream). The client
+ * moves the item with its ownership, so that the hand-off of the NEWER answer
+ * takes it, and the hand-off of the older answer does not.
  */
-import { STEERING_DROP_REASON, STEERING_STATE, type SteeringDropReason, type SteeringState } from './frameTypes';
+import { STEERING_STATE, type SteeringState } from './frameTypes';
 
 /** One steering message, as the clients keep it. */
 export interface SteeringItem {
@@ -81,18 +87,6 @@ export function parseSteeringMessage(raw: unknown): SteeringItem | undefined {
   };
 }
 
-const DROP_REASONS: ReadonlySet<string> = new Set<string>(Object.values(STEERING_DROP_REASON));
-
-/**
- * The `reason` of a `steer.dropped` event's `data`. An unknown or missing
- * value is `removed`: the item is hidden, and the client says nothing more.
- */
-export function steeringDropReason(raw: unknown): SteeringDropReason {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return STEERING_DROP_REASON.Removed;
-  const reason = (raw as Record<string, unknown>)['reason'];
-  return typeof reason === 'string' && DROP_REASONS.has(reason) ? (reason as SteeringDropReason) : STEERING_DROP_REASON.Removed;
-}
-
 /** Reads the `items` of a `SteeringMessageList`. Bad rows are skipped. */
 export function parseSteeringList(raw: unknown): SteeringItem[] {
   if (typeof raw !== 'object' || raw === null) return [];
@@ -144,14 +138,31 @@ function isFinal(state: SteeringState): boolean {
 }
 
 /**
+ * The place of a new item in `items`: before the first item that was
+ * created later, else at the end. A message that the server carried from an
+ * older answer is older than the messages of the newer answer, so it goes
+ * before them, as in the server's queue.
+ */
+function placeOf(items: readonly SteeringItem[], incoming: SteeringItem): number {
+  if (incoming.createdAt === '') return items.length;
+  const at = items.findIndex((item) => item.createdAt !== '' && item.createdAt > incoming.createdAt);
+  return at === -1 ? items.length : at;
+}
+
+/**
  * Puts `incoming` into `items` (by `id`) and returns a new list in queue
  * order. An older copy never replaces a newer one: a higher `revision` wins,
  * and for the same revision a final state wins over `pending`. This keeps the
- * view correct when a replayed SSE event comes after a GET.
+ * view correct when a replayed SSE event comes after a GET. A new item goes
+ * in `created_at` order.
  */
 export function mergeSteering(items: readonly SteeringItem[], incoming: SteeringItem): SteeringItem[] {
   const at = items.findIndex((item) => item.id === incoming.id);
-  if (at === -1) return [...items, incoming];
+  if (at === -1) {
+    const next = [...items];
+    next.splice(placeOf(items, incoming), 0, incoming);
+    return next;
+  }
   const current = items[at] as SteeringItem;
   if (incoming.revision < current.revision) return [...items];
   if (incoming.revision === current.revision && isFinal(current.state) && !isFinal(incoming.state)) return [...items];
@@ -163,6 +174,58 @@ export function mergeSteering(items: readonly SteeringItem[], incoming: Steering
 /** Merges each of `incoming` into `items`, in order. */
 export function mergeSteeringAll(items: readonly SteeringItem[], incoming: readonly SteeringItem[]): SteeringItem[] {
   return incoming.reduce<SteeringItem[]>((list, item) => mergeSteering(list, item), [...items]);
+}
+
+/**
+ * True when `incoming` is a carry-over of a message that this client knows
+ * under the answer `fromAnswer`. When the author sent a newer message before
+ * the hand-off, the server moves the leftover messages of the old answer to
+ * the newer answer: the same `id`, the newer `response_message_id` and
+ * `revision` + 1. `knownRevision` is the revision of the copy that the client
+ * holds, if it holds one. A copy with the same or a lower revision is an old
+ * (replayed) one, and does not move the item.
+ */
+export function isSteeringCarryOver(fromAnswer: string, incoming: SteeringItem, knownRevision?: number): boolean {
+  if (incoming.responseMessageId === fromAnswer) return false;
+  return knownRevision === undefined || incoming.revision > knownRevision;
+}
+
+/** An item that `foldSteeringByAnswer` moved from one answer to another. */
+export interface SteeringMove {
+  readonly id: string;
+  readonly from: string;
+  readonly to: string;
+}
+
+/**
+ * Folds `incoming` into the list of `answerId` in `lists` (the lists by
+ * answer, keyed by `response_message_id`). When an item with the same `id`
+ * is under ANOTHER answer, and the incoming copy is a carry-over
+ * (`isSteeringCarryOver`), the item moves: it goes out of the old list and
+ * into the list of `answerId`. When the copy under the other answer is newer,
+ * the incoming copy is old and is skipped. Returns the new lists and the
+ * moves, so that the client can move its ownership of these ids too.
+ */
+export function foldSteeringByAnswer(
+  lists: Readonly<Record<string, readonly SteeringItem[]>>,
+  answerId: string,
+  incoming: readonly SteeringItem[],
+): { lists: Record<string, readonly SteeringItem[]>; moved: SteeringMove[] } {
+  const next: Record<string, readonly SteeringItem[]> = { ...lists };
+  const moved: SteeringMove[] = [];
+  for (const item of incoming) {
+    const from = Object.keys(next).find((key) => key !== answerId && (next[key] ?? []).some((held) => held.id === item.id));
+    if (from !== undefined) {
+      const held = (next[from] ?? []).find((candidate) => candidate.id === item.id) as SteeringItem;
+      if (!isSteeringCarryOver(from, { ...item, responseMessageId: answerId }, held.revision)) continue;
+      next[from] = (next[from] ?? []).filter((candidate) => candidate.id !== item.id);
+      next[answerId] = mergeSteering(next[answerId] ?? [], { ...item, messageId: item.messageId ?? held.messageId });
+      moved.push({ id: item.id, from, to: answerId });
+      continue;
+    }
+    next[answerId] = mergeSteering(next[answerId] ?? [], item);
+  }
+  return { lists: next, moved };
 }
 
 /**

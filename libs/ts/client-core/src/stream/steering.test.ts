@@ -4,6 +4,8 @@ import { describe, it } from 'node:test';
 import {
   STEERING_RETRY_DEFAULT_MS,
   STEERING_RETRY_MAX_MS,
+  foldSteeringByAnswer,
+  isSteeringCarryOver,
   isSteeringTextValid,
   joinSteeringTexts,
   leftoverSteering,
@@ -11,7 +13,6 @@ import {
   mergeSteeringAll,
   parseSteeringList,
   parseSteeringMessage,
-  steeringDropReason,
   steeringErrorCode,
   steeringRetryAfterMs,
   steeringStateOf,
@@ -107,6 +108,40 @@ describe('mergeSteering', () => {
   });
 });
 
+describe('carry-over (a newer message came before the hand-off)', () => {
+  const OLD = WIRE.response_message_id;
+  const NEWER = '9e8d7c6b-5a49-4382-9170-6f5e4d3c2b1a';
+  // The server moved the leftover message to the newer answer: the same id, revision + 1.
+  const carried = item({ responseMessageId: NEWER, revision: 2, state: 'pending' });
+
+  it('isSteeringCarryOver needs another answer and a higher revision than the known copy', () => {
+    assert.equal(isSteeringCarryOver(OLD, carried, 1), true);
+    assert.equal(isSteeringCarryOver(OLD, carried), true);
+    assert.equal(isSteeringCarryOver(OLD, carried, 2), false);
+    assert.equal(isSteeringCarryOver(NEWER, carried, 1), false);
+  });
+
+  it('moves the item by id to the newer answer, before the messages of the newer turn', () => {
+    const own = item({ id: 'n1', responseMessageId: NEWER, createdAt: '2026-10-26T10:16:00Z' });
+    const lists = { [OLD]: [item({ state: 'turn_ended' }), item({ id: 'o2', state: 'injected' })], [NEWER]: [own] };
+    const { lists: next, moved } = foldSteeringByAnswer(lists, NEWER, [carried]);
+    assert.deepEqual(moved, [{ id: WIRE.id, from: OLD, to: NEWER }]);
+    assert.deepEqual(next[OLD]?.map((i) => i.id), ['o2']);
+    assert.deepEqual(next[NEWER]?.map((i) => [i.id, i.state, i.revision]), [[WIRE.id, 'pending', 2], ['n1', 'pending', 1]]);
+  });
+
+  it('a replayed old copy does not move the item back, and a new id only adds', () => {
+    const lists = { [NEWER]: [carried] };
+    const back = foldSteeringByAnswer(lists, OLD, [item({ state: 'turn_ended' })]);
+    assert.deepEqual(back.moved, []);
+    assert.equal(back.lists[OLD], undefined);
+    assert.deepEqual(back.lists[NEWER], [carried]);
+    const added = foldSteeringByAnswer({}, OLD, [item()]);
+    assert.deepEqual(added.moved, []);
+    assert.deepEqual(added.lists[OLD]?.map((i) => i.id), [WIRE.id]);
+  });
+});
+
 describe('visibleSteering', () => {
   it('hides removed and handed_off items and items that the transcript already holds', () => {
     const list = [item({ id: 'a' }), item({ id: 'b', state: 'removed' }), item({ id: 'c', state: 'injected', messageId: 'm1' }), item({ id: 'd', state: 'injected', messageId: 'm2' }), item({ id: 'e', state: 'handed_off' })];
@@ -136,19 +171,6 @@ describe('joinSteeringTexts', () => {
     assert.equal(isSteeringTextValid('ok'), true);
     assert.equal(isSteeringTextValid(' '), false);
     assert.equal(isSteeringTextValid('x'.repeat(16 * 1024 + 1)), false);
-  });
-});
-
-describe('steeringDropReason', () => {
-  it('reads removed and superseded', () => {
-    assert.equal(steeringDropReason({ ...WIRE, state: 'removed', reason: 'removed' }), 'removed');
-    assert.equal(steeringDropReason({ ...WIRE, state: 'removed', reason: 'superseded' }), 'superseded');
-  });
-
-  it('reads an unknown, missing or bad reason as removed', () => {
-    for (const raw of [{ ...WIRE, reason: 'handed_off' }, WIRE, { ...WIRE, reason: 7 }, null, 'superseded', [WIRE]]) {
-      assert.equal(steeringDropReason(raw), 'removed');
-    }
   });
 });
 

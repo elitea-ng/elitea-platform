@@ -33,14 +33,14 @@
  * no `turn_ended` event, and a switch to another conversation also closes
  * the stream while the turn runs on.
  *
- * A NEWER MESSAGE FIRST. When the user sends a newer message before the
- * hand-off, the server does not send the leftover messages: it marks them
- * `removed` and sends `steer.dropped` with `reason: superseded`. The model
- * then shows their texts in a notice above the composer
- * (`superseded`). The user can send a text again or close the notice; the
- * client never sends it by itself.
+ * CARRY-OVER. When the user sent a newer message before the hand-off, the
+ * server moves the leftover messages to the NEWER answer (`steer.queued` on
+ * the newer turn's stream). The store moves the item and this tab's
+ * ownership with it (`chatSteering.store.ts`), so the end-of-turn rule of
+ * the newer answer hands them off, and the rule of the old answer does not.
+ * A carry-over to an answer whose turn already ended runs the rule again.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   STEERING_ERROR,
@@ -64,7 +64,7 @@ import {
 } from '@/entities/conversation/api/steeringApi';
 import { t } from '@/shared/i18n';
 
-import { useChatSteeringStore, type SupersededSteering } from './chatSteering.store';
+import { useChatSteeringStore } from './chatSteering.store';
 
 /** The answer that the owned run writes, as the transport reports it. */
 export interface ChatSteeringRunTarget {
@@ -95,16 +95,6 @@ export interface ChatSteeringModel {
   /** A short text about the last refused send, or `null`. */
   readonly notice: string | null;
   readonly dismissNotice: () => void;
-  /**
-   * Steering messages of this conversation that the server did not send,
-   * because the user sent a newer message first (`steer.dropped`,
-   * `reason: superseded`). The client never sends them by itself.
-   */
-  readonly superseded: readonly SupersededSteering[];
-  /** Sends one superseded text again (the user asked for it) and takes it off the notice. */
-  readonly resendSuperseded: (entry: SupersededSteering) => void;
-  /** Closes the notice of the superseded messages. */
-  readonly dismissSuperseded: () => void;
 }
 
 /** The waits before the list is read again while own messages still show `pending`. */
@@ -319,6 +309,8 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
     else setNotice(t('chatMessages.steering.removeFailed', 'The message could not be removed. Try again.'));
   }, [refresh]);
 
+  // A carry-over can give this tab a message of an answer whose turn already ended.
+  const carried = useChatSteeringStore((state) => state.carried);
   // When no turn of this chat runs: settle every answer that this tab steered here.
   useEffect(() => {
     const texts = stranded.current.get(conversationKey);
@@ -330,7 +322,7 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
     for (const [responseId, record] of Object.entries(useChatSteeringStore.getState().own)) {
       if (record.conversationKey === conversationKey) void settle(responseId, 0);
     }
-  }, [conversationKey, isStreaming, settle]);
+  }, [conversationKey, isStreaming, settle, carried]);
 
   const dismissNotice = useCallback(() => {
     setNotice(null);
@@ -341,15 +333,5 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
     if (target) void refresh({ projectId: target.projectId, responseMessageId: target.messageGroupUuid });
   }, [refresh]);
 
-  const allSuperseded = useChatSteeringStore((state) => state.superseded);
-  const superseded = useMemo(() => allSuperseded.filter((entry) => entry.conversationKey === conversationKey), [allSuperseded, conversationKey]);
-  const dismissSuperseded = useCallback(() => {
-    useChatSteeringStore.getState().dismissSuperseded(superseded.map((entry) => entry.id));
-  }, [superseded]);
-  const resendSuperseded = useCallback((entry: SupersededSteering) => {
-    useChatSteeringStore.getState().dismissSuperseded([entry.id]);
-    onSend(entry.content);
-  }, [onSend]);
-
-  return { onSend, edit, remove, onReattached, notice: countdownText ?? notice, dismissNotice, superseded, resendSuperseded, dismissSuperseded };
+  return { onSend, edit, remove, onReattached, notice: countdownText ?? notice, dismissNotice };
 }

@@ -69,17 +69,6 @@ export function steerOutcomeText(outcome: SteerOutcome): string | null {
   }
 }
 
-/**
- * The note for steering messages that the server did not send because the
- * user sent a newer message first (`steer.dropped`, `reason: superseded`):
- * the texts, so the user can copy them or send them again. Null when there
- * are none.
- */
-export function supersededSteeringText(items: readonly { content: string }[] | undefined): string | null {
-  if (items === undefined || items.length === 0) return null;
-  return ['Not sent: you sent a newer message first.', ...items.map((item) => item.content)].join('\n\n');
-}
-
 /** The notice while a turn that cannot take messages runs (a pipeline). */
 export const STEERING_NOT_SUPPORTED_TEXT = "This agent can't read new messages while it works. Send yours when the answer is finished.";
 
@@ -128,9 +117,6 @@ export interface UseTurn {
   editSteering: (id: string, text: string) => Promise<string | null>;
   /** Removes a pending steering message. Resolves to an error text, or null. */
   removeSteering: (id: string) => Promise<string | null>;
-  /** The note of the steering messages that a newer message superseded (`supersededSteeringText`), or null. */
-  steeringNotice: string | null;
-  dismissSteeringNotice: () => void;
   busy: boolean;
   /**
    * Stops the streaming answer on the server (client contract 1.3; the
@@ -406,7 +392,6 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
   }, [key, controller]);
   const editSteering = useCallback(async (id: string, text: string) => (controller ? controller.editSteering(id, text) : null), [controller]);
   const removeSteering = useCallback(async (id: string) => (controller ? controller.removeSteering(id) : null), [controller]);
-  const dismissSteeringNotice = useCallback(() => controller?.dismissSuperseded(), [controller]);
 
   const stop = useCallback(async (): Promise<StopResult> => {
     const result = (problem: string | null, restoreText: string | null = null, lostAttachments: string[] = []): StopResult => ({
@@ -465,6 +450,5 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
     live.turn.phase === 'streaming' &&
     (live.execution?.responseMessageId ?? null) !== null &&
     live.steeringUnsupported !== true;
-  const steeringNotice = supersededSteeringText(live?.steeringSuperseded);
-  return { live, send, continueWith, retry, reconnect, dismiss, busy, stop, canStop, isRunning, regenerate, canSteer, editSteering, removeSteering, steeringNotice, dismissSteeringNotice };
+  return { live, send, continueWith, retry, reconnect, dismiss, busy, stop, canStop, isRunning, regenerate, canSteer, editSteering, removeSteering };
 }

@@ -38,14 +38,13 @@ import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import type { Theme } from '@mui/material/styles';
 import CloseIcon from '@mui/icons-material/Close';
 
-import type { ChatMessage, SupersededSteering } from '@/features/chat-messages';
+import type { ChatMessage } from '@/features/chat-messages';
 import { t } from '@/shared/i18n';
 
 import {
@@ -303,46 +302,6 @@ export function ChatBoxSteeringNotice({ notice, onDismiss }: ChatBoxSteeringNoti
           <CloseIcon fontSize="small" />
         </IconButton>
       </Box>
-    </Box>
-  );
-}
-
-export interface ChatBoxSupersededNoticeProps {
-  /** Steering messages that the server did not send: the user sent a newer message first. */
-  readonly items: readonly SupersededSteering[];
-  /** Sends one text again. Only the user starts it; the client never sends it by itself. */
-  readonly onResend: (item: SupersededSteering) => void;
-  readonly onDismiss: () => void;
-}
-
-/**
- * Above the composer: the texts that the server did not send because the
- * user sent a newer message first (`steer.dropped`, `reason: superseded`).
- * The text can be selected and copied, or sent again with one click.
- */
-export function ChatBoxSupersededNotice({ items, onResend, onDismiss }: ChatBoxSupersededNoticeProps): ReactNode {
-  if (items.length === 0) return null;
-  const closeLabel = t('widgets.chatBox.steeringNoticeClose', 'Close');
-  return (
-    <Box sx={stripSx} data-testid="chat-steering-superseded" aria-live="polite">
-      <Box sx={rowSx}>
-        <Typography variant="bodyMedium" color="text.secondary" sx={{ flex: 1 }}>
-          {t('widgets.chatBox.steeringSuperseded', 'Not sent: you sent a newer message first.')}
-        </Typography>
-        <IconButton size="small" aria-label={closeLabel} data-testid="chat-steering-superseded-close" onClick={onDismiss}>
-          <CloseIcon fontSize="small" />
-        </IconButton>
-      </Box>
-      {items.map((item) => (
-        <Box key={item.id} sx={rowSx} data-testid="chat-steering-superseded-item">
-          <Typography variant="bodyMedium" color="text.primary" sx={{ flex: 1, minWidth: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-            {item.content}
-          </Typography>
-          <Button size="small" variant="text" data-testid="chat-steering-superseded-resend" onClick={() => { onResend(item); }}>
-            {t('widgets.chatBox.steeringSupersededResend', 'Send again')}
-          </Button>
-        </Box>
-      ))}
     </Box>
   );
 }
