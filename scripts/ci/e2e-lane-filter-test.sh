@@ -10,7 +10,7 @@ ran=0
 expect() {
   local want_stack="$1" want_model="$2" label="$3"; shift 3
   local out
-  out="$(printf '%s\n' "$@" | bash "$filter" 2>/dev/null | head -n 2)"
+  out="$(printf '%s\n' "$@" | bash "$filter" 2>/dev/null | grep -E '^reaches-(stack|model)=')"
   ran=$((ran + 1))
   if [ "$out" != "$(printf 'reaches-stack=%s\nreaches-model=%s' "$want_stack" "$want_model")" ]; then
     echo "FAIL: $label — got: $(echo "$out" | tr '\n' ' ')"
