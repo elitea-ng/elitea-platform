@@ -15,10 +15,6 @@
 //! continuation (a `fanout_wake` or a decision resume) reads the frontier an
 //! earlier execution parked. Child threads and exact immutable replays pass
 //! through unchanged.
-#![allow(
-    dead_code,
-    reason = "bound to Parallel by the fan-out composition (2a-2 commit 10)"
-)]
 
 use std::collections::HashMap;
 use std::sync::Arc;

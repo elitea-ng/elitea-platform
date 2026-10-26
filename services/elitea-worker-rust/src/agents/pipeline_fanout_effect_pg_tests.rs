@@ -507,6 +507,54 @@ async fn postgres_fanout_agent_branch_that_asks_for_a_decision_ends_typed() {
     db.pool.close().await;
 }
 
+/// Production composition: a pipeline with a fixed Parallel node needs the
+/// claim's decision ledger; without it the run is refused typed before any
+/// child starts (a card could never be decided).
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_production_parallel_without_the_decision_ledger_is_refused_typed() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let (platform, model_facade, captured) = saved_runtime(Vec::new(), effectful_agent());
+    let assembler = PipelineNativeAgentAssembler::postgres(
+        db.pool.clone(),
+        SessionLimits::default(),
+        CheckpointLimits::default(),
+        Arc::new(
+            ToolAdmissionPolicy::new(&[], &std::collections::BTreeMap::new())
+                .expect("empty tool policy"),
+        ),
+        platform,
+        model_facade,
+    )
+    .with_mcp_connector(Arc::new(PipelineMcpConnector {
+        connections: Arc::new(AtomicUsize::new(0)),
+        tool_calls: Arc::new(AtomicUsize::new(0)),
+        read_only: false,
+    }));
+    let request = request("continue");
+    let error = assembler
+        .assemble(claim(&request, 1))
+        .await
+        .err()
+        .expect("refused without the ledger");
+    assert_eq!(
+        error
+            .cause()
+            .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code),
+        Some("graph.fanout.decisions_unavailable")
+    );
+    assert_eq!(model_requests(&captured), 0);
+    db.pool.close().await;
+}
+
 /// A saved pipeline participant whose LLM node asks the user.
 fn asking_pipeline() -> Value {
     json!({

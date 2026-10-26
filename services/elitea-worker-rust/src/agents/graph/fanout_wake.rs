@@ -86,18 +86,14 @@ impl FanoutWake {
         })
     }
 
-    #[allow(
-        dead_code,
-        reason = "read by the restore fetch when commit 10 composes Parallel"
-    )]
+    // The strict marker is the proof; the restore fetch reads the claim's ledger.
+    #[cfg(test)]
     pub(crate) fn response_message_id(&self) -> &str {
         &self.response_message_id
     }
 
-    #[allow(
-        dead_code,
-        reason = "read by the restore fetch when commit 10 composes Parallel"
-    )]
+    // The strict marker is the proof; the restore fetch reads the claim's ledger.
+    #[cfg(test)]
     pub(crate) const fn decision_revision(&self) -> u64 {
         self.decision_revision
     }

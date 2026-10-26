@@ -411,17 +411,14 @@ fn parallel_binds_through_the_fanout_turn_authority() {
 }
 
 #[test]
-fn production_binding_remains_gated_before_composed_restart_acceptance() {
+fn the_production_binding_carries_the_claims_decision_ledger() {
     let authority: Arc<dyn ParallelCheckpointAuthority> = Arc::new(TestAuthority::default());
-    assert!(ParallelCompilerBinding::admitted().is_err());
-    assert!(
-        ParallelCompilerBinding::new(
-            authority,
-            tokio::time::Instant::now(),
-            Arc::new(elitea_agent_runtime::graph::fanout::runner::NoDecisions),
-        )
-        .is_err()
+    let binding = ParallelCompilerBinding::new(
+        authority,
+        tokio::time::Instant::now(),
+        Arc::new(elitea_agent_runtime::graph::fanout::runner::NoDecisions),
     );
+    assert!(binding.decisions.is_some());
 }
 
 #[test]

@@ -9,6 +9,7 @@
     "hitl",
     "llm",
     "mcp",
+    "parallel",
     "printer",
     "router",
     "split_out",
@@ -16,10 +17,10 @@
     "toolkit"
   ],
   "pending_wave_2a": {
-    "comment": "KNOWN DRIFT, recorded so that any new drift fails. `parallel` and `map` are not composed yet: the Worker compiler parses them but refuses them when the graph is bound, Main's save check admits both, the Web editor lists `parallel` (the Add-node menu hides it behind FIXED_PARALLEL_AUTHORING_ENABLED) and omits `map`. This object MUST become empty (and move the two types into `admitted`) when Wave 2a composes Parallel and Map. Each layer's test asserts its admitted set equals `admitted` plus exactly its own entry below.",
-    "worker": ["map", "parallel"],
-    "main": ["map", "parallel"],
-    "web": ["parallel"]
+    "comment": "KNOWN DRIFT, recorded so that any new drift fails. `map` is not composed yet: the Worker compiler parses it but refuses it when the graph is bound, Main's save check admits it, and the Web editor omits it. This object MUST become empty (and move `map` into `admitted`) when Wave 2a-3 composes Map. Each layer's test asserts its admitted set equals `admitted` plus exactly its own entry below.",
+    "worker": ["map"],
+    "main": ["map"],
+    "web": []
   },
   "refused": [
     "condition",

@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Composed by the next full YAML graph compiler slice.
-
 //! Fixed Parallel as a planner on the shared fan-out runner (design
 //! `services/elitea-worker-rust/docs/fanout-v2-runtime-design.md` §2).
 //!
@@ -537,10 +535,12 @@ impl AdkParallelBranchRuntime {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn parent_checkpointer(&self) -> Arc<dyn Checkpointer> {
         self.parent.clone()
     }
 
+    #[cfg(test)]
     pub(crate) fn occurrence_checkpointer(&self) -> Arc<ParallelOccurrenceCheckpointer> {
         Arc::clone(&self.parent)
     }
@@ -1553,12 +1553,14 @@ impl DurableParallelNode {
     }
 
     /// Card and member frames. Default: none.
+    #[cfg(test)]
     pub(crate) fn with_events(mut self, events: Arc<dyn FanoutEvents>) -> Self {
         self.events = events;
         self
     }
 
     /// The child slots. Default: the process-wide pool.
+    #[cfg(test)]
     pub(crate) fn with_permits(mut self, permits: ChildPermits) -> Self {
         self.permits = permits;
         self

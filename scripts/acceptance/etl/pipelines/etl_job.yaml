@@ -143,7 +143,6 @@ nodes:
     transition: print_answer
 
   # Publish: the report and the notification are independent.
-  # TODO(0.8): Parallel admitted (FIXED_PARALLEL_INTEGRATION_READY, parallel_compiler.rs:33).
   # TODO(1.14): non-Agent branches (a Toolkit node and an HTTP node; parallel_compiler.rs:252-291 is Agent-only).
   # TODO(1.15): an HTTP node as a Parallel branch (5d-3).
   - id: publish

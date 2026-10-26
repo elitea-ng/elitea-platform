@@ -739,7 +739,6 @@ impl OrdinaryNativeAgentPlan {
     /// The original command deadline as a monotonic instant for fan-out
     /// nodes. A deadline already passed is refused: the run lifecycle ends it
     /// as `DeadlineExceeded` anyway, and a fan-out must never start past it.
-    #[cfg_attr(not(test), allow(dead_code))] // Bound to Parallel when commit 10 composes it.
     pub(super) fn fanout_deadline(&self) -> Result<tokio::time::Instant, NativeAgentAssemblyError> {
         fanout_deadline_at(
             self.deadline_unix_millis,
@@ -1974,11 +1973,10 @@ pub(super) const PIPELINE_RESUME_MARKER: &str = "[elitea:pipeline-resume:v1]";
 pub(super) enum FanoutComposition {
     /// Production: a pipeline that holds a fixed Parallel node (its own or a
     /// saved child's) binds it through `FanoutTurnAuthority` with the claim's
-    /// fenced decision ledger, once Parallel is admitted; until then it is
-    /// refused typed, as the compiler refuses it.
+    /// fenced decision ledger.
     Bound,
-    /// Test-only: bind Parallel with the test binding (no admission gate; the
-    /// claim's ledger when the backend lends one).
+    /// Test-only: bind Parallel with the test binding (the claim's ledger
+    /// when the backend lends one).
     #[cfg(test)]
     BoundForTests,
 }
@@ -2012,10 +2010,6 @@ fn pipeline_turn(
             None,
         ));
     }
-    if fanout == FanoutComposition::Bound {
-        super::graph::compiler::ParallelCompilerBinding::admitted()
-            .map_err(|error| pipeline_configuration_error(&error))?;
-    }
     // The same Arc is the root checkpointer and the binding's parent, so
     // `bind_parallel_authority` binds through the turn boundary.
     let authority: Arc<dyn super::graph::ParallelCheckpointAuthority> = Arc::new(
@@ -2039,8 +2033,7 @@ fn pipeline_turn(
             Arc::clone(&authority),
             plan.fanout_deadline()?,
             decisions.ok_or_else(fanout_decisions_unavailable)?,
-        )
-        .map_err(|error| pipeline_configuration_error(&error))?,
+        ),
         #[cfg(test)]
         FanoutComposition::BoundForTests => {
             super::graph::compiler::ParallelCompilerBinding::for_tests(

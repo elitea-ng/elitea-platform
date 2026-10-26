@@ -33,8 +33,6 @@ use ring::digest;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-const FIXED_PARALLEL_INTEGRATION_READY: bool = false;
-
 pub(crate) struct ParallelCompilerBinding {
     authority: Arc<dyn ParallelCheckpointAuthority>,
     occurrence: Arc<ParallelOccurrenceCheckpointer>,
@@ -46,29 +44,17 @@ pub(crate) struct ParallelCompilerBinding {
 }
 
 impl ParallelCompilerBinding {
-    /// Whether fixed Parallel is admitted on this build. Checked before any
-    /// binding is built, so a gated pipeline is refused the same typed way.
-    pub(crate) fn admitted() -> Result<(), PipelineConfigurationError> {
-        if !FIXED_PARALLEL_INTEGRATION_READY {
-            return Err(PipelineConfigurationError::Unsupported(
-                "fixed Parallel requires composed continuation and restart acceptance",
-            ));
-        }
-        Ok(())
-    }
-
     pub(crate) fn new(
         authority: Arc<dyn ParallelCheckpointAuthority>,
         deadline: tokio::time::Instant,
         decisions: Arc<dyn DecisionSource>,
-    ) -> Result<Arc<Self>, PipelineConfigurationError> {
-        Self::admitted()?;
-        Ok(Arc::new(Self::bound(
+    ) -> Arc<Self> {
+        Arc::new(Self::bound(
             authority,
             deadline,
             Arc::default(),
             Some(decisions),
-        )))
+        ))
     }
 
     fn bound(

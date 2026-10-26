@@ -4817,7 +4817,6 @@
   "pipelines.parallel.addBranch": "Add fixed branch",
   "pipelines.parallel.agentOutputs": "Declared outputs: {{outputs}}. Task mapping: {{mode}}.",
   "pipelines.parallel.agentScope": "Agent {{node}} uses participant {{tool}}. Edit its own input mapping on the Agent card.",
-  "pipelines.parallel.authoringOff": "Fixed Parallel authoring is not enabled. Stored settings remain visible.",
   "pipelines.parallel.branchAgent": "Branch {{number}} Agent node",
   "pipelines.parallel.branchId": "Branch {{number}} result key",
   "pipelines.parallel.concurrency": "Maximum concurrent branches",

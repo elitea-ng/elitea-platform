@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { collectGraphAdmissionIssues } from '../lib/graphAdmission.helpers';
 import { isCompilerAdmittedNodeType } from '../lib/flow-editor/constants/runtimeContract.constants';
-import { FIXED_PARALLEL_AUTHORING_ENABLED } from '../lib/flow-editor/constants/parallel.constants';
 import { AddNodeMenu } from './AddNodeMenu';
 
 afterEach(cleanup);
@@ -29,15 +28,14 @@ describe('SplitOut and Aggregate are admitted by default', () => {
     expect(issues[0]?.message).toBe('type: "custom" is not a node type this runtime can run — the whole pipeline is refused.');
   });
 
-  it('offers SplitOut and Aggregate in the Add node menu, and still withholds Parallel', async () => {
+  it('offers SplitOut, Aggregate and Parallel in the Add node menu', async () => {
     const user = userEvent.setup();
     renderWithTheme(<AddNodeMenu onAddNode={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Add node' }));
     const entries = within(await screen.findByRole('menu')).getAllByRole('menuitem').map((item) => item.textContent);
-    expect(entries).toHaveLength(12);
+    expect(entries).toHaveLength(13);
     expect(entries).toContain('SplitOut');
     expect(entries).toContain('Aggregate');
-    expect(entries).not.toContain('Parallel');
-    expect(FIXED_PARALLEL_AUTHORING_ENABLED).toBe(false);
+    expect(entries).toContain('Parallel');
   });
 });

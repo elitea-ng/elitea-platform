@@ -16,9 +16,23 @@ use crate::protocol::elitea::runtime::v1::NodeEventV1;
 pub(crate) const INTERRUPT_PENDING_EVENT: &str = "agent_interrupt_pending";
 pub(crate) const FANOUT_MEMBER_EVENT: &str = "agent_fanout_member";
 pub(crate) const FANOUT_PROGRESS_EVENT: &str = "agent_fanout_progress";
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "coalesced progress frames are wired with Map (2a-3)"
+    )
+)]
 const PROGRESS_SCHEMA: &str = "elitea.pipeline.fanout-progress.v1";
 /// Text bytes one progress frame carries across all its members (v1.1 §9.1):
 /// worst-case escaped JSON stays under the node-event bound.
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "coalesced progress frames are wired with Map (2a-3)"
+    )
+)]
 pub(crate) const MAX_PROGRESS_TEXT_BYTES: usize = 8192;
 const CARD_SCHEMA: &str = "elitea.pipeline.fanout-interrupt-card.v1";
 /// The internal event that carries one built frame to the projector. Only the
@@ -390,6 +404,13 @@ pub(crate) fn member_status_event(
 }
 
 /// The activation scope a progress frame shares (`fanout_v1` without member).
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "coalesced progress frames are wired with Map (2a-3)"
+    )
+)]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct ProgressScope {
     pub(crate) activation: String,
@@ -398,6 +419,13 @@ pub(crate) struct ProgressScope {
     pub(crate) total: usize,
 }
 
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "coalesced progress frames are wired with Map (2a-3)"
+    )
+)]
 #[derive(Serialize)]
 struct ProgressMember<'a> {
     call_id: &'a str,
@@ -405,6 +433,13 @@ struct ProgressMember<'a> {
     text: &'a str,
 }
 
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "coalesced progress frames are wired with Map (2a-3)"
+    )
+)]
 #[derive(Serialize)]
 struct ProgressV1<'a> {
     fanout_v1: &'a ProgressScope,
@@ -417,6 +452,13 @@ struct ProgressV1<'a> {
 /// in total; a long member text continues, split on a character boundary, in
 /// the next frame. Lossless: concatenating a member's texts in frame order
 /// gives its input text.
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "coalesced progress frames are wired with Map (2a-3)"
+    )
+)]
 pub(crate) fn progress_events(
     scope: &ProgressScope,
     deltas: &[(usize, String, String)],
