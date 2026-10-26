@@ -21,14 +21,15 @@ Branch `fix/fu244-typed-bound-refusals`, from `main` `6b0cea32c` (#1407). Step 0
 | Where a stack is composed | Main enforcement | Proof |
 |---|---|---|
 | Attach an agent or pipeline as a tool | `eliteacore/application_relation.go:326,373` (before any write, parent locked) | PG attach tests; browser B |
-| Save pipeline instructions (Agent nodes) | `repos/applications.go:831,996` | PG save test; browser A |
-| Add to a conversation (incl. conversation create) | `repos/conversations.go:3124` → `repos/application_composition.go:213` | `TestAddingAParticipantWhoseCompositionBreaksABoundIsRefused` |
-| Switch a participant's version | `repos/conversations.go:1316` | `TestSwitchingAParticipantToAVersionThatClosesACycleIsRefused` |
-| Switch references by deleting a version with a replacement | `applications/handler.go:1763,1782` | `TestHandlerPostgres_DeleteVersionRefusesAReplacementThatClosesACycle` |
-| Publish | `eliteacore/handler.go:2008` (replaces the old walk, which counted pipeline hops as levels and never looked into pipelines) | `TestPublishValidationRefusesACycleThroughAPipelineAndAFourthLevel` |
-| Ad-hoc turn (chat model) | `repos/agent_start.go:796` → `agent_nesting.go:388` → `applicationcomposition.ChatToolFit` (`composition.go:163`): not offered; the participant read sends the same answer (`repos/conversations.go:314`) and the Web shows EliteaUI's warning (`chat-participants/lib/helpers.ts:126`) | `TestChatToolFitOffersOnlyWhatFitsBelowTheChatModel`, `TestFilterCurrentAdhocApplicationNestingOffersOnlyWhatFitsBelowTheChatModel`, `TestTheParticipantReadFlagsAnAgentThatRunsOnlyWhenSelected`; browser G |
-| Run start (selected agent) | `repos/agent_start.go:438` → `application_composition.go:271` (422 typed); the old start walk keeps its row checks only | route test; browser C |
-| Assembly (Worker) | `application.composition_bound` (below) | Worker tests; browser C2 |
+| Save a version: pipeline instructions, or a kind switch (agent ↔ pipeline, stored instructions walked) | `repos/applications.go:831,1014` | PG save test; `TestTurningAnAgentIntoAPipelineWalksItsStoredInstructions`; browser A |
+| Internal MCP instruction patch and `agent_type` update (in their transaction, before the backup) | `mcp/internal_applications_version.go:84,189` → `repos/applications.go:1002` | `TestInternalWritesRefuseABrokenComposition` |
+| Add to a conversation (incl. conversation create) | `repos/conversations.go:3181` → `repos/application_composition.go:324`; the participant's project authorized first (`:356`) | `TestAddingAParticipantWhoseCompositionBreaksABoundIsRefused`, `TestParticipantProjectIsAuthorizedBeforeItsCompositionIsRead` |
+| Switch a participant's version | `repos/conversations.go:1373` | `TestSwitchingAParticipantToAVersionThatClosesACycleIsRefused` |
+| Re-point references by deleting a version with a replacement (one transaction, parents locked, the replacement substituted in the whole walk) | `applications/handler.go:1771,1795` | `TestHandlerPostgres_DeleteVersionRefusesAReplacementThatClosesACycle`, `…WalksTheReplacementThroughEveryParent` |
+| Publish | `eliteacore/handler.go:2008` (replaces the old walk, which counted pipeline hops as levels and never looked into pipelines) | `TestPublishValidationRefusesACycleThroughAPipelineAndAFourthLevel`; e2e `api.publish-subagents` |
+| Ad-hoc turn (chat model): participants judged together against the chat model's shared budget, in turn order | `repos/agent_start.go:802` → `agent_nesting.go:395` → `applicationcomposition.ChatToolFits` (`composition.go:193`); the participant read sends the same answer (`repos/conversations.go:317`) and the Web shows EliteaUI's warning (`chat-participants/lib/helpers.ts:122`) | `TestChatToolFitsShareTheChatModelsHopBudget`, `TestFilterCurrentAdhocApplicationNestingOffersOnlyWhatFitsBelowTheChatModel`, `TestTheParticipantReadJudgesParticipantsTogetherAndOnlyInTheirOwnProject`; browser G |
+| Run start (selected agent), same project and catalogue | `repos/agent_start.go:438,621` → `application_composition.go:434` (422 typed); the old start walk keeps its row checks only | route test; scripted start tests; browser C |
+| Assembly (Worker) | `application.composition_bound` (below); the byte budget has its own outcome (`application.composition_size`) | Worker tests; browser C2 |
 
 Current-app gaps not ported (#5680/#5778): unbounded nesting (bounded here); pipeline children skipped in the sub-agent
 tree walk (the cycle search follows every attachment, `composition.go:219`); version-switch bypass (participant switch
@@ -73,8 +74,8 @@ EliteaUI's depth-aware gate fed by Main.
 ## Design
 
 - **One typed cause.** Every bound violation carries `application.composition_bound` with a data-free detail
-  (`cycle`, `agent_tiers`, `pipeline_depth`, `ordinary_graph_scopes`, `application_hops`, `version_bytes`,
-  `checkpoint_paths`, `static_pause_under_graph_root`): `agents/application_tools/materialization.rs:21-48`. Tagged at
+  (`cycle`, `agent_tiers`, `pipeline_depth`, `ordinary_graph_scopes`, `application_hops`, `checkpoint_paths`,
+  `static_pause_under_graph_root`): `agents/application_tools/materialization.rs:21-48`. Tagged at
   every bound: `materialization.rs:120-224` (scopes, tiers, depth, cycle, hops, bytes), `application_tools.rs:3225-3254`
   (nested build hops, tiers, cycle), `pipeline/composition.rs:89-123,294-297` (saved pipeline composition),
   `pipeline.rs:1830-1838` (static pause under a graph root).
@@ -112,6 +113,35 @@ EliteaUI's depth-aware gate fed by Main.
   is a write and is no longer retried (`api/useAgentPipelineAssociation.tsx:215`): a refused attach went out four
   times.
 
+### Review round 1 (orchestrator, `REVIEW-1409.md`)
+
+- **The participant's project is authorized before anything is read in it** (`repos/application_composition.go:356`
+  `participantSchema`). The conversation's own project is read as is (the conversation route authorized the caller);
+  another project only when the caller may act inside it (`projectaccess.Membership`, the HTTP project gate's own rule)
+  or for a version the catalogue project publishes; anything else answers 404 "The agent or pipeline was not found."
+  before any read there, and every failure refuses. The ad-hoc turn and the participant read judge only participants of
+  the conversation's own project, which are the only ones an ad-hoc turn offers.
+- **Every writer and start path runs the check.** The internal MCP instruction patch and `agent_type` update
+  (`mcp/internal_applications_version.go:84,189`, through `repos.CheckVersionComposition` `applications.go:1002`); a
+  REST kind switch walks the stored instructions as the kind it becomes (`applications.go:1014`); the catalogue start
+  (`agent_start.go:621`); a re-point runs in one transaction with the parents locked `FOR UPDATE` and the replacement
+  substituted in the whole walk (`applications/handler.go:1795` `repointedSource`).
+- **The chat model's shared budget.** The Worker builds every offered participant under one chat root sharing its hop
+  budget, so `ChatToolFits` (`composition.go:193`) judges them together in turn (participant mapping) order; one that
+  does not fit is not offered and consumes nothing.
+- **Checkpoint paths** are a Main bound now (`composition.go:493`, 128, counted like the Worker's `collect_paths`).
+  **Version bytes** are not: Main cannot measure the frozen documents the Worker loads. The Worker gives them their own
+  cause, `application.composition_size` (`materialization.rs:54,242`, `pipeline/composition.rs:121,123`): an
+  attachment past the 4 MiB budget is left out and named "too large" where the root offers its attachments to its own
+  model (`application_tools.rs:3071,3186`; reason code `application_child_too_large`, `skipped_capabilities.rs:45`), so
+  an ad-hoc turn keeps answering; a pipeline Agent node that selects it, or a pipeline root's own composition, ends with
+  `RuntimeFailureKind::ApplicationCompositionTooLarge` (`native_agent_lifecycle.rs:1561`; registered
+  `protocol/output.rs:809,874`; Main maps it, `output/server.go:1175`). The contract gained `max_checkpoint_paths`,
+  `max_version_bytes` and `size_runtime_message`.
+- **One read per level.** `CompositionSource` is per request: one legacy-table probe, a cache of every version read
+  (misses too), and `Prefetch` (`application_composition.go:189`) reading one level of the walk in two statements;
+  the walk prefetches level by level first (`composition.go:528`).
+
 ## Defects found by running it
 
 - **The registered message did not fit the output plane.** Main admits a runtime failure's safe message up to 256 bytes
@@ -125,35 +155,37 @@ EliteaUI's depth-aware gate fed by Main.
   children whose application id belonged to the parent, so a mismatch refusal fired before the hop bound. Fixed; the test
   now asserts the bound marker.
 
+- **Found by CI on the review round.** Three e2e journeys encoded the old behaviour: a cycle accepted at the link and
+  refused only at publish, a four-agent chain accepted at publish (the old walk counted hops), and an agent attached to
+  itself. They now assert the §8.8 rule. One journey attaches a draft agent of another project the persona belongs
+  to; the first authorization rule (catalogue: published only) refused it, and is now the membership rule above.
+
 ## Changed paths
 
 Worker (`services/elitea-worker-rust/src`): `agents/application_tools.rs`, `agents/application_tools/materialization.rs`,
 `agents/application_tools/materialization_tests.rs`, `agents/pipeline.rs`, `agents/pipeline/composition.rs`,
-`agents/pipeline_scoped_tests.rs`, `agents/ordinary_tests.rs`, `agents/session.rs`, `execution/native_agent_lifecycle.rs`,
+`agents/pipeline_scoped_tests.rs`, `agents/ordinary_tests.rs`, `agents/session.rs`, `agents/session_tests.rs`,
+`agents/events_tests.rs`, `agents/skipped_capabilities.rs`, `execution/native_agent_lifecycle.rs`,
 `execution/toolkit_delivery_processor.rs`, `protocol/output.rs`. No `libs/rust` change.
 Main (`services/elitea-main/internal`): `domain/applicationcomposition/{composition.go,composition_test.go,contract_test.go}`
-(new), `infra/db/repos/application_composition.go` (new), `infra/db/repos/{applications.go,agent_nesting.go,agent_start.go,agent_nesting_test.go}`,
-`api/v2/eliteacore/application_relation.go`, `api/v2/eliteacore/application_composition_postgres_integration_test.go`
-(new), `api/v2/agentexecution/{route.go,route_test.go}`, `transport/runtimegrpc/output/{server.go,composition_failure_test.go}`.
-Web (`apps/elitea-web/src/features/agents`): `ui/ToolMenu.tsx`, `ui/ToolMenu.test.tsx`, `api/useAgentPipelineAssociation.tsx`.
+(new); `infra/db/repos/{application_composition.go (new),applications.go,agent_nesting.go,agent_start.go,conversations.go}`
+and their tests; `api/v2/eliteacore/{application_relation.go,handler.go}` and PG tests; `api/v2/applications/handler.go`
+and the re-point PG tests; `api/v2/mcp/internal_applications_version.go` and a PG test; `api/v2/conversations` PG tests
+(participant project authorization); `api/v2/agentexecution/{route.go,route_test.go}`;
+`transport/runtimegrpc/output/{server.go,composition_failure_test.go}`.
+Web (`apps/elitea-web`): `src/features/agents/{ui/ToolMenu.tsx,api/useAgentPipelineAssociation.tsx}` and tests;
+`src/features/chat-participants/{lib/helpers.ts,ui/…}` and tests; the Chat buttons and edit actions of agents and
+pipelines; `src/shared/i18n/en.json`; e2e `journeys/api/api.publish-subagents.spec.ts`, `streaming/chat.agent-tools.spec.ts`
+(they built a cycle or a four-agent chain that is now refused where it is made).
 Contract: `libs/proto/contracts/application-composition-limits-v1.json` (new).
 
 ## Tests
 
-Counts from this branch head, against a disposable `postgres:18` with the CI environment (`ELITEA_TEST_DATABASE_URL`,
-`ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`, `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`):
+Counts from this branch head (after the review round and the merge of `main`), against a disposable `postgres:18`
+with the CI environment (`ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`,
+`ELITEA_TEST_DATABASE_GUARD=disposable-pg18`):
 
-- **Worker** `cargo test --offline --locked --no-fail-fast --all-targets --all-features -- --test-threads=4`:
-  **2612 passed, 0 failed, 103 ignored** (no Worker change after this run). The ignored tests are the supervisor/preparation/hydration `#[ignore]` suites CI runs separately.
-  `cargo fmt --check` and `cargo clippy --locked --all-targets --all-features -D warnings` clean. No `libs/rust` change.
-- **Main** `go test -race -count=1 ./...`: 221 packages ok, 33 without tests, 1 package failed on one pre-existing
-  flake: `TestForkFromAMessageCopiesTheHistoryUpToAndIncludingIt` refuses the text "999" anywhere in the fork's meta, and
-  that run's random conversation UUID contained it (`…4c1999c998c6`); it passes on rerun (`-count=3`) and is not touched
-  here. `go vet ./...` clean.
-- **Web** `vitest run`: 1885 files / 18837 tests passed, 6 expected fail, 1 skipped; 1 failed:
-  `themePreference.test.ts` "keeps the mark in memory when storage refuses the write", which this branch does not touch
-  (pre-existing, storage behaviour under node). `tsc --noEmit` and `oxlint` clean. No new `t()` key: refusals come from the server or
-  `mapAssociationError`; the two skipped-container keys carry EliteaUI's current text.
+R2_COUNTS
 
 New or changed tests (red before the change where marked):
 
@@ -163,7 +195,7 @@ New or changed tests (red before the change where marked):
 | A cycle / graph depth / third scope deep in a saved pipeline is refused with the typed cause before any model call | `mixed_graph_agent_cycle_is_refused_before_provider_effects`, `second_scope_mixed_cycle_is_refused_before_provider_effects`, `second_scope_mixed_graph_depth_is_refused_before_provider_effects`, `third_ordinary_graph_scope_is_refused_before_provider_effects` | red: the edge was dropped |
 | Ordinary graph scopes: 2 assemble, 3 refused typed, the Agent past the bound never read | `the_ordinary_graph_scope_budget_admits_the_limit_and_refuses_one_more` | red: dropped |
 | A static-pausing pipeline tool under a pipeline root is refused typed, 0 model calls | `a_static_saved_pipeline_tool_under_a_graph_root_is_refused_before_any_model_call` | red: dropped |
-| Hop (25/26) and version-byte (4 MiB/+1) budgets carry the bound cause | `the_application_hop_budget_admits_the_limit_and_refuses_one_more`, `the_version_byte_budget_admits_four_mib_and_refuses_one_more_byte` | cause added |
+| The hop budget (25/26) carries the bound cause; the version-byte budget (4 MiB/+1) its own size cause, and a pipeline root ends with the size terminal | `the_application_hop_budget_admits_the_limit_and_refuses_one_more`, `the_version_byte_budget_admits_four_mib_and_refuses_one_more_byte_at_a_pipeline_root` | cause added |
 | Tier limit and nested cycle carry the bound cause; saved-pipeline composition cycle/depth too | `nested_agent_tier_limit_fails_before_fetching_the_fourth_tier`, `nested_agent_cycle_fails_after_one_exact_resolution_and_before_model_dispatch`, `composition::tests::rejects_cycles_depth_unavailable_and_foreign_scope_before_binding` | cause added |
 | FU-243: a pipeline root names the skipped attachment in `skipped_capabilities` | `an_unbuildable_attachment_of_a_pipeline_agent_node_is_skipped_and_the_node_answers` | red: not named |
 | Bounds and message equal the shared contract | Worker `composition_bounds_match_the_shared_contract`; Main `TestBoundsMatchTheSharedContract`, `TestApplicationCompositionFailureAdmitsOnlyTheRegisteredMessage` | new |
@@ -176,30 +208,39 @@ New or changed tests (red before the change where marked):
 | Real PG: a 3-level agent is addable; the participant read sends `agent_subtree_tiers` 3/2/1, `is_container`, `max_agent_nesting_tiers` 3 | `TestTheParticipantReadFlagsAnAgentThatRunsOnlyWhenSelected` | new (Main sent none) |
 | Web: EliteaUI's gate (`1 + tiers > max`, blunt fallback without the tier fields) | `helpers.test.ts` `isSkippedContainerParticipant` (4) | new |
 | Web: a refused attach is shown, the menu closes, the write is sent once | `ToolMenu.test.tsx` "shows a server refusal of the attach …" | red: no alert, 4 requests |
+| Review 1: the participant's project is authorized before it is read (own project, member of another project, published catalogue version allowed; foreign, nonexistent, malformed, unpublished catalogue refused; route answers for unauthenticated, other user, member without access; nothing named, nothing written) | `TestParticipantProjectIsAuthorizedBeforeItsCompositionIsRead` (12 cases) | red: a foreign project was read and named |
+| Review 2: the MCP patch and `agent_type` update refuse a broken composition, nothing changed or backed up | `TestInternalWritesRefuseABrokenComposition` | red: written |
+| Review 3/5: participants share the chat model's hop budget in turn order; a participant of another project is never judged on a colliding id | domain `TestChatToolFitsShareTheChatModelsHopBudget`; PG `TestTheParticipantReadJudgesParticipantsTogetherAndOnlyInTheirOwnProject` | red: each judged alone; wrong schema |
+| Review 4: checkpoint paths 128/129 and through nested pipelines; the size skip names the attachment and the agent still answers; the size terminal and its contract | `TestCheckpointPathsAdmitTheLimitAndRefuseOneMore`, `TestCheckpointPathsCountNestedPipelines`; Worker `an_attachment_past_the_byte_budget_is_left_out_and_the_agent_still_answers`, `a_child_left_out_for_size_says_so`, the taxonomy and contract tests | new |
+| Review 6: the catalogue start runs the shared check | `TestOriginalRootCatalogueSourceRetainsExactAdmittedReadAndOldWrapper` (scripted reads) | new reads |
+| Review 7: an agent → pipeline switch walks the stored instructions | `TestTurningAnAgentIntoAPipelineWalksItsStoredInstructions` | red: stored |
+| Review 8: a re-point is walked for the whole composition (a fourth level through another parent) | `TestHandlerPostgres_DeleteVersionWalksTheReplacementThroughEveryParent` | red: moved |
+| Review 9: judging participants costs a fixed number of statements (5 for 4 and for 8 participants) | `TestJudgingParticipantsCostsAFixedNumberOfStatements` | red: per participant and version |
+| Review 10: the depth refusal quotes the Agent node once | `TestTheDepthRefusalNamesTheAgentNodeOnce` | red: double quotes |
+| e2e (CI): a cycle is refused at the link; a four-agent chain is refused at publish, three accepted; an agent attached to itself is refused | `api.publish-subagents.spec.ts`, `chat.agent-tools.spec.ts` | updated |
 
 ## Performance
 
-- **Budget (Main checks).** One check reads each saved version at most once (per-check cache): the cycle search follows
-  every attachment and reads at most `MaxCycleVersions` = 128 versions; the bound walk reuses the cache and enters at
-  most 25 attachments. Each read is one version row plus the attachment rows (one query, plus the legacy-table probe
-  and read on a legacy-migrated tenant): at most 129 × 3 statements, in the attach transaction, the save's pool, the
-  participant transaction or the start's read-only project transaction. Proven by
-  `TestEachVersionIsReadAtMostOnceWithinTheHopBudget` (a diamond read once per version; every version read once, at
-  most 129). Only composing writes and a selected agent's start pay it; an agent save without pipeline instructions
-  never walks.
+- **Budget (Main checks).** One request reads each saved version at most once: `CompositionSource` caches every version
+  it read (misses too) for the request, probes the legacy attachment table once, and reads a level of the walk in one
+  batch (`Prefetch`: one statement for the version rows, one for their attachments, one more for legacy attachments on a
+  legacy-migrated tenant). The walk prefetches the reachable versions level by level (at most `MaxCycleVersions` = 128)
+  before it walks them, so a check costs about two statements per level of the composition, not per version. Proven by
+  `TestEachVersionIsReadAtMostOnceWithinTheHopBudget` (domain) and, on real PostgreSQL,
+  `TestJudgingParticipantsCostsAFixedNumberOfStatements`: judging 4 and 8 participants (each a 2-level agent) costs
+  **5 statements** both times. Only composing writes, a start, an ad-hoc start and the participant read pay it; an
+  agent save that neither writes pipeline instructions nor changes the kind never walks.
 - Pipeline text is parsed only within the save-time bounds (`pipelinelimits.Check`: 512 KiB, alias expansion budget)
   and only top-level `nodes` / `interrupt_*` are read; an over-bound stored text is not read past its length
   (`CASE … octet_length … <= $3` in the version query).
-- **Worker.** No new work on the run path: the cause is a field on the existing error; the skipped set is a bounded
+- **Worker.** No new work on the run path: the causes are fields on the existing error; the skipped set is a bounded
   `BTreeSet` (≤ 8 entries) behind an uncontended mutex touched only when something was skipped.
-- **Participant read.** Each agent or pipeline participant with a version adds one `ChatToolFit` walk to the
-  conversation read (same budget: ≤ 129 versions, ≤ 25 attachments; typically the participant and its few
-  attachments). Measured on the stack, conversation 898 (two agent participants, six versions walked), 20 reads from
-  the browser: p50 **8.3 ms**, p95 10.2 ms, max 11.5 ms end to end. A failed walk leaves the participant as read.
-  The ad-hoc start runs the same walk per offered participant, in its read-only project transaction.
+- **Participant read.** All agent participants of the conversation are judged in one `ChatToolFits` walk through one
+  source (above). Measured before the batching on the stack, conversation 898 (two agent participants), 20 reads from
+  the browser: p50 **8.3 ms**, p95 10.2 ms end to end; the batching only removes statements.
 - **Measured** (real PostgreSQL 18, `TestTheCompositionCheckAtItsHopBudgetIsFast`): the worst admitted walk, 25
-  attachments under one root, slowest of 20 checks = **54.7 ms** (bound asserted at 2 s; the shape under test is the
-  bound, not the machine). Typical attaches walk a handful of versions.
+  attachments under one root, slowest of 20 checks = **2.0 ms** after the batching (54.7 ms before; bound asserted at
+  2 s; the shape under test is the bound, not the machine).
 
 ## Durability
 
@@ -228,7 +269,10 @@ New or changed tests (red before the change where marked):
 Checked against `rules/security.md`:
 - **Identity / authorization.** No new route. The relation route's existing project scoping and parent row lock apply;
   the walk reads only the request's tenant schema (quoted via `tenantschema.Quote`), so a foreign project's version is
-  simply not found and not followed. The Worker keeps its foreign-project refusal
+  simply not found and not followed. A conversation participant's project is authorized before its composition is
+  read (`participantSchema`, review item 1): the conversation's own project, a project the caller may act inside
+  (`projectaccess.Membership`, the HTTP gate's rule), or a published catalogue version; anything else is 404 before
+  any read there, and every failure refuses (proven by the 12-case matrix test). The Worker keeps its foreign-project refusal
   (`a_saved_participant_from_a_foreign_project_is_refused_before_any_effect`).
 - **Input / amplification.** Stored YAML is parsed only after `pipelinelimits.Check` (size + alias-expansion budget);
   the walk is bounded by the hop budget and cache; cycles terminate (ancestor check).
@@ -255,11 +299,12 @@ No new durable state, no new effect. The rows this change touches:
 
 | Component × phase | Class | Enforcing code | Proof |
 |---|---|---|---|
-| Main × admission (attach, save) | F (typed, readable, at save time): nothing is written | `application_relation.go:326,373`; `repos/applications.go:831,996` | PG attach/save tests (rows read back); browser A, B |
-| Main × admission (run start) of a stored cycle, hop or over-tier container | F (`APPLICATION_COMPOSITION_INVALID`, 422): the run never starts, no execution row | `repos/agent_start.go:445`, `route.go:601` | route test; browser C |
-| Worker × assembly of a stored bound violation Main's start does not see (static pause under a pipeline root, pipeline depth, scopes, version bytes) | F, settled and acked before any model call, persisted on the message | `native_agent_lifecycle.rs:1558`, `protocol/output.rs:806,863` | scoped/materialization tests; browser C2 (`executed_settled_acked`) |
+| Main × admission (attach, save, kind switch, MCP patch/update, participant add/switch, re-point) | F (typed, readable, at save time): nothing is written; a re-point is checked and moved in one transaction | `application_relation.go:326,373`; `repos/applications.go:831,1014`; `mcp/internal_applications_version.go:84,189`; `applications/handler.go:1795` | PG attach/save/MCP/re-point tests (rows read back); browser A, B, E, F |
+| Main × admission (run start, same project and catalogue) of a stored bound violation | F (`APPLICATION_COMPOSITION_INVALID`, 422): the run never starts, no execution row | `repos/agent_start.go:438,621`, `route.go` | route test; scripted start tests; browser C |
+| Worker × assembly of a stored bound violation Main's start does not see (static pause under a pipeline root, pipeline depth, scopes) | F, settled and acked before any model call, persisted on the message | `native_agent_lifecycle.rs:1558`, `protocol/output.rs` | scoped/materialization tests; browser C2 (`executed_settled_acked`) |
+| Worker × assembly past the version-byte budget | R where the root offers attachments to its model (left out and named "too large", the turn answers); F at a pipeline that needs the attachment (`ApplicationCompositionTooLarge`, registered, before any model call) | `application_tools.rs:3071,3186`, `native_agent_lifecycle.rs:1561` | `an_attachment_past_the_byte_budget_…`, `the_version_byte_budget_…_at_a_pipeline_root` |
 | Worker × assembly of an unbuildable attachment (deleted version, unresumable pause kind) | R for every run: degraded and **named** on every root, pipeline roots included | `materialization.rs:187-205`, `pipeline.rs:753,815,2137`, `session.rs:1952` | `an_unbuildable_attachment_of_a_pipeline_agent_node_…`; browser D (reload) |
-| Main × admission of an ad-hoc turn with a participant that does not fit below the chat model | R: the turn runs; the participant is not offered (stated on the participant list, not dropped silently) | `agent_nesting.go:388`, `conversations.go:314` | filter unit + PG tests; browser G (Worker `tool_reference_count=1`) |
+| Main × admission of an ad-hoc turn with a participant that does not fit below the chat model with the others | R: the turn runs; the participant is not offered (stated on the participant list, not dropped silently) | `agent_nesting.go:395`, `conversations.go:317` | filter unit + PG tests; browser G (Worker `tool_reference_count=1`) |
 | Main × output delivery of the composition terminal | I: the registered text fits the 256-byte bound, so the frame is admitted and settled once | `runtime_failure.go` bound; contract | lifecycle + contract tests; browser C2 |
 
 Gap kept (not this change): Main's start validation refuses a **deleted** attachment version generically
