@@ -29,6 +29,9 @@
  * in the cloud and opens its chat (`useRunInCloud`; no plan mode, images or
  * model chip); a start the host refuses with `pipeline_unsupported` offers
  * the same for that prompt (`RunInCloudNotice`).
+ *
+ * While a local turn runs, a send steers it (`useSteering`): the text waits for the agent's next safe point
+ * (`SteeringQueue`, with Edit and Remove), and what the turn did not take goes as the next turn.
  */
 import { lazy, Suspense, useMemo, useState } from 'react';
 
@@ -42,6 +45,7 @@ import { BypassControls } from './BypassControls';
 import { AgentChip, RunLocationChip } from './ComposerControls';
 import { HandoffBanner } from './HandoffControls';
 import { RunInCloudNotice } from './RunInCloudNotice';
+import { SteeringQueue } from './SteeringQueue';
 import { firstError, SessionNotices } from './sessionParts';
 import { useProjectSkills, type ComposerSkill } from './useAgentSkills';
 import type { CloudChat } from './useCloudChat';
@@ -52,6 +56,7 @@ import type { ThreadSession } from './useThreadSession';
 import { useRetryAndSteps, type SentMessage } from './useRetryAndSteps';
 import type { SessionCommands } from './useSessionCommands';
 import { useComposerModes } from './useComposerModes';
+import { useSteering, type Steering } from './useSteering';
 import { useTurnModel, type TurnModelControl } from './useTurnModel';
 import { skillPicks, WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
 
@@ -84,7 +89,7 @@ function cloudBinding(cloud: CloudChat): Pick<WorkspaceComposerProps, 'canSend' 
   };
 }
 
-type SendBinding = Partial<Pick<WorkspaceComposerProps, 'placeholder' | 'showMode' | 'acceptImages'>> & Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'>;
+type SendBinding = Partial<Pick<WorkspaceComposerProps, 'placeholder' | 'showMode' | 'acceptImages' | 'onSteer' | 'onStopAndSend'>> & Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'>;
 
 /**
  * Where a message goes: the cloud copy, else the pipeline's cloud run (gated on that run alone, never on the local
@@ -132,6 +137,14 @@ function turnUsages(turn: WorkspaceTurn, recorded: readonly { turnId: string; us
 }
 
 const NO_USAGE: NonNullable<Usage>[] = [];
+
+/** While a local turn runs, Send steers it and "Stop and send" is offered; otherwise neither. */
+function steeringProps(steering: Steering): Pick<WorkspaceComposerProps, 'onSteer' | 'onStopAndSend'> {
+  return steering.active ? { onSteer: steering.steer, onStopAndSend: steering.stopAndSend } : {};
+}
+
+/** The local session can start a turn, or the running turn takes a steering message; never while the thread is away. */
+const canSendHere = (session: ThreadSession, steering: Steering, offLaptop: boolean): boolean => (session.canSend || steering.active) && !offLaptop;
 
 interface ComposerMetersProps {
   usages: NonNullable<Usage>[];
@@ -183,17 +196,20 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   const local = !cloudMode && !pipeline;
   const modes = useComposerModes(workspaceId, local, turn, session.history, commands);
   const { customCommands, offered, onFocus } = useSlashSources(ipc, workspaceId, projectId, local, skills, session.prewarm, commands.notice === 'help');
-  const here: Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'> = {
-    canSend: session.canSend && !handoff.offLaptop,
+  const sendHere: WorkspaceComposerProps['onSend'] = async (prompt, mentions, picked, command, images) => {
+    model.dismissNotice();
+    remember(prompt);
+    const sent = await session.send(prompt, modes.mode, mentions, picked, commands.compactNext, model.choice, command, images);
+    if (sent && commands.compactNext) commands.compactSent();
+    return sent;
+  };
+  const steering = useSteering(ipc, turn, (prompt) => sendHere(prompt, [], []));
+  const here: Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop' | 'onSteer' | 'onStopAndSend'> = {
+    canSend: canSendHere(session, steering, handoff.offLaptop),
     busy: turn.busy,
-    onSend: async (prompt, mentions, picked, command, images) => {
-      model.dismissNotice();
-      remember(prompt);
-      const sent = await session.send(prompt, modes.mode, mentions, picked, commands.compactNext, model.choice, command, images);
-      if (sent && commands.compactNext) commands.compactSent();
-      return sent;
-    },
+    onSend: sendHere,
     onStop: () => void turn.cancel(),
+    ...steeringProps(steering),
   };
   const bound = sendBinding(cloudMode, cloud, composerPipeline, here);
   const lastRecorded = useMemo(() => recordedPrompt(session.history, customCommands, offered), [session.history, customCommands, offered]);
@@ -208,6 +224,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
       <HandoffBanner handoff={handoff} />
       <SessionNotices error={modelNotice ?? firstError(turnError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={offered} />
       <BypassControls bypass={modes.bypass} active={modes.bypassActive} />
+      {local && <SteeringQueue pending={steering.pending} error={steering.error} onEdit={steering.edit} onRemove={steering.remove} />}
       <RunInCloudNotice cloudOnly={pipeline} refusedPrompt={refusedPrompt} running={runInCloud.running} error={runInCloud.error} onRun={(prompt) => void runInCloud.run(prompt)} />
       <WorkspaceComposer
         ipc={ipc}

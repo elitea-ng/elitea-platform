@@ -14,6 +14,7 @@ import type { PlanProposalPayload, PlanView } from './planIpc';
 import type { ProcessTurnEvent } from './processTypes';
 import type { SubAgentFinishedPayload, SubAgentInnerEvent, SubAgentStartedPayload } from './subAgentIpc';
 import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel } from './turnModel';
+import { steeringCommands, type SteeringCommands, type SteeringEvent } from './steeringIpc';
 import { threadForkCommands, type ThreadForkCommands } from './threadForkIpc';
 import type { UsagePayload, UsageTotalPayload } from './turnUsage';
 
@@ -131,7 +132,6 @@ export interface ApprovalRequestPayload {
 }
 
 export type { SubAgentStatus } from './subAgentIpc';
-
 interface EventBase {
   turn_id: string;
   seq: number;
@@ -208,8 +208,8 @@ export type AgentEvent =
   | (EventBase & { kind: 'subagent_event'; payload: { agent_id: string; inner: SubAgentInnerEvent } })
   /** A sub-agent settled: once per run of it (a `send_input` that continues it settles again). */
   | (EventBase & { kind: 'subagent_finished'; payload: SubAgentFinishedPayload })
-  /** A background process its `run_command` call started, its output and its end, while this turn runs (#1223). */
-  | (EventBase & ProcessTurnEvent)
+  /** A background process of a `run_command` call, while this turn runs (#1223); the steering queue (`steeringIpc.ts`). */
+  | (EventBase & (ProcessTurnEvent | SteeringEvent))
   /**
    * A model call failed in a way another call may mend (a cut or stalled stream, the gateway unreachable, a 408,
    * 409, 429 or 5xx) and is made again after `delay_ms`. `text_units` and `thinking_units` are what the failed call
@@ -273,7 +273,7 @@ export function toWorkspaceIpcError(error: unknown): WorkspaceIpcError {
   return new WorkspaceIpcError('unknown', error instanceof Error ? error.message : 'Something went wrong.');
 }
 
-export interface WorkspaceIpc extends ThreadForkCommands {
+export interface WorkspaceIpc extends ThreadForkCommands, SteeringCommands {
   open(): Promise<Workspace | null>;
   list(): Promise<Workspace[]>;
   remove(id: string): Promise<void>;
@@ -360,6 +360,7 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
     deleteThreadHistory: async (workspaceId, conversationId) =>
       (await invoke<{ deleted: number }>('thread_history_delete', { workspace_id: workspaceId, conversation_id: conversationId })).deleted,
     ...threadForkCommands(invoke),
+    ...steeringCommands(invoke),
     onEvent: (handler) => listen(AGENT_EVENT_CHANNEL, (payload) => handler(payload as AgentEvent)),
   };
 }

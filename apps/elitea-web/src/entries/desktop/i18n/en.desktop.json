@@ -949,5 +949,15 @@
   "workspace.handoff.remaining.scope": "Changes {{from}} to {{to}}: what the cloud changed after change {{last}}, which you took back earlier. Your folder keeps your own edits since then.",
   "workspace.handoff.remaining.takeBack": "Take back the remaining turns",
   "workspace.handoff.remaining.title": "Take back the remaining turns",
-  "workspace.handoff.remaining.until": "You can take them back until {{date}}."
+  "workspace.handoff.remaining.until": "You can take them back until {{date}}.",
+  "workspace.steer.cancelEdit": "Cancel",
+  "workspace.steer.delivered": "Sent while the agent worked",
+  "workspace.steer.edit": "Edit queued message",
+  "workspace.steer.editLabel": "Queued message",
+  "workspace.steer.placeholder": "Add a message for the agent. It reads it after its current step.",
+  "workspace.steer.remove": "Remove queued message",
+  "workspace.steer.save": "Save",
+  "workspace.steer.stopAndSend": "Stop and send",
+  "workspace.steer.unsent": "The messages you queued did not start a new turn. Send them again: {{message}}",
+  "workspace.steer.waiting": "The agent reads these after its current step:"
 }
