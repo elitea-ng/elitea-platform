@@ -461,9 +461,9 @@ fn is_false(value: Option<&str>) -> bool {
 /// * `core.hooksPath` (husky's `.husky`, or `.git/hooks` spelled out): a
 ///   hook runs only when git looks in the hooks path, and every host git
 ///   process gets `-c core.hooksPath=/dev/null` from [`HARDENING`] in
-///   [`Git::spawn`], which beats every config file. `Git::spawn` is the
+///   `Git::spawn`, which beats every config file. `Git::spawn` is the
 ///   only way this crate and the desktop run git on a repository (the one
-///   other `git` process, [`valid_ref_name`], reads no repository); the
+///   other `git` process, `valid_ref_name`, reads no repository); the
 ///   workspace store reads objects with gix's object and pack crates,
 ///   which run no hooks. So the repository's hooks path is never looked
 ///   in, whatever it says. The agent's own `git` in its shell is a command
