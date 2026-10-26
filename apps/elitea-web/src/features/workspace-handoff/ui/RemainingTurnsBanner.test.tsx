@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { act, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -8,7 +8,7 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { RemainingTurnsBanner, remainingTurns } from './RemainingTurnsBanner';
 
-const KEPT: HandoffStatus = { ...LOCAL_STATUS, epoch: 5, sent_from_here: true, rest_pending: true, rest_turns: 2, delete_after: '2026-10-22T00:00:00Z' };
+const KEPT: HandoffStatus = { ...LOCAL_STATUS, epoch: 5, sent_from_here: true, rest_pending: true, rest_turns: 2, delete_after: new Date(Date.now() + 86_400_000).toISOString() };
 
 describe('RemainingTurnsBanner', () => {
   it('offers to take back the later cloud turns while the cloud copy keeps them', async () => {
@@ -30,5 +30,22 @@ describe('RemainingTurnsBanner', () => {
     expect(remainingTurns(KEPT)).toBe(2);
     const { container } = renderWithTheme(<RemainingTurnsBanner status={{ ...KEPT, rest_turns: 0 }} onTakeBack={vi.fn()} />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('hides itself when the grace ends, though the status still counts the turns', () => {
+    vi.useFakeTimers();
+    try {
+      const status = { ...KEPT, delete_after: new Date(Date.now() + 60_000).toISOString() };
+      renderWithTheme(<RemainingTurnsBanner status={status} onTakeBack={vi.fn()} />);
+      expect(screen.getByTestId('remaining-turns-banner')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(61_000);
+      });
+      expect(screen.queryByTestId('remaining-turns-banner')).not.toBeInTheDocument();
+      const { container } = renderWithTheme(<RemainingTurnsBanner status={{ ...KEPT, delete_after: '2020-01-01T00:00:00Z' }} onTakeBack={vi.fn()} />);
+      expect(container).toBeEmptyDOMElement();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

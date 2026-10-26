@@ -9,6 +9,7 @@ import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
+import { useEffect, useState } from 'react';
 
 import type { HandoffStatus } from '@/shared/desktop/handoffIpc';
 import { t } from '@/shared/i18n';
@@ -24,16 +25,38 @@ export function remainingTurns(status: HandoffStatus | undefined): number {
   return status.rest_turns ?? 0;
 }
 
-function until(status: HandoffStatus): string | null {
+function deadlineOf(status: HandoffStatus): Date | null {
   if (status.delete_after === undefined || status.delete_after === null) return null;
   const date = new Date(status.delete_after);
-  return Number.isNaN(date.getTime()) ? null : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** The longest delay a browser timer takes (about 24.8 days). */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/**
+ * Whether the grace is still open. The status is not polled while the
+ * thread runs here, so its `rest_turns` would outlive the grace: the banner
+ * hides itself at `delete_after` instead of offering a take back the server
+ * refuses.
+ */
+function useGraceOpen(deadline: Date | null): boolean {
+  const at = deadline?.getTime() ?? null;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (at === null || at <= now) return undefined;
+    const timer = setTimeout(() => setNow(Date.now()), Math.min(at - now + 1, MAX_TIMER_MS));
+    return () => clearTimeout(timer);
+  }, [at, now]);
+  return at === null || at > now;
 }
 
 export function RemainingTurnsBanner({ status, onTakeBack }: RemainingTurnsBannerProps): React.JSX.Element | null {
   const n = remainingTurns(status);
-  if (n === 0) return null;
-  const deadline = until(status);
+  const date = deadlineOf(status);
+  const open = useGraceOpen(date);
+  if (n === 0 || !open) return null;
+  const deadline = date === null ? null : date.toLocaleString();
   return (
     <Box
       component="output"
