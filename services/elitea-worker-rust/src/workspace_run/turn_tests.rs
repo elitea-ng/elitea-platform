@@ -59,6 +59,9 @@ struct StoreState {
     refuse_push: bool,
     /// The segment bound each fetch was asked with.
     fetch_bounds: Vec<u64>,
+    /// The change sets recorded; answer this many records with a failure.
+    changes: Vec<super::changes::ChangeSet>,
+    changes_failing: u32,
 }
 
 struct FakeStore(Mutex<StoreState>);
@@ -220,6 +223,20 @@ impl WorkspaceStore for FakeStore {
         state.events.push(event.clone());
         Ok(())
     }
+
+    async fn record_changes(
+        &self,
+        _claim: &WorkspaceClaimV1,
+        changes: &super::changes::ChangeSet,
+    ) -> Result<(), StoreCallError> {
+        let mut state = self.state();
+        if state.changes_failing > 0 {
+            state.changes_failing -= 1;
+            return Err(StoreCallError::Transport { retryable: false });
+        }
+        state.changes.push(changes.clone());
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -358,6 +375,21 @@ impl WorkspaceCodec for FakeCodec {
         Ok(Box::new(FakeParent(
             self.hydrated.lock().expect("hydrated").clone(),
         )))
+    }
+
+    fn changes(
+        &self,
+        _git_dir: &Path,
+        base: &str,
+        parent: &str,
+        commit: &str,
+    ) -> Result<super::changes::ChangeSet, CodecError> {
+        Ok(super::changes::ChangeSet {
+            commit: commit.to_owned(),
+            parent: parent.to_owned(),
+            base: base.to_owned(),
+            ..super::changes::ChangeSet::default()
+        })
     }
 
     fn rewind(
@@ -1376,4 +1408,54 @@ async fn a_rewind_resets_the_chain_the_policy_weighs() {
         published.sort();
         published
     });
+}
+
+#[tokio::test]
+async fn a_published_turn_records_its_changes_and_a_failed_record_does_not_fail_it() {
+    for fails in [false, true] {
+        let harness = harness(CLOUD_REFS, &[("src/main.rs", "fn main() {}\n")]);
+        harness.store.state().changes_failing = u32::from(fails);
+        let turn = harness
+            .factory
+            .begin(
+                &later_turn(),
+                claim(2),
+                "execution-1",
+                Arc::new(super::sandbox::NoGrants),
+            )
+            .await
+            .expect("hydrated");
+        let stamp = turn
+            .finish(TurnEnd::Completed)
+            .await
+            .expect("published")
+            .expect("a stamp");
+        let state = harness.store.state();
+        assert_eq!(state.publishes.len(), 1);
+        if fails {
+            assert_eq!(state.changes.len(), 0);
+        } else {
+            assert_eq!(state.changes.len(), 1);
+            assert_eq!(state.changes[0].commit, stamp.workspace_commit);
+            assert_eq!(state.changes[0].parent, CLOUD);
+            assert_eq!(state.changes[0].base, HANDOFF);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_failed_turn_records_no_changes() {
+    let harness = harness(CLOUD_REFS, &[("src/main.rs", "fn main() {}\n")]);
+    let turn = harness
+        .factory
+        .begin(
+            &later_turn(),
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
+        .await
+        .expect("hydrated");
+    assert_eq!(turn.finish(TurnEnd::Failed).await.expect("none"), None);
+    assert_eq!(harness.store.state().changes.len(), 0);
 }

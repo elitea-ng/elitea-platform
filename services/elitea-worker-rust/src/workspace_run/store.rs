@@ -247,6 +247,17 @@ pub(crate) trait WorkspaceStore: Send + Sync {
         claim: &WorkspaceClaimV1,
         event: &super::audit::ExecutorEvent,
     ) -> Result<(), StoreCallError>;
+
+    /// Record the files the turn's published commit changed (the web
+    /// "Files changed" view). Best effort for the caller; a store that
+    /// keeps no record answers `Ok`.
+    async fn record_changes(
+        &self,
+        _claim: &WorkspaceClaimV1,
+        _changes: &super::changes::ChangeSet,
+    ) -> Result<(), StoreCallError> {
+        Ok(())
+    }
 }
 
 /// The wire request of an executor audit event: counts, rule ids, the file
@@ -399,7 +410,7 @@ fn ref_map(refs: &[WorkspaceRefV1]) -> Result<BTreeMap<String, String>, StoreCal
     Ok(map)
 }
 
-fn refused(refusal: &WorkspaceRefusalV1) -> StoreCallError {
+pub(crate) fn refused(refusal: &WorkspaceRefusalV1) -> StoreCallError {
     match RefusalCode::from_wire(refusal.code) {
         Some(code) => StoreCallError::Refused {
             code,
@@ -409,7 +420,7 @@ fn refused(refusal: &WorkspaceRefusalV1) -> StoreCallError {
     }
 }
 
-fn rejected(rejection: &RuntimeErrorV1) -> StoreCallError {
+pub(crate) fn rejected(rejection: &RuntimeErrorV1) -> StoreCallError {
     let code = RuntimeErrorCodeV1::try_from(rejection.code)
         .map_or(RuntimeErrorCodeV1::Unspecified as i32, |code| code as i32);
     StoreCallError::Rejected {
@@ -967,6 +978,21 @@ impl WorkspaceStore for GrpcWorkspaceStore {
         .map_err(|status| status_error(&status))?
         .into_inner();
         read_record_event(&response)
+    }
+
+    async fn record_changes(
+        &self,
+        claim: &WorkspaceClaimV1,
+        changes: &super::changes::ChangeSet,
+    ) -> Result<(), StoreCallError> {
+        let mut client = self.client.clone();
+        let frames = tokio_stream::iter(super::changes::frames(claim, changes));
+        let response = timeout(self.deadline, client.workspace_record_changes(frames))
+            .await
+            .map_err(|_| StoreCallError::Transport { retryable: true })?
+            .map_err(|status| status_error(&status))?
+            .into_inner();
+        super::changes::read_record_changes(&response)
     }
 }
 
