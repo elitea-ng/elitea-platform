@@ -201,4 +201,23 @@ pub(crate) trait WorkspaceCodec: Send + Sync {
         max_segment_bytes: u64,
         out: &Path,
     ) -> Result<(String, BuiltSegment), CodecError>;
+
+    /// The files `commit` changed, in the quarantine at `git_dir`: from
+    /// `parent` (the turn) and from `base`, the handoff snapshot (the
+    /// handoff so far). Read after `commit_and_bundle` wrote the commit.
+    ///
+    /// # Errors
+    ///
+    /// [`CodecError::Integrity`]: a commit, tree or blob is missing.
+    fn changes(
+        &self,
+        git_dir: &Path,
+        base: &str,
+        parent: &str,
+        commit: &str,
+    ) -> Result<super::changes::ChangeSet, CodecError> {
+        let db = elitea_workspace_store::objects::ObjectDb::open_objects(&git_dir.join("objects"))
+            .map_err(|_| CodecError::Integrity)?;
+        super::changes::compute(&db, base, parent, commit).map_err(|_| CodecError::Integrity)
+    }
 }

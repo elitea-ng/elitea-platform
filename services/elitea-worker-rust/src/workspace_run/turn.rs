@@ -751,6 +751,7 @@ impl WorkspaceTurn {
             }
             other => other.map_err(|(_, error)| error)?,
         };
+        self.record_changes(&built.commit).await;
         tracing::info!(
             event = "workspace.published",
             execution_id = self.execution_id.as_str(),
@@ -836,6 +837,58 @@ impl WorkspaceTurn {
             .await
             .map_err(failed)?;
         Ok((built, published))
+    }
+}
+
+/// The longest the end of a turn waits for its Files changed record.
+pub(super) const CHANGES_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl WorkspaceTurn {
+    /// Record the files the published `commit` changed (the web "Files
+    /// changed" view). Best effort: a failure is logged and the turn's
+    /// result is the publish's.
+    ///
+    /// It runs before the turn ends, not detached after it: Main accepts the
+    /// record only while this execution is the thread's running cloud turn
+    /// (`ResolveRunningTurn`: the claim's execution, `CLOUD_RUNNING`), its
+    /// commit is the cloud tip and its base the handoff snapshot, and it
+    /// saves under a share lock of the live handoff row. A record sent after
+    /// the turn's result would be refused, so instead it is bounded by
+    /// [`CHANGES_DEADLINE`]: the end of the turn waits at most that long.
+    async fn record_changes(&self, commit: &str) {
+        let stage =
+            match tokio::time::timeout(CHANGES_DEADLINE, self.try_record_changes(commit)).await {
+                Ok(Ok(())) => return,
+                Ok(Err(stage)) => stage,
+                Err(_) => "deadline",
+            };
+        tracing::warn!(
+            event = "workspace.changes_record_failed",
+            execution_id = self.execution_id.as_str(),
+            stage,
+            "the turn's changed files were not recorded; the turn is published"
+        );
+    }
+
+    async fn try_record_changes(&self, commit: &str) -> Result<(), &'static str> {
+        let base = super::changes::handoff_snapshot(&self.refs).ok_or("no_handoff_snapshot")?;
+        let (codec, git_dir, parent, commit) = (
+            Arc::clone(&self.codec),
+            self.git_dir.clone(),
+            self.parent.clone(),
+            commit.to_owned(),
+        );
+        // The computation is bounded (files, blob and diff budgets); a
+        // deadline that passes leaves it to finish on the blocking pool.
+        let changes =
+            tokio::task::spawn_blocking(move || codec.changes(&git_dir, &base, &parent, &commit))
+                .await
+                .map_err(|_| "compute")?
+                .map_err(|_| "compute")?;
+        self.store
+            .record_changes(&self.claim, &changes)
+            .await
+            .map_err(|_| "record")
     }
 }
 

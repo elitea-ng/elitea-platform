@@ -23,6 +23,14 @@ async function fetchData<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 /** The thread's states, as the banner and the live frames carry them. */
+/**
+ * The Files changed read of one thread (pages/chat; the handoff live events invalidate it): a frame (a cloud turn
+ * starting or ending, a take back) re-reads it, so the count follows the
+ * turns without the dialog open.
+ */
+export const handoffChangesKey = (projectId: string, conversationUuid: string) =>
+  ['workspace-handoff-changes', projectId, conversationUuid.toLowerCase()] as const;
+
 export const WORKSPACE_HANDOFF_STATES = ['LOCAL', 'HANDING_OFF', 'CLOUD_IDLE', 'CLOUD_RUNNING', 'RECLAIMING'] as const;
 export type WorkspaceHandoffState = (typeof WORKSPACE_HANDOFF_STATES)[number];
 

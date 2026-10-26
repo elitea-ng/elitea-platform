@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.25",
+  "client_contract": "1.26",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -9401,6 +9401,812 @@
                 "workspace_bytes": {
                   "type": "integer",
                   "format": "int64"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "details": {
+                      "type": "object",
+                      "properties": {
+                        "current": {
+                          "type": "object",
+                          "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "details": {
+                  "type": "object",
+                  "properties": {
+                    "current": {
+                      "type": "object",
+                      "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "details": {
+                  "type": "object",
+                  "properties": {
+                    "current": {
+                      "type": "object",
+                      "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "503": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "details": {
+                  "type": "object",
+                  "properties": {
+                    "current": {
+                      "type": "object",
+                      "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "retry-after": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "GET /elitea_core/workspace_handoff_changes/prompt_lib/{project_id}/{conversation_uuid}": {
+      "operation_id": "getWorkspaceHandoffChanges",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:conversation_uuid": {
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "complete",
+                "turns"
+              ],
+              "properties": {
+                "base_sha": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "complete": {
+                  "type": "boolean"
+                },
+                "cumulative": {
+                  "type": "object",
+                  "nullable": true,
+                  "required": [
+                    "additions",
+                    "deletions",
+                    "files",
+                    "hidden_files",
+                    "omitted_files"
+                  ],
+                  "properties": {
+                    "additions": {
+                      "type": "integer"
+                    },
+                    "deletions": {
+                      "type": "integer"
+                    },
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "additions",
+                          "binary",
+                          "deletions",
+                          "from_path",
+                          "has_diff",
+                          "path",
+                          "status",
+                          "too_large"
+                        ],
+                        "properties": {
+                          "additions": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "binary": {
+                            "type": "boolean"
+                          },
+                          "deletions": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "from_path": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "has_diff": {
+                            "type": "boolean"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "too_large": {
+                            "type": "boolean"
+                          }
+                        }
+                      }
+                    },
+                    "hidden_files": {
+                      "type": "integer"
+                    },
+                    "omitted_files": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "cumulative_commit": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "handoff_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "nullable": true
+                },
+                "head_sha": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "turns": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "changes",
+                      "commit",
+                      "created_at",
+                      "parent_sha",
+                      "seq"
+                    ],
+                    "properties": {
+                      "changes": {
+                        "type": "object",
+                        "required": [
+                          "additions",
+                          "deletions",
+                          "files",
+                          "hidden_files",
+                          "omitted_files"
+                        ],
+                        "properties": {
+                          "additions": {
+                            "type": "integer"
+                          },
+                          "deletions": {
+                            "type": "integer"
+                          },
+                          "files": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "additions",
+                                "binary",
+                                "deletions",
+                                "from_path",
+                                "has_diff",
+                                "path",
+                                "status",
+                                "too_large"
+                              ],
+                              "properties": {
+                                "additions": {
+                                  "type": "integer",
+                                  "nullable": true
+                                },
+                                "binary": {
+                                  "type": "boolean"
+                                },
+                                "deletions": {
+                                  "type": "integer",
+                                  "nullable": true
+                                },
+                                "from_path": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "has_diff": {
+                                  "type": "boolean"
+                                },
+                                "path": {
+                                  "type": "string"
+                                },
+                                "status": {
+                                  "type": "string"
+                                },
+                                "too_large": {
+                                  "type": "boolean"
+                                }
+                              }
+                            }
+                          },
+                          "hidden_files": {
+                            "type": "integer"
+                          },
+                          "omitted_files": {
+                            "type": "integer"
+                          }
+                        }
+                      },
+                      "commit": {
+                        "type": "string"
+                      },
+                      "created_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "number": {
+                        "type": "integer",
+                        "format": "int64",
+                        "nullable": true
+                      },
+                      "parent_sha": {
+                        "type": "string"
+                      },
+                      "response_message_id": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "seq": {
+                        "type": "integer",
+                        "format": "int64"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "details": {
+                      "type": "object",
+                      "properties": {
+                        "current": {
+                          "type": "object",
+                          "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "details": {
+                  "type": "object",
+                  "properties": {
+                    "current": {
+                      "type": "object",
+                      "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "details": {
+                  "type": "object",
+                  "properties": {
+                    "current": {
+                      "type": "object",
+                      "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "503": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "details": {
+                  "type": "object",
+                  "properties": {
+                    "current": {
+                      "type": "object",
+                      "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "retry-after": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "GET /elitea_core/workspace_handoff_diff/prompt_lib/{project_id}/{conversation_uuid}": {
+      "operation_id": "getWorkspaceHandoffDiff",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:conversation_uuid": {
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "query:commit": {
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        },
+        "query:path": {
+          "required": true,
+          "schema": {
+            "type": "string",
+            "min_length": 1,
+            "max_length": 4096
+          }
+        },
+        "query:scope": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "commit",
+                "diff",
+                "path",
+                "scope"
+              ],
+              "properties": {
+                "commit": {
+                  "type": "string"
+                },
+                "diff": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "scope": {
+                  "type": "string"
                 }
               }
             }

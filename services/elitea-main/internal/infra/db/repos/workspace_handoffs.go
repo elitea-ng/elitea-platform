@@ -413,6 +413,10 @@ WHERE conversation_uuid = $2::uuid AND project_id = $1 AND superseded_at IS NULL
 			thread.ProjectID, thread.ConversationUUID); err != nil {
 			return fmt.Errorf("workspace handoff: supersede segments: %w", err)
 		}
+		// The previous handoff's Files changed records go with it.
+		if err := deleteWorkspaceChanges(ctx, tx, thread); err != nil {
+			return err
+		}
 		result.Handoff = row.Handoff
 		return nil
 	})
@@ -1097,14 +1101,21 @@ RETURNING `+qualifiedHandoffColumns("h"), now, limit)
 }
 
 func (r *WorkspaceHandoffsRepository) MarkErased(ctx context.Context, thread workspacehandoff.Thread, epoch int64) error {
-	if _, err := r.pool.Exec(ctx, `
+	return r.inTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
 UPDATE elitea_runtime.workspace_handoffs
 SET deleted_at = clock_timestamp(), updated_at = clock_timestamp(), env_secret_name = NULL, env_names = '[]'::jsonb
 WHERE project_id = $1 AND conversation_uuid = $2::uuid AND state = 'LOCAL' AND epoch = $3
-  AND deleted_at IS NULL AND delete_after <= clock_timestamp()`, thread.ProjectID, thread.ConversationUUID, epoch); err != nil {
-		return fmt.Errorf("workspace handoff: mark erased: %w", err)
-	}
-	return nil
+  AND deleted_at IS NULL AND delete_after <= clock_timestamp()`, thread.ProjectID, thread.ConversationUUID, epoch)
+		if err != nil {
+			return fmt.Errorf("workspace handoff: mark erased: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return nil
+		}
+		// The Files changed records are part of the cloud copy.
+		return deleteWorkspaceChanges(ctx, tx, thread)
+	})
 }
 
 func qualifiedHandoffColumns(alias string) string {

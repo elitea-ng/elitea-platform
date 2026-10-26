@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.25"
+  x-elitea-client-contract: "1.26"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -4050,6 +4050,78 @@ components:
         updated_at: { type: string, format: date-time }
         delete_after: { type: string, format: date-time, nullable: true }
         workspace_bytes: { type: integer, format: int64 }
+    WorkspaceHandoffChanges:
+      type: object
+      description: >-
+        Contract 1.26. The files a cloud thread's turns changed. NOTE(W2):
+        internal/api/v2/workspacehandoff/changes.go:55 (`changesView`).
+      required: [complete, turns]
+      properties:
+        handoff_id: { type: string, format: uuid, nullable: true, description: 'The current handoff; null when the thread has none.' }
+        base_sha: { type: string, nullable: true, description: 'The handoff snapshot (`refs/elitea/handoff/N`) the cumulative set is measured from.' }
+        head_sha: { type: string, nullable: true, description: 'The cloud tip (`refs/elitea/cloud`); null before the first cloud turn.' }
+        complete:
+          type: boolean
+          description: Every turn from the snapshot to the tip has its changes recorded.
+        cumulative:
+          allOf:
+            - $ref: '#/components/schemas/WorkspaceChangeSet'
+          nullable: true
+          description: 'What the turns changed since the snapshot, as of `cumulative_commit`; null when no turn has a record.'
+        cumulative_commit: { type: string, nullable: true, description: 'The commit `cumulative` belongs to (read its diffs at it): `head_sha`, or the newest recorded turn when the tip has no record.' }
+        turns:
+          type: array
+          description: The cloud turns on the live chain, oldest first.
+          items:
+            $ref: '#/components/schemas/WorkspaceTurnChanges'
+    WorkspaceTurnChanges:
+      type: object
+      description: 'Contract 1.26. One cloud turn. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:55 (`changesView`).'
+      required: [commit, parent_sha, seq, created_at, changes]
+      properties:
+        commit: { type: string, description: 'The turn''s commit (40 hex).' }
+        parent_sha: { type: string, description: 'The commit it started from.' }
+        seq: { type: integer, format: int64, description: 'The store segment it was published in.' }
+        number: { type: integer, format: int64, nullable: true, description: 'The turn''s number on the live chain (1: the first cloud turn after the handoff); null when the worker could not tell.' }
+        response_message_id: { type: string, nullable: true, description: 'The chat answer the turn produced.' }
+        created_at: { type: string, format: date-time }
+        changes:
+          $ref: '#/components/schemas/WorkspaceChangeSet'
+    WorkspaceChangeSet:
+      type: object
+      description: 'Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:55 (`changesView`).'
+      required: [files, omitted_files, hidden_files, additions, deletions]
+      properties:
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkspaceChangedFile'
+        omitted_files: { type: integer, description: 'Changed files past the bound of 1000, counted and not listed.' }
+        hidden_files: { type: integer, description: 'Changed files the exclusions or the path deny list hide.' }
+        additions: { type: integer, description: 'The sum of the listed files'' counted added lines.' }
+        deletions: { type: integer, description: 'The sum of the listed files'' counted removed lines.' }
+    WorkspaceChangedFile:
+      type: object
+      description: 'Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:55 (`changesView`).'
+      required: [path, from_path, status, additions, deletions, binary, too_large, has_diff]
+      properties:
+        path: { type: string }
+        from_path: { type: string, nullable: true, description: 'The path before a `renamed` file; null otherwise.' }
+        status: { type: string, description: '`added`, `modified`, `deleted` or `renamed` (an exact rename).' }
+        additions: { type: integer, nullable: true, description: 'Added lines; null for a binary or too-large file.' }
+        deletions: { type: integer, nullable: true, description: 'Removed lines; null for a binary or too-large file.' }
+        binary: { type: boolean, description: 'A binary file or a symlink; listed without a diff.' }
+        too_large: { type: boolean, description: 'Too large to count or to keep a diff of.' }
+        has_diff: { type: boolean, description: 'getWorkspaceHandoffDiff answers a diff for it.' }
+    WorkspaceHandoffDiff:
+      type: object
+      description: 'Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:68 (`diff`).'
+      required: [commit, scope, path, diff]
+      properties:
+        commit: { type: string }
+        scope: { type: string, description: '`turn` or `cumulative`.' }
+        path: { type: string }
+        diff: { type: string, description: 'The unified diff, at most 48 KiB.' }
     WorkspaceHandoffErased:
       type: object
       description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:336 (`erase`).'
@@ -20005,6 +20077,253 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkspaceHandoffError'
 
+  /elitea_core/workspace_handoff_changes/prompt_lib/{project_id}/{conversation_uuid}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_uuid
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The Local work thread's conversation UUID, lowercase canonical.
+    get:
+      operationId: getWorkspaceHandoffChanges
+      summary: Read the files a cloud thread's turns changed
+      description: |
+        Client contract 1.26 (ADR-0034 Phase 2, the Files changed view). The
+        files each cloud turn of the current handoff changed, oldest turn
+        first, and what all of them changed since the handoff snapshot
+        (`cumulative`), with a status, +/- line counts where the worker could
+        count them, and whether a diff is kept (`has_diff`; read it with
+        getWorkspaceHandoffDiff). The worker records them when it publishes a
+        turn; Main reads no git pack.
+
+        Only the turns on the live chain are listed: from the handoff
+        snapshot to `refs/elitea/cloud`, so a regenerated answer's earlier
+        attempt is not. `complete` is false when a turn on that chain has no
+        record (its record failed): the turns below it are still listed (the
+        walk resumes at the newest attempt under its turn `number`), and when
+        the tip itself has none, the turns and `cumulative` start at the
+        newest record (`cumulative_commit`).
+
+        A path that the thread's exclusions (the platform and project
+        patterns, the files excluded at send) or the path deny list match is
+        never listed, nor is a rename from or to one: it is counted in
+        `hidden_files`. As at the send, a file the exclusions match that was
+        explicitly included (`included_excluded`, when the policy allows
+        includes) is listed; the path deny list wins over an include. A
+        thread with no handoff answers no turns.
+
+        WHO. Any caller who may read the conversation (cookie or token, with
+        `models.chat.conversation.details`), as getWorkspaceHandoff.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The changes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffChanges'
+              example:
+                handoff_id: 6b1f3f0e-6a52-4d0b-9a55-7f3c2f2f7a10
+                base_sha: 3f2c1b0a9e8d7c6b5a493827161504f3e2d1c0b9
+                head_sha: 9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3
+                complete: true
+                cumulative_commit: 9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3
+                cumulative:
+                  additions: 14
+                  deletions: 3
+                  omitted_files: 0
+                  hidden_files: 0
+                  files:
+                    - path: src/parser.rs
+                      from_path: null
+                      status: modified
+                      additions: 12
+                      deletions: 3
+                      binary: false
+                      too_large: false
+                      has_diff: true
+                    - path: docs/parser.md
+                      from_path: null
+                      status: added
+                      additions: 2
+                      deletions: 0
+                      binary: false
+                      too_large: false
+                      has_diff: true
+                    - path: assets/logo.png
+                      from_path: null
+                      status: modified
+                      additions: null
+                      deletions: null
+                      binary: true
+                      too_large: false
+                      has_diff: false
+                turns:
+                  - commit: 9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3
+                    parent_sha: 3f2c1b0a9e8d7c6b5a493827161504f3e2d1c0b9
+                    seq: 2
+                    number: 1
+                    response_message_id: 0b5d2f6e-3c1a-4e8b-9f7d-2a6c4e8b1d3f
+                    created_at: '2026-10-25T12:00:00Z'
+                    changes:
+                      additions: 14
+                      deletions: 3
+                      omitted_files: 0
+                      hidden_files: 0
+                      files:
+                        - path: src/parser.rs
+                          from_path: null
+                          status: modified
+                          additions: 12
+                          deletions: 3
+                          binary: false
+                          too_large: false
+                          has_diff: true
+                        - path: docs/parser.md
+                          from_path: null
+                          status: added
+                          additions: 2
+                          deletions: 0
+                          binary: false
+                          too_large: false
+                          has_diff: true
+                        - path: assets/logo.png
+                          from_path: null
+                          status: modified
+                          additions: null
+                          deletions: null
+                          binary: true
+                          too_large: false
+                          has_diff: false
+        '400':
+          description: >-
+            A malformed path (`invalid_handoff`), or an `X-Client-Version`
+            that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: No project permission.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: No such conversation for this caller (`handoff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+  /elitea_core/workspace_handoff_diff/prompt_lib/{project_id}/{conversation_uuid}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_uuid
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The Local work thread's conversation UUID, lowercase canonical.
+    get:
+      operationId: getWorkspaceHandoffDiff
+      summary: Read one changed file's diff
+      description: |
+        Client contract 1.26 (ADR-0034 Phase 2). The unified diff (git's
+        format, 3 lines of context) the worker kept for one file of
+        getWorkspaceHandoffChanges: `scope=turn` with that turn's `commit`, or
+        `scope=cumulative` with `cumulative_commit`. A diff is at most 48 KiB; a file
+        with `has_diff` false has none (404 `diff_not_found`), and so has a
+        path getWorkspaceHandoffChanges hides. Who may read it is as for
+        getWorkspaceHandoffChanges.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: commit
+          in: query
+          required: true
+          schema: { type: string, pattern: '^[0-9a-f]{40}$' }
+          description: The turn's commit, or `head_sha` for the cumulative scope.
+        - name: scope
+          in: query
+          required: true
+          schema: { type: string }
+          description: '`turn` or `cumulative`.'
+        - name: path
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 4096 }
+          description: The file's path in the workspace, as listed.
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The diff.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffDiff'
+              example:
+                commit: 9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3
+                scope: turn
+                path: docs/parser.md
+                diff: |
+                  diff --git a/docs/parser.md b/docs/parser.md
+                  new file mode 100644
+                  --- /dev/null
+                  +++ b/docs/parser.md
+                  @@ -0,0 +1,2 @@
+                  +# Parser
+                  +The parser reads one token at a time.
+        '400':
+          description: >-
+            A malformed path or query (`invalid_handoff`), or an
+            `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: No project permission.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: >-
+            No such conversation for this caller (`handoff_not_found`), or no
+            diff of that file (`diff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
   /elitea_core/workspace_store_upload/prompt_lib/{project_id}/{conversation_uuid}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
