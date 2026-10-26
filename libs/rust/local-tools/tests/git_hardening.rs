@@ -296,17 +296,17 @@ async fn commondir_and_submodule_git_dirs_are_refused() {
     assert_refused(&checkpoints, &results);
 }
 
-/// The same git directory left behind by a submodule since removed (no
-/// gitlink, no `.gitmodules`), with its `[submodule]` section: accepted,
-/// and nothing under it runs, since nothing leads git into it.
+/// A git directory left behind by a submodule since removed (no gitlink,
+/// no `.gitmodules`), as git writes it, with its `[submodule]` section:
+/// accepted.
 #[tokio::test]
-async fn a_stale_submodule_git_dir_is_used_and_never_runs() {
+async fn a_stale_submodule_git_dir_is_accepted() {
     let planted = repository();
     let module = planted.root.join(".git/modules/m");
     std::fs::create_dir_all(&module).expect("module");
     std::fs::write(
         module.join("config"),
-        format!("[core]\n\tfsmonitor = {}\n", payload(&planted.marker)),
+        "[core]\n\tbare = false\n\tworktree = ../../../m\n",
     )
     .expect("module config");
     append(
@@ -318,6 +318,39 @@ async fn a_stale_submodule_git_dir_is_used_and_never_runs() {
     for result in results.as_array().expect("results") {
         assert_eq!(result["status"], "ok", "{result}");
     }
+}
+
+/// A stale submodule git directory whose config carries an fsmonitor
+/// payload, and a work-tree `.git` file pointing into it: the agent's tools
+/// cannot write that file (`.git` is protected at any depth), the
+/// repository is refused for the module's config, and the payload never
+/// runs through any host git path.
+#[tokio::test]
+async fn a_gitfile_into_a_stale_module_with_a_payload_never_runs_it() {
+    let planted = repository();
+    let module = planted.root.join(".git/modules/m");
+    std::fs::create_dir_all(&module).expect("module");
+    std::fs::write(
+        module.join("config"),
+        format!("[core]\n\tfsmonitor = {}\n", payload(&planted.marker)),
+    )
+    .expect("module config");
+    let workspace = Workspace::open(&planted.root, &[]).expect("workspace");
+    let gitfile =
+        elitea_local_tools::workspace::WsPath::from_relative(Path::new("m/.git")).expect("path");
+    assert!(
+        workspace
+            .write(&gitfile, b"gitdir: ../.git/modules/m\n", None)
+            .is_err(),
+        "the agent's tools must not write a .git file"
+    );
+    // Planted from outside the agent's reach (the person's own folder).
+    std::fs::create_dir_all(planted.root.join("m")).expect("m");
+    std::fs::write(planted.root.join("m/.git"), "gitdir: ../.git/modules/m\n").expect("gitfile");
+    std::fs::write(planted.root.join("m/f.txt"), "f\n").expect("file");
+    let (checkpoints, results) = exercise(&planted).await;
+    assert_refused(&checkpoints, &results);
+    assert!(!planted.marker.exists());
 }
 
 /// `core.hooksPath` is accepted, and no hook in it (or in `.git/hooks`)

@@ -148,16 +148,47 @@ fn unsafe_repo(message: impl Into<String>) -> ToolError {
     ToolError::new(ErrorCode::UnsafeRepository, message)
 }
 
-/// Refuse `.git/<name>` (the file at `path`) when one of its entries is
-/// dangerous, naming the file and the key so the person can remove it.
-fn refuse_dangerous(name: &str, path: &Path, entries: &[ConfigEntry]) -> ToolResult<()> {
+/// A refusal with two texts. The model's (`agent`) names paths relative
+/// to the repository (`.git/config`), no home folder and no uid, and says
+/// to ask the person: its commands cannot change git's own files. The
+/// person's (`person`, shown through the host's UI) names the full path,
+/// the owner found, and what to change.
+fn refused(agent: &str, person: impl Into<String>) -> ToolError {
+    unsafe_repo(format!(
+        "{agent}. Git's own files are protected from your tools: tell the person, who can change it"
+    ))
+    .with_person_message(person)
+}
+
+/// Refuse the config file at `path` (`label`: its path relative to the
+/// repository, `.git/config`) when one of its entries is dangerous, naming
+/// the file and the key. `module`: the config of a submodule git directory
+/// under `.git/modules`, where `core.worktree` (which git writes into
+/// every one, and which runs nothing) passes.
+fn refuse_dangerous(
+    label: &str,
+    path: &Path,
+    entries: &[ConfigEntry],
+    module: bool,
+) -> ToolResult<()> {
     for entry in entries {
+        if module && entry.key == "core.worktree" {
+            continue;
+        }
         if let Some(reason) = dangerous_key(&entry.key, entry.value.as_deref()) {
-            return Err(unsafe_repo(format!(
-                "the repository's .git/{name} ({}) sets `{}` ({reason}), which would run code in the host's git; remove it from that file to use this repository",
-                path.display(),
+            let what = format!(
+                "sets `{}` ({reason}), which would run code in the host's git",
                 entry.key
-            )));
+            );
+            let fix = if module {
+                "it is a submodule's git directory: if that submodule is gone, delete the folder"
+            } else {
+                "remove it from that file to use this repository"
+            };
+            return Err(refused(
+                &format!("{label} {what}"),
+                format!("{} {what}; {fix}", path.display()),
+            ));
         }
     }
     Ok(())
@@ -492,10 +523,6 @@ pub fn dangerous_key(key: &str, value: Option<&str>) -> Option<&'static str> {
     }
 }
 
-/// The git executable: the first absolute `PATH` entry holding one
-/// (relative entries are ignored). On macOS the `/usr/bin/git` shim is
-/// resolved to the developer tools' git, which runs without `xcrun`'s
-/// cache files.
 /// Why a `submodule.*` key is refused, if it is (see [`dangerous_key`]).
 fn submodule_key(name: &str, has_subsection: bool, value: Option<&str>) -> Option<&'static str> {
     if !has_subsection {
@@ -518,26 +545,37 @@ fn submodule_key(name: &str, has_subsection: bool, value: Option<&str>) -> Optio
     }
 }
 
-/// The text of a config file (`name` labels it in refusals); `None` when
-/// there is none.
-fn read_config_file(path: &Path, name: &str) -> ToolResult<Option<String>> {
+/// The text of a config file (`label`: its path relative to the
+/// repository, for refusals); `None` when there is none.
+fn read_config_file(path: &Path, label: &str) -> ToolResult<Option<String>> {
     let meta = match std::fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(unsafe_repo(format!("cannot read .git/{name}"))),
+        Err(_) => return Err(unsafe_repo(format!("cannot read {label}"))),
     };
     if !meta.is_file() || meta.len() > MAX_CONFIG_BYTES {
-        return Err(unsafe_repo(format!(
-            ".git/{name} is not a plain config file"
-        )));
+        return Err(unsafe_repo(format!("{label} is not a plain config file")));
     }
-    let text = std::fs::read(path).map_err(|_| unsafe_repo(format!("cannot read .git/{name}")))?;
+    let text = std::fs::read(path).map_err(|_| unsafe_repo(format!("cannot read {label}")))?;
     String::from_utf8(text)
         .map(Some)
-        .map_err(|_| unsafe_repo(format!(".git/{name} is not UTF-8")))
+        .map_err(|_| unsafe_repo(format!("{label} is not UTF-8")))
 }
 
 type WorktreeTrust = Arc<dyn Fn(&Path) -> bool + Send + Sync>;
+
+/// The longest record a submodule look reads from git (a path is at most
+/// 4 KiB on the platforms here); a longer one fails the look.
+const SCAN_RECORD_CAP: usize = 64 * 1024;
+
+/// See [`Repo::present_submodule`].
+#[derive(Debug, Default)]
+struct SubmodulesChecked {
+    /// [`Repo::index_key`] of an index without a gitlink.
+    index: Option<Vec<u8>>,
+    /// A `HEAD` commit whose tree has no gitlink.
+    head: Option<String>,
+}
 
 /// The tops whose linked worktrees host git may use (a repository's) or
 /// that host git may use as a linked worktree (a worktree's own): the tops
@@ -689,7 +727,10 @@ fn registered_linked_worktree(entry: &RegisteredWorktree) -> ToolResult<(PathBuf
     }
     let me = rustix::process::geteuid().as_raw();
     if meta.uid() != me {
-        return Err(refuse(&another_owner(&dot_git, meta.uid(), me)));
+        return Err(refused(
+            "the worktree's .git is not the one the host created (another user owns it)",
+            another_owner(&dot_git, meta.uid(), me),
+        ));
     }
     if meta.len() > 4096 {
         return Err(refuse("too large"));
@@ -840,6 +881,10 @@ fn linked_worktree(top: &Path) -> ToolResult<(PathBuf, PathBuf)> {
     Ok((admin, common))
 }
 
+/// The git executable: the first absolute `PATH` entry holding one
+/// (relative entries are ignored). On macOS the `/usr/bin/git` shim is
+/// resolved to the developer tools' git, which runs without `xcrun`'s
+/// cache files.
 fn git_binary() -> ToolResult<PathBuf> {
     static GIT: OnceLock<Option<PathBuf>> = OnceLock::new();
     GIT.get_or_init(|| {
@@ -893,9 +938,9 @@ pub struct Repo {
     attributes_checked: Arc<Mutex<Option<[u8; 32]>>>,
     /// How many full attribute scans ran (tests).
     attribute_scans: Arc<AtomicUsize>,
-    /// The [`Repo::submodule_key`] of the last look for submodules that
-    /// found none: the same key again needs no `ls-files`/`ls-tree`.
-    submodules_checked: Arc<Mutex<Option<[u8; 32]>>>,
+    /// What the last looks for submodules found none in: the same index
+    /// checksum or `HEAD` commit again needs no listing.
+    submodules_checked: Arc<Mutex<SubmodulesChecked>>,
 }
 
 impl Repo {
@@ -1113,65 +1158,80 @@ impl Repo {
         ] {
             let path = self.common_dir.join(name);
             if std::fs::symlink_metadata(&path).is_ok() {
-                return Err(unsafe_repo(format!(
-                    "the repository {reason}: {}",
-                    path.display()
-                )));
+                return Err(refused(
+                    &format!("the repository {reason}: .git/{name}"),
+                    format!("the repository {reason}: {}", path.display()),
+                ));
             }
         }
-        let mut submodule_sections = false;
         let mut configs = vec![
-            ("config".to_owned(), self.common_dir.join("config")),
+            (".git/config".to_owned(), self.common_dir.join("config")),
             (
-                "config.worktree".to_owned(),
+                ".git/config.worktree".to_owned(),
                 self.common_dir.join("config.worktree"),
             ),
         ];
         if self.is_linked_worktree() {
+            let name = self
+                .git_dir
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
             configs.push((
-                "worktree config.worktree".to_owned(),
+                format!(".git/worktrees/{name}/config.worktree"),
                 self.git_dir.join("config.worktree"),
             ));
         }
-        for (name, path) in &configs {
-            let name = name.as_str();
-            let Some(text) = read_config_file(path, name)? else {
-                continue;
-            };
-            let ours = parse_config(&text).map_err(|reason| {
-                unsafe_repo(format!(".git/{name} cannot be parsed safely: {reason}"))
-            })?;
-            refuse_dangerous(name, path, &ours)?;
-            submodule_sections |= ours.iter().any(|entry| entry.key.starts_with("submodule."));
-            if self.verified_config(name, &text) {
-                continue;
-            }
-            // A second opinion from git's own reader (reading config runs
-            // no code; includes are not followed): what one parser misreads
-            // the other is unlikely to misread the same way.
-            let theirs = self.git_config_listing(&text).map_err(|error| {
-                unsafe_repo(format!(
-                    "git cannot read .git/{name} safely: {}",
-                    error.message()
-                ))
-            })?;
-            refuse_dangerous(name, path, &theirs)?;
-            if config_sections(&ours) != config_sections(&theirs) {
-                return Err(unsafe_repo(format!(
-                    ".git/{name} reads differently to git and to this check"
-                )));
-            }
-            if let Ok(mut verified) = self.verified.lock() {
-                verified.retain(|(file, _)| file != name);
-                verified.push((name.to_owned(), text));
+        // The first local config that sets `submodule.*`, by label.
+        let mut submodule_sections = None;
+        for (label, path) in &configs {
+            if self.vet_config(label, path, false)? && submodule_sections.is_none() {
+                submodule_sections = Some(label.clone());
             }
         }
-        self.check_submodules(submodule_sections)
+        self.check_submodules(submodule_sections.as_deref())
     }
 
-    /// The submodule rule of [`Self::check`]; `submodule_sections`: a
-    /// local config sets `submodule.*`.
-    fn check_submodules(&self, submodule_sections: bool) -> ToolResult<()> {
+    /// Layer 1 for one config file (`label`: its path relative to the
+    /// repository; `module`: see [`refuse_dangerous`]): parsed here and
+    /// listed by git's own reader, neither with a dangerous key. Whether
+    /// it sets `submodule.*`.
+    fn vet_config(&self, label: &str, path: &Path, module: bool) -> ToolResult<bool> {
+        let Some(text) = read_config_file(path, label)? else {
+            return Ok(false);
+        };
+        let ours = parse_config(&text)
+            .map_err(|reason| unsafe_repo(format!("{label} cannot be parsed safely: {reason}")))?;
+        refuse_dangerous(label, path, &ours, module)?;
+        let submodules = ours.iter().any(|entry| entry.key.starts_with("submodule."));
+        if self.verified_config(label, &text) {
+            return Ok(submodules);
+        }
+        // A second opinion from git's own reader (reading config runs no
+        // code; includes are not followed): what one parser misreads the
+        // other is unlikely to misread the same way.
+        let theirs = self.git_config_listing(&text).map_err(|error| {
+            unsafe_repo(format!(
+                "git cannot read {label} safely: {}",
+                error.message()
+            ))
+        })?;
+        refuse_dangerous(label, path, &theirs, module)?;
+        if config_sections(&ours) != config_sections(&theirs) {
+            return Err(unsafe_repo(format!(
+                "{label} reads differently to git and to this check"
+            )));
+        }
+        if let Ok(mut verified) = self.verified.lock() {
+            verified.retain(|(file, _)| file != label);
+            verified.push((label.to_owned(), text));
+        }
+        Ok(submodules)
+    }
+
+    /// The submodule rule of [`Self::check`]; `submodule_sections`: the
+    /// local config (by label) that sets `submodule.*`, if one does.
+    fn check_submodules(&self, submodule_sections: Option<&str>) -> ToolResult<()> {
         // Submodule git directories (`.git/modules`) and `submodule.*`
         // sections are accepted only while the repository has no
         // submodules: no `.gitmodules` entry and no gitlink in the index
@@ -1181,106 +1241,237 @@ impl Repo {
         // `diff.ignoreSubmodules=all` and never runs `git submodule`. That
         // is a clone whose submodules were removed (`git rm` leaves both
         // behind). The agent cannot make one live: its commands cannot
-        // write `.git` (no index entry, no gitlink), and a `.gitmodules` it
-        // writes in the work tree only turns this into a refusal. Asked
-        // only after the config passed, since it runs git.
+        // write `.git` at any depth (the workspace's protected name and
+        // the sandbox's masks), so neither an index entry nor a work-tree
+        // `.git` file pointing into `modules/`; a `.gitmodules` it writes
+        // only turns this into a refusal. Should git still enter one, the
+        // command-line overrides of [`HARDENING`] travel to every git it
+        // starts (`GIT_CONFIG_PARAMETERS`), and every config under
+        // `modules/` is vetted like the repository's own, `core.worktree`
+        // aside (git writes it into each; it runs nothing). Asked only
+        // after the repository's config passed, since it runs git.
         let modules = self.common_dir.join("modules");
         let module_dirs =
             std::fs::read_dir(&modules).is_ok_and(|mut entries| entries.next().is_some());
-        if (module_dirs || submodule_sections)
-            && let Some(found) = self.present_submodule()?
-        {
-            return Err(unsafe_repo(if module_dirs {
+        if module_dirs {
+            self.vet_module_configs(&modules)?;
+        }
+        if !module_dirs && submodule_sections.is_none() {
+            return Ok(());
+        }
+        let found = match self.present_submodule() {
+            Ok(None) => return Ok(()),
+            Ok(Some(found)) => found,
+            // Not knowing is not "none": refused, and nothing cached.
+            Err(error) => {
+                return Err(unsafe_repo(format!(
+                    "whether the repository has submodules could not be checked ({})",
+                    error.message()
+                )));
+            }
+        };
+        let (agent, person) = if module_dirs {
+            (
+                format!(
+                    "the repository has submodules with their own git directories (.git/modules): {found}"
+                ),
                 format!(
                     "the repository has submodules with their own git directories ({}): {found}",
                     modules.display()
-                )
-            } else {
-                format!(
-                    "the repository's .git/config configures submodules and it has them: {found}"
-                )
-            }));
+                ),
+            )
+        } else {
+            let label = submodule_sections.unwrap_or(".git/config");
+            let text =
+                format!("the repository's {label} configures submodules and it has them: {found}");
+            (text.clone(), text)
+        };
+        Err(refused(&agent, person))
+    }
+
+    /// Vet every config file under `.git/modules` (submodule git
+    /// directories, nested ones too) as [`Self::vet_config`] does. Git's
+    /// object, ref, log and hook folders are not walked; a tree too deep
+    /// or too large to walk is refused.
+    fn vet_module_configs(&self, modules: &Path) -> ToolResult<()> {
+        const MAX_DIRS: usize = 4096;
+        const MAX_DEPTH: usize = 16;
+        const SKIP: &[&str] = &[
+            "objects", "refs", "logs", "hooks", "info", "lfs", "rr-cache",
+        ];
+        let too_big =
+            || unsafe_repo("the repository's .git/modules is too deep or too large to check");
+        let mut stack = vec![(modules.to_path_buf(), 0usize)];
+        let mut seen = 0usize;
+        while let Some((dir, depth)) = stack.pop() {
+            seen += 1;
+            if seen > MAX_DIRS || depth > MAX_DEPTH {
+                return Err(too_big());
+            }
+            let entries = std::fs::read_dir(&dir).map_err(|_| too_big())?;
+            for entry in entries {
+                let entry = entry.map_err(|_| too_big())?;
+                let path = entry.path();
+                let Ok(kind) = entry.file_type() else {
+                    return Err(too_big());
+                };
+                let name = entry.file_name();
+                if kind.is_dir() {
+                    if !SKIP.iter().any(|skip| name == OsStr::new(skip)) {
+                        stack.push((path, depth + 1));
+                    }
+                } else if name == OsStr::new("config") || name == OsStr::new("config.worktree") {
+                    let relative = path.strip_prefix(&self.common_dir).unwrap_or(&path);
+                    let label = format!(".git/{}", relative.display());
+                    self.vet_config(&label, &path, true)?;
+                }
+            }
         }
         Ok(())
     }
 
     /// A submodule the repository has, described (`None`: it has none):
     /// an entry of `.gitmodules`, or a gitlink in the index or in `HEAD`'s
-    /// tree. A `.gitmodules` that cannot be read or parsed counts as one.
+    /// tree. A `.gitmodules` that cannot be read counts as one. An error
+    /// when git could not answer (a timeout, a failure, an oversized
+    /// record): never `None`, and never cached.
+    ///
+    /// Cheap on repeat: the index is listed again only when its checksum
+    /// (its trailing hash, which a `git status` that changes nothing
+    /// leaves alone) changes, and `HEAD`'s tree only when `HEAD` names
+    /// another commit; each listing streams and stops at the first
+    /// gitlink.
     fn present_submodule(&self) -> ToolResult<Option<String>> {
-        let key = self.submodule_key();
-        if self
-            .submodules_checked
-            .lock()
-            .is_ok_and(|checked| *checked == Some(key))
-        {
-            return Ok(None);
-        }
         let gitmodules = self.top.join(".gitmodules");
         if std::fs::symlink_metadata(&gitmodules).is_ok() {
-            let declared = read_config_file(&gitmodules, ".gitmodules")
+            match read_config_file(&gitmodules, ".gitmodules")
                 .ok()
                 .flatten()
-                .and_then(|text| parse_config(&text).ok())
-                .is_none_or(|entries| {
-                    entries
+                .map(|text| parse_config(&text))
+            {
+                Some(Ok(entries)) => {
+                    if entries
                         .iter()
                         .any(|entry| entry.key.starts_with("submodule."))
-                });
-            if declared {
-                return Ok(Some(format!("{} declares one", gitmodules.display())));
+                    {
+                        return Ok(Some(".gitmodules declares one".to_owned()));
+                    }
+                }
+                _ => {
+                    return Ok(Some(
+                        ".gitmodules cannot be read (a symlink, too large, not UTF-8 or not a config file), so it may declare one".to_owned(),
+                    ));
+                }
             }
         }
         // `ls-files --stage` and `ls-tree` both print `<mode> …\t<path>`.
-        let gitlink = |listing: &[u8]| {
-            listing.split(|byte| *byte == 0).find_map(|line| {
-                let line = String::from_utf8_lossy(line);
-                let (meta, path) = line.split_once('\t')?;
-                meta.starts_with("160000 ").then(|| path.to_owned())
-            })
+        let gitlink: fn(&[u8]) -> bool = |record| record.starts_with(b"160000 ");
+        let path_of = |record: &[u8]| {
+            let record = String::from_utf8_lossy(record);
+            record
+                .split_once('\t')
+                .map_or_else(|| record.to_string(), |(_, path)| path.to_owned())
         };
-        let index = self.git(&self.top).spawn(&["ls-files", "--stage", "-z"])?;
-        if let Some(path) = gitlink(&index) {
-            return Ok(Some(format!("{path} is a submodule in the index")));
-        }
-        let tree = self.git(&self.top).exit_one_ok().spawn(&[
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            "HEAD^{tree}",
-        ])?;
-        let tree = String::from_utf8_lossy(&tree).trim().to_owned();
-        if !tree.is_empty() {
-            let listing =
-                self.git(&self.top)
-                    .spawn(&["ls-tree", "-r", "-z", "--full-tree", &tree])?;
-            if let Some(path) = gitlink(&listing) {
-                return Ok(Some(format!("{path} is a submodule in HEAD")));
+        let index_key = self.index_key();
+        let index_known = self
+            .submodules_checked
+            .lock()
+            .is_ok_and(|checked| checked.index.as_ref() == Some(&index_key));
+        if !index_known {
+            if let Some(record) = self.git(&self.top).scan(
+                &["ls-files", "--stage", "-z"],
+                gitlink,
+                SCAN_RECORD_CAP,
+            )? {
+                return Ok(Some(format!(
+                    "{} is a submodule in the index",
+                    path_of(&record)
+                )));
+            }
+            if let Ok(mut checked) = self.submodules_checked.lock() {
+                checked.index = Some(index_key);
             }
         }
-        if let Ok(mut checked) = self.submodules_checked.lock() {
-            *checked = Some(key);
+        let head = if let Some(commit) = self.head_commit() {
+            commit
+        } else {
+            let commit = self.git(&self.top).exit_one_ok().spawn(&[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "HEAD^{commit}",
+            ])?;
+            let commit = String::from_utf8_lossy(&commit).trim().to_owned();
+            if commit.is_empty() {
+                return Ok(None); // no commit yet
+            }
+            commit
+        };
+        let head_known = self
+            .submodules_checked
+            .lock()
+            .is_ok_and(|checked| checked.head.as_deref() == Some(head.as_str()));
+        if !head_known {
+            if let Some(record) = self.git(&self.top).scan(
+                &["ls-tree", "-r", "-z", "--full-tree", &head],
+                gitlink,
+                SCAN_RECORD_CAP,
+            )? {
+                return Ok(Some(format!("{} is a submodule in HEAD", path_of(&record))));
+            }
+            if let Ok(mut checked) = self.submodules_checked.lock() {
+                checked.head = Some(head);
+            }
         }
         Ok(None)
     }
 
-    /// What [`Self::present_submodule`]'s answer depends on: the index,
-    /// `HEAD` and the ref it names, `packed-refs` and `.gitmodules`, by
-    /// their file metadata.
-    fn submodule_key(&self) -> [u8; 32] {
+    /// The index's checksum (its last 32 bytes, which hold the trailing
+    /// hash of either object format), or its metadata when it has none
+    /// (`index.skipHash` writes zeros), or nothing when there is no index.
+    fn index_key(&self) -> Vec<u8> {
+        use std::io::{Read as _, Seek as _, SeekFrom};
+        let path = self.git_dir.join("index");
+        let mut tail = [0u8; 32];
+        let read = std::fs::File::open(&path).and_then(|mut file| {
+            file.seek(SeekFrom::End(-32))?;
+            file.read_exact(&mut tail)
+        });
+        if read.is_ok() && tail[12..].iter().any(|byte| *byte != 0) {
+            return tail.to_vec();
+        }
         let mut hash = Sha256::new();
-        for name in ["index", "HEAD"] {
-            hash_stat(&mut hash, &self.git_dir.join(name));
+        hash_stat(&mut hash, &path);
+        hash.finalize().to_vec()
+    }
+
+    /// The commit `HEAD` names, read from the files (`None` when it cannot
+    /// be read so: unborn, or an unusual ref layout; the caller asks git).
+    fn head_commit(&self) -> Option<String> {
+        let hex = |text: &str| {
+            let text = text.trim();
+            (matches!(text.len(), 40 | 64) && text.bytes().all(|b| b.is_ascii_hexdigit()))
+                .then(|| text.to_owned())
+        };
+        let head = small_text(&self.git_dir.join("HEAD"))?;
+        let Some(reference) = head.strip_prefix("ref: ") else {
+            return hex(&head);
+        };
+        if !reference.starts_with("refs/")
+            || reference
+                .split('/')
+                .any(|part| part == ".." || part.is_empty())
+        {
+            return None;
         }
-        hash_stat(&mut hash, &self.common_dir.join("packed-refs"));
-        if let Ok(head) = std::fs::read_to_string(self.git_dir.join("HEAD")) {
-            if let Some(reference) = head.trim().strip_prefix("ref: ") {
-                hash_stat(&mut hash, &self.common_dir.join(reference));
-            }
-            hash.update(head.as_bytes());
+        if let Some(loose) = small_text(&self.common_dir.join(reference)) {
+            return hex(&loose);
         }
-        hash_stat(&mut hash, &self.top.join(".gitmodules"));
-        hash.finalize().into()
+        let packed = std::fs::read_to_string(self.common_dir.join("packed-refs")).ok()?;
+        packed.lines().find_map(|line| {
+            let (oid, name) = line.split_once(' ')?;
+            (name == reference).then(|| hex(oid)).flatten()
+        })
     }
 
     /// Whether git already agreed on exactly this text of `name`.
@@ -1718,6 +1909,119 @@ impl<'a> Git<'a> {
 
     fn spawn(&self, args: &[&str]) -> ToolResult<Vec<u8>> {
         let what = args.first().copied().unwrap_or_default();
+        let command = self.command(args)?;
+        run_bounded(command, self.stdin, self.timeout, what, self.exit_one_ok)
+    }
+
+    /// Run `git <args>` and read its NUL-separated records as they come,
+    /// with no output cap: the first record `hit` accepts (git is then
+    /// stopped), or `None` once git has exited successfully and every
+    /// record was read. A timeout, a failure, an unreadable pipe or a
+    /// record longer than `record_cap` is an error, never `None`.
+    pub(crate) fn scan(
+        &self,
+        args: &[&str],
+        hit: fn(&[u8]) -> bool,
+        record_cap: usize,
+    ) -> ToolResult<Option<Vec<u8>>> {
+        use std::io::{BufRead as _, Read as _};
+        use std::os::unix::process::CommandExt as _;
+        let what = args.first().copied().unwrap_or_default();
+        let mut command = self.command(args)?;
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .process_group(0);
+        let mut child = command.spawn().map_err(|error| {
+            ToolError::new(
+                ErrorCode::Unsupported,
+                format!("git is not available: {}", error.kind()),
+            )
+        })?;
+        let group = i32::try_from(child.id())
+            .ok()
+            .and_then(rustix::process::Pid::from_raw);
+        let stop = |child: &mut std::process::Child| {
+            if let Some(group) = group {
+                let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+        };
+        let Some(stdout) = child.stdout.take() else {
+            stop(&mut child);
+            return Err(ToolError::new(
+                ErrorCode::Git,
+                format!("git {what}: no output"),
+            ));
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stdout);
+            let mut record = Vec::new();
+            let answer = loop {
+                record.clear();
+                let limit = u64::try_from(record_cap).unwrap_or(u64::MAX) + 1;
+                match reader.by_ref().take(limit).read_until(0, &mut record) {
+                    Ok(0) => break Ok(None),
+                    Ok(_) => {
+                        if record.last() == Some(&0) {
+                            record.pop();
+                        } else if record.len() > record_cap {
+                            break Err("a record too long");
+                        }
+                        if hit(&record) {
+                            break Ok(Some(record));
+                        }
+                    }
+                    Err(_) => break Err("its output could not be read"),
+                }
+            };
+            let _ = sender.send(answer);
+        });
+        let deadline = Instant::now() + self.timeout;
+        let timed_out = || {
+            ToolError::new(
+                ErrorCode::Timeout,
+                format!("git {what} did not finish in {}s", self.timeout.as_secs()),
+            )
+        };
+        let Ok(answer) = receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        else {
+            stop(&mut child);
+            return Err(timed_out());
+        };
+        match answer {
+            Ok(Some(record)) => {
+                stop(&mut child);
+                Ok(Some(record))
+            }
+            Err(why) => {
+                stop(&mut child);
+                Err(ToolError::new(ErrorCode::Git, format!("git {what}: {why}")))
+            }
+            Ok(None) => loop {
+                match child.try_wait() {
+                    Ok(Some(status)) if status.success() => break Ok(None),
+                    Ok(Some(_)) | Err(_) => {
+                        stop(&mut child);
+                        break Err(ToolError::new(ErrorCode::Git, format!("git {what} failed")));
+                    }
+                    Ok(None) if Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Ok(None) => {
+                        stop(&mut child);
+                        break Err(timed_out());
+                    }
+                }
+            },
+        }
+    }
+
+    /// The hardened, sandboxed, environment-cleared `git <args>` command.
+    fn command(&self, args: &[&str]) -> ToolResult<Command> {
         let mut words = vec![git_binary()?.display().to_string()];
         words.extend(HARDENING.iter().map(|arg| (*arg).to_owned()));
         if self.literal {
@@ -1761,7 +2065,7 @@ impl<'a> Git<'a> {
         for (name, value) in &self.env {
             command.env(name, value);
         }
-        run_bounded(command, self.stdin, self.timeout, what, self.exit_one_ok)
+        Ok(command)
     }
 
     /// Run and return trimmed UTF-8 text.
@@ -2077,37 +2381,18 @@ mod tests {
         assert_eq!(summary("").changed, 0);
     }
 
-    fn init(dir: &Path) {
-        let status = Command::new("git")
-            .current_dir(dir)
-            .args(["-c", "init.defaultBranch=main", "init", "-q"])
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .status()
-            .expect("git init");
-        assert!(status.success());
-    }
-
-    fn repo() -> (tempfile::TempDir, std::path::PathBuf, Repo) {
-        let dir = tempfile::tempdir().expect("dir");
-        let base = std::fs::canonicalize(dir.path()).expect("canonical");
-        let top = base.join("repo");
-        std::fs::create_dir(&top).expect("repo");
-        init(&top);
-        let repo = Repo::discover(
-            &top,
-            &SandboxConfig::default(),
-            Arc::new(DenyList::default()),
-        )
-        .expect("safe")
-        .expect("a repository");
-        (dir, base, repo)
-    }
-
+    /// Test git, isolated from the machine's config (no global or system
+    /// file, a fixed identity, no hooks).
     fn git(dir: &Path, args: &[&str]) {
         let status = Command::new("git")
             .current_dir(dir)
             .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args([
+                "-c",
+                "init.defaultBranch=main",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
             .args(args)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -2116,12 +2401,26 @@ mod tests {
         assert!(status.success(), "git {args:?}");
     }
 
+    fn init(dir: &Path) {
+        git(dir, &["init", "-q"]);
+    }
+
     fn discover(dir: &Path) -> crate::error::ToolResult<Option<Repo>> {
         Repo::discover(
             dir,
             &SandboxConfig::default(),
             Arc::new(DenyList::default()),
         )
+    }
+
+    fn repo() -> (tempfile::TempDir, std::path::PathBuf, Repo) {
+        let dir = tempfile::tempdir().expect("dir");
+        let base = std::fs::canonicalize(dir.path()).expect("canonical");
+        let top = base.join("repo");
+        std::fs::create_dir(&top).expect("repo");
+        init(&top);
+        let repo = discover(&top).expect("safe").expect("a repository");
+        (dir, base, repo)
     }
 
     /// The owner's report: a repository they cloned themselves was refused
@@ -2153,26 +2452,56 @@ mod tests {
         }
     }
 
-    /// When a repository is refused, the reason names the file or folder
-    /// and how to clear it, never a guess about who owns it.
+    /// When a repository is refused, the person is told the full path and
+    /// how to clear it; the model gets the path relative to the repository,
+    /// no home folder, and is told to ask the person (it cannot change
+    /// `.git`). Never a guess about who owns it.
     #[test]
-    fn refusals_name_the_path_and_the_way_out() {
+    fn refusals_name_the_path_for_the_person_and_a_relative_one_for_the_model() {
         let (_dir, base, _repo) = repo();
         let top = base.join("repo");
         git(&top, &["config", "core.sshCommand", "touch x"]);
         let error = discover(&top).expect_err("refused");
         assert_eq!(error.code(), ErrorCode::UnsafeRepository);
         let config = top.join(".git/config");
+        let person = error.person_message();
         assert!(
-            error.message().contains(&format!("({})", config.display()))
-                && error.message().contains("`core.sshcommand`")
-                && error.message().contains("remove it from that file"),
+            person.contains(&config.display().to_string())
+                && person.contains("`core.sshcommand`")
+                && person.contains("remove it from that file"),
+            "{person}"
+        );
+        let agent = error.message();
+        assert!(
+            agent.starts_with(".git/config sets `core.sshcommand`")
+                && agent.contains("tell the person")
+                && !agent.contains(&base.display().to_string())
+                && !agent.contains("remove it"),
+            "{agent}"
+        );
+        assert!(!person.contains("another user") && !agent.contains("another user"));
+        git(&top, &["config", "--unset", "core.sshCommand"]);
+        discover(&top).expect("trusted again").expect("found");
+
+        // A `submodule.*` section names the file it came from.
+        git(&top, &["config", "extensions.worktreeConfig", "true"]);
+        git(
+            &top,
+            &["config", "--worktree", "submodule.sub.url", "../sub"],
+        );
+        std::fs::write(
+            top.join(".gitmodules"),
+            "[submodule \"sub\"]\n\tpath = sub\n",
+        )
+        .expect("gitmodules");
+        let error = discover(&top).expect_err("refused");
+        assert!(
+            error
+                .message()
+                .contains(".git/config.worktree configures submodules"),
             "{}",
             error.message()
         );
-        assert!(!error.message().contains("another user"));
-        git(&top, &["config", "--unset", "core.sshCommand"]);
-        discover(&top).expect("trusted again").expect("found");
     }
 
     /// A gitlink at `path` in the index of `top` (a submodule as `git
@@ -2204,9 +2533,10 @@ mod tests {
         let marker = base.join("ran");
         let module = top.join(".git/modules/apps/old-ui");
         std::fs::create_dir_all(&module).expect("modules");
+        // What git writes into an absorbed submodule's git directory.
         std::fs::write(
             module.join("config"),
-            format!("[core]\n\tfsmonitor = touch {}\n", marker.display()),
+            "[core]\n\tbare = false\n\tworktree = ../../../../apps/old-ui\n[remote \"origin\"]\n\turl = https://example.com/old-ui.git\n",
         )
         .expect("module config");
         for (key, value) in [
@@ -2245,7 +2575,98 @@ mod tests {
             .writes(std::slice::from_ref(&dot_git))
             .run(&["update-ref", "refs/elitea/probe", "HEAD"])
             .expect("ref update");
-        assert!(!marker.exists(), "a repository hook or module config ran");
+        assert!(!marker.exists(), "a repository hook ran");
+    }
+
+    /// A stale submodule git directory whose config would run code is
+    /// refused (git could still be led into it by a `.git` file in the work
+    /// tree, which the agent cannot write but the person might keep), and
+    /// so is a nested one.
+    #[test]
+    fn a_stale_module_config_that_runs_code_is_refused() {
+        for module in ["old", "old/modules/nested"] {
+            let (_dir, base, _repo) = repo();
+            let top = base.join("repo");
+            let dir = top.join(".git/modules").join(module);
+            std::fs::create_dir_all(dir.join("objects")).expect("module");
+            std::fs::write(dir.join("config"), "[core]\n\tfsmonitor = touch x\n").expect("config");
+            let error = discover(&top).expect_err("refused");
+            assert!(
+                error.message().starts_with(&format!(
+                    ".git/modules/{module}/config sets `core.fsmonitor`"
+                )),
+                "{}",
+                error.message()
+            );
+            assert!(error.person_message().contains("delete the folder"));
+        }
+    }
+
+    /// Not knowing whether there is a submodule is a refusal, never "none",
+    /// and it is not remembered: a broken index refuses, the repaired one
+    /// is accepted.
+    #[test]
+    fn a_submodule_look_that_fails_refuses_and_is_not_cached() {
+        let (_dir, base, _repo) = repo();
+        let top = base.join("repo");
+        std::fs::write(top.join("a.txt"), "a").expect("write");
+        git(&top, &["add", "a.txt"]);
+        git(&top, &["commit", "-q", "-m", "a"]);
+        std::fs::create_dir_all(top.join(".git/modules/old")).expect("modules");
+        let index = top.join(".git/index");
+        let good = std::fs::read(&index).expect("index");
+        let repo = discover(&top).expect("trusted").expect("found");
+        std::fs::write(
+            &index,
+            b"DIRC not an index at all, but long enough to have a tail",
+        )
+        .expect("corrupt");
+        let error = repo.check().expect_err("refused");
+        assert_eq!(error.code(), ErrorCode::UnsafeRepository);
+        assert!(
+            error.message().contains("could not be checked"),
+            "{}",
+            error.message()
+        );
+        std::fs::write(&index, &good).expect("repair");
+        repo.check().expect("accepted again");
+    }
+
+    /// The streaming look fails closed: a record longer than its cap, or
+    /// a listing that outlives its timeout, is an error, never "none".
+    #[test]
+    fn a_scan_fails_closed_on_a_long_record_or_a_timeout() {
+        let (_dir, base, _repo) = repo();
+        let top = base.join("repo");
+        for name in ["a-file-with-a-long-name.txt", "b.txt"] {
+            std::fs::write(top.join(name), "x").expect("write");
+        }
+        git(&top, &["add", "-A"]);
+        let repo = discover(&top).expect("trusted").expect("found");
+        let never = |_: &[u8]| false;
+        assert_eq!(
+            repo.git(&top)
+                .scan(&["ls-files", "--stage", "-z"], never, 4096)
+                .expect("listed"),
+            None
+        );
+        let error = repo
+            .git(&top)
+            .scan(&["ls-files", "--stage", "-z"], never, 16)
+            .expect_err("a record is longer than 16 bytes");
+        assert_eq!(error.code(), ErrorCode::Git);
+        let error = repo
+            .git(&top)
+            .timeout(Duration::ZERO)
+            .scan(&["ls-files", "--stage", "-z"], never, 4096)
+            .expect_err("no time at all");
+        assert_eq!(error.code(), ErrorCode::Timeout);
+        let first = repo
+            .git(&top)
+            .scan(&["ls-files", "--stage", "-z"], |_| true, 4096)
+            .expect("listed")
+            .expect("a record");
+        assert!(first.ends_with(b"a-file-with-a-long-name.txt"));
     }
 
     /// A submodule the repository really has keeps it refused when its git
@@ -2261,10 +2682,13 @@ mod tests {
         let error = discover(&top).expect_err("refused");
         assert_eq!(error.code(), ErrorCode::UnsafeRepository);
         assert!(
-            error.message().contains(&modules.display().to_string())
+            error
+                .person_message()
+                .contains(&modules.display().to_string())
+                && error.message().contains("(.git/modules)")
                 && error.message().contains("sub is a submodule in the index"),
             "{}",
-            error.message()
+            error.person_message()
         );
 
         // Committed, then gone from the index: HEAD still has it.
