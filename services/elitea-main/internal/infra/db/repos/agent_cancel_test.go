@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
@@ -77,7 +78,7 @@ func TestCurrentAgentCancelRepositoryProjectsRetainedSalvagedAndDeletedResponses
 	} {
 		t.Run(name, func(t *testing.T) {
 			executor := &currentAgentCancelExecutorStub{
-				scriptedExecutor: &scriptedExecutor{},
+				scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{{values: []any{int64(9)}}}},
 				cancelRow: sqlcgen.CancelCurrentAgentExecutionRow{
 					ResponseMessageGroupID: 51,
 					QuestionMessageGroupID: &questionID,
@@ -105,6 +106,20 @@ func TestCurrentAgentCancelRepositoryProjectsRetainedSalvagedAndDeletedResponses
 				executor.projectParams.ExecutionID != "execution-1" ||
 				executor.projectParams.ExecutionGeneration != "20000000-0000-4000-8000-000000000031" {
 				t.Fatalf("project=%d options=%+v cancel=%+v projection=%+v", projects.projectID, projects.options, executor.cancelParams, executor.projectParams)
+			}
+			// A deleted turn discards its steering in the turn's conversation.
+			var discards []queryCall
+			for _, call := range executor.execCalls {
+				if strings.Contains(call.sql, "steering") {
+					discards = append(discards, call)
+				}
+			}
+			if projection.Deleted {
+				if len(discards) != 3 || discards[0].args[0] != int64(9) {
+					t.Fatalf("discard calls=%+v, want 3 in conversation 9", discards)
+				}
+			} else if len(discards) != 0 {
+				t.Fatalf("discard calls=%+v, want none", discards)
 			}
 		})
 	}
@@ -198,7 +213,7 @@ func TestCurrentAgentCancelRepositoryTreatsAVanishedProjectionAsReplay(t *testin
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			executor := &currentAgentCancelExecutorStub{
-				scriptedExecutor: &scriptedExecutor{},
+				scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{{err: pgx.ErrNoRows}}},
 				cancelRow: sqlcgen.CancelCurrentAgentExecutionRow{
 					ResponseMessageGroupID: 51, QuestionMessageGroupID: &questionID,
 					ExecutionID: "execution-1", Generation: 1,
