@@ -13,7 +13,7 @@
 //! NEW branch of the upstream remote's repository: never a force push,
 //! never an existing branch or the default branch (a taken name gets the
 //! next free `_vN` suffix). It runs here, over HTTPS to the credential's own
-//! host only ([`super::git_receive_pack`]); the credential is redeemed from
+//! host only (a native `receive-pack` client); the credential is redeemed from
 //! Main per call, sent in that call's `Authorization` header and nowhere
 //! else: never the sandbox, a file, the model, a log or the audit.
 //!
