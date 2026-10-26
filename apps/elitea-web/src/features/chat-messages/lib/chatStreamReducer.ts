@@ -62,6 +62,7 @@ import { reduceToolFrame } from './chatStreamToolFrames';
 import { reduceToolOutputChunkFrame } from './chatStreamToolOutputChunks';
 import { reduceThinkingFrame } from './chatStreamThinkingFrames';
 import { reduceInterruptFrame } from './chatStreamInterruptFrames';
+import { applyFanoutParkedFrame, reduceFanoutFrame } from './chatStreamFanoutFrames';
 import { reduceSwarmFrame } from './chatStreamSwarmFrames';
 import { reduceContextFrame } from './chatStreamContextFrames';
 import { reduceSummaryFrame } from './chatStreamSummaryFrames';
@@ -107,6 +108,7 @@ export function applyChatStreamFrame(
     reduceToolOutputChunkFrame(history, frame, type, index) ??
     reduceThinkingFrame(history, frame, type, index) ??
     reduceInterruptFrame(history, frame, type, context, index) ??
+    reduceFanoutFrame(history, frame, type, context, index) ??
     reduceSwarmFrame(history, frame, type, context) ??
     reduceContextFrame(history, frame, type, context, index) ??
     reduceSummaryFrame(history, frame, type, context, index) ??
@@ -116,10 +118,10 @@ export function applyChatStreamFrame(
     // point: an unported frame must be inert, never a partial write.
     history
   );
-  const next = applySkippedCapabilitiesFrame(
+  const next = applyFanoutParkedFrame(applySkippedCapabilitiesFrame(
     applyNodeRecoveryFrame(applyStaticPauseFrame(reduced, frame, context), frame, context),
     frame,
-  );
+  ), frame);
   if (!isTurnTerminalFrame(frame)) return next;
   const target = findTarget(next, frame);
   const message = next[target];

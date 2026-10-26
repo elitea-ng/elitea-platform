@@ -8,6 +8,8 @@
  */
 import type { ChatMessage } from '@/features/chat-messages';
 
+import { interruptLedger } from '@/features/chat-messages';
+
 import { forgetHitlDecisions, retainHitlDecisions, type HitlQueueScope } from '../../model/hitlDecisionQueue';
 
 /** The fields of a `NormalizedHitlInterrupt` the decision path reads. */
@@ -125,7 +127,8 @@ export function restoreQueuedHitlDecisions(
   if (!conversation) return history;
   let changed = false;
   const restored = history.map((message) => {
-    const pending = pendingCards(message);
+    // Ledger cards are never queued: the ledger itself holds their state.
+    const pending = pendingCards(message).filter((card) => !interruptLedger.isLedgerCard(card));
     if (pending.length < 2) return message;
     const cards = cardsOf(message);
     const scope: HitlQueueScope = { conversation, message: message.id, kind: 'hitl' };

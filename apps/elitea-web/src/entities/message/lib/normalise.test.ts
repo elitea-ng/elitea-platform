@@ -253,6 +253,13 @@ describe('normaliseAssistantMessage', () => {
     });
   });
 
+  it('marks a response Main parked on per-interrupt cards (meta.fanout_parked_v1) and nothing else', () => {
+    const parked = { schema: 'elitea.pipeline.fanout-parked.v1', decision_revision_seen: 1, pending: [{ interrupt_id: 'ask:1', interrupt_key: 'a'.repeat(64) }] };
+    expect(normaliseAssistantMessage({ ...baseGroup, meta: { fanout_parked_v1: parked } }, [], undefined).fanoutParked).toBe(true);
+    expect(normaliseAssistantMessage({ ...baseGroup, meta: { fanout_parked_v1: { pending: 'no' } } }, [], undefined)).not.toHaveProperty('fanoutParked');
+    expect(normaliseAssistantMessage(baseGroup, [], undefined)).not.toHaveProperty('fanoutParked');
+  });
+
   it('replaces content with the streaming placeholder while is_streaming is true', () => {
     const group: MessageGroupWire = { ...baseGroup, is_streaming: true };
     const result = normaliseAssistantMessage(group, [], undefined);

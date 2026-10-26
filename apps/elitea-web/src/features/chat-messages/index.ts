@@ -59,6 +59,21 @@ export type { ChatStreamContext } from './lib/chatStreamReducer';
 // Reload mid-turn: observe the seeded in-flight turn again (#6654).
 export { findReattachableTurn } from './lib/chatStreamReattach';
 export type { ReattachableTurn } from './lib/chatStreamReattach';
+// Per-interrupt decisions (fan-out contract v1.1 §6) and their live resolution across tabs.
+export { useInterruptLedger } from './model/useInterruptLedger';
+import { decideLedgerInterrupt } from './api/interruptLedgerApi';
+import { reconcileLedgerMessage } from './model/useInterruptLedger';
+import { buildDecisionRequest, dropLedgerCardFromMessage, newDecisionRequestId } from './lib/interruptLedger';
+import { isLedgerInterrupt } from './lib/fanoutFrames';
+/** The decision path's half of the ledger, bundled to stay within the barrel budget. */
+export const interruptLedger = {
+  decide: decideLedgerInterrupt,
+  reconcile: reconcileLedgerMessage,
+  buildRequest: buildDecisionRequest,
+  newRequestId: newDecisionRequestId,
+  dropCard: dropLedgerCardFromMessage,
+  isLedgerCard: isLedgerInterrupt,
+};
 
 // Delete-confirmation dialog orchestrator — waived, see budgets-core.mjs.
 export { useDeleteMessageAlert, ALL_MESSAGES } from './model/useDeleteMessageAlert';

@@ -27,6 +27,11 @@ interface ApprovalModelInput {
   readonly staticPause: ApplicationAnswerStaticPause | undefined;
 }
 
+/** Per-interrupt sign-in cards render in the authorization section, as the reference places authorization. */
+function isLedgerAuth(interrupt: HitlInterrupt): boolean {
+  return interrupt.ledger_kind === 'delegated_auth';
+}
+
 /** Everything the answer derives about its pending cards. */
 export function useAnswerApprovalModel({ hitlInterrupt, hitlInterrupts, toolActions, authRequiredActions, staticPause }: ApprovalModelInput) {
   const effective = useMemo<readonly HitlInterrupt[]>(() => {
@@ -35,7 +40,14 @@ export function useAnswerApprovalModel({ hitlInterrupt, hitlInterrupts, toolActi
   }, [hitlInterrupt, hitlInterrupts]);
   // A queued/decided card is hidden once its decision is recorded; the rest stay answerable.
   const visibleHitlInterrupts = useMemo(() => effective.filter((interrupt) => !interrupt.hidden), [effective]);
-  const hitlBuckets = useMemo(() => buildHitlBuckets(visibleHitlInterrupts, toolActions), [visibleHitlInterrupts, toolActions]);
+  const hitlBuckets = useMemo(
+    () => buildHitlBuckets(visibleHitlInterrupts.filter((interrupt) => !isLedgerAuth(interrupt)), toolActions),
+    [visibleHitlInterrupts, toolActions],
+  );
+  const ledgerAuthorizationBuckets = useMemo(
+    () => buildHitlBuckets(visibleHitlInterrupts.filter(isLedgerAuth), toolActions),
+    [visibleHitlInterrupts, toolActions],
+  );
   const authorizationBuckets = useMemo(() => groupToolkitAuthorizationActions(authRequiredActions, toolActions), [authRequiredActions, toolActions]);
   // Instances whose card is still owed an answer stop shimmering (`paused`).
   const pendingInstanceKeys = useMemo(
@@ -46,7 +58,7 @@ export function useAnswerApprovalModel({ hitlInterrupt, hitlInterrupts, toolActi
     () => buildStaticPauseCards(staticPause?.pause, toolActions, t('features.chatMessages.staticPause.pipeline', 'Pipeline')),
     [staticPause?.pause, toolActions],
   );
-  return { visibleHitlInterrupts, hitlBuckets, authorizationBuckets, pendingInstanceKeys, staticCards };
+  return { visibleHitlInterrupts, hitlBuckets, ledgerAuthorizationBuckets, authorizationBuckets, pendingInstanceKeys, staticCards };
 }
 
 type ApprovalModel = ReturnType<typeof useAnswerApprovalModel>;
@@ -62,7 +74,7 @@ export interface ApplicationAnswerApprovalsProps {
 }
 
 export function ApplicationAnswerApprovals({ model, messageId, onHitlResume, staticPause, authorization, confirmation }: ApplicationAnswerApprovalsProps): ReactNode {
-  const { hitlBuckets, authorizationBuckets, staticCards } = model;
+  const { hitlBuckets, ledgerAuthorizationBuckets, authorizationBuckets, staticCards } = model;
   return (
     <AnswerApprovals
       authorizationBuckets={authorizationBuckets}
@@ -76,6 +88,8 @@ export function ApplicationAnswerApprovals({ model, messageId, onHitlResume, sta
       )}
       confirmation={confirmation}
       hitlBuckets={hitlBuckets}
+      ledgerAuthorizationBuckets={ledgerAuthorizationBuckets}
+      renderAuthModal={authorization.renderAuthModal}
       onHitlResume={onHitlResume}
       extraBuckets={staticCards.buckets.filter((bucket) => !hitlBuckets.subAgents.some((hitl) => hitl.instanceKey === bucket.instanceKey))}
       extraCards={staticCards.cards.map((card) => ({

@@ -3,7 +3,7 @@ import { ROLES } from '@/shared/lib/enums';
 
 import type { AssistantMessage, UserMessage } from '../model/types';
 import { buildAuthorizationActions } from './authorizationActions';
-import { assistantHitlFields } from './normaliseHitlInterrupts';
+import { assistantHitlFields, assistantParkedFields } from './normaliseHitlInterrupts';
 import { resolveAssistantFailureFields } from './normaliseAssistantFailure';
 import { buildToolActions, resolveAssistantToolInputs } from './toolActions';
 import type {
@@ -310,6 +310,7 @@ export function normaliseAssistantMessage(
     ...resolveAssistantFailureFields(messageGroup, meta, isError, messageItems),
     ...(messageGroup.likes !== undefined ? { likes: messageGroup.likes } : {}),
     ...assistantHitlFields(meta),
+    ...assistantParkedFields(meta),
     ...assistantContinuationFields(meta),
     ...(meta?.memories_used ? { memoriesUsed: meta.memories_used } : {}),
   };

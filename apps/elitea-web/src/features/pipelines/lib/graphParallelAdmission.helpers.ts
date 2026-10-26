@@ -35,9 +35,20 @@ function validateOwnedAgent(document: YamlPipelineDocument, owner: YamlPipelineN
   validateOwnedAgentTopology(document, agent, field, check);
 }
 
+/** yaml.rs `OnError::parse`, `JoinMode::parse` and `JoinMode::check` (contract v1.1 §8a). */
+function validateParallelJoin(node: YamlPipelineNode, check: ExtensionValidator): void {
+  if (Object.hasOwn(node, 'on_error')) validateExtensionEnum(node['on_error'], 'on_error', ['continue', 'stop'], check);
+  if (Object.hasOwn(node, 'join')) validateExtensionEnum(node['join'], 'join', ['append', 'keyed', 'merge'], check);
+  const stops = node['on_error'] === 'stop' || (!Object.hasOwn(node, 'on_error') && node['error_policy'] === 'fail_after_drain');
+  if (Object.hasOwn(node, 'on_error') && Object.hasOwn(node, 'error_policy') && node['on_error'] !== 'stop') {
+    check.issue('on_error', 'The legacy error policy means Stop. Remove it or choose Stop.');
+  }
+  if (node['join'] === 'merge' && !stops) check.issue('join', 'Merge needs On Error set to Stop.');
+}
+
 function parallelIssues(document: YamlPipelineDocument, node: YamlPipelineNode): readonly GraphAdmissionIssue[] {
   const check = extensionValidator(node.id, 'yaml.rs::ParallelNodeDefinition::from_yaml, parallel_compiler.rs::validate_parallel_ownership, compiler.rs::validate_node_state');
-  validateExtensionObject(node, '', ['id', 'type', 'branches', 'max_concurrency', 'wait', 'error_policy', 'output', 'transition'],
+  validateExtensionObject(node, '', ['id', 'type', 'branches', 'max_concurrency', 'wait', 'error_policy', 'on_error', 'join', 'output', 'transition'],
     ['branches', 'max_concurrency', 'wait', 'output'], check);
   const branches = extensionValues(node['branches']);
   if (!Array.isArray(node['branches']) || branches.length < 2 || branches.length > 16) check.issue('branches', 'Declare 2 to 16 fixed branches.');
@@ -57,6 +68,7 @@ function parallelIssues(document: YamlPipelineDocument, node: YamlPipelineNode):
   }
   validateExtensionEnum(node['wait'], 'wait', ['all'], check);
   if (Object.hasOwn(node, 'error_policy')) validateExtensionEnum(node['error_policy'], 'error_policy', ['fail_after_drain'], check);
+  validateParallelJoin(node, check);
   if (!Array.isArray(node.output) || node.output.length !== 1) check.issue('output', 'Declare exactly one ordered list output channel.');
   else validateDeclaredExtensionChannel(document, node.output[0], 'output[0]', ['list'], check);
   if (node.transition !== undefined && node.transition !== null && typeof node.transition !== 'string') {

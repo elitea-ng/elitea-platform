@@ -3,12 +3,13 @@ export const FIXED_PARALLEL_AUTHORING_ENABLED = false;
 
 export const isFixedParallelAuthoringAllowed = (type: string): boolean => type !== 'parallel' || FIXED_PARALLEL_AUTHORING_ENABLED;
 
-/** yaml.rs::RawParallelNodeDefinition. Required choices remain explicit. No parent input or reducer exists. */
+/** yaml.rs::RawParallelNodeDefinition. Required choices remain explicit. On Error and Join take the v1.1 defaults. */
 export const FixedParallelNodeDefaults: Readonly<Record<string, unknown>> = {
   branches: [],
   max_concurrency: 1,
   wait: 'all',
-  error_policy: 'fail_after_drain',
+  on_error: 'continue',
+  join: 'append',
   output: [],
   transition: 'END',
 };

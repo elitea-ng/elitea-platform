@@ -3334,6 +3334,26 @@
       "responseSchema": "ConversationReadState",
       "fixture": null,
       "usedBy": ["features/chat-conversation-list"]
+    },
+    {
+      "id": "chat.listExecutionInterrupts",
+      "method": "GET",
+      "path": "/elitea_core/task/prompt_lib/{projectId}/{responseMessageId}/interrupts",
+      "operationId": "listExecutionInterrupts",
+      "source": "generated",
+      "responseSchema": "ExecutionInterruptList",
+      "fixture": null,
+      "usedBy": ["features/chat-messages/api/interruptLedgerApi.ts"]
+    },
+    {
+      "id": "chat.decideExecutionInterrupt",
+      "method": "POST",
+      "path": "/elitea_core/task/prompt_lib/{projectId}/{responseMessageId}/interrupts/{interruptKey}/decision",
+      "operationId": "decideExecutionInterrupt",
+      "source": "generated",
+      "responseSchema": "ExecutionInterruptDecisionResult",
+      "fixture": null,
+      "usedBy": ["features/chat-messages/api/interruptLedgerApi.ts"]
     }
   ]
 }
