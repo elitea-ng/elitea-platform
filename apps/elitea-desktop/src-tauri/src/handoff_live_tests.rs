@@ -520,7 +520,7 @@ async fn web_reads_the_cloud_turn(h: &LiveHarness, uuid: &str, turn: &Value) {
         &live.token,
         Method::GET,
         &format!(
-            "/api/v2/elitea_core/conversation/prompt_lib/{}/{uuid}",
+            "/api/v2/elitea_core/messages/prompt_lib/{}/{uuid}",
             live.project
         ),
         None,
