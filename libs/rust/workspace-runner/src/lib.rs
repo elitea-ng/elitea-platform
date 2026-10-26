@@ -186,6 +186,8 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
             .map_err(|_| WORKSPACE_UNAVAILABLE.to_owned())?,
     );
     let session = LocalSession::open(SessionConfig {
+        // The pod has no cache directory: spills stay under the data dir.
+        spill_dir: None,
         root: config.root.clone(),
         session_id: "cloud".to_owned(),
         policy: LocalWorkPolicy {
