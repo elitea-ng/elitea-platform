@@ -33,6 +33,7 @@ type SweepReport struct {
 	ForcedReclaims   int
 	AbandonedReclaim int
 	RestExpired      int
+	RestAbandoned    int
 	DeadTurnsReaped  int
 	IdleErased       int
 	IdleWarned       int
@@ -148,6 +149,25 @@ func (s *Service) Sweep(ctx context.Context) (SweepReport, error) {
 			report.RestExpired++
 			s.record(ctx, threadOf(handoff), handoff.OwnerUserID, "", "", now,
 				fmt.Sprintf("handoff.release: rest take back expired after the return grace, epoch %d", handoff.Epoch+1), true)
+		}
+	}
+
+	// A rest take back nobody released within RestReclaimAbandonedAfter →
+	// LOCAL (released, the rest still pending), so the folder is writable
+	// again and the rest can be asked for again within the grace.
+	if due, err := s.repo.DueAbandonedRestReclaim(ctx, now.Add(-RestReclaimAbandonedAfter), SweepBatch); err != nil {
+		errs = append(errs, err)
+	} else {
+		for _, handoff := range due {
+			if _, err := s.repo.AbandonRestReclaim(ctx, TimedTransition{Thread: threadOf(handoff), Epoch: handoff.Epoch}); err != nil {
+				if !errors.Is(err, ErrStaleEpoch) {
+					errs = append(errs, err)
+				}
+				continue
+			}
+			report.RestAbandoned++
+			s.record(ctx, threadOf(handoff), handoff.OwnerUserID, "", "", now,
+				fmt.Sprintf("handoff.release: rest take back abandoned, the remaining turns are still kept, epoch %d", handoff.Epoch+1), true)
 		}
 	}
 

@@ -21,6 +21,8 @@ import (
 	"errors"
 	"regexp"
 	"time"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 )
 
 // State is a thread's ownership state (ADR-0034 decision 7).
@@ -67,12 +69,12 @@ const (
 	// PUSH.
 	KindPush = "PUSH"
 	// MaxPrerequisites bounds the prerequisites of one PUSH.
-	MaxPrerequisites = 8
+	MaxPrerequisites = workspaceruntime.MaxPrerequisites
 	// DefaultMaxPushChain is the hard cap of live PUSH segments after the
 	// live COMPACT. Writers compact long before it (the client policy
 	// defaults to 8 PUSH or 64 MiB); the cap only stops a writer that never
 	// does.
-	DefaultMaxPushChain = 32
+	DefaultMaxPushChain = workspaceruntime.MaxPushChain
 	// ObjectFormatSHA1 is the only git object format Phase 1 accepts.
 	ObjectFormatSHA1 = "sha1"
 	// MediaType is the Content-Type of every segment upload.

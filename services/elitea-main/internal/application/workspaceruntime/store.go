@@ -31,12 +31,20 @@ const (
 	// KindPush is an incremental segment whose prerequisites are commits the
 	// store already holds (Phase 2).
 	KindPush = "PUSH"
-	// MaxPrerequisites bounds the prerequisites of one PUSH.
+	// MaxPrerequisites bounds the prerequisites of one PUSH. The Rust
+	// readers and writers hold the same bound (workspace-store
+	// bundle::MAX_PREREQUISITES); TestChainBoundsMatchTheRustStore pins it.
 	MaxPrerequisites = 8
+	// MaxPushChain is the hard cap of live PUSH segments after a thread's
+	// live COMPACT (workspacestore.DefaultMaxPushChain is this value). The
+	// Rust writers clamp their compaction policy to the same number
+	// (workspace-store compaction::SERVER_MAX_PUSH_CHAIN), pinned by
+	// TestChainBoundsMatchTheRustStore.
+	MaxPushChain = 32
 	// MaxPlanSegments bounds a fetch plan's chain: one COMPACT and at most
-	// workspacestore.DefaultMaxPushChain PUSH segments, so the plan frame
-	// stays under the control listener's 80 KiB response bound.
-	MaxPlanSegments = 1 + 32
+	// MaxPushChain PUSH segments, so the plan frame stays under the control
+	// listener's 80 KiB response bound.
+	MaxPlanSegments = 1 + MaxPushChain
 	// ObjectFormatSHA1 is the only object format the store moves.
 	ObjectFormatSHA1 = "sha1"
 	// ExecutedByCloud stamps a cloud turn's response meta (decision 8).

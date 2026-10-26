@@ -20,6 +20,7 @@
 //	RECLAIMING    --abandoned for 7 days--------------------> CLOUD_IDLE
 //	LOCAL (released, turns not taken) --take back the rest---> RECLAIMING (rest)
 //	RECLAIMING (rest) --release (desktop)--------------------> LOCAL
+//	RECLAIMING (rest) --abandoned for 1 hour-----------------> LOCAL (released, rest kept)
 //	RECLAIMING (rest) --return grace over--------------------> LOCAL (then erased)
 //	CLOUD_* / RECLAIMING / HANDING_OFF --erase--------------> LOCAL
 //
@@ -29,7 +30,11 @@
 // rest back: LOCAL → RECLAIMING (epoch + 1), keeping rest_pending and the
 // release's delete_after. A rest RECLAIMING row never returns to CLOUD_IDLE:
 // when the grace runs out the sweeper returns it to LOCAL (released), and the
-// erasure removes the cloud copy. Every other transition clears rest_pending.
+// erasure removes the cloud copy. A rest take back nobody released within
+// RestReclaimAbandonedAfter (the desktop gave up, crashed or lost its record)
+// goes back to LOCAL, released and still rest_pending (epoch + 1), so the
+// folder is writable again and the rest can be asked for once more while the
+// grace lasts. Every other transition clears rest_pending.
 //
 // The epoch increments on every ownership change. A cloud turn's
 // CLOUD_IDLE ⇄ CLOUD_RUNNING keeps it: the turn is fenced by its execution id,
@@ -59,6 +64,11 @@ const (
 	// ReclaimAbandonedAfter: a RECLAIMING thread nobody released returns to
 	// CLOUD_IDLE, so it never waits on an offline laptop.
 	ReclaimAbandonedAfter = 7 * 24 * time.Hour
+	// RestReclaimAbandonedAfter: a rest take back nobody released returns to
+	// LOCAL (released, the rest still pending) after this long. It is short:
+	// the thread is read-only while RECLAIMING, and the cloud copy stays
+	// within its return grace either way.
+	RestReclaimAbandonedAfter = time.Hour
 	// MaxNoteBytes bounds the handoff note.
 	MaxNoteBytes = 8 * 1024
 )
@@ -119,6 +129,9 @@ type Handoff struct {
 	// them (shared/0176).
 	Released    bool
 	RestPending bool
+	// ReturnGraceOpen: delete_after is still ahead by the database clock
+	// (the clock that stamped it, and that ReclaimRest compares with).
+	ReturnGraceOpen bool
 	// IncludedExcluded and EnvNames (decision 5, amended): the explicit
 	// includes and the harvested variable names. EnvSecretName names the
 	// thread's hidden vault secret, "" when it has none; it is never sent to a

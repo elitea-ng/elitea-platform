@@ -117,6 +117,10 @@ func (r eventingRepository) AbandonReclaim(ctx context.Context, transition Timed
 	return r.after(ctx)(r.Repository.AbandonReclaim(ctx, transition))
 }
 
+func (r eventingRepository) AbandonRestReclaim(ctx context.Context, transition TimedTransition) (Handoff, error) {
+	return r.after(ctx)(r.Repository.AbandonRestReclaim(ctx, transition))
+}
+
 func (r eventingRepository) ExpireRestReclaim(ctx context.Context, transition TimedTransition) (Handoff, error) {
 	return r.after(ctx)(r.Repository.ExpireRestReclaim(ctx, transition))
 }

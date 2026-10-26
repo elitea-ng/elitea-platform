@@ -436,8 +436,11 @@ func (s *Service) State(ctx context.Context, thread Thread) (View, error) {
 	}
 	switch handoff.State {
 	case workspacestore.StateLocal:
+		// The database clock decides, as for ReclaimRest: an app clock that
+		// drifts would offer a take back the server refuses, or hide one it
+		// would accept.
 		view.RestPending = handoff.Released && handoff.RestPending && handoff.DeletedAt == nil &&
-			handoff.DeleteAfter != nil && handoff.DeleteAfter.After(s.now())
+			handoff.DeleteAfter != nil && handoff.ReturnGraceOpen
 	case workspacestore.StateReclaiming:
 		view.RestPending = handoff.RestPending
 	}

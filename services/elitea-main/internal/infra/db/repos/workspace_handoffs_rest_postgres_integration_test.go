@@ -47,6 +47,13 @@ func TestPostgresWorkspaceHandoffRestTakeBack(t *testing.T) {
 	if view, err := h.service.State(ctx, thread); err != nil || !view.RestPending {
 		t.Fatalf("state after a partial release = %+v, %v; want rest_pending", view, err)
 	}
+	// The database clock decides the grace, as ReclaimRest does: an app clock
+	// a month ahead still sees the rest pending, and the take back works.
+	h.service.WithClock(func() time.Time { return time.Now().Add(30 * 24 * time.Hour) })
+	if view, err := h.service.State(ctx, thread); err != nil || !view.RestPending {
+		t.Fatalf("state with the app clock ahead = %+v, %v; want rest_pending by the database clock", view, err)
+	}
+	h.service.WithClock(time.Now)
 
 	request := workspacehandoff.ReclaimRequest{Thread: thread, ActorUserID: owner, Epoch: 4, DeviceID: "device-2", Rest: true}
 	rest, err := h.service.Reclaim(ctx, request)
@@ -158,7 +165,7 @@ func TestPostgresWorkspaceHandoffSweeperExpiresARestTakeBackToLocal(t *testing.T
 	ctx := context.Background()
 	h := newHandoffHarness(t, pool)
 	const owner int64 = 5421
-	restTakeBack := func(t *testing.T) workspacestore.Thread {
+	restTakeBack := func(t *testing.T, stale bool) workspacestore.Thread {
 		t.Helper()
 		fixture := seedLocalWorkThread(t, pool, owner, "local_work")
 		seedHandoffRow(t, pool, fixture.thread, owner, workspacestore.StateReclaiming, 3, false, "")
@@ -172,6 +179,9 @@ func TestPostgresWorkspaceHandoffSweeperExpiresARestTakeBackToLocal(t *testing.T
 		}); err != nil {
 			t.Fatal(err)
 		}
+		if !stale {
+			return fixture.thread
+		}
 		// Older than the 7-day abandonment: a rest take back must never be
 		// abandoned to CLOUD_IDLE.
 		if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.workspace_handoffs SET state_changed_at = clock_timestamp() - interval '8 days'
@@ -180,19 +190,43 @@ WHERE conversation_uuid = $1::uuid`, fixture.thread.ConversationUUID); err != ni
 		}
 		return fixture.thread
 	}
-	expired := restTakeBack(t)
+	expired := restTakeBack(t, true)
 	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.workspace_handoffs SET delete_after = clock_timestamp() - interval '1 second'
 WHERE conversation_uuid = $1::uuid`, expired.ConversationUUID); err != nil {
 		t.Fatal(err)
 	}
-	inGrace := restTakeBack(t)
+	// Abandoned (RECLAIMING well past RestReclaimAbandonedAfter) within the
+	// grace: back to LOCAL with the rest still pending, never CLOUD_IDLE.
+	abandoned := restTakeBack(t, true)
+	inGrace := restTakeBack(t, false)
 
 	report, err := h.service.Sweep(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
-	if report.RestExpired != 1 || report.AbandonedReclaim != 0 {
-		t.Fatalf("report = %+v, want one rest expiry and no abandonment", report)
+	if report.RestExpired != 1 || report.RestAbandoned != 1 || report.AbandonedReclaim != 0 {
+		t.Fatalf("report = %+v, want one rest expiry, one rest abandonment and no reclaim abandonment", report)
+	}
+	back, err := h.service.State(ctx, abandoned)
+	if err != nil || back.Handoff.State != workspacestore.StateLocal || !back.Handoff.Released ||
+		!back.Handoff.RestPending || back.Handoff.Epoch != 6 || !back.RestPending || back.Handoff.DeleteAfter == nil {
+		t.Fatalf("abandoned rest take back = %+v, %v; want LOCAL released epoch 6, the rest still pending", back.Handoff, err)
+	}
+	// The desktop that gave up cannot release the RECLAIMING it lost; its
+	// release is refused, not read as a retried success.
+	if _, err := h.service.Release(ctx, workspacehandoff.ReleaseRequest{
+		Thread: abandoned, ActorUserID: owner, Epoch: 5, Outcome: "applied", TurnsNotTaken: turns(0),
+	}); !errors.Is(err, workspacehandoff.ErrStaleEpoch) {
+		t.Fatalf("release of an abandoned rest take back = %v, want ErrStaleEpoch", err)
+	}
+	// The rest may be asked for again within the grace.
+	if again, err := h.service.Reclaim(ctx, workspacehandoff.ReclaimRequest{
+		Thread: abandoned, ActorUserID: owner, Epoch: 6, Rest: true,
+	}); err != nil || again.State != workspacestore.StateReclaiming || again.Epoch != 7 {
+		t.Fatalf("rest take back after the abandonment = %+v, %v; want RECLAIMING epoch 7", again, err)
+	}
+	if !strings.Contains(strings.Join(h.recorder.actions(), "\n"), "rest take back abandoned") {
+		t.Fatalf("the abandonment is not audited: %v", h.recorder.actions())
 	}
 	view, err := h.service.State(ctx, expired)
 	if err != nil || view.Handoff.State != workspacestore.StateLocal || !view.Handoff.Released ||
@@ -200,7 +234,7 @@ WHERE conversation_uuid = $1::uuid`, expired.ConversationUUID); err != nil {
 		t.Fatalf("expired rest take back = %+v, %v; want LOCAL released epoch 6, nothing pending", view.Handoff, err)
 	}
 	if kept, _ := h.service.State(ctx, inGrace); kept.Handoff.State != workspacestore.StateReclaiming || !kept.RestPending {
-		t.Fatalf("rest take back within the grace = %+v; want it still RECLAIMING", kept.Handoff)
+		t.Fatalf("a fresh rest take back = %+v; want it still RECLAIMING", kept.Handoff)
 	}
 	// The next pass (the erasure lease is a minute) erases the expired copy.
 	h.service.WithClock(func() time.Time { return time.Now().Add(2 * time.Minute) })

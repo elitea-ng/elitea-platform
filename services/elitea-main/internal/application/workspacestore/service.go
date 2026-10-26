@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
@@ -592,27 +593,15 @@ func validatePublish(request PublishRequest) error {
 // validateKind checks a segment's kind against its prerequisites: a COMPACT
 // has none; a PUSH has 1..MaxPrerequisites distinct sha1 commits. Any other
 // kind is refused.
+//
+// The rule is the executor transport's (workspaceruntime.ValidPrerequisites),
+// so the edge and gRPC paths cannot drift; the Rust in-memory store keeps
+// its own copy (workspace-store memory.rs is_push).
 func validateKind(kind string, prerequisites []string) error {
-	switch kind {
-	case KindCompact:
-		if len(prerequisites) != 0 {
-			return ErrInvalid
-		}
-		return nil
-	case KindPush:
-		if len(prerequisites) == 0 || len(prerequisites) > MaxPrerequisites {
-			return ErrInvalid
-		}
-		seen := map[string]bool{}
-		for _, prerequisite := range prerequisites {
-			if !ValidSHA1(prerequisite) || seen[prerequisite] {
-				return ErrInvalid
-			}
-			seen[prerequisite] = true
-		}
-		return nil
+	if !workspaceruntime.ValidPrerequisites(kind, prerequisites) {
+		return ErrInvalid
 	}
-	return ErrInvalid
+	return nil
 }
 
 // Publish records one uploaded segment and moves the thread's refs.

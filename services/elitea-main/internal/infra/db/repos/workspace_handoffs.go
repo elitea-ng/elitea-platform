@@ -89,7 +89,8 @@ const handoffColumns = `project_id, conversation_uuid::text, handoff_id::text, s
        base_sha, upstream_sha, handoff_sha, cloud_sha, stats, excluded, last_seq,
        COALESCE(running_execution_id, ''), COALESCE(running_response_message_id::text, ''), expires_at,
        state_changed_at, updated_at, delete_after, deleted_at, note,
-       included_excluded, env_names, COALESCE(env_secret_name, ''), released, rest_pending`
+       included_excluded, env_names, COALESCE(env_secret_name, ''), released, rest_pending,
+       COALESCE(delete_after > clock_timestamp(), FALSE)`
 
 type handoffRow struct {
 	workspacehandoff.Handoff
@@ -109,7 +110,7 @@ func scanHandoff(row pgx.Row) (handoffRow, error) {
 		&out.BaseSHA, &out.UpstreamSHA, &out.HandoffSHA, &out.CloudSHA, &stats, &excluded, &out.LastSeq,
 		&out.RunningExecutionID, &out.RunningResponseID, &out.ExpiresAt,
 		&out.StateChangedAt, &out.UpdatedAt, &out.DeleteAfter, &out.DeletedAt, &out.note,
-		&includes, &environment, &out.EnvSecretName, &out.Released, &out.RestPending)
+		&includes, &environment, &out.EnvSecretName, &out.Released, &out.RestPending, &out.ReturnGraceOpen)
 	if err != nil {
 		return handoffRow{}, err
 	}
@@ -637,6 +638,11 @@ SELECT released FROM elitea_runtime.workspace_handoffs WHERE project_id = $1 AND
 			if !released {
 				return workspacehandoff.ErrErased
 			}
+			if current.RestPending && !record.RestPending {
+				// The rest take back this release ends was abandoned by the
+				// sweeper (LOCAL, the rest still pending): not this release.
+				return workspacehandoff.ErrStaleEpoch
+			}
 			out = workspacehandoff.TransitionResult{Handoff: current.Handoff} // a retried release
 			return nil
 		}
@@ -929,6 +935,20 @@ func (r *WorkspaceHandoffsRepository) DueRestExpired(ctx context.Context, now ti
 ORDER BY delete_after LIMIT $2`, now, limit)
 }
 
+func (r *WorkspaceHandoffsRepository) DueAbandonedRestReclaim(ctx context.Context, before time.Time, limit int) ([]workspacehandoff.Handoff, error) {
+	return r.due(ctx, `state = 'RECLAIMING' AND rest_pending AND state_changed_at <= $1
+  AND deleted_at IS NULL AND delete_after > clock_timestamp()
+ORDER BY state_changed_at LIMIT $2`, before, limit)
+}
+
+// AbandonRestReclaim returns a rest take back nobody released to LOCAL,
+// released, with the rest still pending and the first release's
+// delete_after kept (a transition never moves it).
+func (r *WorkspaceHandoffsRepository) AbandonRestReclaim(ctx context.Context, t workspacehandoff.TimedTransition) (workspacehandoff.Handoff, error) {
+	return r.timed(ctx, t, []workspacestore.State{workspacestore.StateReclaiming}, workspacestore.StateLocal,
+		`, released = TRUE, rest_pending = TRUE`)
+}
+
 // ExpireRestReclaim returns a rest take back whose return grace ran out to
 // LOCAL, released, keeping delete_after, so the erasure removes the copy.
 func (r *WorkspaceHandoffsRepository) ExpireRestReclaim(ctx context.Context, t workspacehandoff.TimedTransition) (workspacehandoff.Handoff, error) {
@@ -1096,7 +1116,7 @@ func qualifiedHandoffColumns(alias string) string {
 		`COALESCE(` + alias + `.running_response_message_id::text, ''), ` + alias + `.expires_at, ` +
 		alias + `.state_changed_at, ` + alias + `.updated_at, ` + alias + `.delete_after, ` + alias + `.deleted_at, ` + alias + `.note, ` +
 		alias + `.included_excluded, ` + alias + `.env_names, COALESCE(` + alias + `.env_secret_name, ''), ` +
-		alias + `.released, ` + alias + `.rest_pending`
+		alias + `.released, ` + alias + `.rest_pending, COALESCE(` + alias + `.delete_after > clock_timestamp(), FALSE)`
 }
 
 // handoffEventParticipantKind marks the tenant schema's system participant

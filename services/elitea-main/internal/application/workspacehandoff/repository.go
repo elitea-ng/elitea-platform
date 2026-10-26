@@ -157,6 +157,11 @@ type Repository interface {
 	// ExpireRestReclaim returns one to LOCAL (released), never CLOUD_IDLE.
 	DueRestExpired(ctx context.Context, now time.Time, limit int) ([]Handoff, error)
 	ExpireRestReclaim(ctx context.Context, transition TimedTransition) (Handoff, error)
+	// DueAbandonedRestReclaim answers rest take backs RECLAIMING since before
+	// `before` whose return grace is still open; AbandonRestReclaim returns
+	// one to LOCAL, released, with the rest still pending.
+	DueAbandonedRestReclaim(ctx context.Context, before time.Time, limit int) ([]Handoff, error)
+	AbandonRestReclaim(ctx context.Context, transition TimedTransition) (Handoff, error)
 	// DueIdle walks the CLOUD_IDLE rows in (state_changed_at, project,
 	// conversation) order, after the cursor. A short page means the walk
 	// reached the end.
