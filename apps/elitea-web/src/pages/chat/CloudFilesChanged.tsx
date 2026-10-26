@@ -4,7 +4,7 @@
  * and the diff the worker kept for it. A binary or too-large file is listed
  * without one. Loaded only when the dialog opens.
  */
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
@@ -25,7 +25,7 @@ import { t } from '@/shared/i18n';
 import { parseUnifiedDiff } from '@/shared/lib/unifiedDiff';
 import { DiffView } from '@/shared/ui/DiffView';
 
-import { scopeView, useCloudChanges, useCloudDiff, type CloudScope, type DiffTarget, type ScopeView } from './cloudChanges';
+import { scopeView, turnNumber, useCloudChanges, useCloudDiff, type CloudScope, type DiffTarget, type ScopeView } from './cloudChanges';
 
 export interface CloudFilesChangedProps {
   readonly projectId: string;
@@ -72,7 +72,8 @@ function FileRow({ file, projectId, conversationUuid, view }: FileRowProps): Rea
   const [open, setOpen] = useState(false);
   const counted = typeof file.additions === 'number' && typeof file.deletions === 'number';
   const target = view.commit === null ? null : { commit: view.commit, scope: view.scope, path: file.path };
-  const diffId = `cloud-diff-${file.path}`;
+  // A path may hold any character; the element id must not.
+  const diffId = useId();
   return (
     <Box component="li" data-testid="cloud-changed-file" sx={(theme: Theme) => ({ listStyle: 'none', paddingY: 0.5, borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
@@ -129,15 +130,15 @@ function ScopePicker({ changes, picked, onPick }: { changes: WorkspaceHandoffCha
       select
       size="small"
       label={t('pages.chat.cloud.files.scope', 'Show')}
-      value={picked === 'cumulative' ? 'cumulative' : String(picked)}
-      onChange={(event) => onPick(event.target.value === 'cumulative' ? 'cumulative' : Number(event.target.value))}
+      value={picked !== 'cumulative' && changes.turns.some((turn) => turn.commit === picked.commit) ? picked.commit : 'cumulative'}
+      onChange={(event) => onPick(event.target.value === 'cumulative' ? 'cumulative' : { commit: event.target.value })}
       slotProps={{ htmlInput: { 'data-testid': 'cloud-files-scope' } }}
       sx={{ minWidth: '14rem', alignSelf: 'flex-start' }}
     >
       <MenuItem value="cumulative">{t('pages.chat.cloud.files.sinceHandoff', 'Since the handoff')}</MenuItem>
       {changes.turns.map((turn, index) => (
-        <MenuItem key={turn.commit} value={String(index)}>
-          {t('pages.chat.cloud.files.turn', 'Turn {{n}}', { n: String(index + 1) })}
+        <MenuItem key={turn.commit} value={turn.commit}>
+          {t('pages.chat.cloud.files.turn', 'Turn {{n}}', { n: String(turnNumber(changes, index)) })}
         </MenuItem>
       ))}
     </TextField>

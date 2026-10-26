@@ -71,7 +71,13 @@ export const WorkspaceHandoffChanges = zod
       .union([WorkspaceChangeSet, zod.null()])
       .optional()
       .describe(
-        "What every listed turn changed since the snapshot; null when the tip's record is missing.",
+        "What the turns changed since the snapshot, as of `cumulative_commit`; null when no turn has a record.",
+      ),
+    cumulative_commit: zod
+      .string()
+      .nullish()
+      .describe(
+        "The commit `cumulative` belongs to (read its diffs at it): `head_sha`, or the newest recorded turn when the tip has no record.",
       ),
     turns: zod
       .array(WorkspaceTurnChanges)

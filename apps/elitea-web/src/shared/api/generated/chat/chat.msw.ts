@@ -1344,6 +1344,7 @@ export const getGetWorkspaceHandoffChangesResponseMock =
     base_sha: "3f2c1b0a9e8d7c6b5a493827161504f3e2d1c0b9",
     head_sha: "9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3",
     complete: true,
+    cumulative_commit: "9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3",
     cumulative: {
       additions: 14,
       deletions: 3,
@@ -1387,6 +1388,7 @@ export const getGetWorkspaceHandoffChangesResponseMock =
         commit: "9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3",
         parent_sha: "3f2c1b0a9e8d7c6b5a493827161504f3e2d1c0b9",
         seq: 2,
+        number: 1,
         response_message_id: "0b5d2f6e-3c1a-4e8b-9f7d-2a6c4e8b1d3f",
         created_at: "2026-10-25T12:00:00Z",
         changes: {

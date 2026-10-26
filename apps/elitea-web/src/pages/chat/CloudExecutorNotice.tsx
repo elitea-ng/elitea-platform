@@ -116,9 +116,9 @@ function Actions({ returning, isOwner, canErase, requesting, onTakeBack, onErase
 }
 
 /** "Files changed (N)": what the cloud turns changed since the handoff; hidden until a turn recorded some. */
-function FilesChanged({ projectId, conversationUuid }: { projectId: string; conversationUuid: string }): React.JSX.Element | null {
+function FilesChanged({ projectId, conversationUuid, running }: { projectId: string; conversationUuid: string; running: boolean }): React.JSX.Element | null {
   const [open, setOpen] = useState(false);
-  const changes = useCloudChanges(projectId, conversationUuid, open);
+  const changes = useCloudChanges(projectId, conversationUuid, open, running);
   const count = changedCount(changes.data);
   if (changes.data === undefined || changes.data.turns.length === 0) return null;
   return (
@@ -135,7 +135,7 @@ function FilesChanged({ projectId, conversationUuid }: { projectId: string; conv
   );
 }
 
-function useHandoffInfo(projectId: string, conversationUuid: string): { readonly requested: boolean } {
+function useHandoffInfo(projectId: string, conversationUuid: string): { readonly requested: boolean; readonly running: boolean } {
   const queryClient = useQueryClient();
   // The desktop taking the thread back (or an erase elsewhere) moves it without this page doing anything: the live stream says so at once, the poll is the fallback.
   useHandoffLiveEvents(projectId);
@@ -157,7 +157,7 @@ function useHandoffInfo(projectId: string, conversationUuid: string): { readonly
     // The thread is local again: re-read the conversation, so the composer and the badge follow.
     if (state === 'LOCAL') void queryClient.invalidateQueries({ queryKey: ['conversation'] });
   }, [state, queryClient]);
-  return { requested: info.data?.reclaim_pending === true };
+  return { requested: info.data?.reclaim_pending === true, running: state === 'CLOUD_RUNNING' };
 }
 
 export default function CloudExecutorNotice({ projectId, conversationUuid, executor, isOwner }: CloudExecutorNoticeProps): React.JSX.Element {
@@ -165,7 +165,7 @@ export default function CloudExecutorNotice({ projectId, conversationUuid, execu
   const canEditSettings = useCanEditProjectSettings(projectId);
   const [confirming, setConfirming] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
-  const { requested } = useHandoffInfo(projectId, conversationUuid);
+  const { requested, running } = useHandoffInfo(projectId, conversationUuid);
 
   const reclaim = useMutation({
     mutationFn: () => requestWorkspaceReclaim(projectId, conversationUuid),
@@ -203,7 +203,7 @@ export default function CloudExecutorNotice({ projectId, conversationUuid, execu
               ? t('pages.chat.cloud.returningBody', 'This thread is being taken back to the desktop it came from. You can read it here; to continue, use the desktop app.')
               : t('pages.chat.cloud.body', 'This thread works on a copy of your desktop folder in the cloud. Take it back to continue on your desktop.')}
           </Typography>
-          <FilesChanged projectId={projectId} conversationUuid={conversationUuid} />
+          <FilesChanged projectId={projectId} conversationUuid={conversationUuid} running={running} />
           <Actions
             returning={returning}
             isOwner={isOwner}

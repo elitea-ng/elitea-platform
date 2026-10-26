@@ -10792,7 +10792,10 @@ export const getGetWorkspaceHandoffChangesUrl = (
  * Only the turns on the live chain are listed: from the handoff
  * snapshot to `refs/elitea/cloud`, so a regenerated answer's earlier
  * attempt is not. `complete` is false when a turn on that chain has no
- * record (its record failed, or it ran before this view existed).
+ * record (its record failed): the turns below it are still listed (the
+ * walk resumes at the newest attempt under its turn `number`), and when
+ * the tip itself has none, the turns and `cumulative` start at the
+ * newest record (`cumulative_commit`).
  *
  * A path that the thread's exclusions (the platform and project
  * patterns, the files excluded at send) or the path deny list match is
@@ -11108,7 +11111,7 @@ export const getGetWorkspaceHandoffDiffUrl = (
  * Client contract 1.26 (ADR-0034 Phase 2). The unified diff (git's
  * format, 3 lines of context) the worker kept for one file of
  * getWorkspaceHandoffChanges: `scope=turn` with that turn's `commit`, or
- * `scope=cumulative` with `head_sha`. A diff is at most 48 KiB; a file
+ * `scope=cumulative` with `cumulative_commit`. A diff is at most 48 KiB; a file
  * with `has_diff` false has none (404 `diff_not_found`), and so has a
  * path getWorkspaceHandoffChanges hides. Who may read it is as for
  * getWorkspaceHandoffChanges.

@@ -48,6 +48,12 @@ export const WorkspaceTurnChanges = zod
     commit: zod.string().describe("The turn's commit (40 hex)."),
     parent_sha: zod.string().describe("The commit it started from."),
     seq: zod.int().describe("The store segment it was published in."),
+    number: zod
+      .int()
+      .nullish()
+      .describe(
+        "The turn's number on the live chain (1: the first cloud turn after the handoff); null when the worker could not tell.",
+      ),
     response_message_id: zod
       .string()
       .nullish()
