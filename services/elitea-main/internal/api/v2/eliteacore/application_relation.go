@@ -293,13 +293,16 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 		// The child's name and author, read rather than synthesised: the
 		// resolver projection serves `name`/`toolkit_name` straight from
 		// this row, and the freeze refuses a reference whose names disagree.
+		// FOR SHARE: a re-point of this version (delete with a replacement)
+		// locks it FOR UPDATE, so it cannot move a reference it never walked.
 		var childName string
 		var childAuthorID int
 		err = transaction.QueryRow(ctx, fmt.Sprintf(`
 			SELECT app.name, version.author_id
 			FROM %s.applications AS app
 			JOIN %s.application_versions AS version ON version.application_id = app.id
-			WHERE app.id = $1 AND version.id = $2`, s, s),
+			WHERE app.id = $1 AND version.id = $2
+			FOR SHARE OF version`, s, s),
 			childAppID, childVersionID).Scan(&childName, &childAuthorID)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "the selected agent version does not exist"})
@@ -378,7 +381,8 @@ func (h *Handler) refuseComposition(ctx context.Context, w http.ResponseWriter, 
 	parent, ok, err := source.Version(ctx, root)
 	if err == nil && ok {
 		parent.Attachments = append(parent.Attachments, attachment)
-		err = applicationcomposition.Check(ctx, source, root, &parent)
+		// Every version that attaches the parent must still fit too.
+		err = applicationcomposition.CheckWithAncestors(ctx, source, root, &parent)
 	}
 	if refusal := applicationcomposition.Refusal(err); refusal != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": refusal.Message, "code": refusal.Code})

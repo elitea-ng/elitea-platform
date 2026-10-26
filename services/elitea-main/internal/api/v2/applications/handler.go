@@ -1755,6 +1755,18 @@ func (h *Handler) repointVersionReferences(ctx context.Context, schema, applicat
 		return apierr.Internal("could not move the references to the replacement version")
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// The version being replaced is locked first: an attach of it takes the row
+	// FOR SHARE, so every reference to it is committed before the parents are
+	// read, and none can be added until the move commits.
+	var locked int64
+	if err := tx.QueryRow(ctx, fmt.Sprintf(
+		`SELECT id FROM %s.application_versions WHERE id = $1 AND application_id = $2 FOR UPDATE`, schema),
+		versionID, applicationID).Scan(&locked); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return apierr.NotFound("version not found")
+		}
+		return apierr.Internal("could not move the references to the replacement version")
+	}
 	var sameApplication bool
 	if err := tx.QueryRow(ctx, fmt.Sprintf(
 		`SELECT EXISTS (SELECT 1 FROM %s.application_versions WHERE id = $1 AND application_id = $2)`, schema),
@@ -1833,7 +1845,7 @@ func checkRepointedParents(ctx context.Context, tx pgx.Tx, schema, applicationID
 		to:    applicationcomposition.Identity{ApplicationID: appID, VersionID: newID},
 	}
 	for _, parent := range parents {
-		err := applicationcomposition.Check(ctx, source, parent, nil)
+		err := applicationcomposition.CheckWithAncestors(ctx, source, parent, nil)
 		if refusal := applicationcomposition.Refusal(err); refusal != nil {
 			return refusal
 		}
@@ -1863,6 +1875,10 @@ func (s repointedSource) Version(ctx context.Context, id applicationcomposition.
 
 func (s repointedSource) Prefetch(ctx context.Context, ids []applicationcomposition.Identity) error {
 	return s.inner.Prefetch(ctx, ids)
+}
+
+func (s repointedSource) Parents(ctx context.Context, ids []applicationcomposition.Identity) ([]applicationcomposition.Identity, error) {
+	return s.inner.Parents(ctx, ids)
 }
 
 // isNumericID admits only the digits a row id is made of — the same guard the

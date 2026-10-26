@@ -1007,7 +1007,7 @@ func CheckVersionComposition(ctx context.Context, q relationReader, schema strin
 // checkVersionComposition refuses a version write whose result would break a
 // composition bound the Worker enforces (FU-244): the version is walked as it
 // is about to be stored (its kind, its pipeline Agent nodes) with its stored
-// attachments. Only a write that changes the kind or writes pipeline
+// attachments, and so is every version that attaches it (CheckWithAncestors). Only a write that changes the kind or writes pipeline
 // instructions is walked, so an ordinary agent save never pays for it.
 // instructionsWritten says whether instructions is the body's new text or the
 // stored text of a kind switch.
@@ -1041,7 +1041,7 @@ func checkVersionComposition(ctx context.Context, q relationReader, schema, appl
 	if kind == applicationcomposition.KindPipeline {
 		saved.AgentNodes, saved.StaticPause = applicationcomposition.ReadPipeline(instructions)
 	}
-	err = applicationcomposition.Check(ctx, source, id, &saved)
+	err = applicationcomposition.CheckWithAncestors(ctx, source, id, &saved)
 	if refusal := applicationcomposition.Refusal(err); refusal != nil {
 		return refusal
 	}

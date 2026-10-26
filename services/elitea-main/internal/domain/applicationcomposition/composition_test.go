@@ -456,3 +456,44 @@ func TestTheDepthRefusalNamesTheAgentNodeOnce(t *testing.T) {
 		t.Fatalf("the node is quoted once: %s", violation)
 	}
 }
+
+// ancestrySource is a fakeSource that also answers the versions attaching ids.
+type ancestrySource struct{ fakeSource }
+
+func (s ancestrySource) Parents(_ context.Context, ids []applicationcomposition.Identity) ([]applicationcomposition.Identity, error) {
+	var parents []applicationcomposition.Identity
+	for n, version := range s.fakeSource {
+		for _, attachment := range version.Attachments {
+			for _, wanted := range ids {
+				if attachment.Identity == wanted {
+					parents = append(parents, id(n))
+				}
+			}
+		}
+	}
+	return parents, nil
+}
+
+// Review round 2 (C): a change below can push an ancestor past a bound although
+// the changed version alone fits; every version that attaches it is checked.
+func TestCheckWithAncestorsRefusesAChangeThatPushesAnAncestorPastTheLimit(t *testing.T) {
+	source := ancestrySource{fakeSource{1: agent("Agent 1", 2), 2: agent("Agent 2", 3), 3: agent("Agent 3"), 4: agent("Agent 4")}}
+	// Agent 3 attaching Agent 4 is two levels from Agent 3, but four from Agent 1.
+	changed := agent("Agent 3", 4)
+	err := applicationcomposition.CheckWithAncestors(context.Background(), source, id(3), &changed)
+	var violation *applicationcomposition.Violation
+	if !errors.As(err, &violation) || violation.Bound != applicationcomposition.BoundAgentTiers ||
+		!strings.Contains(violation.Error(), `"Agent 1" → "Agent 2" → "Agent 3" → "Agent 4"`) {
+		t.Fatalf("err = %v", err)
+	}
+	// The same change one level higher up fits: three levels from Agent 1.
+	source = ancestrySource{fakeSource{1: agent("Agent 1", 2), 2: agent("Agent 2"), 4: agent("Agent 4")}}
+	changed = agent("Agent 2", 4)
+	if err := applicationcomposition.CheckWithAncestors(context.Background(), source, id(2), &changed); err != nil {
+		t.Fatalf("three levels must fit: %v", err)
+	}
+	// Without an ancestry the version is checked alone.
+	if err := applicationcomposition.CheckWithAncestors(context.Background(), fakeSource{1: agent("Agent 1", 2), 2: agent("Agent 2", 3), 3: agent("Agent 3"), 4: agent("Agent 4")}, id(3), &changed); err != nil {
+		t.Fatalf("no ancestry: %v", err)
+	}
+}

@@ -135,6 +135,12 @@ type Prefetcher interface {
 	Prefetch(ctx context.Context, ids []Identity) error
 }
 
+// Ancestry is a Source that answers, in one round trip, the versions that
+// attach any of ids as a tool.
+type Ancestry interface {
+	Parents(ctx context.Context, ids []Identity) ([]Identity, error)
+}
+
 // Violation is a refused composition; Error is the readable refusal naming
 // the attachment and the path that reaches it.
 type Violation struct {
@@ -171,6 +177,91 @@ func Check(ctx context.Context, source Source, root Identity, override *Version)
 	}
 	_, err := check(ctx, source, root, *version, nil)
 	return err
+}
+
+// CheckWithAncestors is Check for a version that is about to change, followed
+// by the same check of every saved version that attaches it, directly or
+// through others (PLAN §8.8): a change below can push an ancestor past a bound
+// (a fourth agent level, a cycle) although the changed version alone fits. The
+// ancestors read root as override. Up to MaxCycleVersions ancestors are found,
+// level by level when source is an Ancestry; a source that is not checks root
+// alone.
+func CheckWithAncestors(ctx context.Context, source Source, root Identity, override *Version) error {
+	if err := Check(ctx, source, root, override); err != nil {
+		return err
+	}
+	ancestry, ok := source.(Ancestry)
+	if !ok {
+		return nil
+	}
+	ancestors, err := ancestorsOf(ctx, ancestry, root)
+	if err != nil {
+		return err
+	}
+	if len(ancestors) == 0 {
+		return nil
+	}
+	if batch, ok := source.(Prefetcher); ok {
+		if err := batch.Prefetch(ctx, ancestors); err != nil {
+			return err
+		}
+	}
+	view := source
+	if override != nil {
+		view = overridden{Source: source, id: root, version: *override}
+	}
+	for _, ancestor := range ancestors {
+		if err := Check(ctx, view, ancestor, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ancestorsOf answers the versions that attach root, transitively, nearest first.
+func ancestorsOf(ctx context.Context, ancestry Ancestry, root Identity) ([]Identity, error) {
+	seen := map[Identity]bool{root: true}
+	var ancestors []Identity
+	for frontier := []Identity{root}; len(frontier) > 0 && len(ancestors) < MaxCycleVersions; {
+		parents, err := ancestry.Parents(ctx, frontier)
+		if err != nil {
+			return nil, err
+		}
+		frontier = nil
+		for _, parent := range parents {
+			if seen[parent] || len(ancestors) == MaxCycleVersions {
+				continue
+			}
+			seen[parent] = true
+			ancestors = append(ancestors, parent)
+			frontier = append(frontier, parent)
+		}
+	}
+	return ancestors, nil
+}
+
+// overridden reads one version as it is about to be stored.
+type overridden struct {
+	Source
+	id      Identity
+	version Version
+}
+
+func (o overridden) Version(ctx context.Context, id Identity) (Version, bool, error) {
+	if id == o.id {
+		version := o.version
+		version.Attachments = append([]Attachment(nil), o.version.Attachments...)
+		version.AgentNodes = append([]AgentNode(nil), o.version.AgentNodes...)
+		return version, true, nil
+	}
+	return o.Source.Version(ctx, id)
+}
+
+func (o overridden) Prefetch(ctx context.Context, ids []Identity) error {
+	if batch, ok := o.Source.(Prefetcher); ok {
+		return batch.Prefetch(ctx, ids)
+	}
+	return nil
 }
 
 // Fit is whether one participant can be offered to a conversation's chat model.

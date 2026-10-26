@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -248,6 +249,61 @@ func (s *CompositionSource) Prefetch(ctx context.Context, ids []applicationcompo
 		s.cache[id] = read
 	}
 	return nil
+}
+
+// Parents answers, in one batch, the saved versions that attach any of ids
+// as a tool (the reverse of attachments), on a legacy-migrated tenant also
+// through the legacy table.
+func (s *CompositionSource) Parents(ctx context.Context, ids []applicationcomposition.Identity) ([]applicationcomposition.Identity, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if s.legacy == nil {
+		legacy, err := legacyApplicationToolsExists(ctx, s.q, s.schema)
+		if err != nil {
+			return nil, fmt.Errorf("composition: read parents: %w", err)
+		}
+		s.legacy = &legacy
+	}
+	children := make([]string, 0, len(ids))
+	for _, id := range ids {
+		children = append(children, strconv.FormatInt(id.VersionID, 10))
+	}
+	sql := fmt.Sprintf(`
+		SELECT DISTINCT version.application_id::bigint, version.id::bigint
+		FROM %[1]s.entity_tool_mapping AS mapping
+		JOIN %[1]s.elitea_tools AS tool ON tool.id = mapping.tool_id
+		JOIN %[1]s.application_versions AS version ON version.id = mapping.entity_version_id
+		WHERE mapping.entity_type = 'agent' AND tool.type = 'application'
+		  AND %[2]s = ANY($1::text[])`, s.schema, ApplicationToolSettingsVersionSQL)
+	if *s.legacy {
+		sql += fmt.Sprintf(`
+		UNION
+		SELECT version.application_id::bigint, version.id::bigint
+		FROM %[1]s.application_tools AS tool
+		JOIN %[1]s.application_versions AS version ON version.id = tool.application_version_id
+		WHERE tool.type = 'application' AND %[2]s = ANY($1::text[])`, s.schema, ApplicationToolSettingsVersionSQL)
+	}
+	rows, err := s.q.Query(ctx, sql, children)
+	if err != nil {
+		return nil, fmt.Errorf("composition: read parents: %w", err)
+	}
+	defer rows.Close()
+	var parents []applicationcomposition.Identity
+	for rows.Next() {
+		var parent applicationcomposition.Identity
+		if err := rows.Scan(&parent.ApplicationID, &parent.VersionID); err != nil {
+			return nil, fmt.Errorf("composition: read parents: %w", err)
+		}
+		parents = append(parents, parent)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("composition: read parents: %w", err)
+	}
+	slices.SortFunc(parents, func(a, b applicationcomposition.Identity) int {
+		return cmp.Or(cmp.Compare(a.VersionID, b.VersionID), cmp.Compare(a.ApplicationID, b.ApplicationID))
+	})
+	return parents, nil
 }
 
 // attachments answers the agents and pipelines attached to each parent

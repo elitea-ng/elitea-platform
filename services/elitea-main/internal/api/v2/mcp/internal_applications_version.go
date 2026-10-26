@@ -79,8 +79,15 @@ func (executor *postgresInternalApplicationExecutor) updateVersion(
 	if problem != nil {
 		return *problem, nil
 	}
-	// FU-244: a kind switch walks the stored composition as the new kind.
+	// FU-244: a kind switch walks the stored composition as the new kind; a
+	// switch to a pipeline first bounds the stored text it will run, as the
+	// REST write does (checkStoredPipelineInstructions).
 	if agentType, _ := arguments["agent_type"].(string); agentType != "" && agentType != state.agentType {
+		if agentType == "pipeline" {
+			if err := pipelinelimits.Check(state.instructions); err != nil {
+				return internalApplicationBadRequest(err.Error())
+			}
+		}
 		if refused, err := refuseInternalComposition(ctx, tx, schema, applicationID, versionID, agentType, state.instructions, false); refused != nil || err != nil {
 			return *refused, err
 		}

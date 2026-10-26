@@ -253,3 +253,44 @@ func TestJudgingParticipantsCostsAFixedNumberOfStatements(t *testing.T) {
 	}
 	t.Logf("statements for 4 and 8 participants: %d, %d", n, twice)
 }
+
+// Review round 2 (C, PLAN §8.8): a chain linked top-down is refused at the link
+// that would make a fourth agent level, from the top of the chain, although the
+// parent being linked holds only two levels itself.
+func TestAnAttachIsRefusedWhenAnAncestorWouldPassTheLimit(t *testing.T) {
+	pool := newPublishCopyPool(t)
+	chain := make([]savedVersion, 5)
+	for n := range chain {
+		chain[n] = seedComposed(t, pool, fmt.Sprintf("Tier %d", n), "agent", "work")
+	}
+	mustAttach(t, pool, chain[0], chain[1])
+	mustAttach(t, pool, chain[1], chain[2])
+	expectRefused(t, pool, chain[2], chain[3], "Agents are nested more than 3 levels deep",
+		`"Tier 0" → "Tier 1" → "Tier 2" → "Tier 3"`)
+}
+
+// The upward walk costs a few batched statements per level, not per ancestor:
+// ten agents attaching one version and ten more above them.
+func TestTheAncestorWalkCostsAFixedNumberOfStatementsPerLevel(t *testing.T) {
+	pool := newPublishCopyPool(t)
+	leaf := seedComposed(t, pool, "Shared leaf", "agent", "work")
+	for n := range 10 {
+		middle := seedComposed(t, pool, fmt.Sprintf("Middle %d", n), "agent", "work")
+		mustAttach(t, pool, middle, leaf)
+		mustAttach(t, pool, seedComposed(t, pool, fmt.Sprintf("Top %d", n), "agent", "work"), middle)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	reader := &countingReader{pool: pool}
+	id := applicationcomposition.Identity{ApplicationID: int64(leaf.appID), VersionID: int64(leaf.versionID)}
+	if err := applicationcomposition.CheckWithAncestors(ctx, repos.NewCompositionSource(reader, `"p_1"`), id, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The leaf and its attachments (2), the legacy probe (1), three parent
+	// levels (3), and the twenty ancestors read in one batch (2); their walks
+	// then read from the cache.
+	t.Logf("statements for 20 ancestors: %d", reader.statements)
+	if reader.statements > 8 {
+		t.Fatalf("the ancestor walk sent %d statements for 20 ancestors", reader.statements)
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 )
 
 // seedComposedApplication seeds one application version and answers its ids.
@@ -101,5 +102,30 @@ func TestInternalWritesRefuseABrokenComposition(t *testing.T) {
 	var backups int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM p_1.application_versions WHERE name LIKE 'mcp-backup-%'`).Scan(&backups); err != nil || backups != 0 {
 		t.Fatalf("a refused write created %d backups (%v)", backups, err)
+	}
+}
+
+// Review round 2 (D): an agent switched to a pipeline by the MCP update has its
+// stored text bounded first, as the REST write does; an over-bound text is
+// refused, not walked as a pipeline without nodes.
+func TestInternalAgentTypeSwitchBoundsTheStoredText(t *testing.T) {
+	pool := newInternalApplicationsPool(t)
+	applicationID, versionID := seedComposedApplication(t, pool, "Big switcher", "agent", limitYAML(pipelinelimits.MaxNodes+1, 0))
+	executor := newPostgresInternalApplicationExecutor(pool)
+	result, err := executor.Execute(context.Background(), 1, 73, internalUpdateVersion, map[string]any{
+		"application_id": applicationID, "version_id": versionID, "agent_type": "pipeline",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.status != 400 || !strings.Contains(string(result.body), "128 nodes") {
+		t.Fatalf("status=%d body=%.300s", result.status, result.body)
+	}
+	var agentType string
+	if err := pool.QueryRow(context.Background(), `SELECT agent_type FROM p_1.application_versions WHERE id = $1`, versionID).Scan(&agentType); err != nil {
+		t.Fatal(err)
+	}
+	if agentType != "agent" {
+		t.Fatalf("a refused switch stored %q", agentType)
 	}
 }
