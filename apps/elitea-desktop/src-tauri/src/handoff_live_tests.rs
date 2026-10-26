@@ -322,6 +322,11 @@ async fn cloud_turn_args(h: &LiveHarness, uuid: &str) -> Vec<String> {
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-q", "-m", "cloud turn 1"]);
     let commit = git(&dir, &["rev-parse", "HEAD"]);
+    // What the worker records for the web's Files changed: the turn's files
+    // against the handoff snapshot (the first turn, so the turn's and the
+    // cumulative sets are the same).
+    let changes = h.app.path().join(format!("changes-{uuid}.json"));
+    std::fs::write(&changes, changed_files(&dir).to_string()).unwrap();
     git(&dir, &["update-ref", "refs/elitea/cloud", "HEAD"]);
     let out = h.app.path().join(format!("cloud-{uuid}.bundle"));
     let mut args = vec!["bundle", "create", "-q", out.to_str().unwrap()];
@@ -337,7 +342,141 @@ async fn cloud_turn_args(h: &LiveHarness, uuid: &str) -> Vec<String> {
         out.to_string_lossy().into_owned(),
         "-commit".into(),
         commit,
+        "-changes".into(),
+        changes.to_string_lossy().into_owned(),
     ]
+}
+
+/// The first cloud turn's files as the worker's `WorkspaceRecordChanges`
+/// carries them, in both scopes: `git diff --numstat` for the counts and the
+/// unified diff per file, against the handoff snapshot.
+fn changed_files(dir: &std::path::Path) -> Value {
+    let numstat = git(dir, &["diff", "--numstat", "refs/elitea/handoff/1", "HEAD"]);
+    let mut files = Vec::new();
+    for scope in ["turn", "cumulative"] {
+        for line in numstat.lines() {
+            let mut cols = line.split('\t');
+            let added: u32 = cols.next().unwrap().parse().unwrap();
+            let removed: u32 = cols.next().unwrap().parse().unwrap();
+            let path = cols.next().unwrap();
+            let status = if path == "src/cloud.rs" {
+                "added"
+            } else {
+                "modified"
+            };
+            let diff = git(dir, &["diff", "refs/elitea/handoff/1", "HEAD", "--", path]);
+            files.push(json!({
+                "scope": scope, "path": path, "status": status,
+                "additions": added, "deletions": removed, "diff": diff,
+            }));
+        }
+    }
+    Value::Array(files)
+}
+
+/// The web's reads of a cloud thread, as the browser makes them: the
+/// handoff banner state, the Files changed list and one file's diff, then
+/// the conversation with the cloud turn in it.
+async fn web_reads_the_cloud_turn(h: &LiveHarness, uuid: &str, turn: &Value) {
+    let live = &h.live;
+    let (code, state) = raw(
+        live,
+        &live.token,
+        Method::GET,
+        &state_path(live, uuid),
+        None,
+    )
+    .await;
+    assert_eq!(code, 200, "{state}");
+    assert_eq!(state["state"], "CLOUD_IDLE", "{state}");
+    assert_eq!(state["cloud_sha"], turn["cloud_sha"], "{state}");
+
+    let changes_path = format!(
+        "/api/v2/elitea_core/workspace_handoff_changes/prompt_lib/{}/{uuid}",
+        live.project
+    );
+    let (code, view) = raw(live, &live.token, Method::GET, &changes_path, None).await;
+    assert_eq!(code, 200, "{view}");
+    assert_eq!(view["complete"], true, "{view}");
+    assert_eq!(view["head_sha"], turn["cloud_sha"], "{view}");
+    let turns = view["turns"].as_array().unwrap();
+    assert_eq!(turns.len(), 1, "{view}");
+    assert_eq!(turns[0]["number"], 1, "{view}");
+    assert_eq!(
+        turns[0]["response_message_id"], turn["answer_uuid"],
+        "the turn belongs to the cloud answer: {view}"
+    );
+    let cumulative = view["cumulative"]["files"].as_array().unwrap();
+    let paths: Vec<&str> = cumulative
+        .iter()
+        .filter_map(|f| f["path"].as_str())
+        .collect();
+    assert_eq!(paths.len(), 2, "{view}");
+    for path in ["README.md", "src/cloud.rs"] {
+        assert!(paths.contains(&path), "{path} in {paths:?}");
+    }
+    assert_eq!(view["cumulative"]["hidden_files"], 0, "{view}");
+    assert_eq!(view["cumulative"]["omitted_files"], 0, "{view}");
+    let added = cumulative
+        .iter()
+        .find(|f| f["path"] == "src/cloud.rs")
+        .unwrap();
+    assert_eq!(added["status"], "added");
+    assert_eq!(added["has_diff"], true);
+
+    let diff_path = format!(
+        "/api/v2/elitea_core/workspace_handoff_diff/prompt_lib/{}/{uuid}",
+        live.project
+    );
+    let commit = view["cumulative_commit"].as_str().unwrap();
+    let (code, diff) = raw(
+        live,
+        &live.token,
+        Method::GET,
+        &format!("{diff_path}?commit={commit}&scope=cumulative&path=README.md"),
+        None,
+    )
+    .await;
+    assert_eq!(code, 200, "{diff}");
+    assert!(
+        diff["diff"]
+            .as_str()
+            .unwrap()
+            .contains("+hello from the cloud"),
+        "{diff}"
+    );
+    let (code, _) = raw(
+        live,
+        &live.token,
+        Method::GET,
+        &format!("{diff_path}?commit={commit}&scope=cumulative&path=.env"),
+        None,
+    )
+    .await;
+    assert_eq!(code, 404, "a file that was never recorded has no diff");
+
+    // The conversation shows the cloud answer, produced by the executor.
+    let (code, conversation) = raw(
+        live,
+        &live.token,
+        Method::GET,
+        &format!(
+            "/api/v2/elitea_core/conversation/prompt_lib/{}/{uuid}",
+            live.project
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(code, 200, "{conversation}");
+    let text = conversation.to_string();
+    assert!(
+        text.contains(turn["answer_uuid"].as_str().unwrap()),
+        "{text}"
+    );
+    assert!(
+        text.contains("Done: README.md and src/cloud.rs changed."),
+        "{text}"
+    );
 }
 
 async fn server_state(h: &LiveHarness, uuid: &str) -> Value {
@@ -537,6 +676,7 @@ async fn live_send_cloud_turn_take_back_import_and_undo() {
     let status = h.host.status(&uuid, None).await.unwrap();
     assert_eq!(status["state"], "CLOUD_IDLE");
     assert!(status["cloud_sha"].is_string());
+    web_reads_the_cloud_turn(&h, &uuid, &turn).await;
 
     // 4. take back: reclaim, preflight with diffs, apply, release, import.
     assert_eq!(

@@ -23,6 +23,11 @@
 // or RECLAIMING when a take back is pending). It prints one JSON object:
 // {"state","epoch","cloud_sha","seq","execution_id","answer_uuid","answer_meta"}.
 //
+// With -changes FILE (a JSON array of {scope, path, from_path, status,
+// additions, deletions, binary, too_large, diff}) the turn's files are kept
+// for the web's Files changed, as the worker's WorkspaceRecordChanges does
+// (the first cloud turn: its parent and base are the handoff snapshot).
+//
 //	cloudturn-sim -sql QUERY
 //
 // prints the rows of QUERY as a JSON array of arrays of strings (NULL is "").
@@ -49,7 +54,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacechanges"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -66,18 +73,19 @@ func main() {
 	bundle := flag.String("bundle", "", "the git bundle of the cloud turn (every ref plus refs/elitea/cloud)")
 	commit := flag.String("commit", "", "the commit refs/elitea/cloud moves to")
 	hold := flag.String("hold", "", "end the turn only after this file exists")
+	changes := flag.String("changes", "", "a JSON file of the files the turn changed (as the worker records them); kept for the web's Files changed")
 	query := flag.String("sql", "", "print the rows of this query as JSON and exit")
 	flag.Parse()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	if err := run(ctx, *project, *conversation, *bundle, *commit, *hold, *query); err != nil {
+	if err := run(ctx, *project, *conversation, *bundle, *commit, *hold, *changes, *query); err != nil {
 		fmt.Fprintln(os.Stderr, "cloudturn-sim:", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, project int64, conversation, bundle, commit, hold, query string) error {
+func run(ctx context.Context, project int64, conversation, bundle, commit, hold, changesFile, query string) error {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		return errors.New("DATABASE_URL is required")
@@ -93,7 +101,7 @@ func run(ctx context.Context, project int64, conversation, bundle, commit, hold,
 		return fmt.Errorf("connect: %w", err)
 	}
 	defer pool.Close()
-	handoff, store, err := compose(ctx, pool)
+	handoff, store, recorder, err := compose(ctx, pool)
 	if err != nil {
 		return err
 	}
@@ -119,6 +127,11 @@ WHERE project_id = $1 AND conversation_uuid = $2::uuid AND deleted_at IS NULL`, 
 	seq, err := publishCloudRef(ctx, store, thread, caller, epoch, bundle, commit)
 	if err != nil {
 		return err
+	}
+	if changesFile != "" {
+		if err := recordChanges(ctx, recorder, thread, executionID, seq, commit, changesFile); err != nil {
+			return err
+		}
 	}
 	if hold != "" {
 		if err := waitFor(ctx, hold); err != nil {
@@ -151,49 +164,108 @@ WHERE project_id = $1 AND conversation_uuid = $2::uuid AND deleted_at IS NULL`, 
 // compose builds the two services over the pool as Main's composition does
 // (cmd/elitea-main/workspace_handoff.go), with a stub device policy that
 // allows the handoff and no audit trail or turn canceller.
-func compose(ctx context.Context, pool *pgxpool.Pool) (*workspacehandoff.Service, *workspacestore.Service, error) {
+func compose(ctx context.Context, pool *pgxpool.Pool) (*workspacehandoff.Service, *workspacestore.Service, *changesRecorder, error) {
 	cfg, err := storage.ConfigFromEnv(os.LookupEnv)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if cfg.Backend != "s3" {
-		return nil, nil, fmt.Errorf("only the s3 backend is supported, not %q", cfg.Backend)
+		return nil, nil, nil, fmt.Errorf("only the s3 backend is supported, not %q", cfg.Backend)
 	}
 	backend, err := s3.New(ctx, s3.Config{
 		Endpoint: cfg.S3.Endpoint, AccessKey: cfg.S3.AccessKey, SecretKey: cfg.S3.SecretKey,
 		Region: cfg.S3.Region, ForcePathStyle: cfg.S3.ForcePathStyle, Bucket: cfg.S3.Bucket, KeyPrefix: cfg.S3.KeyPrefix,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("object store: %w", err)
+		return nil, nil, nil, fmt.Errorf("object store: %w", err)
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	settings, err := dbrepos.NewCloudExecutorSettingsRepository(pool)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	policy, err := workspacehandoff.NewPolicyService(settings, settings, allowHandoff{}, true,
 		platformconfig.CloudExecutorResources{TurnWallSeconds: 3600})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	storeRepo, err := dbrepos.NewWorkspaceStoreRepository(pool)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	buckets := workspacestore.Buckets{Default: workspacestore.PhysicalStore{Name: cfg.Container, Store: backend}}
 	store, err := workspacestore.NewService(storeRepo, buckets, policy, discardAudit{}, logger)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	handoffRepo, err := dbrepos.NewWorkspaceHandoffsRepository(pool)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	handoff, err := workspacehandoff.NewService(handoffRepo, policy, store, noCanceller{}, discardRecorder{}, logger)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return handoff, store, nil
+	changesRepo, err := dbrepos.NewWorkspaceChangesRepository(pool)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	changes, err := workspacechanges.NewService(changesRepo, handoffRepo, handoff, logger)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return handoff, store, &changesRecorder{changes: changes, handoffs: handoffRepo}, nil
+}
+
+// changesRecorder is what the worker's WorkspaceRecordChanges adapter does
+// after a cloud turn: resolve the thread's handoff and keep the turn's files.
+type changesRecorder struct {
+	changes  *workspacechanges.Service
+	handoffs *dbrepos.WorkspaceHandoffsRepository
+}
+
+// changedFile is one entry of the -changes file.
+type changedFile struct {
+	Scope     string  `json:"scope"`
+	Path      string  `json:"path"`
+	FromPath  string  `json:"from_path"`
+	Status    string  `json:"status"`
+	Additions *uint32 `json:"additions"`
+	Deletions *uint32 `json:"deletions"`
+	Binary    bool    `json:"binary"`
+	TooLarge  bool    `json:"too_large"`
+	Diff      string  `json:"diff"`
+}
+
+// recordChanges keeps the first cloud turn's files: its parent and the base
+// are the handoff snapshot, its depth 1.
+func recordChanges(
+	ctx context.Context, recorder *changesRecorder, thread workspacestore.Thread, executionID string, seq int64,
+	commit, file string,
+) error {
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		return fmt.Errorf("read the changes file: %w", err)
+	}
+	var entries []changedFile
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return fmt.Errorf("decode the changes file: %w", err)
+	}
+	handoff, ok, err := recorder.handoffs.Read(ctx, thread)
+	if err != nil || !ok || handoff.HandoffSHA == nil {
+		return fmt.Errorf("read the handoff to record its changes: found=%v err=%v", ok, err)
+	}
+	turn := workspaceruntime.TurnChanges{Commit: commit, Parent: *handoff.HandoffSHA, Base: *handoff.HandoffSHA, Depth: 1}
+	for _, entry := range entries {
+		turn.Files = append(turn.Files, workspaceruntime.ChangedFile{
+			Scope: entry.Scope, Path: entry.Path, FromPath: entry.FromPath, Status: entry.Status,
+			Additions: entry.Additions, Deletions: entry.Deletions, Binary: entry.Binary, TooLarge: entry.TooLarge, Diff: entry.Diff,
+		})
+	}
+	if err := recorder.changes.Record(ctx, handoff, executionID, seq, turn); err != nil {
+		return fmt.Errorf("record the turn's changes: %w", err)
+	}
+	return nil
 }
 
 type allowHandoff struct{}

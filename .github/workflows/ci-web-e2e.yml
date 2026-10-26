@@ -121,6 +121,27 @@ on:
       - ".github/actions/**"
       - "deploy/**"
       - "docker-bake.hcl"
+      # The `handoff-journey` job's own subjects (ADR-0034): the desktop host's
+      # handoff code and the live tests it runs, the crates the host links for
+      # it, and the simulator that plays the cloud executor. The desktop
+      # paths are outside the stack lanes (e2e-lane-filter.sh), so only that
+      # job runs on a change that touches nothing else.
+      - "apps/elitea-desktop/src-tauri/**"
+      - "rust-toolchain.toml"
+      - "scripts/ci/assert-rust-toolchain.sh"
+      - "libs/rust/workspace-store/**"
+      - "libs/rust/local-tools/**"
+      - "libs/rust/platform-rpc/**"
+      - "libs/rust/agent-runtime/**"
+      - "libs/rust/llm-wire/**"
+      - "libs/rust/connectors/**"
+      - "libs/rust/content-source/**"
+      - "libs/rust/doc-extract/**"
+      - "libs/rust/engine-core/**"
+      - "libs/rust/code-parsers/**"
+      - "libs/rust/inventory-core/**"
+      - "libs/rust/local-index/**"
+      - "libs/rust/vendor/**"
       # The `native-client-conformance` job's own subject: the black-box
       # ADR-0025 suite it runs against the stack.
       - "conformance/nativeclient/**"
@@ -196,7 +217,8 @@ jobs:
     # carry (`model-path-changes`), so a docs-only pull request builds nothing.
     needs: &build-once-needs model-path-changes
     if: &build-once-if >-
-      needs.model-path-changes.outputs.reaches-stack == 'true' &&
+      (needs.model-path-changes.outputs.reaches-stack == 'true' ||
+       needs.model-path-changes.outputs.reaches-handoff == 'true') &&
       (github.event_name != 'pull_request' ||
        (github.event.pull_request.head.repo.full_name == github.repository &&
         github.actor != 'dependabot[bot]'))
@@ -852,6 +874,7 @@ jobs:
     outputs:
       reaches-model: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-model }}
       reaches-stack: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-stack }}
+      reaches-handoff: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-handoff }}
     steps:
       - uses: actions/checkout@v7
         if: github.event_name == 'pull_request'
@@ -1370,6 +1393,90 @@ jobs:
           STANDALONE_PROJECT: elitea-native-conformance-ci
           STANDALONE_PORT: "8088"
         run: bash deploy/scripts/native-conformance.sh run
+
+  handoff-journey:
+    name: Cloud handoff journey (ADR-0034)
+    # Runs when the change touches the handoff (reaches-handoff: the desktop
+    # host's handoff code, the crates it links, Main's handoff services, this
+    # lane), on main's nightly and on dispatch. NOT gated by reaches-stack: a
+    # change to apps/elitea-desktop alone is outside the stack lanes and is
+    # exactly the change this lane exists for.
+    needs: [model-path-changes, web-images, stack-images]
+    if: ${{ !cancelled() && (needs.web-images.result == 'success' || needs.web-images.result == 'skipped') && (needs.stack-images.result == 'success' || needs.stack-images.result == 'skipped') && needs.model-path-changes.outputs.reaches-handoff == 'true' }}
+    permissions:
+      contents: read
+      # Pulls the ci-* images by digest; only the build jobs write packages.
+      packages: read
+    # The desktop host's `handoff::tests::live` tests (apps/elitea-desktop/
+    # src-tauri/src/handoff_live_tests.rs) against the FULL standalone stack:
+    # send a workspace folder to the cloud, a cloud turn that changes files,
+    # the web's reads of that turn (state, Files changed, one file's diff, the
+    # conversation), take back, and the folder and the thread history match.
+    # Also the take-back while a turn runs, cancel and erase in the cloud, a
+    # stale epoch and the quota. deploy/scripts/handoff-live.sh owns the
+    # lifecycle (overlay, seeds, bucket encryption, the simulator that plays
+    # the cloud executor, the tests, logs on failure, teardown); its header
+    # says why the executor is simulated. One Linux runner: the stack needs
+    # Docker and the host crate builds against WebKitGTK, whose headers are
+    # installed below. The embedded web bundle is a stub: no test renders it.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          # The cache is .github/actions/go-cache below: setup-go's own
+          # saves from every ref, and pull-request copies evicted main's.
+          cache: false
+          go-version-file: go.work
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
+          cache-dependency-path: services/elitea-main/go.sum
+      - name: Stack images for this lane (pulled by digest; built here on a fork)
+        uses: ./.github/actions/stack-images
+        with:
+          built: ${{ needs.web-images.result == 'success' && needs.stack-images.result == 'success' }}
+          compose-files: |
+            docker-compose.standalone-full.yml
+            docker-compose.standalone-rust-agent.yml
+          cache-hcl: |
+            ci/bake-cache.hcl
+            ci/bake-cache-rust.hcl
+          targets: standalone-rust
+          mount-cache-suffix: rust
+      - name: Host build dependencies (Tauri on Linux)
+        working-directory: ${{ github.workspace }}
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libxdo-dev pkg-config
+      - name: The embedded web bundle is a stub (the tests render nothing)
+        working-directory: ${{ github.workspace }}
+        run: |
+          mkdir -p apps/elitea-web/dist-desktop
+          printf '<!doctype html><title>stub</title>' > apps/elitea-web/dist-desktop/index.html
+      - name: Assert the pinned toolchain
+        working-directory: apps/elitea-desktop/src-tauri
+        run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+      # Read everywhere, write on main only (the policy of ci-desktop.yml).
+      - name: Cache cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: apps/elitea-desktop/src-tauri
+          prefix-key: handoff-journey
+      - name: Run the handoff journey against a fresh standalone stack
+        working-directory: ${{ github.workspace }}
+        env:
+          COMPOSE_BIN: docker compose
+          CI: "true"
+          STANDALONE_SKIP_BUILD: "1"
+          STANDALONE_WORKER: rust
+          STANDALONE_PROJECT: elitea-handoff-live-ci
+          STANDALONE_PORT: "8089"
+        run: bash deploy/scripts/handoff-live.sh run
 
   index-stream-rust:
     name: Index journey and lifecycle on the Rust-only runtime (ADR-0030 V3)
