@@ -356,6 +356,7 @@ async fn both_paused(
         let proven = child_card(&pause).expect("the child pause is proven");
         assert_eq!(proven.kind, kind);
         assert!(cards.iter().any(|(_, id)| *id == proven.card.interrupt_id));
+        assert_card_frame(&pause, kind);
     }
     let left = fixture.pause_of("left").await;
     let left_id = child_card(&left).unwrap().card.interrupt_id;
@@ -371,6 +372,65 @@ async fn both_paused(
         .unwrap();
     assert_ne!(left.0, right.0, "children share no card");
     (left, right)
+}
+
+/// The pause also renders as its card frame (contract §4): kind, guardrail
+/// and actions agree with the proven kind, the digest is a function of the
+/// pause, and the full card frame builds and encodes.
+fn assert_card_frame(pause: &ParallelBranchPause, kind: FanoutCardKind) {
+    use crate::agents::graph::fanout_frames::{
+        AgentPathTier, CardInput, CardKind, FanoutMemberV1, InterruptCardV1, MemberHierarchy,
+        interrupt_pending_event, member_call_id,
+    };
+    let parts = crate::agents::graph::parallel_cards::card_parts(pause).expect("card parts");
+    assert_eq!(
+        parts,
+        crate::agents::graph::parallel_cards::card_parts(pause).unwrap()
+    );
+    let (expected, guardrail) = match kind {
+        FanoutCardKind::ToolGuard => (CardKind::ToolGuard, "sensitive_tool"),
+        FanoutCardKind::HitlNode => (CardKind::HitlNode, "pipeline_hitl"),
+        FanoutCardKind::StaticPause => (CardKind::HitlNode, "pipeline_static"),
+        FanoutCardKind::AskUser => (CardKind::AskUser, "clarifying_question"),
+        FanoutCardKind::DelegatedAuth => (CardKind::DelegatedAuth, "mcp_auth"),
+    };
+    assert_eq!(
+        (parts.kind, parts.display.guardrail_type),
+        (expected, guardrail)
+    );
+    assert!(
+        parts
+            .available_actions
+            .iter()
+            .all(|action| kind.accepts(action))
+    );
+    let member = FanoutMemberV1 {
+        activation: "0123456789abcdef".to_owned(),
+        kind: "parallel",
+        member: "left".to_owned(),
+        node: "fan".to_owned(),
+        ordinal: 1,
+        total: 2,
+    };
+    let hierarchy = MemberHierarchy {
+        path: vec![AgentPathTier {
+            call_id: member_call_id(&pause.thread_id),
+            name: "worker".to_owned(),
+            sibling_ordinal: Some(1),
+        }],
+    };
+    let card = InterruptCardV1::new(CardInput {
+        interrupt_key: &"a".repeat(64),
+        interrupt_id: &child_card(pause).unwrap().card.interrupt_id,
+        kind: parts.kind,
+        available_actions: &parts.available_actions,
+        payload_sha256: &parts.payload_sha256,
+        display: parts.display.clone(),
+        hierarchy: &hierarchy,
+        member: Some(&member),
+    })
+    .expect("the card frame builds");
+    interrupt_pending_event(&card).expect("the frame encodes");
 }
 
 /// The right card resumes only its own child: the sibling keeps its card.
