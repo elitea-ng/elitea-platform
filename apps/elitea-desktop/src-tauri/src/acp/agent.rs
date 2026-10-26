@@ -1097,7 +1097,9 @@ impl Connection {
                 Err(error) if error.code == "steer_invalid" => {
                     return Err(RpcError::invalid_params(error.message));
                 }
-                // The turn is ending: the prompt runs as the next turn.
+                // The turn is ending, or it has the most steering messages
+                // that one turn takes (`steer_turn_full`): the prompt runs
+                // as the next turn.
                 Err(error) => log::debug!("acp: a prompt waits for the next turn ({})", error.code),
             }
         }

@@ -3532,7 +3532,9 @@ impl AgentHost {
     /// # Errors
     ///
     /// `turn_unknown` / `turn_expired`, `turn_not_running` once the turn is
-    /// cancelled or its run ended, `steer_invalid`, `steer_queue_full`.
+    /// cancelled or its run ended, `steer_invalid`, `steer_queue_full`,
+    /// `steer_turn_full` once the turn has the most steering messages that
+    /// its commit carries.
     pub fn steer(&self, turn_id: &str, text: &str) -> Result<String, TurnError> {
         let entry = self.entry(turn_id)?;
         let state = entry.state();

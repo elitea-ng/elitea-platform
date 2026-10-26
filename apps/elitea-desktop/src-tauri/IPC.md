@@ -321,7 +321,7 @@ names instead of retrying. A rule imported from a repository leaves the
 | `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
-| `agent_turn_steer` | `{turn_id, text}` | `{steer_id}` — queues `text` against the running turn: the agent gets it as a user message of the same turn at the next safe point (**Steering**, below). Rejects `turn_not_running` once the turn is cancelled or its run ended (send the text as the next turn), `steer_invalid` (empty, only whitespace, or more than 16 KiB of UTF-8), `steer_queue_full` (10 messages wait already), `turn_unknown` / `turn_expired`. |
+| `agent_turn_steer` | `{turn_id, text}` | `{steer_id}` — queues `text` against the running turn: the agent gets it as a user message of the same turn at the next safe point (**Steering**, below). Rejects `turn_not_running` once the turn is cancelled or its run ended (send the text as the next turn), `steer_invalid` (empty, only whitespace, or more than 16 KiB of UTF-8), `steer_queue_full` (10 messages wait already), `steer_turn_full` (the turn has 10 steering messages already, taken and waiting together: the most its commit carries; the UI shows the message and the person sends the text as the next turn), `turn_unknown` / `turn_expired`. |
 | `agent_turn_steer_update` | `{turn_id, steer_id, text: string \| null}` | `null` — changes a waiting message (`text`), or removes it (`null`). Rejects `steer_not_pending` (the agent has it already, or it was removed), `turn_not_running`, `steer_invalid`, `turn_unknown` / `turn_expired`. |
 | `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny" \| "deny_with_feedback" \| "continue" \| "cancel" \| "accept" \| "decline", feedback?: string}` (`continue` is `allow_once` and `cancel` is `deny`, the MCP sign-in card's answers; `accept` and `decline` answer a `plan_proposed` card, where only `accept` accepts, and on any other card both deny; `deny_with_feedback` denies any card (declines a plan card) and tells the agent why. `feedback`, taken by `decline` and `deny_with_feedback`, is the person's text for the model, kept to 2 KiB of UTF-8 (the UI's box stops there too), control characters other than newlines and tabs dropped; it travels only with a denial, never an approval, and `deny_with_feedback` without any is `deny`) | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
 | `turn_changes` | `{turn_id}` | `{files: FileChange[], latest: boolean, undone: boolean}` |
@@ -332,8 +332,11 @@ names instead of retrying. A rule imported from a repository leaves the
 
 **Steering.** While a turn runs, the composer stays open. A message sent
 then is a steering message (`agent_turn_steer`): the host queues it
-against the turn (at most 10, each at most 16 KiB) and sends
-`steer_queued`. The person can change it (`steer_queued` again, with the
+against the turn (each at most 16 KiB) and sends `steer_queued`. One
+turn takes at most 10 steering messages, the taken and the waiting ones
+together: the commit carries each taken text as one item, and the
+server keeps at most 10. The 11th is refused (`steer_turn_full`); no text
+is joined into another or cut. The person can change it (`steer_queued` again, with the
 next `revision`) or remove it (`steer_dropped` `removed`) while it waits
 (`agent_turn_steer_update`). At the next safe point of the run (after
 the tool results of a step, before the next model request) the agent
@@ -347,8 +350,9 @@ point of the turn where `steer_injected` is. When the turn ends first
 still waits is sent as `steer_dropped` with reason `turn_ended`, before
 `usage_total` and `done`; the UI then sends their texts, joined with a
 blank line, as the next turn. The commit of the turn keeps its own prompt
-as the user message: the server conversation does not get the injected
-messages.
+as the user message and carries the injected messages, in order, as
+`steering_messages` (`{content}` each, a NUL as a space): the server stores
+them after the question, as the session has them.
 
 ACP (`src/acp/`) steers with the same queue. A `session/prompt` that
 arrives while a turn of its session runs is not refused: its text goes into
@@ -374,7 +378,9 @@ resource link, or a slash command (`/compact`, a custom command) is refused
 with `-32602` invalid params (send it when the turn ends). Beyond the
 queue's bounds (10 prompts waiting, 16 KiB of text) the prompt is refused
 with the refusal ACP used before for a running session (`data.code`
-`busy`), so no prompt is lost without an answer. `session/load` of a
+`busy`), so no prompt is lost without an answer. A prompt past the 10
+steering messages that one turn takes (`steer_turn_full`) is not refused:
+it runs as the next prompt turn. `session/load` of a
 session that runs a turn is still refused with `busy`.
 
 **One round trip before the first token.** The host keeps, for the app's

@@ -15,7 +15,11 @@
 //!
 //! The commit of the turn carries the messages the agent took, in order
 //! (`steering_messages`, [`TurnSteering::commit_messages`]): the server
-//! stores them after the question, as the session has them.
+//! stores them after the question, as the session has them. The commit
+//! carries at most [`MAX_COMMITTED`] of them, so one turn takes at most
+//! that many: the taken and the waiting messages together. The queue
+//! refuses the next one (`steer_turn_full`), and the UI sends it as the
+//! next turn. No text is joined into another or cut.
 //!
 //! The queue and its events change under one lock, so the UI receives
 //! `steer_queued`, `steer_injected` and `steer_dropped` of one message in
@@ -36,7 +40,8 @@ use super::turn::TurnError;
 pub const MAX_PENDING: usize = 10;
 /// The largest message, in bytes of UTF-8.
 pub const MAX_TEXT_BYTES: usize = 16 * 1024;
-/// The most steering messages one commit carries (the server's bound).
+/// The most steering messages one commit carries (the server's bound), and
+/// so the most that one turn takes (taken and waiting together).
 pub const MAX_COMMITTED: usize = 10;
 /// The author of a steering message's session event: the runner's own
 /// author for the person's message.
@@ -58,9 +63,10 @@ fn not_pending() -> TurnError {
     )
 }
 
-/// Check a message's text: not empty, not only whitespace, not too long.
+/// Check a message's text: not empty, not only whitespace (a NUL counts as
+/// a space, as in the commit), not too long.
 fn checked(text: &str) -> Result<String, TurnError> {
-    if text.trim().is_empty() {
+    if text.replace('\0', " ").trim().is_empty() {
         return Err(TurnError::new("steer_invalid", "The message is empty."));
     }
     if text.len() > MAX_TEXT_BYTES {
@@ -75,28 +81,22 @@ fn checked(text: &str) -> Result<String, TurnError> {
     Ok(text.to_owned())
 }
 
-/// The texts as the server accepts them: no NUL (a space instead), none
-/// blank, at most [`MAX_COMMITTED`]. A turn that took more joins the rest
-/// into the last one with a blank line, cut to [`MAX_TEXT_BYTES`]: the
-/// commit keeps every text it can and is never refused for them.
+/// The texts as the server accepts them: no NUL (a space instead). Each
+/// text is one item, as the agent took it. [`checked`] keeps each one not
+/// blank and at most [`MAX_TEXT_BYTES`], and [`TurnSteering::queue`] keeps
+/// their number at most [`MAX_COMMITTED`].
 fn committed(texts: &[String]) -> Vec<String> {
-    let mut texts: Vec<String> = texts
-        .iter()
-        .map(|text| text.replace('\0', " "))
-        .filter(|text| !text.trim().is_empty())
-        .collect();
-    if texts.len() > MAX_COMMITTED {
-        let mut last = texts.split_off(MAX_COMMITTED - 1).join("\n\n");
-        if last.len() > MAX_TEXT_BYTES {
-            let mut end = MAX_TEXT_BYTES;
-            while !last.is_char_boundary(end) {
-                end -= 1;
-            }
-            last.truncate(end);
-        }
-        texts.push(last);
-    }
-    texts
+    debug_assert!(texts.len() <= MAX_COMMITTED);
+    texts.iter().map(|text| text.replace('\0', " ")).collect()
+}
+
+fn turn_full() -> TurnError {
+    TurnError::new(
+        "steer_turn_full",
+        format!(
+            "This turn already has {MAX_COMMITTED} steering messages, the most one turn takes. Send this one as the next message."
+        ),
+    )
 }
 
 /// One message that waits for the next safe point.
@@ -156,7 +156,9 @@ impl TurnSteering {
     /// # Errors
     ///
     /// `turn_not_running` when the queue is closed, `steer_invalid` for an
-    /// empty or too long text, `steer_queue_full` past [`MAX_PENDING`].
+    /// empty or too long text, `steer_queue_full` past [`MAX_PENDING`],
+    /// `steer_turn_full` when the taken and the waiting messages are
+    /// [`MAX_COMMITTED`] already (the commit cannot carry one more).
     pub fn queue(&self, text: &str) -> Result<String, TurnError> {
         let text = checked(text)?;
         let mut queue = self.lock();
@@ -170,6 +172,9 @@ impl TurnSteering {
                     "At most {MAX_PENDING} messages can wait for the agent. Wait for it to take them, or remove one."
                 ),
             ));
+        }
+        if queue.injected.len() + queue.pending.len() >= MAX_COMMITTED {
+            return Err(turn_full());
         }
         let pending = Pending {
             id: uuid::Uuid::new_v4().to_string(),
@@ -354,18 +359,39 @@ mod tests {
         );
     }
 
+    // One turn takes at most MAX_COMMITTED messages (taken and waiting
+    // together): the next one is refused, and the commit carries each taken
+    // text whole, one item each.
     #[test]
-    fn steering_commit_joins_texts_past_the_bound_into_the_last() {
-        let mut texts: Vec<String> = (1..=12).map(|n| format!("m{n}")).collect();
-        texts.push("\0".into());
-        let joined = committed(&texts);
-        assert_eq!(joined.len(), MAX_COMMITTED);
-        assert_eq!(joined[8], "m9");
-        assert_eq!(joined[9], "m10\n\nm11\n\nm12");
-        let long = vec!["é".repeat(MAX_TEXT_BYTES / 2); MAX_COMMITTED + 1];
-        let cut = committed(&long);
-        assert_eq!(cut.len(), MAX_COMMITTED);
-        assert!(cut[9].len() <= MAX_TEXT_BYTES && cut[9].len() > MAX_TEXT_BYTES - 2);
+    fn steering_refuses_past_the_commit_bound_and_commits_each_text_whole() {
+        let (_, steering) = steering();
+        let long = "é".repeat(MAX_TEXT_BYTES / 2);
+        for n in 1..MAX_COMMITTED {
+            steering.queue(&format!("{n}{}", &long[2..])).unwrap();
+            if n % 3 == 0 {
+                steering.take();
+            }
+        }
+        let last = steering.queue("last").unwrap();
+        let refused = steering.queue("one more").unwrap_err();
+        assert_eq!(refused.code, "steer_turn_full");
+        assert!(refused.message.contains("next message"));
+        // A removed waiting message frees its place.
+        steering.update(&last, None).unwrap();
+        steering.queue("last again").unwrap();
+        steering.take();
+        assert_eq!(steering.queue("after").unwrap_err().code, "steer_turn_full");
+        let commit = steering.commit_messages();
+        assert_eq!(commit.len(), MAX_COMMITTED);
+        for (n, item) in commit.iter().take(MAX_COMMITTED - 1).enumerate() {
+            let content = item["content"].as_str().unwrap();
+            assert!(content.starts_with(&(n + 1).to_string()));
+            assert!(content.len() <= MAX_TEXT_BYTES);
+        }
+        assert_eq!(
+            commit[MAX_COMMITTED - 1],
+            json!({ "content": "last again" })
+        );
     }
 
     #[test]
@@ -418,6 +444,8 @@ mod tests {
     fn steering_refuses_invalid_text_and_a_full_queue() {
         let (_, steering) = steering();
         assert_eq!(steering.queue("  \n\t").unwrap_err().code, "steer_invalid");
+        // Only NUL is blank in the commit (a NUL becomes a space).
+        assert_eq!(steering.queue("\0 \0").unwrap_err().code, "steer_invalid");
         let long = "x".repeat(MAX_TEXT_BYTES + 1);
         assert_eq!(steering.queue(&long).unwrap_err().code, "steer_invalid");
         assert!(steering.queue(&"x".repeat(MAX_TEXT_BYTES)).is_ok());
