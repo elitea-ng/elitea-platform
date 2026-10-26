@@ -243,7 +243,7 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// Client contract 1.3: cancelChatExecution, registered only when the
 		// cancel route is composed (production_router.go).
 		CurrentAgentCancel: http.NotFoundHandler(),
-		// Client contract 1.26: the four steering operations, registered
+		// Client contract 1.27: the four steering operations, registered
 		// only when the steering route is composed (production_router.go).
 		CurrentAgentSteering: http.NotFoundHandler(),
 		// Client contract 1.5: startLocalTurn and commitLocalTurn, registered

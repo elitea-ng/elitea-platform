@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.26",
+  "client_contract": "1.27",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",

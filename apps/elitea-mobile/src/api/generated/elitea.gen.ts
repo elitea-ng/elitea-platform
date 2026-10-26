@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.26
+ * client contract:    1.27
  * operations sha256:  783025a1641da0a5b9253902c5b1a2dfcf89af67eb4083a7bb707da0de98447f
  */
 export interface paths {
@@ -1370,7 +1370,7 @@ export interface paths {
         };
         /**
          * List the steering messages of an answer
-         * @description Client contract 1.26. Every steering message of this answer's turn,
+         * @description Client contract 1.27. Every steering message of this answer's turn,
          *     oldest first, in every state (see steerChatExecution). A client that
          *     reloads uses it to show the pending and injected messages, and to
          *     find `turn_ended` messages that still wait to be sent. The same
@@ -1381,7 +1381,7 @@ export interface paths {
         put?: never;
         /**
          * Queue a steering message for a running answer
-         * @description Client contract 1.26. Queues a user message against the turn that
+         * @description Client contract 1.27. Queues a user message against the turn that
          *     writes this answer. The turn does not stop. The worker injects the
          *     message at its next safe point: after the current tool calls finish
          *     and before the next model request. The model reads it as a new user
@@ -1405,12 +1405,20 @@ export interface paths {
          *     turn has no MCP tokens of the client: an MCP server that needs one
          *     asks for authorization, as for a client that holds no token.
          *     Whoever takes the messages first wins; the other gets an empty list.
+         *     When the author already sent a newer message in the conversation
+         *     after the turn ended, the server starts no turn: the messages are
+         *     `removed`, and each gets `steer.dropped` with `reason: superseded`
+         *     on the stream of the author's newer turn (else on this answer's
+         *     stream). The event's `response_message_id` names this answer. The
+         *     client shows the texts as not sent, so the author can send them
+         *     again.
          *
          *     EVENTS. The execution event stream
          *     (`/api/v2/executions/{project_id}/{execution_id}/events`) carries
          *     `steer.queued` (a new or edited pending message), `steer.injected`
-         *     (with `message_id`) and `steer.dropped` (`reason: removed`). The
-         *     `data` of each is one SteeringMessage.
+         *     (with `message_id`) and `steer.dropped` (`reason` `removed`, or
+         *     `superseded` as above). The `data` of each is one SteeringMessage,
+         *     plus `reason` on `steer.dropped`.
          *
          *     WHO. The permission is the send's (`models.chat.messages.create`),
          *     and the caller must be a user participant of the conversation. A
@@ -1455,7 +1463,7 @@ export interface paths {
         post?: never;
         /**
          * Remove a steering message before it is injected
-         * @description Client contract 1.26. Removes a PENDING or `turn_ended` message (it
+         * @description Client contract 1.27. Removes a PENDING or `turn_ended` message (it
          *     becomes `removed`); for a pending one the stream carries
          *     `steer.dropped` with `reason: removed`. Only the author may remove
          *     it. Idempotent: removing a removed message answers 204 again. An
@@ -1467,7 +1475,7 @@ export interface paths {
         head?: never;
         /**
          * Edit a pending steering message
-         * @description Client contract 1.26. Replaces the content of a PENDING message
+         * @description Client contract 1.27. Replaces the content of a PENDING message
          *     and advances `revision`; the stream carries `steer.queued` again.
          *     Only the message's author may edit it. A message that the worker
          *     already injected, or that is removed or `turn_ended`, answers 409
@@ -1493,7 +1501,7 @@ export interface paths {
         put?: never;
         /**
          * Take the caller's turn_ended steering messages as the next message
-         * @description Client contract 1.26. Takes, in one transaction, every `turn_ended`
+         * @description Client contract 1.27. Takes, in one transaction, every `turn_ended`
          *     steering message of this answer that the CALLER queued, marks them
          *     `handed_off` and answers them, oldest first. The client then sends
          *     their texts, joined with a blank line, as one normal message (the
@@ -3584,7 +3592,7 @@ export interface components {
             /** Format: int64 */
             retry_after_ms?: number;
         };
-        /** @description One steering message of a running turn (client contract 1.26). NOTE(W2): internal/api/v2/agentexecution/steering.go:303 (`steeringView`). */
+        /** @description One steering message of a running turn (client contract 1.27). NOTE(W2): internal/api/v2/agentexecution/steering.go:303 (`steeringView`). */
         SteeringMessage: {
             /**
              * Format: int64

@@ -9,12 +9,13 @@ import (
 
 type handOffStoreStub struct {
 	handOffs []ServerHandOff
+	effects  []SteeringEffect
 	started  []string
 	dropped  []string
 }
 
-func (s *handOffStoreStub) TakeServerHandOffs(context.Context, time.Duration, time.Duration, int) ([]ServerHandOff, error) {
-	return s.handOffs, nil
+func (s *handOffStoreStub) TakeServerHandOffs(context.Context, time.Duration, time.Duration, int) ([]ServerHandOff, []SteeringEffect, error) {
+	return s.handOffs, s.effects, nil
 }
 
 func (s *handOffStoreStub) MarkServerHandOffStarted(_ context.Context, handOff ServerHandOff) error {
@@ -62,7 +63,9 @@ func TestSteeringHandOffRoutineStartsDropsAndRetries(t *testing.T) {
 		}
 		return userID == 11, nil
 	}
-	routine, err := NewSteeringHandOffRoutine(store, starter, mayStart, nil)
+	store.effects = []SteeringEffect{{ProjectID: 7, ExecutionID: "newer", Cursor: 9}}
+	var woken []SteeringEffect
+	routine, err := NewSteeringHandOffRoutine(store, starter, mayStart, func(effects []SteeringEffect) { woken = append(woken, effects...) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +73,7 @@ func TestSteeringHandOffRoutineStartsDropsAndRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result != (SteeringHandOffResult{Started: 2, Dropped: 2, Retried: 2}) {
+	if result != (SteeringHandOffResult{Started: 2, Dropped: 2, Retried: 2, Superseded: 1}) || len(woken) != 1 || woken[0].ExecutionID != "newer" {
 		t.Fatalf("result=%+v", result)
 	}
 	if len(starter.applications) != 3 || starter.applications[0].UserInput != "one\n\ntwo" ||

@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Steering messages of a local turn (client contract 1.26): the texts the
+// Steering messages of a local turn (client contract 1.27): the texts the
 // person sent while the turn ran, which the agent took at a safe point. The
 // commit stores each one as a user message after the question. The bounds
 // are the cloud steering bounds (agentexecution steering).

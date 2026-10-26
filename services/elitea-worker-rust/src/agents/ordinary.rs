@@ -299,7 +299,7 @@ impl OrdinaryNativeAgentAssembler {
             session: session_authority,
             state_writer_lease,
         } = redeemed;
-        // Client contract 1.26: the claim's live lease also fences the
+        // Client contract 1.27: the claim's live lease also fences the
         // steering queue of this turn.
         let steering = state_writer_lease.steering_source();
         let (sessions, model_scopes) = self

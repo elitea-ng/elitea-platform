@@ -21,7 +21,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// Steering during execution (client contract 1.26): queue, list, edit and
+// Steering during execution (client contract 1.27): queue, list, edit and
 // remove the user messages sent while a cloud turn runs. The permission is
 // the send's; the store checks that the caller is a user participant of the
 // answer's conversation.

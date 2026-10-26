@@ -74,7 +74,7 @@ export const LocalTurnCommitRequest = zod
       .max(localTurnCommitRequestSteeringMessagesMax)
       .optional()
       .describe(
-        "Client contract 1.26. The steering messages the turn took while it ran (the person sent them mid-turn and the agent read them at a safe point), in the order the agent took them; absent or empty when none. Each one is stored as a user message of the conversation directly after the question (the question's `created_at`, a larger id), with `meta.steering` `{origin: local, response_message_id}`, in the same transaction as the turn. They are part of the commit body, so a retry must send them again; the audit holds their SHA-256, never the text.",
+        "Client contract 1.27. The steering messages the turn took while it ran (the person sent them mid-turn and the agent read them at a safe point), in the order the agent took them; absent or empty when none. Each one is stored as a user message of the conversation directly after the question (the question's `created_at`, a larger id), with `meta.steering` `{origin: local, response_message_id}`, in the same transaction as the turn. They are part of the commit body, so a retry must send them again; the audit holds their SHA-256, never the text.",
       ),
     assistant_message: zod.object({
       content: zod

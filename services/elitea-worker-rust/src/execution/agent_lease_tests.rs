@@ -726,7 +726,7 @@ fn steer_calls(state: &FakeState) -> usize {
         .count()
 }
 
-// Client contract 1.26: the probe claims through the lease actor and gets the
+// Client contract 1.27: the probe claims through the lease actor and gets the
 // texts in queue order; a refusal gives nothing and keeps asking later.
 #[tokio::test(flavor = "current_thread")]
 async fn state_probe_claims_steering_in_queue_order_and_survives_a_refusal() {

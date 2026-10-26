@@ -303,7 +303,7 @@ pub(crate) struct OrdinaryRuntimeBindings {
     /// The cloud workspace's argument-aware confirmation (ADR-0034): a
     /// destructive or escaping `run_command` is a HITL interrupt.
     tool_call_confirmation: Option<Arc<dyn adk_rust::agent::ToolCallConfirmation>>,
-    /// Client contract 1.26: the user messages queued against the running
+    /// Client contract 1.27: the user messages queued against the running
     /// turn, taken by the root agent at each safe point. Only the ordinary
     /// root agent takes them; a pipeline or a child agent never does.
     steering: Option<Arc<dyn crate::state::TurnSteering>>,

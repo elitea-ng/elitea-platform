@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -74,7 +75,7 @@ func TestPostgresSteeringClientHandOffReplaysAndWaitsForTheEnd(t *testing.T) {
 		t.Fatalf("listed=%+v err=%v", listed, err)
 	}
 	// The server finds nothing to start.
-	server, err := repository.TakeServerHandOffs(t.Context(), 0, time.Hour, 10)
+	server, _, err := repository.TakeServerHandOffs(t.Context(), 0, time.Hour, 10)
 	if err != nil || len(server) != 0 {
 		t.Fatalf("server=%+v err=%v", server, err)
 	}
@@ -87,12 +88,12 @@ func TestPostgresSteeringServerHandOffStartsRetriesAndDrops(t *testing.T) {
 
 	// Not before the client's window has passed.
 	endSteeringTurn(t, repository, response, "execution-steer-handoff-server", 2*time.Second)
-	early, err := repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, time.Hour, 10)
+	early, _, err := repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, time.Hour, 10)
 	if err != nil || len(early) != 0 {
 		t.Fatalf("early=%+v err=%v", early, err)
 	}
 	endSteeringTurn(t, repository, response, "execution-steer-handoff-server", time.Minute)
-	taken, err := repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, time.Hour, 10)
+	taken, _, err := repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, time.Hour, 10)
 	if err != nil || len(taken) != 1 {
 		t.Fatalf("taken=%+v err=%v", taken, err)
 	}
@@ -108,14 +109,14 @@ func TestPostgresSteeringServerHandOffStartsRetriesAndDrops(t *testing.T) {
 		t.Fatalf("late=%+v err=%v", late, err)
 	}
 	// Not started: a retry answers the same question id.
-	retried, err := repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, 0, 10)
+	retried, _, err := repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, 0, 10)
 	if err != nil || len(retried) != 1 || retried[0].QuestionID != handOff.QuestionID || len(retried[0].Texts) != 2 {
 		t.Fatalf("retried=%+v err=%v", retried, err)
 	}
 	if err := repository.MarkServerHandOffStarted(t.Context(), handOff); err != nil {
 		t.Fatal(err)
 	}
-	again, err := repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, 0, 10)
+	again, _, err := repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, 0, 10)
 	if err != nil || len(again) != 0 {
 		t.Fatalf("started again=%+v err=%v", again, err)
 	}
@@ -124,7 +125,7 @@ func TestPostgresSteeringServerHandOffStartsRetriesAndDrops(t *testing.T) {
 	dropped := seedSteeringTurn(t, pool, "23", "execution-steer-handoff-drop", "RUNNING")
 	queueSteeringTexts(t, repository, dropped, "never")
 	endSteeringTurn(t, repository, dropped, "execution-steer-handoff-drop", time.Minute)
-	toDrop, err := repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, time.Hour, 10)
+	toDrop, _, err := repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, time.Hour, 10)
 	if err != nil || len(toDrop) != 1 {
 		t.Fatalf("toDrop=%+v err=%v", toDrop, err)
 	}
@@ -166,7 +167,7 @@ func TestPostgresSteeringHandOffRaceStartsOneTurn(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			<-start
-			server, serverErr = repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, time.Hour, 10)
+			server, _, serverErr = repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, time.Hour, 10)
 		}()
 		close(start)
 		wait.Wait()
@@ -201,4 +202,61 @@ WHERE response_message_id = $1::uuid AND state = 'handed_off'`, response).Scan(&
 		}
 	}
 	t.Logf("client won %d, server won %d", clientWins, serverWins)
+}
+
+// TestPostgresSteeringServerHandOffSkipsANewerMessage: the author already sent
+// a newer message in the conversation, so the server starts no turn. The
+// leftover messages are removed, and steer.dropped `superseded` goes on the
+// newer turn's stream, which the client watches.
+func TestPostgresSteeringServerHandOffSkipsANewerMessage(t *testing.T) {
+	repository, pool := newSteeringIntegrationRepository(t)
+	response := seedSteeringTurn(t, pool, "41", "execution-steer-superseded-old", "RUNNING")
+	queueSteeringTexts(t, repository, response, "old instruction", "another one")
+	endSteeringTurn(t, repository, response, "execution-steer-superseded-old", time.Minute)
+	// The author's newer turn in the same conversation.
+	seedSteeringTurn(t, pool, "42", "execution-steer-superseded-new", "RUNNING")
+
+	taken, effects, err := repository.TakeServerHandOffs(t.Context(), agentexecutionapp.ServerHandOffDelay, time.Hour, 10)
+	if err != nil || len(taken) != 0 || len(effects) != 2 {
+		t.Fatalf("taken=%+v effects=%+v err=%v", taken, effects, err)
+	}
+	for _, effect := range effects {
+		if effect.ExecutionID != "execution-steer-superseded-new" || effect.Cursor == 0 {
+			t.Fatalf("effect=%+v", effect)
+		}
+	}
+	listed, err := repository.ListSteering(t.Context(), steeringTarget(response))
+	if err != nil || len(listed) != 2 || listed[0].State != agentexecutionapp.SteeringRemoved || listed[1].State != agentexecutionapp.SteeringRemoved {
+		t.Fatalf("listed=%+v err=%v", listed, err)
+	}
+	rows, err := repository.shared.Query(t.Context(), `
+SELECT event_type, convert_from(event_bytes, 'UTF8') FROM elitea_runtime.execution_replay_events
+WHERE execution_id = 'execution-steer-superseded-new' AND event_type = 'steer.dropped'
+ORDER BY cursor`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []string
+	for rows.Next() {
+		var eventType, data string
+		if err := rows.Scan(&eventType, &data); err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, data)
+	}
+	rows.Close()
+	if len(events) != 2 || !strings.Contains(events[0], `"reason":"superseded"`) ||
+		!strings.Contains(events[0], `"content":"old instruction"`) || !strings.Contains(events[0], response) {
+		t.Fatalf("events=%v", events)
+	}
+	// Nothing is left to start, and the client's hand-off finds nothing.
+	again, _, err := repository.TakeServerHandOffs(t.Context(), 0, 0, 10)
+	if err != nil || len(again) != 0 {
+		t.Fatalf("again=%+v err=%v", again, err)
+	}
+	if handed, err := repository.HandOffSteering(t.Context(), agentexecutionapp.SteeringHandOffRequest{
+		SteeringTarget: steeringTarget(response), IdempotencyKey: "after",
+	}); err != nil || len(handed) != 0 {
+		t.Fatalf("handed=%+v err=%v", handed, err)
+	}
 }

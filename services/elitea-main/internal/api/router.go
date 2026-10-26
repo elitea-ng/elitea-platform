@@ -597,7 +597,7 @@ type RouterConfig struct {
 	CurrentExecutionInterrupts http.Handler
 	CurrentAgentCancel         http.Handler
 	// CurrentAgentSteering serves the steering queue of a running chat turn
-	// (client contract 1.26). Composed beside CurrentAgentCancel.
+	// (client contract 1.27). Composed beside CurrentAgentCancel.
 	CurrentAgentSteering http.Handler
 	// CurrentLocalTurns serves startLocalTurn and commitLocalTurn, the
 	// desktop local turn operations (ADR-0029 decision 5c, client contract

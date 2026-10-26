@@ -2095,7 +2095,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			if publicRoutes.Steering != nil {
 				if handOffErr := startSteeringHandOff(
 					ctx, runtimePools.Admission, publicRoutes.AgentStart,
-					legacyrbac.NewPostgresResolver(pool), logger,
+					legacyrbac.NewPostgresResolver(pool), publicRoutes.Steering, logger,
 				); handOffErr != nil {
 					return fmt.Errorf("compose steering hand-off: %w", handOffErr)
 				}

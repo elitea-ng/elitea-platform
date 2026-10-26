@@ -128,7 +128,7 @@ pub trait ControlRpc: Send + Sync {
         Err(Status::unimplemented("index removal is unavailable"))
     }
 
-    /// `ClaimSteeringMessages` (client contract 1.26): the steering messages
+    /// `ClaimSteeringMessages` (client contract 1.27): the steering messages
     /// queued against the running turn, taken at a safe point. A transport
     /// that does not serve it answers `Unimplemented`; the turn then runs
     /// without steering.

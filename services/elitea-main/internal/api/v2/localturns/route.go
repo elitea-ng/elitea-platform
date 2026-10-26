@@ -97,7 +97,7 @@ type commitBody struct {
 	UserMessage struct {
 		Content string `json:"content"`
 	} `json:"user_message"`
-	// SteeringMessages are the texts the turn took while it ran (contract 1.26).
+	// SteeringMessages are the texts the turn took while it ran (contract 1.27).
 	SteeringMessages []struct {
 		Content string `json:"content"`
 	} `json:"steering_messages"`

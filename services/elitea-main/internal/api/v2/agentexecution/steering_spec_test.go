@@ -11,7 +11,7 @@ import (
 	specfiles "github.com/elitea-ng/elitea-platform/services/elitea-main/api/openapi"
 )
 
-// TestSteeringSpecMatchesTheRoute: client contract 1.26 publishes the five
+// TestSteeringSpecMatchesTheRoute: client contract 1.27 publishes the five
 // steering operations. Each must sit on the route's own path, be a client
 // operation, and declare every status the route answers, so the lock never
 // records behaviour the server does not have.

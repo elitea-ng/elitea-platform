@@ -43,7 +43,7 @@ struct Checkpoint {
     #[serde(default)]
     output_continuation: Option<output::OutputContinuation>,
     /// The steering messages the model request holds (client contract
-    /// 1.26), so a replacement claim acknowledges them instead of taking
+    /// 1.27), so a replacement claim acknowledges them instead of taking
     /// them again.
     #[serde(default)]
     steering_ids: Vec<String>,

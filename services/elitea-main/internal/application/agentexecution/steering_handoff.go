@@ -10,7 +10,7 @@ import (
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
-// The server's hand-off of leftover steering messages (client contract 1.26).
+// The server's hand-off of leftover steering messages (client contract 1.27).
 //
 // A turn that ends before a safe point takes its steering messages leaves them
 // `turn_ended`. A client normally takes them at once (HandOff) and sends them
@@ -20,6 +20,15 @@ import (
 // participant's stored settings, after it resolves the author's permission
 // again. Both take rows with one guarded update, so a message is taken once
 // and no turn starts twice.
+//
+// A NEWER MESSAGE. When the author already sent a newer message in the
+// conversation after the turn ended, the routine starts no turn: the
+// messages are removed, and each gets steer.dropped with reason
+// `superseded` on the stream of the author's newer turn (the stream the
+// client watches), so the client shows them as not sent. Adding them to the
+// newer turn was the other option. It was not chosen: that turn is about
+// something the author asked later, and old instructions must not steer it
+// without the author's action.
 //
 // MCP. The client's MCP tokens are never stored, so this turn has none. An MCP
 // server that needs a token asks for authorization in the turn, the same way
@@ -67,8 +76,10 @@ type ServerHandOff struct {
 type SteeringHandOffStore interface {
 	// TakeServerHandOffs takes the groups whose answer settled before
 	// readyBefore and returns them, with the groups it took before whose
-	// start was not confirmed before retryBefore.
-	TakeServerHandOffs(ctx context.Context, readyBefore, retryBefore time.Duration, limit int) ([]ServerHandOff, error)
+	// start was not confirmed before retryBefore. A group whose author sent
+	// a newer message is removed instead (steer.dropped `superseded`); the
+	// effects name the events to wake.
+	TakeServerHandOffs(ctx context.Context, readyBefore, retryBefore time.Duration, limit int) ([]ServerHandOff, []SteeringEffect, error)
 	// MarkServerHandOffStarted records that the start was admitted.
 	MarkServerHandOffStarted(ctx context.Context, handOff ServerHandOff) error
 	// DropServerHandOff removes the messages of a group that can never start
@@ -91,17 +102,24 @@ type SteeringHandOffRoutine struct {
 	store    SteeringHandOffStore
 	starter  SteeringTurnStarter
 	mayStart SteeringAuthorCheck
+	wake     func([]SteeringEffect)
 	logger   *slog.Logger
 }
 
-func NewSteeringHandOffRoutine(store SteeringHandOffStore, starter SteeringTurnStarter, mayStart SteeringAuthorCheck, logger *slog.Logger) (*SteeringHandOffRoutine, error) {
+// NewSteeringHandOffRoutine builds the routine. wake may be nil (no event
+// stream wake-up is composed; the stream then reads the events on its next
+// poll).
+func NewSteeringHandOffRoutine(store SteeringHandOffStore, starter SteeringTurnStarter, mayStart SteeringAuthorCheck, wake func([]SteeringEffect), logger *slog.Logger) (*SteeringHandOffRoutine, error) {
 	if store == nil || starter == nil || mayStart == nil {
 		return nil, errors.New("steering hand-off routine dependencies are required")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &SteeringHandOffRoutine{store: store, starter: starter, mayStart: mayStart, logger: logger}, nil
+	if wake == nil {
+		wake = func([]SteeringEffect) {}
+	}
+	return &SteeringHandOffRoutine{store: store, starter: starter, mayStart: mayStart, wake: wake, logger: logger}, nil
 }
 
 // SteeringHandOffResult counts the decisions of one pass.
@@ -109,12 +127,17 @@ type SteeringHandOffResult struct {
 	Started int
 	Dropped int
 	Retried int
+	// Superseded counts the steer.dropped `superseded` events: removed
+	// messages of authors who had sent a newer message.
+	Superseded int
 }
 
 // Pass takes the due groups and starts their turns.
 func (routine *SteeringHandOffRoutine) Pass(ctx context.Context) (SteeringHandOffResult, error) {
 	var result SteeringHandOffResult
-	handOffs, err := routine.store.TakeServerHandOffs(ctx, ServerHandOffDelay, ServerHandOffRetryAfter, MaxServerHandOffsPerPass)
+	handOffs, effects, err := routine.store.TakeServerHandOffs(ctx, ServerHandOffDelay, ServerHandOffRetryAfter, MaxServerHandOffsPerPass)
+	routine.wake(effects)
+	result.Superseded = len(effects)
 	if err != nil {
 		return result, err
 	}

@@ -132,9 +132,9 @@ type handOffCandidate struct {
 	key string
 }
 
-func (r *SteeringRepository) TakeServerHandOffs(ctx context.Context, readyBefore, retryBefore time.Duration, limit int) ([]agentexecutionapp.ServerHandOff, error) {
+func (r *SteeringRepository) TakeServerHandOffs(ctx context.Context, readyBefore, retryBefore time.Duration, limit int) ([]agentexecutionapp.ServerHandOff, []agentexecutionapp.SteeringEffect, error) {
 	if limit <= 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	// A server hand-off that did not start within the give-up window (the
 	// start keeps failing) is removed: the author sees it in the list as gone.
@@ -145,7 +145,7 @@ SET state = 'removed', handoff_key = NULL, handoff_by = NULL, handoff_question_i
 WHERE state = 'handed_off' AND handoff_by = 'server' AND handoff_started_at IS NULL
   AND handed_off_at < clock_timestamp() - make_interval(secs => $1)`,
 		agentexecutionapp.ServerHandOffGiveUpAfter.Seconds()); err != nil {
-		return nil, fmt.Errorf("expire steering hand-offs: %w", err)
+		return nil, nil, fmt.Errorf("expire steering hand-offs: %w", err)
 	}
 	rows, err := r.shared.Query(ctx, `
 (SELECT DISTINCT message.project_id, message.response_message_id::text, message.author_user_id, ''
@@ -167,47 +167,56 @@ UNION ALL
    AND message.handed_off_at < clock_timestamp() - make_interval(secs => $2)
  LIMIT $3)`, readyBefore.Seconds(), retryBefore.Seconds(), limit)
 	if err != nil {
-		return nil, fmt.Errorf("find steering hand-offs: %w", err)
+		return nil, nil, fmt.Errorf("find steering hand-offs: %w", err)
 	}
 	var candidates []handOffCandidate
 	for rows.Next() {
 		var candidate handOffCandidate
 		if err := rows.Scan(&candidate.projectID, &candidate.responseMessageID, &candidate.authorUserID, &candidate.key); err != nil {
 			rows.Close()
-			return nil, fmt.Errorf("scan steering hand-off: %w", err)
+			return nil, nil, fmt.Errorf("scan steering hand-off: %w", err)
 		}
 		candidates = append(candidates, candidate)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("find steering hand-offs: %w", err)
+		return nil, nil, fmt.Errorf("find steering hand-offs: %w", err)
 	}
 	var handOffs []agentexecutionapp.ServerHandOff
+	var effects []agentexecutionapp.SteeringEffect
 	for _, candidate := range candidates {
 		if len(handOffs) >= limit {
 			break
 		}
-		handOff, ok, err := r.takeServerHandOff(ctx, candidate)
+		handOff, ok, superseded, err := r.takeServerHandOff(ctx, candidate)
+		effects = append(effects, superseded...)
 		if err != nil {
-			return handOffs, err
+			return handOffs, effects, err
 		}
 		if ok {
 			handOffs = append(handOffs, handOff)
 		}
 	}
-	return handOffs, nil
+	return handOffs, effects, nil
 }
 
 // takeServerHandOff takes one group (or reads a group it took before) with the
 // context of the next turn: the answer's conversation and participant.
-func (r *SteeringRepository) takeServerHandOff(ctx context.Context, candidate handOffCandidate) (agentexecutionapp.ServerHandOff, bool, error) {
+func (r *SteeringRepository) takeServerHandOff(ctx context.Context, candidate handOffCandidate) (agentexecutionapp.ServerHandOff, bool, []agentexecutionapp.SteeringEffect, error) {
 	handOff := agentexecutionapp.ServerHandOff{
 		ProjectID: candidate.projectID, ResponseMessageID: candidate.responseMessageID, AuthorUserID: candidate.authorUserID,
 	}
 	ok := false
+	var effects []agentexecutionapp.SteeringEffect
 	err := r.projects.WithinProjectTx(ctx, candidate.projectID, steeringWriteTx, func(tx sqlExecutor) error {
 		key := candidate.key
 		if key == "" {
+			// The author sent a newer message: start nothing.
+			superseded, found, err := supersedeTurnEnded(ctx, tx, candidate)
+			if err != nil || found {
+				effects = superseded
+				return err
+			}
 			questionID := uuid.NewString()
 			key = agentexecutionapp.ServerHandOffKey + "_" + questionID
 			taken, err := takeTurnEnded(ctx, tx, candidate.projectID, candidate.responseMessageID, candidate.authorUserID,
@@ -258,9 +267,134 @@ LIMIT 1`, candidate.projectID, candidate.responseMessageID, candidate.authorUser
 		return nil
 	})
 	if err != nil {
-		return agentexecutionapp.ServerHandOff{}, false, err
+		return agentexecutionapp.ServerHandOff{}, false, nil, err
 	}
-	return handOff, ok, nil
+	return handOff, ok, effects, nil
+}
+
+// newerAuthorTurnSQL finds the author's newest message in the answer's
+// conversation that is newer than the answer, with the execution of its
+// newest answer when it has one. A steering message (meta.steering) is not
+// a newer message: it is part of a turn.
+const newerAuthorTurnSQL = `
+SELECT newer.id,
+       COALESCE(binding.execution_id, ''),
+       COALESCE(binding.generation, 0)
+FROM chat_message_group AS response
+JOIN chat_participant_mapping AS author_mapping
+  ON author_mapping.conversation_id = response.conversation_id
+JOIN chat_participants AS author
+  ON author.id = author_mapping.participant_id
+ AND author.entity_name = 'user'
+ AND author.entity_meta ->> 'id' = $2::bigint::text
+JOIN chat_message_group AS newer
+  ON newer.conversation_id = response.conversation_id
+ AND newer.author_participant_id = author.id
+ AND newer.id > response.id
+ AND newer.reply_to_id IS NULL
+ AND NOT (COALESCE(newer.meta, '{}'::jsonb) ? 'steering')
+LEFT JOIN LATERAL (
+    SELECT job_binding.execution_id, job_binding.generation
+    FROM chat_message_group AS newer_response
+    JOIN elitea_runtime.agent_execution_jobs AS job_binding
+      ON job_binding.client_message_id = newer_response.uuid::text
+     AND job_binding.execution_id = newer_response.task_id
+    WHERE newer_response.reply_to_id = newer.id
+      AND newer_response.conversation_id = newer.conversation_id
+    ORDER BY newer_response.id DESC
+    LIMIT 1
+) AS binding ON TRUE
+WHERE response.uuid = $1::uuid
+ORDER BY newer.id DESC
+LIMIT 1`
+
+// supersedeTurnEnded removes the author's turn_ended messages of the answer
+// when the author already sent a newer message, and appends steer.dropped
+// `superseded` for each one: on the stream of the newer turn when it has an
+// execution (the client watches it), else on the answer's own stream.
+func supersedeTurnEnded(ctx context.Context, tx sqlExecutor, candidate handOffCandidate) ([]agentexecutionapp.SteeringEffect, bool, error) {
+	var newerID int64
+	var newerExecution string
+	var newerGeneration int64
+	err := tx.QueryRow(ctx, newerAuthorTurnSQL, candidate.responseMessageID, candidate.authorUserID).
+		Scan(&newerID, &newerExecution, &newerGeneration)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("find a newer message of the steering author: %w", err)
+	}
+	rows, err := tx.Query(ctx, `
+WITH waiting AS (
+    SELECT message.steering_id
+    FROM elitea_runtime.execution_steering_messages AS message
+    JOIN elitea_runtime.execution_jobs AS job
+      ON job.execution_id = message.execution_id
+     AND job.generation = message.generation
+    WHERE message.project_id = $1
+      AND message.response_message_id = $2::uuid
+      AND message.author_user_id = $3
+      AND message.state IN ('pending', 'claimed')
+      AND `+steeringEndedSQL+`
+    ORDER BY message.queue_order
+    FOR UPDATE OF message
+), message AS (
+    UPDATE elitea_runtime.execution_steering_messages AS message
+    SET state = 'removed', claim_lease_epoch = NULL, updated_at = clock_timestamp()
+    FROM waiting
+    WHERE message.steering_id = waiting.steering_id
+      AND message.state IN ('pending', 'claimed')
+    RETURNING message.*
+)
+SELECT message.execution_id, message.generation,`+steeringColumns+`
+FROM message
+JOIN elitea_runtime.execution_jobs AS job
+  ON job.execution_id = message.execution_id
+ AND job.generation = message.generation
+ORDER BY message.queue_order`, candidate.projectID, candidate.responseMessageID, candidate.authorUserID)
+	if err != nil {
+		return nil, true, fmt.Errorf("remove superseded steering: %w", err)
+	}
+	type removed struct {
+		executionID string
+		generation  int64
+		message     agentexecutionapp.SteeringMessage
+	}
+	var messages []removed
+	for rows.Next() {
+		var item removed
+		var state string
+		var injectedAt *time.Time
+		if scanErr := rows.Scan(&item.executionID, &item.generation,
+			&item.message.ID, &item.message.ResponseMessageID, &item.message.AuthorUserID, &item.message.Content,
+			&state, &item.message.Revision, &item.message.CreatedAt, &item.message.UpdatedAt, &injectedAt, &item.message.MessageID,
+		); scanErr != nil {
+			rows.Close()
+			return nil, true, fmt.Errorf("scan superseded steering: %w", scanErr)
+		}
+		item.message.State = agentexecutionapp.SteeringState(state)
+		item.message.CreatedAt = item.message.CreatedAt.UTC()
+		item.message.UpdatedAt = item.message.UpdatedAt.UTC()
+		messages = append(messages, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, true, fmt.Errorf("remove superseded steering: %w", err)
+	}
+	var effects []agentexecutionapp.SteeringEffect
+	for _, item := range messages {
+		executionID, generation := item.executionID, item.generation
+		if newerExecution != "" {
+			executionID, generation = newerExecution, newerGeneration
+		}
+		effect, err := appendSteeringEvent(ctx, tx, candidate.projectID, executionID, generation,
+			agentexecutionapp.SteeringEventDropped, item.message, agentexecutionapp.SteeringDropSuperseded)
+		if err != nil {
+			return nil, true, err
+		}
+		effects = append(effects, effect)
+	}
+	return effects, true, nil
 }
 
 func (r *SteeringRepository) MarkServerHandOffStarted(ctx context.Context, handOff agentexecutionapp.ServerHandOff) error {

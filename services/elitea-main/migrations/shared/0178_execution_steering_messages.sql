@@ -32,6 +32,9 @@
 -- turn. Both take rows with one guarded UPDATE, so the first one wins. The
 -- state is `handed_off` (final). `handoff_started_at` records that the
 -- server's start was admitted; a server hand-off without it is retried.
+-- When the author already sent a newer message in the conversation, the
+-- routine starts nothing: the rows become `removed` and the clients get
+-- steer.dropped with reason `superseded`.
 --
 -- A turn stopped before any output is deleted with its question; its rows
 -- here are deleted in the same transaction (agent_cancel.go).

@@ -1,6 +1,6 @@
 package repos
 
-// The steering messages of a desktop local turn (client contract 1.26)
+// The steering messages of a desktop local turn (client contract 1.27)
 // against a REAL database (ELITEA_TEST_DATABASE_URL): the commit stores them
 // as user messages directly after the question, once.
 

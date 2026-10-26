@@ -234,7 +234,7 @@ enum MonitorCommand {
     CheckNow(oneshot::Sender<Result<(), ClaimLeaseError>>),
 }
 
-/// One steering call (client contract 1.26): the acknowledgements, whether
+/// One steering call (client contract 1.27): the acknowledgements, whether
 /// it only acknowledges, and the reply. The reply is `None` when Main did not
 /// answer (the acknowledgements are not confirmed), else the claimed
 /// `(id, text)` pairs, oldest first.
@@ -518,7 +518,7 @@ impl crate::state::TurnSteering for ClaimLeaseStateProbe {
     }
 }
 
-/// The agent loop's safe point (client contract 1.26): each claimed text is
+/// The agent loop's safe point (client contract 1.27): each claimed text is
 /// a new user message of the same turn.
 #[async_trait::async_trait]
 impl adk_rust::agent::SteeringSource for ClaimLeaseStateProbe {

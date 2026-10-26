@@ -13,7 +13,7 @@ import (
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
-// Steering during execution (client contract 1.26). A user sends a message
+// Steering during execution (client contract 1.27). A user sends a message
 // while a cloud turn runs. The message waits in a durable queue until the
 // worker reaches its next safe point, after the tool results of a step and
 // before the next model request. The worker claims it over gRPC and adds it to
@@ -61,6 +61,13 @@ const (
 	SteeringEventQueued   = "steer.queued"
 	SteeringEventInjected = "steer.injected"
 	SteeringEventDropped  = "steer.dropped"
+
+	// SteeringDropRemoved is the steer.dropped reason of a message its author
+	// removed. SteeringDropSuperseded is the reason of a turn_ended message
+	// that the server's hand-off did not start, because the author had
+	// already sent a newer message in the conversation.
+	SteeringDropRemoved    = "removed"
+	SteeringDropSuperseded = "superseded"
 )
 
 var (
@@ -307,6 +314,10 @@ func (service *SteeringService) ready(ctx context.Context, target SteeringTarget
 	}
 	return ctx.Err()
 }
+
+// WakeEffects wakes the event streams of steering events that another
+// writer (the hand-off routine) appended.
+func (service *SteeringService) WakeEffects(effects []SteeringEffect) { service.wake(effects) }
 
 func (service *SteeringService) wake(effects []SteeringEffect) {
 	if service.waker == nil {

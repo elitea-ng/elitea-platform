@@ -16,7 +16,7 @@ pub(crate) struct StateWriterLeaseLost;
 pub(crate) trait StateWriterLease: Send + Sync {
     fn ensure_current(&self) -> Result<(), StateWriterLeaseLost>;
 
-    /// The steering queue (client contract 1.26) fenced by the same claim:
+    /// The steering queue (client contract 1.27) fenced by the same claim:
     /// the live lease that permits state work also permits claiming the
     /// user messages queued against the turn. `None` (the default) binds no
     /// steering, as for a test lease.
@@ -26,7 +26,7 @@ pub(crate) trait StateWriterLease: Send + Sync {
 }
 
 /// The steering queue of one turn, as the agent loop and the model checkpoint
-/// see it (client contract 1.26). The loop takes messages at its safe points
+/// see it (client contract 1.27). The loop takes messages at its safe points
 /// (`SteeringSource`). Main records them as claimed; it writes them as
 /// conversation messages only when the worker acknowledges them, after the
 /// model checkpoint that holds them is persisted. So a worker that stops in

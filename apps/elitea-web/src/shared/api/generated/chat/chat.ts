@@ -15046,7 +15046,7 @@ export const getSteerChatExecutionUrl = (
 };
 
 /**
- * Client contract 1.26. Queues a user message against the turn that
+ * Client contract 1.27. Queues a user message against the turn that
  * writes this answer. The turn does not stop. The worker injects the
  * message at its next safe point: after the current tool calls finish
  * and before the next model request. The model reads it as a new user
@@ -15070,12 +15070,20 @@ export const getSteerChatExecutionUrl = (
  * turn has no MCP tokens of the client: an MCP server that needs one
  * asks for authorization, as for a client that holds no token.
  * Whoever takes the messages first wins; the other gets an empty list.
+ * When the author already sent a newer message in the conversation
+ * after the turn ended, the server starts no turn: the messages are
+ * `removed`, and each gets `steer.dropped` with `reason: superseded`
+ * on the stream of the author's newer turn (else on this answer's
+ * stream). The event's `response_message_id` names this answer. The
+ * client shows the texts as not sent, so the author can send them
+ * again.
  *
  * EVENTS. The execution event stream
  * (`/api/v2/executions/{project_id}/{execution_id}/events`) carries
  * `steer.queued` (a new or edited pending message), `steer.injected`
- * (with `message_id`) and `steer.dropped` (`reason: removed`). The
- * `data` of each is one SteeringMessage.
+ * (with `message_id`) and `steer.dropped` (`reason` `removed`, or
+ * `superseded` as above). The `data` of each is one SteeringMessage,
+ * plus `reason` on `steer.dropped`.
  *
  * WHO. The permission is the send's (`models.chat.messages.create`),
  * and the caller must be a user participant of the conversation. A
@@ -15416,7 +15424,7 @@ export const getListChatExecutionSteeringUrl = (
 };
 
 /**
- * Client contract 1.26. Every steering message of this answer's turn,
+ * Client contract 1.27. Every steering message of this answer's turn,
  * oldest first, in every state (see steerChatExecution). A client that
  * reloads uses it to show the pending and injected messages, and to
  * find `turn_ended` messages that still wait to be sent. The same
@@ -15705,7 +15713,7 @@ export const getHandOffChatExecutionSteeringUrl = (
 };
 
 /**
- * Client contract 1.26. Takes, in one transaction, every `turn_ended`
+ * Client contract 1.27. Takes, in one transaction, every `turn_ended`
  * steering message of this answer that the CALLER queued, marks them
  * `handed_off` and answers them, oldest first. The client then sends
  * their texts, joined with a blank line, as one normal message (the
@@ -16015,7 +16023,7 @@ export const getUpdateChatExecutionSteeringUrl = (
 };
 
 /**
- * Client contract 1.26. Replaces the content of a PENDING message
+ * Client contract 1.27. Replaces the content of a PENDING message
  * and advances `revision`; the stream carries `steer.queued` again.
  * Only the message's author may edit it. A message that the worker
  * already injected, or that is removed or `turn_ended`, answers 409
@@ -16371,7 +16379,7 @@ export const getRemoveChatExecutionSteeringUrl = (
 };
 
 /**
- * Client contract 1.26. Removes a PENDING or `turn_ended` message (it
+ * Client contract 1.27. Removes a PENDING or `turn_ended` message (it
  * becomes `removed`); for a pending one the stream carries
  * `steer.dropped` with `reason: removed`. Only the author may remove
  * it. Idempotent: removing a removed message answers 204 again. An

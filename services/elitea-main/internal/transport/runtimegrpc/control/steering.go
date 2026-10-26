@@ -17,7 +17,7 @@ type SteeringClaimer interface {
 }
 
 // WithSteeringMessages lets the worker claim steering messages at its safe
-// points (client contract 1.26).
+// points (client contract 1.27).
 func (s *Server) WithSteeringMessages(steering SteeringClaimer) *Server {
 	s.steering = steering
 	return s

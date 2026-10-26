@@ -32,6 +32,7 @@ func startSteeringHandOff(
 	pool *pgxpool.Pool,
 	starter agentexecutionapi.StartUseCase,
 	permissions auth.PermissionResolver,
+	steering agentexecutionapi.SteeringUseCase,
 	logger *slog.Logger,
 ) error {
 	if pool == nil || starter == nil || permissions == nil {
@@ -41,7 +42,15 @@ func startSteeringHandOff(
 	if err != nil {
 		return fmt.Errorf("construct steering hand-off store: %w", err)
 	}
-	routine, err := agentexecutionapp.NewSteeringHandOffRoutine(store, starter, steeringAuthorCheck(permissions), logger)
+	// The routine's steer.dropped events wake the event streams the same way
+	// as the steering routes' events.
+	var wake func([]agentexecutionapp.SteeringEffect)
+	if waker, ok := steering.(interface {
+		WakeEffects([]agentexecutionapp.SteeringEffect)
+	}); ok {
+		wake = waker.WakeEffects
+	}
+	routine, err := agentexecutionapp.NewSteeringHandOffRoutine(store, starter, steeringAuthorCheck(permissions), wake, logger)
 	if err != nil {
 		return err
 	}
@@ -62,8 +71,9 @@ func startSteeringHandOff(
 		if passErr != nil {
 			return routines.OutcomeError, passErr
 		}
-		if result.Started+result.Dropped+result.Retried > 0 {
-			logger.Info("steering hand-off pass", "started", result.Started, "dropped", result.Dropped, "retried", result.Retried)
+		if result.Started+result.Dropped+result.Retried+result.Superseded > 0 {
+			logger.Info("steering hand-off pass", "started", result.Started, "dropped", result.Dropped,
+				"retried", result.Retried, "superseded", result.Superseded)
 		}
 		return routines.OutcomeOK, nil
 	})
