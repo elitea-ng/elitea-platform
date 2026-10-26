@@ -21,6 +21,8 @@ class WorkspaceRefusalCodeV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     WORKSPACE_REFUSAL_CODE_V1_UNSUPPORTED_OBJECT_FORMAT: _ClassVar[WorkspaceRefusalCodeV1]
     WORKSPACE_REFUSAL_CODE_V1_SEGMENT_TOO_LARGE: _ClassVar[WorkspaceRefusalCodeV1]
     WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED: _ClassVar[WorkspaceRefusalCodeV1]
+    WORKSPACE_REFUSAL_CODE_V1_NO_FORGE_CREDENTIAL: _ClassVar[WorkspaceRefusalCodeV1]
+    WORKSPACE_REFUSAL_CODE_V1_PULL_REQUESTS_DISABLED: _ClassVar[WorkspaceRefusalCodeV1]
 
 class WorkspaceExecutorEventKindV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -51,6 +53,8 @@ WORKSPACE_REFUSAL_CODE_V1_CHECKSUM_MISMATCH: WorkspaceRefusalCodeV1
 WORKSPACE_REFUSAL_CODE_V1_UNSUPPORTED_OBJECT_FORMAT: WorkspaceRefusalCodeV1
 WORKSPACE_REFUSAL_CODE_V1_SEGMENT_TOO_LARGE: WorkspaceRefusalCodeV1
 WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED: WorkspaceRefusalCodeV1
+WORKSPACE_REFUSAL_CODE_V1_NO_FORGE_CREDENTIAL: WorkspaceRefusalCodeV1
+WORKSPACE_REFUSAL_CODE_V1_PULL_REQUESTS_DISABLED: WorkspaceRefusalCodeV1
 WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED: WorkspaceExecutorEventKindV1
 WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED: WorkspaceExecutorEventKindV1
 WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED: WorkspaceExecutorEventKindV1
@@ -248,6 +252,22 @@ class WorkspaceEnvVarsV1(_message.Message):
     VARS_FIELD_NUMBER: _ClassVar[int]
     vars: _containers.RepeatedCompositeFieldContainer[WorkspaceEnvVarV1]
     def __init__(self, vars: _Optional[_Iterable[_Union[WorkspaceEnvVarV1, _Mapping]]] = ...) -> None: ...
+
+class WorkspaceForgeCredentialRequestV1(_message.Message):
+    __slots__ = ("claim",)
+    CLAIM_FIELD_NUMBER: _ClassVar[int]
+    claim: WorkspaceClaimV1
+    def __init__(self, claim: _Optional[_Union[WorkspaceClaimV1, _Mapping]] = ...) -> None: ...
+
+class WorkspaceForgeCredentialResponseV1(_message.Message):
+    __slots__ = ("github_configuration_json", "refusal", "rejection")
+    GITHUB_CONFIGURATION_JSON_FIELD_NUMBER: _ClassVar[int]
+    REFUSAL_FIELD_NUMBER: _ClassVar[int]
+    REJECTION_FIELD_NUMBER: _ClassVar[int]
+    github_configuration_json: str
+    refusal: WorkspaceRefusalV1
+    rejection: _errors_pb2.RuntimeErrorV1
+    def __init__(self, github_configuration_json: _Optional[str] = ..., refusal: _Optional[_Union[WorkspaceRefusalV1, _Mapping]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
 
 class WorkspaceRecordEventRequestV1(_message.Message):
     __slots__ = ("claim", "kind", "findings", "rules", "toolkit", "branch", "base", "number", "url", "files")

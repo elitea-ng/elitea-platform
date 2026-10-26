@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { WorkspaceForgeCredential } from "./workspaceForgeCredential.zod";
 import { WorkspaceHandoffStats } from "./workspaceHandoffStats.zod";
 
 export const WorkspaceHandoffState = zod
@@ -65,6 +66,12 @@ export const WorkspaceHandoffState = zod
     updated_at: zod.iso.datetime({ offset: true }).optional(),
     delete_after: zod.iso.datetime({ offset: true }).nullish(),
     workspace_bytes: zod.int().optional(),
+    pull_request_credential: zod
+      .union([WorkspaceForgeCredential, zod.null()])
+      .optional()
+      .describe(
+        "Contract 1.29. The GitHub configuration the owner chose for the cloud executor's pull requests; null when none.",
+      ),
   })
   .describe(
     "The banner state; only `state` and `epoch` when the thread has no handoff. NOTE(W2): internal/api/v2/workspacehandoff/route.go:288 (`state`).",
