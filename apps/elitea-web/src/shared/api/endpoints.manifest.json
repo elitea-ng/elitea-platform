@@ -3366,6 +3366,26 @@
       "responseSchema": "WorkspaceHandoffDiff",
       "fixture": null,
       "usedBy": ["pages/chat"]
+    },
+    {
+      "id": "workspaceHandoff.setPullRequestCredential",
+      "method": "PUT",
+      "path": "/elitea_core/workspace_handoff_pull_request_credential/prompt_lib/{project_id}/{conversation_uuid}",
+      "operationId": "setWorkspaceHandoffPullRequestCredential",
+      "source": "generated",
+      "responseSchema": "WorkspaceHandoffPullRequestCredential",
+      "fixture": null,
+      "usedBy": ["pages/chat"]
+    },
+    {
+      "id": "configurations.listForPullRequests",
+      "method": "GET",
+      "path": "/configurations/configurations/{projectId}",
+      "operationId": "listConfigurations",
+      "source": "generated",
+      "responseSchema": "ConfigurationListResponse",
+      "fixture": null,
+      "usedBy": ["pages/chat"]
     }
   ]
 }

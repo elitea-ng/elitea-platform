@@ -2692,9 +2692,11 @@ async fn create_branch_from_sha_branches_from_that_commit_without_reading_a_bran
 mod open_pull_request {
     use super::*;
     use crate::toolkits::workspace_pull_request::{
-        DiffUnavailable, GitHubPullRequestTarget, PullRequestAudit, PullRequestOpened,
-        WorkspaceDiff, WorkspaceDiffSource, open_pull_request_toolset,
+        CredentialUnavailable, DiffUnavailable, ForgeKind, PullRequestAudit, PullRequestOpened,
+        PullRequestTarget, THREAD_CREDENTIAL, ThreadConfiguration, ThreadCredential,
+        ThreadCredentialSource, WorkspaceDiff, WorkspaceDiffSource, open_pull_request_toolset,
     };
+    use zeroize::Zeroizing;
 
     struct Source(Result<WorkspaceDiff, DiffUnavailable>);
 
@@ -2728,14 +2730,12 @@ mod open_pull_request {
         source: Result<WorkspaceDiff, DiffUnavailable>,
         audit: &Arc<Audit>,
     ) -> Value {
-        let config = GitHubToolkitConfig::parse(&settings(&[])).expect("config");
-        let client =
-            Arc::new(GitHubClient::test_with_transport(config, script.clone()).expect("client"));
         let toolset = open_pull_request_toolset(
-            vec![GitHubPullRequestTarget::test(
+            None,
+            vec![PullRequestTarget::github_test(
                 "team-github",
-                "EliteaAI/elitea-platform",
-                client,
+                &settings(&[]),
+                &(script.clone() as Arc<dyn Transport>),
             )],
             Arc::new(Source(source)),
             audit.clone(),
@@ -2807,6 +2807,10 @@ mod open_pull_request {
         let events = audit.0.lock().expect("audit");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].number, 7);
+        assert_eq!(
+            events[0].url,
+            "https://github.example.test/EliteaAI/elitea-platform/pull/7"
+        );
         assert_eq!(events[0].files, 2);
     }
 
@@ -2882,6 +2886,7 @@ mod open_pull_request {
         assert!(script.hits().is_empty());
         assert!(
             open_pull_request_toolset(
+                None,
                 Vec::new(),
                 Arc::new(Source(Ok(diff("")))),
                 Arc::new(Audit::default())
@@ -2889,5 +2894,224 @@ mod open_pull_request {
             .is_none(),
             "without a bound GitHub toolkit the tool is absent"
         );
+    }
+
+    /// The thread's credential: the redeemed configuration's data, counted.
+    struct Credential {
+        answer: Result<String, CredentialUnavailable>,
+        calls: Mutex<usize>,
+    }
+
+    impl Credential {
+        fn new(answer: Result<String, CredentialUnavailable>) -> Arc<Self> {
+            Arc::new(Self {
+                answer,
+                calls: Mutex::new(0),
+            })
+        }
+
+        fn calls(&self) -> usize {
+            *self.calls.lock().expect("calls")
+        }
+    }
+
+    #[async_trait]
+    impl ThreadCredentialSource for Credential {
+        async fn configuration(&self) -> Result<ThreadConfiguration, CredentialUnavailable> {
+            *self.calls.lock().expect("calls") += 1;
+            self.answer.clone().map(|json| ThreadConfiguration {
+                forge: ForgeKind::GitHub,
+                json: Zeroizing::new(json),
+            })
+        }
+    }
+
+    fn configuration(base_url: &str) -> String {
+        json!({"base_url": base_url, "access_token": "thread-token"}).to_string()
+    }
+
+    /// Open through `@thread` only (no toolkit bound), over the fake GitHub
+    /// API in `script`.
+    async fn open_thread(
+        script: &Arc<Script>,
+        credential: &Arc<Credential>,
+        source: Result<WorkspaceDiff, DiffUnavailable>,
+        audit: &Arc<Audit>,
+        args: Value,
+    ) -> Value {
+        let thread = ThreadCredential::test(credential.clone(), script.clone());
+        let toolset = open_pull_request_toolset(
+            Some(thread),
+            Vec::new(),
+            Arc::new(Source(source)),
+            audit.clone(),
+        )
+        .expect("a thread credential offers the tool");
+        let readonly: Arc<dyn ReadonlyContext> = context();
+        let tools = adk_core::Toolset::tools(toolset.as_ref(), readonly)
+            .await
+            .expect("tools");
+        let schema = tools[0].parameters_schema().expect("schema");
+        assert_eq!(
+            schema["properties"]["toolkit"]["enum"],
+            json!([THREAD_CREDENTIAL])
+        );
+        let ctx: Arc<dyn ToolContext> = context();
+        tools[0].execute(ctx, args).await.expect("result")
+    }
+
+    fn change() -> Value {
+        json!({"title": "Cloud change", "body": "From the cloud", "branch": "cloud-change"})
+    }
+
+    #[tokio::test]
+    async fn the_thread_credential_opens_on_the_upstream_repository_without_a_toolkit() {
+        let script = Arc::new(Script::default());
+        script.json("POST", "/git/refs", 201, json!({}));
+        script.json(
+            "GET",
+            "/contents/src/a.txt",
+            200,
+            file_json("one\ntwo\n", 'a'),
+        );
+        script.json("GET", "/contents/src/new.txt", 404, json!({}));
+        script.json("PUT", "/contents/src/a.txt", 200, json!({}));
+        script.json("PUT", "/contents/src/new.txt", 201, json!({}));
+        script.json("POST", "/pulls", 201, json!({"number": 9, "html_url": "https://github.example.test/EliteaAI/elitea-platform/pull/9"}));
+        let credential = Credential::new(Ok(configuration("https://github.example.test/api/v3")));
+        let audit = Arc::new(Audit::default());
+        let result = open_thread(
+            &script,
+            &credential,
+            Ok(diff(PATCH_TWO_FILES)),
+            &audit,
+            change(),
+        )
+        .await;
+        assert_eq!(result["status"], "ok", "{result}");
+        assert_eq!(
+            result["url"],
+            "https://github.example.test/EliteaAI/elitea-platform/pull/9"
+        );
+        assert_eq!(credential.calls(), 1, "redeemed once, when the tool ran");
+        let hits = script.hits();
+        assert!(
+            hits.iter()
+                .all(|hit| hit.path.contains("/repos/EliteaAI/elitea-platform/")),
+            "every call names the upstream's repository: {hits:?}"
+        );
+        let pull = script
+            .writes()
+            .into_iter()
+            .find(|hit| hit.path.ends_with("/pulls"))
+            .expect("a pull request");
+        assert_eq!(body_of(&pull)["base"], "main");
+        let events = audit.0.lock().expect("audit");
+        assert_eq!(events[0].toolkit, THREAD_CREDENTIAL);
+        assert_eq!(events[0].repository, "EliteaAI/elitea-platform");
+        let recorded = format!("{:?}{result}", events[0]);
+        assert!(
+            !recorded.contains("thread-token"),
+            "no token in the audit or the answer"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_thread_credential_is_refused_for_another_host_unset_or_disabled() {
+        let script = Arc::new(Script::default());
+        let audit = Arc::new(Audit::default());
+        let other_host = Credential::new(Ok(configuration("https://api.github.com")));
+        let result = open_thread(
+            &script,
+            &other_host,
+            Ok(diff(PATCH_TWO_FILES)),
+            &audit,
+            change(),
+        )
+        .await;
+        assert_eq!(result["status"], "refused", "{result}");
+        assert!(
+            result["message"]
+                .as_str()
+                .expect("message")
+                .contains("github.com")
+        );
+        for unavailable in [
+            CredentialUnavailable::NotChosen,
+            CredentialUnavailable::Disabled,
+            CredentialUnavailable::Invalid,
+            CredentialUnavailable::Failed,
+        ] {
+            let credential = Credential::new(Err(unavailable));
+            let result = open_thread(
+                &script,
+                &credential,
+                Ok(diff(PATCH_TWO_FILES)),
+                &audit,
+                change(),
+            )
+            .await;
+            assert_eq!(result["status"], "refused", "{unavailable:?}: {result}");
+        }
+        let broken = Credential::new(Ok(
+            "{\"base_url\": \"http://plain.example.test\"}".to_owned()
+        ));
+        let result = open_thread(
+            &script,
+            &broken,
+            Ok(diff(PATCH_TWO_FILES)),
+            &audit,
+            change(),
+        )
+        .await;
+        assert_eq!(result["status"], "refused", "{result}");
+        assert!(script.hits().is_empty(), "nothing reached GitHub");
+        assert!(audit.0.lock().expect("audit").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_branch_named_as_the_upstream_is_refused_before_the_credential_is_redeemed() {
+        let script = Arc::new(Script::default());
+        let credential = Credential::new(Ok(configuration("https://github.example.test/api/v3")));
+        for branch in ["main", "refs/heads/main", "MAIN"] {
+            let result = open_thread(
+                &script,
+                &credential,
+                Ok(diff(PATCH_TWO_FILES)),
+                &Arc::new(Audit::default()),
+                json!({"title": "t", "branch": branch}),
+            )
+            .await;
+            assert_eq!(result["status"], "refused", "{branch}: {result}");
+        }
+        assert_eq!(credential.calls(), 0);
+        assert!(script.hits().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_ssh_alias_remote_is_refused_not_taken_for_the_credentials_host() {
+        // `github-work` is an alias in the desktop's SSH config: it names no
+        // host, so nothing is written to the credential's host under it.
+        let script = Arc::new(Script::default());
+        let mut aliased = diff(PATCH_TWO_FILES);
+        aliased.remote_url = "github-work:EliteaAI/elitea-platform.git".to_owned();
+        let credential = Credential::new(Ok(configuration("https://github.example.test/api/v3")));
+        let result = open_thread(
+            &script,
+            &credential,
+            Ok(aliased),
+            &Arc::new(Audit::default()),
+            change(),
+        )
+        .await;
+        assert_eq!(result["status"], "refused", "{result}");
+        assert!(
+            result["message"]
+                .as_str()
+                .expect("message")
+                .contains("SSH alias `github-work`"),
+            "{result}"
+        );
+        assert!(script.hits().is_empty(), "nothing reached the forge");
     }
 }

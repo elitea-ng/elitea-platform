@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.28"
+  x-elitea-client-contract: "1.29"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -3912,7 +3912,8 @@ components:
       type: object
       description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:680 (`policy`).'
       required: [enabled, disabled_reason, shell, network, history_modes, exclusions, exclusions_platform, exclusions_project,
-                 path_deny, allow_user_include, env_harvest, env_deny, env_allow, limits, env_limits]
+                 path_deny, allow_user_include, env_harvest, env_deny, env_allow, limits, env_limits,
+                 pull_requests, pull_request_approval, pull_request_credentials]
       properties:
         enabled: { type: boolean }
         disabled_reason:
@@ -3962,6 +3963,58 @@ components:
           $ref: '#/components/schemas/WorkspaceHandoffLimits'
         env_limits:
           $ref: '#/components/schemas/WorkspaceHandoffEnvLimits'
+        pull_requests:
+          type: boolean
+          description: >-
+            Contract 1.29 (ADR-0034 decision 10, amended 2026-10-26). Whether
+            a cloud turn may open a pull request (the platform
+            cloud_executor.pull_requests, narrowed by the project).
+        pull_request_approval:
+          type: boolean
+          description: >-
+            Contract 1.29. Whether a person approves each pull request before
+            it is opened: an approve or reject card in the conversation.
+        pull_request_credentials:
+          type: boolean
+          description: >-
+            Contract 1.29. Whether this deployment can store a thread's
+            pull-request credential (setWorkspaceHandoffPullRequestCredential).
+    WorkspaceForgeCredential:
+      type: object
+      description: >-
+        Contract 1.29. A reference to a GitHub or GitLab configuration, the
+        way a toolkit setting holds one, with its type: a configuration of the
+        project (or a shared one), or with `private` one of the caller's own.
+        Never a secret.
+        NOTE(W2): internal/application/workspacehandoff/forge_credential.go:25.
+      required: [type, elitea_title, private]
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          enum: [github, gitlab]
+          description: The configuration's type, which is the forge the cloud pushes to.
+        elitea_title: { type: string, minLength: 1, maxLength: 256 }
+        private: { type: boolean }
+    WorkspaceHandoffPullRequestCredentialUpdate:
+      type: object
+      required: [credential]
+      additionalProperties: false
+      properties:
+        credential:
+          allOf:
+            - $ref: '#/components/schemas/WorkspaceForgeCredential'
+          nullable: true
+          description: The configuration to push and open pull requests through; null clears the choice.
+    WorkspaceHandoffPullRequestCredential:
+      type: object
+      description: 'Contract 1.29. NOTE(W2): internal/api/v2/workspacehandoff/route.go:832 (`setPullRequestCredential`).'
+      required: [pull_request_credential]
+      properties:
+        pull_request_credential:
+          allOf:
+            - $ref: '#/components/schemas/WorkspaceForgeCredential'
+          nullable: true
     ProjectCloudExecutorSwitch:
       type: object
       description: >-
@@ -4050,6 +4103,13 @@ components:
         updated_at: { type: string, format: date-time }
         delete_after: { type: string, format: date-time, nullable: true }
         workspace_bytes: { type: integer, format: int64 }
+        pull_request_credential:
+          allOf:
+            - $ref: '#/components/schemas/WorkspaceForgeCredential'
+          nullable: true
+          description: >-
+            Contract 1.29. The GitHub or GitLab configuration the owner chose for the
+            cloud executor's pushes and pull requests; null when none.
     WorkspaceHandoffChanges:
       type: object
       description: >-
@@ -20331,6 +20391,100 @@ paths:
                 $ref: '#/components/schemas/WorkspaceHandoffError'
         '409':
           description: '`handoff_not_in_cloud`: the cloud executor does not own the thread.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+
+  /elitea_core/workspace_handoff_pull_request_credential/prompt_lib/{project_id}/{conversation_uuid}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_uuid
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The Local work thread's conversation UUID, lowercase canonical.
+    put:
+      operationId: setWorkspaceHandoffPullRequestCredential
+      summary: Choose the GitHub or GitLab configuration a cloud thread pushes and opens pull requests through
+      description: |
+        Client contract 1.29 (ADR-0034 decision 10, amended 2026-10-26). The
+        cloud executor's `git_push` and `open_pull_request` (a merge request
+        on GitLab) write through this configuration: Main expands it as the
+        owner only for a running cloud turn of the thread, over the
+        claim-bound runtime plane, and the token never reaches the sandbox;
+        the worker sends it only to the configuration's own host over HTTPS.
+        The worker refuses a configuration whose host or repository is not
+        the folder's upstream remote's. The thread's
+        owner only, cookie or token, while the thread has a cloud copy; a
+        choice (not `null`) only while the policy allows pull requests.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceHandoffPullRequestCredentialUpdate'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The choice is stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffPullRequestCredential'
+        '400':
+          description: >-
+            A malformed body (`invalid_handoff`), or an `X-Client-Version`
+            that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, or `pull_requests_disabled`: the policy
+            does not allow pull requests from the cloud.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: No such thread or handoff for this caller (`handoff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '409':
+          description: >-
+            `handoff_not_in_cloud` (the thread is back on the desktop) or
+            `handoff_erased` (the cloud copy was erased).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '422':
+          description: >-
+            `invalid_handoff` (no `credential` key, or not a reference) or
+            `pull_request_credential_invalid` (not a configuration of that type the
+            caller can use).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: >-
+            A dependency is unavailable, or the deployment cannot store a
+            credential (`handoff_unavailable`); retry with the same body.
+          headers:
+            Retry-After:
+              schema: { type: string }
           content:
             application/json:
               schema:

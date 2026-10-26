@@ -4,8 +4,8 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.28
- * operations sha256:  3f0a9fc606e7e69f25c0ae1643f07629a28d04143e646d5e771854383cd0fec0
+ * client contract:    1.29
+ * operations sha256:  4131ed493bddee7047f4460fe33337842dfc94ddfa1e03fa6eaf5c9f44105609
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -223,6 +223,58 @@ export interface paths {
          *     never immutable.
          */
         get: operations["getBrandingPackJSON"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/configurations/configurations/{project_id}": {
+        parameters: {
+            query?: {
+                /** @description Adds the `shared` block, read from the PUBLIC project's schema and never from the caller's own. Without a configured public project the block stays empty. That is the honest answer: the caller's own schema is a wrong answer, not a fallback. */
+                include_shared?: boolean;
+                /** @description Page size. The default is 20 and the clamp is 200. */
+                limit?: number;
+                offset?: number;
+                /** @description Label search. A value longer than 1024 characters is refused with 400. It is not truncated. */
+                query?: string;
+                /** @description Repeatable. The client fires ONE request per section, and this filter used to be ignored: every section received the whole table, so one credential rendered under all seven headings. */
+                section?: string[];
+                shared_limit?: number;
+                shared_offset?: number;
+                sort_by?: string;
+                sort_order?: "asc" | "desc";
+                /** @description Repeatable credential-type filter, for example `sharepoint`. */
+                type?: string[];
+            };
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a project's stored credentials and integrations
+         * @description NOTE(W2): internal/api/v2/configurations/handler.go, List
+         *     (compatibility) and internal/application/configurations/crud.go
+         *     (reviewed). The page carries every row the project OWNS, shared or
+         *     not. The old `shared = false` predicate hid a shared credential from
+         *     its own project.
+         *
+         *     A project whose tenant schema does not exist yet answers 200 with an
+         *     empty page. Every OTHER database error answers 500. An empty page
+         *     reports a timeout as a project that holds no credentials, and the user
+         *     then creates a credential that already exists.
+         *
+         *     The app calls this through a hand-written client today
+         *     (apps/elitea-web/src/features/credentials/api/configurations.ts). It is
+         *     described here so a generated client exists to migrate onto.
+         */
+        get: operations["listConfigurations"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1717,6 +1769,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/elitea_core/workspace_handoff_pull_request_credential/prompt_lib/{project_id}/{conversation_uuid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The Local work thread's conversation UUID, lowercase canonical. */
+                conversation_uuid: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Choose the GitHub or GitLab configuration a cloud thread pushes and opens pull requests through
+         * @description Client contract 1.29 (ADR-0034 decision 10, amended 2026-10-26). The
+         *     cloud executor's `git_push` and `open_pull_request` (a merge request
+         *     on GitLab) write through this configuration: Main expands it as the
+         *     owner only for a running cloud turn of the thread, over the
+         *     claim-bound runtime plane, and the token never reaches the sandbox;
+         *     the worker sends it only to the configuration's own host over HTTPS.
+         *     The worker refuses a configuration whose host or repository is not
+         *     the folder's upstream remote's. The thread's
+         *     owner only, cookie or token, while the thread has a cloud copy; a
+         *     choice (not `null`) only while the policy allows pull requests.
+         */
+        put: operations["setWorkspaceHandoffPullRequestCredential"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/elitea_core/workspace_handoff_reclaim_request/prompt_lib/{project_id}/{conversation_uuid}": {
         parameters: {
             query?: never;
@@ -2572,6 +2658,16 @@ export interface components {
             /** @description The minimum this client must update to. */
             min_client_version: string;
         };
+        /** @description NOTE(W2): internal/api/v2/configurations/handler.go, ListResponse (compat) and dto.go, CurrentConfigurationListDTO (reviewed). */
+        ConfigurationListResponse: {
+            items: components["schemas"]["ConfigurationRow"][];
+            limit: number;
+            offset: number;
+            /** @description Present only when `include_shared=true`. `compat` emits an empty block rather than omitting the key. */
+            shared?: components["schemas"]["ConfigurationSharedPage"];
+            /** @description Rows that match the filter, not rows in this page. It is counted before the page is read, so it survives a page that comes back short. */
+            total: number;
+        };
         /** @description NOTE(W2): the union of internal/api/v2/configurations/handler.go's Model (compat) and internal/application/configurations/models.go's CurrentModelCatalogItem (reviewed). */
         ConfigurationModelItem: {
             /** @description `reviewed` only, and section=llm only. What the gateway charges per 1M cached input tokens, in USD; it applies no cache discount today, so it equals the input price. Absent or null when unknown or when the caller may not see amounts (the budget routes' can_see_amounts rule). */
@@ -2643,6 +2739,57 @@ export interface components {
             low_tier_default_model_name?: string | null;
             /** @description `reviewed` only, and omitted when unset. */
             low_tier_default_model_project_id?: number | null;
+            total: number;
+        };
+        /** @description NOTE(W2): the union of internal/api/v2/configurations/handler.go's Configuration (compat) and internal/api/v2/configurations/dto.go's CurrentConfigurationDTO (reviewed). */
+        ConfigurationRow: {
+            /** @description BOTH. */
+            author_id?: number | null;
+            /** @description BOTH. */
+            created_at: string;
+            data?: {
+                [key: string]: unknown;
+            };
+            /** @description BOTH. The row's stored title, and the name every reader resolves a credential by: a toolkit stores the reference `{"github_configuration": {"elitea_title": …}}`, and the credential picker builds its options from this field. `compat` served the column as `name` alone until the two were aligned, so against that handler the picker offered nothing to link. */
+            elitea_title?: string;
+            /** @description The `configuration` row id. BOTH handlers emit it. */
+            id?: number;
+            /** @description `reviewed` only. */
+            is_pinned?: boolean;
+            /** @description BOTH. `compat` omits the key when the column is empty; `reviewed` emits null. */
+            label?: string | null;
+            meta?: {
+                [key: string]: unknown;
+            };
+            /** @description `compat` only, and the same column it also serves as `elitea_title`. Kept for the clients that already read it. */
+            name?: string;
+            options?: {
+                [key: string]: unknown;
+            };
+            /** @description BOTH, and a NUMBER on both. It was a string on `compat` until the two were aligned, and a client comparing the two routes with `===` broke on exactly one deployment. */
+            project_id: number;
+            /** @description The catalogue section the type belongs to. The list is filtered on it, one request per section. */
+            section: string;
+            /** @description BOTH. True when the row is published to the public project. */
+            shared: boolean;
+            /** @description BOTH. Which writer created the row. */
+            source: string;
+            /** @description BOTH. Why `status_ok` is what it is. */
+            status_logs?: string | null;
+            /** @description BOTH. The admission verdict for the row. It is NOT a live connection check. */
+            status_ok: boolean;
+            /** @description The credential type, for example `sharepoint`. */
+            type: string;
+            /** @description BOTH. */
+            updated_at?: string | null;
+            /** @description BOTH. `compat` omits the key when the column is empty; `reviewed` emits an empty string instead. */
+            uuid?: string;
+        };
+        /** @description NOTE(W2): the `shared` block, read from the PUBLIC project's schema. `compat` always emits the block and leaves it empty when no public project is configured; `reviewed` omits the key instead. */
+        ConfigurationSharedPage: {
+            items: components["schemas"]["ConfigurationRow"][];
+            limit?: number;
+            offset?: number;
             total: number;
         };
         /** @description Client contract 1.12. The activity status of a conversation. A turn transition (a start, a pause, a finish, a failure or a cancel) re-delivers the list row in the `changes_since` delta; a streamed token does not. The project event stream (`conversation_activity` events) also sends each transition to the members who can see the conversation. */
@@ -4079,6 +4226,16 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** @description Contract 1.29. A reference to a GitHub or GitLab configuration, the way a toolkit setting holds one, with its type: a configuration of the project (or a shared one), or with `private` one of the caller's own. Never a secret. NOTE(W2): internal/application/workspacehandoff/forge_credential.go:25. */
+        WorkspaceForgeCredential: {
+            elitea_title: string;
+            private: boolean;
+            /**
+             * @description The configuration's type, which is the forge the cloud pushes to.
+             * @enum {string}
+             */
+            type: "github" | "gitlab";
+        };
         /** @description An empty object. */
         WorkspaceHandoffEmpty: Record<string, never>;
         /** @description NOTE(W2): internal/api/v2/workspacehandoff/route.go:336 (`erase`). */
@@ -4101,6 +4258,14 @@ export interface components {
             /** @description `cloud_handoff_disabled`: one of `platform_off`, `project_off`, `device_off`, `no_executor`, `storage_encryption_unconfirmed`. */
             reason?: string;
         };
+        /** @description Contract 1.29. NOTE(W2): internal/api/v2/workspacehandoff/route.go:832 (`setPullRequestCredential`). */
+        WorkspaceHandoffPullRequestCredential: {
+            pull_request_credential: components["schemas"]["WorkspaceForgeCredential"] | null;
+        };
+        WorkspaceHandoffPullRequestCredentialUpdate: {
+            /** @description The configuration to push and open pull requests through; null clears the choice. */
+            credential: components["schemas"]["WorkspaceForgeCredential"] | null;
+        };
         /** @description The banner state; only `state` and `epoch` when the thread has no handoff. NOTE(W2): internal/api/v2/workspacehandoff/route.go:288 (`state`). */
         WorkspaceHandoffState: {
             cloud_sha?: string | null;
@@ -4113,6 +4278,8 @@ export interface components {
             handoff_id?: string;
             has_upstream?: boolean;
             history_mode?: string;
+            /** @description Contract 1.29. The GitHub or GitLab configuration the owner chose for the cloud executor's pushes and pull requests; null when none. */
+            pull_request_credential?: components["schemas"]["WorkspaceForgeCredential"] | null;
             reclaim_pending?: boolean;
             /** @description Contract 1.25. True while the owner's desktop may take back the cloud turns the last release left (LOCAL, within the return grace `delete_after`), and during that take back (RECLAIMING). */
             rest_pending?: boolean;
@@ -4566,6 +4733,66 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    listConfigurations: {
+        parameters: {
+            query?: {
+                /** @description Adds the `shared` block, read from the PUBLIC project's schema and never from the caller's own. Without a configured public project the block stays empty. That is the honest answer: the caller's own schema is a wrong answer, not a fallback. */
+                include_shared?: boolean;
+                /** @description Page size. The default is 20 and the clamp is 200. */
+                limit?: number;
+                offset?: number;
+                /** @description Label search. A value longer than 1024 characters is refused with 400. It is not truncated. */
+                query?: string;
+                /** @description Repeatable. The client fires ONE request per section, and this filter used to be ignored: every section received the whole table, so one credential rendered under all seven headings. */
+                section?: string[];
+                shared_limit?: number;
+                shared_offset?: number;
+                sort_by?: string;
+                sort_order?: "asc" | "desc";
+                /** @description Repeatable credential-type filter, for example `sharepoint`. */
+                type?: string[];
+            };
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of configurations */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationListResponse"];
+                };
+            };
+            /** @description A filter is out of bounds: more than 64 values, a value longer than 128 characters, or a `query` longer than 1024 characters. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            500: components["responses"]["500"];
+            /** @description The configuration store is not available. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -7132,6 +7359,96 @@ export interface operations {
             403: components["responses"]["403"];
             426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
+        };
+    };
+    setWorkspaceHandoffPullRequestCredential: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The Local work thread's conversation UUID, lowercase canonical. */
+                conversation_uuid: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceHandoffPullRequestCredentialUpdate"];
+            };
+        };
+        responses: {
+            /** @description The choice is stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffPullRequestCredential"];
+                };
+            };
+            /** @description A malformed body (`invalid_handoff`), or an `X-Client-Version` that does not parse. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            /** @description No project permission, or `pull_requests_disabled`: the policy does not allow pull requests from the cloud. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
+            /** @description No such thread or handoff for this caller (`handoff_not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
+            /** @description `handoff_not_in_cloud` (the thread is back on the desktop) or `handoff_erased` (the cloud copy was erased). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
+            /** @description `invalid_handoff` (no `credential` key, or not a reference) or `pull_request_credential_invalid` (not a configuration of that type the caller can use). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+            /** @description A dependency is unavailable, or the deployment cannot store a credential (`handoff_unavailable`); retry with the same body. */
+            503: {
+                headers: {
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
         };
     };
     requestWorkspaceHandoffReclaim: {

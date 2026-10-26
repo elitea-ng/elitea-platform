@@ -11,6 +11,9 @@ import { Button, GlassSurface, Icon, Text } from '@/ui';
  * - "Ask laptop to take back": the owner only; it notifies the owner's laptop and changes
  *   nothing in the thread (only the laptop can move it), so the composer keeps working;
  * - "Erase cloud copy": the owner or a project settings editor; it asks first.
+ * - "Pushes and pull requests: <credential>" (client contract 1.29): the owner only, while the
+ *   cloud runs it; it opens the sheet that chooses the GitHub or GitLab configuration the cloud
+ *   agent pushes and opens pull requests through.
  *
  * `returning` (the laptop is taking the thread back) replaces the composer elsewhere; here it
  * only keeps Erase within reach.
@@ -24,6 +27,8 @@ export function CloudExecutorNotice({
   erasing,
   onTakeBack,
   onErase,
+  credentialTitle = null,
+  onChooseCredential,
 }: {
   executor: 'cloud' | 'returning';
   canTakeBack: boolean;
@@ -34,6 +39,9 @@ export function CloudExecutorNotice({
   erasing: boolean;
   onTakeBack: () => void;
   onErase: () => void;
+  /** The credential control's words; null hides it (not the owner, or not running in the cloud). */
+  credentialTitle?: string | null;
+  onChooseCredential?: () => void;
 }) {
   const design = useDesign();
   const returning = executor === 'returning';
@@ -44,6 +52,7 @@ export function CloudExecutorNotice({
       ? 'Your laptop was asked to take it back. It starts when the running cloud turn ends.'
       : 'This thread works on a copy of your laptop folder in the cloud.';
   const showTakeBack = canTakeBack && !returning;
+  const showCredential = credentialTitle !== null && !returning && onChooseCredential !== undefined;
   return (
     <GlassSurface radius={design.radius.md} floating style={styles.card} testID="cloud-executor-notice" accessible={false}>
       <View style={styles.head}>
@@ -57,6 +66,9 @@ export function CloudExecutorNotice({
           </Text>
         </View>
       </View>
+      {showCredential ? (
+        <Button title={credentialTitle} size="small" variant="plain" onPress={onChooseCredential} testID="cloud-pr-credential" />
+      ) : null}
       {showTakeBack || canErase ? (
         <View style={styles.actions}>
           {showTakeBack ? (

@@ -761,7 +761,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// elitea_runtime.execution_steering_messages queue: user messages sent
 	// while a cloud turn runs, injected by the worker at its next safe point.
 	// No data, no permission.
-	require.EqualValues(t, 178, Head(shared))
+	//
+	// 179: shared/0179_workspace_handoff_forge_credential.sql, the
+	// forge_credential column on elitea_runtime.workspace_handoffs: the
+	// GitHub or GitLab configuration reference (never a secret) a cloud turn
+	// pushes and opens pull (merge) requests through (ADR-0034 decision 10,
+	// amended). No data, no permission.
+	require.EqualValues(t, 179, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

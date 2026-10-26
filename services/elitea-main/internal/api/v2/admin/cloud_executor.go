@@ -72,6 +72,15 @@ func cloudExecutorSection() map[string]any {
 				"description": "Whether a user may send selected environment variables, which the cloud sandbox's " +
 					"commands receive. They are stored in the vault, never in the uploaded files.",
 				"section": section, "default": defaults.EnvHarvest},
+			{"key": platformconfig.KeyCloudExecutorPullRequests, "type": "boolean", "title": "Allow Pull Requests",
+				"description": "Whether a cloud turn may push its changes and open a pull request (GitHub) or merge " +
+					"request (GitLab), through a GitHub or GitLab configuration. The token stays on the server; the " +
+					"sandbox never sees it.",
+				"section": section, "default": defaults.PullRequests},
+			{"key": platformconfig.KeyCloudExecutorPullRequestApproval, "type": "boolean", "title": "Approve Each Pull Request",
+				"description": "Whether a person approves each push and pull (merge) request before it is made. A project can " +
+					"require approval when this is off, but cannot waive it when this is on.",
+				"section": section, "default": defaults.PullRequestApproval},
 			patterns(platformconfig.KeyCloudExecutorEnvDeny, "Denied Variable Names",
 				"Environment variable names (patterns such as SSH_*) that are never offered. A project can add names.",
 				toAny(defaults.EnvDeny)),

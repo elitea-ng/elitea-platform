@@ -64,6 +64,42 @@ pub fn reachable_excluding(
     known: &HashSet<ObjectId>,
     max_objects: usize,
 ) -> Result<Reachable, StoreError> {
+    reachable_bounded(db, tips, known, max_objects).map_err(|error| match error {
+        WalkError::OverLimit { max_objects } => {
+            StoreError::Integrity(format!("more than {max_objects} objects are reachable"))
+        }
+        WalkError::Store(error) => *error,
+    })
+}
+
+/// Why a bounded walk stopped: over its object limit (a size, not damage),
+/// or a store failure (a missing or mistyped object, a read error).
+#[derive(Debug)]
+pub enum WalkError {
+    OverLimit {
+        max_objects: usize,
+    },
+    /// Boxed: a store error is large, and the over-limit case is common.
+    Store(Box<StoreError>),
+}
+
+/// [`reachable_excluding`], telling the object limit apart from a missing
+/// or corrupt object.
+///
+/// # Errors
+///
+/// [`WalkError::OverLimit`] past `max_objects`; [`WalkError::Store`] for a
+/// missing or mistyped object or a read failure.
+#[allow(
+    clippy::implicit_hasher,
+    reason = "the walk's own sets use the default hasher; callers pass one of those"
+)]
+pub fn reachable_bounded(
+    db: &ObjectDb,
+    tips: &[ObjectId],
+    known: &HashSet<ObjectId>,
+    max_objects: usize,
+) -> Result<Reachable, WalkError> {
     let mut walk = Walk {
         db,
         max_objects,
@@ -72,7 +108,20 @@ pub fn reachable_excluding(
         out: Reachable::default(),
         commits: VecDeque::new(),
         trees: VecDeque::new(),
+        over_limit: false,
     };
+    walk_all(&mut walk, tips).map_err(|error| {
+        if walk.over_limit {
+            WalkError::OverLimit { max_objects }
+        } else {
+            WalkError::Store(Box::new(error))
+        }
+    })?;
+    Ok(walk.out)
+}
+
+fn walk_all(walk: &mut Walk<'_>, tips: &[ObjectId]) -> Result<(), StoreError> {
+    let db = walk.db;
     for tip in tips {
         walk.seed(*tip)?;
     }
@@ -107,7 +156,7 @@ pub fn reachable_excluding(
             }
         }
     }
-    Ok(walk.out)
+    Ok(())
 }
 
 struct Walk<'a> {
@@ -118,6 +167,8 @@ struct Walk<'a> {
     out: Reachable,
     commits: VecDeque<ObjectId>,
     trees: VecDeque<ObjectId>,
+    /// The walk stopped at `max_objects`.
+    over_limit: bool,
 }
 
 impl Walk<'_> {
@@ -127,6 +178,7 @@ impl Walk<'_> {
             return Ok(false);
         }
         if self.seen.len() > self.max_objects {
+            self.over_limit = true;
             return Err(StoreError::Integrity(format!(
                 "more than {} objects are reachable",
                 self.max_objects

@@ -15,9 +15,17 @@ import { PROJECT_SETTINGS_EDIT } from '@/features/localWork/model';
  *   owner's desktop and changes no state;
  * - `eraseWorkspaceHandoff` ("Erase cloud copy"): the owner or a project settings editor; it
  *   stops a running cloud turn and the thread goes back to the laptop.
+ * - `setWorkspaceHandoffPullRequestCredential` (client contract 1.29): the owner chooses the
+ *   GitHub or GitLab configuration the cloud agent pushes and opens pull requests through; only
+ *   the reference is sent, never a secret. `listConfigurations` lists the choices.
  */
 
 export type HandoffInfo = components['schemas']['WorkspaceHandoffState'];
+export type ForgeCredential = components['schemas']['WorkspaceForgeCredential'];
+export type ForgeType = ForgeCredential['type'];
+
+/** The forges a cloud thread pushes to, in the order the picker lists them. */
+export const FORGES: readonly ForgeType[] = ['github', 'gitlab'];
 
 /** How often an open Local work thread asks for its state (the web page's interval). */
 export const HANDOFF_POLL_MS = 10_000;
@@ -61,6 +69,38 @@ export async function eraseCloudCopy(projectId: number, conversationUuid: string
       ...handoffPath(projectId, conversationUuid),
     }),
   );
+}
+
+export async function setPullRequestCredential(
+  projectId: number,
+  conversationUuid: string,
+  credential: ForgeCredential | null,
+  client: ApiClient = sessionApiClient(),
+): Promise<void> {
+  await unwrap(
+    client.PUT('/elitea_core/workspace_handoff_pull_request_credential/prompt_lib/{project_id}/{conversation_uuid}', {
+      ...handoffPath(projectId, conversationUuid),
+      body: { credential },
+    }),
+  );
+}
+
+/** The titles of one project's configurations of one forge (with the shared ones when asked). */
+export async function listForgeTitles(
+  projectId: number,
+  type: ForgeType,
+  includeShared: boolean,
+  client: ApiClient = sessionApiClient(),
+  signal?: AbortSignal,
+): Promise<{ own: string[]; shared: string[] }> {
+  const page = await unwrap(
+    client.GET('/configurations/configurations/{project_id}', {
+      params: { path: { project_id: String(projectId) }, query: { type: [type], include_shared: includeShared, limit: 200 } },
+      signal,
+    }),
+  );
+  const titles = (rows: readonly { elitea_title?: string }[] | undefined) => (rows ?? []).map((row) => row.elitea_title ?? '').filter((title) => title !== '');
+  return { own: titles(page.items), shared: titles(page.shared?.items) };
 }
 
 /**

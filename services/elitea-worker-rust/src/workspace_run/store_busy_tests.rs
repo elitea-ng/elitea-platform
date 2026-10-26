@@ -102,6 +102,19 @@ async fn the_grpc_store_resends_a_busy_publish_and_it_applies_once() {
         ) -> Result<tonic::Response<Self::WorkspaceEnvSecretStream>, tonic::Status> {
             Err(tonic::Status::unimplemented("env"))
         }
+        async fn workspace_forge_credential(
+            &self,
+            _: tonic::Request<
+                crate::protocol::elitea::runtime::v1::WorkspaceForgeCredentialRequestV1,
+            >,
+        ) -> Result<
+            tonic::Response<
+                crate::protocol::elitea::runtime::v1::WorkspaceForgeCredentialResponseV1,
+            >,
+            tonic::Status,
+        > {
+            Err(tonic::Status::unimplemented("forge credential"))
+        }
     }
 
     let service = Arc::new(BusyOnce::default());

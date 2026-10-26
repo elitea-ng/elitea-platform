@@ -42,6 +42,9 @@ const (
 	FetchPath          = "/api/v2/elitea_core/workspace_store_fetch/prompt_lib/{projectID}/{conversationUUID}"
 	ObjectPath         = "/api/v2/elitea_core/workspace_store_object/prompt_lib/{projectID}/{conversationUUID}/{sha256}"
 	PolicyPath         = "/api/v2/elitea_core/workspace_handoff_policy/prompt_lib/{projectID}"
+	// PullRequestCredentialPath sets the thread's pull-request credential
+	// (ADR-0034 decision 10, amended 2026-10-26; client contract 1.29).
+	PullRequestCredentialPath = "/api/v2/elitea_core/workspace_handoff_pull_request_credential/prompt_lib/{projectID}/{conversationUUID}"
 
 	// SendPermission is the chat send's: every handoff write moves the
 	// conversation. 0068 grants it, so no migration seeds anything.
@@ -66,6 +69,7 @@ var Methods = []struct{ Method, Pattern string }{
 	{http.MethodPut, ObjectPath}, {http.MethodGet, ObjectPath},
 	{http.MethodGet, PolicyPath},
 	{http.MethodGet, ChangesPath}, {http.MethodGet, DiffPath},
+	{http.MethodPut, PullRequestCredentialPath},
 }
 
 var ErrInvalidRoute = errors.New("invalid workspace handoff route dependencies")
@@ -149,6 +153,7 @@ func NewRoute(handoff Handoff, store Store, conversations ConversationReader, au
 	router.Method(http.MethodGet, PolicyPath, gate(h.policy, SendPermission))
 	router.Method(http.MethodGet, ChangesPath, gate(h.changesView, ReadPermission))
 	router.Method(http.MethodGet, DiffPath, gate(h.diff, ReadPermission))
+	router.Method(http.MethodPut, PullRequestCredentialPath, gate(h.setPullRequestCredential, SendPermission))
 	return &Route{handler: router}, nil
 }
 
@@ -332,10 +337,13 @@ func (h *handler) state(writer http.ResponseWriter, request *http.Request) {
 		"history_mode":    view.Handoff.HistoryMode,
 		"has_upstream":    view.Handoff.HasUpstream,
 		"stats":           stats,
-		"cloud_sha":       optionalString(view.Handoff.CloudSHA),
-		"updated_at":      timestamp(view.Handoff.UpdatedAt),
-		"delete_after":    optionalTimestamp(view.DeleteAfter),
-		"workspace_bytes": bytes,
+		// The owner's pull-request credential: a configuration reference,
+		// never a secret.
+		"pull_request_credential": forgeCredentialView(view.Handoff.ForgeCredential),
+		"cloud_sha":               optionalString(view.Handoff.CloudSHA),
+		"updated_at":              timestamp(view.Handoff.UpdatedAt),
+		"delete_after":            optionalTimestamp(view.DeleteAfter),
+		"workspace_bytes":         bytes,
 	})
 }
 
@@ -764,8 +772,14 @@ func (h *handler) policy(writer http.ResponseWriter, request *http.Request) {
 		"path_deny":           nonNil(policy.PathDeny),
 		"allow_user_include":  policy.AllowUserInclude,
 		"env_harvest":         policy.EnvHarvest,
-		"env_deny":            nonNil(policy.EnvDeny),
-		"env_allow":           envAllow,
+		// Decision 10, amended 2026-10-26: whether a cloud turn may open a
+		// pull request, whether each one asks first, and whether this
+		// deployment can store a thread's pull-request credential.
+		"pull_requests":            policy.PullRequests,
+		"pull_request_approval":    policy.PullRequestApproval,
+		"pull_request_credentials": h.forgeCredentials() != nil,
+		"env_deny":                 nonNil(policy.EnvDeny),
+		"env_allow":                envAllow,
 		"limits": map[string]any{
 			"max_segment_bytes":            policy.Limits.MaxSegmentBytes,
 			"max_file_bytes":               policy.Limits.MaxFileBytes,
@@ -776,6 +790,82 @@ func (h *handler) policy(writer http.ResponseWriter, request *http.Request) {
 		"env_limits": map[string]any{
 			"max_vars": platformconfig.MaxCloudExecutorEnvVars, "max_bytes": platformconfig.MaxCloudExecutorEnvBytes,
 		},
+	})
+}
+
+// forgeCredentialSetter is the optional Handoff call behind
+// PullRequestCredentialPath (*handoffapp.Service with its credential
+// plumbing composed).
+type forgeCredentialSetter interface {
+	SetForgeCredential(context.Context, handoffapp.SetForgeCredentialRequest) (handoffapp.Handoff, error)
+	ForgeCredentialsAvailable() bool
+}
+
+var _ forgeCredentialSetter = (*handoffapp.Service)(nil)
+
+// forgeCredentials answers the setter, or nil when the deployment cannot
+// store a pull-request credential.
+func (h *handler) forgeCredentials() forgeCredentialSetter {
+	setter, ok := h.handoff.(forgeCredentialSetter)
+	if !ok || !setter.ForgeCredentialsAvailable() {
+		return nil
+	}
+	return setter
+}
+
+func forgeCredentialView(credential *handoffapp.ForgeCredential) any {
+	if credential == nil {
+		return nil
+	}
+	return map[string]any{"type": credential.Type, "elitea_title": credential.EliteaTitle, "private": credential.Private}
+}
+
+type pullRequestCredentialBody struct {
+	// Credential is required as a key: null clears the choice.
+	Credential *handoffapp.ForgeCredential `json:"credential"`
+}
+
+// setPullRequestCredential chooses (or, with null, clears) the GitHub or
+// GitLab configuration a cloud turn of the thread pushes and opens pull
+// requests through. Only
+// the thread's owner, from any client.
+func (h *handler) setPullRequestCredential(writer http.ResponseWriter, request *http.Request) {
+	target, ok := thread(writer, request)
+	if !ok {
+		return
+	}
+	_, actor, ok := caller(writer, request, false)
+	if !ok {
+		return
+	}
+	var raw map[string]json.RawMessage
+	if !decodeBody(writer, request, &raw) {
+		return
+	}
+	value, present := raw["credential"]
+	if !present || len(raw) != 1 {
+		desktopwire.WriteError(writer, http.StatusUnprocessableEntity, "invalid_handoff", "Send `credential`: a configuration reference or null.")
+		return
+	}
+	var body pullRequestCredentialBody
+	if err := json.Unmarshal(value, &body.Credential); err != nil {
+		desktopwire.WriteError(writer, http.StatusUnprocessableEntity, "invalid_handoff", "Send `credential`: a configuration reference or null.")
+		return
+	}
+	setter := h.forgeCredentials()
+	if setter == nil {
+		writeError(request.Context(), writer, "pull_request_credential", handoffapp.ErrUnavailable)
+		return
+	}
+	updated, err := setter.SetForgeCredential(request.Context(), handoffapp.SetForgeCredentialRequest{
+		Thread: target, ActorUserID: actor, Credential: body.Credential, AuditRoute: PullRequestCredentialPath,
+	})
+	if err != nil {
+		writeError(request.Context(), writer, "pull_request_credential", err)
+		return
+	}
+	desktopwire.WriteJSON(writer, http.StatusOK, map[string]any{
+		"pull_request_credential": forgeCredentialView(updated.ForgeCredential),
 	})
 }
 
@@ -800,6 +890,12 @@ func writeError(ctx context.Context, writer http.ResponseWriter, operation strin
 	case errors.Is(err, handoffapp.ErrEnvTooLarge):
 		desktopwire.WriteError(writer, http.StatusRequestEntityTooLarge, "env_too_large",
 			"At most 200 environment variables and 64 KiB in all.")
+	case errors.Is(err, handoffapp.ErrPullRequestsDisabled):
+		desktopwire.WriteError(writer, http.StatusForbidden, "pull_requests_disabled",
+			"Pull requests from the cloud are turned off for this project or deployment.")
+	case errors.Is(err, handoffapp.ErrForgeCredentialInvalid):
+		desktopwire.WriteError(writer, http.StatusUnprocessableEntity, "pull_request_credential_invalid",
+			"Choose a GitHub or GitLab configuration of this project, or one of your private ones.")
 	case errors.Is(err, workspacestore.ErrThreadBusy):
 		// Retryable, and not a ref conflict: nothing was compared. The
 		// caller sends the SAME publish again after Retry-After.

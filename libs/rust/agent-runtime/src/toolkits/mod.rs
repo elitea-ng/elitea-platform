@@ -45,6 +45,7 @@ pub mod families;
 #[cfg(not(any(test, feature = "test-support")))]
 pub(crate) mod families;
 mod family_error;
+mod git_receive_pack;
 pub(crate) mod invocation;
 pub(crate) mod materialize;
 pub(crate) mod mcp;
@@ -174,6 +175,8 @@ mod testrail_tests;
 mod web_test_support;
 #[cfg(test)]
 mod web_tests;
+#[cfg(test)]
+mod workspace_push_tests;
 #[cfg(all(test, feature = "toolkit-office"))]
 mod xlsx_tests;
 #[cfg(test)]

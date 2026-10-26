@@ -44,6 +44,10 @@ const (
 	KeyCloudExecutorEnvHarvest       = "env_harvest"
 	KeyCloudExecutorEnvDeny          = "env_deny"
 	KeyCloudExecutorEnvAllow         = "env_allow"
+	// Amendment 2026-10-26 (decision 10): whether a cloud turn may open a
+	// pull request, and whether a person approves each one first.
+	KeyCloudExecutorPullRequests        = "pull_requests"
+	KeyCloudExecutorPullRequestApproval = "pull_request_approval"
 )
 
 // Bounds of the pattern lists and of the harvested environment.
@@ -114,8 +118,12 @@ type CloudExecutorSettings struct {
 	EnvDeny               []string `json:"env_deny"`
 	// EnvAllow, when set, is the only list of names that can be harvested;
 	// nil is unset.
-	EnvAllow  *[]string              `json:"env_allow"`
-	Resources CloudExecutorResources `json:"resources"`
+	EnvAllow *[]string `json:"env_allow"`
+	// PullRequests: a cloud turn may open a pull request (decision 10).
+	// PullRequestApproval: each one is a HITL approval first.
+	PullRequests        bool                   `json:"pull_requests"`
+	PullRequestApproval bool                   `json:"pull_request_approval"`
+	Resources           CloudExecutorResources `json:"resources"`
 }
 
 // DefaultCloudExecutorSettings is the ceiling of a deployment that never saved
@@ -130,6 +138,7 @@ func DefaultCloudExecutorSettings() CloudExecutorSettings {
 		IdleRetentionDays: 30, ReturnGraceDays: 7,
 		Exclusions: DefaultCloudExecutorExclusions(), AllowUserInclude: true, EnvHarvest: false,
 		EnvDeny: DefaultCloudExecutorEnvDeny(), EnvAllow: nil,
+		PullRequests: true, PullRequestApproval: true,
 	}
 }
 
@@ -174,6 +183,8 @@ func CloudExecutorSettingsFromValues(values Values) CloudExecutorSettings {
 	bounded(KeyCloudExecutorReturnGraceDays, 0, MaxCloudExecutorRetentionDays, &settings.ReturnGraceDays)
 	settings.AllowUserInclude = values.Bool(KeyCloudExecutorAllowUserInclude, settings.AllowUserInclude)
 	settings.EnvHarvest = values.Bool(KeyCloudExecutorEnvHarvest, settings.EnvHarvest)
+	settings.PullRequests = values.Bool(KeyCloudExecutorPullRequests, settings.PullRequests)
+	settings.PullRequestApproval = values.Bool(KeyCloudExecutorPullRequestApproval, settings.PullRequestApproval)
 	// A saved list replaces the default; an absent or wrong-typed one keeps it.
 	if _, present := values[KeyCloudExecutorExclusions].([]any); present {
 		settings.Exclusions = CloudExecutorPatterns(values.Strings(KeyCloudExecutorExclusions))

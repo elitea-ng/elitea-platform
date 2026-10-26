@@ -21,6 +21,7 @@ pub(crate) mod context;
 pub(crate) mod file_redact;
 pub(crate) mod gix_codec;
 pub(crate) mod pr_diff;
+pub(crate) mod push_prep;
 pub(crate) mod redact;
 pub(crate) mod sandbox;
 pub(crate) mod scan;

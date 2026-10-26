@@ -789,7 +789,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 354 -> 356 (client contract 1.28, ADR-0037): generateApplicationDraftStream
 // and getAgentSchema, the conversational agent builder's streamed draft and
 // the published agent schemas.
-const GENERATED_OPERATION_COUNT = 356;
+// 356 -> 357 (client contract 1.29, ADR-0034 decision 10 amended):
+// setWorkspaceHandoffPullRequestCredential, the GitHub or GitLab configuration a cloud
+// thread opens pull requests through, chosen from the cloud notice of the
+// web chat (pages/chat). Generated; the manifest gains it.
+const GENERATED_OPERATION_COUNT = 357;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1012,8 +1016,13 @@ const GENERATED_OPERATION_COUNT = 356;
  * applications.generateAgentDraftStream, the streamed agent draft of the
  * Build with AI builder (features/agents `useAgentDraftStream`). Handwritten:
  * an SSE answer to a POST, read through `eliteaFetch`'s `stream` flag.
+ *
+ * 286 -> 288 (client contract 1.29, ADR-0034 decision 10 amended):
+ * workspaceHandoff.setPullRequestCredential, and
+ * configurations.listForPullRequests (the GitHub or GitLab configurations it is
+ * chosen from), the cloud notice of the web chat (pages/chat). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 286;
+const MANIFEST_ENTRY_COUNT = 288;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {
