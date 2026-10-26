@@ -1559,13 +1559,6 @@ impl DurableParallelNode {
         self
     }
 
-    /// The child slots. Default: the process-wide pool.
-    #[cfg(test)]
-    pub(crate) fn with_permits(mut self, permits: ChildPermits) -> Self {
-        self.permits = permits;
-        self
-    }
-
     /// The output key's typed reducer, checked against the join at compile time.
     pub(crate) fn with_output_reducer(mut self, reducer: Option<StateReducer>) -> Self {
         self.output_reducer = reducer;
