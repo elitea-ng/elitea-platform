@@ -561,7 +561,7 @@ pub(crate) fn ensure_incremental_vacuum(conn: &Connection, what: &str) {
 /// The file refused the vacuum (it is not a database, or the disk could
 /// not be written).
 pub fn reclaim_database(dir: &Path, file_name: &str) -> Result<u64, HostError> {
-    let path = dir.join(file_name);
+    let path = canonical_dir(dir).join(file_name);
     let before = fs::symlink_metadata(&path)
         .map(|meta| meta.len())
         .unwrap_or_default();
@@ -580,6 +580,13 @@ pub fn reclaim_database(dir: &Path, file_name: &str) -> Result<u64, HostError> {
     )
     .map_err(|e| storage("could not reclaim the database", &e))?;
     Ok(before)
+}
+
+/// `dir` canonical, as [`SessionStore::open`] makes it: the no-follow open
+/// then refuses a symlinked FILE, not a symlink higher up (macOS's `/var`
+/// is one). As given when it cannot be resolved (the open then fails).
+fn canonical_dir(dir: &Path) -> PathBuf {
+    fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
 }
 
 /// What a store file holds, for the Doctor's space checks.
@@ -610,7 +617,7 @@ impl DbSpace {
 /// fails. Opened read-only through a no-follow connection, separate from
 /// the store's own.
 pub fn database_space(dir: &Path, file_name: &str) -> DbSpace {
-    let path = dir.join(file_name);
+    let path = canonical_dir(dir).join(file_name);
     let bytes = fs::symlink_metadata(&path)
         .map(|meta| meta.len())
         .unwrap_or_default();
