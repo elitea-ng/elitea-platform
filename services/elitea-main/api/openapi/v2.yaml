@@ -6730,6 +6730,64 @@ components:
           enum: [agent_draft_invalid, agent_draft_unparseable, agent_draft_cut_off]
       example: { error: "the generated agent draft is not usable: the draft does not match AgentDefinition: name (missing)", code: agent_draft_invalid }
 
+    DraftConversationTurn:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string, enum: [user, assistant] }
+        content: { type: string, maxLength: 16384 }
+
+    GenerateApplicationDraftStreamRequest:
+      type: object
+      required: [user_description]
+      properties:
+        user_description:
+          type: string
+          description: This turn's request, in plain text. Required and non-blank.
+        conversation_history:
+          type: array
+          maxItems: 20
+          description: >
+            The builder conversation so far, oldest first. At most 20 turns;
+            entries with an empty role or content are dropped.
+          items: { $ref: '#/components/schemas/DraftConversationTurn' }
+        current_draft:
+          $ref: '#/components/schemas/AgentDefinition'
+        llm_settings:
+          $ref: '#/components/schemas/DraftLlmSettings'
+      example:
+        user_description: Make it also name the on-call engineer.
+        conversation_history:
+          - { role: user, content: An agent that triages incidents. }
+        current_draft:
+          name: Incident Triager
+          description: Sorts new incidents by severity.
+          instructions: Assign a severity.
+
+    DraftStreamToken:
+      type: object
+      required: [text]
+      description: The data of a `draft.token` frame.
+      properties:
+        text: { type: string, description: A text delta from the model. }
+      example: { text: '{"name": "Inci' }
+
+    DraftStreamError:
+      type: object
+      required: [code, status, message]
+      description: >
+        The data of a `draft.error` frame, the last frame of a failed stream.
+        `status` is the HTTP status the one-shot route answers for the same
+        failure (422 an unusable draft, 502 the gateway hop failed, 500 the
+        agent schema could not be loaded).
+      properties:
+        code:
+          type: string
+          enum: [agent_draft_invalid, agent_draft_unparseable, agent_draft_cut_off, agent_schema_unavailable, gateway_failed]
+        status: { type: integer, enum: [422, 500, 502] }
+        message: { type: string }
+      example: { code: agent_draft_invalid, status: 422, message: "the draft does not match AgentDefinition: name (missing)" }
+
     ProjectContextDraft:
       type: object
       required: [project_background]
@@ -23872,6 +23930,78 @@ paths:
               schema:
                 $ref: '#/components/schemas/PredictLLMUnavailableResponse'
 
+  /elitea_core/generate_application_draft_stream/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    post:
+      operationId: generateApplicationDraftStream
+      summary: Draft an agent conversationally, streamed as Server-Sent Events
+      description: |
+        Client contract 1.28 (ADR-0037 decision 4). The streaming twin of
+        generateApplicationDraft: one gateway completion per call, through
+        the same gRPC-over-mTLS hop (`GatewayService.ChatCompletions`,
+        server-streaming), billed to the caller against the project budget
+        like `predict_llm`. Nothing is saved: the client reviews the draft
+        and saves it through createApplication.
+
+        `conversation_history` carries the builder conversation so far and
+        `current_draft` the draft being improved, so a person can refine a
+        draft over several turns. Gated on
+        `models.applications.applications.create`, as the one-shot route.
+
+        FAILURES BEFORE THE STREAM OPENS answer a plain JSON status: 400 an
+        unusable body, 503 no LLM gateway configured. The stream then opens
+        at once, before the gateway answers, so the keepalive can hold the
+        connection while a reasoning model thinks. From then on the status
+        is 200 and a failure is the last frame, `draft.error`, whose
+        `status` is what the one-shot route answers for the same failure
+        (502 the gateway hop failed, 422 an unusable draft).
+
+        FRAMES (`event:`, each `data` one JSON object):
+        `draft.token` (DraftStreamToken: a model text delta, for display
+        only — it is the raw JSON the model writes), `draft.complete`
+        (ApplicationDraft: the full draft, truncated to the caps and
+        validated against AgentDefinition exactly as the one-shot route
+        does, then the stream ends), `draft.error` (DraftStreamError, then
+        the stream ends). Comment lines (`: keepalive`) keep an idle
+        connection open while the model thinks. A client must ignore an
+        unknown event type.
+      tags: [applications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateApplicationDraftStreamRequest'
+      responses:
+        '200':
+          description: The draft stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+              example: "event: draft.token\ndata: {\"text\":\"{\\\"name\\\": \\\"Inci\"}\n\nevent: draft.complete\ndata: {\"name\":\"Incident Triager\",\"description\":\"Sorts incidents.\",\"instructions\":\"Assign a severity.\",\"welcome_message\":\"\",\"conversation_starters\":[],\"suggested_toolkits\":[],\"suggested_mcp\":[],\"suggested_pipelines\":[],\"suggested_agents\":[],\"suggested_skills\":[]}\n\n"
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '413':
+          description: The request body is above the 1 MiB bound.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: >
+            No completion backend is composed because LLM_GATEWAY_URL is empty.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PredictLLMUnavailableResponse'
+
   /elitea_core/agent_schema/prompt_lib/{project_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -23883,8 +24013,8 @@ paths:
         Client contract 1.28 (ADR-0037 decision 5). The AgentDefinition and
         LocalAgentDefinition components of this contract, as JSON Schema, and
         a `schema_version` that changes exactly when one of them changes
-        (also the strong `ETag`). The agent draft route validates its draft
-        against this AgentDefinition before it answers. The route reads no
+        (also the strong `ETag`). Both draft routes validate their draft
+        against this AgentDefinition before they answer. The route reads no
         tenant state: every authorized project gets the same body. Gated on
         `models.applications.applications.create`, the permission of the
         builders that use it.

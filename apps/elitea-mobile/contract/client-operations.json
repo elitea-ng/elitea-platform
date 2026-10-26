@@ -64,6 +64,8 @@
     "archiveConversation",
     "unarchiveConversation",
     "forkConversation",
-    "markConversationRead"
+    "markConversationRead",
+    "generateApplicationDraftStream",
+    "createApplication"
   ]
 }

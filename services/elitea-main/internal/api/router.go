@@ -3929,9 +3929,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 				r.With(projectPermission("models.applications.applications.create")).
 					Post("/generate_application_draft/prompt_lib/{projectID}", draftHandler.GenerateApplicationDraft)
-				// ADR-0037: the published agent schemas the agent draft is
-				// validated against. Same permission as the draft: it serves
-				// the people who may create an agent.
+				// ADR-0037: the conversational builder's streamed draft and the
+				// published agent schemas both drafts are validated against.
+				// Same permission as the one-shot draft: both serve the people
+				// who may create an agent. The stream is text/event-stream,
+				// which the compressor below leaves alone.
+				r.With(projectPermission("models.applications.applications.create")).
+					Post("/generate_application_draft_stream/prompt_lib/{projectID}", draftHandler.GenerateApplicationDraftStream)
 				r.With(projectPermission("models.applications.applications.create")).
 					Get("/agent_schema/prompt_lib/{projectID}", draftHandler.GetAgentSchema)
 				r.With(projectPermission("models.applications.skills.create")).

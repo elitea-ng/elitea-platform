@@ -49,6 +49,7 @@ clients generated from it.
 | Discover public agents | shipped | shipped | shipped | |
 | Workspace brand (ADR-0024 runtime branding) | shipped | shipped | shipped | The default mark and identity are shared: `@elitea/client-core/brand`. |
 | Agent, pipeline, toolkit and MCP editors | shipped | shipped | n-a: authoring needs a large screen; the mobile app runs agents and does not edit them | |
+| Create an agent in a conversation (contract 1.28) | shipped | shipped | shipped | ADR-0037. The builder streams a draft, the person reviews and saves it, and it is listed with the other agents at once. Desktop also offers the local branch in a folder session: the session agent writes an `AGENTS.md` behind the approval card. Mobile offers the Elitea branch only and does not edit an agent after it is saved. |
 | Native right panel (inspector) | n-a: the browser layout keeps its in-page panels | shipped | n-a: the phone layout has no side panel | Desktop host UI. |
 | Local work (local agent over a folder) | n-a: the agent runs in the desktop host on the laptop | shipped | n-a: the agent runs in the desktop host on the laptop | Web and mobile list Local work threads. They are read-only while the laptop runs them. |
 | Context breakdown, idle compaction and bypass mode for Local work | n-a: the agent runs in the desktop host on the laptop | shipped | n-a: the agent runs in the desktop host on the laptop | The Context tab shows the parts of the context. Bypass mode allows what would be asked. |

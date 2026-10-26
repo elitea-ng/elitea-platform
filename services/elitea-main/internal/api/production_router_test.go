@@ -2146,6 +2146,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/elitea_core/fork/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/fork_toolkit/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/generate_application_draft/prompt_lib/{projectID}",
+		"POST /api/v2/elitea_core/generate_application_draft_stream/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/generate_project_context_draft/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/generate_skill_draft/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/import_wizard/prompt_lib/{projectID}",
