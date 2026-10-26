@@ -257,6 +257,27 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+/// The threads idle past the retention cutoff `?1` (Unix ms): every turn
+/// of the thread finished (a running turn, or one a crash left unfinished,
+/// keeps its thread) and the last one finished before the cutoff. One query
+/// for the Doctor's count and the repair's delete, so both see the same
+/// threads.
+const IDLE_THREADS: &str = "SELECT conversation_uuid FROM turns
+    WHERE conversation_uuid IS NOT NULL
+    GROUP BY conversation_uuid
+    HAVING COUNT(*) = COUNT(finished_at) AND MAX(finished_at) < ?1";
+
+/// The retention cutoff, in Unix ms: `idle_days` before now.
+fn retention_cutoff_ms(idle_days: u32) -> i64 {
+    let span = i64::try_from(
+        u128::from(idle_days)
+            .saturating_mul(86_400)
+            .saturating_mul(1_000),
+    )
+    .unwrap_or(i64::MAX);
+    now_ms().saturating_sub(span)
+}
+
 /// Cut `text` to at most `max` bytes on a character boundary, marking the cut.
 fn cut(text: &str, max: usize) -> Option<String> {
     if text.len() <= max {
@@ -381,9 +402,8 @@ enum Op {
         conversation_uuid: Option<String>,
     },
     /// Remove the turns of every thread that sat idle past the cutoff
-    /// (retention): its last finished turn is older than `cutoff_ms`. The
-    /// server keeps the messages; the turns' local recording goes. Answers
-    /// with the number of turns deleted.
+    /// (retention, [`IDLE_THREADS`]). The server keeps the messages; the
+    /// turns' local recording goes. Answers with the number of threads.
     PruneIdle {
         cutoff_ms: i64,
         ack: std::sync::mpsc::Sender<rusqlite::Result<usize>>,
@@ -1021,42 +1041,28 @@ impl HistoryStore {
         })
     }
 
-    /// The number of threads that sat idle past the cutoff: their last
-    /// finished turn (`MAX(turns.finished_at)`) is older than `cutoff_ms`,
-    /// in Unix ms. The Doctor's retention check counts these before it
-    /// offers `threads.prune`.
+    /// The number of threads idle more than `idle_days` ([`IDLE_THREADS`]):
+    /// what [`Self::prune_idle`] would forget. The Doctor's retention check
+    /// counts these before it offers `threads.prune`.
     ///
     /// # Errors
     ///
     /// The database could not be read.
-    pub fn idle_threads(&self, cutoff_ms: i64) -> Result<usize, HostError> {
+    pub fn idle_threads(&self, idle_days: u32) -> Result<usize, HostError> {
+        let cutoff_ms = retention_cutoff_ms(idle_days);
         self.with("could not read the thread history", |conn| {
             conn.query_row(
-                "SELECT COUNT(*) FROM (
-                    SELECT 1 FROM turns
-                    WHERE conversation_uuid IS NOT NULL
-                    GROUP BY conversation_uuid
-                    HAVING MAX(finished_at) < ?1 AND MAX(finished_at) IS NOT NULL
-                )",
+                &format!("SELECT COUNT(*) FROM ({IDLE_THREADS})"),
                 params![cutoff_ms],
                 |row| row.get(0),
             )
         })
     }
 
-    /// The fraction of this database that is free pages (`0.0..=1.0`): what
-    /// a trimmed or pruned store still holds that it does not use. `0.0`
-    /// when the file is empty or the query fails. The space check shows it
-    /// next to the file size; a large fraction is the hint for the
-    /// `history.vacuum` repair.
-    pub fn free_page_fraction(&self) -> f64 {
-        crate::sessions::database_free_page_fraction(&self.dir, FILE_NAME)
-    }
-
-    /// Remove the turns of every thread that sat idle past `idle_days`: its
-    /// last finished turn (`MAX(turns.finished_at)`) is older than the
-    /// cutoff. Threads that never finished a turn are kept: retention counts
-    /// finished work, not absence. The server keeps the messages; what only
+    /// Remove every thread idle more than `idle_days` ([`IDLE_THREADS`]):
+    /// all its turns finished, the last before the cutoff. A thread with a
+    /// turn still running (or never finished) is kept. Answers with the
+    /// number of threads forgotten. The server keeps the messages; what only
     /// this device recorded (the tool rows, approvals and file changes of
     /// those turns) is gone for good, which is why the Doctor runs it only on
     /// the person's confirm. Queued on the writer (after the queued turns),
@@ -1070,14 +1076,7 @@ impl HistoryStore {
         // far: the app's in-flight turns are settled first, and the prune
         // sees a quiet table. The cutoff, not the rows, travels the queue
         // (durable messages carry bounded metadata, never data).
-        let cutoff_ms = now_ms().saturating_sub(
-            i64::try_from(
-                u128::from(idle_days)
-                    .saturating_mul(86_400)
-                    .saturating_mul(1_000),
-            )
-            .unwrap_or(i64::MAX),
-        );
+        let cutoff_ms = retention_cutoff_ms(idle_days);
         let (ack, done) = std::sync::mpsc::channel();
         if !self.send(Op::PruneIdle { cutoff_ms, ack }) {
             return Err(HostError::Storage(
@@ -1468,23 +1467,24 @@ fn add_bytes(conn: &Connection, turn_id: &str, bytes: usize) -> rusqlite::Result
     )
 }
 
-/// Remove the turns of every thread (of every account) that sat idle past
-/// the cutoff (retention): its last finished turn (`MAX(turns.finished_at)`)
-/// is older than `cutoff_ms`, in Unix ms. Threads that never finished a
-/// turn stay: retention counts finished work, not absence. A thread is its
-/// turns (there is no thread table); their events go with them (`ON DELETE
-/// CASCADE`). Answers with the number of turns deleted.
+/// Remove the threads idle past `cutoff_ms` ([`IDLE_THREADS`]), across
+/// every account and workspace (retention has no owner). A thread is its
+/// turns, there is no thread table; the turns' events go with them (`ON
+/// DELETE CASCADE`). One transaction, so the count is what was deleted.
+/// Answers with the number of threads forgotten.
 fn prune_idle_threads(conn: &Connection, cutoff_ms: i64) -> rusqlite::Result<usize> {
-    // The idle threads: last finished turn older than the cutoff.
-    let idle = "SELECT conversation_uuid FROM turns
-                WHERE conversation_uuid IS NOT NULL
-                GROUP BY conversation_uuid
-                HAVING MAX(finished_at) < ?1 AND MAX(finished_at) IS NOT NULL";
-    let pruned = conn.execute(
-        &format!("DELETE FROM turns WHERE conversation_uuid IN ({idle})"),
+    let tx = conn.unchecked_transaction()?;
+    let threads: usize = tx.query_row(
+        &format!("SELECT COUNT(*) FROM ({IDLE_THREADS})"),
+        params![cutoff_ms],
+        |row| row.get(0),
+    )?;
+    tx.execute(
+        &format!("DELETE FROM turns WHERE conversation_uuid IN ({IDLE_THREADS})"),
         params![cutoff_ms],
     )?;
-    Ok(pruned)
+    tx.commit()?;
+    Ok(threads)
 }
 
 /// Rewrite the `message_ids` of the `done` events of `turn_id` through
@@ -2215,32 +2215,39 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store =
             Arc::new(HistoryStore::open_at(root.path(), Duration::from_millis(200)).unwrap());
-        // The store's writer is idle; a second connection inserts two
-        // threads: one finished two days ago, one just now. A thread is its
-        // turns: there is no thread table.
+        // The store's writer is idle; a second connection inserts three
+        // threads: one whose two turns finished days ago, one finished just
+        // now, and one with an old finished turn and a turn still running.
+        // A thread is its turns: there is no thread table.
         {
             let conn = rusqlite::Connection::open(store.path()).unwrap();
             conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL")
                 .unwrap();
-            conn.execute(
-                "INSERT INTO turns (turn_id, origin, user_id, workspace_id, conversation_id, conversation_uuid, prompt, mentions, started_at, finished_at, events_bytes)
-                 VALUES ('turn-old', 'https://a.example', 1, 'w1', 't-old', 'uuid-old', '', '[]', 0, ?1, 0)",
-                rusqlite::params![now_ms() - 2 * 86_400 * 1_000],
-            )
-            .unwrap();
-            conn.execute(
-                "INSERT INTO turns (turn_id, origin, user_id, workspace_id, conversation_id, conversation_uuid, prompt, mentions, started_at, finished_at, events_bytes)
-                 VALUES ('turn-new', 'https://a.example', 1, 'w1', 't-new', 'uuid-new', '', '[]', 0, ?1, 0)",
-                rusqlite::params![now_ms()],
-            )
-            .unwrap();
+            let insert = |turn: &str, thread: &str, finished: Option<i64>| {
+                conn.execute(
+                    "INSERT INTO turns (turn_id, origin, user_id, workspace_id, conversation_id, conversation_uuid, prompt, mentions, started_at, finished_at, events_bytes)
+                     VALUES (?1, 'https://a.example', 1, 'w1', ?2, ?3, '', '[]', 0, ?4, 0)",
+                    rusqlite::params![turn, format!("t-{thread}"), format!("uuid-{thread}"), finished],
+                )
+                .unwrap();
+            };
+            let days_ago = |days: i64| Some(now_ms() - days * 86_400 * 1_000);
+            insert("turn-old-1", "old", days_ago(3));
+            insert("turn-old-2", "old", days_ago(2));
+            insert("turn-new", "new", Some(now_ms()));
+            insert("turn-live-1", "live", days_ago(3));
+            insert("turn-live-2", "live", None);
         }
-        // The check counts the idle threads; the repair forgets them.
-        let cutoff = now_ms() - 86_400 * 1_000;
-        let idle = store.idle_threads(cutoff).unwrap();
-        assert_eq!(idle, 1, "one thread is idle past the cutoff");
+        // The check counts the idle threads; the repair forgets the same.
+        assert_eq!(store.idle_threads(1).unwrap(), 1, "one thread is idle");
         let pruned = store.prune_idle(1).unwrap();
-        assert_eq!(pruned, 1, "one turn (the idle thread's) is deleted");
+        assert_eq!(pruned, 1, "one thread (of two turns) is forgotten");
+        let threads = store.workspace_threads("w1").unwrap();
+        let uuids: Vec<&str> = threads.iter().map(|(_, _, u)| u.as_str()).collect();
+        assert!(
+            uuids.contains(&"uuid-live"),
+            "a thread with a running turn stays: {uuids:?}"
+        );
         // The idle thread and its turns are gone; the fresh one stays.
         let me = owner(1);
         assert!(store.thread(&me, "w1", "t-old").unwrap().is_empty());
