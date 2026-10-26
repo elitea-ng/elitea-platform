@@ -82,7 +82,11 @@ fn classify(error: &ToolCodeError) -> AnalysisCodeFailure {
             | "sandbox.memory_limit"
             | "sandbox.step_limit" => AnalysisCodeFailure::Overrun,
             "sandbox.cancelled" => AnalysisCodeFailure::Cancelled,
-            crate::sandbox::runtime_loss::FAILURE_CODE => AnalysisCodeFailure::Interrupted,
+            code if code == crate::sandbox::runtime_loss::FAILURE_CODE
+                || crate::sandbox::runtime_loss::NEVER_DISPATCHED_FAILURE_CODES.contains(&code) =>
+            {
+                AnalysisCodeFailure::Interrupted
+            }
             _ => AnalysisCodeFailure::Failed,
         },
         ToolCodeError::Submission | ToolCodeError::Untyped(_) => AnalysisCodeFailure::Failed,
