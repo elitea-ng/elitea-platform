@@ -142,6 +142,23 @@ EliteaUI's depth-aware gate fed by Main.
   (misses too), and `Prefetch` (`application_composition.go:189`) reading one level of the walk in two statements;
   the walk prefetches level by level first (`composition.go:528`).
 
+### Review round 2 (orchestrator, `REVIEW-1409-delta.md`)
+
+- **A. The version switch authorizes and writes in one transaction** (`repos/conversations.go:1371`): the mapping row
+  is locked `FOR UPDATE`, the participant's project authorized and the composition checked on that transaction, then
+  the row is written and committed. A participant meta that does not decode refuses.
+- **B. Re-points are serialized with attaches.** The re-point locks the version it replaces `FOR UPDATE` before it
+  reads the parents (`applications/handler.go:1763`); the relation attach reads the child version `FOR SHARE OF version`
+  (`eliteacore/application_relation.go:305`). An attach of that version in flight finishes first and its parent is
+  walked; none can start until the move commits.
+- **C. Ancestors are walked at authoring time** (`applicationcomposition.CheckWithAncestors`, `composition.go:189`):
+  an attach, a version save or kind switch (REST and MCP) and every re-pointed parent are checked as roots, and so is
+  every saved version that attaches them, transitively (up to 128), with the changed version as it will be stored. The
+  ancestors are found a level per batch (`CompositionSource.Parents`, `application_composition.go:257`) and read in one
+  batch, so twenty ancestors cost 8 statements. A chain linked top-down is now refused at the link that makes a fourth
+  agent level, naming the path from the top.
+- **D.** The MCP switch to a pipeline bounds the stored text first (`mcp/internal_applications_version.go:87`).
+
 ## Defects found by running it
 
 - **The registered message did not fit the output plane.** Main admits a runtime failure's safe message up to 256 bytes
@@ -189,8 +206,9 @@ with the CI environment (`ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RE
   **2646 passed, 0 failed, 103 ignored** (the ignored are the supervisor/preparation/hydration `#[ignore]` suites CI
   runs separately). `cargo fmt --check` and `cargo clippy --locked --all-targets --all-features -D warnings` clean.
   No `libs/rust` change.
-- **Main** `go test -race -count=1 ./...`: **222 packages ok, 0 failed** (33 without tests); `go vet` clean. The last
-  commit (`3ee734d8f`, the project-existence check) was run after it: its package passes, with the new case.
+- **Main** `go test -race -count=1 ./...`: **222 packages ok, 0 failed** (33 without tests); `go vet` clean. Rerun on
+  the round-2 head `feb3c82a8`: 222 ok, 0 failed. Round 2 changed no Worker and no Web `src` file (Worker and Web
+  counts are from `71083b119`); the e2e journey it changed type-checks and lints clean.
 - **Web** `vitest run`: 1914 files / **19023 tests passed**, 6 expected fail, 1 skipped; 1 failed:
   `themePreference.test.ts` "keeps the mark in memory when storage refuses the write", which this branch does not touch
   (pre-existing, storage behaviour under node). `tsc --noEmit` and `oxlint` clean.
@@ -225,7 +243,11 @@ New or changed tests (red before the change where marked):
 | Review 8: a re-point is walked for the whole composition (a fourth level through another parent) | `TestHandlerPostgres_DeleteVersionWalksTheReplacementThroughEveryParent` | red: moved |
 | Review 9: judging participants costs a fixed number of statements (5 for 4 and for 8 participants) | `TestJudgingParticipantsCostsAFixedNumberOfStatements` | red: per participant and version |
 | Review 10: the depth refusal quotes the Agent node once | `TestTheDepthRefusalNamesTheAgentNodeOnce` | red: double quotes |
-| e2e (CI): a cycle is refused at the link; a four-agent chain is refused at publish, three accepted; an agent attached to itself is refused | `api.publish-subagents.spec.ts`, `chat.agent-tools.spec.ts` | updated |
+| e2e (CI): a cycle is refused at the link; a chain linked top-down is refused at the link that makes a fourth agent level (typed, naming the path), three publish; an agent attached to itself is refused | `api.publish-subagents.spec.ts`, `chat.agent-tools.spec.ts` | updated |
+| Round 2 A: the version switch, create-with-participants and token principals authorize the participant's project (foreign, missing, unpublished catalogue refused; published catalogue allowed; token of the owner like its session, a token without an owner refused); a refused switch changes nothing, a refused create creates nothing | `TestParticipantVersionSwitchAndCreateAuthorizeTheParticipantsProject`, token rows in `TestParticipantProjectIsAuthorizedBeforeItsCompositionIsRead` | new |
+| Round 2 B: an attach in flight when the re-point starts is waited for and walked (a cycle → 400, nothing moved) | `TestHandlerPostgres_DeleteVersionWaitsForAConcurrentAttachAndWalksIt` | red: moved unwalked |
+| Round 2 C: an ancestor pushed past the limit refuses the change (domain); the 4th-level link refused on real PostgreSQL; the upward walk's statements (8 for 20 ancestors) | `TestCheckWithAncestorsRefusesAChangeThatPushesAnAncestorPastTheLimit`, `TestAnAttachIsRefusedWhenAnAncestorWouldPassTheLimit`, `TestTheAncestorWalkCostsAFixedNumberOfStatementsPerLevel` | red: 201 |
+| Round 2 D: the MCP switch to a pipeline bounds the stored text | `TestInternalAgentTypeSwitchBoundsTheStoredText` | red: walked without nodes |
 
 ## Performance
 
@@ -236,7 +258,9 @@ New or changed tests (red before the change where marked):
   before it walks them, so a check costs about two statements per level of the composition, not per version. Proven by
   `TestEachVersionIsReadAtMostOnceWithinTheHopBudget` (domain) and, on real PostgreSQL,
   `TestJudgingParticipantsCostsAFixedNumberOfStatements`: judging 4 and 8 participants (each a 2-level agent) costs
-  **5 statements** both times. Only composing writes, a start, an ad-hoc start and the participant read pay it; an
+  **5 statements** both times. The upward walk (round 2) adds one statement per level of ancestors and one batch for
+  all of them: `TestTheAncestorWalkCostsAFixedNumberOfStatementsPerLevel` checks a version with twenty ancestors in
+  **8 statements**. Only composing writes, a start, an ad-hoc start and the participant read pay it; an
   agent save that neither writes pipeline instructions nor changes the kind never walks.
 - Pipeline text is parsed only within the save-time bounds (`pipelinelimits.Check`: 512 KiB, alias expansion budget)
   and only top-level `nodes` / `interrupt_*` are read; an over-bound stored text is not read past its length
@@ -347,6 +371,7 @@ SQL on purpose, as a composition saved before the check would hold them (`fixtur
 | F. Add to a conversation refused (§8.8) | Agent 157 (stored cycle 157 → 172 → 157), header "Chat" | `POST …/participants/prompt_lib/2/<conversation>` → 400; header alert shows the named cycle `"C1 sensitive record agent 20261008" → "FU244 cycle flow" → "C1 sensitive record agent 20261008"` (before: the generic "Failed to open a chat with this agent.") | The conversation created first is left with only the user (the button creates, then adds — follow-up) |
 | G. Ad-hoc (§8.8) | New chat (898), chat model Claude Haiku; add "FU244 Top" (182 v207 → Middle 181 v206 → Leaf 180 v205, `fixture-g-adhoc.sql`) and "FU244 Middle" by `#` mention; (1) Top selected, send; (2) select nothing, send | Add accepted. (1) Top runs as the root and calls Middle, which has Leaf bound. Participant row under Top (not active): "Its sub-agent chain is at the nesting limit (3 tiers), so it runs only as the active agent here — select it to run."; nothing under Middle. (2) The turn completes; the chat model answers that it can call only "FU244 Middle"; Worker `execution_kind=Adhoc … tool_reference_count=1 nested_application_count=1`, no refusal. Read: Top `agent_subtree_tiers` 3, Middle 2, `max_agent_nesting_tiers` 3 | Collapsed rail: info dot, tooltip "Its sub-agent chain is at the nesting limit (3 tiers) — select it to run."; expanded: the same row warning |
 | H. Review round re-check (images Main `fu244-3ee734d8f`, Worker and Web `fu244-f7b9be2dc`; binaries contain `repos.participantSchema`, `applicationcomposition.ChatToolFits`, `application.composition_size`, `application_child_too_large`) | Chat 898 after the redeploy: select nothing, send; then from the signed-in session add participants to chat 899 | The warning still on "FU244 Top"; the ad-hoc turn answers that it can call only "FU244 Middle". Add with a foreign project → 404 "The agent or pipeline was not found."; with a project id that does not exist → 404 (it was 500 for a platform administrator before `3ee734d8f`, found here); the own project's 3-level "FU244 Top" → 200 with its nesting fields | Persisted |
+| I. Round 2 C: a fourth level reached through an ancestor (Main `fu244-feb3c82a8`, binary contains `applicationcomposition.CheckWithAncestors` and `(*CompositionSource).Parents`) | Agent 180 "FU244 Leaf" (attached by Middle, which Top attaches), Tools → Agent → "FU244 notice agent" | Inline alert: `Agents are nested more than 3 levels deep: "FU244 Top" → "FU244 Middle" → "FU244 Leaf" → "FU244 notice agent". Attach fewer levels of agents before saving.`; Leaf's version 205 has 0 application attachments (DB) | Unchanged |
 | D. Named degrade on a pipeline root (FU-243) | Chat with pipeline 175 | The node answers ("Hello! 👋"); notice "Some tools were not available in this reply — Attached agent FU244 ask flow: this attached agent type is not available as a tool on this worker yet, so it was left out." (chat 892; message group 7518 meta carries `skipped_capabilities`) | Persisted, same notice |
 
 Screenshots: `handoffs/point5-wave1-20261008/fu244/evidence/` (local; G1–G4 for case G).
@@ -358,6 +383,11 @@ conversation read returns the same fields (`is_container`, `agent_subtree_tiers`
 2-tier agent `true, 2, 3`; no participant there sits at the limit, so the warning itself was not rendered there.
 
 ## Follow-ups
+
+- **Plain delete vs a concurrent attach (pre-existing, outside the re-point).** The delete route checks whether a
+  version is in use before taking any lock; an attach of it in flight is not seen, the delete waits for the attach's
+  share lock and then removes the version, leaving the new reference dangling. Moving the in-use check under the
+  version lock closes it (FU-245).
 
 - The new Web composer's "Switch to model" control did not switch to the chat model on the stack (clicked and
   scripted); clicking the active participant in the list does. Pre-existing, unrelated to this change.
