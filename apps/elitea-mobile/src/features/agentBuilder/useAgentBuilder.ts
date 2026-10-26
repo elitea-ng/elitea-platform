@@ -45,6 +45,15 @@ export async function createAgent(projectId: number, draft: EditableDraft, clien
   return id;
 }
 
+/** Deletes an agent (the copy a re-save replaces). */
+export async function deleteAgent(projectId: number, id: number, client: ApiClient = sessionApiClient()): Promise<void> {
+  await unwrap(
+    client.DELETE('/elitea_core/application/prompt_lib/{project_id}/{application_id}', {
+      params: { path: { project_id: String(projectId), application_id: id } },
+    }),
+  );
+}
+
 export interface AgentBuilder {
   state: DraftState;
   generate: (request: string) => void;
@@ -77,6 +86,18 @@ export function useAgentBuilder(projectId: number | null): AgentBuilder {
   }, []);
   useEffect(() => cancel, [cancel]);
 
+  // A new draft replaces the saved one: delete the copy (best effort) so none is left behind.
+  const dropSaved = useCallback(() => {
+    const abandoned = savedId.current;
+    savedId.current = null;
+    savedFingerprint.current = null;
+    if (abandoned !== null && projectId !== null) {
+      void deleteAgent(projectId, abandoned)
+        .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.agents(projectId) }))
+        .catch(() => undefined);
+    }
+  }, [projectId, queryClient]);
+
   const run = useCallback(
     (request: string, current?: EditableDraft) => {
       const trimmed = request.trim();
@@ -94,14 +115,13 @@ export function useAgentBuilder(projectId: number | null): AgentBuilder {
         dispatch(action);
       };
       dispatch({ type: 'start' });
-      savedId.current = null;
-      savedFingerprint.current = null;
+      dropSaved();
       setSaveError(null);
       void streamAgentDraft({ projectId, input: { request: trimmed, history, current }, signal: own.signal, dispatch: fold }).finally(() => {
         if (controller.current === own) controller.current = null;
       });
     },
-    [projectId, cancel],
+    [projectId, cancel, dropSaved],
   );
 
   const save = useCallback(
@@ -111,12 +131,19 @@ export function useAgentBuilder(projectId: number | null): AgentBuilder {
       setSaveError(null);
       try {
         // The chat start failed after the agent was saved, and the person has
-        // edited the draft since: starting that chat would silently drop the
-        // edits, so the edited draft is saved as the agent instead.
-        if (savedId.current !== null && savedFingerprint.current !== fingerprint(draft)) savedId.current = null;
+        // edited the draft since: the edited draft is saved as the agent, and
+        // the first copy is deleted once that succeeds, so no stray is left.
+        const stale = savedId.current !== null && savedFingerprint.current !== fingerprint(draft) ? savedId.current : null;
+        if (stale !== null) savedId.current = null;
         if (savedId.current === null) {
-          savedId.current = await createAgent(projectId, draft);
+          try {
+            savedId.current = await createAgent(projectId, draft);
+          } catch (error) {
+            savedId.current = stale; // Nothing new was saved: the first copy still stands.
+            throw error;
+          }
           savedFingerprint.current = fingerprint(draft);
+          if (stale !== null) await deleteAgent(projectId, stale).catch(() => undefined);
           void queryClient.invalidateQueries({ queryKey: queryKeys.agents(projectId) });
         }
         const id = savedId.current;
@@ -147,8 +174,7 @@ export function useAgentBuilder(projectId: number | null): AgentBuilder {
     reset: () => {
       cancel();
       turns.current = [];
-      savedId.current = null;
-      savedFingerprint.current = null;
+      dropSaved();
       dispatch({ type: 'reset' });
     },
   };

@@ -5,6 +5,7 @@
     "listConversations",
     "listApplications",
     "getApplication",
+    "deleteApplication",
     "getConversation",
     "generateConversationName",
     "listConversationMessages",
