@@ -691,13 +691,16 @@ func (m *Manager) Poll(ctx context.Context, toolkit, tool, id string) (map[strin
 	if err != nil || invocation == nil {
 		return nil, err
 	}
+	// Status BEFORE the drain: a run that is stopped here emitted every event
+	// before it stopped, so the drain below sees them all. Draining first lost
+	// the events written between the drain and the status read.
+	m.mu.Lock()
+	status, result := invocation.Status, invocation.Result
+	m.mu.Unlock()
 	events, err := m.store.DrainEvents(ctx, invocation)
 	if err != nil {
 		return nil, err
 	}
-	m.mu.Lock()
-	status, result := invocation.Status, invocation.Result
-	m.mu.Unlock()
 	body := map[string]any{}
 	if status == statusStopped && result != nil {
 		for k, v := range result {
