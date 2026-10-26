@@ -277,7 +277,7 @@ func TestDraftStreamSendsTheResponseHeadBeforeTheFirstToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no response head before the first token: %v", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("status = %d content-type = %q", response.StatusCode, response.Header.Get("Content-Type"))
 	}
