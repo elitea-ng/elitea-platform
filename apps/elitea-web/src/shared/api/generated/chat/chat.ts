@@ -10797,7 +10797,10 @@ export const getGetWorkspaceHandoffChangesUrl = (
  * A path that the thread's exclusions (the platform and project
  * patterns, the files excluded at send) or the path deny list match is
  * never listed, nor is a rename from or to one: it is counted in
- * `hidden_files`. A thread with no handoff answers no turns.
+ * `hidden_files`. As at the send, a file the exclusions match that was
+ * explicitly included (`included_excluded`, when the policy allows
+ * includes) is listed; the path deny list wins over an include. A
+ * thread with no handoff answers no turns.
  *
  * WHO. Any caller who may read the conversation (cookie or token, with
  * `models.chat.conversation.details`), as getWorkspaceHandoff.
@@ -11107,8 +11110,8 @@ export const getGetWorkspaceHandoffDiffUrl = (
  * getWorkspaceHandoffChanges: `scope=turn` with that turn's `commit`, or
  * `scope=cumulative` with `head_sha`. A diff is at most 48 KiB; a file
  * with `has_diff` false has none (404 `diff_not_found`), and so has a
- * path the exclusions or the path deny list match. Who may read it is
- * as for getWorkspaceHandoffChanges.
+ * path getWorkspaceHandoffChanges hides. Who may read it is as for
+ * getWorkspaceHandoffChanges.
  * @summary Read one changed file's diff
  */
 export const getWorkspaceHandoffDiff = async (

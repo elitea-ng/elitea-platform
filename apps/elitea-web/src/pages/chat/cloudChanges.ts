@@ -2,8 +2,9 @@
  * The Files changed view of a cloud thread (ADR-0034 Phase 2): what the
  * cloud turns changed, per turn and since the handoff snapshot, and one
  * file's diff. The worker records the changes when it publishes a turn; the
- * server never lists a path the exclusions or the path deny list match (it
- * counts it in `hidden_files`).
+ * server never lists a path the exclusions or the path deny list match,
+ * unless the send explicitly included it (never a path deny one); it counts
+ * the hidden ones in `hidden_files`.
  *
  * The list is read once for the notice's count, and polled only while the
  * view is open. A diff belongs to one commit, so it never goes stale.

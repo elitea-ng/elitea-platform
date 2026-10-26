@@ -157,7 +157,8 @@ func (WorkspaceExecutorEventKindV1) EnumDescriptor() ([]byte, []int) {
 // commit's tree) and the CUMULATIVE set (the handoff snapshot's tree to the
 // commit's tree). Main reads no git pack: it keeps what the worker sends,
 // bounded, drops every path the thread's exclusions or path deny list
-// match, and serves the rest to the conversation's readers.
+// match (an explicitly included excluded file stays, as at the send; never
+// a path deny one), and serves the rest to the conversation's readers.
 type WorkspaceChangeStatusV1 int32
 
 const (

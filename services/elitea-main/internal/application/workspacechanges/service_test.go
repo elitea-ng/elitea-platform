@@ -211,3 +211,52 @@ func TestNoHandoffReadsEmpty(t *testing.T) {
 		t.Fatalf("bad scope = %v", err)
 	}
 }
+
+// TestAnIncludedExcludedFileIsShown: a file the exclusions match that the
+// send explicitly included (the policy allows includes) was uploaded, so it is
+// listed and its diff served, on the record and on every read. With includes
+// no longer allowed, it is hidden again.
+func TestAnIncludedExcludedFileIsShown(t *testing.T) {
+	service, repo, rows, policy := harness(t)
+	policy.policy.AllowUserInclude = true
+	rows.row.IncludedExcluded = []string{"./deploy/.env"}
+	record(t, service, rows, turnOne, snapshot, 1,
+		text(workspaceruntime.ChangeScopeTurn, "deploy/.env", workspaceruntime.ChangeModified),
+		text(workspaceruntime.ChangeScopeTurn, "other/.env", workspaceruntime.ChangeModified),
+	)
+	stored := repo.records[turnOne]
+	if len(stored.Turn.Files) != 1 || stored.Turn.Files[0].Path != "deploy/.env" || stored.Turn.Hidden != 1 || len(stored.Diffs) != 1 {
+		t.Fatalf("stored = %+v", stored)
+	}
+	view, err := service.View(context.Background(), thread)
+	if err != nil || len(view.Turns) != 1 || len(view.Turns[0].Changes.Files) != 1 || view.Turns[0].Changes.Hidden != 1 {
+		t.Fatalf("view = %+v %v", view, err)
+	}
+	if diff, err := service.Diff(context.Background(), thread, turnOne, workspaceruntime.ChangeScopeTurn, "deploy/.env"); err != nil || diff.Diff == "" {
+		t.Fatalf("diff = %+v %v", diff, err)
+	}
+	policy.policy.AllowUserInclude = false
+	if _, err := service.Diff(context.Background(), thread, turnOne, workspaceruntime.ChangeScopeTurn, "deploy/.env"); !errors.Is(err, workspacechanges.ErrNotFound) {
+		t.Fatalf("includes off = %v", err)
+	}
+}
+
+// TestADeniedIncludedFileStaysHidden: path_deny wins over an include, and a
+// file the send excluded and did not include stays hidden.
+func TestADeniedIncludedFileStaysHidden(t *testing.T) {
+	service, repo, rows, policy := harness(t)
+	policy.policy.AllowUserInclude = true
+	rows.row.IncludedExcluded = []string{"./secrets/token.txt"}
+	record(t, service, rows, turnOne, snapshot, 1,
+		text(workspaceruntime.ChangeScopeTurn, "secrets/token.txt", workspaceruntime.ChangeModified),
+		text(workspaceruntime.ChangeScopeTurn, "config/local.yaml", workspaceruntime.ChangeModified),
+	)
+	stored := repo.records[turnOne]
+	if len(stored.Turn.Files) != 0 || stored.Turn.Hidden != 2 || len(stored.Diffs) != 0 {
+		t.Fatalf("stored = %+v", stored)
+	}
+	repo.diffs[turnOne+"|turn|secrets/token.txt"] = "@@ -1 +1 @@\n-a\n+b\n"
+	if _, err := service.Diff(context.Background(), thread, turnOne, workspaceruntime.ChangeScopeTurn, "secrets/token.txt"); !errors.Is(err, workspacechanges.ErrNotFound) {
+		t.Fatalf("denied diff = %v", err)
+	}
+}

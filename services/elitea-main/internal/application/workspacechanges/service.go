@@ -6,11 +6,15 @@
 // (WorkspaceRecordChanges, through workspaceexecutor). Main reads no git pack:
 // it bounds and stores what it is sent, and the web reads it back.
 //
-// A path the thread's exclusions or path deny list match is never stored and
-// never served: the filter runs on the record, with the policy of that moment,
-// and again on every read, with the policy of the read, so a pattern added
-// later hides what was stored before it. A rename from or to such a path is
-// hidden whole. Hidden files are only counted.
+// A path the thread's path deny list matches, a file the send left out, and a
+// path the exclusions match is never stored and never served. The one
+// exception is the send's own: a file the exclusions match that the person
+// explicitly included (included_excluded, when the policy allows includes)
+// was uploaded, so it is shown; path_deny wins over an include. The filter
+// runs on the record, with the policy of that moment, and again on every
+// read, with the policy of the read, so a pattern added later hides what was
+// stored before it. A rename from or to a hidden path is hidden whole.
+// Hidden files are only counted.
 package workspacechanges
 
 import (
@@ -128,37 +132,53 @@ func NewService(repo Repository, handoffs Handoffs, policies Policies, logger *s
 	return &Service{repo: repo, handoffs: handoffs, policies: policies, logger: logger}, nil
 }
 
-// filter hides the paths the policy's exclusions or path deny list, or the
-// send's excluded files, name.
+// filter hides what the send did not upload: a path the deny list matches
+// (always), a file the send excluded, and a path the exclusions match unless
+// the send explicitly included it (workspacehandoff.checkIncludes: only when
+// the policy allows includes, never a path_deny path).
 type filter struct {
-	patterns []string
-	excluded map[string]bool
+	deny       []string
+	exclusions []string
+	excluded   map[string]bool
+	included   map[string]bool
 }
 
+func sentPath(name string) string { return strings.TrimPrefix(name, "./") }
+
 func newFilter(policy workspacehandoff.Policy, handoff workspacehandoff.Handoff) filter {
-	patterns := make([]string, 0, len(policy.Exclusions)+len(policy.PathDeny))
-	patterns = append(patterns, policy.Exclusions...)
-	patterns = append(patterns, policy.PathDeny...)
 	excluded := make(map[string]bool, len(handoff.Excluded))
 	for _, name := range handoff.Excluded {
-		excluded[strings.ToLower(strings.TrimPrefix(name, "./"))] = true
+		excluded[strings.ToLower(sentPath(name))] = true
 	}
-	return filter{patterns: patterns, excluded: excluded}
+	included := map[string]bool{}
+	if policy.AllowUserInclude {
+		for _, name := range handoff.IncludedExcluded {
+			included[sentPath(name)] = true
+		}
+	}
+	return filter{deny: policy.PathDeny, exclusions: policy.Exclusions, excluded: excluded, included: included}
+}
+
+func matchesAny(patterns []string, name string) bool {
+	for _, pattern := range patterns {
+		if workspacehandoff.MatchPathPattern(pattern, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (f filter) hidden(name string) bool {
 	if name == "" {
 		return false
 	}
-	if f.excluded[strings.ToLower(name)] {
+	if matchesAny(f.deny, name) {
 		return true
 	}
-	for _, pattern := range f.patterns {
-		if workspacehandoff.MatchPathPattern(pattern, name) {
-			return true
-		}
+	if f.excluded[strings.ToLower(name)] && !f.included[name] {
+		return true
 	}
-	return false
+	return matchesAny(f.exclusions, name) && !f.included[name]
 }
 
 func (f filter) hiddenFile(file File) bool {
