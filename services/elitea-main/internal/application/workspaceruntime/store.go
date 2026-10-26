@@ -175,7 +175,7 @@ type UploadResult struct {
 	Exists bool
 }
 
-// Store is what the executor's four gRPC calls need. The server unit
+// Store is what the executor's gRPC calls need. The server unit
 // implements it over workspacestore/workspacehandoff. Every method first
 // resolves claim to its thread (the claim's execution is a cloud turn of a
 // handed-off thread in CLOUD_RUNNING) and refuses RefusalNotWorkspaceTurn
@@ -203,6 +203,11 @@ type Store interface {
 	// turn (decision 12): EventScanBlocked or EventPullRequestOpened, with
 	// the allowlisted attributes only (never a path).
 	RecordEvent(ctx context.Context, claim ClaimRef, event ExecutorEvent) error
+	// RecordChanges keeps the files the running turn's published commit
+	// changed (ADR-0034 Phase 2): changes.Commit must be the thread's
+	// refs/elitea/cloud and changes.Base its handoff snapshot
+	// (RefusalRefConflict otherwise). A replay replaces the record.
+	RecordChanges(ctx context.Context, claim ClaimRef, changes TurnChanges) error
 }
 
 // The executor audit events (workspacehandoff.EventScanBlocked and

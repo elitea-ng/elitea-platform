@@ -62,7 +62,7 @@ export const WorkspaceChangeSet = zod
       .describe("The sum of the listed files' counted removed lines."),
   })
   .describe(
-    "Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:60 (`changes`).",
+    "Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:55 (`changesView`).",
   );
 
 export type WorkspaceChangeSet = zod.input<typeof WorkspaceChangeSet>;

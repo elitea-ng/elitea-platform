@@ -4054,7 +4054,7 @@ components:
       type: object
       description: >-
         Contract 1.26. The files a cloud thread's turns changed. NOTE(W2):
-        internal/api/v2/workspacehandoff/changes.go:60 (`changes`).
+        internal/api/v2/workspacehandoff/changes.go:55 (`changesView`).
       required: [complete, turns]
       properties:
         handoff_id: { type: string, format: uuid, nullable: true, description: 'The current handoff; null when the thread has none.' }
@@ -4075,7 +4075,7 @@ components:
             $ref: '#/components/schemas/WorkspaceTurnChanges'
     WorkspaceTurnChanges:
       type: object
-      description: 'Contract 1.26. One cloud turn. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:60 (`changes`).'
+      description: 'Contract 1.26. One cloud turn. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:55 (`changesView`).'
       required: [commit, parent_sha, seq, created_at, changes]
       properties:
         commit: { type: string, description: 'The turn''s commit (40 hex).' }
@@ -4087,7 +4087,7 @@ components:
           $ref: '#/components/schemas/WorkspaceChangeSet'
     WorkspaceChangeSet:
       type: object
-      description: 'Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:60 (`changes`).'
+      description: 'Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:55 (`changesView`).'
       required: [files, omitted_files, hidden_files, additions, deletions]
       properties:
         files:
@@ -4100,7 +4100,7 @@ components:
         deletions: { type: integer, description: 'The sum of the listed files'' counted removed lines.' }
     WorkspaceChangedFile:
       type: object
-      description: 'Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:60 (`changes`).'
+      description: 'Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:55 (`changesView`).'
       required: [path, from_path, status, additions, deletions, binary, too_large, has_diff]
       properties:
         path: { type: string }
@@ -4113,7 +4113,7 @@ components:
         has_diff: { type: boolean, description: 'getWorkspaceHandoffDiff answers a diff for it.' }
     WorkspaceHandoffDiff:
       type: object
-      description: 'Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:60 (`diff`).'
+      description: 'Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:68 (`diff`).'
       required: [commit, scope, path, diff]
       properties:
         commit: { type: string }

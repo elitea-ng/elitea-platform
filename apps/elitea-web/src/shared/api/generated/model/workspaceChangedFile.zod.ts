@@ -73,7 +73,7 @@ export const WorkspaceChangedFile = zod
       .describe("getWorkspaceHandoffDiff answers a diff for it."),
   })
   .describe(
-    "Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:60 (`changes`).",
+    "Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:55 (`changesView`).",
   );
 
 export type WorkspaceChangedFile = zod.input<typeof WorkspaceChangedFile>;

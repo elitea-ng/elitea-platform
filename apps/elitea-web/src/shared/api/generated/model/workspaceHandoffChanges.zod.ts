@@ -78,7 +78,7 @@ export const WorkspaceHandoffChanges = zod
       .describe("The cloud turns on the live chain, oldest first."),
   })
   .describe(
-    "Contract 1.26. The files a cloud thread's turns changed. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:60 (`changes`).",
+    "Contract 1.26. The files a cloud thread's turns changed. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:55 (`changesView`).",
   );
 
 export type WorkspaceHandoffChanges = zod.input<typeof WorkspaceHandoffChanges>;

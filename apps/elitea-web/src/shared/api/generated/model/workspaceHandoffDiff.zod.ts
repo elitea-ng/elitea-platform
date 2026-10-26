@@ -50,7 +50,7 @@ export const WorkspaceHandoffDiff = zod
     diff: zod.string().describe("The unified diff, at most 48 KiB."),
   })
   .describe(
-    "Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:60 (`diff`).",
+    "Contract 1.26. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:68 (`diff`).",
   );
 
 export type WorkspaceHandoffDiff = zod.input<typeof WorkspaceHandoffDiff>;

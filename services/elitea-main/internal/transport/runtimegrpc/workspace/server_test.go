@@ -54,8 +54,9 @@ type fakeStore struct {
 	cloud     string
 	env       map[string]string
 	// busy answers ErrThreadBusy to this many publishes first.
-	busy   int
-	events []workspaceruntime.ExecutorEvent
+	busy    int
+	events  []workspaceruntime.ExecutorEvent
+	changes []workspaceruntime.TurnChanges
 }
 
 func (f *fakeStore) check(claim workspaceruntime.ClaimRef) error {
@@ -155,6 +156,19 @@ func (f *fakeStore) RecordEvent(_ context.Context, claim workspaceruntime.ClaimR
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.events = append(f.events, event)
+	return nil
+}
+
+func (f *fakeStore) RecordChanges(_ context.Context, claim workspaceruntime.ClaimRef, changes workspaceruntime.TurnChanges) error {
+	if err := f.check(claim); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if changes.Commit != f.cloud {
+		return workspaceruntime.Refuse(workspaceruntime.RefusalRefConflict)
+	}
+	f.changes = append(f.changes, changes)
 	return nil
 }
 

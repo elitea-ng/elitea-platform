@@ -56,7 +56,7 @@ export const WorkspaceTurnChanges = zod
     changes: WorkspaceChangeSet,
   })
   .describe(
-    "Contract 1.26. One cloud turn. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:60 (`changes`).",
+    "Contract 1.26. One cloud turn. NOTE(W2): internal/api/v2/workspacehandoff/changes.go:55 (`changesView`).",
   );
 
 export type WorkspaceTurnChanges = zod.input<typeof WorkspaceTurnChanges>;

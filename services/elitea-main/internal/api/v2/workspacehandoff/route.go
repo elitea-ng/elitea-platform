@@ -65,6 +65,7 @@ var Methods = []struct{ Method, Pattern string }{
 	{http.MethodPost, PublishPath}, {http.MethodGet, FetchPath},
 	{http.MethodPut, ObjectPath}, {http.MethodGet, ObjectPath},
 	{http.MethodGet, PolicyPath},
+	{http.MethodGet, ChangesPath}, {http.MethodGet, DiffPath},
 }
 
 var ErrInvalidRoute = errors.New("invalid workspace handoff route dependencies")
@@ -111,11 +112,14 @@ type Route struct {
 }
 
 func NewRoute(handoff Handoff, store Store, conversations ConversationReader, authConfig apimw.AuthConfig,
-	permissions auth.PermissionResolver) (*Route, error) {
+	permissions auth.PermissionResolver, options ...RouteOption) (*Route, error) {
 	if handoff == nil || store == nil || conversations == nil || authConfig.PrincipalValidator == nil || permissions == nil {
 		return nil, ErrInvalidRoute
 	}
 	h := &handler{handoff: handoff, store: store, conversations: conversations}
+	for _, option := range options {
+		option(h)
+	}
 	gate := func(endpoint http.HandlerFunc, required ...string) http.Handler {
 		wrapped := apimw.RequireResolvedPermissionsForProject(
 			permissions, Mode,
@@ -143,6 +147,8 @@ func NewRoute(handoff Handoff, store Store, conversations ConversationReader, au
 	router.Method(http.MethodPut, ObjectPath, gate(h.putObject, SendPermission))
 	router.Method(http.MethodGet, ObjectPath, gate(h.getObject, SendPermission))
 	router.Method(http.MethodGet, PolicyPath, gate(h.policy, SendPermission))
+	router.Method(http.MethodGet, ChangesPath, gate(h.changesView, ReadPermission))
+	router.Method(http.MethodGet, DiffPath, gate(h.diff, ReadPermission))
 	return &Route{handler: router}, nil
 }
 
@@ -158,6 +164,7 @@ type handler struct {
 	handoff       Handoff
 	store         Store
 	conversations ConversationReader
+	changes       Changes
 }
 
 // caller answers the authenticated owning user. nativeOnly refuses every
