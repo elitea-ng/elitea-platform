@@ -11,7 +11,7 @@ import { AppProviders } from '@/app/providers/AppProviders';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { useDesktopLayout } from '@/widgets/desktop-shell';
 
-import type { UnsentSteers } from './SteeringControls';
+import type { UnsentSteers } from './useSteering';
 import { WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
 
 type Handler = (text: string) => Promise<boolean>;

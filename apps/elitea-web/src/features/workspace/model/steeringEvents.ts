@@ -13,7 +13,7 @@ import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
 import type { TranscriptItem } from './transcriptItem';
 
 /** A message that waits for the next safe point. */
-export interface PendingSteer {
+interface PendingSteer {
   steerId: string;
   text: string;
   revision: number;

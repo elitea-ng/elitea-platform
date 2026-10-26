@@ -12,15 +12,7 @@ import Button from '@mui/material/Button';
 
 import { t } from '@/shared/i18n';
 
-import { nextTurnMessage } from './useSteering';
-
-/** The texts that did not start the next turn. A new `id` puts `text` into the input again. */
-export interface UnsentSteers {
-  id: number;
-  text: string;
-  /** Send `text` (as the input holds it now) as the next turn; resolves `true` once it started. */
-  onRetry: (text: string) => Promise<boolean>;
-}
+import { nextTurnMessage, type UnsentSteers } from './useSteering';
 
 /** The part of the input handle these controls use. */
 interface DraftInput {

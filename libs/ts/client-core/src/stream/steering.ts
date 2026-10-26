@@ -25,7 +25,12 @@ export interface SteeringItem {
   readonly content: string;
   readonly state: SteeringState;
   readonly revision: number;
-  readonly createdAt: string;
+  /**
+   * The server's queue position (`queue_order`): the items of an answer go
+   * in this order, lowest first. Values have gaps. `null` when the wire value
+   * has none: such an item goes at the end.
+   */
+  readonly queueOrder: number | null;
   /** The conversation message that holds the text, after injection. */
   readonly messageId: string | null;
 }
@@ -75,6 +80,7 @@ export function parseSteeringMessage(raw: unknown): SteeringItem | undefined {
   if (id === undefined || responseMessageId === undefined || typeof content !== 'string') return undefined;
   const revision = row['revision'];
   const author = row['author_id'];
+  const order = row['queue_order'];
   return {
     id,
     responseMessageId,
@@ -82,7 +88,7 @@ export function parseSteeringMessage(raw: unknown): SteeringItem | undefined {
     content,
     state: steeringStateOf(row['state']),
     revision: typeof revision === 'number' && Number.isFinite(revision) ? revision : 1,
-    createdAt: typeof row['created_at'] === 'string' ? row['created_at'] : '',
+    queueOrder: typeof order === 'number' && Number.isFinite(order) ? order : null,
     messageId: text(row['message_id']) ?? null,
   };
 }
@@ -138,37 +144,44 @@ function isFinal(state: SteeringState): boolean {
 }
 
 /**
- * The place of a new item in `items`: before the first item that was
- * created later, else at the end. A message that the server carried from an
- * older answer is older than the messages of the newer answer, so it goes
- * before them, as in the server's queue.
+ * The place of an item in `items`: before the first item with a higher
+ * `queueOrder`, else at the end. The server gives a message that it carried
+ * from an older answer a lower `queue_order` than the messages of the newer
+ * answer, so it goes before them, as in the server's queue.
  */
 function placeOf(items: readonly SteeringItem[], incoming: SteeringItem): number {
-  if (incoming.createdAt === '') return items.length;
-  const at = items.findIndex((item) => item.createdAt !== '' && item.createdAt > incoming.createdAt);
+  const order = incoming.queueOrder;
+  if (order === null) return items.length;
+  const at = items.findIndex((item) => item.queueOrder !== null && item.queueOrder > order);
   return at === -1 ? items.length : at;
+}
+
+function insertAt(items: readonly SteeringItem[], incoming: SteeringItem): SteeringItem[] {
+  const next = [...items];
+  next.splice(placeOf(items, incoming), 0, incoming);
+  return next;
 }
 
 /**
  * Puts `incoming` into `items` (by `id`) and returns a new list in queue
  * order. An older copy never replaces a newer one: a higher `revision` wins,
  * and for the same revision a final state wins over `pending`. This keeps the
- * view correct when a replayed SSE event comes after a GET. A new item goes
- * in `created_at` order.
+ * view correct when a replayed SSE event comes after a GET. Items go in
+ * `queue_order` order; a copy with a new `queue_order` moves to its place.
  */
 export function mergeSteering(items: readonly SteeringItem[], incoming: SteeringItem): SteeringItem[] {
   const at = items.findIndex((item) => item.id === incoming.id);
-  if (at === -1) {
-    const next = [...items];
-    next.splice(placeOf(items, incoming), 0, incoming);
-    return next;
-  }
+  if (at === -1) return insertAt(items, incoming);
   const current = items[at] as SteeringItem;
   if (incoming.revision < current.revision) return [...items];
   if (incoming.revision === current.revision && isFinal(current.state) && !isFinal(incoming.state)) return [...items];
-  const next = [...items];
-  next[at] = { ...incoming, messageId: incoming.messageId ?? current.messageId };
-  return next;
+  const merged: SteeringItem = { ...incoming, messageId: incoming.messageId ?? current.messageId, queueOrder: incoming.queueOrder ?? current.queueOrder };
+  if (merged.queueOrder === current.queueOrder) {
+    const next = [...items];
+    next[at] = merged;
+    return next;
+  }
+  return insertAt(items.filter((item) => item.id !== incoming.id), merged);
 }
 
 /** Merges each of `incoming` into `items`, in order. */

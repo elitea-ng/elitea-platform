@@ -28,6 +28,7 @@ import { ChatEmptyState, MODEL_CHAT_SUGGESTIONS } from '@/features/chat/ChatEmpt
 import { ThreadLayout, Toast, useToast } from '@/features/chat/ThreadLayout';
 import { LiveReply, PersistedMessage, QueuedMessage } from '@/features/chat/ThreadRows';
 import { SteeringMessage, steeringRows } from '@/features/chat/SteeringRows';
+import { SteeringOfferNote } from '@/features/chat/SteeringOfferNote';
 import type { SteeringItem } from '@elitea/client-core/stream';
 import { displayHost } from '@/features/connect/connectFlow';
 import type { ActiveTrigger, MentionCandidate, TriggerChar } from '@/features/chat/mentions/mentions';
@@ -85,7 +86,7 @@ import { canDictateOnDevice } from '@/features/speech/dictation';
 import { canReadAloud, readAloud, stopReading, useReading } from '@/features/speech/readAloud';
 import { exportErrorText } from '@/api/queries/exportConversation';
 import { shareTranscript } from '@/features/chat/export/shareTranscript';
-import { answerHiddenByRegeneration, newQuestionId, type LiveTurn } from '@/features/chat/turnController';
+import { answerHiddenByRegeneration, newQuestionId, type LiveTurn, type StopOptions } from '@/features/chat/turnController';
 import { ATTACHMENT_ONLY_TEXT, STEERING_NOT_SUPPORTED_TEXT, useTurn } from '@/features/chat/useTurn';
 import { useSteeringWaitText } from '@/features/chat/useSteeringWaitText';
 import { CloudExecutorNotice } from '@/features/localWork/CloudExecutorNotice';
@@ -510,16 +511,16 @@ export function ThreadView({
     const ended = livePhase === 'failed' || livePhase === 'paused' || livePhase === 'done';
     if (ended || liveQuestion !== heldFor) tray.releaseSent();
   }, [tray, livePhase, liveQuestion, stopping]);
-  const stopWithFiles = async (): Promise<StopResult> => {
+  const stopWithFiles = async (options?: StopOptions): Promise<StopResult> => {
     setStopping(true);
     try {
-      return await stopAndRestore();
+      return await stopAndRestore(options);
     } finally {
       setStopping(false);
     }
   };
-  const stopAndRestore = async (): Promise<StopResult> => {
-    const result = await turn.stop();
+  const stopAndRestore = async (options?: StopOptions): Promise<StopResult> => {
+    const result = await turn.stop(options);
     if (result.restoreText !== null && result.lostAttachments.length > 0) {
       // Only what the tray actually put back is off the list: a file it no
       // longer held (the thread was left and reopened while the answer ran,
@@ -867,7 +868,7 @@ export function ThreadView({
                           own={item.own}
                           onEdit={turn.editSteering}
                           onRemove={turn.removeSteering}
-                          onStopAndSend={contract13 && online && turn.canStop ? () => void stopWithFiles() : null}
+                          onStopAndSend={contract13 && online && turn.canStop ? () => void stopWithFiles({ sendSteering: true }) : null}
                         />
                       );
                     case 'live_reply':
@@ -911,6 +912,17 @@ export function ThreadView({
                 erasing={localWork.erasing}
                 onTakeBack={localWork.takeBack}
                 onErase={localWork.erase}
+              />
+            ) : null}
+            {turn.steeringOffer !== null ? (
+              <SteeringOfferNote
+                text={turn.steeringOffer}
+                onSend={async () => {
+                  const problem = await turn.sendSteeringOffer();
+                  if (problem !== null) setThreadNote(problem);
+                  return problem;
+                }}
+                onDismiss={turn.dismissSteeringOffer}
               />
             ) : null}
             {threadNote ? (

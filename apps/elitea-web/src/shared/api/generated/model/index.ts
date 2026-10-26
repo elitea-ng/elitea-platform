@@ -326,6 +326,7 @@ export * from "./getWorkspaceSegmentObjectHeaders.zod";
 export * from "./globalUserInviteRequest.zod";
 export * from "./globalUserInviteResult.zod";
 export * from "./groupsListResponse.zod";
+export * from "./handOffChatExecutionSteeringBody.zod";
 export * from "./handOffChatExecutionSteeringHeaders.zod";
 export * from "./hideSecret200.zod";
 export * from "./iconGalleryPage.zod";

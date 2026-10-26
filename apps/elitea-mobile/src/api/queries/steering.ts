@@ -160,22 +160,33 @@ export function removeSteering(
   return call(() => client.DELETE(ITEM_ROUTE, { params: { path: { ...path(projectId, responseMessageId), steering_id: steeringId } } }));
 }
 
+/** The keys of one hand-off. A retry sends both again. */
+export interface SteeringHandoff {
+  /** The Idempotency-Key of the hand-off. */
+  key: string;
+  /** The `question_id` of the next send, which carries the texts. The hand-off body names it. */
+  questionId: string;
+}
+
 /**
  * Takes the caller's `turn_ended` messages of the ended answer (now
  * `handed_off`) and returns them, oldest first. Send ONLY these texts as the
- * next message. An empty list means that the server took them first (it
- * then starts the next turn itself): send nothing. A retry sends the SAME
- * `idempotencyKey` and gets the same messages. Throws when the call fails.
+ * next message, with the question id `handoff.questionId`. An empty list
+ * means that the server took them first (it then starts the next turn
+ * itself): send nothing. A retry sends the SAME keys and gets the same
+ * messages. When no message with that question id comes, the server starts
+ * that turn itself after about a minute. Throws when the call fails.
  */
 export async function handOffSteering(
   projectId: number,
   responseMessageId: string,
-  idempotencyKey: string,
+  handoff: SteeringHandoff,
   client: ApiClient = sessionApiClient(),
 ): Promise<SteeringItem[]> {
   if (!validTarget(projectId, responseMessageId)) throw new Error('steering: invalid answer');
   const { data, response } = await client.POST(HANDOFF_ROUTE, {
-    params: { path: path(projectId, responseMessageId), header: { 'Idempotency-Key': idempotencyKey } },
+    params: { path: path(projectId, responseMessageId), header: { 'Idempotency-Key': handoff.key } },
+    body: { question_id: handoff.questionId },
   });
   if (!response.ok) throw new Error(`steering hand-off: ${response.status}`);
   return parseSteeringList(data);
@@ -185,20 +196,20 @@ export async function handOffSteering(
 const HANDOFF_RETRY_MS = [500, 1_500] as const;
 
 /**
- * `handOffSteering`, tried again with the SAME `idempotencyKey` after each
- * failure (at most `HANDOFF_RETRY_MS.length` more times). The key makes sure
- * that a lost answer loses no text: the retry gets the same messages.
- * Throws the last failure.
+ * `handOffSteering`, tried again with the SAME keys after each failure (at
+ * most `HANDOFF_RETRY_MS.length` more times). The keys make sure that a lost
+ * answer loses no text: the retry gets the same messages. Throws the last
+ * failure.
  */
 export async function handOffSteeringWithRetry(
   projectId: number,
   responseMessageId: string,
-  idempotencyKey: string,
+  handoff: SteeringHandoff,
   options: { client?: ApiClient; sleep: (ms: number) => Promise<void> },
 ): Promise<SteeringItem[]> {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await handOffSteering(projectId, responseMessageId, idempotencyKey, options.client);
+      return await handOffSteering(projectId, responseMessageId, handoff, options.client);
     } catch (error) {
       const wait = HANDOFF_RETRY_MS[attempt];
       if (wait === undefined) throw error;

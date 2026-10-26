@@ -181,27 +181,30 @@ describe('useChatSteering — the end of the turn', () => {
 
   /**
    * Answers the hand-off with `answers` in order (a number is that HTTP status, with a typed
-   * `SteeringError`). Records the key of each call. Only a list answer uses the generated handler.
+   * `SteeringError`). Records the key and the `question_id` of each call. Only a list answer uses the generated handler.
    */
   function handOff(answers: readonly (readonly SteeringMessage[] | number)[]) {
     const keys: (string | null)[] = [];
+    const questions: string[] = [];
     const queue = [...answers];
-    const generated = getHandOffChatExecutionSteeringMockHandler(({ request }) => {
+    const generated = getHandOffChatExecutionSteeringMockHandler(async ({ request }) => {
       keys.push(request.headers.get('Idempotency-Key'));
+      questions.push(((await request.json()) as { question_id: string }).question_id);
       const next = queue.shift();
       return { ...getHandOffChatExecutionSteeringResponseMock(), items: Array.isArray(next) ? [...next] : [] };
     });
     server.use(
-      http.post(`${ROUTE}/handoff`, ({ request }) => {
+      http.post(`${ROUTE}/handoff`, async ({ request }) => {
         const next = queue[0];
         if (typeof next !== 'number') return undefined;
         queue.shift();
         keys.push(request.headers.get('Idempotency-Key'));
+        questions.push(((await request.clone().json()) as { question_id: string }).question_id);
         return HttpResponse.json({ error: 'steering_invalid' } satisfies SteeringError, { status: next });
       }),
       generated,
     );
-    return keys;
+    return Object.assign(keys, { questions });
   }
   const handed = (patch: Partial<SteeringMessage>): SteeringMessage => ({ ...getHandOffChatExecutionSteeringResponseMock().items[0] as SteeringMessage, ...patch });
 
@@ -222,7 +225,9 @@ describe('useChatSteering — the end of the turn', () => {
     expect(keys).toHaveLength(1);
     expect(keys[0]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
     expect(queueAfterTurn).toHaveBeenCalledTimes(1);
-    expect(queueAfterTurn).toHaveBeenCalledWith('first\n\nother tab');
+    // The send uses the question id that the hand-off named.
+    expect(keys.questions[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(queueAfterTurn).toHaveBeenCalledWith('first\n\nother tab', keys.questions[0]);
     expect(deleted).not.toHaveBeenCalled();
     expect(useChatSteeringStore.getState().items[RESPONSE]?.find((item) => item.id === 'a')?.state).toBe('handed_off');
   });
@@ -246,13 +251,15 @@ describe('useChatSteering — the end of the turn', () => {
       rerender({ ...params, isStreaming: false });
       await waitFor(() => { expect(keys).toHaveLength(1); });
       await waitFor(() => { expect(sessionStorage.getItem('el.chat.steeringOwn')).toContain(String(keys[0])); });
+      expect(sessionStorage.getItem('el.chat.steeringOwn')).toContain(String(keys.questions[0]));
       expect(queueAfterTurn).not.toHaveBeenCalled();
       // A reload: the record and its key come back from sessionStorage.
       useChatSteeringStore.resetForTests();
       expect(useChatSteeringStore.getState().own[RESPONSE]?.handoffKey).toBe(keys[0]);
       await act(async () => { await vi.advanceTimersByTimeAsync(1_600); });
-      await waitFor(() => { expect(queueAfterTurn).toHaveBeenCalledWith('first'); });
-      expect(keys).toEqual([keys[0], keys[0]]);
+      await waitFor(() => { expect(queueAfterTurn).toHaveBeenCalledWith('first', keys.questions[0]); });
+      expect([...keys]).toEqual([keys[0], keys[0]]);
+      expect(keys.questions).toEqual([keys.questions[0], keys.questions[0]]);
       expect(queueAfterTurn).toHaveBeenCalledTimes(1);
       expect(useChatSteeringStore.getState().own[RESPONSE]).toBeUndefined();
     } finally {
@@ -286,8 +293,8 @@ describe('SteeringMessages', () => {
 
   it('shows pending only while the answer runs, delivered always, and hides a delivered copy that the transcript holds', () => {
     useChatSteeringStore.getState().apply(RESPONSE, [
-      { id: 'p', responseMessageId: RESPONSE, authorId: 1, content: 'waiting', state: 'pending', revision: 1, createdAt: '', messageId: null },
-      { id: 'i', responseMessageId: RESPONSE, authorId: 1, content: 'read', state: 'injected', revision: 1, createdAt: '', messageId: 'm-i' },
+      { id: 'p', responseMessageId: RESPONSE, authorId: 1, content: 'waiting', state: 'pending', revision: 1, queueOrder: 1, messageId: null },
+      { id: 'i', responseMessageId: RESPONSE, authorId: 1, content: 'read', state: 'injected', revision: 1, queueOrder: 2, messageId: 'm-i' },
     ]);
     const { rerender } = render(<Harness live transcript={ids()} />);
     expect(screen.getAllByTestId('chat-steering-status').map((node) => node.textContent)).toEqual(['Waiting for the next step', 'Delivered']);
@@ -365,7 +372,7 @@ describe('useChatSteering — carry-over to the newer answer', () => {
     const { queueAfterTurn } = setup({ isStreaming: false });
     // The newer turn already ended: the frame comes as turn_ended, and the end-of-turn rule runs again.
     act(() => { applySteeringEvent('steer.queued', carried('turn_ended')); });
-    await waitFor(() => { expect(queueAfterTurn).toHaveBeenCalledWith(EXAMPLE.content); });
+    await waitFor(() => { expect(queueAfterTurn).toHaveBeenCalledWith(EXAMPLE.content, expect.any(String)); });
     expect(answers).toEqual([NEWER]);
     expect(queueAfterTurn).toHaveBeenCalledTimes(1);
     await waitFor(() => { expect(own()[NEWER]).toBeUndefined(); });

@@ -1405,6 +1405,10 @@ export interface paths {
          *     turn has no MCP tokens of the client: an MCP server that needs one
          *     asks for authorization, as for a client that holds no token.
          *     Whoever takes the messages first wins; the other gets an empty list.
+         *     A turn that the user STOPPED, or that FAILED, is never continued by
+         *     the server: its `turn_ended` messages wait for the author, and the
+         *     client offers to send them as the next message (it does not send
+         *     them by itself).
          *     When the author already sent a newer message in the conversation
          *     after the turn ended, the server CARRIES the messages over to the
          *     author's newer turn: they move to the newer answer (same `id`,
@@ -1516,6 +1520,14 @@ export interface paths {
          *     `idempotency_key_required`): a retry with the same key answers the
          *     same messages again, so a lost answer loses no text. A running turn
          *     answers an empty list (its messages are not `turn_ended`).
+         *
+         *     NO LOST TEXT. The body names the `question_id` that the client's
+         *     next send uses. When no message with that id exists about a minute
+         *     after the hand-off (the tab closed before it sent), the server
+         *     starts that turn itself with the same question id and the same
+         *     text, as its own hand-off does. A late send of the client then
+         *     reaches the same turn, because the start is idempotent by question
+         *     id.
          */
         post: operations["handOffChatExecutionSteering"];
         delete?: never;
@@ -3613,6 +3625,11 @@ export interface components {
              * @description The conversation message that holds the text, once injected.
              */
             message_id: string | null;
+            /**
+             * Format: int64
+             * @description The server's queue position. Order the messages of an answer by it (ascending): the worker injects them in this order, and a message carried over from an older answer has a lower value than the newer turn's own messages. Not a count: values have gaps.
+             */
+            queue_order: number;
             /** Format: uuid */
             response_message_id: string;
             /**
@@ -6228,6 +6245,7 @@ export interface operations {
                      *           "content": "Skip the tests for now and only fix the build.",
                      *           "state": "injected",
                      *           "revision": 1,
+                     *           "queue_order": 41,
                      *           "created_at": "2026-10-26T10:15:02Z",
                      *           "updated_at": "2026-10-26T10:15:09Z",
                      *           "injected_at": "2026-10-26T10:15:09Z",
@@ -6313,6 +6331,7 @@ export interface operations {
                      *       "content": "Skip the tests for now and only fix the build.",
                      *       "state": "pending",
                      *       "revision": 1,
+                     *       "queue_order": 41,
                      *       "created_at": "2026-10-26T10:15:02Z",
                      *       "updated_at": "2026-10-26T10:15:02Z",
                      *       "injected_at": null,
@@ -6498,6 +6517,7 @@ export interface operations {
                      *       "content": "Fix the build first, then run the unit tests.",
                      *       "state": "pending",
                      *       "revision": 2,
+                     *       "queue_order": 41,
                      *       "created_at": "2026-10-26T10:15:02Z",
                      *       "updated_at": "2026-10-26T10:15:05Z",
                      *       "injected_at": null,
@@ -6574,7 +6594,22 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "question_id": "5c2e8f1a-3b7d-4e9c-a0f6-1d8b2c4e6a90"
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Format: uuid
+                     * @description The question id of the client's next send, which carries these texts.
+                     */
+                    question_id: string;
+                };
+            };
+        };
         responses: {
             /** @description The messages this hand-off took (maybe none). */
             200: {
@@ -6592,6 +6627,7 @@ export interface operations {
                      *           "content": "Skip the tests for now and only fix the build.",
                      *           "state": "handed_off",
                      *           "revision": 1,
+                     *           "queue_order": 41,
                      *           "created_at": "2026-10-26T10:15:02Z",
                      *           "updated_at": "2026-10-26T10:15:40Z",
                      *           "injected_at": null,
@@ -6603,7 +6639,7 @@ export interface operations {
                     "application/json": components["schemas"]["SteeringMessageList"];
                 };
             };
-            /** @description An invalid id, a missing or malformed Idempotency-Key (`idempotency_key_required`), or an `X-Client-Version` that does not parse. */
+            /** @description An invalid id, a missing or malformed Idempotency-Key (`idempotency_key_required`), a body without a valid `question_id` (`steering_invalid`), or an `X-Client-Version` that does not parse. */
             400: {
                 headers: {
                     [name: string]: unknown;

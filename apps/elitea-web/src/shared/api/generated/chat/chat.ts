@@ -91,6 +91,7 @@ import type {
   GetMessageTraceParams,
   GetWorkspaceFetchPlanParams,
   GetWorkspaceHandoffDiffParams,
+  HandOffChatExecutionSteeringBody,
   InvalidClientVersionError,
   InvalidClientVersionResponse,
   ListConversationMessagesParams,
@@ -15070,6 +15071,10 @@ export const getSteerChatExecutionUrl = (
  * turn has no MCP tokens of the client: an MCP server that needs one
  * asks for authorization, as for a client that holds no token.
  * Whoever takes the messages first wins; the other gets an empty list.
+ * A turn that the user STOPPED, or that FAILED, is never continued by
+ * the server: its `turn_ended` messages wait for the author, and the
+ * client offers to send them as the next message (it does not send
+ * them by itself).
  * When the author already sent a newer message in the conversation
  * after the turn ended, the server CARRIES the messages over to the
  * author's newer turn: they move to the newer answer (same `id`,
@@ -15728,18 +15733,53 @@ export const getHandOffChatExecutionSteeringUrl = (
  * `idempotency_key_required`): a retry with the same key answers the
  * same messages again, so a lost answer loses no text. A running turn
  * answers an empty list (its messages are not `turn_ended`).
+ *
+ * NO LOST TEXT. The body names the `question_id` that the client's
+ * next send uses. When no message with that id exists about a minute
+ * after the hand-off (the tab closed before it sent), the server
+ * starts that turn itself with the same question id and the same
+ * text, as its own hand-off does. A late send of the client then
+ * reaches the same turn, because the start is idempotent by question
+ * id.
  * @summary Take the caller's turn_ended steering messages as the next message
  */
 export const handOffChatExecutionSteering = async (
   projectId: string,
   responseMessageId: string,
+  handOffChatExecutionSteeringBody: HandOffChatExecutionSteeringBody,
   options?: Parameters<typeof eliteaFetch>[1],
 ): Promise<handOffChatExecutionSteeringResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
   return eliteaFetch<handOffChatExecutionSteeringResponse>(
     getHandOffChatExecutionSteeringUrl(projectId, responseMessageId),
     {
       ...options,
       method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(handOffChatExecutionSteeringBody),
     },
   );
 };
@@ -15747,10 +15787,12 @@ export const handOffChatExecutionSteering = async (
 export const getHandOffChatExecutionSteeringQueryKey = (
   projectId: string,
   responseMessageId: string,
+  handOffChatExecutionSteeringBody?: HandOffChatExecutionSteeringBody,
 ) => {
   return [
     "POST",
     `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/steering/handoff`,
+    handOffChatExecutionSteeringBody,
   ] as const;
 };
 
@@ -15765,6 +15807,7 @@ export const getHandOffChatExecutionSteeringQueryOptions = <
 >(
   projectId: string,
   responseMessageId: string,
+  handOffChatExecutionSteeringBody: HandOffChatExecutionSteeringBody,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -15780,15 +15823,21 @@ export const getHandOffChatExecutionSteeringQueryOptions = <
 
   const queryKey =
     queryOptions?.queryKey ??
-    getHandOffChatExecutionSteeringQueryKey(projectId, responseMessageId);
+    getHandOffChatExecutionSteeringQueryKey(
+      projectId,
+      responseMessageId,
+      handOffChatExecutionSteeringBody,
+    );
 
   const queryFn: QueryFunction<
     Awaited<ReturnType<typeof handOffChatExecutionSteering>>
   > = ({ signal }) =>
-    handOffChatExecutionSteering(projectId, responseMessageId, {
-      signal,
-      ...requestOptions,
-    });
+    handOffChatExecutionSteering(
+      projectId,
+      responseMessageId,
+      handOffChatExecutionSteeringBody,
+      { signal, ...requestOptions },
+    );
 
   return {
     queryKey,
@@ -15827,6 +15876,7 @@ export function useHandOffChatExecutionSteering<
 >(
   projectId: string,
   responseMessageId: string,
+  handOffChatExecutionSteeringBody: HandOffChatExecutionSteeringBody,
   options: {
     query: Partial<
       UseQueryOptions<
@@ -15860,6 +15910,7 @@ export function useHandOffChatExecutionSteering<
 >(
   projectId: string,
   responseMessageId: string,
+  handOffChatExecutionSteeringBody: HandOffChatExecutionSteeringBody,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -15893,6 +15944,7 @@ export function useHandOffChatExecutionSteering<
 >(
   projectId: string,
   responseMessageId: string,
+  handOffChatExecutionSteeringBody: HandOffChatExecutionSteeringBody,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -15922,6 +15974,7 @@ export function useHandOffChatExecutionSteering<
 >(
   projectId: string,
   responseMessageId: string,
+  handOffChatExecutionSteeringBody: HandOffChatExecutionSteeringBody,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -15939,6 +15992,7 @@ export function useHandOffChatExecutionSteering<
   const queryOptions = getHandOffChatExecutionSteeringQueryOptions(
     projectId,
     responseMessageId,
+    handOffChatExecutionSteeringBody,
     options,
   );
 

@@ -112,13 +112,16 @@ export async function removeSteering(target: SteeringTarget, steeringId: string)
 
 /**
  * Takes the caller's `turn_ended` messages of the answer (now `handed_off`)
- * and returns them, oldest first. The caller sends ONLY these texts. An
- * empty list means that the server (or another tab) took them first: send
- * nothing. Send the same `idempotencyKey` again on a retry: the server then
- * answers the same messages again. Throws when the call fails.
+ * and returns them, oldest first. The caller sends ONLY these texts, as one
+ * message with the question id `questionId`. An empty list means that the
+ * server (or another tab) took them first: send nothing. Send the same
+ * `idempotencyKey` and `questionId` again on a retry: the server then answers
+ * the same messages again. When no message with `questionId` comes, the
+ * server starts that turn itself after about a minute. Throws when the call
+ * fails.
  */
-export async function handOffSteering(target: SteeringTarget, idempotencyKey: string): Promise<SteeringItem[]> {
-  const envelope = await handOffChatExecutionSteering(String(target.projectId), target.responseMessageId, {
+export async function handOffSteering(target: SteeringTarget, idempotencyKey: string, questionId: string): Promise<SteeringItem[]> {
+  const envelope = await handOffChatExecutionSteering(String(target.projectId), target.responseMessageId, { question_id: questionId }, {
     headers: { 'Idempotency-Key': idempotencyKey },
   });
   return parseSteeringList(envelope.data);

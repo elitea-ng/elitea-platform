@@ -10,9 +10,12 @@
  * `own` records which messages THIS tab queued, with the project and the
  * conversation they belong to. Only the client that queued a message sends
  * it again when the turn ends before injection, so this part survives a
- * reload (`sessionStorage`), with the Idempotency-Key of an open hand-off
- * (so a retry after a reload gets the same answer). The lists themselves do not: after a reload the
- * GET of the list and the SSE replay fill them again.
+ * reload (`sessionStorage`), with the Idempotency-Key and the question id of
+ * an open hand-off (so a retry after a reload gets the same answer and sends
+ * the same question), and with `held` (the user stopped the turn: the client
+ * offers the texts and does not send them by itself). The lists themselves
+ * do not: after a reload the GET of the list and the SSE replay fill them
+ * again.
  *
  * CARRY-OVER. When the author sent a newer message before the hand-off, the
  * server moves the leftover messages of the old answer to the newer answer
@@ -31,13 +34,23 @@ import type { ExecutionEventData } from '@/shared/api/sse';
 import { createStorage } from '@/shared/lib/storage';
 
 /** The messages that this tab queued against one answer. */
-export interface OwnSteeringRecord {
+interface OwnSteeringRecord {
   readonly projectId: string;
   /** The A17 queue key of the conversation (`chatBoxQueueKey`). */
   readonly conversationKey: string;
   readonly ids: readonly string[];
   /** The Idempotency-Key of the hand-off that is not done yet, if one started. */
   readonly handoffKey?: string;
+  /** The question id of the send that follows that hand-off (the hand-off body names it). */
+  readonly handoffQuestionId?: string;
+  /** The user stopped the turn: the client offers the leftover texts, it does not send them by itself. */
+  readonly held?: true;
+}
+
+/** The keys of one hand-off: they stay the same on every retry. */
+export interface SteeringHandoff {
+  readonly key: string;
+  readonly questionId: string;
 }
 
 /** An id that this tab owned and forgot, with the answer and the record it had. */
@@ -60,14 +73,16 @@ interface ChatSteeringState {
   readonly carried: number;
   /** Folds items into the list of the answer. A carry-over moves the item and its ownership (see the file comment). */
   readonly apply: (responseMessageId: string, incoming: readonly SteeringItem[]) => void;
-  readonly addOwn: (responseMessageId: string, record: Omit<OwnSteeringRecord, 'ids' | 'handoffKey'>, id: string) => void;
+  readonly addOwn: (responseMessageId: string, record: Pick<OwnSteeringRecord, 'projectId' | 'conversationKey'>, id: string) => void;
   /** Forgets own ids (sent again, or final). The record goes when it has no ids. */
   readonly dropOwn: (responseMessageId: string, ids: readonly string[]) => void;
   /** Removes items from the view (they became the next message). */
   readonly forget: (responseMessageId: string, ids: readonly string[]) => void;
   readonly markUnsupported: (responseMessageId: string) => void;
-  /** Keeps (a string) or forgets (`undefined`) the key of the open hand-off of the answer. */
-  readonly setHandoffKey: (responseMessageId: string, key: string | undefined) => void;
+  /** Keeps (a value) or forgets (`undefined`) the keys of the open hand-off of the answer. */
+  readonly setHandoff: (responseMessageId: string, handoff: SteeringHandoff | undefined) => void;
+  /** Marks the record of the answer `held` (the user stopped the turn). */
+  readonly hold: (responseMessageId: string) => void;
 }
 
 const STORAGE_KEY = 'chat.steeringOwn';
@@ -85,7 +100,7 @@ function session(): ReturnType<typeof createStorage> | undefined {
 }
 
 /** Reads the persisted `own` map. Bad rows are skipped. */
-export function parseOwnRecords(raw: unknown): Record<string, OwnSteeringRecord> {
+function parseOwnRecords(raw: unknown): Record<string, OwnSteeringRecord> {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {};
   const out: Record<string, OwnSteeringRecord> = {};
   for (const [responseId, value] of Object.entries(raw as Record<string, unknown>).slice(-MAX_RECORDS)) {
@@ -94,7 +109,10 @@ export function parseOwnRecords(raw: unknown): Record<string, OwnSteeringRecord>
     const ids = Array.isArray(row['ids']) ? row['ids'].filter((id): id is string => typeof id === 'string').slice(-MAX_IDS) : [];
     if (typeof row['projectId'] !== 'string' || typeof row['conversationKey'] !== 'string' || ids.length === 0) continue;
     const key = row['handoffKey'];
-    out[responseId] = { projectId: row['projectId'], conversationKey: row['conversationKey'], ids, ...(typeof key === 'string' && key !== '' ? { handoffKey: key } : {}) };
+    const question = row['handoffQuestionId'];
+    // A hand-off needs both keys: a record with only one starts a new hand-off.
+    const handoff = typeof key === 'string' && key !== '' && typeof question === 'string' && question !== '' ? { handoffKey: key, handoffQuestionId: question } : {};
+    out[responseId] = { projectId: row['projectId'], conversationKey: row['conversationKey'], ids, ...handoff, ...(row['held'] === true ? { held: true as const } : {}) };
   }
   return out;
 }
@@ -109,7 +127,7 @@ function saveOwn(own: Readonly<Record<string, OwnSteeringRecord>>): void {
 
 type ChatSteeringStore = UseBoundStore<StoreApi<ChatSteeringState>>;
 
-export function createChatSteeringStore(): ChatSteeringStore {
+function createChatSteeringStore(): ChatSteeringStore {
   return create<ChatSteeringState>((set, get) => {
     const writeOwn = (own: Record<string, OwnSteeringRecord>): void => {
       saveOwn(own);
@@ -190,12 +208,18 @@ export function createChatSteeringStore(): ChatSteeringStore {
         if (current === undefined) return;
         set({ items: { ...items, [responseMessageId]: current.filter((item) => !ids.includes(item.id)) } });
       },
-      setHandoffKey: (responseMessageId, key) => {
+      setHandoff: (responseMessageId, handoff) => {
         const own = get().own;
         const current = own[responseMessageId];
-        if (current === undefined || current.handoffKey === key) return;
-        const { handoffKey: _old, ...rest } = current;
-        writeOwn({ ...own, [responseMessageId]: key === undefined ? rest : { ...rest, handoffKey: key } });
+        if (current === undefined || (current.handoffKey === handoff?.key && current.handoffQuestionId === handoff?.questionId)) return;
+        const { handoffKey: _key, handoffQuestionId: _question, ...rest } = current;
+        writeOwn({ ...own, [responseMessageId]: handoff === undefined ? rest : { ...rest, handoffKey: handoff.key, handoffQuestionId: handoff.questionId } });
+      },
+      hold: (responseMessageId) => {
+        const own = get().own;
+        const current = own[responseMessageId];
+        if (current === undefined || current.held === true) return;
+        writeOwn({ ...own, [responseMessageId]: { ...current, held: true } });
       },
       markUnsupported: (responseMessageId) => {
         set({ unsupported: { ...get().unsupported, [responseMessageId]: true } });

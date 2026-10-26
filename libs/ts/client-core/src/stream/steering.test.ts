@@ -29,6 +29,7 @@ const WIRE = {
   content: 'Skip the tests for now and only fix the build.',
   state: 'pending',
   revision: 1,
+  queue_order: 41,
   created_at: '2026-10-26T10:15:02Z',
   updated_at: '2026-10-26T10:15:02Z',
   injected_at: null,
@@ -46,7 +47,7 @@ describe('parseSteeringMessage', () => {
       content: WIRE.content,
       state: 'pending',
       revision: 1,
-      createdAt: WIRE.created_at,
+      queueOrder: 41,
       messageId: null,
     });
   });
@@ -101,6 +102,18 @@ describe('mergeSteering', () => {
     assert.equal(mergeSteering(handed, item())[0]?.state, 'handed_off');
   });
 
+  it('puts a new item in queue_order, and an item without one at the end', () => {
+    const list = mergeSteeringAll([], [item({ id: 'c', queueOrder: 30 }), item({ id: 'a', queueOrder: 10 }), item({ id: 'x', queueOrder: null }), item({ id: 'b', queueOrder: 20 })]);
+    assert.deepEqual(list.map((i) => i.id), ['a', 'b', 'c', 'x']);
+  });
+
+  it('moves an item when a newer copy has a new queue_order, and keeps the order when the copy has none', () => {
+    const list = [item({ id: 'a', queueOrder: 10 }), item({ id: 'b', queueOrder: 20 })];
+    assert.deepEqual(mergeSteering(list, item({ id: 'b', queueOrder: 5, revision: 2 })).map((i) => i.id), ['b', 'a']);
+    const kept = mergeSteering(list, item({ id: 'a', queueOrder: null, revision: 2 }));
+    assert.deepEqual(kept.map((i) => [i.id, i.queueOrder]), [['a', 10], ['b', 20]]);
+  });
+
   it('merges a list in order', () => {
     const list = mergeSteeringAll([], [item(), item({ state: 'injected', messageId: 'm1' })]);
     assert.equal(list.length, 1);
@@ -122,7 +135,7 @@ describe('carry-over (a newer message came before the hand-off)', () => {
   });
 
   it('moves the item by id to the newer answer, before the messages of the newer turn', () => {
-    const own = item({ id: 'n1', responseMessageId: NEWER, createdAt: '2026-10-26T10:16:00Z' });
+    const own = item({ id: 'n1', responseMessageId: NEWER, queueOrder: 57 });
     const lists = { [OLD]: [item({ state: 'turn_ended' }), item({ id: 'o2', state: 'injected' })], [NEWER]: [own] };
     const { lists: next, moved } = foldSteeringByAnswer(lists, NEWER, [carried]);
     assert.deepEqual(moved, [{ id: WIRE.id, from: OLD, to: NEWER }]);

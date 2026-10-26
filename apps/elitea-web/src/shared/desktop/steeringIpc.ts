@@ -4,7 +4,7 @@
  */
 
 /** Why a queued message does not wait any more: the person removed it, or the turn ended before a safe point. */
-export type SteerDropReason = 'removed' | 'turn_ended';
+type SteerDropReason = 'removed' | 'turn_ended';
 
 /** The queue's events, as `agent://event` carries them (without the turn id and seq). */
 export type SteeringEvent =

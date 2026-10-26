@@ -27,11 +27,20 @@
  * message (A17). An empty answer means that the server took them first
  * (about 10 s after the turn end it starts the next turn itself): the tab
  * sends nothing. So the server and a client never both start a turn. The
- * Idempotency-Key of the hand-off stays in the `own` record until the
- * answer is used, so a retry (also after a reload) gets the same rows. The
- * tab reads the server list first, never only the local view: the SSE has
- * no `turn_ended` event, and a switch to another conversation also closes
- * the stream while the turn runs on.
+ * tab makes the question id of that message BEFORE the hand-off, and the
+ * hand-off body names it: when the tab closes before it sends, the server
+ * starts that turn itself with the same question id. The Idempotency-Key
+ * and the question id of the hand-off stay in the `own` record until the
+ * answer is used, so a retry (also after a reload) gets the same rows and
+ * sends the same question. The tab reads the server list first, never only
+ * the local view: the SSE has no `turn_ended` event, and a switch to another
+ * conversation also closes the stream while the turn runs on.
+ *
+ * A STOPPED OR FAILED TURN. The server never continues a turn that the user
+ * stopped (`onStop`) or that failed (`answerFailed`). Its `turn_ended`
+ * messages wait, and this tab does not send them by itself: it OFFERS them
+ * (`offer`). "Send" hands them off and sends them; "Dismiss" leaves them on
+ * the server and forgets them here.
  *
  * CARRY-OVER. When the user sent a newer message before the hand-off, the
  * server moves the leftover messages to the NEWER answer (`steer.queued` on
@@ -40,7 +49,7 @@
  * the newer answer hands them off, and the rule of the old answer does not.
  * A carry-over to an answer whose turn already ended runs the rule again.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   STEERING_ERROR,
@@ -49,7 +58,6 @@ import {
   STEERING_STATE,
   joinSteeringTexts,
   leftoverSteering,
-  steeringWaitSeconds,
   type SteeringItem,
 } from '@elitea/client-core/stream';
 
@@ -64,10 +72,11 @@ import {
 } from '@/entities/conversation/api/steeringApi';
 import { t } from '@/shared/i18n';
 
-import { useChatSteeringStore } from './chatSteering.store';
+import { useChatSteeringStore, type SteeringHandoff } from './chatSteering.store';
+import { failureNotice, sleep, useRetryCountdown } from './chatSteeringNotice';
 
 /** The answer that the owned run writes, as the transport reports it. */
-export interface ChatSteeringRunTarget {
+interface ChatSteeringRunTarget {
   readonly projectId: string | number;
   readonly messageGroupUuid: string;
 }
@@ -81,8 +90,20 @@ export interface UseChatSteeringParams {
   readonly streamTarget: () => ChatSteeringRunTarget | null;
   /** The send of today (A17): sends now when idle, queues for after the turn otherwise. */
   readonly send: (question: string) => void;
-  /** Puts a text in the A17 queue; it goes as a normal message when the composer settles. */
-  readonly queueAfterTurn: (question: string) => void;
+  /**
+   * Puts a text in the A17 queue; it goes as a normal message when the
+   * composer settles. With `questionId`, that send MUST use it as its
+   * `question_id` (the hand-off named it to the server).
+   */
+  readonly queueAfterTurn: (question: string, questionId?: string) => void;
+  /** True when the answer failed (the server does not continue a failed turn). */
+  readonly answerFailed?: ((responseMessageId: string) => boolean) | undefined;
+}
+
+/** The leftover texts of a stopped or failed turn, which the user can send as the next message. */
+export interface SteeringOffer {
+  readonly responseMessageId: string;
+  readonly text: string;
 }
 
 export interface ChatSteeringModel {
@@ -95,6 +116,24 @@ export interface ChatSteeringModel {
   /** A short text about the last refused send, or `null`. */
   readonly notice: string | null;
   readonly dismissNotice: () => void;
+  /** The user pressed Stop (not "Stop and send"): the leftovers of this turn are offered, not sent. */
+  readonly onStop: () => void;
+  /** The leftover texts of a stopped or failed turn of this conversation, or `null`. */
+  readonly offer: SteeringOffer | null;
+  /** "Send": hands the offered texts off and sends them as the next message. */
+  readonly acceptOffer: () => void;
+  /** "Dismiss": leaves the offered texts on the server and forgets them here. */
+  readonly dismissOffer: () => void;
+}
+
+interface HeldOffer extends SteeringOffer {
+  readonly conversationKey: string;
+}
+
+/** A text for the A17 queue of a conversation that is not on screen. */
+interface Stranded {
+  readonly text: string;
+  readonly questionId: string | undefined;
 }
 
 /** The waits before the list is read again while own messages still show `pending`. */
@@ -102,48 +141,6 @@ const SETTLE_RETRY_MS = [1_500, 4_000] as const;
 
 function targetOf(responseMessageId: string, projectId: string): SteeringTarget {
   return { projectId, responseMessageId };
-}
-
-/** The time between two updates of the countdown. */
-const COUNTDOWN_TICK_MS = 250;
-
-const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
-
-/**
- * The countdown of a rate-limited send. `start(ms)` shows "You can send
- * again in N s" until the wait ends; the text updates each tick. A later
- * wait that ends later replaces the current one.
- */
-function useRetryCountdown(): { readonly text: string | null; readonly start: (ms: number) => void; readonly clear: () => void } {
-  const [until, setUntil] = useState<number | null>(null);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (until === null) return undefined;
-    const timer = setInterval(() => {
-      const at = Date.now();
-      setNow(at);
-      if (at >= until) setUntil(null);
-    }, COUNTDOWN_TICK_MS);
-    return () => { clearInterval(timer); };
-  }, [until]);
-  const start = useCallback((ms: number) => {
-    const at = Date.now();
-    setNow(at);
-    setUntil((current) => Math.max(current ?? 0, at + ms));
-  }, []);
-  const clear = useCallback(() => { setUntil(null); }, []);
-  const left = until === null ? 0 : until - now;
-  const text = left > 0
-    ? t('chatMessages.steering.rateLimited', 'Too many messages at once. You can send again in {{seconds}} s. Your message goes again then.', { seconds: String(steeringWaitSeconds(left)) })
-    : null;
-  return { text, start, clear };
-}
-
-function failureNotice(code: string | undefined): string {
-  if (code === STEERING_ERROR.queueFull) {
-    return t('chatMessages.steering.queueFull', 'This turn has too many waiting messages. Your message is sent after the turn.');
-  }
-  return t('chatMessages.steering.failed', 'Your message could not reach the running turn. It is sent after the turn.');
 }
 
 // eslint-disable-next-line eslint/max-lines-per-function -- one routing hook: send, edit, remove and the end-of-turn rule share the same refs
@@ -154,8 +151,11 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
   live.current = params;
   const settling = useRef(new Set<string>());
   const { text: countdownText, start: startCountdown, clear: clearCountdown } = useRetryCountdown();
-  /** Texts whose send failed while another conversation was on screen, by conversation key. */
-  const stranded = useRef(new Map<string, string[]>());
+  /** Texts that must go while another conversation was on screen, by conversation key. */
+  const stranded = useRef(new Map<string, Stranded[]>());
+  /** The answers that the user stopped in this page life (the record can come after the Stop). */
+  const stopped = useRef(new Set<string>());
+  const [offers, setOffers] = useState<Readonly<Record<string, HeldOffer>>>({});
 
   const refresh = useCallback(async (target: SteeringTarget): Promise<void> => {
     try {
@@ -165,14 +165,31 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
     }
   }, []);
 
+  /** Puts a text in the A17 queue of the conversation that sent it, with the question id that its send must use. */
+  const deliver = useCallback((conversationKey: string, text: string, questionId?: string): void => {
+    if (live.current.conversationKey === conversationKey) {
+      if (questionId === undefined) live.current.queueAfterTurn(text);
+      else live.current.queueAfterTurn(text, questionId);
+      return;
+    }
+    // Another conversation is on screen: its A17 queue is not the right one. Keep the text for the reopen.
+    stranded.current.set(conversationKey, [...(stranded.current.get(conversationKey) ?? []), { text, questionId }]);
+  }, []);
+
+  /** The server does not continue this turn: the user stopped it, or it failed. */
+  const isHeld = (responseId: string, held: boolean | undefined): boolean =>
+    held === true || stopped.current.has(responseId) || live.current.answerFailed?.(responseId) === true;
+
   /**
    * Applies the end-of-turn rule to one answer of this conversation. Reads
    * the server list. When own messages are `turn_ended`, calls the hand-off
-   * and queues ONLY the texts that it returns as ONE A17 message. Own
-   * messages that are still `pending` keep the record, and the list is read
-   * again a little later (the server can mark them a moment after the
-   * terminal frame). On a failure the record keeps the hand-off key, so the
-   * next settle sends the same key and gets the same rows.
+   * and queues ONLY the texts that it returns as ONE A17 message, with the
+   * question id that the hand-off named. When the server does not continue
+   * the turn (`isHeld`), it offers the texts instead, and keeps the record.
+   * Own messages that are still `pending` keep the record, and the list is
+   * read again a little later (the server can mark them a moment after the
+   * terminal frame). On a failure the record keeps the hand-off keys, so the
+   * next settle sends the same keys and gets the same rows.
    */
   const settle = useCallback(async (responseId: string, attempt: number): Promise<void> => {
     const record = useChatSteeringStore.getState().own[responseId];
@@ -195,39 +212,36 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
       const leftovers = leftoverSteering(items, own, false);
       // Another conversation is on screen now: its A17 queue is not this one. Keep the record for the reopen.
       if (live.current.conversationKey !== record.conversationKey) return;
-      if (leftovers.length > 0 || record.handoffKey !== undefined) {
-        const key = record.handoffKey ?? newSteeringKey();
-        store.setHandoffKey(responseId, key);
-        const handed = await handOffSteering(target, key);
+      const handing = record.handoffKey !== undefined && record.handoffQuestionId !== undefined;
+      const offered = leftovers.length > 0 && !handing && isHeld(responseId, record.held);
+      if (offered) {
+        const offer: HeldOffer = { responseMessageId: responseId, conversationKey: record.conversationKey, text: joinSteeringTexts(leftovers) };
+        setOffers((current) => ({ ...current, [responseId]: offer }));
+      } else if (leftovers.length > 0 || handing) {
+        const handoff: SteeringHandoff = handing
+          ? { key: record.handoffKey as string, questionId: record.handoffQuestionId as string }
+          : { key: newSteeringKey(), questionId: crypto.randomUUID() };
+        store.setHandoff(responseId, handoff);
+        const handed = await handOffSteering(target, handoff.key, handoff.questionId);
         const text = joinSteeringTexts(handed);
-        if (text !== '' && live.current.conversationKey === record.conversationKey) live.current.queueAfterTurn(text);
-        // Another conversation came on screen during the call: keep the text for the reopen.
-        else if (text !== '') stranded.current.set(record.conversationKey, [...(stranded.current.get(record.conversationKey) ?? []), text]);
-        // The answer is used: the next hand-off of this answer needs a new key.
-        store.setHandoffKey(responseId, undefined);
+        if (text !== '') deliver(record.conversationKey, text, handoff.questionId);
+        // The answer is used: the next hand-off of this answer needs new keys.
+        store.setHandoff(responseId, undefined);
         store.forget(responseId, leftovers.map((item) => item.id));
         store.apply(responseId, handed);
       }
       const open = items.filter((item) => own.has(item.id) && item.state === STEERING_STATE.Pending);
-      store.dropOwn(responseId, record.ids.filter((id) => !open.some((item) => item.id === id)));
+      // An offered text keeps its id: the offer (also after a reload) needs the record.
+      const kept = new Set([...open, ...(offered ? leftovers : [])].map((item) => item.id));
+      store.dropOwn(responseId, record.ids.filter((id) => !kept.has(id)));
       if (open.length > 0) again();
     } catch {
-      // Handled: the record (and its hand-off key) stays. A later settle sends the same key and gets the same rows.
+      // Handled: the record (and its hand-off keys) stays. A later settle sends the same keys and gets the same rows.
       again();
     } finally {
       settling.current.delete(responseId);
     }
-  }, []);
-
-  /** Puts a refused text in the A17 queue of the conversation that sent it. */
-  const fallBack = useCallback((conversationKey: string, question: string): void => {
-    if (live.current.conversationKey === conversationKey) {
-      live.current.queueAfterTurn(question);
-      return;
-    }
-    // Another conversation is on screen: its A17 queue is not the right one. Keep the text for the reopen.
-    stranded.current.set(conversationKey, [...(stranded.current.get(conversationKey) ?? []), question]);
-  }, []);
+  }, [deliver]);
 
   /**
    * Sends one steering message. A network failure is tried one more time,
@@ -261,11 +275,11 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
       return;
     }
     if (result.code === STEERING_ERROR.notSupported) store.markUnsupported(responseId);
-    fallBack(conversationKey, question);
+    deliver(conversationKey, question);
     // The last try was refused too: the countdown must not hide that the text now waits for the turn end.
     if (result.code === STEERING_ERROR.rateLimited) clearCountdown();
     if (result.code !== STEERING_ERROR.notSupported && result.code !== STEERING_ERROR.turnNotRunning) setNotice(failureNotice(result.code));
-  }, [settle, post, fallBack, clearCountdown]);
+  }, [settle, post, deliver, clearCountdown]);
 
   const onSend = useCallback((question: string): void => {
     if (question.trim() === '') return;
@@ -316,13 +330,13 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
     const texts = stranded.current.get(conversationKey);
     if (texts !== undefined) {
       stranded.current.delete(conversationKey);
-      for (const text of texts) live.current.queueAfterTurn(text);
+      for (const item of texts) deliver(conversationKey, item.text, item.questionId);
     }
     if (isStreaming) return;
     for (const [responseId, record] of Object.entries(useChatSteeringStore.getState().own)) {
       if (record.conversationKey === conversationKey) void settle(responseId, 0);
     }
-  }, [conversationKey, isStreaming, settle, carried]);
+  }, [conversationKey, isStreaming, settle, deliver, carried]);
 
   const dismissNotice = useCallback(() => {
     setNotice(null);
@@ -333,5 +347,35 @@ export function useChatSteering(params: UseChatSteeringParams): ChatSteeringMode
     if (target) void refresh({ projectId: target.projectId, responseMessageId: target.messageGroupUuid });
   }, [refresh]);
 
-  return { onSend, edit, remove, onReattached, notice: countdownText ?? notice, dismissNotice };
+  const onStop = useCallback(() => {
+    const target = live.current.streamTarget();
+    if (target === null) return;
+    stopped.current.add(target.messageGroupUuid);
+    useChatSteeringStore.getState().hold(target.messageGroupUuid);
+  }, []);
+
+  // An offer goes when its record goes (a carry-over moved the messages, or the user dismissed it).
+  const ownRecords = useChatSteeringStore((state) => state.own);
+  const held = Object.values(offers).find((item) => item.conversationKey === conversationKey && ownRecords[item.responseMessageId] !== undefined);
+  const offerId = held?.responseMessageId;
+  const offerText = held?.text;
+  const offer = useMemo(() => (offerId === undefined || offerText === undefined ? null : { responseMessageId: offerId, text: offerText }), [offerId, offerText]);
+  const closeOffer = useCallback((responseId: string) => {
+    setOffers((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== responseId)));
+  }, []);
+  const acceptOffer = useCallback(() => {
+    if (offerId === undefined) return;
+    closeOffer(offerId);
+    // With the hand-off keys in the record, the end-of-turn rule hands the texts off and sends them.
+    useChatSteeringStore.getState().setHandoff(offerId, { key: newSteeringKey(), questionId: crypto.randomUUID() });
+    void settle(offerId, 0);
+  }, [offerId, closeOffer, settle]);
+  const dismissOffer = useCallback(() => {
+    if (offerId === undefined) return;
+    closeOffer(offerId);
+    const record = useChatSteeringStore.getState().own[offerId];
+    if (record !== undefined) useChatSteeringStore.getState().dropOwn(offerId, record.ids);
+  }, [offerId, closeOffer]);
+
+  return { onSend, edit, remove, onReattached, notice: countdownText ?? notice, dismissNotice, onStop, offer, acceptOffer, dismissOffer };
 }

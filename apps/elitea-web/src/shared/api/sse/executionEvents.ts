@@ -71,7 +71,7 @@ export const EXECUTION_EVENT_STEER_INJECTED = EXECUTION_EVENT.steerInjected;
 export const EXECUTION_EVENT_STEER_DROPPED = EXECUTION_EVENT.steerDropped;
 
 /** The SSE `event:` name of a steering frame. */
-export type SteerEventName = typeof EXECUTION_EVENT_STEER_QUEUED | typeof EXECUTION_EVENT_STEER_INJECTED | typeof EXECUTION_EVENT_STEER_DROPPED;
+type SteerEventName = typeof EXECUTION_EVENT_STEER_QUEUED | typeof EXECUTION_EVENT_STEER_INJECTED | typeof EXECUTION_EVENT_STEER_DROPPED;
 
 /**
  * A parsed frame body. Deliberately a loose record: every consumer reads it

@@ -48,7 +48,8 @@ import { NewChatInput } from '@/features/chat-input';
 import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
 
 import { FooterControls } from './FooterControls';
-import { RetryUnsent, StopAndSend, useRestoredDraft, type UnsentSteers } from './SteeringControls';
+import { RetryUnsent, StopAndSend, useRestoredDraft } from './SteeringControls';
+import type { UnsentSteers } from './useSteering';
 import type { ComposerSkill } from './useAgentSkills';
 import { useImageAttachments } from './useImageAttachments';
 import type { SentImages } from './useSendPrompt';

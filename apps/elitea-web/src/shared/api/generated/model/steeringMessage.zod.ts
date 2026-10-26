@@ -46,6 +46,11 @@ export const SteeringMessage = zod
   .object({
     id: zod.uuid(),
     response_message_id: zod.uuid(),
+    queue_order: zod
+      .int()
+      .describe(
+        "The server's queue position. Order the messages of an answer by it (ascending): the worker injects them in this order, and a message carried over from an older answer has a lower value than the newer turn's own messages. Not a count: values have gaps.\n",
+      ),
     author_id: zod.int().describe("The user who queued it."),
     content: zod.string(),
     state: zod
