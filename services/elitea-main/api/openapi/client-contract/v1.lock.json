@@ -9766,6 +9766,10 @@
                     }
                   }
                 },
+                "cumulative_commit": {
+                  "type": "string",
+                  "nullable": true
+                },
                 "handoff_id": {
                   "type": "string",
                   "format": "uuid",
@@ -9862,6 +9866,11 @@
                       "created_at": {
                         "type": "string",
                         "format": "date-time"
+                      },
+                      "number": {
+                        "type": "integer",
+                        "format": "int64",
+                        "nullable": true
                       },
                       "parent_sha": {
                         "type": "string"

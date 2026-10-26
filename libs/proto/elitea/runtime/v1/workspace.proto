@@ -308,7 +308,10 @@ message WorkspaceChangesHeaderV1 {
   // Changed files past each scope's file bound, counted and not listed.
   uint32 turn_omitted = 5;
   uint32 cumulative_omitted = 6;
-  reserved 7 to 15;
+  // The commit's turn number: how many commits the parent walk from it takes
+  // to reach the handoff snapshot (1: the first cloud turn). 0: unknown.
+  uint32 depth = 7;
+  reserved 8 to 15;
 }
 
 // The record stream: one header frame, then one frame per changed file.

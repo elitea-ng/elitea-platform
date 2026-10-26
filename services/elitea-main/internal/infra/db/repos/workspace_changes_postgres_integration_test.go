@@ -8,9 +8,11 @@ package repos
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacechanges"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
 )
 
@@ -90,5 +92,83 @@ delete_after = clock_timestamp() - interval '1 second' WHERE project_id = $1 AND
 	}
 	if err := save(sha1Of("four"), two, 4, handoffID); !errors.Is(err, workspacechanges.ErrNotFound) {
 		t.Fatalf("a record after the erasure = %v, want ErrNotFound", err)
+	}
+}
+
+type allowAllPolicy struct{}
+
+func (allowAllPolicy) EffectivePolicy(context.Context, int64) (workspacehandoff.Policy, error) {
+	return workspacehandoff.Policy{}, nil
+}
+
+// TestPostgresWorkspaceChangesViewSurvivesAMissingTipRecord: five cloud
+// turns, the fifth (the tip) without a record: turns 1 to 4 still show, by
+// their numbers, with the newest record's cumulative set, and the view is
+// not complete. A missing record in the middle (turn 3) still lets the walk
+// reach turns 1 and 2.
+func TestPostgresWorkspaceChangesViewSurvivesAMissingTipRecord(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const owner int64 = 5502
+	thread := seedLocalWorkThread(t, pool, owner, "local_work").thread
+	seedHandoffRow(t, pool, thread, owner, workspacestore.StateCloudIdle, 2, false, "")
+	base := sha1Of("base")
+	commits := []string{sha1Of("t1"), sha1Of("t2"), sha1Of("t3"), sha1Of("t4"), sha1Of("t5")}
+	var handoffID string
+	if err := pool.QueryRow(ctx, `UPDATE elitea_runtime.workspace_handoffs SET handoff_sha = $3, cloud_sha = $4
+WHERE project_id = $1 AND conversation_uuid = $2::uuid RETURNING handoff_id::text`,
+		thread.ProjectID, thread.ConversationUUID, base, commits[4]).Scan(&handoffID); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := NewWorkspaceChangesRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoffs, err := NewWorkspaceHandoffsRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := workspacechanges.NewService(repo, handoffs, allowAllPolicy{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	save := func(index int) {
+		t.Helper()
+		parent := base
+		if index > 0 {
+			parent = commits[index-1]
+		}
+		path := fmt.Sprintf("turn%d.go", index+1)
+		if err := repo.Save(ctx, workspacechanges.Record{
+			Thread: thread, HandoffID: handoffID, Commit: commits[index], Parent: parent, Base: base,
+			Seq: int64(index + 1), Depth: int64(index + 1), ExecutionID: "exec",
+			Turn:       workspacechanges.Manifest{Files: []workspacechanges.File{{Path: path, Status: "added"}}},
+			Cumulative: workspacechanges.Manifest{Files: []workspacechanges.File{{Path: path, Status: "added"}}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index := range 4 {
+		save(index)
+	}
+	view, err := service.View(ctx, thread)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Complete || len(view.Turns) != 4 || *view.HeadSHA != commits[4] || *view.CumulativeCommit != commits[3] {
+		t.Fatalf("view = %+v", view)
+	}
+	for index, turn := range view.Turns {
+		if turn.Commit != commits[index] || turn.Number == nil || *turn.Number != int64(index+1) {
+			t.Fatalf("turn %d = %+v", index, turn)
+		}
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM elitea_runtime.workspace_turn_changes WHERE commit_sha = $1`, commits[2]); err != nil {
+		t.Fatal(err)
+	}
+	view, err = service.View(ctx, thread)
+	if err != nil || view.Complete || len(view.Turns) != 3 || view.Turns[0].Commit != commits[0] ||
+		view.Turns[1].Commit != commits[1] || view.Turns[2].Commit != commits[3] {
+		t.Fatalf("with a gap = %+v %v", view, err)
 	}
 }

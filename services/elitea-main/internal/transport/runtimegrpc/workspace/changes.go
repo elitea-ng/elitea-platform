@@ -14,8 +14,10 @@ const maxChangeFrames = 1 + 2*workspaceruntime.MaxChangedFiles
 
 // WorkspaceRecordChanges keeps the files the running turn's published commit
 // changed (ADR-0034 Phase 2): one header frame, then one frame per file. The
-// whole record is read and checked before the claim's thread is asked; a
-// stream longer than the bounds is malformed.
+// claim is authorised on the header, before the rest of the stream is read;
+// the record is then checked once here (workspaceruntime.SanitizeTurnChanges:
+// a bad file entry is dropped alone). A stream longer than the bounds is
+// malformed.
 func (s *Server) WorkspaceRecordChanges(stream runtimev1.WorkspaceStoreService_WorkspaceRecordChangesServer) error {
 	ctx := stream.Context()
 	first, err := stream.Recv()
@@ -26,9 +28,13 @@ func (s *Server) WorkspaceRecordChanges(stream runtimev1.WorkspaceStoreService_W
 	if header == nil {
 		return stream.SendAndClose(&runtimev1.WorkspaceRecordChangesResponseV1{Rejection: malformed()})
 	}
+	claim, reject := s.authorize(ctx, header.GetClaim())
+	if reject != nil {
+		return stream.SendAndClose(&runtimev1.WorkspaceRecordChangesResponseV1{Rejection: reject})
+	}
 	changes := workspaceruntime.TurnChanges{
 		Commit: header.GetCommit(), Parent: header.GetParent(), Base: header.GetBase(),
-		TurnOmitted: header.GetTurnOmitted(), CumulativeOmitted: header.GetCumulativeOmitted(),
+		TurnOmitted: header.GetTurnOmitted(), CumulativeOmitted: header.GetCumulativeOmitted(), Depth: header.GetDepth(),
 	}
 	for frames := 1; ; frames++ {
 		frame, err := stream.Recv()
@@ -42,18 +48,11 @@ func (s *Server) WorkspaceRecordChanges(stream runtimev1.WorkspaceStoreService_W
 		if file == nil || frames >= maxChangeFrames {
 			return stream.SendAndClose(&runtimev1.WorkspaceRecordChangesResponseV1{Rejection: malformed()})
 		}
-		changed, ok := changedFile(file)
-		if !ok {
-			return stream.SendAndClose(&runtimev1.WorkspaceRecordChangesResponseV1{Rejection: malformed()})
-		}
-		changes.Files = append(changes.Files, changed)
+		changes.Files = append(changes.Files, changedFile(file))
 	}
-	if err := workspaceruntime.ValidateTurnChanges(changes); err != nil {
+	changes, err = workspaceruntime.SanitizeTurnChanges(changes)
+	if err != nil {
 		return stream.SendAndClose(&runtimev1.WorkspaceRecordChangesResponseV1{Rejection: malformed()})
-	}
-	claim, reject := s.authorize(ctx, header.GetClaim())
-	if reject != nil {
-		return stream.SendAndClose(&runtimev1.WorkspaceRecordChangesResponseV1{Rejection: reject})
 	}
 	if err := s.store.RecordChanges(ctx, claim, changes); err != nil {
 		if refusal, ok := refusalProto(err); ok {
@@ -64,7 +63,9 @@ func (s *Server) WorkspaceRecordChanges(stream runtimev1.WorkspaceStoreService_W
 	return stream.SendAndClose(&runtimev1.WorkspaceRecordChangesResponseV1{Recorded: true})
 }
 
-func changedFile(file *runtimev1.WorkspaceChangedFileV1) (workspaceruntime.ChangedFile, bool) {
+// changedFile converts one file frame; an unknown scope or status is left
+// empty, so SanitizeTurnChanges drops the entry alone.
+func changedFile(file *runtimev1.WorkspaceChangedFileV1) workspaceruntime.ChangedFile {
 	out := workspaceruntime.ChangedFile{
 		Path: file.GetPath(), FromPath: file.GetFromPath(), Binary: file.GetBinary(), TooLarge: file.GetTooLarge(), Diff: file.GetDiff(),
 	}
@@ -73,8 +74,6 @@ func changedFile(file *runtimev1.WorkspaceChangedFileV1) (workspaceruntime.Chang
 		out.Scope = workspaceruntime.ChangeScopeTurn
 	case runtimev1.WorkspaceChangeScopeV1_WORKSPACE_CHANGE_SCOPE_V1_CUMULATIVE:
 		out.Scope = workspaceruntime.ChangeScopeCumulative
-	default:
-		return workspaceruntime.ChangedFile{}, false
 	}
 	switch file.GetStatus() {
 	case runtimev1.WorkspaceChangeStatusV1_WORKSPACE_CHANGE_STATUS_V1_ADDED:
@@ -85,8 +84,6 @@ func changedFile(file *runtimev1.WorkspaceChangedFileV1) (workspaceruntime.Chang
 		out.Status = workspaceruntime.ChangeDeleted
 	case runtimev1.WorkspaceChangeStatusV1_WORKSPACE_CHANGE_STATUS_V1_RENAMED:
 		out.Status = workspaceruntime.ChangeRenamed
-	default:
-		return workspaceruntime.ChangedFile{}, false
 	}
 	if file.Additions != nil {
 		value := file.GetAdditions()
@@ -96,5 +93,5 @@ func changedFile(file *runtimev1.WorkspaceChangedFileV1) (workspaceruntime.Chang
 		value := file.GetDeletions()
 		out.Deletions = &value
 	}
-	return out, true
+	return out
 }

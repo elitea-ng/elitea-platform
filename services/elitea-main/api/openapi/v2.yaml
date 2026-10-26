@@ -4067,7 +4067,8 @@ components:
           allOf:
             - $ref: '#/components/schemas/WorkspaceChangeSet'
           nullable: true
-          description: What every listed turn changed since the snapshot; null when the tip's record is missing.
+          description: 'What the turns changed since the snapshot, as of `cumulative_commit`; null when no turn has a record.'
+        cumulative_commit: { type: string, nullable: true, description: 'The commit `cumulative` belongs to (read its diffs at it): `head_sha`, or the newest recorded turn when the tip has no record.' }
         turns:
           type: array
           description: The cloud turns on the live chain, oldest first.
@@ -4081,6 +4082,7 @@ components:
         commit: { type: string, description: 'The turn''s commit (40 hex).' }
         parent_sha: { type: string, description: 'The commit it started from.' }
         seq: { type: integer, format: int64, description: 'The store segment it was published in.' }
+        number: { type: integer, format: int64, nullable: true, description: 'The turn''s number on the live chain (1: the first cloud turn after the handoff); null when the worker could not tell.' }
         response_message_id: { type: string, nullable: true, description: 'The chat answer the turn produced.' }
         created_at: { type: string, format: date-time }
         changes:
@@ -20098,7 +20100,10 @@ paths:
         Only the turns on the live chain are listed: from the handoff
         snapshot to `refs/elitea/cloud`, so a regenerated answer's earlier
         attempt is not. `complete` is false when a turn on that chain has no
-        record (its record failed, or it ran before this view existed).
+        record (its record failed): the turns below it are still listed (the
+        walk resumes at the newest attempt under its turn `number`), and when
+        the tip itself has none, the turns and `cumulative` start at the
+        newest record (`cumulative_commit`).
 
         A path that the thread's exclusions (the platform and project
         patterns, the files excluded at send) or the path deny list match is
@@ -20126,6 +20131,7 @@ paths:
                 base_sha: 3f2c1b0a9e8d7c6b5a493827161504f3e2d1c0b9
                 head_sha: 9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3
                 complete: true
+                cumulative_commit: 9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3
                 cumulative:
                   additions: 14
                   deletions: 3
@@ -20160,6 +20166,7 @@ paths:
                   - commit: 9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3
                     parent_sha: 3f2c1b0a9e8d7c6b5a493827161504f3e2d1c0b9
                     seq: 2
+                    number: 1
                     response_message_id: 0b5d2f6e-3c1a-4e8b-9f7d-2a6c4e8b1d3f
                     created_at: '2026-10-25T12:00:00Z'
                     changes:
@@ -20240,7 +20247,7 @@ paths:
         Client contract 1.26 (ADR-0034 Phase 2). The unified diff (git's
         format, 3 lines of context) the worker kept for one file of
         getWorkspaceHandoffChanges: `scope=turn` with that turn's `commit`, or
-        `scope=cumulative` with `head_sha`. A diff is at most 48 KiB; a file
+        `scope=cumulative` with `cumulative_commit`. A diff is at most 48 KiB; a file
         with `has_diff` false has none (404 `diff_not_found`), and so has a
         path getWorkspaceHandoffChanges hides. Who may read it is as for
         getWorkspaceHandoffChanges.

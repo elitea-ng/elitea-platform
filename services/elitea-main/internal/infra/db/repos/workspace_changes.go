@@ -92,14 +92,14 @@ WHERE project_id = $1 AND conversation_uuid = $2::uuid AND (commit_sha = $3 OR s
 	if _, err := tx.Exec(ctx, `
 INSERT INTO elitea_runtime.workspace_turn_changes (
     project_id, conversation_uuid, commit_sha, handoff_id, parent_sha, base_sha, seq, execution_id,
-    response_message_id, turn_files, cumulative_files)
-VALUES ($1, $2::uuid, $3, $4::uuid, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb)
+    response_message_id, turn_files, cumulative_files, depth)
+VALUES ($1, $2::uuid, $3, $4::uuid, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12)
 ON CONFLICT (project_id, conversation_uuid, commit_sha) DO UPDATE SET
     handoff_id = EXCLUDED.handoff_id, parent_sha = EXCLUDED.parent_sha, base_sha = EXCLUDED.base_sha,
-    seq = EXCLUDED.seq, execution_id = EXCLUDED.execution_id, response_message_id = EXCLUDED.response_message_id,
+    seq = EXCLUDED.seq, depth = EXCLUDED.depth, execution_id = EXCLUDED.execution_id, response_message_id = EXCLUDED.response_message_id,
     turn_files = EXCLUDED.turn_files, cumulative_files = EXCLUDED.cumulative_files, created_at = clock_timestamp()`,
 		record.Thread.ProjectID, record.Thread.ConversationUUID, record.Commit, record.HandoffID, record.Parent,
-		record.Base, record.Seq, record.ExecutionID, response, string(turn), string(cumulative)); err != nil {
+		record.Base, record.Seq, record.ExecutionID, response, string(turn), string(cumulative), record.Depth); err != nil {
 		return fmt.Errorf("workspace changes: save record: %w", err)
 	}
 	if len(record.Diffs) > 0 {
@@ -123,7 +123,7 @@ VALUES ($1, $2::uuid, $3, $4, $5, $6)`, record.Thread.ProjectID, record.Thread.C
 // Turns reads the handoff's records, newest first, at most limit.
 func (r *WorkspaceChangesRepository) Turns(ctx context.Context, thread workspacehandoff.Thread, handoffID string, limit int) ([]workspacechanges.Stored, error) {
 	rows, err := r.pool.Query(ctx, `
-SELECT commit_sha, parent_sha, seq, COALESCE(response_message_id, ''), created_at, turn_files, cumulative_files
+SELECT commit_sha, parent_sha, seq, depth, COALESCE(response_message_id, ''), created_at, turn_files, cumulative_files
 FROM elitea_runtime.workspace_turn_changes
 WHERE project_id = $1 AND conversation_uuid = $2::uuid AND handoff_id = $3::uuid
 ORDER BY seq DESC, created_at DESC
@@ -138,7 +138,7 @@ LIMIT $4`, thread.ProjectID, thread.ConversationUUID, handoffID, limit)
 			stored           workspacechanges.Stored
 			turn, cumulative []byte
 		)
-		if err := rows.Scan(&stored.Commit, &stored.Parent, &stored.Seq, &stored.ResponseMessageID, &stored.CreatedAt,
+		if err := rows.Scan(&stored.Commit, &stored.Parent, &stored.Seq, &stored.Depth, &stored.ResponseMessageID, &stored.CreatedAt,
 			&turn, &cumulative); err != nil {
 			return nil, fmt.Errorf("workspace changes: scan: %w", err)
 		}

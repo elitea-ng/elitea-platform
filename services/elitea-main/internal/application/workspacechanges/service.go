@@ -74,6 +74,7 @@ type Record struct {
 	Parent            string
 	Base              string
 	Seq               int64
+	Depth             int64
 	ExecutionID       string
 	ResponseMessageID string
 	Turn              Manifest
@@ -86,6 +87,7 @@ type Stored struct {
 	Commit            string
 	Parent            string
 	Seq               int64
+	Depth             int64
 	ResponseMessageID string
 	CreatedAt         time.Time
 	Turn              Manifest
@@ -207,14 +209,12 @@ func (s *Service) policyFilter(ctx context.Context, handoff workspacehandoff.Han
 	return newFilter(policy, handoff), nil
 }
 
-// Record keeps the running turn's changes. The caller (the executor adapter)
-// has resolved the claim to handoff and checked that changes.Commit is its
-// cloud tip and changes.Base its snapshot.
+// Record keeps the running turn's changes. The record was checked once, at
+// the transport boundary (workspaceruntime.SanitizeTurnChanges); the caller
+// (the executor adapter) has resolved the claim to handoff and checked that
+// changes.Commit is its cloud tip and changes.Base its snapshot.
 func (s *Service) Record(ctx context.Context, handoff workspacehandoff.Handoff, executionID string, seq int64,
 	changes workspaceruntime.TurnChanges) error {
-	if err := workspaceruntime.ValidateTurnChanges(changes); err != nil {
-		return ErrInvalid
-	}
 	f, err := s.policyFilter(ctx, handoff)
 	if err != nil {
 		return err
@@ -226,6 +226,7 @@ func (s *Service) Record(ctx context.Context, handoff workspacehandoff.Handoff, 
 		Parent:            changes.Parent,
 		Base:              changes.Base,
 		Seq:               seq,
+		Depth:             int64(changes.Depth),
 		ExecutionID:       executionID,
 		ResponseMessageID: handoff.RunningResponseID,
 		Turn:              Manifest{Files: []File{}, Omitted: int(changes.TurnOmitted)},

@@ -43,7 +43,7 @@ func (m *memoryRepo) Turns(_ context.Context, _ workspacehandoff.Thread, handoff
 	out := []workspacechanges.Stored{}
 	for _, record := range m.records {
 		if record.HandoffID == handoff {
-			out = append(out, workspacechanges.Stored{Commit: record.Commit, Parent: record.Parent, Seq: record.Seq,
+			out = append(out, workspacechanges.Stored{Commit: record.Commit, Parent: record.Parent, Seq: record.Seq, Depth: record.Depth,
 				ResponseMessageID: record.ResponseMessageID, CreatedAt: time.Unix(record.Seq, 0), Turn: record.Turn, Cumulative: record.Cumulative})
 		}
 	}
@@ -95,9 +95,15 @@ func text(scope, path, status string) workspaceruntime.ChangedFile {
 
 func record(t *testing.T, service *workspacechanges.Service, rows *handoffs, commit, parent string, seq int64, files ...workspaceruntime.ChangedFile) {
 	t.Helper()
+	recordAt(t, service, rows, commit, parent, seq, uint32(seq), files...)
+}
+
+func recordAt(t *testing.T, service *workspacechanges.Service, rows *handoffs, commit, parent string, seq int64, depth uint32,
+	files ...workspaceruntime.ChangedFile) {
+	t.Helper()
 	rows.row.CloudSHA = sha(commit)
 	err := service.Record(context.Background(), rows.row, "exec-"+commit[:4], seq,
-		workspaceruntime.TurnChanges{Commit: commit, Parent: parent, Base: snapshot, Files: files})
+		workspaceruntime.TurnChanges{Commit: commit, Parent: parent, Base: snapshot, Depth: depth, Files: files})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,8 +140,8 @@ func TestRecordNeverKeepsAHiddenPathOrItsDiff(t *testing.T) {
 func TestViewWalksTheLiveChainOnly(t *testing.T) {
 	service, _, rows, _ := harness(t)
 	record(t, service, rows, turnOne, snapshot, 1, text(workspaceruntime.ChangeScopeTurn, "a.go", workspaceruntime.ChangeAdded))
-	record(t, service, rows, abandoned, turnOne, 2, text(workspaceruntime.ChangeScopeTurn, "gone.go", workspaceruntime.ChangeAdded))
-	record(t, service, rows, turnTwo, turnOne, 3,
+	recordAt(t, service, rows, abandoned, turnOne, 2, 2, text(workspaceruntime.ChangeScopeTurn, "gone.go", workspaceruntime.ChangeAdded))
+	recordAt(t, service, rows, turnTwo, turnOne, 3, 2,
 		text(workspaceruntime.ChangeScopeTurn, "b.go", workspaceruntime.ChangeModified),
 		text(workspaceruntime.ChangeScopeCumulative, "a.go", workspaceruntime.ChangeAdded),
 		text(workspaceruntime.ChangeScopeCumulative, "b.go", workspaceruntime.ChangeModified),
@@ -145,7 +151,8 @@ func TestViewWalksTheLiveChainOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !view.Complete || len(view.Turns) != 2 || view.Turns[0].Commit != turnOne || view.Turns[1].Commit != turnTwo ||
-		*view.HeadSHA != turnTwo || *view.BaseSHA != snapshot {
+		*view.HeadSHA != turnTwo || *view.BaseSHA != snapshot || *view.CumulativeCommit != turnTwo ||
+		*view.Turns[0].Number != 1 || *view.Turns[1].Number != 2 {
 		t.Fatalf("view = %+v", view)
 	}
 	if view.Cumulative == nil || len(view.Cumulative.Files) != 2 || view.Cumulative.Additions != 4 || view.Cumulative.Deletions != 2 {
@@ -153,18 +160,64 @@ func TestViewWalksTheLiveChainOnly(t *testing.T) {
 	}
 }
 
-// TestViewIsIncompleteWithoutARecord: a turn on the chain whose record is
-// missing stops the walk and says so; the tip's cumulative set still shows.
-func TestViewIsIncompleteWithoutARecord(t *testing.T) {
+// TestViewWalksPastATurnWithoutARecord: a turn on the chain whose record is
+// missing does not hide the turns below it; the view is not complete.
+func TestViewWalksPastATurnWithoutARecord(t *testing.T) {
 	service, repo, rows, _ := harness(t)
 	record(t, service, rows, turnOne, snapshot, 1, text(workspaceruntime.ChangeScopeTurn, "a.go", workspaceruntime.ChangeAdded))
-	record(t, service, rows, turnTwo, turnOne, 2, text(workspaceruntime.ChangeScopeCumulative, "a.go", workspaceruntime.ChangeAdded))
-	delete(repo.records, turnOne)
+	record(t, service, rows, turnTwo, turnOne, 2, text(workspaceruntime.ChangeScopeTurn, "b.go", workspaceruntime.ChangeAdded))
+	record(t, service, rows, abandoned, turnTwo, 3, text(workspaceruntime.ChangeScopeCumulative, "a.go", workspaceruntime.ChangeAdded))
+	delete(repo.records, turnTwo)
 	view, err := service.View(context.Background(), thread)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.Complete || len(view.Turns) != 1 || view.Cumulative == nil {
+	if view.Complete || len(view.Turns) != 2 || view.Turns[0].Commit != turnOne || view.Turns[1].Commit != abandoned ||
+		view.Cumulative == nil || *view.CumulativeCommit != abandoned {
+		t.Fatalf("view = %+v", view)
+	}
+}
+
+// TestViewWithoutTheTipsRecordStartsAtTheNewest: when the cloud tip has no
+// record, the turns below it still show, from the newest record, and so does
+// that record's cumulative set, with its commit.
+func TestViewWithoutTheTipsRecordStartsAtTheNewest(t *testing.T) {
+	service, _, rows, _ := harness(t)
+	record(t, service, rows, turnOne, snapshot, 1, text(workspaceruntime.ChangeScopeTurn, "a.go", workspaceruntime.ChangeAdded))
+	record(t, service, rows, turnTwo, turnOne, 2, text(workspaceruntime.ChangeScopeCumulative, "a.go", workspaceruntime.ChangeAdded))
+	rows.row.CloudSHA = sha(abandoned)
+	view, err := service.View(context.Background(), thread)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Complete || len(view.Turns) != 2 || view.Turns[1].Commit != turnTwo || *view.HeadSHA != abandoned ||
+		view.Cumulative == nil || len(view.Cumulative.Files) != 1 || *view.CumulativeCommit != turnTwo {
+		t.Fatalf("view = %+v", view)
+	}
+}
+
+// TestAGapResumesAtTheLiveAttempt: a regenerated turn's earlier attempt is
+// not taken for the missing turn's parent: below a gap, the walk resumes at
+// the newest attempt under the missing turn's number.
+func TestAGapResumesAtTheLiveAttempt(t *testing.T) {
+	service, repo, rows, _ := harness(t)
+	const (
+		firstTry  = "5555555555555555555555555555555555555555"
+		missing   = "6666666666666666666666666666666666666666"
+		tipCommit = "7777777777777777777777777777777777777777"
+	)
+	recordAt(t, service, rows, firstTry, snapshot, 1, 1, text(workspaceruntime.ChangeScopeTurn, "try.go", workspaceruntime.ChangeAdded))
+	recordAt(t, service, rows, turnOne, snapshot, 2, 1, text(workspaceruntime.ChangeScopeTurn, "a.go", workspaceruntime.ChangeAdded))
+	recordAt(t, service, rows, abandoned, turnOne, 3, 2, text(workspaceruntime.ChangeScopeTurn, "gone.go", workspaceruntime.ChangeAdded))
+	recordAt(t, service, rows, missing, turnOne, 4, 2)
+	recordAt(t, service, rows, tipCommit, missing, 5, 3, text(workspaceruntime.ChangeScopeTurn, "c.go", workspaceruntime.ChangeAdded))
+	delete(repo.records, missing)
+	view, err := service.View(context.Background(), thread)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Complete || len(view.Turns) != 2 || view.Turns[0].Commit != turnOne || view.Turns[1].Commit != tipCommit ||
+		*view.Turns[0].Number != 1 || *view.Turns[1].Number != 3 {
 		t.Fatalf("view = %+v", view)
 	}
 }

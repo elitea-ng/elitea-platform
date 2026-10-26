@@ -11,7 +11,9 @@
 --   workspace_turn_changes  one row per published cloud commit of a handoff:
 --                           the two manifests (paths, status, +/- counts, no
 --                           diff text). parent_sha links the live chain, so a
---                           regenerated answer's earlier attempt is not read.
+--                           regenerated answer's earlier attempt is not read;
+--                           depth is the turn number from the snapshot (0:
+--                           unknown), which bridges a turn with no record.
 --   workspace_change_diffs  the size-capped unified diff of one file of one
 --                           scope (`turn` or `cumulative`). Only the newest
 --                           commit of a thread keeps its cumulative diffs.
@@ -29,6 +31,7 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.workspace_turn_changes (
     parent_sha          text        NOT NULL,
     base_sha            text        NOT NULL,
     seq                 bigint      NOT NULL,
+    depth               integer     NOT NULL DEFAULT 0,
     execution_id        text        NOT NULL,
     response_message_id text,
     turn_files          jsonb       NOT NULL DEFAULT '{}'::jsonb,
@@ -37,7 +40,8 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.workspace_turn_changes (
     PRIMARY KEY (project_id, conversation_uuid, commit_sha),
     CONSTRAINT workspace_turn_changes_commit_valid CHECK (commit_sha ~ '^[0-9a-f]{40}$'),
     CONSTRAINT workspace_turn_changes_parent_valid CHECK (parent_sha ~ '^[0-9a-f]{40}$'),
-    CONSTRAINT workspace_turn_changes_base_valid CHECK (base_sha ~ '^[0-9a-f]{40}$')
+    CONSTRAINT workspace_turn_changes_base_valid CHECK (base_sha ~ '^[0-9a-f]{40}$'),
+    CONSTRAINT workspace_turn_changes_depth_valid CHECK (depth >= 0)
 );
 
 CREATE INDEX IF NOT EXISTS workspace_turn_changes_handoff

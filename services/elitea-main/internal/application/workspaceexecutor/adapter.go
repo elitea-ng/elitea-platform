@@ -371,11 +371,9 @@ func (a *Adapter) RecordEvent(ctx context.Context, claim workspaceruntime.ClaimR
 
 // RecordChanges keeps the running turn's Files changed record: only for the
 // commit the turn published (the thread's cloud tip) measured from the
-// thread's handoff snapshot.
+// thread's handoff snapshot. The record was checked once, at the transport
+// boundary (workspaceruntime.SanitizeTurnChanges).
 func (a *Adapter) RecordChanges(ctx context.Context, claim workspaceruntime.ClaimRef, changes workspaceruntime.TurnChanges) error {
-	if err := workspaceruntime.ValidateTurnChanges(changes); err != nil {
-		return err
-	}
 	handoff, _, err := a.running(ctx, claim)
 	if err != nil {
 		return err
@@ -391,8 +389,6 @@ func (a *Adapter) RecordChanges(ctx context.Context, claim workspaceruntime.Clai
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, workspacechanges.ErrInvalid):
-		return workspaceruntime.ErrInvalidRequest
 	case errors.Is(err, workspacechanges.ErrNotFound):
 		return workspaceruntime.Refuse(workspaceruntime.RefusalStaleEpoch)
 	default:

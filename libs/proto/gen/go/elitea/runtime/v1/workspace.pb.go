@@ -1844,8 +1844,11 @@ type WorkspaceChangesHeaderV1 struct {
 	// Changed files past each scope's file bound, counted and not listed.
 	TurnOmitted       uint32 `protobuf:"varint,5,opt,name=turn_omitted,json=turnOmitted,proto3" json:"turn_omitted,omitempty"`
 	CumulativeOmitted uint32 `protobuf:"varint,6,opt,name=cumulative_omitted,json=cumulativeOmitted,proto3" json:"cumulative_omitted,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// The commit's turn number: how many commits the parent walk from it takes
+	// to reach the handoff snapshot (1: the first cloud turn). 0: unknown.
+	Depth         uint32 `protobuf:"varint,7,opt,name=depth,proto3" json:"depth,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WorkspaceChangesHeaderV1) Reset() {
@@ -1916,6 +1919,13 @@ func (x *WorkspaceChangesHeaderV1) GetTurnOmitted() uint32 {
 func (x *WorkspaceChangesHeaderV1) GetCumulativeOmitted() uint32 {
 	if x != nil {
 		return x.CumulativeOmitted
+	}
+	return 0
+}
+
+func (x *WorkspaceChangesHeaderV1) GetDepth() uint32 {
+	if x != nil {
+		return x.Depth
 	}
 	return 0
 }
@@ -2181,14 +2191,15 @@ const file_elitea_runtime_v1_workspace_proto_rawDesc = "" +
 	"_additionsB\f\n" +
 	"\n" +
 	"_deletionsJ\x04\b\n" +
-	"\x10\x10\"\xf1\x01\n" +
+	"\x10\x10\"\x87\x02\n" +
 	"\x18WorkspaceChangesHeaderV1\x129\n" +
 	"\x05claim\x18\x01 \x01(\v2#.elitea.runtime.v1.WorkspaceClaimV1R\x05claim\x12\x16\n" +
 	"\x06commit\x18\x02 \x01(\tR\x06commit\x12\x16\n" +
 	"\x06parent\x18\x03 \x01(\tR\x06parent\x12\x12\n" +
 	"\x04base\x18\x04 \x01(\tR\x04base\x12!\n" +
 	"\fturn_omitted\x18\x05 \x01(\rR\vturnOmitted\x12-\n" +
-	"\x12cumulative_omitted\x18\x06 \x01(\rR\x11cumulativeOmittedJ\x04\b\a\x10\x10\"\xb0\x01\n" +
+	"\x12cumulative_omitted\x18\x06 \x01(\rR\x11cumulativeOmitted\x12\x14\n" +
+	"\x05depth\x18\a \x01(\rR\x05depthJ\x04\b\b\x10\x10\"\xb0\x01\n" +
 	"\x17WorkspaceChangesFrameV1\x12E\n" +
 	"\x06header\x18\x01 \x01(\v2+.elitea.runtime.v1.WorkspaceChangesHeaderV1H\x00R\x06header\x12?\n" +
 	"\x04file\x18\x02 \x01(\v2).elitea.runtime.v1.WorkspaceChangedFileV1H\x00R\x04fileB\a\n" +

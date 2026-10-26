@@ -22,6 +22,7 @@ type Turn struct {
 	Commit            string    `json:"commit"`
 	Parent            string    `json:"parent_sha"`
 	Seq               int64     `json:"seq"`
+	Number            *int64    `json:"number"`
 	ResponseMessageID *string   `json:"response_message_id"`
 	CreatedAt         time.Time `json:"created_at"`
 	Changes           Set       `json:"changes"`
@@ -34,7 +35,11 @@ type View struct {
 	HeadSHA    *string `json:"head_sha"`
 	Complete   bool    `json:"complete"`
 	Cumulative *Set    `json:"cumulative"`
-	Turns      []Turn  `json:"turns"`
+	// CumulativeCommit is the commit the cumulative set (and its diffs)
+	// belongs to: head_sha, or the newest recorded turn when the tip has no
+	// record.
+	CumulativeCommit *string `json:"cumulative_commit"`
+	Turns            []Turn  `json:"turns"`
 }
 
 func setOf(manifest Manifest) Set {
@@ -95,35 +100,95 @@ func (s *Service) View(ctx context.Context, thread workspacehandoff.Thread) (Vie
 		s.logger.ErrorContext(ctx, "workspace changes: read turns", "conversation_uuid", thread.ConversationUUID, "err", err)
 		return View{}, ErrUnavailable
 	}
+	view.Turns = liveChain(stored, *handoff.CloudSHA, *handoff.HandoffSHA, f, &view)
+	return view, nil
+}
+
+// liveChain walks the parents from the cloud tip to the snapshot: only the
+// live chain, so a regenerated answer's earlier attempt is not listed. It
+// answers the turns oldest first and fills view's cumulative set and
+// completeness.
+//
+// A commit with no record (its record failed) does not stop the walk. Its
+// parent is unknown to Main (it reads no git pack), so the walk resumes at
+// the record of the live turn below it: the one with the highest turn
+// number under the missing commit's, and, of the attempts at that number,
+// the newest recorded before the turn above (a regenerate replaces only the
+// newest turn, so the newest attempt below a live turn is the live one).
+// When the tip itself has no record, the walk starts at the newest record.
+// Either way the view is not complete.
+func liveChain(stored []Stored, tip, base string, f filter, view *View) []Turn {
+	if len(stored) == 0 {
+		view.Complete = false
+		return []Turn{}
+	}
 	byCommit := make(map[string]Stored, len(stored))
 	for _, turn := range stored {
 		byCommit[turn.Commit] = turn
 	}
-	// Walk the parents from the tip to the snapshot: only the live chain, so a
-	// regenerated answer's earlier attempt is not listed.
+	current, found := byCommit[tip]
+	if !found {
+		view.Complete = false
+		current = newest(stored, func(Stored) bool { return true })
+	}
+	cumulative := setOf(f.apply(current.Cumulative))
+	view.Cumulative, view.CumulativeCommit = &cumulative, optional(current.Commit)
+	walked := map[string]bool{}
 	chain := []Turn{}
-	commit := *handoff.CloudSHA
-	for steps := 0; commit != *handoff.HandoffSHA; steps++ {
-		turn, found := byCommit[commit]
-		if !found || steps >= len(stored) {
-			view.Complete = false
+	for len(chain) < len(stored) {
+		walked[current.Commit] = true
+		chain = append(chain, Turn{
+			Commit: current.Commit, Parent: current.Parent, Seq: current.Seq, Number: number(current.Depth),
+			ResponseMessageID: optional(current.ResponseMessageID), CreatedAt: current.CreatedAt, Changes: setOf(f.apply(current.Turn)),
+		})
+		if current.Parent == base {
 			break
 		}
-		if len(chain) == 0 {
-			cumulative := setOf(f.apply(turn.Cumulative))
-			view.Cumulative = &cumulative
+		if parent, ok := byCommit[current.Parent]; ok && !walked[parent.Commit] {
+			current = parent
+			continue
 		}
-		chain = append(chain, Turn{
-			Commit: turn.Commit, Parent: turn.Parent, Seq: turn.Seq, ResponseMessageID: optional(turn.ResponseMessageID),
-			CreatedAt: turn.CreatedAt, Changes: setOf(f.apply(turn.Turn)),
+		view.Complete = false
+		above := current
+		next := newest(stored, func(turn Stored) bool {
+			if walked[turn.Commit] || turn.Seq >= above.Seq {
+				return false
+			}
+			// The missing parent's number is above.Depth-1; the next record
+			// is under it.
+			return above.Depth <= 0 || (turn.Depth > 0 && turn.Depth < above.Depth-1)
 		})
-		commit = turn.Parent
+		if next.Commit == "" {
+			break
+		}
+		current = next
 	}
 	for left, right := 0, len(chain)-1; left < right; left, right = left+1, right-1 {
 		chain[left], chain[right] = chain[right], chain[left]
 	}
-	view.Turns = chain
-	return view, nil
+	return chain
+}
+
+// newest answers the record that keep accepts with the highest turn number,
+// then the highest seq; the zero Stored when none.
+func newest(stored []Stored, keep func(Stored) bool) Stored {
+	var best Stored
+	for _, turn := range stored {
+		if !keep(turn) {
+			continue
+		}
+		if best.Commit == "" || turn.Depth > best.Depth || (turn.Depth == best.Depth && turn.Seq > best.Seq) {
+			best = turn
+		}
+	}
+	return best
+}
+
+func number(depth int64) *int64 {
+	if depth <= 0 {
+		return nil
+	}
+	return &depth
 }
 
 // DiffView is getWorkspaceHandoffDiff's answer.

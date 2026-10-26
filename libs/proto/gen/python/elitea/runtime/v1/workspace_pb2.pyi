@@ -306,20 +306,22 @@ class WorkspaceChangedFileV1(_message.Message):
     def __init__(self, scope: _Optional[_Union[WorkspaceChangeScopeV1, str]] = ..., path: _Optional[str] = ..., from_path: _Optional[str] = ..., status: _Optional[_Union[WorkspaceChangeStatusV1, str]] = ..., additions: _Optional[int] = ..., deletions: _Optional[int] = ..., binary: bool = ..., too_large: bool = ..., diff: _Optional[str] = ...) -> None: ...
 
 class WorkspaceChangesHeaderV1(_message.Message):
-    __slots__ = ("claim", "commit", "parent", "base", "turn_omitted", "cumulative_omitted")
+    __slots__ = ("claim", "commit", "parent", "base", "turn_omitted", "cumulative_omitted", "depth")
     CLAIM_FIELD_NUMBER: _ClassVar[int]
     COMMIT_FIELD_NUMBER: _ClassVar[int]
     PARENT_FIELD_NUMBER: _ClassVar[int]
     BASE_FIELD_NUMBER: _ClassVar[int]
     TURN_OMITTED_FIELD_NUMBER: _ClassVar[int]
     CUMULATIVE_OMITTED_FIELD_NUMBER: _ClassVar[int]
+    DEPTH_FIELD_NUMBER: _ClassVar[int]
     claim: WorkspaceClaimV1
     commit: str
     parent: str
     base: str
     turn_omitted: int
     cumulative_omitted: int
-    def __init__(self, claim: _Optional[_Union[WorkspaceClaimV1, _Mapping]] = ..., commit: _Optional[str] = ..., parent: _Optional[str] = ..., base: _Optional[str] = ..., turn_omitted: _Optional[int] = ..., cumulative_omitted: _Optional[int] = ...) -> None: ...
+    depth: int
+    def __init__(self, claim: _Optional[_Union[WorkspaceClaimV1, _Mapping]] = ..., commit: _Optional[str] = ..., parent: _Optional[str] = ..., base: _Optional[str] = ..., turn_omitted: _Optional[int] = ..., cumulative_omitted: _Optional[int] = ..., depth: _Optional[int] = ...) -> None: ...
 
 class WorkspaceChangesFrameV1(_message.Message):
     __slots__ = ("header", "file")
