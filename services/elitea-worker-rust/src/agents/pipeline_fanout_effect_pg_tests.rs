@@ -177,7 +177,10 @@ impl Tool for CrashingMcpTool {
 
 /// The platform answers by request path, not call order: each scoped Agent
 /// node materializes its own participant (same shape as the 2a-1 fixture).
-struct SavedAgentVersions;
+/// `asks`: the saved Agent may also ask the user (`ask_user`).
+struct SavedAgentVersions {
+    asks: bool,
+}
 
 #[tonic::async_trait]
 impl crate::transport::input_content::content_fake::ContextRoutes for SavedAgentVersions {
@@ -189,8 +192,12 @@ impl crate::transport::input_content::content_fake::ContextRoutes for SavedAgent
             json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":17,
                 "token":"ephemeral-fanout-token"})
         } else if call.route.ends_with("/3/versions/4") {
+            let mut agent = effectful_agent();
+            if self.asks {
+                agent["meta"] = json!({"internal_tools": ["ask_user"]});
+            }
             json!({"schema_version":"elitea.runtime.application-version.v1","project_id":17,
-                "application_id":3,"version_id":4,"version_details":effectful_agent(),
+                "application_id":3,"version_id":4,"version_details":agent,
                 // Main's authenticated digest of the frozen version: the saved
                 // participant fingerprint a Parallel branch is bound to.
                 "frozen_definition_sha256":"ab".repeat(32)})
@@ -203,9 +210,10 @@ impl crate::transport::input_content::content_fake::ContextRoutes for SavedAgent
 
 fn saved_runtime(
     outcomes: Vec<TestModelGatewayOutcome>,
+    asks: bool,
 ) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
     let runtime = RuntimeContextClient::with_rpc(
-        crate::transport::input_content::content_fake::Routes(SavedAgentVersions),
+        crate::transport::input_content::content_fake::Routes(SavedAgentVersions { asks }),
         RuntimeContextConfig {
             origin: "https://content.internal".to_owned(),
             deadline: Duration::from_secs(1),
@@ -231,8 +239,9 @@ fn assembler(
     pool: &sqlx::PgPool,
     outcomes: Vec<TestModelGatewayOutcome>,
     connector: Arc<dyn McpConnector>,
+    asks: bool,
 ) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
-    let (platform, model_facade, captured) = saved_runtime(outcomes);
+    let (platform, model_facade, captured) = saved_runtime(outcomes, asks);
     let assembler = PipelineNativeAgentAssembler::postgres(
         pool.clone(),
         SessionLimits::default(),
@@ -287,6 +296,15 @@ async fn run_to_end(
                     .project(&event)
                     .map_err(|error| error.to_string())?
                 {
+                    // One pause authority: a fan-out never raises a legacy card.
+                    assert!(
+                        !matches!(
+                            frame.r#type.as_str(),
+                            "agent_hitl_interrupt" | "mcp_authorization_required"
+                        ),
+                        "a legacy pause frame inside a fan-out: {}",
+                        frame.r#type
+                    );
                     if frame.r#type == "agent_fanout_member" {
                         let metadata: Value = serde_json::from_slice(&frame.response_metadata)
                             .expect("member frame metadata");
@@ -386,6 +404,83 @@ async fn postgres_effectful_fanout_child_may_have_started_stops_the_node() {
     scenario(&url, "effect", "stop").await;
 }
 
+/// FU-246: a member whose saved Agent asks the user cannot pause yet. It ends
+/// with a typed entry naming its node, without a legacy card; the siblings run
+/// and the pipeline completes instead of staying paused.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_fanout_agent_branch_that_asks_for_a_decision_ends_typed() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let (assembler, captured) = assembler(
+        &db.pool,
+        vec![
+            TestModelGatewayOutcome::Response(pipeline_text_response("first done")),
+            TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
+            TestModelGatewayOutcome::Response(pipeline_text_response("third done")),
+        ],
+        Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::new(AtomicUsize::new(0)),
+            read_only: false,
+        }),
+        true,
+    );
+    let request = request("continue");
+    let invocation = assembler
+        .assemble(claim(&request, 1))
+        .await
+        .expect("assemble the fan-out pipeline");
+    let members = run_to_end(invocation)
+        .await
+        .expect("the pipeline completes, not paused");
+    assert_eq!(model_requests(&captured), 3);
+    let statuses = members
+        .iter()
+        .map(|member| {
+            format!(
+                "{}:{}",
+                member["fanout_v1"]["member"].as_str().unwrap_or_default(),
+                member["status"].as_str().unwrap_or_default()
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        statuses,
+        [
+            "first:start",
+            "first:end",
+            "second:start",
+            "second:failed",
+            "third:start",
+            "third:end"
+        ]
+    );
+    let entries = joined(&db.pool).await.expect("joined entries");
+    assert_eq!(entries[0]["status"], "succeeded");
+    assert_eq!(entries[1]["branch_id"], "second");
+    assert_eq!(entries[1]["status"], "failed");
+    assert_eq!(
+        entries[1]["error"]["code"],
+        "graph.fanout.agent_pause_unsupported"
+    );
+    assert!(
+        entries[1]["error"]["message_safe"]
+            .as_str()
+            .is_some_and(|text| text.contains("'second_call'")),
+        "{entries:?}"
+    );
+    assert_eq!(entries[2]["status"], "succeeded");
+    db.pool.close().await;
+}
+
 /// R: `second` dies in its model call and resumes from its model checkpoint.
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_fanout_child_caught_mid_model_resumes_from_its_checkpoint() {
@@ -439,6 +534,7 @@ async fn postgres_fanout_effect_child() {
                     pool: pool.clone(),
                     read_only: mode == "read_only",
                 }),
+                false,
             );
             let invocation = assembler
                 .assemble(claim(&request, 1))
@@ -469,6 +565,7 @@ async fn postgres_fanout_effect_child() {
                     // The same tool declarations as the crashed process offered.
                     read_only: mode == "read_only",
                 }),
+                false,
             );
             let invocation = assembler
                 .assemble(claim(&request, 2))
@@ -543,6 +640,7 @@ async fn postgres_fanout_effect_child() {
                     tool_calls: Arc::clone(&tool_calls),
                     read_only: false,
                 }),
+                false,
             );
             let invocation = assembler
                 .assemble(claim(&request, 2))

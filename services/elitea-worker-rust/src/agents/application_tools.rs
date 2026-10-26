@@ -4263,6 +4263,7 @@ impl ApplicationAgentTool {
         Ok(result)
     }
 
+    #[allow(clippy::too_many_lines)] // One ordered drain: failures, branch, lineage, pause, answer.
     async fn drain_child(
         &self,
         ctx: &dyn ToolContext,
@@ -4340,6 +4341,7 @@ impl ApplicationAgentTool {
             }
             application_batch.observe_calls(&event, &self.application.child_tools)?;
             if event.llm_response.interrupted || event.actions.tool_confirmation.is_some() {
+                refuse_fanout_pause(ctx)?;
                 let interrupt_ids = confirmation_interrupt_ids(&event)?;
                 self.send_event(ctx, event).await?;
                 return Ok(nested_interrupt_result(&interrupt_ids));
@@ -5526,6 +5528,25 @@ pub(super) fn application_event_channel_error() -> AdkError {
         "elitea_nested_agent.event_channel_unavailable",
         "the nested agent event channel is unavailable",
     )
+}
+
+/// The code a fixed Parallel member's Agent ends with when it asks for a
+/// decision (FU-246).
+pub(crate) const FANOUT_AGENT_PAUSE_CODE: &str = "graph.fanout.agent_pause_unsupported";
+
+/// A fixed Parallel member cannot pause yet (FU-246): its card would be a
+/// second pause authority. The confirmation is not forwarded; the member ends
+/// with a typed refusal instead.
+fn refuse_fanout_pause(ctx: &dyn ToolContext) -> adk_rust::Result<()> {
+    if !fanout_child_call(ctx).0 {
+        return Ok(());
+    }
+    Err(AdkError::new(
+        ErrorComponent::Agent,
+        ErrorCategory::Unsupported,
+        FANOUT_AGENT_PAUSE_CODE,
+        "a parallel branch's agent cannot ask for a decision",
+    ))
 }
 
 pub(super) fn child_execution_error() -> AdkError {

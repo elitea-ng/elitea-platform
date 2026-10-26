@@ -329,6 +329,20 @@ impl PipelineApplicationNodeRuntime {
         let outcome = if crate::agents::application_tools::nested_application_interrupt_ids(&result)
             .is_some()
         {
+            // A fixed Parallel member cannot pause yet (FU-246), at any depth.
+            if fanout {
+                let error = self.fanout_pause();
+                if visible {
+                    self.close_failed_call(
+                        &receipt,
+                        graph_scope.as_ref(),
+                        parent.invocation_id(),
+                        &error,
+                    )
+                    .await?;
+                }
+                return Err(error);
+            }
             if terminal.is_some() {
                 return Err(failure());
             }
@@ -355,6 +369,19 @@ impl PipelineApplicationNodeRuntime {
         Ok((result, receipt.activation().call_id().to_owned()))
     }
 
+    /// The typed, readable end of a member whose Agent asked for a decision.
+    fn fanout_pause(&self) -> GraphError {
+        GraphError::NodeExecutionFailed {
+            node: "application_scope".to_owned(),
+            message: format!(
+                "{}: the agent of node '{}' asked for a decision, which a parallel branch cannot \
+                 take yet",
+                crate::agents::application_tools::FANOUT_AGENT_PAUSE_CODE,
+                self.node_name
+            ),
+        }
+    }
+
     /// Close a failed fan-out child's call with a failure result in the shape
     /// a saved Agent reports a child failure, naming no provider message.
     async fn close_failed_call(
@@ -366,10 +393,17 @@ impl PipelineApplicationNodeRuntime {
     ) -> Result<(), GraphError> {
         let may_have_started = matches!(error, GraphError::NodeExecutionFailed { message, .. }
             if message.starts_with(CALL_MAY_HAVE_STARTED_CODE));
+        let pause = matches!(error, GraphError::NodeExecutionFailed { message, .. }
+            if message.starts_with(crate::agents::application_tools::FANOUT_AGENT_PAUSE_CODE));
         let (code, message) = if may_have_started {
             (
                 "graph.fanout.may_have_started",
                 "The task may already have started its work; it was not repeated.",
+            )
+        } else if pause {
+            (
+                crate::agents::application_tools::FANOUT_AGENT_PAUSE_CODE,
+                "The agent asked for a decision, which a parallel branch cannot take yet.",
             )
         } else {
             ("graph.node_execution_failed", "The task failed.")
@@ -410,6 +444,7 @@ impl PipelineApplicationNodeRuntime {
     async fn child_failure(&self, refusal: ChildFailure) -> GraphError {
         let (code, error) = match refusal {
             ChildFailure::Scope(error) => return error,
+            ChildFailure::FanoutPause => return self.fanout_pause(),
             // The decided call never ran (FU-226).
             ChildFailure::ReplayUnsupported => (
                 REPLAY_UNSUPPORTED_PUBLIC_CODE,
@@ -687,6 +722,8 @@ enum ChildFailure {
     Scope(GraphError),
     /// The nested Agent refused its decided call before running it.
     ReplayUnsupported,
+    /// A fixed Parallel member's Agent asked for a decision (FU-246).
+    FanoutPause,
     /// The approved call may have started (`RECOVERY_REFUSED_UPSTREAM_CODE`),
     /// or its dispatch record could not be written (`DISPATCH_UNRECORDED_CODE`).
     ApprovedCallStop(&'static str),
@@ -704,7 +741,9 @@ impl ChildFailure {
         use crate::agents::direct_hitl::DirectHitlErrorCode;
         use crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE;
         use crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE;
-        if code == RECOVERY_REFUSED_UPSTREAM_CODE {
+        if code == crate::agents::application_tools::FANOUT_AGENT_PAUSE_CODE {
+            Self::FanoutPause
+        } else if code == RECOVERY_REFUSED_UPSTREAM_CODE {
             Self::ApprovedCallStop(RECOVERY_REFUSED_UPSTREAM_CODE)
         } else if code == DISPATCH_UNRECORDED_CODE {
             Self::ApprovedCallStop(DISPATCH_UNRECORDED_CODE)

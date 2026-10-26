@@ -70,6 +70,8 @@ pub(crate) const BRANCH_BLOCKED_CODE: &str = "graph.parallel.branch_blocked";
 /// A branch an earlier process left inside an Agent call that may have started
 /// an effect (D2): it fails typed and is never dispatched again.
 pub(crate) const BRANCH_MAY_HAVE_STARTED_CODE: &str = "graph.fanout.may_have_started";
+/// A member's Agent asked for a decision: not supported yet (FU-246).
+const BRANCH_AGENT_PAUSE_CODE: &str = crate::agents::application_tools::FANOUT_AGENT_PAUSE_CODE;
 /// Earlier checkpoints of one child examined for an already answered pause.
 const MAX_ANSWERED_PAUSE_SCAN: usize = 64;
 
@@ -620,7 +622,7 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
                     .filter(|saved| matches!(saved.receipt, Some(BranchReceipt::Failed { .. })))
                     .map(|saved| saved.checkpoint_id);
                 ParallelBranchOutcome::Failed {
-                    failure: branch_failure(graph_error_code(&error)),
+                    failure: branch_failure_of(&error),
                     checkpoint_id,
                 }
             }
@@ -1949,6 +1951,25 @@ fn invalid_pause() -> GraphError {
 }
 
 /// A typed child failure with a fixed safe message per code.
+/// A failed branch's entry. A member whose Agent asked for a decision keeps
+/// the readable text naming its node (FU-246); others the code's fixed text.
+fn branch_failure_of(error: &GraphError) -> ChildFailure {
+    let code = graph_error_code(error);
+    if code == BRANCH_AGENT_PAUSE_CODE
+        && let GraphError::NodeExecutionFailed { message, .. } = error
+        && let Some(text) = unwrap_node_failures(message)
+            .strip_prefix(BRANCH_AGENT_PAUSE_CODE)
+            .and_then(|rest| rest.strip_prefix(": "))
+    {
+        let mut text = text.to_owned();
+        if let Some(first) = text.get_mut(..1) {
+            first.make_ascii_uppercase();
+        }
+        return ChildFailure::new(code, &format!("{text}."));
+    }
+    branch_failure(code)
+}
+
 fn branch_failure(code: &str) -> ChildFailure {
     ChildFailure::new(
         code,
@@ -2167,12 +2188,19 @@ impl Write for CappedJsonWriter {
 fn graph_error_code(error: &GraphError) -> &'static str {
     // A child refusal that names its own registered cause keeps it, also
     // when an inner node's failure wraps it.
-    if let GraphError::NodeExecutionFailed { message, .. } = error
-        && unwrap_node_failures(message)
-            .strip_prefix(crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE)
-            .is_some_and(|rest| rest.starts_with(": "))
-    {
-        return BRANCH_MAY_HAVE_STARTED_CODE;
+    if let GraphError::NodeExecutionFailed { message, .. } = error {
+        let inner = unwrap_node_failures(message);
+        let names = |code: &str| {
+            inner
+                .strip_prefix(code)
+                .is_some_and(|rest| rest.starts_with(": "))
+        };
+        if names(crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE) {
+            return BRANCH_MAY_HAVE_STARTED_CODE;
+        }
+        if names(BRANCH_AGENT_PAUSE_CODE) {
+            return BRANCH_AGENT_PAUSE_CODE;
+        }
     }
     match error {
         GraphError::InvalidGraph(_) => "graph.invalid",
@@ -2227,6 +2255,7 @@ fn valid_failure_code(code: &str) -> bool {
             | "graph.json"
             | "graph.other"
             | BRANCH_MAY_HAVE_STARTED_CODE
+            | BRANCH_AGENT_PAUSE_CODE
     )
 }
 
