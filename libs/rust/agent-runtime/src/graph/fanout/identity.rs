@@ -129,7 +129,7 @@ mod tests {
         let cases = vectors["member_call_ids"]
             .as_array()
             .expect("call id vectors");
-        assert!(!cases.is_empty());
+        assert_ne!(cases.as_slice(), &[] as &[serde_json::Value]);
         for case in cases {
             assert_eq!(
                 member_call_id(text(case, "child_thread")),

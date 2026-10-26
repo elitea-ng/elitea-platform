@@ -81,11 +81,15 @@ impl PipelineNodeEventSender {
         self.parallel_scope.is_some()
     }
 
+    /// `original_root` is the invocation the scoped call's receipt names: a
+    /// root-level member's already-routed leaf is projected onto the current
+    /// root invocation from it, as a scoped Agent node's leaves are.
     pub(crate) fn project_parallel_application_event(
         &self,
         event: &mut Event,
         local: Option<&PipelineNodeEventScope>,
         root_container: &str,
+        original_root: Option<&str>,
     ) -> adk_rust::Result<()> {
         let scope = self
             .parallel_scope
@@ -130,6 +134,16 @@ impl PipelineNodeEventSender {
             };
             if !proved {
                 return Err(pipeline_node_event_channel_error());
+            }
+            if current.is_none()
+                && let Some(original) = original_root
+            {
+                crate::agents::pipeline::scoped_applications::stamp_root_scope_projection(
+                    event,
+                    original,
+                    root_container,
+                )
+                .map_err(|_| pipeline_node_event_channel_error())?;
             }
             return Ok(());
         }

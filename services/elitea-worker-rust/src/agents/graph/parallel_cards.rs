@@ -129,6 +129,22 @@ pub(crate) fn child_card(pause: &ParallelBranchPause) -> Result<FanoutCard, Grap
     ))
 }
 
+/// The card frame parts of the child's pause: its kind, actions, display and
+/// the digest of its private pending object (contract §4).
+pub(crate) fn card_parts(
+    pause: &ParallelBranchPause,
+) -> Result<crate::agents::graph::fanout_frames::FanoutCardParts, GraphError> {
+    let event = pause_event(pause);
+    crate::agents::events::fanout_card_parts(&event, FANOUT_CHILD_AUTHOR, &pause.thread_id).map_err(
+        |_| {
+            fanout_card_error(
+                "graph.parallel.pause_unproved",
+                "the branch pause cannot be shown as a card",
+            )
+        },
+    )
+}
+
 /// Resume controls for exactly this child's decision, proven against the
 /// child's own checkpoints. `catalog` is the child participant's authored
 /// pause catalog (static pauses only).

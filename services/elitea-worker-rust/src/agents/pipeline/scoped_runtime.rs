@@ -134,6 +134,9 @@ pub(crate) struct PipelineApplicationNodeRuntime {
     pub(crate) applications: Arc<ApplicationRuntimeProjection>,
     pub(crate) events: PipelineNodeEventSender,
     pub(crate) prepare_gate: Arc<Mutex<()>>,
+    /// Activation calls whose start this runtime forwarded and whose call is
+    /// still running: a fan-out child that fails closes its visible call.
+    visible_starts: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
 }
 
 impl PipelineApplicationNodeRuntime {
@@ -150,6 +153,7 @@ impl PipelineApplicationNodeRuntime {
             applications,
             events,
             prepare_gate,
+            visible_starts: Arc::default(),
         }
     }
 
@@ -161,6 +165,7 @@ impl PipelineApplicationNodeRuntime {
             applications: Arc::clone(&self.applications),
             events,
             prepare_gate: Arc::clone(&self.prepare_gate),
+            visible_starts: Arc::default(),
         }
     }
 
@@ -298,9 +303,28 @@ impl PipelineApplicationNodeRuntime {
             .restore(receiver)
             .await
             .map_err(|_| failure())?;
+        let visible = self
+            .visible_starts
+            .lock()
+            .is_ok_and(|mut starts| starts.remove(receipt.activation().call_id()))
+            || !fresh;
         let result = match result {
             Ok(result) => result,
-            Err(refusal) => return Err(self.child_failure(refusal).await),
+            Err(refusal) => {
+                let error = self.child_failure(refusal).await;
+                // A fixed Parallel child's failure is data the join records
+                // (contract §8a); its visible call closes with that failure.
+                if fanout && visible {
+                    self.close_failed_call(
+                        &receipt,
+                        graph_scope.as_ref(),
+                        parent.invocation_id(),
+                        &error,
+                    )
+                    .await?;
+                }
+                return Err(error);
+            }
         };
         let outcome = if crate::agents::application_tools::nested_application_interrupt_ids(&result)
             .is_some()
@@ -329,6 +353,57 @@ impl PipelineApplicationNodeRuntime {
             .await?;
         }
         Ok((result, receipt.activation().call_id().to_owned()))
+    }
+
+    /// Close a failed fan-out child's call with a failure result in the shape
+    /// a saved Agent reports a child failure, naming no provider message.
+    async fn close_failed_call(
+        &self,
+        receipt: &PipelineGraphCallReceipt,
+        graph_scope: Option<&PipelineNodeEventScope>,
+        root_container: &str,
+        error: &GraphError,
+    ) -> Result<(), GraphError> {
+        let may_have_started = matches!(error, GraphError::NodeExecutionFailed { message, .. }
+            if message.starts_with(CALL_MAY_HAVE_STARTED_CODE));
+        let (code, message) = if may_have_started {
+            (
+                "graph.fanout.may_have_started",
+                "The task may already have started its work; it was not repeated.",
+            )
+        } else {
+            ("graph.node_execution_failed", "The task failed.")
+        };
+        let start = receipt.original_start();
+        let name = start
+            .tool_calls()
+            .first()
+            .map(|call| call.name.to_owned())
+            .ok_or_else(failure)?;
+        let mut event = Event::new(receipt.invocation_id());
+        start.author.clone_into(&mut event.author);
+        start.branch.clone_into(&mut event.branch);
+        event.llm_response.finish_reason = Some(adk_rust::FinishReason::Stop);
+        event.llm_response.turn_complete = true;
+        event.llm_response.content = Some(adk_rust::Content {
+            role: "function".to_owned(),
+            parts: vec![Part::FunctionResponse {
+                function_response: adk_rust::FunctionResponseData::new(
+                    name,
+                    serde_json::json!({
+                        "error": message,
+                        "failure": {"code": code, "message": message, "recoverable": true,
+                            "retryable": false, "recovery_action": "verify_before_retry"},
+                    }),
+                ),
+                id: Some(receipt.activation().call_id().to_owned()),
+                annotations: None,
+            }],
+        });
+        super::scoped_applications::stamp_activation_parent(&mut event, receipt)
+            .map_err(|_| failure())?;
+        self.forward(event, graph_scope, root_container, receipt.invocation_id())
+            .await
     }
 
     /// Report a typed child refusal with its registered public reason.
@@ -458,14 +533,17 @@ impl PipelineApplicationNodeRuntime {
                 return Err(failure());
             }
             // The immutable checkpoint receipt is the original model-call identity.
-            return self
-                .forward(
-                    receipt.original_start().clone(),
-                    graph_scope,
-                    root_container,
-                    receipt.invocation_id(),
-                )
-                .await;
+            self.forward(
+                receipt.original_start().clone(),
+                graph_scope,
+                root_container,
+                receipt.invocation_id(),
+            )
+            .await?;
+            if let Ok(mut starts) = self.visible_starts.lock() {
+                starts.insert(receipt.activation().call_id().to_owned());
+            }
+            return Ok(());
         }
         if event.invocation_id == receipt.invocation_id() {
             receipt.branch().clone_into(&mut event.branch);
@@ -489,7 +567,12 @@ impl PipelineApplicationNodeRuntime {
     ) -> Result<(), GraphError> {
         if self.events.has_parallel_event_scope() {
             self.events
-                .project_parallel_application_event(&mut event, graph_scope, root_container)
+                .project_parallel_application_event(
+                    &mut event,
+                    graph_scope,
+                    root_container,
+                    Some(original_root),
+                )
                 .map_err(|_| failure())?;
             return self
                 .events

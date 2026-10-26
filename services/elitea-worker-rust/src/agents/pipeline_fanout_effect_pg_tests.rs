@@ -262,15 +262,17 @@ fn claim(
     )
 }
 
-/// Run the reclaimed pipeline to its end: `Ok(())` on completion, the
-/// failure's code otherwise.
+/// Run the reclaimed pipeline to its end through the browser projector: the
+/// `agent_fanout_member` statuses it emitted on completion, the failure's
+/// code otherwise.
 async fn run_to_end(
     mut invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
-) -> Result<(), String> {
+) -> Result<Vec<Value>, String> {
     invocation
         .project_start(timestamp(1))
         .expect("pipeline browser start");
-    let (mut run, _projector, completion) = invocation.start().expect("pipeline start");
+    let (mut run, mut projector, completion) = invocation.start().expect("pipeline start");
+    let mut members = Vec::new();
     loop {
         match run.next_event().await {
             Err(error) => {
@@ -280,14 +282,25 @@ async fn run_to_end(
                     error.diagnostic_detail()
                 ));
             }
-            Ok(Some(_)) => {}
+            Ok(Some(event)) => {
+                for frame in projector
+                    .project(&event)
+                    .map_err(|error| error.to_string())?
+                {
+                    if frame.r#type == "agent_fanout_member" {
+                        let metadata: Value = serde_json::from_slice(&frame.response_metadata)
+                            .expect("member frame metadata");
+                        members.push(metadata["fanout_member_status_v1"].clone());
+                    }
+                }
+            }
             Ok(None) => break,
         }
     }
     completion
         .select()
         .await
-        .map(|_| ())
+        .map(|_| members)
         .map_err(|error| error.to_string())
 }
 
@@ -461,9 +474,41 @@ async fn postgres_fanout_effect_child() {
                 .assemble(claim(&request, 2))
                 .await
                 .expect("recover: the replacement Worker assembles the reclaim");
-            run_to_end(invocation)
+            let members = run_to_end(invocation)
                 .await
                 .expect("recover: the resumed child completes the pipeline");
+            // `first` is served from its receipt; `second` and `third` raise
+            // their lifecycle in order, under their frozen member identity.
+            let statuses = members
+                .iter()
+                .map(|member| {
+                    let tier = &member["parent_agent_path"][0];
+                    assert_eq!(tier["sibling_ordinal"], member["fanout_v1"]["ordinal"]);
+                    assert!(
+                        tier["call_id"]
+                            .as_str()
+                            .is_some_and(|id| id.starts_with("fo1_"))
+                    );
+                    assert_eq!(member["fanout_v1"]["total"], 3);
+                    (
+                        member["fanout_v1"]["member"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned(),
+                        member["status"].as_str().unwrap_or_default().to_owned(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                statuses,
+                [
+                    ("second", "start"),
+                    ("second", "end"),
+                    ("third", "start"),
+                    ("third", "end")
+                ]
+                .map(|(member, status)| (member.to_owned(), status.to_owned()))
+            );
             // R resumes the saved model request; I replays the saved call
             // batch without a model call and runs the read-only tool again.
             assert_eq!(
@@ -517,7 +562,22 @@ async fn postgres_fanout_effect_child() {
                 "recover: the effectful tool is never dispatched again"
             );
             if on_error == "continue" {
-                outcome.expect("recover: partial results complete the pipeline");
+                let members = outcome.expect("recover: partial results complete the pipeline");
+                // The re-run `second` ends failed as data; `third` runs.
+                let statuses = members
+                    .iter()
+                    .map(|member| {
+                        format!(
+                            "{}:{}",
+                            member["fanout_v1"]["member"].as_str().unwrap_or_default(),
+                            member["status"].as_str().unwrap_or_default()
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    statuses,
+                    ["second:start", "second:failed", "third:start", "third:end"]
+                );
                 assert_eq!(
                     model_requests(&captured),
                     1,

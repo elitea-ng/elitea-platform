@@ -194,10 +194,18 @@ pub trait FanoutChildren: Send + Sync {
     }
 }
 
-/// Frames the runner raises. Card frames are never coalesced.
+/// Frames the runner raises, in order, before it goes on. Card frames are
+/// never coalesced. A frame the host cannot deliver stops the run
+/// ([`FanoutRunError::FrameUndelivered`]): Main raises a card only from its
+/// frame, so an undelivered card could never be decided.
+#[async_trait]
 pub trait FanoutEvents: Send + Sync {
-    fn card_opened(&self, _child: usize, _card: &CardIdentity) {}
-    fn member(&self, _child: usize, _status: MemberStatus) {}
+    async fn card_opened(&self, _child: usize, _card: &CardIdentity) -> Result<(), FanoutRunError> {
+        Ok(())
+    }
+    async fn member(&self, _child: usize, _status: MemberStatus) -> Result<(), FanoutRunError> {
+        Ok(())
+    }
 }
 
 /// No frames (tests, hosts without a stream).
@@ -259,6 +267,8 @@ pub enum FanoutRunError {
     InvalidConfiguration,
     #[error("graph.fanout.corrupt_child")]
     CorruptChild,
+    #[error("graph.fanout.frame_undelivered")]
+    FrameUndelivered,
 }
 
 enum Slot {
@@ -371,7 +381,7 @@ impl FanoutRunner {
                 RestoredChild::Paused { cards, .. } => {
                     // Re-raise: card ingestion is idempotent on the key.
                     for card in &cards {
-                        self.events.card_opened(child, card);
+                        self.events.card_opened(child, card).await?;
                     }
                     Slot::Paused {
                         cards,
@@ -393,7 +403,9 @@ impl FanoutRunner {
             state.tick = Some(Tick::reset(Instant::now()));
         }
         loop {
-            self.admit(&mut state, &mut running);
+            if let Err(error) = self.admit(&mut state, &mut running).await {
+                return Err(self.drain_after_stop(running, error).await);
+            }
             if running.is_empty() && !has_queued(&state) {
                 if open_cards(&state) == 0 || !state.admission_open {
                     return Ok(RunnerOutcome::Settled(self.settled(state)));
@@ -446,7 +458,7 @@ impl FanoutRunner {
         Ok(())
     }
 
-    fn admit(&self, state: &mut Loop, running: &mut Running) {
+    async fn admit(&self, state: &mut Loop, running: &mut Running) -> Result<(), FanoutRunError> {
         let mut in_flight = state
             .slots
             .iter()
@@ -466,7 +478,7 @@ impl FanoutRunner {
             let decisions = decisions.clone();
             state.slots[child] = Slot::Running;
             in_flight += 1;
-            self.events.member(child, MemberStatus::Start);
+            self.events.member(child, MemberStatus::Start).await?;
             let permits = self.permits.clone();
             let run = self.children.run(child, decisions.clone());
             running.push(Box::pin(async move {
@@ -475,6 +487,7 @@ impl FanoutRunner {
                 (child, decisions, run.await)
             }));
         }
+        Ok(())
     }
 
     /// Apply one child's result. `Some(error)` is a control stop.
@@ -507,14 +520,14 @@ impl FanoutRunner {
         match run {
             ChildRun::Settled { terminal, .. } => {
                 let failed = matches!(terminal, ChildTerminal::Failed(_));
-                self.events.member(
-                    child,
-                    if failed {
-                        MemberStatus::Failed
-                    } else {
-                        MemberStatus::End
-                    },
-                );
+                let status = if failed {
+                    MemberStatus::Failed
+                } else {
+                    MemberStatus::End
+                };
+                if let Err(error) = self.events.member(child, status).await {
+                    return Ok(Some(error));
+                }
                 if failed && self.config.on_error == OnError::Stop {
                     state.admission_open = false;
                 }
@@ -529,14 +542,16 @@ impl FanoutRunner {
                     return Err(FanoutRunError::CorruptChild);
                 }
                 for card in &cards {
-                    self.events.card_opened(child, card);
+                    if let Err(error) = self.events.card_opened(child, card).await {
+                        return Ok(Some(error));
+                    }
                 }
-                self.events.member(
-                    child,
-                    MemberStatus::Paused {
-                        open_interrupts: cards.len(),
-                    },
-                );
+                let status = MemberStatus::Paused {
+                    open_interrupts: cards.len(),
+                };
+                if let Err(error) = self.events.member(child, status).await {
+                    return Ok(Some(error));
+                }
                 state.slots[child] = Slot::Paused {
                     cards,
                     ready: BTreeMap::new(),
@@ -552,7 +567,8 @@ impl FanoutRunner {
             }
             ChildRun::LeaseLost => Ok(Some(FanoutRunError::LeaseLost)),
             ChildRun::Cancelled => {
-                self.events.member(child, MemberStatus::Cancelled);
+                // The run stops as cancelled either way.
+                let _ = self.events.member(child, MemberStatus::Cancelled).await;
                 Ok(Some(FanoutRunError::Cancelled))
             }
         }

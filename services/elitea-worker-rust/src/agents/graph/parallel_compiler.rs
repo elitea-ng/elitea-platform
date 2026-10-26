@@ -192,6 +192,17 @@ impl PipelineDefinition {
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
         reject_nested_parallel(&owned, runtimes)?;
+        // The member tier shows the participant the branch's Agent node selects.
+        let member_names = definition
+            .branches()
+            .iter()
+            .map(|branch| {
+                owned.get(branch.id()).map_or_else(
+                    || branch.node().to_owned(),
+                    |node| node.selection().alias().to_owned(),
+                )
+            })
+            .collect();
         let factory = Arc::new(CompilerParallelBranches {
             owned,
             state_types: self.state.clone(),
@@ -207,7 +218,8 @@ impl PipelineDefinition {
             DurableParallelNode::new(definition.clone(), runtime)
                 .with_deadline(binding.deadline)
                 .with_cancellation(Arc::clone(&binding.cancellation))
-                .with_failure_events(runtimes.events.clone())
+                .with_node_events(runtimes.events.clone())
+                .with_member_names(member_names)
                 .with_output_reducer(self.state_reducers.get(definition.output_key()).copied()),
         );
         if let Some(target) = definition.transition() {

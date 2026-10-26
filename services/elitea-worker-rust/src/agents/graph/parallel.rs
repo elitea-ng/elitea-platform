@@ -39,6 +39,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::fanout_control::{FanoutCancellation, is_lease_lost, latch_cancelled};
+use super::fanout_frames::FanoutCardParts;
 use super::fanout_trace::{self, ActivationOutcome, ChildOutcome, ChildStart, FanoutKind};
 use super::state_reducers::StateReducer;
 use super::yaml::{ParallelBranchDefinition, ParallelNodeDefinition};
@@ -47,6 +48,8 @@ use tracing::Instrument as _;
 #[path = "parallel_checkpoint.rs"]
 mod checkpoint;
 use elitea_agent_runtime::graph::parallel_control as control;
+#[path = "parallel_frames.rs"]
+mod frames;
 #[path = "parallel_structure.rs"]
 mod structure;
 #[cfg(test)]
@@ -1009,6 +1012,37 @@ struct ParallelChildren {
     /// The first infrastructure error a child adapter met; the node reports
     /// it instead of the runner's control code.
     fault: Arc<std::sync::Mutex<Option<GraphError>>>,
+    /// Card frame parts of every proven pause (only when frames are sent).
+    board: Option<Arc<CardBoard>>,
+}
+
+/// The frame parts of each card a child's proven pause opened, by interrupt
+/// key: filled where the pause is proven (a run or a restore), taken once by
+/// the frames adapter when the runner opens the card.
+#[derive(Default)]
+pub(crate) struct CardBoard(std::sync::Mutex<BTreeMap<String, FanoutCardParts>>);
+
+impl CardBoard {
+    fn record(
+        &self,
+        pause: &ParallelBranchPause,
+        cards: &[CardIdentity],
+    ) -> Result<(), GraphError> {
+        // A pipeline child's pause holds exactly one card.
+        let [card] = cards else {
+            return Err(invalid_pause());
+        };
+        let parts = super::parallel_cards::card_parts(pause)?;
+        self.0
+            .lock()
+            .map_err(|_| invalid_pause())?
+            .insert(card.interrupt_key.clone(), parts);
+        Ok(())
+    }
+
+    fn take(&self, interrupt_key: &str) -> Option<FanoutCardParts> {
+        self.0.lock().ok()?.remove(interrupt_key)
+    }
 }
 
 impl ParallelChildren {
@@ -1017,6 +1051,7 @@ impl ParallelChildren {
         activation: ParallelActivation,
         context: Arc<NodeContext>,
         prepared: Vec<PreparedParallelBranch>,
+        board: Option<Arc<CardBoard>>,
     ) -> Result<Self, GraphError> {
         let mut members = Vec::with_capacity(prepared.len());
         let mut restored = Vec::with_capacity(prepared.len());
@@ -1030,22 +1065,24 @@ impl ParallelChildren {
             unread.push(AtomicBool::new(branch.replay.is_none()));
             restored.push(match branch.replay.take() {
                 None => RestoredChild::Pending,
-                Some(replay) => match to_child_run(&activation, &branch, replay, "")? {
-                    ChildRun::Settled { terminal, .. } => RestoredChild::Settled(terminal),
-                    ChildRun::Paused {
-                        checkpoint_id,
-                        cards,
-                    } => RestoredChild::Paused {
-                        checkpoint_id,
-                        cards,
-                    },
-                    ChildRun::LeaseLost | ChildRun::Cancelled => {
-                        return Err(parallel_error(
-                            "graph.parallel.corrupt_receipt",
-                            "a restored child holds no lifecycle receipt",
-                        ));
+                Some(replay) => {
+                    match to_child_run(&activation, &branch, replay, "", board.as_deref())? {
+                        ChildRun::Settled { terminal, .. } => RestoredChild::Settled(terminal),
+                        ChildRun::Paused {
+                            checkpoint_id,
+                            cards,
+                        } => RestoredChild::Paused {
+                            checkpoint_id,
+                            cards,
+                        },
+                        ChildRun::LeaseLost | ChildRun::Cancelled => {
+                            return Err(parallel_error(
+                                "graph.parallel.corrupt_receipt",
+                                "a restored child holds no lifecycle receipt",
+                            ));
+                        }
                     }
-                },
+                }
             });
             branches.push(Arc::new(branch));
         }
@@ -1058,6 +1095,7 @@ impl ParallelChildren {
             unread,
             restored: std::sync::Mutex::new(Some(restored)),
             fault: Arc::new(std::sync::Mutex::new(None)),
+            board,
         })
     }
 
@@ -1187,6 +1225,7 @@ impl FanoutChildren for ParallelChildren {
         let activation = self.activation.clone();
         let context = Arc::clone(&self.context);
         let fault = Arc::clone(&self.fault);
+        let board = self.board.clone();
         let branch = self.branches.get(child).cloned();
         let unread = decisions.is_empty()
             && self
@@ -1213,11 +1252,19 @@ impl FanoutChildren for ParallelChildren {
                     .invoke(&activation, branch.fresh(), &context)
                     .instrument(span.clone())
                     .await;
-                to_child_run(&activation, &branch, outcome, "")
+                to_child_run(&activation, &branch, outcome, "", board.as_deref())
             } else {
-                run_child(&*runtime, &activation, &context, &branch, decisions, &span)
-                    .instrument(span.clone())
-                    .await
+                run_child(
+                    &*runtime,
+                    &activation,
+                    &context,
+                    &branch,
+                    decisions,
+                    &span,
+                    board.as_deref(),
+                )
+                .instrument(span.clone())
+                .await
             };
             match run {
                 Ok(run) => {
@@ -1280,6 +1327,7 @@ async fn run_child(
     branch: &PreparedParallelBranch,
     decisions: Vec<FetchedDecision>,
     span: &tracing::Span,
+    board: Option<&CardBoard>,
 ) -> Result<ChildRun, GraphError> {
     let latest = branch.store.load(&branch.thread_id).await?;
     let latest_id = latest
@@ -1300,11 +1348,11 @@ async fn run_child(
         if let Some(replay) = restored {
             // Settled or paused already: never run completed work again.
             fanout_trace::child_admitted(span, ChildStart::Restored);
-            return to_child_run(activation, branch, replay, &latest_id);
+            return to_child_run(activation, branch, replay, &latest_id, board);
         }
         fanout_trace::child_admitted(span, ChildStart::Fresh);
         let outcome = runtime.invoke(activation, branch.fresh(), context).await;
-        return to_child_run(activation, branch, outcome, &latest_id);
+        return to_child_run(activation, branch, outcome, &latest_id, board);
     }
     let Some(ParallelBranchOutcome::Paused { pause, cards }) = restored else {
         return Err(stale_decision());
@@ -1338,7 +1386,7 @@ async fn run_child(
     let mut resumed = branch.fresh();
     resumed.input.extend(controls);
     let outcome = runtime.invoke(activation, resumed, context).await;
-    to_child_run(activation, branch, outcome, &pause.checkpoint_id)
+    to_child_run(activation, branch, outcome, &pause.checkpoint_id, board)
 }
 
 /// `fallback` names the checkpoint the child stood at when its run left no
@@ -1348,6 +1396,7 @@ fn to_child_run(
     branch: &PreparedParallelBranch,
     outcome: ParallelBranchOutcome,
     fallback: &str,
+    board: Option<&CardBoard>,
 ) -> Result<ChildRun, GraphError> {
     Ok(match outcome {
         ParallelBranchOutcome::Completed {
@@ -1370,16 +1419,22 @@ fn to_child_run(
             }),
             checkpoint_id: checkpoint_id.unwrap_or_else(|| fallback.to_owned()),
         },
-        ParallelBranchOutcome::Paused { pause, cards } => ChildRun::Paused {
-            cards: card_identities(
+        ParallelBranchOutcome::Paused { pause, cards } => {
+            let cards = card_identities(
                 activation,
                 branch.ordinal,
                 &branch.thread_id,
                 &pause.checkpoint_id,
                 &cards,
-            )?,
-            checkpoint_id: pause.checkpoint_id,
-        },
+            )?;
+            if let Some(board) = board {
+                board.record(&pause, &cards)?;
+            }
+            ChildRun::Paused {
+                cards,
+                checkpoint_id: pause.checkpoint_id,
+            }
+        }
         ParallelBranchOutcome::Cancelled => ChildRun::Cancelled,
         ParallelBranchOutcome::LeaseLost(error) => return Err(error),
     })
@@ -1432,9 +1487,12 @@ pub(crate) struct DurableParallelNode {
     cancellation: Option<Arc<FanoutCancellation>>,
     decisions: Arc<dyn DecisionSource>,
     events: Arc<dyn FanoutEvents>,
-    /// The run's terminal channel: an On Error `stop` caused by a child that
-    /// may have started ends the run with its registered reason.
-    failure_events: Option<super::node_events::PipelineNodeEventSender>,
+    /// The run's event stream: card and member frames go out on it, and an
+    /// On Error `stop` caused by a child that may have started ends the run
+    /// with its registered reason.
+    node_events: Option<super::node_events::PipelineNodeEventSender>,
+    /// The member tier name per branch (§3.3); the branch node id by default.
+    member_names: Vec<String>,
     permits: ChildPermits,
     /// The output key's declared reducer, if it declares one.
     output_reducer: Option<StateReducer>,
@@ -1452,7 +1510,8 @@ impl DurableParallelNode {
             cancellation: None,
             decisions: Arc::new(NoDecisions),
             events: Arc::new(NoEvents),
-            failure_events: None,
+            node_events: None,
+            member_names: Vec::new(),
             permits: worker_child_permits(),
             output_reducer: None,
         }
@@ -1476,12 +1535,18 @@ impl DurableParallelNode {
         self
     }
 
-    /// The run's terminal channel. Default: none (the node error only).
-    pub(crate) fn with_failure_events(
+    /// The run's event stream. Default: none (no frames; the node error only).
+    pub(crate) fn with_node_events(
         mut self,
         events: Option<super::node_events::PipelineNodeEventSender>,
     ) -> Self {
-        self.failure_events = events;
+        self.node_events = events;
+        self
+    }
+
+    /// The member tier name of each branch, in declared order.
+    pub(crate) fn with_member_names(mut self, names: Vec<String>) -> Self {
+        self.member_names = names;
         self
     }
 
@@ -1561,11 +1626,22 @@ impl DurableParallelNode {
                     Arc::clone(&cancel_signal),
                 )));
         }
+        // With the run's event stream, every activation raises its cards and
+        // member lifecycle as frames (contract §4, §9).
+        let (events, board) = match &self.node_events {
+            Some(sender) => {
+                let board = Arc::new(CardBoard::default());
+                let frames = self.frames(sender, &board, &activation, &prepared, context)?;
+                (Arc::new(frames) as Arc<dyn FanoutEvents>, Some(board))
+            }
+            None => (Arc::clone(&self.events), None),
+        };
         let children = Arc::new(ParallelChildren::new(
             Arc::clone(&self.runtime),
             activation,
             Arc::new(run_context),
             prepared,
+            board,
         )?);
         let max_concurrency = usize::try_from(self.definition.max_concurrency()).map_err(|_| {
             parallel_error(
@@ -1576,7 +1652,7 @@ impl DurableParallelNode {
         let runner = FanoutRunner::new(
             children.clone(),
             Arc::clone(&self.decisions),
-            Arc::clone(&self.events),
+            events,
             self.permits.clone(),
             Arc::clone(&stop),
             FanoutRunnerConfig {
@@ -1621,6 +1697,58 @@ impl DurableParallelNode {
         }
     }
 
+    fn frames(
+        &self,
+        sender: &super::node_events::PipelineNodeEventSender,
+        board: &Arc<CardBoard>,
+        activation: &ParallelActivation,
+        prepared: &[PreparedParallelBranch],
+        context: &NodeContext,
+    ) -> Result<frames::ParallelFrames, GraphError> {
+        let invocation = context
+            .config
+            .parent_context
+            .as_ref()
+            .map(|parent| parent.invocation_id().to_owned())
+            .ok_or_else(|| {
+                parallel_error(
+                    "graph.parallel.invalid_invocation",
+                    "the parallel frames have no owning invocation",
+                )
+            })?;
+        let enclosing = super::node_events::PipelineNodeEventScope::from_state(
+            context
+                .state
+                .get(super::node_events::PIPELINE_NODE_EVENT_SCOPE_STATE_KEY),
+        )
+        .map_err(|_| {
+            parallel_error(
+                "graph.parallel.invalid_invocation",
+                "the parallel event scope is invalid",
+            )
+        })?;
+        let members = prepared
+            .iter()
+            .map(|branch| frames::MemberInput {
+                branch_id: branch.branch.id(),
+                name: self
+                    .member_names
+                    .get(branch.ordinal)
+                    .map_or_else(|| branch.branch.node(), String::as_str),
+                child_thread: &branch.thread_id,
+            })
+            .collect::<Vec<_>>();
+        frames::ParallelFrames::new(
+            sender.clone(),
+            &invocation,
+            Arc::clone(board),
+            activation,
+            &members,
+            enclosing.as_ref(),
+        )
+        .map_err(|error| runner_error(error, None))
+    }
+
     /// Run the runner while relaying the owner's latch into the stop, and the
     /// stop into every child's cancellation flag. Nothing here polls.
     async fn drive(
@@ -1660,7 +1788,7 @@ impl DurableParallelNode {
             JoinOutcome::Joined(entries) => entries,
             JoinOutcome::Failed { key, failure } => {
                 if failure.code == BRANCH_MAY_HAVE_STARTED_CODE
-                    && let Some(events) = &self.failure_events
+                    && let Some(events) = &self.node_events
                     && let Some(stop) = events
                         .approved_call_stop(
                             crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
@@ -1771,6 +1899,10 @@ fn runner_error(error: FanoutRunError, fault: Option<GraphError>) -> GraphError 
         FanoutRunError::CorruptChild => parallel_error(
             "graph.parallel.corrupt_receipt",
             "a parallel child checkpoint contradicts its card",
+        ),
+        FanoutRunError::FrameUndelivered => parallel_error(
+            "graph.parallel.frame_undelivered",
+            "a parallel card or member frame could not be delivered",
         ),
     }
 }

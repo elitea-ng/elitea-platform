@@ -311,7 +311,7 @@ impl PipelineNodeEventSender {
         root_container: &str,
     ) -> adk_rust::Result<()> {
         if self.parallel_scope.is_some() {
-            self.project_parallel_application_event(&mut event, scope, root_container)?;
+            self.project_parallel_application_event(&mut event, scope, root_container, None)?;
             return self.send_routed_application_event(event).await;
         }
         if let Some(scope) = scope {

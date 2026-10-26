@@ -943,7 +943,7 @@ async fn delegated_auth_applies_only_at_the_park_boundary() {
     harness.children.gates[1].add_permits(1);
     let outcome = task.await.expect("join").expect("run");
     assert_eq!(parked(&outcome), vec!["ik-0-1-auth"]);
-    assert!(harness.ledger.acks().is_empty());
+    assert_eq!(harness.ledger.acks(), Vec::new());
     // The wake continuation's restore fetch applies it.
     harness.replace_process();
     let joined = settled(

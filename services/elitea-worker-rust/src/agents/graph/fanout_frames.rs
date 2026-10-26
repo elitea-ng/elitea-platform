@@ -21,6 +21,12 @@ const PROGRESS_SCHEMA: &str = "elitea.pipeline.fanout-progress.v1";
 /// worst-case escaped JSON stays under the node-event bound.
 pub(crate) const MAX_PROGRESS_TEXT_BYTES: usize = 8192;
 const CARD_SCHEMA: &str = "elitea.pipeline.fanout-interrupt-card.v1";
+/// The internal event that carries one built frame to the projector. Only the
+/// fan-out node stamps it; the projector emits the frame in the run's order.
+pub(crate) const FANOUT_FRAME_METADATA_KEY: &str = "elitea.fanout.frame.v1";
+pub(crate) const FANOUT_FRAME_AUTHOR: &str = "elitea-fanout";
+/// One stamped frame's metadata, encoded (the node-event bound is 60 KiB).
+const MAX_FRAME_METADATA_BYTES: usize = 48 * 1024;
 const MEMBER_STATUS_SCHEMA: &str = "elitea.pipeline.fanout-member-status.v1";
 const MEMBER_CALL_DOMAIN: &[u8] = b"elitea.graph.fanout-member-call.v1\0";
 const ACTIVATION_LABEL_DOMAIN: &[u8] = b"elitea.graph.fanout-activation-label.v1\0";
@@ -133,6 +139,33 @@ impl CardKind {
             Self::DelegatedAuth => matches!(action, "authorize" | "skip"),
         }
     }
+}
+
+/// What a child's proven pause contributes to its card: the kind, the
+/// actions it offers, the closed display and the digest of the Worker's full
+/// private pending object (§4).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FanoutCardParts {
+    pub(crate) kind: CardKind,
+    pub(crate) available_actions: Vec<&'static str>,
+    pub(crate) display: CardDisplay,
+    pub(crate) payload_sha256: String,
+}
+
+/// The contract's action vocabulary (§1), as the card's static strings.
+pub(crate) fn card_action(action: &str) -> Option<&'static str> {
+    [
+        "approve",
+        "reject",
+        "edit",
+        "block_with_comment",
+        "continue",
+        "answer",
+        "authorize",
+        "skip",
+    ]
+    .into_iter()
+    .find(|known| *known == action)
 }
 
 /// One card (`fanout-interrupt-card`), fields in key order.
@@ -453,6 +486,58 @@ pub(crate) fn progress_events(
             })
         })
         .collect()
+}
+
+/// The internal event that carries `frame` through the run's event stream:
+/// persisted with the run, projected once, in order.
+pub(crate) fn frame_event(
+    invocation_id: &str,
+    frame: &NodeEventV1,
+) -> Result<adk_rust::Event, FanoutFrameError> {
+    let metadata: serde_json::Value = serde_json::from_slice(&frame.response_metadata)
+        .map_err(|_| FanoutFrameError::InvalidMember)?;
+    let mut event = adk_rust::Event::new(invocation_id);
+    FANOUT_FRAME_AUTHOR.clone_into(&mut event.author);
+    event.provider_metadata.insert(
+        FANOUT_FRAME_METADATA_KEY.to_owned(),
+        serde_json::json!({"type": frame.r#type, "metadata": metadata}).to_string(),
+    );
+    Ok(event)
+}
+
+/// The frame a stamped event carries: its type and metadata. `None` for any
+/// other event; a stamp that is not exactly a fan-out frame is refused.
+pub(crate) fn stamped_frame(
+    event: &adk_rust::Event,
+) -> Result<Option<(&'static str, serde_json::Value)>, FanoutFrameError> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Stamp {
+        r#type: String,
+        metadata: serde_json::Map<String, serde_json::Value>,
+    }
+    let Some(raw) = event.provider_metadata.get(FANOUT_FRAME_METADATA_KEY) else {
+        return Ok(None);
+    };
+    let stamp: Stamp = serde_json::from_str(raw).map_err(|_| FanoutFrameError::InvalidMember)?;
+    let frame_type = [
+        INTERRUPT_PENDING_EVENT,
+        FANOUT_MEMBER_EVENT,
+        FANOUT_PROGRESS_EVENT,
+    ]
+    .into_iter()
+    .find(|known| *known == stamp.r#type)
+    .ok_or(FanoutFrameError::InvalidMember)?;
+    if event.author != FANOUT_FRAME_AUTHOR
+        || event.content().is_some()
+        || raw.len() > MAX_FRAME_METADATA_BYTES
+    {
+        return Err(FanoutFrameError::InvalidMember);
+    }
+    Ok(Some((
+        frame_type,
+        serde_json::Value::Object(stamp.metadata),
+    )))
 }
 
 fn nonzero_hex64(value: &str) -> bool {

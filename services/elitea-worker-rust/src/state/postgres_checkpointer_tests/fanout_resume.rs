@@ -400,12 +400,18 @@ impl Checkpointer for SeamRoot {
 #[derive(Default)]
 struct RaisedCards(StdMutex<Vec<String>>);
 
+#[async_trait::async_trait]
 impl FanoutEvents for RaisedCards {
-    fn card_opened(&self, _child: usize, card: &CardIdentity) {
+    async fn card_opened(
+        &self,
+        _child: usize,
+        card: &CardIdentity,
+    ) -> Result<(), elitea_agent_runtime::graph::fanout::runner::FanoutRunError> {
         self.0
             .lock()
             .expect("raised cards")
             .push(card.interrupt_key.clone());
+        Ok(())
     }
 }
 

@@ -252,7 +252,7 @@ fn routed_leaf_retains_its_nearest_edge_and_refuses_partial_or_unknown_threads()
     );
     let original = json!(event);
     sender
-        .project_parallel_application_event(&mut event, None, "root-invocation")
+        .project_parallel_application_event(&mut event, None, "root-invocation", None)
         .unwrap();
     assert_eq!(json!(event), original);
     event.provider_metadata.insert(
@@ -261,13 +261,13 @@ fn routed_leaf_retains_its_nearest_edge_and_refuses_partial_or_unknown_threads()
     );
     assert!(
         sender
-            .project_parallel_application_event(&mut event, None, "root-invocation")
+            .project_parallel_application_event(&mut event, None, "root-invocation", None)
             .is_err()
     );
     event.provider_metadata.remove(DESCENDANT_PARENT_CALL_KEY);
     assert!(
         sender
-            .project_parallel_application_event(&mut event, None, "root-invocation")
+            .project_parallel_application_event(&mut event, None, "root-invocation", None)
             .is_err()
     );
 }
@@ -303,14 +303,14 @@ fn agent_child_leaf_is_proved_by_its_activation_receipt() {
     let mut event = leaf("hashed-branch/owned");
     let original = json!(event);
     sender
-        .project_parallel_application_event(&mut event, None, "root-invocation")
+        .project_parallel_application_event(&mut event, None, "root-invocation", None)
         .unwrap();
     assert_eq!(json!(event), original, "the leaf keeps its own edge");
     // A receipt for a thread this branch does not own.
     let mut foreign = leaf("other-branch");
     assert!(
         sender
-            .project_parallel_application_event(&mut foreign, None, "root-invocation")
+            .project_parallel_application_event(&mut foreign, None, "root-invocation", None)
             .is_err()
     );
     // No receipt: nothing proves the leaf.
@@ -320,7 +320,7 @@ fn agent_child_leaf_is_proved_by_its_activation_receipt() {
     );
     assert!(
         sender
-            .project_parallel_application_event(&mut bare, None, "root-invocation")
+            .project_parallel_application_event(&mut bare, None, "root-invocation", None)
             .is_err()
     );
 }

@@ -1180,6 +1180,20 @@ impl AgentEventProjector {
     ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
         validate_event_id(&event.id)?;
         validate_invocation_id(&event.invocation_id)?;
+        // A fan-out frame the Parallel node built: emitted as is, in order.
+        if let Some((frame_type, metadata)) = super::graph::fanout_frames::stamped_frame(event)
+            .map_err(|_| AgentEventProjectionError::invalid_state())?
+        {
+            let mut batch = ProjectedAgentEventBatch::new();
+            batch.push(self.event(
+                frame_type,
+                &Value::Null,
+                None,
+                &metadata,
+                event.timestamp,
+            )?)?;
+            return Ok(batch);
+        }
         if let Some(projected) = super::pipeline::scoped_applications::project_root_scope_event(
             event,
             self.invocation_id.as_deref(),
@@ -4750,6 +4764,171 @@ pub(crate) fn pipeline_mcp_auth_event_binding(
     let payload = GraphInterruptPayload::from_event(event)
         .ok_or_else(AgentEventProjectionError::invalid_state)?;
     pipeline_mcp_auth_event_binding_from_payload(event, &payload, root_agent_name, thread_id)
+}
+
+/// The card a fan-out child's replayed pause shows (contract §4), bound by the
+/// same typed bindings the root path uses and in the same order as
+/// `parallel_cards::child_card`. The digest covers the full private pending
+/// object; the display holds only the closed contract fields, never routes,
+/// call digests, replay envelopes, headers or resource metadata.
+#[allow(clippy::too_many_lines)] // One binding order, one display mapping per kind.
+pub(crate) fn fanout_card_parts(
+    event: &Event,
+    root_agent_name: &str,
+    thread_id: &str,
+) -> Result<super::graph::fanout_frames::FanoutCardParts, AgentEventProjectionError> {
+    use super::graph::fanout_frames::{CardDisplay, CardKind};
+    /// Tool arguments a card shows (§4): larger ones are refused, never cut.
+    const MAX_CARD_TOOL_ARGS_BYTES: usize = 16 * 1024;
+    let args_json = |args: &Value| {
+        serde_json::to_string(args)
+            .ok()
+            .filter(|text| text.len() <= MAX_CARD_TOOL_ARGS_BYTES)
+            .ok_or_else(AgentEventProjectionError::invalid_state)
+    };
+    let parts = |kind: CardKind, actions: &[String], display: CardDisplay, pending: &Value| {
+        let available_actions = actions
+            .iter()
+            .map(|action| super::graph::fanout_frames::card_action(action))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        let encoded =
+            serde_json::to_vec(pending).map_err(|_| AgentEventProjectionError::invalid_state())?;
+        Ok(super::graph::fanout_frames::FanoutCardParts {
+            kind,
+            available_actions,
+            display,
+            payload_sha256: hex(digest::digest(&digest::SHA256, &encoded).as_ref()),
+        })
+    };
+    if let Ok(binding) = pipeline_hitl_event_binding(event, root_agent_name, thread_id) {
+        let data = &binding.data;
+        let pending = json!({
+            "type": "hitl", "interaction_type": data.interaction_type,
+            "history_contract_version": data.history_contract_version,
+            "interrupt_id": binding.interrupt_id, "call_digest": binding.call_digest,
+            "guardrail_type": "pipeline_hitl", "node_name": data.node_name,
+            "message": data.message, "available_actions": data.available_actions,
+            "routes": data.routes, "edit_state_key": data.edit_state_key,
+            "definition_digest": data.definition_digest,
+        });
+        let display = CardDisplay {
+            edit_state_key: data.edit_state_key.clone(),
+            guardrail_type: "pipeline_hitl",
+            interaction_type: Some(data.interaction_type.clone()),
+            message: data.message.clone(),
+            node_name: Some(data.node_name.clone()),
+            ..CardDisplay::default()
+        };
+        return parts(
+            CardKind::HitlNode,
+            &data.available_actions,
+            display,
+            &pending,
+        );
+    }
+    if let Ok(binding) = pipeline_tool_event_binding(event, root_agent_name, thread_id) {
+        let data = &binding.data;
+        let pending = json!({
+            "type": "hitl", "interrupt_id": binding.interrupt_id,
+            "call_digest": binding.call_digest, "guardrail_type": "sensitive_tool",
+            "node_name": data.node_name, "message": data.message,
+            "available_actions": data.available_actions, "tool_call_id": data.tool_call_id,
+            "tool_name": data.tool_name, "toolkit_name": data.toolkit_name,
+            "toolkit_type": data.toolkit_type, "action_label": data.action_label,
+            "tool_args": data.tool_args, "policy_message": data.policy_message,
+            "definition_digest": data.definition_digest, "argument_digest": data.argument_digest,
+        });
+        let display = CardDisplay {
+            action_label: Some(data.action_label.clone()).filter(|label| !label.is_empty()),
+            guardrail_type: "sensitive_tool",
+            message: data.message.clone(),
+            node_name: Some(data.node_name.clone()),
+            policy_message: Some(data.policy_message.clone()).filter(|text| !text.is_empty()),
+            tool_args_json: Some(args_json(&data.tool_args)?),
+            tool_call_id: Some(data.tool_call_id.clone()),
+            tool_name: Some(data.tool_name.clone()),
+            toolkit_name: Some(data.toolkit_name.clone()),
+            toolkit_type: Some(data.toolkit_type.clone()),
+            ..CardDisplay::default()
+        };
+        return parts(
+            CardKind::ToolGuard,
+            &data.available_actions,
+            display,
+            &pending,
+        );
+    }
+    if let Ok(binding) = pipeline_clarifying_event_binding(event, root_agent_name, thread_id) {
+        let data = &binding.data;
+        let pending = json!({
+            "type": "hitl", "interrupt_id": binding.interrupt_id,
+            "call_digest": binding.call_digest, "guardrail_type": "clarifying_question",
+            "node_name": data.node_name, "message": data.message, "questions": data.questions,
+            "available_actions": data.available_actions, "tool_call_id": data.tool_call_id,
+            "tool_name": data.tool_name, "tool_args": data.tool_args,
+            "definition_digest": data.definition_digest, "argument_digest": data.argument_digest,
+        });
+        let display = CardDisplay {
+            guardrail_type: "clarifying_question",
+            message: data.message.clone(),
+            node_name: Some(data.node_name.clone()),
+            tool_args_json: Some(args_json(&data.tool_args)?),
+            tool_call_id: Some(data.tool_call_id.clone()),
+            tool_name: Some(data.tool_name.clone()),
+            ..CardDisplay::default()
+        };
+        return parts(
+            CardKind::AskUser,
+            &data.available_actions,
+            display,
+            &pending,
+        );
+    }
+    if let Ok(binding) = pipeline_mcp_auth_event_binding(event, root_agent_name, thread_id) {
+        let data = &binding.data;
+        let pending = json!({
+            "type": "hitl", "interrupt_id": binding.interrupt_id,
+            "call_digest": binding.call_digest, "guardrail_type": "mcp_auth",
+            "node_name": data.node_name, "message": data.message,
+            "available_actions": data.available_actions, "tool_call_id": data.tool_call_id,
+            "tool_name": data.tool_name, "toolkit_name": data.toolkit_name,
+            "toolkit_type": data.toolkit_type, "tool_args": data.tool_args,
+            "server_url": data.server_url, "definition_digest": data.definition_digest,
+            "argument_digest": data.argument_digest,
+        });
+        let display = CardDisplay {
+            guardrail_type: "mcp_auth",
+            message: data.message.clone(),
+            node_name: Some(data.node_name.clone()),
+            server_url: Some(data.server_url.clone()).filter(|url| url.starts_with("https://")),
+            tool_call_id: Some(data.tool_call_id.clone()),
+            tool_name: Some(data.tool_name.clone()),
+            toolkit_name: Some(data.toolkit_name.clone()),
+            toolkit_type: Some(data.toolkit_type.clone()),
+            ..CardDisplay::default()
+        };
+        return parts(
+            CardKind::DelegatedAuth,
+            &data.available_actions,
+            display,
+            &pending,
+        );
+    }
+    let binding = pipeline_static_event_binding(event, root_agent_name, thread_id)?;
+    let pending = binding.public_proof(event)?;
+    let display = CardDisplay {
+        guardrail_type: "pipeline_static",
+        message: STATIC_PAUSE_MESSAGE.to_owned(),
+        node_name: Some(binding.metadata.node_name.clone()),
+        ..CardDisplay::default()
+    };
+    parts(
+        CardKind::HitlNode,
+        &["continue".to_owned()],
+        display,
+        &pending,
+    )
 }
 
 /// Validate and bind an internal graph checkpoint for descendant Application
