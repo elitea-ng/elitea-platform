@@ -33,10 +33,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
+	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authzcompose"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity/governance"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore/backends"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
@@ -272,4 +276,52 @@ func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevi
 		return nil, fmt.Errorf("construct agent identity governance: %w", err)
 	}
 	return v2agentidentity.New(service)
+}
+
+// credentialGrantGovernance builds the AND-composed operation decider and
+// the credential grant admin API (#1116). Both are nil with the flag off:
+// no decider exists and no grant route mounts. With the flag on, a
+// construction error refuses boot.
+//
+// No request path calls the decider yet; the credential broker (#1118) is
+// its first caller. The operation registry is empty until the adapter
+// descriptors exist (#1120) and delegations are unusable until delegation
+// custody exists (#1117), so every decision it could take today is a deny.
+func credentialGrantGovernance(admission profile.Admission, pool *pgxpool.Pool, pins profile.PinReader) (*authzcompose.Decider, *v2credentialgrants.Handler, error) {
+	if !admission.Governed() {
+		return nil, nil, nil
+	}
+	if pool == nil || pins == nil {
+		return nil, nil, errors.New("credential grant governance needs the platform database")
+	}
+	audit, err := securityaudit.NewPostgresAppender("elitea-main")
+	if err != nil {
+		return nil, nil, fmt.Errorf("construct credential grant security audit appender: %w", err)
+	}
+	grants := repos.NewCredentialGrants(pool, audit)
+	decider, err := authzcompose.NewGovernedDecider(authzcompose.Dependencies{
+		AuthSources:  authzcompose.DefaultAuthSources{},
+		Permissions:  legacyrbac.NewPostgresResolver(pool),
+		EntityAccess: repos.NewCredentialGrantEntityAccess(pool),
+		Bindings:     repos.NewAgentIdentityBindings(pool, audit),
+		Toolkits:     grants,
+		Grants:       grants,
+		References:   grants,
+		Operations:   credentialgrant.EmptyRegistry,
+		Mandates:     repos.NewMandates(pool, audit),
+		Delegations:  authzcompose.NoDelegations{},
+		Pins:         pins,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("construct the credential operation decider: %w", err)
+	}
+	service, err := credentialgrant.NewService(credentialgrant.ServiceConfig{Store: grants})
+	if err != nil {
+		return nil, nil, fmt.Errorf("construct credential grant governance: %w", err)
+	}
+	handler, err := v2credentialgrants.New(service)
+	if err != nil {
+		return nil, nil, err
+	}
+	return decider, handler, nil
 }

@@ -25,6 +25,8 @@ package admin
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 )
 
 // TestDeclaredPermissionsHoldEveryConfigSectionGate keeps the declaration in
@@ -156,5 +158,19 @@ func TestPermissionCatalogueHidesRetiredNames(t *testing.T) {
 	}}
 	if _, err := parseMatrixBody(body, current); err == nil {
 		t.Fatal("a save that names the retired prefix node \"admin\" was accepted")
+	}
+}
+
+// The governed credential permissions (#1116) are granted to no role by any
+// migration, so only the declaration makes them grantable.
+func TestCatalogueDeclaresTheGovernedCredentialPermissions(t *testing.T) {
+	present := map[string]bool{}
+	for _, name := range catalogueFrom(nil) {
+		present[name] = true
+	}
+	for _, name := range credentialgrant.Permissions() {
+		if !present[name] {
+			t.Errorf("the catalogue omits %q; no operator could grant it", name)
+		}
 	}
 }
