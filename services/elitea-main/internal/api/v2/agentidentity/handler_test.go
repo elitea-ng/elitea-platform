@@ -237,3 +237,62 @@ func TestNewRefusesANilService(t *testing.T) {
 		t.Fatal("New(nil) succeeded")
 	}
 }
+
+// The actor is only the resolved auth_core user id (auth.User.UserID). A
+// caller that reaches the handler without one (no gate stamped it) is
+// refused before the service runs, never attributed to auth.User.ID.
+func TestActorIsOnlyTheResolvedUserID(t *testing.T) {
+	h, err := New(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := []struct {
+		method, path string
+		serve        http.HandlerFunc
+		body         string
+	}{
+		{http.MethodPost, "/api/v2/admin/agent_identities", h.CreateBinding,
+			`{"tenant_project_id":7,"application_id":1,"application_version_id":2,"definition_digest":"` + strings.Repeat("ab", 32) + `","mode":"dedicated_agent"}`},
+		{http.MethodPost, "/api/v2/admin/agent_identities/" + bindingID + ":approve", h.ApproveBinding, ""},
+		{http.MethodPost, "/api/v2/admin/agent_identities/" + bindingID + ":revoke", h.RevokeBinding, ""},
+		{http.MethodPost, "/api/v2/admin/mandates", h.CreateMandate,
+			`{"tenant_project_id":7,"kind":"autonomous","agent_binding_id":"` + bindingID + `","operation_scopes":["a"]}`},
+		{http.MethodPost, "/api/v2/admin/mandates/" + bindingID + ":approve", h.ApproveMandate, ""},
+		{http.MethodPost, "/api/v2/admin/mandates/" + bindingID + ":suspend", h.SuspendMandate, ""},
+	}
+	for _, route := range routes {
+		for _, tc := range []struct {
+			name string
+			user *auth.User
+			want int
+		}{
+			{"no user", nil, http.StatusUnauthorized},
+			{"compatibility id only", &auth.User{ID: "token-7"}, http.StatusForbidden},
+			{"blank user id", &auth.User{ID: "42", UserID: "  "}, http.StatusForbidden},
+		} {
+			service := &fakeService{}
+			h.service = service
+			request := httptest.NewRequest(route.method, route.path, strings.NewReader(route.body))
+			if tc.user != nil {
+				request = request.WithContext(auth.ContextWithUser(request.Context(), *tc.user))
+			}
+			response := httptest.NewRecorder()
+			route.serve(response, request)
+			if response.Code != tc.want {
+				t.Errorf("%s %s (%s) = %d, want %d", route.method, route.path, tc.name, response.Code, tc.want)
+			}
+			if service.lastActor != "" {
+				t.Errorf("%s %s (%s) reached the service as %q", route.method, route.path, tc.name, service.lastActor)
+			}
+		}
+	}
+}
+
+func TestDelegationNotUsableIsAConflict(t *testing.T) {
+	router := newRouter(t, &fakeService{err: mandate.ErrDelegationNotUsable}, PermissionMandatesManage)
+	body := `{"tenant_project_id":7,"kind":"delegated_background","agent_binding_id":"` + bindingID +
+		`","subject_user_id":5,"delegation_id":"` + bindingID + `","operation_scopes":["a"]}`
+	if got := serve(router, http.MethodPost, "/api/v2/admin/mandates", body).Code; got != http.StatusConflict {
+		t.Fatalf("ErrDelegationNotUsable = %d, want 409", got)
+	}
+}

@@ -89,6 +89,9 @@ var (
 	// ErrBindingNotUsable refuses a mandate for a binding that is revoked, in
 	// another tenant project, or (at approval) not active.
 	ErrBindingNotUsable = errors.New("mandate: the agent identity binding is not usable")
+	// ErrDelegationNotUsable refuses a mandate whose delegation is absent,
+	// in another tenant project, for another binding, or not active.
+	ErrDelegationNotUsable = errors.New("mandate: the delegation is not usable")
 )
 
 const (
@@ -116,6 +119,10 @@ type Mandate struct {
 	PolicyRevisionID string
 	IssuedBy         string
 	ApprovedBy       string
+	// LastTransitionBy is the user who made the latest change: the issuer at
+	// creation, then the actor of every approve, suspend and revoke,
+	// including one cascaded from the binding (FollowBinding).
+	LastTransitionBy string
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -243,6 +250,7 @@ func New(id string, req Request, policy TTLPolicy, policyRevisionID, issuedBy st
 		State:            StateProposed,
 		PolicyRevisionID: policyRevisionID,
 		IssuedBy:         issuedBy,
+		LastTransitionBy: issuedBy,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}, nil
@@ -298,9 +306,62 @@ func (m Mandate) Transition(action Action, actor, policyRevisionID string, now t
 		out.PolicyRevisionID = policyRevisionID
 	}
 	out.State = next
+	out.LastTransitionBy = actor
 	out.RevocationEpoch = m.RevocationEpoch + 1
 	out.UpdatedAt = now
 	return out, nil
+}
+
+// FollowBinding answers what happens to m when its binding is revoked
+// (action ActionRevoke) or suspended (ActionSuspend), in the same
+// transaction as the binding change:
+//
+//   - revoke: every non-revoked mandate is revoked.
+//   - suspend: a mandate whose effective state is active is suspended.
+//     Proposed, suspended and expired mandates stay as they are; approval
+//     requires an active binding, so none of them can become active while
+//     the binding is suspended.
+//
+// Reactivating the binding does NOT reactivate a mandate it suspended: each
+// needs a fresh approval. changed is false when m is left as it is; a
+// changed mandate has its epoch bumped by one and records actor.
+func (m Mandate) FollowBinding(action Action, actor string, now time.Time) (next Mandate, changed bool, err error) {
+	switch action {
+	case ActionRevoke:
+		if m.State == StateRevoked {
+			return m, false, nil
+		}
+	case ActionSuspend:
+		if m.EffectiveState(now) != StateActive {
+			return m, false, nil
+		}
+	default:
+		return Mandate{}, false, ErrInvalidTransition
+	}
+	next, err = m.Transition(action, actor, m.PolicyRevisionID, now)
+	if err != nil {
+		return Mandate{}, false, err
+	}
+	return next, true, nil
+}
+
+// CheckDelegation refuses a delegation that m cannot rest on. delegation is
+// what the store read, inside the mandate's transaction, for m.DelegationID;
+// nil means no row. A mandate without a delegation passes.
+func CheckDelegation(m Mandate, delegation *Delegation, now time.Time) error {
+	if m.DelegationID == nil {
+		return nil
+	}
+	switch {
+	case delegation == nil,
+		delegation.ID != *m.DelegationID,
+		delegation.TenantProjectID != m.TenantProjectID,
+		delegation.AgentBindingID != m.AgentBindingID,
+		delegation.State != StateActive,
+		!now.Before(delegation.ExpiresAt):
+		return ErrDelegationNotUsable
+	}
+	return nil
 }
 
 // Reader is the lookup later issues read mandates through.

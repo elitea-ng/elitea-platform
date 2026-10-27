@@ -2663,17 +2663,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// the colon.
 				if cfg.AgentIdentityAdmin != nil {
 					agentIdentities := cfg.AgentIdentityAdmin
-					bindingsManage := central("models.agent_identity.bindings.manage")
-					bindingsApprove := central("models.agent_identity.bindings.approve")
+					bindingsManage := central(v2agentidentity.PermissionBindingsManage)
+					bindingsApprove := central(v2agentidentity.PermissionBindingsApprove)
 					bindingsRead := apimw.RequireCentralPermissions(
 						permissionResolver, platformauth.PermissionModeAdministration,
-						"models.agent_identity.bindings.manage", "models.agent_identity.bindings.approve",
+						v2agentidentity.PermissionBindingsManage, v2agentidentity.PermissionBindingsApprove,
 					)
-					mandatesManage := central("models.agent_identity.mandates.manage")
-					mandatesApprove := central("models.agent_identity.mandates.approve")
+					mandatesManage := central(v2agentidentity.PermissionMandatesManage)
+					mandatesApprove := central(v2agentidentity.PermissionMandatesApprove)
 					mandatesRead := apimw.RequireCentralPermissions(
 						permissionResolver, platformauth.PermissionModeAdministration,
-						"models.agent_identity.mandates.manage", "models.agent_identity.mandates.approve",
+						v2agentidentity.PermissionMandatesManage, v2agentidentity.PermissionMandatesApprove,
 					)
 					r.With(bindingsRead).Get("/agent_identities", agentIdentities.ListBindings)
 					r.With(bindingsManage).Post("/agent_identities", agentIdentities.CreateBinding)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -43,6 +44,10 @@ func NewLedger(db LedgerDB) (*Ledger, error) {
 //     invalid) wrote nothing, so the row is marked abandoned at once.
 //   - An unknown outcome (unavailable, a cancelled context) leaves the row
 //     staged; SweepStale reconciles it.
+//   - A write that created a version other than casVersion+1
+//     (ErrUnexpectedVersion) leaves the row staged with that version
+//     recorded as created_version, so the sweeper retires the version that
+//     exists. The caller gets ErrUnexpectedVersion and no version.
 //   - A failure to mark the row committed is returned as ErrUnavailable. The
 //     caller then never references the version, and the sweeper retires it.
 func (l *Ledger) StagedWrite(ctx context.Context, store SecretStore, sc StoreContext, ref SecretRef, value RuntimeSecret, casVersion int64) (int64, error) {
@@ -70,7 +75,8 @@ RETURNING id`,
 	}
 
 	version, writeErr := store.Write(ctx, sc, ref, value, casVersion)
-	if writeErr != nil {
+	unexpected := errors.Is(writeErr, ErrUnexpectedVersion)
+	if writeErr != nil && !unexpected {
 		if definitiveRefusal(writeErr) {
 			// Best effort: a row left staged here is swept, and the sweep's
 			// retire of a version nobody wrote is a no-op.
@@ -78,16 +84,36 @@ RETURNING id`,
 		}
 		return 0, writeErr
 	}
-	if version != intended {
-		// The backend created a version the ledger did not stage. Leave the
-		// row staged so the sweeper retires the intended one if it exists,
-		// and tell the caller nothing was committed.
-		return 0, Errorf(ErrMisconfigured, OpWrite, "backend created an unexpected version")
+	if unexpected || version != intended {
+		// The backend created a version the ledger did not stage. Record it
+		// and leave the row staged, so the sweeper retires the version that
+		// exists; tell the caller nothing was committed.
+		if version > 0 && version != intended {
+			if err := l.recordCreated(context.WithoutCancel(ctx), id, version); err != nil {
+				slog.Default().Warn("secretstore: could not record the version a write created; the sweeper will retire the intended version instead",
+					"ledger_id", id, "backend", ref.Backend)
+			}
+		}
+		return 0, Errorf(ErrUnexpectedVersion, OpWrite, "backend created an unexpected version")
 	}
 	if err := l.transition(context.WithoutCancel(ctx), id, "committed"); err != nil {
 		return 0, Errorf(ErrUnavailable, OpWrite, "commit the ledger row")
 	}
 	return version, nil
+}
+
+func (l *Ledger) recordCreated(ctx context.Context, id, version int64) error {
+	tag, err := l.db.Exec(ctx, `
+UPDATE elitea_identity.secret_write_ledger
+SET created_version = $2
+WHERE id = $1 AND state = 'staged' AND created_version IS NULL`, id, version)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("secretstore: ledger row is no longer staged")
+	}
+	return nil
 }
 
 func definitiveRefusal(err error) bool {
@@ -123,6 +149,10 @@ type SweepResult struct {
 	// Deferred rows stayed staged: the backend was unavailable or is not in
 	// the store map. The next sweep tries again.
 	Deferred int
+	// Unretired rows were abandoned without a retire because the backend
+	// cannot prove the stored value is the one the staged write created
+	// (pgvault removes by name). Each is logged as a possible orphan.
+	Unretired int
 }
 
 // SweepStale reconciles up to limit staged rows older than olderThan
@@ -132,9 +162,13 @@ type SweepResult struct {
 //
 //  1. If a committed row owns the same backend version, the staged row lost a
 //     check-and-set race; it is marked abandoned and nothing is retired.
-//  2. Otherwise the backend version is retired through stores[row.backend]
-//     (not found counts as retired) and the row is marked abandoned.
-//  3. If the retire fails for any other reason, the row stays staged.
+//  2. If stores[row.backend] is not a VersionScopedRetirer (pgvault), the
+//     row is marked abandoned without a retire and logged as a possible
+//     orphan: a retire could destroy a value another path wrote.
+//  3. Otherwise the version (created_version when recorded, else
+//     intended_version) is retired through stores[row.backend] (not found
+//     counts as retired) and the row is marked abandoned.
+//  4. If the retire fails for any other reason, the row stays staged.
 //
 // The caller schedules it (a periodic routine); it holds no timer itself.
 func (l *Ledger) SweepStale(ctx context.Context, stores map[string]SecretStore, olderThan time.Duration, limit int) (SweepResult, error) {
@@ -166,6 +200,8 @@ func (l *Ledger) SweepStale(ctx context.Context, stores map[string]SecretStore, 
 			result.Abandoned++
 		case sweepSuperseded:
 			result.Superseded++
+		case sweepUnretired:
+			result.Unretired++
 		case sweepDeferred:
 			result.Deferred++
 			skipped = append(skipped, id)
@@ -180,6 +216,7 @@ const (
 	sweepNone sweepOutcome = iota
 	sweepAbandoned
 	sweepSuperseded
+	sweepUnretired
 	sweepDeferred
 )
 
@@ -194,11 +231,11 @@ func (l *Ledger) sweepOne(ctx context.Context, stores map[string]SecretStore, ag
 		id       int64
 		sc       StoreContext
 		ref      SecretRef
-		intended int64
+		target   int64
 	)
 	err = tx.QueryRow(ctx, `
 SELECT id, credential_ref_id, tenant_project_id, workload_scope, policy_revision_id,
-       backend, locator_mount, locator_path, intended_version
+       backend, locator_mount, locator_path, COALESCE(created_version, intended_version)
 FROM elitea_identity.secret_write_ledger
 WHERE state = 'staged'
   AND created_at < clock_timestamp() - make_interval(secs => $1::double precision)
@@ -207,7 +244,7 @@ ORDER BY created_at
 LIMIT 1
 FOR UPDATE SKIP LOCKED`, ageSeconds, skipped).Scan(
 		&id, &sc.CredentialRefID, &sc.TenantProjectID, &sc.WorkloadScope, &sc.PolicyRevisionID,
-		&ref.Backend, &ref.Mount, &ref.Path, &intended)
+		&ref.Backend, &ref.Mount, &ref.Path, &target)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return sweepNone, 0, nil
 	}
@@ -221,7 +258,7 @@ SELECT EXISTS (
     SELECT 1 FROM elitea_identity.secret_write_ledger
     WHERE state = 'committed' AND backend = $1 AND locator_mount = $2
       AND locator_path = $3 AND intended_version = $4)`,
-		ref.Backend, ref.Mount, ref.Path, intended).Scan(&owned); err != nil {
+		ref.Backend, ref.Mount, ref.Path, target).Scan(&owned); err != nil {
 		return sweepNone, 0, fmt.Errorf("secretstore: check committed ledger row: %w", err)
 	}
 	outcome := sweepSuperseded
@@ -230,11 +267,19 @@ SELECT EXISTS (
 		if store == nil {
 			return sweepDeferred, id, nil
 		}
-		retireErr := store.Retire(ctx, sc, ref, intended)
-		if retireErr != nil && !errors.Is(retireErr, ErrNotFound) {
-			return sweepDeferred, id, nil
+		if _, scoped := store.(VersionScopedRetirer); scoped {
+			retireErr := store.Retire(ctx, sc, ref, target)
+			if retireErr != nil && !errors.Is(retireErr, ErrNotFound) {
+				return sweepDeferred, id, nil
+			}
+			outcome = sweepAbandoned
+		} else {
+			// The ledger row is the only trace; the path is a name, never a
+			// value, and the row id lets an operator find it.
+			slog.Default().Warn("secretstore: abandoned a stale staged write without retiring it; the backend may hold an orphaned value",
+				"ledger_id", id, "backend", ref.Backend, "tenant_project_id", sc.TenantProjectID)
+			outcome = sweepUnretired
 		}
-		outcome = sweepAbandoned
 	}
 	if _, err := tx.Exec(ctx, `
 UPDATE elitea_identity.secret_write_ledger

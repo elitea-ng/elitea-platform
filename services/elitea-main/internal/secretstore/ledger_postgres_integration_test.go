@@ -82,7 +82,7 @@ type recordingStore struct {
 
 func (s *recordingStore) Write(_ context.Context, _ StoreContext, _ SecretRef, _ RuntimeSecret, cas int64) (int64, error) {
 	if s.writeErr != nil {
-		return 0, s.writeErr
+		return s.version, s.writeErr
 	}
 	if s.version != 0 {
 		return s.version, nil
@@ -96,6 +96,12 @@ func (s *recordingStore) Retire(_ context.Context, _ StoreContext, _ SecretRef, 
 	s.retired = append(s.retired, version)
 	return s.retireErr
 }
+
+// versionScoped is a recordingStore that, like the Vault adapter, retires
+// exactly one version, so the sweeper may retire through it.
+type versionScoped struct{ *recordingStore }
+
+func (versionScoped) RetiresOnlyTheWrittenVersion() {}
 
 func ledgerRef() SecretRef {
 	return SecretRef{Backend: BackendVault, Mount: "secret", Path: "tenant7/db"}
@@ -192,7 +198,7 @@ func TestPostgresLedgerSweepStale(t *testing.T) {
 	insertStale(t, pool, other, 1, "staged")
 
 	store := &recordingStore{}
-	result, err := ledger.SweepStale(ctx, map[string]SecretStore{BackendVault: store}, 0, 100)
+	result, err := ledger.SweepStale(ctx, map[string]SecretStore{BackendVault: versionScoped{store}}, 0, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,14 +216,72 @@ func TestPostgresLedgerSweepStale(t *testing.T) {
 	// A retire that fails leaves the row staged for the next sweep.
 	insertStale(t, pool, ref, 9, "staged")
 	failing := &recordingStore{retireErr: Errorf(ErrUnavailable, OpRetire, "x")}
-	result, err = ledger.SweepStale(ctx, map[string]SecretStore{BackendVault: failing}, 0, 100)
+	result, err = ledger.SweepStale(ctx, map[string]SecretStore{BackendVault: versionScoped{failing}}, 0, 100)
 	if err != nil || result.Deferred != 2 || result.Abandoned != 0 {
 		t.Fatalf("failing retire = %+v, %v", result, err)
 	}
 	// A not-found retire counts as retired.
 	notFound := &recordingStore{retireErr: Errorf(ErrNotFound, OpRetire, "x")}
-	result, err = ledger.SweepStale(ctx, map[string]SecretStore{BackendVault: notFound}, 0, 100)
+	result, err = ledger.SweepStale(ctx, map[string]SecretStore{BackendVault: versionScoped{notFound}}, 0, 100)
 	if err != nil || result.Abandoned != 1 {
 		t.Fatalf("not-found retire = %+v, %v", result, err)
+	}
+	// A store that removes by name (pgvault) is never retired through: the
+	// row is abandoned and counted as a possible orphan.
+	byName := &recordingStore{}
+	result, err = ledger.SweepStale(ctx, map[string]SecretStore{BackendPGVault: byName}, 0, 100)
+	if err != nil || result.Unretired != 1 || result.Abandoned != 0 || len(byName.retired) != 0 {
+		t.Fatalf("name-scoped store = %+v, %v, retired %v", result, err, byName.retired)
+	}
+}
+
+// A write the backend answered with another version leaves the row staged
+// with that version recorded, and the sweeper retires the recorded version,
+// not the intended one.
+func TestPostgresLedgerUnexpectedVersionIsRetired(t *testing.T) {
+	pool := newLedgerPool(t)
+	ledger, err := NewLedger(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	value := NewRuntimeSecret([]byte("v"))
+	for _, store := range []*recordingStore{
+		{version: 5, writeErr: Errorf(ErrUnexpectedVersion, OpWrite, "x")}, // what the Vault adapter returns
+		{version: 6}, // an adapter that answered success with the wrong version
+	} {
+		version, err := ledger.StagedWrite(ctx, store, governedContext(), ledgerRef(), value, 0)
+		if !errors.Is(err, ErrUnexpectedVersion) || version != 0 {
+			t.Fatalf("unexpected version = %d, %v", version, err)
+		}
+	}
+	var staged, recorded int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*), count(created_version) FROM elitea_identity.secret_write_ledger
+WHERE state = 'staged' AND intended_version = 1 AND created_version IN (5, 6)`).Scan(&staged, &recorded); err != nil {
+		t.Fatal(err)
+	}
+	if staged != 2 || recorded != 2 {
+		t.Fatalf("staged = %d, recorded = %d", staged, recorded)
+	}
+	// created_version is set once.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_identity.secret_write_ledger SET created_version = 9 WHERE created_version = 5`); err == nil {
+		t.Fatal("created_version must be immutable once set")
+	}
+	// The trigger keeps created_at immutable, so age the rows past
+	// MinSweepAge with it disabled.
+	if _, err := pool.Exec(ctx, `
+ALTER TABLE elitea_identity.secret_write_ledger DISABLE TRIGGER secret_write_ledger_transition;
+UPDATE elitea_identity.secret_write_ledger SET created_at = created_at - interval '1 hour';
+ALTER TABLE elitea_identity.secret_write_ledger ENABLE TRIGGER secret_write_ledger_transition;`); err != nil {
+		t.Fatal(err)
+	}
+	store := &recordingStore{}
+	result, err := ledger.SweepStale(ctx, map[string]SecretStore{BackendVault: versionScoped{store}}, 0, 100)
+	if err != nil || result.Abandoned != 2 {
+		t.Fatalf("sweep = %+v, %v", result, err)
+	}
+	if len(store.retired) != 2 || store.retired[0]+store.retired[1] != 11 {
+		t.Fatalf("retired = %v; the recorded versions 5 and 6 must be retired, never the intended 1", store.retired)
 	}
 }

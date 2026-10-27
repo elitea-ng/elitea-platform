@@ -27,7 +27,15 @@ type Store struct {
 	client *client
 }
 
-var _ secretstore.SecretStore = (*Store)(nil)
+var (
+	_ secretstore.SecretStore          = (*Store)(nil)
+	_ secretstore.VersionScopedRetirer = (*Store)(nil)
+)
+
+// RetiresOnlyTheWrittenVersion implements secretstore.VersionScopedRetirer:
+// Retire destroys one KV v2 version, and cas_required makes every version
+// the product of exactly one check-and-set write.
+func (*Store) RetiresOnlyTheWrittenVersion() {}
 
 // New builds the adapter. It does not dial; the readiness prerequisite does.
 func New(cfg Config) (*Store, error) {
@@ -280,7 +288,13 @@ func (s *Store) Write(ctx context.Context, sc secretstore.StoreContext, ref secr
 		return 0, secretstore.Errorf(secretstore.ErrUnavailable, op, "malformed write response")
 	}
 	if decoded.Data.Version != casVersion+1 {
-		return 0, secretstore.Errorf(secretstore.ErrMisconfigured, op, "backend created an unexpected version")
+		// The version exists now. Hand it back so the ledger records it
+		// and the sweeper retires it; a non-positive answer names none.
+		created := decoded.Data.Version
+		if created < 0 {
+			created = 0
+		}
+		return created, secretstore.Errorf(secretstore.ErrUnexpectedVersion, op, "backend created an unexpected version")
 	}
 	return decoded.Data.Version, nil
 }

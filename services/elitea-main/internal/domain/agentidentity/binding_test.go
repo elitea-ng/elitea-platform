@@ -175,7 +175,7 @@ func TestProposalValidation(t *testing.T) {
 func TestBindingFieldSetHoldsNoSecretMaterial(t *testing.T) {
 	assertFieldSet(t, reflect.TypeOf(AgentIdentityBinding{}), []string{
 		"ApplicationID", "ApplicationVersionID", "ApprovedBy", "CreatedAt", "DefinitionDigest",
-		"ExternalAgentIdentityID", "ID", "Mode", "PolicyRevisionID", "ProposedBy", "RevocationEpoch",
+		"ExternalAgentIdentityID", "ID", "LastTransitionBy", "Mode", "PolicyRevisionID", "ProposedBy", "RevocationEpoch",
 		"State", "TenantProjectID", "UpdatedAt", "WorkloadIdentity",
 	})
 }

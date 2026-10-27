@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 )
 
@@ -84,5 +85,28 @@ func TestDispatchPolicyRefusesMissingCredentialProfile(t *testing.T) {
 	policy.CredentialProfile = profile.Admission{}
 	if err := policy.validate(); err == nil {
 		t.Fatal("a dispatch policy without a credential profile must be refused")
+	}
+}
+
+// TestAgentAdmissionPinScopesToTheResponse is the review fix for #1456: a
+// resume of turn 1 must not inherit the pin of a later turn 2 in the same
+// conversation, so the scope is the response message, not the conversation.
+func TestAgentAdmissionPinScopesToTheResponse(t *testing.T) {
+	const conversation = "11111111-1111-4111-8111-111111111111"
+	turnOne := agentexecutionapp.Admission{CurrentTurn: &agentexecutionapp.CurrentApplicationTurn{
+		ConversationUUID: conversation, ResponseMessageID: "22222222-2222-4222-8222-222222222222",
+	}}
+	turnTwo := agentexecutionapp.Admission{CurrentTurn: &agentexecutionapp.CurrentApplicationTurn{
+		ConversationUUID: conversation, ResponseMessageID: "33333333-3333-4333-8333-333333333333",
+	}}
+	resumeOne := agentexecutionapp.Admission{CurrentContinueTurn: &agentexecutionapp.CurrentContinueTurn{
+		ConversationUUID: conversation, ResponseMessageID: "22222222-2222-4222-8222-222222222222",
+	}}
+	one, two, resume := agentAdmissionPin(turnOne), agentAdmissionPin(turnTwo), agentAdmissionPin(resumeOne)
+	if one.continuation || !resume.continuation {
+		t.Fatal("only the continue turn is a continuation")
+	}
+	if resume.continuationScope != one.continuationScope || one.continuationScope == two.continuationScope {
+		t.Fatalf("scopes: turn1=%q turn2=%q resume1=%q", one.continuationScope, two.continuationScope, resume.continuationScope)
 	}
 }

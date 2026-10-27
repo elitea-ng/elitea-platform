@@ -37,7 +37,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity/governance"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore/vault"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore/backends"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
@@ -80,26 +80,24 @@ func credentialGovernancePrerequisites(lookup func(string) (string, bool), pool 
 		var checks []profile.Prerequisite
 		// The Vault/OpenBao readiness check (#1113). Unconfigured Vault is
 		// refused only by a revision that requires it for a class. The store
-		// map itself is built for the credential broker (#1118), its only
-		// consumer.
-		var external *vault.Store
-		if vault.Configured(lookup) {
-			cfg, err := vault.ConfigFromEnv(lookup)
-			if err != nil {
-				return nil, err
-			}
-			if external, err = vault.New(cfg); err != nil {
-				return nil, err
-			}
+		// itself is built for the credential broker (#1118), its only consumer.
+		_, vaultReady, err := backends.VaultFromEnv(lookup)
+		if err != nil {
+			return nil, err
 		}
-		checks = append(checks, vault.NewPrerequisite(external))
-		if pool != nil {
-			outbox, err := securityaudit.NewOutboxPrerequisite(pool)
-			if err != nil {
-				return nil, err
-			}
-			checks = append(checks, outbox)
+		checks = append(checks, vaultReady)
+		// Boot and `credential-policy put` check the same outbox: put on a
+		// database without 0183 is refused, not deferred to the next boot.
+		if pool == nil {
+			// A nil *pgxpool.Pool boxed into the Querier interface would pass
+			// the constructor's nil check and panic at the first query.
+			return nil, errors.New("credential governance prerequisites need the platform database")
 		}
+		outbox, err := securityaudit.NewOutboxPrerequisite(pool)
+		if err != nil {
+			return nil, err
+		}
+		checks = append(checks, outbox)
 		return checks, nil
 	}
 }
@@ -131,7 +129,7 @@ func runCredentialPolicy(
 	args []string,
 	lookup func(string) (string, bool),
 	stdout, stderr io.Writer,
-	prerequisites func(context.Context) ([]profile.Prerequisite, error),
+	prerequisites func(*pgxpool.Pool) func(context.Context) ([]profile.Prerequisite, error),
 ) int {
 	if len(args) == 0 || (args[0] != "put" && args[0] != "show") {
 		_, _ = fmt.Fprintln(stderr, "usage: elitea-main credential-policy put --id ID --file FILE --operator NAME | show --id ID")
@@ -158,7 +156,11 @@ func runCredentialPolicy(
 	if args[0] == "show" {
 		return credentialPolicyShow(ctx, args[1:], store, stdout, stderr)
 	}
-	return credentialPolicyPut(ctx, args[1:], store, os.ReadFile, prerequisites, stdout, stderr)
+	var checks func(context.Context) ([]profile.Prerequisite, error)
+	if prerequisites != nil {
+		checks = prerequisites(pool)
+	}
+	return credentialPolicyPut(ctx, args[1:], store, os.ReadFile, checks, stdout, stderr)
 }
 
 func credentialPolicyShow(ctx context.Context, args []string, store credentialPolicyStore, stdout, stderr io.Writer) int {
@@ -246,22 +248,22 @@ func credentialPolicyPut(
 	return 0
 }
 
-// cliCredentialGovernancePrerequisites is the prerequisite set `put` checks a
-// new revision against: the same governed dependencies boot would build.
-func cliCredentialGovernancePrerequisites(lookup func(string) (string, bool)) func(context.Context) ([]profile.Prerequisite, error) {
-	return credentialGovernancePrerequisites(lookup, nil)
-}
-
 // agentIdentityAdmin builds the binding and mandate admin API (#1112). It is
 // nil with the flag off, and the router then mounts none of its routes.
 func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevision, pool *pgxpool.Pool) (*v2agentidentity.Handler, error) {
 	if !admission.Governed() {
 		return nil, nil
 	}
+	// Every binding and mandate change appends its security audit event in
+	// the same transaction; an append failure rolls the change back.
+	audit, err := securityaudit.NewPostgresAppender("elitea-main")
+	if err != nil {
+		return nil, fmt.Errorf("construct agent identity security audit appender: %w", err)
+	}
 	service, err := governance.New(governance.Config{
 		Revisions: governance.FixedRevision(revision),
-		Bindings:  repos.NewAgentIdentityBindings(pool),
-		Mandates:  repos.NewMandates(pool),
+		Bindings:  repos.NewAgentIdentityBindings(pool, audit),
+		Mandates:  repos.NewMandates(pool, audit),
 		// No binding can activate until external agent identities exist
 		// (#1151): an unknown external identity is never active.
 		ExternalIdentities: agentidentity.FailClosedExternalIdentities{},

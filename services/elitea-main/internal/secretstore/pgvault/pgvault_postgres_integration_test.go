@@ -211,3 +211,78 @@ func TestPostgresPGVaultCreatesAnAbsentProjectVault(t *testing.T) {
 		t.Fatalf("direct = %+v, %v", direct, err)
 	}
 }
+
+// flakyLoader fails its next fail loads with a transient error, then reads
+// through.
+type flakyLoader struct {
+	storage.SecretVaultLoader
+	fail atomic.Int64
+}
+
+func (l *flakyLoader) LoadProjectVault(ctx context.Context, projectID int64) (storage.SecretVault, error) {
+	if l.fail.Add(-1) >= 0 {
+		return nil, errors.New("transient database failure")
+	}
+	return l.SecretVaultLoader.LoadProjectVault(ctx, projectID)
+}
+
+// The review scenario: project 7 already holds hidden API_KEY, written by
+// the configurations path with no ledger row. A governed cas-0 StagedWrite
+// of the same name hits a transient load failure, so its row stays staged.
+// After MinSweepAge the sweeper must not purge the existing credential: it
+// abandons the row without a retire.
+func TestPostgresPGVaultSweeperNeverPurgesAPreExistingSecret(t *testing.T) {
+	f := newVaultFixture(t)
+	ctx := context.Background()
+	migration, err := os.ReadFile("../../../migrations/shared/0182_secret_write_ledger.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, string(migration)); err != nil {
+		t.Fatalf("apply 0182: %v", err)
+	}
+	const existing = "pre-existing-credential"
+	if err := f.writer.MutateProject(ctx, 7, []centrysecrets.Mutation{
+		{Collection: centrysecrets.HiddenSecrets, Name: "API_KEY", Value: existing},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := &flakyLoader{SecretVaultLoader: f.loader}
+	loader.fail.Store(1)
+	store, err := New(f.pool, loader, f.writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := secretstore.NewLedger(f.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.StagedWrite(ctx, store, sc(), ref("API_KEY"), secretstore.NewRuntimeSecret([]byte("governed")), 0); !errors.Is(err, secretstore.ErrUnavailable) {
+		t.Fatalf("staged write = %v, want the transient failure", err)
+	}
+	// Without the failure, the cas-0 create of an existing name is refused.
+	if _, err := store.Write(ctx, sc(), ref("API_KEY"), secretstore.NewRuntimeSecret([]byte("governed")), 0); !errors.Is(err, secretstore.ErrVersionConflict) {
+		t.Fatalf("create over an existing name = %v", err)
+	}
+	// The trigger keeps created_at immutable; age the row with it disabled.
+	if _, err := f.pool.Exec(ctx, `
+ALTER TABLE elitea_identity.secret_write_ledger DISABLE TRIGGER secret_write_ledger_transition;
+UPDATE elitea_identity.secret_write_ledger SET created_at = created_at - interval '1 hour';
+ALTER TABLE elitea_identity.secret_write_ledger ENABLE TRIGGER secret_write_ledger_transition;`); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ledger.SweepStale(ctx, map[string]secretstore.SecretStore{secretstore.BackendPGVault: store}, secretstore.MinSweepAge, 100)
+	if err != nil || result.Unretired != 1 || result.Abandoned != 0 || result.Deferred != 0 {
+		t.Fatalf("sweep = %+v, %v", result, err)
+	}
+	direct, err := f.direct(t, 7, "API_KEY")
+	if err != nil || direct.Value != existing {
+		t.Fatalf("the pre-existing secret must survive the sweep: %+v, %v", direct, err)
+	}
+	var state string
+	if err := f.pool.QueryRow(ctx, `SELECT state FROM elitea_identity.secret_write_ledger`).Scan(&state); err != nil || state != "abandoned" {
+		t.Fatalf("ledger state = %q, %v", state, err)
+	}
+}

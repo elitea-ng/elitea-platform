@@ -153,7 +153,7 @@ func TestMandateKindRules(t *testing.T) {
 func TestMandateAndDelegationFieldSetsHoldNoSecretMaterial(t *testing.T) {
 	assertFieldSet(t, reflect.TypeOf(Mandate{}), []string{
 		"AgentBindingID", "ApprovedBy", "CreatedAt", "DelegationID", "ExpiresAt", "ID", "IssuedBy", "Kind",
-		"NotBefore", "OperationScopes", "PolicyRevisionID", "ResourceScopes", "RevocationEpoch", "State",
+		"LastTransitionBy", "NotBefore", "OperationScopes", "PolicyRevisionID", "ResourceScopes", "RevocationEpoch", "State",
 		"SubjectUserID", "TenantProjectID", "UpdatedAt",
 	})
 	assertFieldSet(t, reflect.TypeOf(Delegation{}), []string{
@@ -179,5 +179,82 @@ func assertFieldSet(t *testing.T, typ reflect.Type, want []string) {
 	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("%s fields = %v, want %v", typ.Name(), got, want)
+	}
+}
+
+// A binding revoke revokes every non-revoked mandate; a binding suspend
+// suspends only the effectively active ones. Each change bumps the epoch by
+// one and records the actor.
+func TestFollowBindingCascade(t *testing.T) {
+	cases := []struct {
+		action  Action
+		state   State
+		changed bool
+		want    State
+	}{
+		{ActionRevoke, StateProposed, true, StateRevoked},
+		{ActionRevoke, StateActive, true, StateRevoked},
+		{ActionRevoke, StateSuspended, true, StateRevoked},
+		{ActionRevoke, StateExpired, true, StateRevoked},
+		{ActionRevoke, StateRevoked, false, StateRevoked},
+		{ActionSuspend, StateActive, true, StateSuspended},
+		{ActionSuspend, StateProposed, false, StateProposed},
+		{ActionSuspend, StateSuspended, false, StateSuspended},
+		{ActionSuspend, StateExpired, false, StateActive}, // stored state; effective is expired
+		{ActionSuspend, StateRevoked, false, StateRevoked},
+	}
+	for _, tc := range cases {
+		m := mandateIn(t, tc.state)
+		next, changed, err := m.FollowBinding(tc.action, "300", testNow)
+		if err != nil {
+			t.Fatalf("%s from %s: %v", tc.action, tc.state, err)
+		}
+		if changed != tc.changed || next.State != tc.want {
+			t.Errorf("%s from %s = %s changed=%v, want %s changed=%v", tc.action, tc.state, next.State, changed, tc.want, tc.changed)
+		}
+		wantEpoch := m.RevocationEpoch
+		if tc.changed {
+			wantEpoch++
+			if next.LastTransitionBy != "300" {
+				t.Errorf("%s from %s: last_transition_by = %q", tc.action, tc.state, next.LastTransitionBy)
+			}
+		}
+		if next.RevocationEpoch != wantEpoch {
+			t.Errorf("%s from %s: epoch %d, want %d", tc.action, tc.state, next.RevocationEpoch, wantEpoch)
+		}
+	}
+	if _, _, err := mandateIn(t, StateActive).FollowBinding(ActionApprove, "300", testNow); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("an approval never cascades: %v", err)
+	}
+}
+
+func TestCheckDelegation(t *testing.T) {
+	m := mandateIn(t, StateProposed)
+	if err := CheckDelegation(m, nil, testNow); err != nil {
+		t.Fatalf("no delegation named: %v", err)
+	}
+	id := "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0d01"
+	m.DelegationID = &id
+	good := Delegation{ID: id, TenantProjectID: m.TenantProjectID, AgentBindingID: m.AgentBindingID,
+		State: StateActive, ExpiresAt: testNow.Add(time.Hour)}
+	if err := CheckDelegation(m, &good, testNow); err != nil {
+		t.Fatalf("same tenant and binding: %v", err)
+	}
+	bad := map[string]func(*Delegation){
+		"other tenant":  func(d *Delegation) { d.TenantProjectID++ },
+		"other binding": func(d *Delegation) { d.AgentBindingID = testMandateID },
+		"other id":      func(d *Delegation) { d.ID = testMandateID },
+		"revoked":       func(d *Delegation) { d.State = StateRevoked },
+		"expired":       func(d *Delegation) { d.ExpiresAt = testNow },
+	}
+	for name, mutate := range bad {
+		d := good
+		mutate(&d)
+		if err := CheckDelegation(m, &d, testNow); !errors.Is(err, ErrDelegationNotUsable) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if err := CheckDelegation(m, nil, testNow); !errors.Is(err, ErrDelegationNotUsable) {
+		t.Errorf("absent delegation: %v", err)
 	}
 }

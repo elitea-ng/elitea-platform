@@ -12,8 +12,13 @@
 --
 -- No column holds a token, an assertion, a secret or a key. Every state
 -- change bumps revocation_epoch by one (the repositories do it under
--- SELECT ... FOR UPDATE). The approver differs from the proposer/issuer, in
--- code and in the CHECKs below.
+-- SELECT ... FOR UPDATE), records its actor in last_transition_by and
+-- appends a security audit event (0183 outbox) in the same transaction. The
+-- approver differs from the proposer/issuer, in code and in the CHECKs below.
+--
+-- A delegation and a mandate stay inside their binding's tenant project, and
+-- a mandate's delegation belongs to the same binding: composite foreign keys
+-- enforce both, behind the same checks in code.
 --
 -- With ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED off nothing writes or
 -- reads these tables. Additive only; no change to existing tables.
@@ -41,8 +46,12 @@ CREATE TABLE IF NOT EXISTS elitea_identity.agent_identity_bindings (
                                 REFERENCES elitea_identity.credential_policy_revisions (id),
     proposed_by                 text NOT NULL CHECK (length(proposed_by) BETWEEN 1 AND 64),
     approved_by                 text CHECK (approved_by IS NULL OR length(approved_by) BETWEEN 1 AND 64),
+    -- Who made the latest change: the proposer at creation, then the actor of
+    -- every approve, suspend and revoke.
+    last_transition_by          text NOT NULL CHECK (length(last_transition_by) BETWEEN 1 AND 64),
     created_at                  timestamptz NOT NULL DEFAULT clock_timestamp(),
     updated_at                  timestamptz NOT NULL DEFAULT clock_timestamp(),
+    CONSTRAINT agent_identity_bindings_tenant_key UNIQUE (id, tenant_project_id),
     CONSTRAINT agent_identity_bindings_approver_not_proposer
         CHECK (approved_by IS NULL OR approved_by <> proposed_by),
     CONSTRAINT agent_identity_bindings_active_is_approved
@@ -65,7 +74,7 @@ CREATE TABLE IF NOT EXISTS elitea_identity.delegations (
     issuer               text NOT NULL CHECK (length(issuer) BETWEEN 1 AND 512),
     tenant_id            text NOT NULL CHECK (length(tenant_id) BETWEEN 1 AND 128),
     subject_object_id    text NOT NULL CHECK (length(subject_object_id) BETWEEN 1 AND 128),
-    agent_binding_id     uuid NOT NULL REFERENCES elitea_identity.agent_identity_bindings (id),
+    agent_binding_id     uuid NOT NULL,
     audiences            text[] NOT NULL DEFAULT '{}' CHECK (cardinality(audiences) <= 64),
     scopes               text[] NOT NULL DEFAULT '{}' CHECK (cardinality(scopes) <= 64),
     consent_recorded_at  timestamptz NOT NULL,
@@ -74,16 +83,20 @@ CREATE TABLE IF NOT EXISTS elitea_identity.delegations (
                          CHECK (state IN ('active', 'suspended', 'revoked', 'expired')),
     revocation_epoch     bigint NOT NULL DEFAULT 0 CHECK (revocation_epoch >= 0),
     created_at           timestamptz NOT NULL DEFAULT clock_timestamp(),
-    updated_at           timestamptz NOT NULL DEFAULT clock_timestamp()
+    updated_at           timestamptz NOT NULL DEFAULT clock_timestamp(),
+    CONSTRAINT delegations_scope_key UNIQUE (id, tenant_project_id, agent_binding_id),
+    CONSTRAINT delegations_binding_same_tenant
+        FOREIGN KEY (agent_binding_id, tenant_project_id)
+        REFERENCES elitea_identity.agent_identity_bindings (id, tenant_project_id)
 );
 
 CREATE TABLE IF NOT EXISTS elitea_identity.mandates (
     id                  uuid PRIMARY KEY,
     tenant_project_id   bigint NOT NULL CHECK (tenant_project_id > 0),
     kind                text NOT NULL CHECK (kind IN ('autonomous', 'delegated_background')),
-    agent_binding_id    uuid NOT NULL REFERENCES elitea_identity.agent_identity_bindings (id),
+    agent_binding_id    uuid NOT NULL,
     subject_user_id     bigint CHECK (subject_user_id IS NULL OR subject_user_id > 0),
-    delegation_id       uuid REFERENCES elitea_identity.delegations (id),
+    delegation_id       uuid,
     operation_scopes    text[] NOT NULL CHECK (cardinality(operation_scopes) BETWEEN 1 AND 64),
     resource_scopes     text[] NOT NULL DEFAULT '{}' CHECK (cardinality(resource_scopes) <= 64),
     not_before          timestamptz NOT NULL,
@@ -95,8 +108,17 @@ CREATE TABLE IF NOT EXISTS elitea_identity.mandates (
                         REFERENCES elitea_identity.credential_policy_revisions (id),
     issued_by           text NOT NULL CHECK (length(issued_by) BETWEEN 1 AND 64),
     approved_by         text CHECK (approved_by IS NULL OR length(approved_by) BETWEEN 1 AND 64),
+    -- Who made the latest change, including a cascade from the binding.
+    last_transition_by  text NOT NULL CHECK (length(last_transition_by) BETWEEN 1 AND 64),
     created_at          timestamptz NOT NULL DEFAULT clock_timestamp(),
     updated_at          timestamptz NOT NULL DEFAULT clock_timestamp(),
+    CONSTRAINT mandates_binding_same_tenant
+        FOREIGN KEY (agent_binding_id, tenant_project_id)
+        REFERENCES elitea_identity.agent_identity_bindings (id, tenant_project_id),
+    -- MATCH SIMPLE: a NULL delegation_id skips the check.
+    CONSTRAINT mandates_delegation_same_scope
+        FOREIGN KEY (delegation_id, tenant_project_id, agent_binding_id)
+        REFERENCES elitea_identity.delegations (id, tenant_project_id, agent_binding_id),
     CONSTRAINT mandates_expiry_after_start CHECK (expires_at > not_before),
     CONSTRAINT mandates_approver_not_issuer
         CHECK (approved_by IS NULL OR approved_by <> issued_by),

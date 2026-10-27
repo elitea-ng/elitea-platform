@@ -45,6 +45,11 @@ var (
 	// backend: a missing StoreContext field, version 0 on a read, a malformed
 	// SecretRef.
 	ErrInvalidRequest = errors.New("secretstore: invalid request")
+	// ErrUnexpectedVersion is a write the backend accepted but that created
+	// a version other than casVersion+1. It is not a refusal: a version
+	// exists. Write returns that version alongside the error when the
+	// backend reported one, so the ledger can retire it.
+	ErrUnexpectedVersion = errors.New("secretstore: backend created an unexpected version")
 )
 
 // StoreContext is what the broker passes with every call. Every field comes
@@ -142,12 +147,24 @@ type Metadata struct {
 // takes an explicit version; there is no "latest" read. Write is
 // check-and-set: casVersion is the version the caller expects to be current
 // (0: the secret must not exist yet), and the returned version is the one the
-// write created, casVersion+1.
+// write created, casVersion+1. A Write that fails with ErrUnexpectedVersion
+// returns the version it did create (0 when the backend did not say).
 type SecretStore interface {
 	Read(ctx context.Context, sc StoreContext, ref SecretRef, version int64) (SecretVersion, error)
 	Write(ctx context.Context, sc StoreContext, ref SecretRef, value RuntimeSecret, casVersion int64) (int64, error)
 	Metadata(ctx context.Context, sc StoreContext, ref SecretRef) (Metadata, error)
 	Retire(ctx context.Context, sc StoreContext, ref SecretRef, version int64) error
+}
+
+// VersionScopedRetirer is implemented by a store whose Retire removes
+// exactly one version and whose versions are each created by exactly one
+// check-and-set write, so a retire of the version a staged write intended
+// can only remove what that write (or another uncommitted write of the same
+// version) created. The ledger sweeper retires only through such a store.
+// A store that does not implement it (pgvault, whose Retire removes a name
+// whoever wrote it) is never retired by the sweeper.
+type VersionScopedRetirer interface {
+	RetiresOnlyTheWrittenVersion()
 }
 
 // ValidateReadVersion refuses a read without an explicit version.

@@ -73,6 +73,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authcomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/wikichat"
@@ -129,7 +130,9 @@ func main() {
 	// The credential policy operator command (credential_governance.go).
 	if len(os.Args) > 1 && os.Args[1] == credentialPolicyCommand {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-		code := runCredentialPolicy(ctx, os.Args[2:], os.LookupEnv, os.Stdout, os.Stderr, cliCredentialGovernancePrerequisites(os.LookupEnv))
+		code := runCredentialPolicy(ctx, os.Args[2:], os.LookupEnv, os.Stdout, os.Stderr, func(p *pgxpool.Pool) func(context.Context) ([]profile.Prerequisite, error) {
+			return credentialGovernancePrerequisites(os.LookupEnv, p)
+		})
 		stop()
 		os.Exit(code)
 	}

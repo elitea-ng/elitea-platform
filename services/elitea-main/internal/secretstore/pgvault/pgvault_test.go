@@ -241,6 +241,26 @@ func TestWriteRefusals(t *testing.T) {
 	assertClean(t, err)
 }
 
+// The vault removes by name, so the adapter must never claim version-scoped
+// retires: the ledger sweeper would then purge a value another path wrote.
+func TestStoreIsNotVersionScoped(t *testing.T) {
+	store, _, _, _ := newStore(t, nil)
+	if _, scoped := any(store).(secretstore.VersionScopedRetirer); scoped {
+		t.Fatal("pgvault must not be retired through by the ledger sweeper")
+	}
+}
+
+// A load failure during the existence check is an unknown outcome: nothing
+// is sealed and the error is unavailable, not a refusal.
+func TestWriteWithAFailedLoadSealsNothing(t *testing.T) {
+	store, loader, sealer, _ := newStore(t, map[string]centrysecrets.Secret{})
+	loader.err = errors.New("transient")
+	_, err := store.Write(t.Context(), sc(), ref(nameCanary), secretstore.NewRuntimeSecret([]byte(valueCanary)), 0)
+	if !errors.Is(err, secretstore.ErrUnavailable) || len(sealer.sealed) != 0 {
+		t.Fatalf("write = %v, sealed %v", err, sealer.sealed)
+	}
+}
+
 func TestRetire(t *testing.T) {
 	store, _, sealer, db := newStore(t, nil)
 	if err := store.Retire(t.Context(), sc(), ref(nameCanary), 2); !errors.Is(err, secretstore.ErrNotFound) {

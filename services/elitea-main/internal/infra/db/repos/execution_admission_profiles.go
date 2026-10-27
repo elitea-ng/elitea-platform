@@ -204,8 +204,20 @@ WHERE execution_id = $1`, executionID).Scan(&name, &revisionID, &digest, &pin.Pi
 	return pin, nil
 }
 
-// AnyGovernedPin is the boot-time probe for the continuation guard.
+// AnyGovernedPin is the boot-time probe for the continuation guard. A
+// database without migration 0180 (a developer bootstrap, or pods that start
+// before elitea-migrate) has no pins at all, so the probe answers false rather
+// than refusing a flag-off boot.
 func (s *CredentialGovernanceStore) AnyGovernedPin(ctx context.Context) (bool, error) {
+	var present bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT to_regclass('elitea_runtime.execution_admission_profiles') IS NOT NULL`,
+	).Scan(&present); err != nil {
+		return false, fmt.Errorf("probe governed admission pins: %w", err)
+	}
+	if !present {
+		return false, nil
+	}
 	var found bool
 	if err := s.pool.QueryRow(ctx, `
 SELECT EXISTS (

@@ -106,3 +106,16 @@ func testCertificatePEM(t *testing.T) []byte {
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
+
+func TestVaultFromEnv(t *testing.T) {
+	store, prerequisite, err := VaultFromEnv(lookup(nil))
+	if err != nil || store != nil || prerequisite == nil {
+		t.Fatalf("unconfigured = %v, %v, %v", store, prerequisite, err)
+	}
+	if _, _, err := VaultFromEnv(lookup(map[string]string{vault.EnvAddr: "http://vault:8200"})); !errors.Is(err, vault.ErrInvalidConfig) {
+		t.Fatalf("http:// = %v", err)
+	}
+	if _, _, err := VaultFromEnv(nil); err == nil {
+		t.Fatal("a nil lookup must refuse")
+	}
+}

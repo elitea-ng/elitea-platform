@@ -123,4 +123,7 @@ func TestDefinitiveRefusalClassifiesOutcomes(t *testing.T) {
 	if definitiveRefusal(Errorf(ErrUnavailable, OpWrite, "x")) {
 		t.Fatal("an unavailable backend is an unknown outcome")
 	}
+	if definitiveRefusal(Errorf(ErrUnexpectedVersion, OpWrite, "x")) {
+		t.Fatal("an unexpected version created something; it is not a refusal")
+	}
 }

@@ -30,9 +30,12 @@ on:
   checks the hash chain. The scheduler's
   `SECURITY_AUDIT_OUTBOX_RETENTION_DAYS` is `0` (delete nothing) by default.
 
-**Turning it off.** Drain first: wait until no governed run is active. A
-governed run still active when the flag goes off fails closed at its next
-credential use; it never continues as legacy.
+**What this release does not do yet.** It records the profile; it does not
+enforce it. No credential path reads the pin until the credential broker
+lands (#1118), so a governed run uses credentials exactly as a legacy run
+does. Turn the flag on in this release only to stage revisions, bindings and
+mandates. When enforcement lands, drain before turning the flag off: a
+governed run still active then fails closed at its next credential use.
 
 ## elitea-main: applied migrations were reworded in their comments
 

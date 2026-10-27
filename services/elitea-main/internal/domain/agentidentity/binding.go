@@ -114,6 +114,9 @@ type AgentIdentityBinding struct {
 	PolicyRevisionID string
 	ProposedBy       string // user id; never equal to ApprovedBy
 	ApprovedBy       string // empty until the first approval
+	// LastTransitionBy is the user who made the latest change: the proposer
+	// at creation, then the actor of every approve, suspend and revoke.
+	LastTransitionBy string
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -194,6 +197,7 @@ func NewBinding(id string, p Proposal, policy ModePolicy, policyRevisionID, prop
 		RevocationEpoch:         0,
 		PolicyRevisionID:        policyRevisionID,
 		ProposedBy:              proposedBy,
+		LastTransitionBy:        proposedBy,
 		CreatedAt:               now,
 		UpdatedAt:               now,
 	}, nil
@@ -244,6 +248,7 @@ func (b AgentIdentityBinding) Transition(action Action, actor, policyRevisionID 
 		out.PolicyRevisionID = policyRevisionID
 	}
 	out.State = next
+	out.LastTransitionBy = actor
 	out.RevocationEpoch = b.RevocationEpoch + 1
 	out.UpdatedAt = now
 	return out, nil

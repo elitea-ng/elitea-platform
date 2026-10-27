@@ -131,6 +131,25 @@ func TestWriteWithStaleCASIsVersionConflict(t *testing.T) {
 	assertClean(t, err)
 }
 
+// A write the backend answers with a version other than cas+1 created that
+// version: the adapter returns it with ErrUnexpectedVersion (not a refusal),
+// so the ledger can record and retire it.
+func TestWriteWithUnexpectedVersionReturnsTheCreatedVersion(t *testing.T) {
+	h := newHarness(t)
+	h.fake.override = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/secret/data/") {
+			writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"version": 5}})
+			return true
+		}
+		return false
+	}
+	version, err := h.store.Write(context.Background(), sc(), ref(pathCanary), secret(valueCanary), 0)
+	if !errors.Is(err, secretstore.ErrUnexpectedVersion) || errors.Is(err, secretstore.ErrMisconfigured) || version != 5 {
+		t.Fatalf("unexpected version = %d, %v", version, err)
+	}
+	assertClean(t, err)
+}
+
 // custom_metadata carries no authority: a key that claims cas_required or a
 // different current version changes nothing.
 func TestCustomMetadataNeverChangesADecision(t *testing.T) {

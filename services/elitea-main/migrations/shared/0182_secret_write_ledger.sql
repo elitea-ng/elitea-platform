@@ -8,7 +8,15 @@
 -- refusal (version conflict, denied, misconfigured) marks it `abandoned`. A
 -- crash or an unknown outcome leaves it `staged`; the sweeper
 -- (secretstore.Ledger.SweepStale) later marks it `abandoned` and retires the
--- backend version, unless a committed row already owns that version.
+-- backend version, unless a committed row already owns that version. It
+-- retires only on a backend whose versions are each created by one
+-- check-and-set write (Vault/OpenBao KV v2). A pgvault row is abandoned
+-- without a retire: the vault removes by name, so the sweeper cannot prove
+-- the value is the one this write created.
+--
+-- created_version is set once, on a staged row, when the backend accepted a
+-- write but created a version other than intended_version. The sweeper then
+-- retires created_version, the version that exists.
 --
 -- The row holds the locator (mount and path) and the version, never a value.
 -- The StoreContext fields the sweeper needs to retire a version (tenant,
@@ -30,10 +38,14 @@ CREATE TABLE IF NOT EXISTS elitea_identity.secret_write_ledger (
     locator_mount       text NOT NULL CHECK (length(locator_mount) <= 256),
     locator_path        text NOT NULL CHECK (length(locator_path) BETWEEN 1 AND 512),
     intended_version    bigint NOT NULL CHECK (intended_version > 0),
+    created_version     bigint CHECK (created_version > 0),
     state               text NOT NULL DEFAULT 'staged'
                             CHECK (state IN ('staged', 'committed', 'abandoned')),
     created_at          timestamptz NOT NULL DEFAULT clock_timestamp(),
-    state_changed_at    timestamptz NOT NULL DEFAULT clock_timestamp()
+    state_changed_at    timestamptz NOT NULL DEFAULT clock_timestamp(),
+    -- A committed row owns intended_version; a row whose write created
+    -- another version is never committed.
+    CHECK (created_version IS NULL OR state <> 'committed')
 );
 
 -- One backend version is owned by at most one committed write.
@@ -47,12 +59,19 @@ CREATE INDEX IF NOT EXISTS secret_write_ledger_staged
     WHERE state = 'staged';
 
 -- A row leaves `staged` once and never returns to it, and its identity
--- columns never change.
+-- columns never change. The one staged-to-staged update is recording
+-- created_version, once, from NULL.
 CREATE OR REPLACE FUNCTION elitea_identity.secret_write_ledger_transition()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF OLD.state <> 'staged' OR NEW.state = 'staged' THEN
+    IF OLD.state <> 'staged'
+        OR (NEW.state = 'staged'
+            AND NOT (OLD.created_version IS NULL AND NEW.created_version IS NOT NULL)) THEN
         RAISE EXCEPTION 'secret write ledger row % cannot move from % to %', OLD.id, OLD.state, NEW.state;
+    END IF;
+    IF OLD.created_version IS NOT NULL
+        AND NEW.created_version IS DISTINCT FROM OLD.created_version THEN
+        RAISE EXCEPTION 'secret write ledger row % created version is immutable', OLD.id;
     END IF;
     IF NEW.credential_ref_id IS DISTINCT FROM OLD.credential_ref_id
         OR NEW.tenant_project_id IS DISTINCT FROM OLD.tenant_project_id

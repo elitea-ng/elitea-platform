@@ -95,7 +95,7 @@ func writeDomainError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, agentidentity.ErrInvalidTransition), errors.Is(err, agentidentity.ErrDuplicateBinding),
 		errors.Is(err, agentidentity.ErrExternalIdentityNotActive), errors.Is(err, mandate.ErrInvalidTransition),
-		errors.Is(err, mandate.ErrBindingNotUsable):
+		errors.Is(err, mandate.ErrBindingNotUsable), errors.Is(err, mandate.ErrDelegationNotUsable):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, governance.ErrPolicyUnavailable):
 		writeError(w, http.StatusServiceUnavailable, governance.ErrPolicyUnavailable.Error())
@@ -104,16 +104,22 @@ func writeDomainError(w http.ResponseWriter, err error) {
 	}
 }
 
-// actor is the resolved auth_core user id the permission gate stamped.
-func actor(r *http.Request) (string, bool) {
+// actor is the resolved auth_core user id (auth.User.UserID) the permission
+// gate stamped: the security-boundary id. auth.User.ID is a compatibility id
+// and may be a token id, so it is never used. With no user it writes 401;
+// with a user but no resolved UserID it writes 403. Either way ok is false
+// and the caller must stop.
+func actor(w http.ResponseWriter, r *http.Request) (string, bool) {
 	user, ok := auth.UserFromContext(r.Context())
 	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
 		return "", false
 	}
-	if user.UserID != "" {
-		return user.UserID, true
+	if strings.TrimSpace(user.UserID) == "" {
+		writeError(w, http.StatusForbidden, "the caller has no resolved user id")
+		return "", false
 	}
-	return user.ID, user.ID != ""
+	return user.UserID, true
 }
 
 func decode(w http.ResponseWriter, r *http.Request, into any) bool {
@@ -236,9 +242,8 @@ type bindingCreate struct {
 
 // CreateBinding serves POST /admin/agent_identities.
 func (h *Handler) CreateBinding(w http.ResponseWriter, r *http.Request) {
-	who, ok := actor(r)
+	who, ok := actor(w, r)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	var body bindingCreate
@@ -266,9 +271,8 @@ func (h *Handler) CreateBinding(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) transitionBinding(action agentidentity.Action) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		who, ok := actor(r)
+		who, ok := actor(w, r)
 		if !ok {
-			writeError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
 		next, err := h.service.TransitionBinding(r.Context(), pathID(r, string(action)), action, who)
@@ -370,9 +374,8 @@ type mandateCreate struct {
 
 // CreateMandate serves POST /admin/mandates.
 func (h *Handler) CreateMandate(w http.ResponseWriter, r *http.Request) {
-	who, ok := actor(r)
+	who, ok := actor(w, r)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	var body mandateCreate
@@ -400,9 +403,8 @@ func (h *Handler) CreateMandate(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) transitionMandate(action mandate.Action) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		who, ok := actor(r)
+		who, ok := actor(w, r)
 		if !ok {
-			writeError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
 		next, err := h.service.TransitionMandate(r.Context(), pathID(r, string(action)), action, who)

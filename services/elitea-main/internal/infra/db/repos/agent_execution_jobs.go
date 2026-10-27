@@ -1417,25 +1417,27 @@ func resumeCurrentAgentStaticTools(ctx context.Context, queries *sqlcgen.Queries
 	return nil
 }
 
-// agentAdmissionPin scopes an agent admission to its conversation, so a
-// continuation (HITL, output-limit, authorization or static resume) keeps
-// the governed pin its run started under.
+// agentAdmissionPin scopes an agent admission to the response message it
+// produces, so a continuation (HITL, output-limit, authorization or static
+// resume) of that response keeps the governed pin its run started under. A
+// later turn of the same conversation writes a different response, so its
+// revision never leaks into the resume of an earlier one.
 func agentAdmissionPin(admission agentexecutionapp.Admission) admissionPin {
 	pin := admissionPin{executionID: admission.Record.Outbox.ExecutionID}
-	conversationID := ""
+	var conversationID, responseID string
 	switch {
 	case admission.CurrentTurn != nil:
-		conversationID = admission.CurrentTurn.ConversationUUID
+		conversationID, responseID = admission.CurrentTurn.ConversationUUID, admission.CurrentTurn.ResponseMessageID
 	case admission.CurrentAdhocTurn != nil:
-		conversationID = admission.CurrentAdhocTurn.ConversationUUID
+		conversationID, responseID = admission.CurrentAdhocTurn.ConversationUUID, admission.CurrentAdhocTurn.ResponseMessageID
 	case admission.CurrentRegenerateTurn != nil:
-		conversationID = admission.CurrentRegenerateTurn.ConversationUUID
+		conversationID, responseID = admission.CurrentRegenerateTurn.ConversationUUID, admission.CurrentRegenerateTurn.ResponseMessageID
 	case admission.CurrentContinueTurn != nil:
-		conversationID = admission.CurrentContinueTurn.ConversationUUID
+		conversationID, responseID = admission.CurrentContinueTurn.ConversationUUID, admission.CurrentContinueTurn.ResponseMessageID
 		pin.continuation = true
 	}
-	if conversationID != "" {
-		pin.continuationScope = "agent-conversation:" + conversationID
+	if conversationID != "" && responseID != "" {
+		pin.continuationScope = "agent-response:" + conversationID + ":" + responseID
 	}
 	return pin
 }
