@@ -151,6 +151,13 @@ impl PipelineDefinition {
             .any(|node| matches!(node, PipelineNodeDefinition::Parallel(_)))
     }
 
+    pub(crate) fn first_parallel_node(&self) -> Option<&str> {
+        self.nodes.iter().find_map(|node| match node {
+            PipelineNodeDefinition::Parallel(node) => Some(node.id()),
+            _ => None,
+        })
+    }
+
     pub(super) fn bind_parallel_authority(
         &self,
         checkpointer: Arc<dyn Checkpointer>,
@@ -306,10 +313,31 @@ fn reject_nested_parallel(
             if definitions.iter().any(|(key, definition)| {
                 (key == &path || key.starts_with(&descendants)) && definition.has_parallel_nodes()
             }) {
-                return Err(PipelineConfigurationError::Unsupported(
-                    "an explicit Parallel branch cannot contain another explicit Parallel",
-                ));
+                return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                    node: node.id().to_owned(),
+                    refusal: FanoutChildRefusal::ContainsParallel,
+                });
             }
+        }
+    }
+    Ok(())
+}
+
+/// FU-249: a Parallel binds its checkpoint authority to the started root only,
+/// so a saved child pipeline (beneath an Agent node, a Parallel branch's
+/// included) that holds one is refused by the path of its Parallel node.
+pub(crate) fn refuse_child_parallel(
+    runtimes: &PipelineNodeRuntimes,
+) -> Result<(), PipelineConfigurationError> {
+    let Some(definitions) = runtimes.composition_definitions() else {
+        return Ok(());
+    };
+    for (path, definition) in definitions.iter() {
+        if let Some(parallel) = definition.first_parallel_node() {
+            return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                node: format!("{path}/{parallel}"),
+                refusal: FanoutChildRefusal::ContainsParallel,
+            });
         }
     }
     Ok(())

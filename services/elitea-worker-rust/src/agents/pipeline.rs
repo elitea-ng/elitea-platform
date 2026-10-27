@@ -1921,6 +1921,24 @@ pub(super) async fn materialize_saved_pipeline_tool(
             .ok_or_else(invalid_pipeline_tool_scope)?,
     )?;
     let scoped_proof = scopes.has_ordinary_applications();
+    // FU-249: a Parallel binds its checkpoint authority to the started root only, so a
+    // pipeline run as an Agent's tool that holds one, or runs a child that does, is refused
+    // typed before any model call instead of failing when the tool is called.
+    let parallel = definition.first_parallel_node().map_or_else(
+        || crate::agents::graph::compiler::refuse_child_parallel(&bound.runtimes),
+        |node| {
+            Err(PipelineConfigurationError::FanoutChildUnsupported {
+                node: node.to_owned(),
+                refusal: crate::agents::graph::compiler::FanoutChildRefusal::ContainsParallel,
+            })
+        },
+    );
+    if let Err(refusal) = parallel {
+        return Err(super::runtime::pipeline_configuration_assembly_error(
+            &refusal,
+            "the saved pipeline tool holds a Parallel node",
+        ));
+    }
     // FU-244: a static pause beneath a graph root is an authoring error of the composition
     // (the editor can fix it by removing the pause or the attachment), so it is refused with
     // the composition terminal, never skipped as unavailable.

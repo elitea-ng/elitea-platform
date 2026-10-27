@@ -3065,6 +3065,15 @@ async fn materialize_pipeline_children(
             // root cannot continue) is an authoring error of the saved composition. It is
             // refused with its typed readable terminal, never dropped as an edge.
             Err(error) if is_composition_bound(&error) => return Err(error),
+            // FU-247/FU-249: a node a fan-out position cannot run is fixed by editing the
+            // pipeline; refused with its typed readable terminal too.
+            Err(error)
+                if error.cause().is_some_and(|cause| {
+                    crate::agents::graph::compiler::FanoutChildRefusal::is_code(cause.code())
+                }) =>
+            {
+                return Err(error);
+            }
             // Too large to load together with what is already loaded: left out and named
             // where the root offers its attachments to its own model; a pipeline Agent node
             // that selects it cannot run without it.

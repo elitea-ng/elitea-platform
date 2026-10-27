@@ -1821,6 +1821,29 @@ mod taxonomy_tests {
         assert!(!retryable);
     }
 
+    /// A saved child pipeline holding a Parallel (FU-249) ends as the
+    /// registered deployment message, never the generic unsupported one.
+    #[test]
+    fn a_parallel_in_a_saved_child_pipeline_ends_as_the_registered_deployment_message() {
+        use crate::agents::graph::compiler::{FanoutChildRefusal, PipelineConfigurationError};
+        use crate::protocol::output::{
+            PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE, runtime_error_policy,
+        };
+
+        let error = crate::agents::runtime::pipeline_configuration_assembly_error(
+            &PipelineConfigurationError::FanoutChildUnsupported {
+                node: "inner_call/gather".to_owned(),
+                refusal: FanoutChildRefusal::ContainsParallel,
+            },
+            "the stored pipeline could not be compiled",
+        );
+        let kind = assembly_failure(&error);
+        assert_eq!(kind, RuntimeFailureKind::PipelineNodeTypeNotAvailable);
+        let (_, message, retryable) = runtime_error_policy(kind);
+        assert_eq!(message, PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE);
+        assert!(!retryable);
+    }
+
     /// A Parallel branch that names an inline LLM node (FU-247) is refused at
     /// assembly with the same registered message, never the generic one.
     #[test]

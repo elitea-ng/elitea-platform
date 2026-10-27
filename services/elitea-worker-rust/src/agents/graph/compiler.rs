@@ -78,6 +78,7 @@ pub(crate) use map_compiler::MapCompilerBinding;
 use map_compiler::validate_map_ownership;
 #[allow(unused_imports)] // The binding is staged behind the Parallel gate.
 pub(crate) use parallel_compiler::ParallelCompilerBinding;
+pub(crate) use parallel_compiler::refuse_child_parallel;
 use parallel_compiler::validate_parallel_ownership;
 
 pub(crate) const MAX_PIPELINE_YAML_BYTES: usize = 512 * 1024;
@@ -1304,6 +1305,7 @@ impl PipelineDefinition {
                 "the pipeline agent name is malformed",
             ));
         }
+        refuse_child_parallel(runtimes)?;
         let (checkpointer, bound_runtimes) =
             self.bind_parallel_authority(checkpointer, runtimes)?;
         let (checkpointer, bound_runtimes) =
@@ -3184,6 +3186,9 @@ pub(crate) enum FanoutChildRefusal {
     Kind,
     /// The child is a saved pipeline that contains a Code node.
     ContainsCode,
+    /// A saved child pipeline contains a Parallel node, which binds its
+    /// checkpoint authority to the started root only (FU-249).
+    ContainsParallel,
 }
 
 impl FanoutChildRefusal {
@@ -3192,13 +3197,14 @@ impl FanoutChildRefusal {
         match self {
             Self::Kind => "graph.fanout.child_kind_unsupported",
             Self::ContainsCode => "graph.fanout.child_contains_code",
+            Self::ContainsParallel => "graph.fanout.parallel_in_child_pipeline",
         }
     }
 
     /// Whether `code` is a fan-out child refusal: fixed by editing the pipeline.
     #[must_use]
     pub(crate) fn is_code(code: &str) -> bool {
-        [Self::Kind, Self::ContainsCode]
+        [Self::Kind, Self::ContainsCode, Self::ContainsParallel]
             .iter()
             .any(|refusal| refusal.code() == code)
     }
@@ -3209,6 +3215,9 @@ impl std::fmt::Display for FanoutChildRefusal {
         formatter.write_str(match self {
             Self::Kind => "this node kind cannot run as a Parallel branch or Map worker",
             Self::ContainsCode => "a saved pipeline with a Code node cannot run as a fan-out child",
+            Self::ContainsParallel => {
+                "a saved pipeline with a Parallel node runs only as the started pipeline"
+            }
         })
     }
 }
@@ -3247,6 +3256,7 @@ impl PipelineConfigurationError {
             Self::FanoutChildUnsupported { refusal, .. } => Some(match refusal {
                 FanoutChildRefusal::Kind => "fanout_child_kind",
                 FanoutChildRefusal::ContainsCode => "fanout_child_code",
+                FanoutChildRefusal::ContainsParallel => "parallel_in_child_pipeline",
             }),
         }
     }

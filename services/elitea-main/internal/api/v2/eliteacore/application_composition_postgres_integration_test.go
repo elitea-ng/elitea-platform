@@ -146,6 +146,47 @@ func TestAPausingPipelineUnderAPipelineAgentNodeIsRefusedAtAttachAndAtSave(t *te
 	}
 }
 
+// parallelPipeline is a pipeline whose root is a Parallel of two Agent nodes running alias.
+func parallelPipeline(alias string) string {
+	return fmt.Sprintf("state:\n  messages: list\n  b1: str\n  b2: str\n  joined: list\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{id: one, node: ask_one}, {id: two, node: ask_two}]\n    max_concurrency: 2\n    wait: all\n    output: [joined]\n    transition: END\n  - id: ask_one\n    type: agent\n    tool: %[1]q\n    input_mapping:\n      task: {type: fixed, value: 'one'}\n    output: [b1]\n  - id: ask_two\n    type: agent\n    tool: %[1]q\n    input_mapping:\n      task: {type: fixed, value: 'two'}\n    output: [b2]\n", alias)
+}
+
+// FU-249: a pipeline with a Parallel runs only as the started root, refused by name at
+// attach and at the save that adds the Parallel to a pipeline already run as a child.
+func TestAParallelInASavedChildPipelineIsRefusedAtAttachAndAtSave(t *testing.T) {
+	pool := newPublishCopyPool(t)
+	helper := seedComposed(t, pool, "Helper", "agent", "help")
+	fan := seedComposed(t, pool, "Fan", "pipeline", parallelPipeline("Helper"))
+	mustAttach(t, pool, fan, helper)
+	outer := seedComposed(t, pool, "Outer", "pipeline", agentNodePipeline("Fan", false))
+	expectRefused(t, pool, outer, fan, `Pipeline "Fan" has Parallel node "gather"`, `"Outer" → "Fan"`)
+	// An agent's tool is a child too.
+	chat := seedComposed(t, pool, "Chat", "agent", "chat")
+	expectRefused(t, pool, chat, fan, `Pipeline "Fan" has Parallel node "gather"`)
+
+	// The save path: Inner runs as Outer's child, and the save that adds a Parallel is refused.
+	inner := seedComposed(t, pool, "Inner", "pipeline", agentNodePipeline("Helper", false))
+	mustAttach(t, pool, inner, helper)
+	runner := seedComposed(t, pool, "Runner", "pipeline", agentNodePipeline("Inner", false))
+	mustAttach(t, pool, runner, inner)
+	repo := repos.NewApplicationsRepo(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	_, err := repo.UpdateVersion(ctx, "1", fmt.Sprint(inner.appID), fmt.Sprint(inner.versionID),
+		applications.Version{AgentType: "pipeline", Instructions: parallelPipeline("Helper")})
+	apiErr, ok := err.(*apierr.APIError)
+	if !ok || apiErr.Status != http.StatusBadRequest || apiErr.Code != "APPLICATION_COMPOSITION_INVALID" || !strings.Contains(apiErr.Message, `Pipeline "Inner" has Parallel node "gather"`) {
+		t.Fatalf("save err = %v", err)
+	}
+	var stored string
+	if err := pool.QueryRow(ctx, `SELECT instructions FROM p_1.application_versions WHERE id = $1`, inner.versionID).Scan(&stored); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if strings.Contains(stored, "type: parallel") {
+		t.Fatal("a refused save stored the Parallel")
+	}
+}
+
 // The save check at its hop budget on real PostgreSQL: 25 attachments under
 // one root, walked through the same source the routes use. The bound is
 // generous (the measurement is recorded in the source mapping); the shape

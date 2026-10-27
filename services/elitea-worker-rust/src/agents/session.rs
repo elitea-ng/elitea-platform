@@ -2142,15 +2142,9 @@ pub(super) async fn assemble_pipeline_native(
     )
     .await?;
     let is_resume = resume.is_some();
-    // A saved child pipeline's Parallel binds through the same root turn.
-    let has_parallel = definition.has_parallel_nodes()
-        || node_runtimes
-            .composition_definitions()
-            .is_some_and(|definitions| {
-                definitions
-                    .values()
-                    .any(PipelineDefinition::has_parallel_nodes)
-            });
+    // Only the started root binds a Parallel; a saved child pipeline's is
+    // refused typed at compile (FU-249).
+    let has_parallel = definition.has_parallel_nodes();
     let (turn_checkpointer, node_runtimes, fanout_stop) = pipeline_turn(
         &fanout,
         &state,

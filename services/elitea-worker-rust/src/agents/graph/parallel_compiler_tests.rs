@@ -516,3 +516,55 @@ fn a_branch_whose_saved_pipeline_contains_code_is_refused_typed() {
         Ok(_) => panic!("a branch with Code compiled"),
     }
 }
+
+/// FU-249: a Parallel binds its checkpoint authority to the started root only,
+/// so a saved child pipeline beneath an Agent node that holds one is refused
+/// typed by the path of its Parallel node, before anything binds.
+#[test]
+fn a_saved_child_pipeline_with_a_parallel_is_refused_typed_by_path() {
+    let root = PipelineDefinition::from_yaml(
+        "state:\n  input: str\n  messages: list\n  answer: str\nentry_point: inner_call\nnodes:\n  - id: inner_call\n    type: agent\n    tool: Inner Flow\n    input: [input]\n    input_mapping:\n      task: {type: variable, value: input}\n    output: [answer]\n    transition: END\n",
+    )
+    .expect("root pipeline with one Agent node");
+    let runtimes = PipelineNodeRuntimes::new(None, None, Some(Arc::new(UnavailableResolver)))
+        .with_composition_definitions(std::collections::BTreeMap::from([(
+            "inner_call".to_owned(),
+            PipelineDefinition::from_yaml(YAML).unwrap(),
+        )]));
+    match root.compile_with_runtime("root", Arc::new(MemoryCheckpointer::new()), None, &runtimes) {
+        Err(error @ PipelineConfigurationError::FanoutChildUnsupported { .. }) => {
+            assert_eq!(error.code(), "graph.fanout.parallel_in_child_pipeline");
+            assert_eq!(error.cause_detail(), Some("parallel_in_child_pipeline"));
+            assert!(error.to_string().contains("inner_call/gather"), "{error}");
+        }
+        Err(other) => panic!("expected a typed nested-Parallel refusal, got {other:?}"),
+        Ok(_) => panic!("a saved child pipeline with a Parallel compiled"),
+    }
+}
+
+/// A branch whose saved pipeline holds another Parallel (nested fan-out) is
+/// refused with the same typed refusal, naming the branch's node.
+#[test]
+fn a_branch_whose_saved_pipeline_holds_a_parallel_is_refused_typed() {
+    let definition = PipelineDefinition::from_yaml(YAML).unwrap();
+    let authority: Arc<dyn ParallelCheckpointAuthority> = Arc::new(TestAuthority::default());
+    let checkpointer: Arc<dyn Checkpointer> = authority.clone();
+    let runtimes = PipelineNodeRuntimes::new(None, None, Some(Arc::new(UnavailableResolver)))
+        .with_parallel(ParallelCompilerBinding::for_tests(
+            authority,
+            tokio::time::Instant::now() + std::time::Duration::from_secs(10),
+            None,
+        ))
+        .with_composition_definitions(std::collections::BTreeMap::from([(
+            "workerB".to_owned(),
+            PipelineDefinition::from_yaml(YAML).unwrap(),
+        )]));
+    match definition.compile_subgraph_with_runtime(checkpointer, &runtimes) {
+        Err(error @ PipelineConfigurationError::FanoutChildUnsupported { .. }) => {
+            assert_eq!(error.code(), "graph.fanout.parallel_in_child_pipeline");
+            assert!(error.to_string().contains("workerB"), "{error}");
+        }
+        Err(other) => panic!("expected a typed nested-Parallel refusal, got {other:?}"),
+        Ok(_) => panic!("a nested fan-out compiled"),
+    }
+}
