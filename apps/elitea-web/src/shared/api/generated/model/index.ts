@@ -213,6 +213,7 @@ export * from "./createMemoryHeaders.zod";
 export * from "./createSupportConversationBody.zod";
 export * from "./createTransferGrantRequest.zod";
 export * from "./createdConversation.zod";
+export * from "./credentialProbeResult.zod";
 export * from "./credentialSearchOptionPage.zod";
 export * from "./credentialUseGrant.zod";
 export * from "./credentialUseGrantCreate.zod";

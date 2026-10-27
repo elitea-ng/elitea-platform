@@ -37,6 +37,7 @@ import (
 	v2contextmgr "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
+	v2credentialprobe "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialprobe"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	v2discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/discovery"
@@ -699,6 +700,9 @@ type RouterConfig struct {
 	// API (ADR-0039, issue 1151). Set, like AgentIdentityAdmin, only with the
 	// credential governance flag on; nil mounts none of its routes.
 	ExternalAgentIdentityAdmin *v2agentidentity.ExternalHandler
+	// CredentialProbe serves the credential probe (ADR-0039, issue 1120).
+	// Set only with the credential governance flag on; nil mounts no route.
+	CredentialProbe *v2credentialprobe.Handler
 }
 
 type RuntimeRoutes struct {
@@ -2162,6 +2166,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(grantsApprove).Post("/projects/{projectID}/credential_grants/{id}:approve", grants.Approve)
 				r.With(grantsManage).Post("/projects/{projectID}/credential_grants/{id}:suspend", grants.Suspend)
 				r.With(grantsManage).Post("/projects/{projectID}/credential_grants/{id}:revoke", grants.Revoke)
+			}
+			// Credential probe (ADR-0039, issue 1120): needs
+			// models.credentials.governed.probe in {projectID}; the handler
+			// also needs an active grant listing the probe capability.
+			if cfg.CredentialProbe != nil {
+				probeGate := apimw.RequireResolvedPermissions(
+					permissionResolver, platformauth.PermissionModeDefault, credentialgrant.PermissionProbe)
+				r.With(probeGate).Post("/projects/{projectID}/credential_references/{id}:probe", cfg.CredentialProbe.Probe)
 			}
 			r.Mount("/projects", v2projects.NewHandler(cfg.Pool, projectOptions...).Routes())
 

@@ -95,7 +95,11 @@ type Dependencies struct {
 	// CredentialProfile is the credential governance profile every admission
 	// is pinned to (ADR-0039, #1111). Required: the admission repositories
 	// refuse its zero value.
-	CredentialProfile             profile.Admission
+	CredentialProfile profile.Admission
+	// CredentialBroker serves RuntimeContentService.RedeemCredential
+	// (#1118). It is built at the composition root only with credential
+	// governance on; nil leaves the RPC Unimplemented.
+	CredentialBroker              storage.CredentialRedeemer
 	OriginalCodeDefinitions       repos.CodeDefinitionSourceReader
 	OriginalCodeWorkspaceVerifier storage.OriginalCodeWorkspaceVerifier
 	OriginalCodeBrokerVerifier    storage.OriginalCodeBrokerVerifier
@@ -2083,6 +2087,19 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	// the honest old behaviour — the native worker skips the toolkit — instead
 	// of gaining a family whose every call answers 503.
 	contentServer = contentServer.WithRuntimeArtifacts(runtimeArtifacts)
+	if dependencies.CredentialBroker != nil {
+		contentServer.WithCredentialBroker(dependencies.CredentialBroker)
+	}
+	if dependencies.CredentialProfile.Governed() || dependencies.CredentialProfile.ContinuationGuard() {
+		// A governed run's client-token response carries no secrets-header
+		// value (#1118). Flag off with no governed pins, the token path reads
+		// nothing new.
+		contentPins, pinsErr := repos.NewCredentialGovernanceStore(dependencies.ContentPool)
+		if pinsErr != nil {
+			return nil, fmt.Errorf("construct content pin reader: %w", pinsErr)
+		}
+		contentServer.WithGovernedPins(contentPins)
+	}
 	if originalCodeIntents != nil {
 		contentServer.WithOriginalCodeIntents(originalCodeIntents)
 	}

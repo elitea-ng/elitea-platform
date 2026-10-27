@@ -37,6 +37,20 @@ impl PlatformClient {
         self.runtime_context.redeem(authority).await
     }
 
+    /// Redeem the credential of one bound tool invocation of a governed run.
+    pub(crate) async fn redeem_credential(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        invocation: elitea_agent_runtime::toolkits::governed::BoundToolInvocation,
+    ) -> Result<
+        elitea_agent_runtime::toolkits::governed::RedeemOutcome,
+        elitea_agent_runtime::toolkits::governed::RedeemFailure,
+    > {
+        self.runtime_context
+            .redeem_credential(authority, invocation)
+            .await
+    }
+
     /// Resolve one exact child application/version using the live claim.
     ///
     /// Main serves the frozen, claim-materialized definition on the private

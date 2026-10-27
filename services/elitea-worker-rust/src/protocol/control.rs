@@ -1053,6 +1053,10 @@ pub(crate) struct ClaimBoundRuntimeContextAuthority {
     /// `RemoveIndex` RPC with (ADR-0030 I1), lent as [`IndexRemovalBinding`]
     /// copies; the raw material stays here.
     index_removal: Box<IndexRemovalBinding>,
+    /// The SHA-256 of the command's security context (field 65) for a
+    /// governed command (#1120); `None` for a legacy one. Every
+    /// `RedeemCredential` call names it.
+    governed_context_digest: Option<[u8; 32]>,
 }
 
 /// The claim material one `RemoveIndex` call carries: the execution identity,
@@ -1196,7 +1200,27 @@ impl ClaimBoundRuntimeContextAuthority {
                 fence: claim.fence.clone(),
                 claim_id: claim.claim_id.clone(),
             }),
+            governed_context_digest: claim
+                .governed
+                .reference
+                .as_ref()
+                .map(|reference| *reference.digest()),
         }
+    }
+
+    /// The security context digest of a governed command; `None` for a
+    /// legacy command, whose toolkits keep their claim-time settings.
+    #[must_use]
+    pub(crate) const fn governed_context_digest(&self) -> Option<&[u8; 32]> {
+        self.governed_context_digest.as_ref()
+    }
+
+    /// Test-only: the same authority as a governed command's.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn governed_for_test(mut self, digest: [u8; 32]) -> Self {
+        self.governed_context_digest = Some(digest);
+        self
     }
 
     /// A copy of the claim material the `remove_index` tool addresses Main
@@ -1861,6 +1885,7 @@ pub(crate) fn test_runtime_context_authority() -> ClaimBoundRuntimeContextAuthor
         resource_project_id: "17".to_owned(),
         vector_token: None,
         index_removal: Box::new(IndexRemovalBinding::fixture()),
+        governed_context_digest: None,
     }
 }
 

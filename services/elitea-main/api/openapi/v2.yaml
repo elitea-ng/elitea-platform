@@ -2210,6 +2210,42 @@ components:
           items: { type: string }
         expires_at: { type: string, format: date-time }
 
+    CredentialProbeResult:
+      type: object
+      description: >
+        ADR-0039 credential probe outcome. Names the outcome only: no field
+        holds a secret value, a token or a provider response body.
+      required: [credential_reference_id, provider_type, operation, outcome,
+        message, provider_status, checked_at]
+      properties:
+        credential_reference_id: { type: string, format: uuid }
+        provider_type:
+          type: string
+          description: The provider adapter id, for example jira.
+        operation:
+          type: string
+          nullable: true
+          description: The canonical probe operation id; null when the provider has no probe.
+        outcome:
+          type: string
+          description: One of succeeded, rejected, unreachable, unavailable.
+        message:
+          type: string
+          description: A fixed sentence per outcome; never provider text.
+        provider_status:
+          type: integer
+          nullable: true
+          description: The provider's HTTP status when it answered.
+        checked_at: { type: string, format: date-time }
+      example:
+        credential_reference_id: 0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f11
+        provider_type: jira
+        operation: jira.project.read
+        outcome: unavailable
+        message: probe not available for provider
+        provider_status: null
+        checked_at: '2026-10-27T12:00:00Z'
+
     CredentialUseGrantListResponse:
       type: object
       required: [rows]
@@ -27831,6 +27867,56 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '409':
           description: The current state does not allow this action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /projects/{project_id}/credential_references/{id}:probe:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: id
+        in: path
+        required: true
+        description: The credential reference id (uuid).
+        schema: { type: string }
+    post:
+      operationId: probeCredentialReference
+      summary: Probe a governed credential
+      description: >
+        Runs the provider adapter's probe operation server side, with the
+        material held only for that call, and answers the outcome. Gated on
+        `models.credentials.governed.probe` in the project, and needs an
+        active credential use grant for this reference that lists the
+        `probe` capability; `use` alone is refused (403). The response never
+        holds material. With no probe available for the provider the outcome
+        is `unavailable`. Mounted only when the enterprise credential
+        governance flag is on; otherwise the path answers like any unknown
+        route.
+      tags: [admin]
+      responses:
+        '200':
+          description: The probe outcome
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialProbeResult' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or no active grant lists the probe capability
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such credential reference in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The reference is not active, or no provider adapter serves it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '502':
+          description: The probe failed inside the platform
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

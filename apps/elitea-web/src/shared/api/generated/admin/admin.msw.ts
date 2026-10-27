@@ -53,6 +53,7 @@ import type {
   BrandingPackageReport,
   BrandingSettings,
   BulkInviteSummary,
+  CredentialProbeResult,
   CredentialUseGrant,
   CredentialUseGrantListResponse,
   ExternalAgentIdentity,
@@ -2060,6 +2061,17 @@ export const getRevokeCredentialUseGrantResponseMock = (
   ...overrideResponse,
 });
 
+export const getProbeCredentialReferenceResponseMock =
+  (): CredentialProbeResult => ({
+    credential_reference_id: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f11",
+    provider_type: "jira",
+    operation: "jira.project.read",
+    outcome: "unavailable",
+    message: "probe not available for provider",
+    provider_status: null,
+    checked_at: "2026-10-27T12:00:00Z",
+  });
+
 export const getGetSystemInfoResponseMock = (
   overrideResponse: Partial<Extract<SystemInfo, object>> = {},
 ): SystemInfo => ({
@@ -3671,6 +3683,32 @@ export const getRevokeCredentialUseGrantMockHandler = (
   );
 };
 
+export const getProbeCredentialReferenceMockHandler = (
+  overrideResponse?:
+    | CredentialProbeResult
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CredentialProbeResult> | CredentialProbeResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/projects/:projectId/credential_references/:id\\:probe",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getProbeCredentialReferenceResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetSystemInfoMockHandler = (
   overrideResponse?:
     | SystemInfo
@@ -3758,5 +3796,6 @@ export const getAdminMock = () => [
   getApproveCredentialUseGrantMockHandler(),
   getSuspendCredentialUseGrantMockHandler(),
   getRevokeCredentialUseGrantMockHandler(),
+  getProbeCredentialReferenceMockHandler(),
   getGetSystemInfoMockHandler(),
 ];

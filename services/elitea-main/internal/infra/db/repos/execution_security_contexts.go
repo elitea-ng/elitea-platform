@@ -108,6 +108,11 @@ WHERE execution_id = $1 AND profile = 'elitea.credential-profile.governed.v1'`, 
 			return securitycontext.Reference{}, err
 		}
 	}
+	if built.AgentBindingID != "" {
+		if err := bindRunAuthority(ctx, rows, &built, facts); err != nil {
+			return securitycontext.Reference{}, err
+		}
+	}
 	encoded, reference, err := built.Marshal(executionID)
 	if err != nil {
 		return securitycontext.Reference{}, err
@@ -214,4 +219,78 @@ func callerFromContext(ctx context.Context) securitycontext.Caller {
 		caller.CallingApplicationID = "token:" + user.TokenID
 	}
 	return caller
+}
+
+// bindRunAuthority names the one authority source of the run in the context
+// (ADR-0039 decision 3), read in the admission transaction. In order:
+//
+//  1. A run with a user: that user's newest active, unexpired delegation for
+//     the bound agent. A delegation names the IdP subject (tid + oid), not
+//     the Elitea user, so it is the user's through the sign-in assertion of
+//     the browser session that created it.
+//  2. Else, for a run with a user: exactly one active delegated_background
+//     mandate of the binding naming that user; its delegation, if any, too.
+//  3. A run with no user: exactly one active autonomous mandate of the
+//     binding.
+//
+// Nothing, or more than one mandate, records no authority: the decision
+// (check 6) then denies every governed credential use of the run. An
+// autonomous mandate never serves a run that has a user.
+func bindRunAuthority(ctx context.Context, rows rowFunc, built *securitycontext.Context, facts securityContextFacts) error {
+	userID, _ := strconv.ParseInt(facts.actorID, 10, 64)
+	if userID > 0 {
+		var id string
+		var epoch int64
+		err := rows(ctx, `
+SELECT d.id::text, d.revocation_epoch
+FROM elitea_identity.delegations AS d
+WHERE d.tenant_project_id = $1 AND d.agent_binding_id = $2::uuid
+  AND d.state = 'active' AND d.expires_at > $4
+  AND EXISTS (
+      SELECT 1 FROM elitea_identity.signin_assertions AS a
+      WHERE a.browser_session_digest = d.browser_session_digest AND a.user_id = $3
+        AND a.tenant_id = d.tenant_id AND a.subject_object_id = d.subject_object_id)
+ORDER BY d.created_at DESC, d.id
+LIMIT 1`, facts.tenantProjectID, built.AgentBindingID, userID, facts.admittedAt).Scan(&id, &epoch)
+		switch {
+		case err == nil:
+			built.DelegationID, built.DelegationEpoch = id, epoch
+			return nil
+		case !errors.Is(err, pgx.ErrNoRows):
+			return fmt.Errorf("read the run's delegation: %w", err)
+		}
+	}
+	var (
+		mandateID, delegationID string
+		mandateEpoch            int64
+		delegationEpoch         *int64
+		matches                 int
+	)
+	err := rows(ctx, `
+SELECT m.id::text, m.revocation_epoch, coalesce(m.delegation_id::text, ''), d.revocation_epoch, count(*) OVER ()
+FROM elitea_identity.mandates AS m
+LEFT JOIN elitea_identity.delegations AS d
+  ON d.id = m.delegation_id AND d.tenant_project_id = m.tenant_project_id
+WHERE m.tenant_project_id = $1 AND m.agent_binding_id = $2::uuid AND m.state = 'active'
+  AND m.not_before <= $4 AND m.expires_at > $4
+  AND CASE WHEN $3::bigint > 0
+           THEN m.kind = 'delegated_background' AND m.subject_user_id = $3
+           ELSE m.kind = 'autonomous' END
+ORDER BY m.id
+LIMIT 1`, facts.tenantProjectID, built.AgentBindingID, userID, facts.admittedAt).
+		Scan(&mandateID, &mandateEpoch, &delegationID, &delegationEpoch, &matches)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read the run's mandate: %w", err)
+	}
+	if matches != 1 {
+		return nil
+	}
+	built.MandateID, built.MandateEpoch = mandateID, mandateEpoch
+	if delegationID != "" && delegationEpoch != nil {
+		built.DelegationID, built.DelegationEpoch = delegationID, *delegationEpoch
+	}
+	return nil
 }

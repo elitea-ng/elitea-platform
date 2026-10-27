@@ -374,6 +374,7 @@ macro_rules! content_fake {
 
 content_fake! {
     get_elitea_client_token(GetEliteaClientTokenRequestV1) -> GetEliteaClientTokenResponseV1;
+    redeem_credential(RedeemCredentialRequestV1) -> RedeemCredentialResponseV1;
     get_application_version(GetApplicationVersionRequestV1) -> GetApplicationVersionResponseV1;
     get_attachment_object(GetAttachmentObjectRequestV1) -> GetAttachmentObjectResponseV1;
     execute_http_action(ExecuteHttpActionRequestV1) -> ExecuteHttpActionResponseV1;

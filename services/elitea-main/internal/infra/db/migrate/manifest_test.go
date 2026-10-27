@@ -812,7 +812,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// ExecutionSecurityContextV1 bytes and digest of each governed execution
 	// (#1115), written in its admission transaction and served to the
 	// governed worker under its claim. No data, no permission.
-	require.EqualValues(t, 187, Head(shared))
+	//
+	// 188: shared/0188_credential_redemptions.sql, the credential broker's
+	// elitea_runtime.bound_tool_invocations, credential_redemptions and
+	// execution_agent_sessions (#1118): immutable rows, written only by a
+	// governed process. The material is never stored. No data, no
+	// permission.
+	require.EqualValues(t, 188, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

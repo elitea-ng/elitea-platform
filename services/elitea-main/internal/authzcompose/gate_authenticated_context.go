@@ -30,6 +30,12 @@ func (DefaultAuthSources) AllowsAuthSource(_ string, source auth.AuthenticationS
 
 // AuthenticatedContextGate is check 1: the principal and the caller workload
 // are present and the authentication source is allowed by the revision.
+//
+// An attributed subject (Subject.Attributed: an unattended run under a
+// mandate) has no authentication source. It passes only with
+// AuthenticationSourceUnknown and a mandate authority; the authority gate
+// still checks that mandate. An attributed subject with a source, or under
+// a delegation, is a deny.
 type AuthenticatedContextGate struct{ policy AuthSourcePolicy }
 
 // NewAuthenticatedContextGate builds the gate.
@@ -52,7 +58,12 @@ func (g *AuthenticatedContextGate) Evaluate(_ context.Context, r OperationReques
 	if r.Subject.WorkloadID == "" {
 		reasons = append(reasons, ReasonWorkloadMissing)
 	}
-	if !g.policy.AllowsAuthSource(r.Context.PolicyRevisionID, r.Subject.AuthSource) {
+	switch {
+	case r.Subject.Attributed:
+		if r.Subject.AuthSource != auth.AuthenticationSourceUnknown || r.Authority.Kind != AuthorityMandate {
+			reasons = append(reasons, ReasonAuthSourceNotAllowed)
+		}
+	case !g.policy.AllowsAuthSource(r.Context.PolicyRevisionID, r.Subject.AuthSource):
 		reasons = append(reasons, ReasonAuthSourceNotAllowed)
 	}
 	return GateResult{Permit: len(reasons) == 0, Reasons: reasons}, nil

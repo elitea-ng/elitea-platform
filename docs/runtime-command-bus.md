@@ -232,6 +232,50 @@ Main enforces the same pairing at claim:
 | a field-65 command without `governed_security_context_v1` | `GOVERNED_WORKER_REQUIRED`, non-retryable (the worker maps it to an unsupported capability) |
 | a command without field 65 whose execution is pinned governed | `GOVERNED_CONTEXT_MISSING`, non-retryable (an authorization failure) |
 
+### Governed toolkit credentials (#1118, #1120)
+
+On a governed agent turn no toolkit uses a credential from its claim-time
+settings. Each credentialed configured toolkit is served through its
+`AuthAdapter` (`libs/rust/agent-runtime/src/toolkits/governed`), and every
+tool call:
+
+1. is mapped to one canonical operation of
+   `testdata/proto/runtime/v1/governed-operations/catalogue.json`
+   (`operation_id`, `resource_ref` `<provider>:<kind>/<id or *>`, SHA-256 of
+   the canonical JSON arguments). A tool the adapter does not map is refused
+   (`governed.operation_not_mapped`) and nothing is redeemed;
+2. is redeemed with `RuntimeContentService.RedeemCredential` under the live
+   claim (claim id and fence in metadata), naming a fresh UUID v7
+   `invocation_id` and the command's security context digest;
+3. refuses, before any provider I/O, an envelope whose `target_identity` is
+   not the toolkit's canonical configured target, an expired one
+   (`not_after`), and one whose class or material keys the adapter does not
+   allow;
+4. builds a fresh provider client from the envelope alone, runs the call and
+   drops both. There is no client cache: two runs, or two calls of one run,
+   never share a client. An envelope is never logged or persisted.
+
+The canonical target is the `https` URL `scheme://host[:port][/path]`
+(host lowercased, no trailing slash, query or fragment): the configured base
+URL for Jira, Confluence, Aha! (origin only) and qTest, the site URL with its
+site path for SharePoint.
+
+A `CredentialRedeemDenialV1` with `AUTHORIZATION_REQUIRED` raises the
+delegated-authorization signal (`mcp.authorization_required`) with the
+toolkit, its target as `server_url` and the opaque `authorization_reference`;
+any other code is a tool error carrying the stable code only
+(`governed.credential_denied`). A transport or binding failure is
+`governed.redeem_unavailable`.
+
+Refused as `toolkit_not_governable` on a governed run: a configured toolkit
+whose type has no adapter (named in the run notice; a pipeline fails), every
+MCP connection, a nested agent or saved pipeline that carries a credentialed
+toolkit, and every governed toolkit command (`toolkit.*`, validation, index
+ingest) on the toolkit lane. Credential-free toolkits (`artifact`, `memory`,
+`pptx`, `docx`, `xlsx`) are served as before. `GetEliteaClientToken` stays
+the model-gateway credential only and never reaches a toolkit. A legacy
+command installs none of this.
+
 ## Limits (owner decision Q6)
 
 `libs/proto/elitea/runtime/v1/limits.proto` fields 4 and 5 are

@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package elitea.runtime.v1;
 
+import "elitea/runtime/v1/common.proto";
+import "elitea/runtime/v1/credential.proto";
 import "elitea/runtime/v1/toolkit.proto";
 
 option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
@@ -52,6 +54,9 @@ service RuntimeContentService {
 
   // The Elitea client-token runtime context of the claimed execution.
   rpc GetEliteaClientToken(GetEliteaClientTokenRequestV1) returns (GetEliteaClientTokenResponseV1);
+  // The credential material for one bound tool invocation of a governed run
+  // (#1118). Not served (Unimplemented) unless credential governance is on.
+  rpc RedeemCredential(RedeemCredentialRequestV1) returns (RedeemCredentialResponseV1);
   // One frozen nested (agent-as-tool) application version.
   rpc GetApplicationVersion(GetApplicationVersionRequestV1) returns (GetApplicationVersionResponseV1);
   // One stored chat attachment's text.
@@ -157,6 +162,23 @@ message GetEliteaClientTokenRequestV1 {
 message GetEliteaClientTokenResponseV1 {
   bytes context_json = 1;
   reserved 2 to 15;
+}
+
+message RedeemCredentialRequestV1 {
+  RuntimeContentScopeV1 scope = 1;
+  BoundToolInvocationV1 invocation = 2;
+  // Must equal the digest of the command's security context reference
+  // (WorkerCommandV1 field 65).
+  DigestV1 security_context_digest = 3;
+  reserved 4 to 15;
+}
+
+message RedeemCredentialResponseV1 {
+  oneof result {
+    CredentialEnvelopeV1 envelope = 1;
+    CredentialRedeemDenialV1 denial = 2;
+  }
+  reserved 3 to 15;
 }
 
 message GetApplicationVersionRequestV1 {
