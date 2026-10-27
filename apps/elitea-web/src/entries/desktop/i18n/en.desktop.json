@@ -1056,5 +1056,9 @@
   "workspace.workIn.note": "A worktree is a separate copy on its own branch: the agent works there while you keep using the folder. Merge it back from the sidebar.",
   "workspace.workIn.worktree": "New worktree",
   "workspace.worktree.branch": "Branch: {{branch}}",
-  "workspace.worktree.untitled": "New task"
+  "workspace.worktree.untitled": "New task",
+  "workspace.indexIcon.building": "Index building…",
+  "workspace.indexIcon.off": "Index off: the agent searches files without it",
+  "workspace.indexIcon.open": "Click to open the Index tab",
+  "workspace.indexIcon.reading": "Index: reading…"
 }

@@ -2,16 +2,21 @@
  * `NoAgents`: what a project without agents shows in the thread body instead
  * of an agent picker (`ComposerControls`): create a Local coding agent in it
  * (one click, under the person's own permissions), open the agent editor
- * there, or bind the folder to another project (which opens the title's path
- * card). Nothing is created on the server unless the person clicks.
+ * there, or bind the folder to another project (a menu of the projects it may
+ * join). Nothing is created on the server unless the person clicks.
  */
+import { useState } from 'react';
+
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
+import Menu from '@mui/material/Menu';
+import MenuItem from '@mui/material/MenuItem';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
+import type { ProjectChoice } from './useBindableProjects';
 import type { LocalCodingAgent } from './useLocalCodingAgent';
 
 interface NoAgentsProps {
@@ -19,7 +24,9 @@ interface NoAgentsProps {
   codingAgent: LocalCodingAgent;
   /** Open the agent editor in the bound project. */
   onCreate: () => void;
-  onOtherProject: () => void;
+  /** The projects the folder may move to (not the bound one), and the move. */
+  otherProjects: readonly ProjectChoice[];
+  onMoveTo: (projectId: number) => void;
   busy: boolean;
 }
 
@@ -49,8 +56,9 @@ function noAgentsBody(state: LocalCodingAgent['state']): string {
   }
 }
 
-export function NoAgents({ codingAgent, onCreate, onOtherProject, busy }: NoAgentsProps): React.JSX.Element {
+export function NoAgents({ codingAgent, onCreate, otherProjects, onMoveTo, busy }: NoAgentsProps): React.JSX.Element {
   const { state } = codingAgent;
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   return (
     <Box
       data-testid="workspace-no-agents"
@@ -83,9 +91,24 @@ export function NoAgents({ codingAgent, onCreate, onOtherProject, busy }: NoAgen
             {t('workspace.noAgents.create', 'Create an agent')}
           </Button>
         )}
-        <Button variant="outlined" size="small" disabled={busy} onClick={onOtherProject}>
-          {t('workspace.noAgents.otherProject', 'Use another project')}
-        </Button>
+        {otherProjects.length > 0 && (
+          <Button variant="outlined" size="small" disabled={busy} aria-haspopup="menu" onClick={(event) => setAnchor(event.currentTarget)}>
+            {t('workspace.noAgents.otherProject', 'Use another project')}
+          </Button>
+        )}
+        <Menu anchorEl={anchor} open={anchor !== null} onClose={() => setAnchor(null)} slotProps={{ list: { dense: true } }}>
+          {otherProjects.map((project) => (
+            <MenuItem
+              key={project.id}
+              onClick={() => {
+                setAnchor(null);
+                onMoveTo(project.id);
+              }}
+            >
+              {project.name}
+            </MenuItem>
+          ))}
+        </Menu>
       </Box>
     </Box>
   );

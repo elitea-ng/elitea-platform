@@ -1137,7 +1137,7 @@ describe('WorkspaceSessionPage', () => {
       expect(screen.queryByTestId('agent-chip')).toBeNull();
 
       await user.click(within(empty).getByRole('button', { name: 'Use another project' }));
-      await user.click(await screen.findByRole('menuitemradio', { name: 'Public' }));
+      await user.click(await screen.findByRole('menuitem', { name: 'Public' }));
       await waitFor(async () => expect((await ipc.list())[0]?.project_id).toBe(1));
     });
 

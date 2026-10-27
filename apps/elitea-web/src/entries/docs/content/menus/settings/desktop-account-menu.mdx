@@ -46,8 +46,12 @@ In a Local work thread the row under the text holds, from the left:
 - The agent and its version, and the model.
 - **⋯** with **Step limit**: how many steps a turn may take.
 - In a new thread of a git folder, **Work in**: **This folder**, or **New worktree** (see [Work in a worktree](#work-in-a-worktree)).
-- Where the thread runs (**Local** or in the cloud), the language-server status, and a ring showing how much of the model's context the thread uses. Select the ring to open the **Context** tab.
+- Where the thread runs (**Local** or in the cloud), the language-server status, the index icon, and a ring showing how much of the model's context the thread uses. Select the ring to open the **Context** tab.
 - **Send**, which becomes **Stop** while a turn runs.
+
+The index icon shows the state of the folder's code index by its colour: grey when it is ready or off, the accent colour while it builds, orange when it is out of date and red after an error. Point at it to read the state, for example *Index ready · 257.3K entities*; select it to open the **Index** tab on the right, where the index settings are.
+
+The thread's title at the top (folder › thread) opens a card with the folder's path, **Reveal in Finder** and **Copy Path**. To move the folder to another project, use the folder's menus in the sidebar.
 
 While a turn runs, in a chat or a thread, that round button is **Stop** until you type, then **Send** again: what you send waits in the **Queued** list at the top of the message box. Each queued message has **Send now** (stop the turn and send this message first), **Edit** (take it back into the message box) and **Remove**. Press **Esc** twice quickly to stop the turn from anywhere on the page; a single Esc still just closes a menu or dialog.
 

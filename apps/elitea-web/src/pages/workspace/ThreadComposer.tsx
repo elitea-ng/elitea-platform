@@ -16,7 +16,8 @@
  * fills the context, the inspector's Context tab (`ContextPanel`); `/compact`
  * marks the next send, and so does a thread left idle (`useIdleCompaction`).
  * Beside it the language-server icon (`LspChip`, lazy, #1236): the servers
- * behind the edits' diagnostics. The ⋯ menu holds the step limit
+ * behind the edits' diagnostics; and the index icon (`IndexStatusIcon`): the folder's index state, a click opens the
+ * Index tab. The ⋯ menu holds the step limit
  * (`StepLimitMenu`, lazy): the model steps each run here may take (`/steps`
  * sets the same).
  * `/retry` sends the last message again and `/steps` shows or sets the
@@ -43,6 +44,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 
 import { composer, replayView, type WorkspaceTurn } from '@/features/workspace';
+import { IndexStatusIcon } from '@/features/workspace-index';
 import type { CustomCommand, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { useDoubleEscape } from '@/shared/lib/useDoubleEscape';
@@ -177,6 +179,7 @@ function contextPercentOf(cloudMode: boolean, turn: WorkspaceTurn, history: Thre
 const offersWorkIn = (canBranch: boolean, local: boolean, conversationId: string): boolean => canBranch && local && conversationId === '';
 
 const openContextTab = (): void => useDesktopLayout.getState().showInspector('context');
+const openIndexTab = (): void => useDesktopLayout.getState().showInspector('index');
 
 /** The footer's language-server icon and the context ring (both lazy); the ring once a model call reported usage. */
 function ComposerMeters({ usages, projectId, workspaceId, local, contextPercent }: ComposerMetersProps): React.JSX.Element | null {
@@ -184,6 +187,7 @@ function ComposerMeters({ usages, projectId, workspaceId, local, contextPercent 
   return (
     <Suspense fallback={null}>
       {local ? <LspChip workspaceId={workspaceId} /> : null}
+      {local ? <IndexStatusIcon workspaceId={workspaceId} onOpen={openIndexTab} /> : null}
       {usages.length === 0 ? null : <UsageChip turns={usages} projectId={projectId} contextPercent={contextPercent} onOpenContext={openContextTab} />}
     </Suspense>
   );

@@ -83,7 +83,6 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const subject = useThreadSubject(workspace, conversationId);
   const { turn, commands, raw } = session;
   const skills = useAgentSkills(projectId, raw.versionId);
-  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const hasIndex = useHasIndexHost();
   const appIpc = useAppIpc();
   // "Continue?" at the step limit and an MCP sign-in are cards in the transcript; the rest are the dialog's queue.
@@ -116,11 +115,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           workspace={workspace}
           conversationId={conversationId}
           projectId={projectId}
-          projects={session.projects}
           busy={busy}
-          onChangeProject={(next) => session.rebind.mutate(next)}
-          pathOpen={projectMenuOpen}
-          onPathOpenChange={setProjectMenuOpen}
           attention={attentionOf(session)}
           onIndexSettings={indexSettingsOpener(hasIndex)}
           onFork={forking.onForkThread}
@@ -133,7 +128,13 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
             ) : (
               <>
               {raw.empty && (
-                <NoAgents codingAgent={codingAgent} busy={busy} onCreate={session.createAgent} onOtherProject={() => setProjectMenuOpen(true)} />
+                <NoAgents
+                  codingAgent={codingAgent}
+                  busy={busy}
+                  onCreate={session.createAgent}
+                  otherProjects={session.projects.filter((project) => project.id !== projectId)}
+                  onMoveTo={(next) => session.rebind.mutate(next)}
+                />
               )}
               {!raw.empty && !started && nothingEarlier && (
                 <ThreadIntro

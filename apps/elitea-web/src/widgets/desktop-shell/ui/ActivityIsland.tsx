@@ -4,8 +4,7 @@
  * steps), a commit, a send to the cloud, a thread in the cloud, an index
  * build — most important first. Hover or click opens the list of everything
  * running, with progress and a cancel where the host has one. Nothing
- * running shows the idle line the page gives it (the index state), or
- * nothing at all.
+ * running shows the idle line the page gives it, if any, or nothing at all.
  *
  * It animates its width as the text changes, and keeps still under reduced
  * motion.
