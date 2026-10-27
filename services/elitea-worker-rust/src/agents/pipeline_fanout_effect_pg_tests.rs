@@ -192,6 +192,9 @@ impl Tool for CrashingMcpTool {
 /// The one saved participant every branch selects.
 struct SavedAgentVersions {
     details: Value,
+    /// A second saved participant (application 5, version 6), when a test
+    /// mixes two kinds of branch.
+    second: Option<Value>,
 }
 
 #[tonic::async_trait]
@@ -203,6 +206,14 @@ impl crate::transport::input_content::content_fake::ContextRoutes for SavedAgent
         let value = if call.route == "elitea-client-token" {
             json!({"schema_version":"elitea.runtime.elitea-client-token.v1","project_id":17,
                 "token":"ephemeral-fanout-token"})
+        } else if let Some(second) = self
+            .second
+            .as_ref()
+            .filter(|_| call.route.ends_with("/5/versions/6"))
+        {
+            json!({"schema_version":"elitea.runtime.application-version.v1","project_id":17,
+                "application_id":5,"version_id":6,"version_details":second,
+                "frozen_definition_sha256":"cd".repeat(32)})
         } else if call.route.ends_with("/3/versions/4") {
             json!({"schema_version":"elitea.runtime.application-version.v1","project_id":17,
                 "application_id":3,"version_id":4,"version_details":self.details,
@@ -220,8 +231,19 @@ fn saved_runtime(
     outcomes: Vec<TestModelGatewayOutcome>,
     details: Value,
 ) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
+    saved_runtime_with(outcomes, details, None)
+}
+
+fn saved_runtime_with(
+    outcomes: Vec<TestModelGatewayOutcome>,
+    details: Value,
+    second: Option<Value>,
+) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
     let runtime = RuntimeContextClient::with_rpc(
-        crate::transport::input_content::content_fake::Routes(SavedAgentVersions { details }),
+        crate::transport::input_content::content_fake::Routes(SavedAgentVersions {
+            details,
+            second,
+        }),
         RuntimeContextConfig {
             origin: "https://content.internal".to_owned(),
             deadline: Duration::from_secs(1),
@@ -629,6 +651,131 @@ async fn postgres_fanout_pipeline_branches_that_ask_raise_one_card_each_and_park
         ["start", "paused", "start", "paused", "start", "paused"]
     );
     db.pool.close().await;
+}
+
+/// A saved pipeline that answers without a model.
+fn answering_pipeline() -> Value {
+    json!({
+        "agent_type": "pipeline",
+        "instructions": "state:\n  input: str\n  messages: list\n  answer: str\nentry_point: answer\nnodes:\n  - id: answer\n    type: state_modifier\n    template: 'answered'\n    input: [input]\n    output: [answer]\n    transition: END\n",
+        "meta": {}, "variables": [], "tools": [], "llm_settings": null
+    })
+}
+
+/// A saved pipeline whose direct MCP node calls a tool with external effects.
+/// A saved child has no fenced node writer, so the node is refused at binding.
+fn direct_effect_pipeline() -> Value {
+    let mut pipeline = effectful_agent();
+    pipeline["agent_type"] = json!("pipeline");
+    pipeline["instructions"] = json!(
+        "state:\n  input: str\n  messages: list\n  answer: dict\nentry_point: rev\nnodes:\n  - id: rev\n    type: mcp\n    toolkit_name: release intelligence\n    tool: lookup_release\n    input_mapping: {}\n    output: [answer]\n    transition: END\n"
+    );
+    pipeline
+}
+
+/// Branches `first` and `third` answer; `second` runs `direct_effect_pipeline`.
+fn mixed_request(on_error: &str) -> super::super::request::AgentExecutionRequest {
+    let mut request = request_for(on_error, "pipeline");
+    let yaml = pipeline_yaml(on_error).replacen(
+        "  - id: second_call\n    type: agent\n    tool: release-agent\n",
+        "  - id: second_call\n    type: agent\n    tool: direct-flow\n",
+        1,
+    );
+    assert!(yaml.contains("tool: direct-flow"), "{yaml}");
+    let version = &mut request.payload.application["version_details"];
+    version["instructions"] = json!(yaml);
+    let mut second = version["tools"][0].clone();
+    second["id"] = json!(45);
+    second["name"] = json!("direct-flow");
+    second["toolkit_name"] = json!("direct-flow");
+    second["settings"] = json!({"application_id": 5, "application_version_id": 6});
+    version["tools"].as_array_mut().expect("tools").push(second);
+    request
+}
+
+/// A member whose direct tool cannot run fails its own branch: under On Error
+/// `continue` the run completes and joins it as a failed entry; it never ends
+/// the root run with the member's own failure signal (browser finding,
+/// 2026-10-27). Under `stop` the Parallel node fails the run.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_member_whose_tool_cannot_run_fails_its_branch_not_the_run() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    for on_error in ["continue", "stop"] {
+        let db = IsolatedPostgres::create(&url).await;
+        install_schema(&db.pool).await;
+        sqlx::raw_sql(CHECKPOINT_MIGRATION)
+            .execute(&db.pool)
+            .await
+            .expect("apply checkpoint migration");
+        let tool_calls = Arc::new(AtomicUsize::new(0));
+        let (platform, model_facade, captured) = saved_runtime_with(
+            Vec::new(),
+            answering_pipeline(),
+            Some(direct_effect_pipeline()),
+        );
+        let assembler = PipelineNativeAgentAssembler::postgres(
+            db.pool.clone(),
+            SessionLimits::default(),
+            CheckpointLimits::default(),
+            Arc::new(
+                ToolAdmissionPolicy::new(&[], &std::collections::BTreeMap::new())
+                    .expect("empty tool policy"),
+            ),
+            platform,
+            model_facade,
+        )
+        .with_mcp_connector(Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::clone(&tool_calls),
+            read_only: false,
+        }))
+        .with_fixed_parallel_for_tests();
+        let request = mixed_request(on_error);
+        let invocation = assembler
+            .assemble(claim(&request, 1))
+            .await
+            .unwrap_or_else(|error| panic!("assemble the mixed fan-out: {error}"));
+        let outcome = run_to_end(invocation).await;
+        assert_eq!(tool_calls.load(Ordering::Acquire), 0, "{on_error}");
+        assert_eq!(model_requests(&captured), 0, "{on_error}");
+        if on_error == "continue" {
+            let members = outcome.unwrap_or_else(|error| {
+                panic!("continue: a member's failure ended the run: {error}")
+            });
+            assert!(
+                members
+                    .iter()
+                    .any(|member| member["fanout_v1"]["member"] == "second"
+                        && member["status"] == "failed"),
+                "{members:?}"
+            );
+            let entries = joined(&db.pool).await.expect("joined entries");
+            let statuses = entries
+                .iter()
+                .map(|entry| {
+                    format!(
+                        "{}:{}",
+                        entry["branch_id"].as_str().unwrap_or_default(),
+                        entry["status"].as_str().unwrap_or_default()
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                statuses,
+                ["first:succeeded", "second:failed", "third:succeeded"]
+            );
+        } else {
+            let error = outcome.expect_err("stop: the failed branch fails the node");
+            assert!(
+                !error.contains("pipeline.tool_unavailable"),
+                "stop: the member's own signal ended the run: {error}"
+            );
+        }
+        db.pool.close().await;
+    }
 }
 
 /// R: `second` dies in its model call and resumes from its model checkpoint.

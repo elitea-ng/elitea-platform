@@ -169,6 +169,8 @@ impl PipelineNodeEventScope {
 pub(crate) struct PipelineNodeEventSender {
     inner: mpsc::Sender<PipelineNodeEventSignal>,
     parallel_scope: Option<Arc<ParallelEventScope>>,
+    /// A fixed Parallel member's sender: its failures are its branch outcome.
+    fanout_member: bool,
 }
 
 #[derive(Clone)]
@@ -184,6 +186,7 @@ pub(crate) fn pipeline_node_event_channel() -> (PipelineNodeEventSender, Pipelin
         PipelineNodeEventSender {
             inner: sender,
             parallel_scope: None,
+            fanout_member: false,
         },
         PipelineNodeEventReceiver {
             inner: Arc::new(Mutex::new(Some(receiver))),
@@ -205,7 +208,13 @@ impl PipelineNodeEventSender {
             .map_err(|_| pipeline_node_event_channel_error())
     }
 
+    /// End the run with a registered failure. Inside a fixed Parallel
+    /// member nothing is sent: the member's failure is its branch outcome,
+    /// which the Parallel node lands per On Error, never a root terminal.
     pub(crate) async fn send_execution_failure(&self, code: &'static str) -> adk_rust::Result<()> {
+        if self.fanout_member {
+            return Ok(());
+        }
         self.inner
             .send(PipelineNodeEventSignal::ExecutionFailed { code })
             .await
@@ -235,6 +244,22 @@ impl PipelineNodeEventSender {
         } else {
             return None;
         };
+        if self.fanout_member {
+            // A member's stop is its branch failure; a call that may have
+            // started keeps its code, so the branch fails typed as such.
+            let message = if code == crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE {
+                format!(
+                    "{}: {detail}",
+                    crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE
+                )
+            } else {
+                detail.to_owned()
+            };
+            return Some(adk_rust::graph::GraphError::NodeExecutionFailed {
+                node: node.to_owned(),
+                message,
+            });
+        }
         self.send_execution_failure(code).await.ok()?;
         Some(adk_rust::graph::GraphError::NodeExecutionFailed {
             node: node.to_owned(),
@@ -244,6 +269,10 @@ impl PipelineNodeEventSender {
 
     /// Preserve safe codes and typed continuation causes, never provider messages.
     pub(crate) async fn send_model_failure(&self, error: &AdkError) -> adk_rust::Result<()> {
+        // As `send_execution_failure`: a member's model failure is its branch's.
+        if self.fanout_member {
+            return Ok(());
+        }
         self.inner
             .send(PipelineNodeEventSignal::ModelFailed {
                 code: error.code,
@@ -394,6 +423,42 @@ impl PipelineNodeEventSender {
         });
         self.send_application_event_scoped(tool_name, call_id, event, scope)
             .await
+    }
+
+    /// Close a fixed Parallel member's call with a failure result, in the
+    /// shape a saved Agent member reports one, naming no provider message:
+    /// the member's failure is data its join records.
+    pub(crate) async fn send_application_failed_scoped(
+        &self,
+        tool_name: &str,
+        call_id: &str,
+        scope: Option<&PipelineNodeEventScope>,
+    ) -> adk_rust::Result<()> {
+        const MESSAGE: &str = "The task failed.";
+        let mut event = Event::new("pipeline_application_failed");
+        event.llm_response.content = Some(Content {
+            role: "function".to_owned(),
+            parts: vec![Part::FunctionResponse {
+                function_response: FunctionResponseData::new(
+                    tool_name,
+                    json!({
+                        "error": MESSAGE,
+                        "failure": {"code": "graph.node_execution_failed", "message": MESSAGE,
+                            "recoverable": true, "retryable": false,
+                            "recovery_action": "verify_before_retry"},
+                    }),
+                ),
+                id: Some(call_id.to_owned()),
+                annotations: None,
+            }],
+        });
+        self.send_application_event_scoped(tool_name, call_id, event, scope)
+            .await
+    }
+
+    #[must_use]
+    pub(crate) const fn is_fanout_member(&self) -> bool {
+        self.fanout_member
     }
 
     async fn send_application_event_scoped(

@@ -1,5 +1,7 @@
 use super::*;
 use crate::agents::graph::node_events::{pipeline_node_event_channel, pipeline_node_signal_event};
+use adk_rust::graph::GraphError;
+use adk_rust::{AdkError, ErrorCategory, ErrorComponent};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -347,5 +349,49 @@ async fn ordinary_sender_keeps_existing_root_projection() {
         !event
             .provider_metadata
             .contains_key(DESCENDANT_CHECKPOINT_THREAD_KEY)
+    );
+}
+
+/// A fixed Parallel member's failure is its branch outcome: its failure
+/// signals never reach the root stream, and an approved call that may have
+/// started stays typed on the branch (browser finding, 2026-10-27).
+#[tokio::test]
+async fn a_member_failure_stays_in_its_branch_and_a_root_failure_ends_the_run() {
+    let (mut member, receiver) = sender(binding(Some(parent())));
+    member.fanout_member = true;
+    member
+        .send_execution_failure("pipeline.tool_unavailable")
+        .await
+        .unwrap();
+    member
+        .send_model_failure(&AdkError::new(
+            ErrorComponent::Model,
+            ErrorCategory::Internal,
+            "model.failed",
+            "failed",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(receiver.try_failure_code().await, None);
+    let stop = member
+        .approved_call_stop(
+            crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+            "rev",
+        )
+        .await
+        .expect("a typed member stop");
+    assert!(
+        matches!(&stop, GraphError::NodeExecutionFailed { message, .. }
+        if message.starts_with(crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE))
+    );
+    assert_eq!(receiver.try_failure_code().await, None);
+
+    let (root, receiver) = pipeline_node_event_channel();
+    root.send_execution_failure("pipeline.tool_unavailable")
+        .await
+        .unwrap();
+    assert_eq!(
+        receiver.try_failure_code().await,
+        Some("pipeline.tool_unavailable")
     );
 }
