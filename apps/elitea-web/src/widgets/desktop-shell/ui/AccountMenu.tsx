@@ -37,7 +37,7 @@ import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import ListSubheader from '@mui/material/ListSubheader';
 import Menu from '@mui/material/Menu';
-import MenuItem from '@mui/material/MenuItem';
+import MenuItem, { type MenuItemProps } from '@mui/material/MenuItem';
 import { useColorScheme, useTheme, type Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
@@ -66,14 +66,24 @@ const ITEM_ICONS: Partial<Record<EliteaItemValue, ReactNode>> = {
   catalog: <StorefrontOutlinedIcon fontSize="small" />,
 };
 
-/** The sidebar's scale (`labelSmall`, 16px icons, compact rows), so the menu reads as part of it rather than as MUI's larger default. */
-const MENU_LIST_SX = (theme: Theme) => ({
-  '& .MuiMenuItem-root': { minHeight: '1.75rem', paddingY: 0.5, ...theme.typography.labelSmall },
-  '& .MuiListItemText-primary': theme.typography.labelSmall,
-  '& .MuiListItemIcon-root': { minWidth: '1.75rem' },
-  '& .MuiListItemIcon-root .MuiSvgIcon-root, & .MuiMenuItem-root > .MuiSvgIcon-root': { fontSize: '1rem' },
-  '& .MuiListSubheader-root': { ...theme.typography.labelSmall, lineHeight: '1.75rem' },
-});
+/*
+ * The sidebar's scale (`labelSmall`, 16px icons, 28px rows), so the menu reads
+ * as part of it rather than as MUI's larger default. Each part carries its
+ * own style: the theme gate keeps `.Mui*` class selectors out of `sx`.
+ */
+const rowSx = (theme: Theme) => ({ minHeight: '1.75rem', paddingY: 0.5, ...theme.typography.labelSmall });
+
+function Row(props: MenuItemProps): React.JSX.Element {
+  return <MenuItem {...props} sx={rowSx} />;
+}
+
+function RowIcon({ children }: { readonly children?: ReactNode }): React.JSX.Element {
+  return <ListItemIcon sx={{ minWidth: '1.75rem', '& svg': { fontSize: '1rem' } }}>{children}</ListItemIcon>;
+}
+
+function RowText({ children }: { readonly children: ReactNode }): React.JSX.Element {
+  return <ListItemText slotProps={{ primary: { variant: 'labelSmall' } }}>{children}</ListItemText>;
+}
 
 function initials(name: string): string {
   return name
@@ -106,7 +116,7 @@ function ChoiceSubmenu<T extends string>({ icon, label, value, choices, onChoose
   const start = end === 'left' ? 'right' : 'left';
   return (
     <>
-      <MenuItem
+      <Row
         data-testid={testId}
         aria-haspopup="menu"
         aria-expanded={anchor !== null}
@@ -115,20 +125,20 @@ function ChoiceSubmenu<T extends string>({ icon, label, value, choices, onChoose
           if (event.key === (end === 'left' ? 'ArrowLeft' : 'ArrowRight')) setAnchor(event.currentTarget);
         }}
       >
-        <ListItemIcon>{icon}</ListItemIcon>
-        <ListItemText>{label}</ListItemText>
-        <ChevronRightIcon fontSize="small" />
-      </MenuItem>
+        <RowIcon>{icon}</RowIcon>
+        <RowText>{label}</RowText>
+        <ChevronRightIcon sx={{ fontSize: '1rem' }} />
+      </Row>
       <Menu
         anchorEl={anchor}
         open={anchor !== null}
         onClose={() => setAnchor(null)}
         anchorOrigin={{ vertical: 'top', horizontal: end }}
         transformOrigin={{ vertical: 'top', horizontal: start }}
-        slotProps={{ list: { dense: true, 'aria-label': label, sx: MENU_LIST_SX } }}
+        slotProps={{ list: { dense: true, 'aria-label': label } }}
       >
         {choices.map((choice) => (
-          <MenuItem
+          <Row
             key={choice.value}
             selected={choice.value === value}
             onClick={() => {
@@ -136,9 +146,9 @@ function ChoiceSubmenu<T extends string>({ icon, label, value, choices, onChoose
               onChoose(choice.value);
             }}
           >
-            <ListItemIcon>{choice.value === value ? <CheckIcon fontSize="small" /> : null}</ListItemIcon>
-            <ListItemText>{choice.label}</ListItemText>
-          </MenuItem>
+            <RowIcon>{choice.value === value ? <CheckIcon fontSize="small" /> : null}</RowIcon>
+            <RowText>{choice.label}</RowText>
+          </Row>
         ))}
       </Menu>
     </>
@@ -266,41 +276,41 @@ export function AccountMenu({ items, run, selected = false, reload = reloadPage 
         onClose={close}
         anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
         transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-        slotProps={{ list: { dense: true, 'aria-label': menuLabel, sx: MENU_LIST_SX }, paper: { sx: { minWidth: '15rem' } } }}
+        slotProps={{ list: { dense: true, 'aria-label': menuLabel }, paper: { sx: { minWidth: '15rem' } } }}
       >
         {author.email !== undefined && author.email !== '' && (
           // A subheader, not an item: the menu's keyboard focus skips it (`muiSkipListHighlight`).
           <ListSubheader
             disableSticky
-            sx={(theme: Theme) => ({ background: 'transparent', color: theme.vars.palette.text.metrics, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' })}
+            sx={(theme: Theme) => ({ ...theme.typography.labelSmall, lineHeight: '1.75rem', background: 'transparent', color: theme.vars.palette.text.metrics, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' })}
           >
             {author.email}
           </ListSubheader>
         )}
-        <MenuItem onClick={() => go('/settings')}>
-          <ListItemIcon>
+        <Row onClick={() => go('/settings')}>
+          <RowIcon>
             <SettingsOutlinedIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText>{t('desktop.shell.settings', 'Settings')}</ListItemText>
+          </RowIcon>
+          <RowText>{t('desktop.shell.settings', 'Settings')}</RowText>
           <Typography variant="bodySmall" component="kbd" sx={{ fontFamily: 'inherit', marginLeft: 2 }}>
             {`${modKey()},`}
           </Typography>
-        </MenuItem>
+        </Row>
         {usageVisible && (
-          <MenuItem onClick={() => go('/settings/usage')}>
-            <ListItemIcon>
+          <Row onClick={() => go('/settings/usage')}>
+            <RowIcon>
               <DataUsageOutlinedIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText>{t('desktop.account.usage', 'Usage')}</ListItemText>
-          </MenuItem>
+            </RowIcon>
+            <RowText>{t('desktop.account.usage', 'Usage')}</RowText>
+          </Row>
         )}
         {items
           .filter((item) => item.value !== 'help')
           .map((item) => (
-            <MenuItem key={item.value} data-testid={`shell-account-${item.value}`} onClick={() => go(item.url)}>
-              <ListItemIcon>{ITEM_ICONS[item.value]}</ListItemIcon>
-              <ListItemText>{item.label}</ListItemText>
-            </MenuItem>
+            <Row key={item.value} data-testid={`shell-account-${item.value}`} onClick={() => go(item.url)}>
+              <RowIcon>{ITEM_ICONS[item.value]}</RowIcon>
+              <RowText>{item.label}</RowText>
+            </Row>
           ))}
         <Divider />
         <ChoiceSubmenu<ThemeMode>
@@ -325,49 +335,49 @@ export function AccountMenu({ items, run, selected = false, reload = reloadPage 
         />
         <Divider />
         {help !== undefined && (
-          <MenuItem onClick={() => go(help.url)}>
-            <ListItemIcon>
+          <Row onClick={() => go(help.url)}>
+            <RowIcon>
               <HelpOutlineOutlinedIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText>{t('desktop.account.getHelp', 'Get help')}</ListItemText>
-          </MenuItem>
+            </RowIcon>
+            <RowText>{t('desktop.account.getHelp', 'Get help')}</RowText>
+          </Row>
         )}
-        <MenuItem
+        <Row
           data-testid="shell-account-whats-new"
           onClick={() => {
             close();
             openExternally(whatsNewUrl(version));
           }}
         >
-          <ListItemIcon>
+          <RowIcon>
             <NewReleasesOutlinedIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText>{t('desktop.account.whatsNew', 'What’s new')}</ListItemText>
+          </RowIcon>
+          <RowText>{t('desktop.account.whatsNew', 'What’s new')}</RowText>
           {version !== undefined && (
             <Typography variant="bodySmall" sx={(theme: Theme) => ({ marginLeft: 2, color: theme.vars.palette.text.metrics })}>
               {version}
             </Typography>
           )}
-        </MenuItem>
-        <MenuItem onClick={() => go('/settings/troubleshoot')}>
-          <ListItemIcon>
+        </Row>
+        <Row onClick={() => go('/settings/troubleshoot')}>
+          <RowIcon>
             <MedicalServicesOutlinedIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText>{t('desktop.account.troubleshoot', 'Troubleshoot')}</ListItemText>
-        </MenuItem>
+          </RowIcon>
+          <RowText>{t('desktop.account.troubleshoot', 'Troubleshoot')}</RowText>
+        </Row>
         <Divider />
-        <MenuItem
+        <Row
           data-testid="shell-account-sign-out"
           onClick={() => {
             close();
             performLogout();
           }}
         >
-          <ListItemIcon>
+          <RowIcon>
             <LogoutOutlinedIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText>{t('desktop.account.signOut', 'Sign out')}</ListItemText>
-        </MenuItem>
+          </RowIcon>
+          <RowText>{t('desktop.account.signOut', 'Sign out')}</RowText>
+        </Row>
       </Menu>
     </Box>
   );
