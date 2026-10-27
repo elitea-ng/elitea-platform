@@ -282,16 +282,20 @@ func (s *EliteaClientTokenService) Resolve(
 	ctx context.Context,
 	claim ContentClaim,
 ) (EliteaClientTokenContext, error) {
-	value, _, err := s.resolve(ctx, claim)
+	value, _, err := s.resolve(ctx, claim, true)
 	return value, err
 }
 
+// resolve issues the run's token. withSecretsHeader reads the project's
+// X-SECRET value too; a worker that did not accept the field (and every
+// governed run) never has it read.
 func (s *EliteaClientTokenService) resolve(
 	ctx context.Context,
 	claim ContentClaim,
+	withSecretsHeader bool,
 ) (EliteaClientTokenContext, RuntimeContextAuthorization, error) {
 	var authorization RuntimeContextAuthorization
-	value, err := s.resolveTokenValue(ctx, claim, &authorization)
+	value, err := s.resolveTokenValue(ctx, claim, &authorization, withSecretsHeader)
 	if err != nil {
 		return EliteaClientTokenContext{}, RuntimeContextAuthorization{}, err
 	}
@@ -302,6 +306,7 @@ func (s *EliteaClientTokenService) resolveTokenValue(
 	ctx context.Context,
 	claim ContentClaim,
 	authorized *RuntimeContextAuthorization,
+	withSecretsHeader bool,
 ) (EliteaClientTokenContext, error) {
 	if err := ctx.Err(); err != nil {
 		return EliteaClientTokenContext{}, err
@@ -359,12 +364,15 @@ func (s *EliteaClientTokenService) resolveTokenValue(
 	); err != nil {
 		return EliteaClientTokenContext{}, err
 	}
-	return EliteaClientTokenContext{
-		SchemaVersion:      EliteaClientTokenSchemaVersion,
-		ProjectID:          authorization.ResourceProjectID,
-		Token:              token,
-		SecretsHeaderValue: s.projectSecretsHeaderValue(ctx, authorization.ResourceProjectID),
-	}, nil
+	value := EliteaClientTokenContext{
+		SchemaVersion: EliteaClientTokenSchemaVersion,
+		ProjectID:     authorization.ResourceProjectID,
+		Token:         token,
+	}
+	if withSecretsHeader {
+		value.SecretsHeaderValue = s.projectSecretsHeaderValue(ctx, authorization.ResourceProjectID)
+	}
+	return value, nil
 }
 
 // projectSecretsHeaderValue reads the project's `X-SECRET` value, or reports

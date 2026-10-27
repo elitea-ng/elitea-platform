@@ -101,6 +101,25 @@ func TestRuntimeContextOmitsTheProjectSecretsHeaderWhenTheWorkerDoesNotAsk(t *te
 	require.Contains(t, keys, "token")
 }
 
+// A worker that did not ask (and every governed run, which never asks) has
+// the project vault left unread, not read and then dropped.
+func TestRuntimeContextDoesNotReadTheProjectSecretsHeaderWhenTheWorkerDoesNotAsk(t *testing.T) {
+	t.Parallel()
+
+	reads := 0
+	service := newSecretsHeaderTokenService(t, projectSecretsHeaderReaderFunc(
+		func(context.Context, int64) (string, error) {
+			reads++
+			return "a-real-value", nil
+		}))
+	server := newIndexRuntimeContextTestServer(t, service)
+
+	response := serve(server, validRuntimeContextRequest(t))
+
+	require.Equal(t, codes.OK, response.Code)
+	require.Zero(t, reads, "the project X-SECRET value was read for a worker that did not accept it")
+}
+
 // A different field name in the accept list grants nothing. Without this, an
 // accept header that was merely PRESENT would look like it worked.
 func TestRuntimeContextOmitsTheProjectSecretsHeaderForAnotherAcceptedField(t *testing.T) {
