@@ -48,6 +48,17 @@ type statusRecorder struct {
 // http.ResponseController (SSE, HTTP/2 flush, and per-write deadlines).
 func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
+// Flush makes the recorder an http.Flusher too. A wrapper inside it that
+// flushes by asserting http.Flusher on the writer it holds (chi's Compress
+// middleware does) would otherwise find none here, and an event stream's
+// frames would wait in the server's buffer (the project event stream did).
+func (r *statusRecorder) Flush() {
+	if !r.wroteHeader {
+		r.WriteHeader(http.StatusOK)
+	}
+	_ = http.NewResponseController(r.ResponseWriter).Flush()
+}
+
 func (r *statusRecorder) WriteHeader(code int) {
 	if r.wroteHeader {
 		return
