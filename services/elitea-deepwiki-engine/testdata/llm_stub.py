@@ -84,10 +84,15 @@ STRUCTURE = {
 
 def embed(text: str) -> list:
     vector = [0.0] * DIM
-    for token in re.findall(r"[A-Za-z][A-Za-z0-9]+", text.lower()):
+    tokens = re.findall(r"[A-Za-z][A-Za-z0-9]+", text.lower())
+    # A text with no word token ("{}", "0", "x", punctuation) must still get
+    # a unit vector: elitea-vector refuses an all-zero vector (#1441), as a
+    # real embedding model never returns one. Its one bucket comes from the
+    # whole text, so it stays deterministic.
+    for token in tokens or [f"\0{text}"]:
         digest = hashlib.sha256(f"deepwiki-e2e:{token}".encode()).hexdigest()
         vector[int(digest[:8], 16) % DIM] += 1.0
-    norm = math.sqrt(sum(v * v for v in vector)) or 1.0
+    norm = math.sqrt(sum(v * v for v in vector))
     return [v / norm for v in vector]
 
 
