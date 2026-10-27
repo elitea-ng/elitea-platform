@@ -308,7 +308,7 @@ func (c *Client) token(ctx context.Context, fields [][2]string) (TokenResponse, 
 		// The error names the URL only; it is still not returned.
 		return TokenResponse{}, ErrProviderUnavailable
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxTokenResponseBytes+1))
 	defer clear(raw)
 	if err != nil || len(raw) > maxTokenResponseBytes {
