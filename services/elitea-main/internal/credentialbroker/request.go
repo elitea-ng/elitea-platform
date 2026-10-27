@@ -142,6 +142,20 @@ func (b *Broker) buildRequest(ctx context.Context, sc *securitycontextView, req 
 				subjectUser = parseUserID(m.ApprovedBy)
 			}
 		}
+		// A delegated_background mandate may carry the user's delegation;
+		// admission recorded it so an oauth_delegated use can exchange it.
+		if sc.delegationID != "" && facts.mandate != nil && facts.mandate.Kind == mandate.KindDelegatedBackground &&
+			facts.mandate.DelegationID != nil && *facts.mandate.DelegationID == sc.delegationID {
+			d, err := b.cfg.Delegations.Delegation(ctx, sc.delegationID)
+			switch {
+			case errors.Is(err, mandate.ErrDelegationNotUsable):
+			case err != nil:
+				return requestFacts{}, err
+			default:
+				facts.delegation = &d
+				externalSubject = d.SubjectObjectID
+			}
+		}
 	case sc.delegationID != "":
 		authority = authzcompose.AuthorityRef{Kind: authzcompose.AuthorityDelegation, ID: sc.delegationID, Epoch: sc.delegationEpoch}
 		d, err := b.cfg.Delegations.Delegation(ctx, sc.delegationID)

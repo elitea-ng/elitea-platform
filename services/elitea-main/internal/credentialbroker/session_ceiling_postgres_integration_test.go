@@ -65,4 +65,16 @@ VALUES (gen_random_uuid(), 7, $1::uuid, 11, $2::uuid, $3::uuid, ARRAY['use'], AR
 	empty, err := store.SessionCeiling(ctx, 8, binding)
 	require.NoError(t, err)
 	require.Empty(t, empty)
+
+	// Resolution: two usable grants of the toolkit are ambiguous; the other
+	// binding's one is the answer; another operation or toolkit has none.
+	_, err = store.ResolveCredentialReference(ctx, 7, binding, 11, "jira.issue.read")
+	require.ErrorIs(t, err, ErrReferenceUnresolved)
+	ref, err := store.ResolveCredentialReference(ctx, 7, other, 11, "jira.issue.read")
+	require.NoError(t, err)
+	require.Equal(t, "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e4d05", ref)
+	_, err = store.ResolveCredentialReference(ctx, 7, other, 11, "jira.issue.write")
+	require.ErrorIs(t, err, ErrReferenceUnresolved)
+	_, err = store.ResolveCredentialReference(ctx, 7, other, 12, "jira.issue.read")
+	require.ErrorIs(t, err, ErrReferenceUnresolved)
 }

@@ -3,11 +3,14 @@ package storage
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"io"
+	"net/url"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 
@@ -224,4 +227,30 @@ func TestGovernedRunTokenCarriesNoSecretsHeader(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The redemption claim binding refuses a node-recovery inspection claim and
+// every lane but the agent lanes, as the content reads do for writes.
+func TestCredentialRedemptionBindingGuards(t *testing.T) {
+	identity, err := url.Parse("spiffe://elitea.internal/runtime/worker-1")
+	require.NoError(t, err)
+	queried := false
+	repository, err := newPostgresContentRepository(contentQueryerFunc(func(_ context.Context, query string, _ ...any) pgx.Row {
+		queried = true
+		for _, guard := range []string{
+			"c.released_at IS NULL", "c.lease_expires_at > clock_timestamp()", "ws.revoked_at IS NULL",
+			"j.desired_state = 'RUNNING'", "c.recovery_mode <> 'NODE_RECOVERY'",
+			"j.capability_id IN ('agent.execute.application.v1', 'agent.execute.adhoc.v1')",
+		} {
+			require.Contains(t, query, guard)
+		}
+		return contentRowFunc(func(...any) error { return pgx.ErrNoRows })
+	}))
+	require.NoError(t, err)
+	_, err = repository.AuthorizeCredentialRedemption(context.Background(), ContentClaim{
+		PeerCertificate: certificateWithURI(identity), ExecutionID: "execution-1", Generation: 1,
+		ClaimID: "claim-1", FenceToken: make([]byte, sha256.Size),
+	})
+	require.True(t, queried)
+	require.ErrorIs(t, err, ErrContentUnauthorized)
 }

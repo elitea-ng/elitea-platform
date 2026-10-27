@@ -221,6 +221,19 @@ func (r *Registry) MaterialKeys(providerType string, class credentialgrant.Crede
 	return slices.Clone(d.MaterialKeys[class])
 }
 
+// OAuthResource is the delegated token's resource and least-privilege
+// scopes of providerType for class: empty when the descriptor names none.
+func (r *Registry) OAuthResource(providerType string, class credentialgrant.CredentialClass) (string, []string) {
+	if r == nil {
+		return "", nil
+	}
+	d, ok := r.providers[providerType]
+	if !ok || !d.Accepts(class) {
+		return "", nil
+	}
+	return d.Audience, slices.Clone(d.Scopes[class])
+}
+
 // Descriptor returns a copy of providerType's descriptor.
 func (r *Registry) Descriptor(providerType string) (AdapterDescriptor, bool) {
 	if r == nil {

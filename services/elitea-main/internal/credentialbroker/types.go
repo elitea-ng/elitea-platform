@@ -68,6 +68,10 @@ var ErrInvalidRequest = errors.New("credential broker: invalid redemption reques
 // ErrInvocationMismatch is a replayed invocation id with another field.
 var ErrInvocationMismatch = errors.New("credential broker: the invocation id was used with other fields")
 
+// ErrReferenceUnresolved is a Store answer: the run has no single usable
+// grant to name the credential reference of an invocation that sent none.
+var ErrReferenceUnresolved = errors.New("credential broker: no single grant names the credential reference")
+
 // ErrAuditFailed wraps a security audit append failure. The broker denies.
 var ErrAuditFailed = errors.New("credential broker: security audit append failed")
 
@@ -114,8 +118,11 @@ func (i BoundToolInvocation) validate() error {
 	if err != nil || id.String() != i.InvocationID {
 		return ErrInvalidRequest
 	}
-	if _, err := uuid.Parse(i.CredentialReferenceID); err != nil {
-		return ErrInvalidRequest
+	// Empty asks Main to resolve the reference from the run's grants.
+	if i.CredentialReferenceID != "" {
+		if _, err := uuid.Parse(i.CredentialReferenceID); err != nil {
+			return ErrInvalidRequest
+		}
 	}
 	switch {
 	case i.ToolCallID == "", len(i.ToolCallID) > maxToolCallIDBytes, !printable(i.ToolCallID),

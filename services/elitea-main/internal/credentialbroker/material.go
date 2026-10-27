@@ -94,41 +94,41 @@ func (b *Broker) readStatic(ctx context.Context, req RedeemRequest, reference cr
 	return material, nil
 }
 
-// shapeMaterial turns a stored value into the catalogue's keys. A JSON
-// object of strings gives each key its member; any other value is the one
-// key of a single-key class. A missing or empty key refuses the whole
-// value, and members the catalogue does not name are dropped.
+// shapeMaterial turns a stored value into the catalogue's keys. The first
+// key is required; the others are optional (a Jira PAT has a token and no
+// username). A JSON object of strings gives each key its member: the first
+// key missing or empty refuses the whole value, and members the catalogue
+// does not name are dropped, never released. Any other value is the first
+// key alone. A JSON object is never released as a raw value.
 func shapeMaterial(raw []byte, keys []string) (map[string][]byte, bool) {
+	if len(keys) == 0 || len(raw) == 0 {
+		return nil, false
+	}
 	var object map[string]json.RawMessage
-	if json.Unmarshal(raw, &object) == nil && object != nil {
-		out := make(map[string][]byte, len(keys))
-		complete := true
-		for _, key := range keys {
-			member, ok := object[key]
-			var value string
-			if !ok || json.Unmarshal(member, &value) != nil || value == "" {
-				complete = false
-				break
-			}
-			out[key] = []byte(value)
-		}
+	if json.Unmarshal(raw, &object) != nil || object == nil {
+		return map[string][]byte{keys[0]: append([]byte(nil), raw...)}, true
+	}
+	defer func() {
 		for _, member := range object {
 			clear(member)
 		}
-		if complete {
-			return out, true
+	}()
+	out := make(map[string][]byte, len(keys))
+	for i, key := range keys {
+		member, ok := object[key]
+		var value string
+		if ok && json.Unmarshal(member, &value) == nil && value != "" {
+			out[key] = []byte(value)
+			continue
 		}
-		for _, value := range out {
-			clear(value)
-		}
-		if len(keys) != 1 {
+		if i == 0 {
+			for _, v := range out {
+				clear(v)
+			}
 			return nil, false
 		}
 	}
-	if len(keys) != 1 || len(raw) == 0 {
-		return nil, false
-	}
-	return map[string][]byte{keys[0]: append([]byte(nil), raw...)}, true
+	return out, true
 }
 
 // exchange runs the on-behalf-of exchange of an oauth_delegated use. Entra
@@ -139,15 +139,20 @@ func (b *Broker) exchange(ctx context.Context, req RedeemRequest, facts requestF
 		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "oauth_not_configured"}
 	}
 	r := facts.request
-	if r.Authority.Kind != authzcompose.AuthorityDelegation || facts.delegation == nil {
+	// The delegation is the run's authority, or the one its
+	// delegated_background mandate carries (buildRequest loads only that).
+	if facts.delegation == nil ||
+		(r.Authority.Kind != authzcompose.AuthorityDelegation && r.Authority.Kind != authzcompose.AuthorityMandate) {
 		return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "no_delegation"}
 	}
-	scopes := exchangeScopes(facts.target)
+	delegationID := facts.delegation.ID
+	resource, adapterScopes := b.cfg.Catalog.OAuthResource(facts.reference.ProviderType, facts.reference.Class)
+	scopes := exchangeScopes(facts.target, resource, adapterScopes)
 	if len(scopes) == 0 {
 		return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "target_has_no_audience"}
 	}
 	assertion, _, err := b.cfg.Custody.Load(ctx, delegationstore.LoadRequest{
-		DelegationID: r.Authority.ID, TenantProjectID: r.Context.TenantProjectID, AgentBindingID: r.Agent.BindingID,
+		DelegationID: delegationID, TenantProjectID: r.Context.TenantProjectID, AgentBindingID: r.Agent.BindingID,
 	})
 	switch {
 	case errors.Is(err, delegationstore.ErrDelegationNotUsable), errors.Is(err, delegationstore.ErrDelegationNotFound):
@@ -156,7 +161,7 @@ func (b *Broker) exchange(ctx context.Context, req RedeemRequest, facts requestF
 		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "custody_unavailable"}
 	}
 	token, err := b.cfg.Exchanger.Exchange(ctx, assertion, obo.ExchangeRequest{
-		DelegationID: r.Authority.ID, Scopes: scopes,
+		DelegationID: delegationID, Scopes: scopes,
 		ExecutionID: req.Run.ExecutionID, Generation: int64(req.Run.Generation),
 	})
 	var challenge *obo.ErrClaimsChallenge
@@ -176,17 +181,35 @@ func (b *Broker) exchange(ctx context.Context, req RedeemRequest, facts requestF
 	return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "oauth_rejected"}
 }
 
-// exchangeScopes is the target's OAuth resource as an Entra v2 scope: the
-// audience itself when it already names a scope, else "<audience>/.default".
-func exchangeScopes(target credentialgrant.TargetBinding) []string {
-	audience := strings.TrimSpace(target.Audience)
-	if audience == "" {
+// exchangeScopes is the Entra v2 scope list of an exchange. The resource is
+// the target binding's audience, else the adapter's (Microsoft Graph for
+// SharePoint). The adapter's least-privilege scopes qualify it
+// ("https://graph.microsoft.com/Sites.Selected"); with none, the resource's
+// "/.default" asks for what was consented. No resource is no exchange.
+func exchangeScopes(target credentialgrant.TargetBinding, adapterResource string, adapterScopes []string) []string {
+	resource := strings.TrimSpace(target.Audience)
+	if resource == "" {
+		resource = strings.TrimSpace(adapterResource)
+	}
+	if resource == "" {
 		return nil
 	}
-	if strings.HasSuffix(audience, "/.default") {
-		return []string{audience}
+	if strings.HasSuffix(resource, "/.default") {
+		return []string{resource}
 	}
-	return []string{strings.TrimSuffix(audience, "/") + "/.default"}
+	resource = strings.TrimSuffix(resource, "/")
+	if len(adapterScopes) == 0 {
+		return []string{resource + "/.default"}
+	}
+	scopes := make([]string, 0, len(adapterScopes))
+	for _, scope := range adapterScopes {
+		if strings.Contains(scope, "://") {
+			scopes = append(scopes, scope)
+			continue
+		}
+		scopes = append(scopes, resource+"/"+scope)
+	}
+	return scopes
 }
 
 func (b *Broker) authorizationRequired(ctx context.Context, req RedeemRequest, facts requestFacts, scopes []string, reason, claims string) *Denial {
@@ -199,7 +222,7 @@ func (b *Broker) authorizationRequired(ctx context.Context, req RedeemRequest, f
 		TenantProjectID: req.Run.TenantProjectID, ActorUserID: actor,
 		ConversationUUID: req.Run.ConversationUUID, ResponseMessageID: req.Run.ResponseMessageID,
 		ExecutionID: req.Run.ExecutionID, ExecutionGeneration: strconv.FormatUint(req.Run.Generation, 10),
-		DelegationID: facts.request.Authority.ID, Scopes: scopes, Reason: reason, Claims: claims,
+		DelegationID: facts.delegation.ID, Scopes: scopes, Reason: reason, Claims: claims,
 	})
 	if err != nil || requirement.Reference == "" {
 		return &Denial{Code: CodeBackendUnavailable, reason: "authorization_requirement"}

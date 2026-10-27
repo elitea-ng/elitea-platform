@@ -80,6 +80,11 @@ type Store interface {
 	// LinkAgentSession links ref unless a session is linked already, and
 	// answers the linked one.
 	LinkAgentSession(ctx context.Context, executionID string, generation uint64, ref string) (string, error)
+	// ResolveCredentialReference answers the credential reference of the
+	// one active, unexpired grant of the binding for the toolkit whose
+	// capabilities include use and whose operation scopes include
+	// operationID. None or more than one is ErrReferenceUnresolved.
+	ResolveCredentialReference(ctx context.Context, tenantProjectID int64, agentBindingID string, toolkitID int64, operationID string) (string, error)
 	// SessionCeiling answers the audiences the agent binding's active grants
 	// target in the tenant project: the ceiling of the run's session.
 	SessionCeiling(ctx context.Context, tenantProjectID int64, agentBindingID string) ([]string, error)
@@ -205,19 +210,37 @@ func (b *Broker) Redeem(ctx context.Context, req RedeemRequest) (result Result, 
 		return deny(CodeContextMismatch, "context_mismatch", ""), nil
 	}
 
-	// 3-5. Invocation row, decision and its audit event in one transaction.
-	var (
-		decision authzcompose.OperationDecision
-		facts    requestFacts
-	)
-	err = b.cfg.Store.AdmitInvocation(ctx, req.Run, req.Invocation, func(ctx context.Context) (securityaudit.SecurityEvent, error) {
-		var buildErr error
-		facts, buildErr = b.buildRequest(ctx, sc, req)
-		if buildErr != nil {
-			return securityaudit.SecurityEvent{}, buildErr
+	// 2b. A worker whose toolkit settings name no credential reference
+	// sends none: the run's one usable grant for the toolkit and operation
+	// names it. None, or more than one, denies.
+	if req.Invocation.CredentialReferenceID == "" {
+		if sc.agentBindingID == "" {
+			return deny(CodeDenied, "credential_reference_unresolved", ""), nil
 		}
-		decision = b.cfg.Decider.Decide(ctx, facts.request)
-		return b.decisionEvent(req, facts, decision), nil
+		ref, err := b.cfg.Store.ResolveCredentialReference(ctx, req.Run.TenantProjectID, sc.agentBindingID,
+			req.Invocation.ToolkitID, req.Invocation.OperationID)
+		switch {
+		case errors.Is(err, ErrReferenceUnresolved):
+			return deny(CodeDenied, "credential_reference_unresolved", ""), nil
+		case err != nil:
+			return Result{}, fmt.Errorf("credential broker: resolve the credential reference: %w", err)
+		}
+		req.Invocation.CredentialReferenceID = ref
+	}
+
+	// 3-5. The decision is made first, outside any transaction: its readers
+	// use the pool, and a transaction held across them would hold one
+	// connection while waiting for another (N concurrent redemptions
+	// exhaust a pool of N). The invocation row and the decision's audit
+	// event are then written in one transaction.
+	facts, err := b.buildRequest(ctx, sc, req)
+	if err != nil {
+		return Result{}, fmt.Errorf("credential broker: build the decision request: %w", err)
+	}
+	decision := b.cfg.Decider.Decide(ctx, facts.request)
+	event := b.decisionEvent(req, facts, decision)
+	err = b.cfg.Store.AdmitInvocation(ctx, req.Run, req.Invocation, func(context.Context) (securityaudit.SecurityEvent, error) {
+		return event, nil
 	})
 	switch {
 	case errors.Is(err, ErrInvocationMismatch):

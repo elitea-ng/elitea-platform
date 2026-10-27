@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -321,6 +322,27 @@ func TestOAuthDelegatedRedemption(t *testing.T) {
 		w.exchanger.err = obo.ErrUnavailable
 		requireDenial(t, redeem(t, w.broker(t), w.request(t)), CodeBackendUnavailable)
 	})
+	t.Run("background mandate carrying the delegation", func(t *testing.T) {
+		w := delegated().withMandate(mandate.KindDelegatedBackground)
+		m := w.mandates.mandates[tMandate]
+		delegation := tDelegation
+		m.DelegationID = &delegation
+		w.mandates.mandates[tMandate] = m
+		w.context.MandateID, w.context.MandateEpoch = tMandate, 5
+		result := redeem(t, w.broker(t), w.request(t))
+		if result.Envelope == nil {
+			t.Fatalf("denied: %+v", result.Denial)
+		}
+		defer result.Envelope.Destroy()
+		if result.Envelope.Kind != KindOAuthAccess || w.exchanger.last.DelegationID != tDelegation {
+			t.Fatalf("envelope kind=%s exchange=%+v", result.Envelope.Kind, w.exchanger.last)
+		}
+	})
+	t.Run("background mandate without the delegation", func(t *testing.T) {
+		w := delegated().withMandate(mandate.KindDelegatedBackground)
+		w.context.MandateID, w.context.MandateEpoch = tMandate, 5
+		requireDenial(t, redeem(t, w.broker(t), w.request(t)), CodeDenied)
+	})
 	t.Run("no exchanger composed", func(t *testing.T) {
 		w := delegated()
 		b := w.broker(t, func(c *Config) { c.Exchanger, c.Custody = nil, nil })
@@ -429,6 +451,58 @@ func TestLogsCarryNoMaterial(t *testing.T) {
 	}
 }
 
+// An invocation naming no credential reference takes the one usable
+// grant's; none or more than one denies before any secret read.
+func TestEmptyCredentialReferenceIsResolvedFromTheGrant(t *testing.T) {
+	for name, c := range map[string]struct {
+		resolvable []string
+		permit     bool
+	}{
+		"one grant":  {[]string{tReference}, true},
+		"no grant":   {nil, false},
+		"two grants": {[]string{tReference, tReference}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld().withMandate(mandate.KindDelegatedBackground)
+			w.store.resolvable = c.resolvable
+			req := w.request(t)
+			req.Invocation.CredentialReferenceID = ""
+			result := redeem(t, w.broker(t), req)
+			if !c.permit {
+				requireDenial(t, result, CodeDenied)
+				if w.secrets.readCount() != 0 {
+					t.Fatal("an unresolved reference read a secret")
+				}
+				return
+			}
+			if result.Envelope == nil {
+				t.Fatalf("denied: %+v", result.Denial)
+			}
+			result.Envelope.Destroy()
+		})
+	}
+}
+
+func TestExchangeScopes(t *testing.T) {
+	graph := "https://graph.microsoft.com"
+	for name, c := range map[string]struct {
+		audience, resource string
+		scopes             []string
+		want               []string
+	}{
+		"target audience, no adapter scopes": {"api://jira-a", "", nil, []string{"api://jira-a/.default"}},
+		"adapter least privilege":            {"", graph, []string{"Sites.Selected"}, []string{graph + "/Sites.Selected"}},
+		"target audience qualified":          {graph + "/", "", []string{"Sites.Selected"}, []string{graph + "/Sites.Selected"}},
+		"absolute scope kept":                {"", graph, []string{"api://x/read"}, []string{"api://x/read"}},
+		"no resource":                        {"", "", []string{"Sites.Selected"}, nil},
+	} {
+		got := exchangeScopes(credentialgrant.TargetBinding{Audience: c.audience}, c.resource, c.scopes)
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
+	}
+}
+
 func TestShapeMaterial(t *testing.T) {
 	cases := []struct {
 		name string
@@ -436,12 +510,14 @@ func TestShapeMaterial(t *testing.T) {
 		keys []string
 		want map[string]string
 	}{
-		{"json object keeps named keys", `{"username":"u","password":"p","x":"y"}`, []string{"username", "password"}, map[string]string{"username": "u", "password": "p"}},
-		{"raw value is the one key", `plain-token`, []string{"api_token"}, map[string]string{"api_token": "plain-token"}},
-		{"json without the one key is raw", `{"other":"v"}`, []string{"api_token"}, map[string]string{"api_token": `{"other":"v"}`}},
-		{"json missing a key of two", `{"username":"u"}`, []string{"username", "password"}, nil},
-		{"raw value for two keys", `plain`, []string{"username", "password"}, nil},
-		{"empty member", `{"username":"","password":"p"}`, []string{"username", "password"}, nil},
+		{"json object keeps named keys", `{"token":"t","username":"u","x":"y"}`, []string{"token", "username"}, map[string]string{"token": "t", "username": "u"}},
+		{"raw value is the first key", `plain-token`, []string{"token"}, map[string]string{"token": "plain-token"}},
+		{"raw value for two keys is the first", `pat`, []string{"token", "username"}, map[string]string{"token": "pat"}},
+		{"optional key may be absent", `{"token":"pat"}`, []string{"token", "username"}, map[string]string{"token": "pat"}},
+		{"json without the first key is refused, never raw", `{"qtest_api_token":"a","admin_password":"x"}`, []string{"token"}, nil},
+		{"json missing the first key of two", `{"username":"u"}`, []string{"token", "username"}, nil},
+		{"empty first member", `{"token":"","username":"u"}`, []string{"token", "username"}, nil},
+		{"empty optional member is dropped", `{"token":"t","username":""}`, []string{"token", "username"}, map[string]string{"token": "t"}},
 	}
 	for _, c := range cases {
 		got, ok := shapeMaterial([]byte(c.raw), c.keys)

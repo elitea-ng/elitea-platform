@@ -10,9 +10,14 @@ import "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domai
 type OperationCatalog interface {
 	credentialgrant.OperationRegistry
 	// MaterialKeys names the keys of the material the adapter of
-	// providerType reads for class. Empty means the adapter takes none of
-	// this class, and the broker releases nothing.
+	// providerType reads for class. The first key is required, the rest are
+	// optional. Empty means the adapter takes none of this class, and the
+	// broker releases nothing.
 	MaterialKeys(providerType string, class credentialgrant.CredentialClass) []string
+	// OAuthResource is the delegated token's resource and least-privilege
+	// scopes the adapter of providerType asks for under class; empty when
+	// it names none (the target binding's audience then decides).
+	OAuthResource(providerType string, class credentialgrant.CredentialClass) (resource string, scopes []string)
 }
 
 // EmptyCatalog knows no operation and no material key: every decision it
@@ -28,5 +33,10 @@ func (EmptyCatalog) Class(credentialgrant.OperationID) string { return "" }
 
 // MaterialKeys implements OperationCatalog.
 func (EmptyCatalog) MaterialKeys(string, credentialgrant.CredentialClass) []string { return nil }
+
+// OAuthResource implements OperationCatalog.
+func (EmptyCatalog) OAuthResource(string, credentialgrant.CredentialClass) (string, []string) {
+	return "", nil
+}
 
 var _ OperationCatalog = EmptyCatalog{}

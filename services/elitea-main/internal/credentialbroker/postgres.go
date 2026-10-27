@@ -30,7 +30,8 @@ func NewPostgresStore(pool *pgxpool.Pool, audit securityaudit.Appender) (*Postgr
 	return &PostgresStore{pool: pool, audit: audit}, nil
 }
 
-// AdmitInvocation implements Store.
+// AdmitInvocation implements Store. decide runs inside the transaction and
+// must not read through the pool (the broker passes a prepared event).
 func (s *PostgresStore) AdmitInvocation(ctx context.Context, run ClaimedRun, inv BoundToolInvocation,
 	decide func(context.Context) (securityaudit.SecurityEvent, error)) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
@@ -146,6 +147,29 @@ WHERE execution_id = $1 AND generation = $2 AND NOT EXISTS (SELECT 1 FROM insert
 		return "", fmt.Errorf("link the run's agent session: %w", err)
 	}
 	return linked, nil
+}
+
+// ResolveCredentialReference implements Store.
+func (s *PostgresStore) ResolveCredentialReference(ctx context.Context, tenantProjectID int64, agentBindingID string,
+	toolkitID int64, operationID string) (string, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT credential_reference_id::text
+FROM elitea_identity.credential_use_grants
+WHERE tenant_project_id = $1 AND agent_binding_id = $2::uuid AND toolkit_id = $3
+  AND state = 'active' AND (expires_at IS NULL OR expires_at > clock_timestamp())
+  AND 'use' = ANY (capabilities) AND $4 = ANY (operation_scopes)
+LIMIT 2`, tenantProjectID, agentBindingID, toolkitID, operationID)
+	if err != nil {
+		return "", fmt.Errorf("resolve the credential reference: %w", err)
+	}
+	refs, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return "", fmt.Errorf("resolve the credential reference: %w", err)
+	}
+	if len(refs) != 1 {
+		return "", ErrReferenceUnresolved
+	}
+	return refs[0], nil
 }
 
 // SessionCeiling implements Store: the audience, or else the canonical

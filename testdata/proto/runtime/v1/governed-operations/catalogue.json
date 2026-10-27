@@ -1,6 +1,6 @@
 {
   "schema": "elitea.runtime.governed-operations.v1",
-  "note": "Shared contract (#1120): Go credentialadapters descriptors and the Rust governed tool mapping are both tested against this file. Edit all three together.",
+  "note": "Shared contract (#1120): Go credentialadapters descriptors and the Rust governed tool mapping are both tested against this file. Edit all three together. material_keys: the first key of each class is required, the rest optional.",
   "providers": [
     {
       "provider_type": "jira",

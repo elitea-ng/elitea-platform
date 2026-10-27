@@ -289,14 +289,19 @@ func (allowEntities) AgentAccessible(context.Context, int64, int64, int64) (bool
 }
 
 type fakeCatalog struct {
-	ops  map[credentialgrant.OperationID]string
-	keys map[credentialgrant.CredentialClass][]string
+	ops      map[credentialgrant.OperationID]string
+	keys     map[credentialgrant.CredentialClass][]string
+	resource string
+	scopes   []string
 }
 
 func (c fakeCatalog) Known(id credentialgrant.OperationID) bool   { _, ok := c.ops[id]; return ok }
 func (c fakeCatalog) Class(id credentialgrant.OperationID) string { return c.ops[id] }
 func (c fakeCatalog) MaterialKeys(_ string, class credentialgrant.CredentialClass) []string {
 	return slices.Clone(c.keys[class])
+}
+func (c fakeCatalog) OAuthResource(string, credentialgrant.CredentialClass) (string, []string) {
+	return c.resource, slices.Clone(c.scopes)
 }
 
 // fakeSecretStore counts reads; it fails the test on any other call.
@@ -357,6 +362,8 @@ type memStore struct {
 	sessions    map[invocationKey]string
 	ceiling     []string
 	failAudit   func(securityaudit.SecurityEvent) bool
+	// resolvable is the grants' credential references a resolution sees.
+	resolvable []string
 }
 
 func newMemStore() *memStore {
@@ -424,6 +431,13 @@ func (s *memStore) LinkAgentSession(_ context.Context, execution string, generat
 	}
 	s.sessions[key] = ref
 	return ref, nil
+}
+
+func (s *memStore) ResolveCredentialReference(context.Context, int64, string, int64, string) (string, error) {
+	if len(s.resolvable) != 1 {
+		return "", ErrReferenceUnresolved
+	}
+	return s.resolvable[0], nil
 }
 
 func (s *memStore) SessionCeiling(context.Context, int64, string) ([]string, error) {
