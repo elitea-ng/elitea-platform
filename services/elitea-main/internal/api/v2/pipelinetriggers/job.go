@@ -119,6 +119,7 @@ func NewPlatformHandler(
 	logger *slog.Logger,
 	events EventEmitter,
 	runTracker RunTracker,
+	extra ...Option,
 ) *Handler {
 	options := []Option{
 		WithPermissions(permissions),
@@ -152,6 +153,8 @@ func NewPlatformHandler(
 	if present(runTracker) {
 		options = append(options, WithRunTracker(runTracker))
 	}
+	// WithGovernedRuns, with credential governance on (governed.go).
+	options = append(options, extra...)
 	return NewHandler(pool, options...)
 }
 

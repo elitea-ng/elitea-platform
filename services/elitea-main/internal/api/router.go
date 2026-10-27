@@ -50,6 +50,7 @@ import (
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
 	v2indextypes "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	v2inventory "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/inventory"
+	v2mandateattachments "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/mandateattachments"
 	v2mcp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/mcp"
 	v2memories "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/memories"
 	v2messagetraces "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/messagetraces"
@@ -702,6 +703,11 @@ type RouterConfig struct {
 	// API (ADR-0039, issue 1151). Set, like AgentIdentityAdmin, only with the
 	// credential governance flag on; nil mounts none of its routes.
 	ExternalAgentIdentityAdmin *v2agentidentity.ExternalHandler
+	// MandateAttachments serves the routes that attach a mandate to a
+	// pipeline schedule, pipeline trigger or index schedule (ADR-0039, issue
+	// 1122). Set only with the credential governance flag on; nil mounts
+	// none of its routes.
+	MandateAttachments *v2mandateattachments.Handler
 	// AgentAssertionWellKnown serves the Elitea-native agent assertion JWKS
 	// and issuer metadata (ADR-0039, issue 1153). The composition root sets
 	// it only with the credential governance flag on and at least one
@@ -2769,6 +2775,26 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(mandatesApprove).Post("/mandates/{id}:approve", agentIdentities.ApproveMandate)
 					r.With(mandatesManage).Post("/mandates/{id}:suspend", agentIdentities.SuspendMandate)
 					r.With(mandatesManage).Post("/mandates/{id}:revoke", agentIdentities.RevokeMandate)
+				}
+
+				// Mandate attachments of unattended runs (ADR-0039, issue
+				// 1122). Mounted only with the governance flag on. Attaching
+				// names the authority an unattended run acts under, so it takes
+				// the permission that issues and revokes mandates. The target
+				// is read from the path; the handler checks the mandate is in
+				// that tenant project.
+				if cfg.MandateAttachments != nil {
+					attachments := cfg.MandateAttachments
+					attachManage := central(v2agentidentity.PermissionMandatesManage)
+					r.Route("/mandate_attachments", func(r chi.Router) {
+						r.Use(attachManage)
+						r.Put("/pipeline_schedules/{projectID}/{versionID}", attachments.AttachPipelineSchedule)
+						r.Delete("/pipeline_schedules/{projectID}/{versionID}", attachments.DetachPipelineSchedule)
+						r.Put("/pipeline_triggers/{projectID}/{versionID}", attachments.AttachPipelineTrigger)
+						r.Delete("/pipeline_triggers/{projectID}/{versionID}", attachments.DetachPipelineTrigger)
+						r.Put("/index_schedules/{projectID}/{toolkitID}/{indexName}", attachments.AttachIndexSchedule)
+						r.Delete("/index_schedules/{projectID}/{toolkitID}/{indexName}", attachments.DetachIndexSchedule)
+					})
 				}
 
 				// External agent identities (ADR-0039, issue 1151). Mounted

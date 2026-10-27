@@ -6517,6 +6517,51 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
+    MandateAttachmentRequest:
+      type: object
+      additionalProperties: false
+      required: [mandate_id]
+      properties:
+        mandate_id:
+          type: string
+          minLength: 1
+          description: The mandate id (uuid) to run the target under.
+    MandateAttachment:
+      type: object
+      additionalProperties: false
+      required: [origin, project_id, resource_id]
+      properties:
+        origin:
+          type: string
+          enum: [pipeline_schedule, pipeline_trigger, index_schedule]
+        project_id: { type: integer, format: int64 }
+        resource_id:
+          type: string
+          description: >
+            The schedule or trigger id, or `toolkit_id:index_name` for an
+            index schedule.
+        mandate_id:
+          type: string
+          description: The attached mandate; absent after a detach.
+    MandateRefusal:
+      type: object
+      additionalProperties: false
+      required: [error, code]
+      properties:
+        error:
+          type: string
+          description: Human-readable refusal message.
+        code:
+          type: string
+          description: The machine-readable reason a mandate cannot run the target.
+          enum:
+            - MANDATE_REQUIRED
+            - MANDATE_NOT_FOUND
+            - MANDATE_NOT_USABLE
+            - MANDATE_SCOPE_MISMATCH
+            - MANDATE_TENANT_MISMATCH
+            - MANDATE_KIND_NOT_ALLOWED
+            - MANDATE_BINDING_MISMATCH
     MandateCreate:
       type: object
       additionalProperties: false
@@ -15506,7 +15551,15 @@ components:
         last_result:
           type: string
           description: The outcome of the most recent fire attempt.
-          enum: [dispatched, skipped_overlap, skipped_unauthorized, skipped_missing_version, failed]
+          enum:
+            - dispatched
+            - skipped_overlap
+            - skipped_unauthorized
+            - skipped_missing_version
+            - skipped_mandate_required
+            - skipped_mandate_not_usable
+            - skipped_mandate_scope
+            - failed
         last_result_detail:
           type: string
           description: One sentence saying why, for every non-dispatch outcome.
@@ -17332,6 +17385,286 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  /admin/mandate_attachments/pipeline_schedules/{project_id}/{version_id}:
+    parameters:
+      - name: project_id
+        in: path
+        required: true
+        description: The tenant project id.
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: version_id
+        in: path
+        required: true
+        description: The pipeline version id.
+        schema: { type: integer, format: int64, minimum: 1 }
+    put:
+      operationId: attachPipelineScheduleMandate
+      summary: Attach a mandate to a pipeline schedule
+      description: >
+        Credential governance (ADR-0039): with the enterprise flag on, a pipeline schedule
+        runs only under the mandate attached here, re-checked at every fire.
+        The mandate must be in the same tenant project, of an unattended kind
+        (autonomous or delegated_background) that the active policy revision
+        lists in `unattended_mandate_kinds`, bound to the version the target
+        starts, not revoked or expired, and its `schedule.cron:` and
+        `schedule.input:sha256:` resource scopes, if any, must cover the
+        target. A proposed or suspended mandate may be attached; it runs
+        nothing until it is active. Replaces any attached mandate. Gated on
+        `models.agent_identity.mandates.manage` in administration mode, and
+        mounted only when the flag is on. Appends a security audit decision.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MandateAttachmentRequest' }
+            example: { mandate_id: 0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e1b04 }
+      responses:
+        '200':
+          description: The attachment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MandateAttachment' }
+              example:
+                origin: pipeline_schedule
+                project_id: 7
+                resource_id: '3'
+                mandate_id: 0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e1b04
+        '400':
+          description: A malformed path or body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such mandate, or no such target in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The mandate cannot run this target; `code` names why
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MandateRefusal' }
+              example: { error: the mandate belongs to another tenant, code: MANDATE_TENANT_MISMATCH }
+    delete:
+      operationId: detachPipelineScheduleMandate
+      summary: Detach the mandate from a pipeline schedule
+      description: >
+        Clears the attached mandate. With the flag on, the target then runs
+        nothing (MANDATE_REQUIRED) until another is attached. Gated on
+        `models.agent_identity.mandates.manage`. Appends a security audit
+        decision.
+      tags: [admin]
+      responses:
+        '200':
+          description: The target, with no mandate
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MandateAttachment' }
+              example: { origin: pipeline_schedule, project_id: 7, resource_id: '3' }
+        '400':
+          description: A malformed path
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such target in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/mandate_attachments/pipeline_triggers/{project_id}/{version_id}:
+    parameters:
+      - name: project_id
+        in: path
+        required: true
+        description: The tenant project id.
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: version_id
+        in: path
+        required: true
+        description: The pipeline version id.
+        schema: { type: integer, format: int64, minimum: 1 }
+    put:
+      operationId: attachPipelineTriggerMandate
+      summary: Attach a mandate to an inbound pipeline trigger
+      description: >
+        Credential governance (ADR-0039): with the enterprise flag on, an inbound pipeline trigger
+        runs only under the mandate attached here, re-checked at every fire.
+        The mandate must be in the same tenant project, of an unattended kind
+        (autonomous or delegated_background) that the active policy revision
+        lists in `unattended_mandate_kinds`, bound to the version the target
+        starts, not revoked or expired, and its `schedule.cron:` and
+        `schedule.input:sha256:` resource scopes, if any, must cover the
+        target. A proposed or suspended mandate may be attached; it runs
+        nothing until it is active. Replaces any attached mandate. Gated on
+        `models.agent_identity.mandates.manage` in administration mode, and
+        mounted only when the flag is on. Appends a security audit decision.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MandateAttachmentRequest' }
+            example: { mandate_id: 0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e1b04 }
+      responses:
+        '200':
+          description: The attachment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MandateAttachment' }
+              example:
+                origin: pipeline_trigger
+                project_id: 7
+                resource_id: '5'
+                mandate_id: 0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e1b04
+        '400':
+          description: A malformed path or body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such mandate, or no such target in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The mandate cannot run this target; `code` names why
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MandateRefusal' }
+              example: { error: the mandate belongs to another tenant, code: MANDATE_TENANT_MISMATCH }
+    delete:
+      operationId: detachPipelineTriggerMandate
+      summary: Detach the mandate from an inbound pipeline trigger
+      description: >
+        Clears the attached mandate. With the flag on, the target then runs
+        nothing (MANDATE_REQUIRED) until another is attached. Gated on
+        `models.agent_identity.mandates.manage`. Appends a security audit
+        decision.
+      tags: [admin]
+      responses:
+        '200':
+          description: The target, with no mandate
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MandateAttachment' }
+              example: { origin: pipeline_trigger, project_id: 7, resource_id: '5' }
+        '400':
+          description: A malformed path
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such target in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/mandate_attachments/index_schedules/{project_id}/{toolkit_id}/{index_name}:
+    parameters:
+      - name: project_id
+        in: path
+        required: true
+        description: The tenant project id.
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: toolkit_id
+        in: path
+        required: true
+        description: The toolkit that holds the index.
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: index_name
+        in: path
+        required: true
+        description: The index whose schedule runs under the mandate.
+        schema: { type: string, minLength: 1, maxLength: 256 }
+    put:
+      operationId: attachIndexScheduleMandate
+      summary: Attach a mandate to an index schedule
+      description: >
+        Credential governance (ADR-0039): with the enterprise flag on, an index schedule
+        runs only under the mandate attached here, re-checked at every fire.
+        The mandate must be in the same tenant project, of an unattended kind
+        (autonomous or delegated_background) that the active policy revision
+        lists in `unattended_mandate_kinds`, bound to the version the target
+        starts, not revoked or expired, and its `schedule.cron:` and
+        `schedule.input:sha256:` resource scopes, if any, must cover the
+        target. A proposed or suspended mandate may be attached; it runs
+        nothing until it is active. Replaces any attached mandate. Gated on
+        `models.agent_identity.mandates.manage` in administration mode, and
+        mounted only when the flag is on. Appends a security audit decision.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MandateAttachmentRequest' }
+            example: { mandate_id: 0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e1b04 }
+      responses:
+        '200':
+          description: The attachment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MandateAttachment' }
+              example:
+                origin: index_schedule
+                project_id: 7
+                resource_id: '12:docs'
+                mandate_id: 0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e1b04
+        '400':
+          description: A malformed path or body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such mandate, or no such target in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The mandate cannot run this target; `code` names why
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MandateRefusal' }
+              example: { error: the mandate belongs to another tenant, code: MANDATE_TENANT_MISMATCH }
+    delete:
+      operationId: detachIndexScheduleMandate
+      summary: Detach the mandate from an index schedule
+      description: >
+        Clears the attached mandate. With the flag on, the target then runs
+        nothing (MANDATE_REQUIRED) until another is attached. Gated on
+        `models.agent_identity.mandates.manage`. Appends a security audit
+        decision.
+      tags: [admin]
+      responses:
+        '200':
+          description: The target, with no mandate
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MandateAttachment' }
+              example: { origin: index_schedule, project_id: 7, resource_id: '12:docs' }
+        '400':
+          description: A malformed path
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such target in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /admin/external_agent_identities:
     get:
@@ -34537,6 +34870,15 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: >
+            Credential governance is on, the schedule has an attached mandate,
+            and the new cron or input is outside that mandate's resource
+            scopes. A save inside the scope keeps the attached mandate.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MandateRefusal' }
+              example: { error: "the schedule's mandate does not cover this cron or input", code: MANDATE_SCOPE_MISMATCH }
     delete:
       operationId: deletePipelineSchedule
       summary: Remove a pipeline version's schedule
@@ -34705,6 +35047,16 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '403':
+          description: >
+            Credential governance is on and the trigger has no usable mandate
+            (ADR-0039). Sent only after the credential was accepted, so naming
+            the cause is no oracle. No run starts and a security audit
+            decision is appended.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MandateRefusal' }
+              example: { error: this trigger has no usable mandate, code: MANDATE_REQUIRED }
         '413':
           description: The request body is too large
           content:
@@ -34831,6 +35183,16 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '403':
+          description: >
+            Credential governance is on and the trigger has no usable mandate
+            (ADR-0039). Sent only after the credential was accepted, so naming
+            the cause is no oracle. No run starts and a security audit
+            decision is appended.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MandateRefusal' }
+              example: { error: this trigger has no usable mandate, code: MANDATE_REQUIRED }
         '413':
           description: The request body is too large
           content:

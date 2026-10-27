@@ -100,18 +100,15 @@ WHERE execution_id = $1 AND profile = 'elitea.credential-profile.governed.v1'`, 
 		Caller:              callerFromContext(ctx),
 		IssuedAt:            facts.admittedAt,
 	}
-	if facts.actorID != "" {
-		built.ActorChain = []securitycontext.ActorLink{{Kind: "user", Ref: facts.actorID}}
-	}
-	if facts.applicationVersionID > 0 {
-		if err := bindActiveAgentIdentity(ctx, rows, &built, facts); err != nil {
+	if authority, ok := securitycontext.RunAuthorityFrom(ctx); ok {
+		// An unattended governed run (#1122): its authority is the attached
+		// mandate, never one inferred from the run's user. The context value
+		// reaches here because admission runs in the entry point's call.
+		if err := bindMandateAuthority(ctx, rows, &built, facts, authority); err != nil {
 			return securitycontext.Reference{}, err
 		}
-	}
-	if built.AgentBindingID != "" {
-		if err := bindRunAuthority(ctx, rows, &built, facts); err != nil {
-			return securitycontext.Reference{}, err
-		}
+	} else if err := bindInferredAuthority(ctx, rows, &built, facts); err != nil {
+		return securitycontext.Reference{}, err
 	}
 	encoded, reference, err := built.Marshal(executionID)
 	if err != nil {
@@ -126,6 +123,95 @@ INSERT INTO elitea_runtime.execution_security_contexts (
 		return securitycontext.Reference{}, fmt.Errorf("store execution security context: %w", err)
 	}
 	return reference, nil
+}
+
+// bindInferredAuthority is the authority of a run that names none: the
+// run's user, the version's usable binding and the delegation or mandate
+// bindRunAuthority finds for them.
+func bindInferredAuthority(ctx context.Context, rows rowFunc, built *securitycontext.Context, facts securityContextFacts) error {
+	if facts.actorID != "" {
+		built.ActorChain = []securitycontext.ActorLink{{Kind: "user", Ref: facts.actorID}}
+	}
+	if facts.applicationVersionID > 0 {
+		if err := bindActiveAgentIdentity(ctx, rows, built, facts); err != nil {
+			return err
+		}
+	}
+	if built.AgentBindingID != "" {
+		return bindRunAuthority(ctx, rows, built, facts)
+	}
+	return nil
+}
+
+// ErrRunAuthorityNotUsable refuses the admission of an unattended governed
+// run whose attached mandate changed after its fire-time check: revoked,
+// suspended, expired, at another epoch, or bound to an agent that is not
+// usable or is not the run's version (#1122). The admission transaction
+// rolls back, so the run writes no row.
+var ErrRunAuthorityNotUsable = errors.New("the run's mandate is not usable")
+
+// bindMandateAuthority names the attached mandate, its binding and its
+// delegation in the context, read in the admission transaction. The subject
+// is the mandate's: empty for an autonomous mandate, whatever user the run
+// is attributed to.
+func bindMandateAuthority(ctx context.Context, rows rowFunc, built *securitycontext.Context, facts securityContextFacts, authority securitycontext.RunAuthority) error {
+	var (
+		subject                    *int64
+		mandateEpoch, bindingEpoch int64
+		bindingID, delegationID    string
+		versionID                  int64
+		digest                     []byte
+		delegationEpoch            *int64
+	)
+	err := rows(ctx, `
+SELECT m.subject_user_id, m.revocation_epoch, b.id::text, b.revocation_epoch, b.definition_digest,
+       b.application_version_id, coalesce(m.delegation_id::text, ''), d.revocation_epoch
+FROM elitea_identity.mandates AS m
+JOIN elitea_identity.agent_identity_bindings AS b
+  ON b.id = m.agent_binding_id AND b.tenant_project_id = m.tenant_project_id AND b.state = 'active'
+JOIN elitea_identity.external_agent_identities AS e
+  ON e.id = b.external_agent_identity_id AND e.tenant_project_id = b.tenant_project_id AND e.state = 'active'
+LEFT JOIN elitea_identity.delegations AS d
+  ON d.id = m.delegation_id AND d.tenant_project_id = m.tenant_project_id
+ AND d.state = 'active' AND d.expires_at > $3
+WHERE m.id::text = $1 AND m.tenant_project_id = $2 AND m.state = 'active'
+  AND m.not_before <= $3 AND m.expires_at > $3
+  AND m.kind IN ('autonomous', 'delegated_background')`,
+		authority.MandateID, facts.tenantProjectID, facts.admittedAt,
+	).Scan(&subject, &mandateEpoch, &bindingID, &bindingEpoch, &digest, &versionID, &delegationID, &delegationEpoch)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrRunAuthorityNotUsable
+	}
+	if err != nil {
+		return fmt.Errorf("read the run's mandate: %w", err)
+	}
+	subjectID := int64(0)
+	if subject != nil {
+		subjectID = *subject
+	}
+	switch {
+	case mandateEpoch != authority.MandateEpoch,
+		subjectID != authority.SubjectUserID,
+		len(digest) != len(runtimedomain.Digest{}),
+		facts.applicationVersionID > 0 && versionID != facts.applicationVersionID,
+		delegationID != "" && delegationEpoch == nil:
+		return ErrRunAuthorityNotUsable
+	}
+	built.SubjectPrincipalRef, built.ActorChain = "", nil
+	if subjectID > 0 {
+		built.SubjectPrincipalRef = strconv.FormatInt(subjectID, 10)
+		built.ActorChain = []securitycontext.ActorLink{{Kind: "user", Ref: built.SubjectPrincipalRef}}
+	}
+	if authority.Caller != (securitycontext.Caller{}) {
+		built.Caller = authority.Caller
+	}
+	built.AgentBindingID, built.AgentBindingEpoch = bindingID, bindingEpoch
+	built.DefinitionDigest = runtimedomain.Digest(digestArray(digest))
+	built.MandateID, built.MandateEpoch = authority.MandateID, mandateEpoch
+	if delegationID != "" {
+		built.DelegationID, built.DelegationEpoch = delegationID, *delegationEpoch
+	}
+	return nil
 }
 
 // bindActiveAgentIdentity names the agent version's usable binding in the

@@ -69,6 +69,13 @@ type PolicyDocument struct {
 	// defaults of DefaultCachePolicy, which are test values only (gate D5).
 	// Optional, so a document without it keeps its canonical bytes.
 	Cache *CachePolicy `json:"cache,omitempty"`
+	// UnattendedMandateKinds lists the mandate kinds an unattended governed
+	// run (a pipeline schedule, an inbound pipeline trigger, an index
+	// schedule) may run under: autonomous, delegated_background (#1122, gate
+	// D4). Absent or empty: none, so no unattended governed run starts until
+	// the decision is recorded in a revision. omitempty keeps the canonical
+	// bytes of a revision written before the field existed.
+	UnattendedMandateKinds []string `json:"unattended_mandate_kinds,omitempty"`
 }
 
 // Reconcile defaults and bounds (#1154).
@@ -166,6 +173,14 @@ func (c *CachePolicy) validate() error {
 	return nil
 }
 
+// The mandate kinds (mandate.KindAutonomous, mandate.KindDelegatedBackground)
+// an unattended run may name. Restated: the mandate package imports nothing
+// from here, and this one stays free of the domain.
+const (
+	unattendedKindAutonomous          = "autonomous"
+	unattendedKindDelegatedBackground = "delegated_background"
+)
+
 // MaxMandateTTL is MaxMandateTTLSeconds as a duration.
 func (d PolicyDocument) MaxMandateTTL() time.Duration {
 	return time.Duration(d.MaxMandateTTLSeconds) * time.Second
@@ -174,6 +189,12 @@ func (d PolicyDocument) MaxMandateTTL() time.Duration {
 // AllowsIdentityMode reports whether mode is in the allow-list.
 func (d PolicyDocument) AllowsIdentityMode(mode agentidentity.IdentityMode) bool {
 	return slices.Contains(d.AllowedIdentityModes, mode)
+}
+
+// AllowsUnattendedMandateKind reports whether an unattended governed run
+// may run under a mandate of kind (gate D4).
+func (d PolicyDocument) AllowsUnattendedMandateKind(kind string) bool {
+	return slices.Contains(d.UnattendedMandateKinds, kind)
 }
 
 // RequiresVault reports whether credentialClass must live in Vault/OpenBao.
@@ -194,7 +215,16 @@ func (d PolicyDocument) Validate() error {
 			return fmt.Errorf("%w: unknown identity mode %q", ErrInvalidPolicy, mode)
 		}
 	}
-	if hasDuplicates(d.AllowedIdentityModes) || hasDuplicates(d.VaultRequiredCredentialClasses) {
+	if len(d.UnattendedMandateKinds) > maxPolicyListItems {
+		return fmt.Errorf("%w: a list exceeds %d items", ErrInvalidPolicy, maxPolicyListItems)
+	}
+	for _, kind := range d.UnattendedMandateKinds {
+		if kind != unattendedKindAutonomous && kind != unattendedKindDelegatedBackground {
+			return fmt.Errorf("%w: unknown unattended mandate kind %q", ErrInvalidPolicy, kind)
+		}
+	}
+	if hasDuplicates(d.AllowedIdentityModes) || hasDuplicates(d.VaultRequiredCredentialClasses) ||
+		hasDuplicates(d.UnattendedMandateKinds) {
 		return fmt.Errorf("%w: a list repeats a value", ErrInvalidPolicy)
 	}
 	for _, class := range d.VaultRequiredCredentialClasses {

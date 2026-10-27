@@ -282,7 +282,7 @@ func (s *EliteaClientTokenService) Resolve(
 	ctx context.Context,
 	claim ContentClaim,
 ) (EliteaClientTokenContext, error) {
-	value, _, err := s.resolve(ctx, claim, true)
+	value, _, err := s.resolve(ctx, claim, true, false)
 	return value, err
 }
 
@@ -293,9 +293,10 @@ func (s *EliteaClientTokenService) resolve(
 	ctx context.Context,
 	claim ContentClaim,
 	withSecretsHeader bool,
+	governedRun bool,
 ) (EliteaClientTokenContext, RuntimeContextAuthorization, error) {
 	var authorization RuntimeContextAuthorization
-	value, err := s.resolveTokenValue(ctx, claim, &authorization, withSecretsHeader)
+	value, err := s.resolveTokenValue(ctx, claim, &authorization, withSecretsHeader, governedRun)
 	if err != nil {
 		return EliteaClientTokenContext{}, RuntimeContextAuthorization{}, err
 	}
@@ -307,6 +308,7 @@ func (s *EliteaClientTokenService) resolveTokenValue(
 	claim ContentClaim,
 	authorized *RuntimeContextAuthorization,
 	withSecretsHeader bool,
+	governedRun bool,
 ) (EliteaClientTokenContext, error) {
 	if err := ctx.Err(); err != nil {
 		return EliteaClientTokenContext{}, err
@@ -341,7 +343,10 @@ func (s *EliteaClientTokenService) resolveTokenValue(
 			return EliteaClientTokenContext{}, runtimeContextUnavailable(runtimeContextStageActorPATIssuance)
 		}
 	case runtimeContextInitiatorSchedule:
-		if s.projectIssuer == nil {
+		// A governed scheduled run never gets the project system token
+		// (#1122): it runs under its mandate, through the broker and the
+		// claim-bound routes, or not at all.
+		if s.projectIssuer == nil || governedRun {
 			return EliteaClientTokenContext{}, runtimeContextUnavailable(runtimeContextStageExecutionMode)
 		}
 		token, expectedPrincipalID, err = issueProjectSystemToken(
