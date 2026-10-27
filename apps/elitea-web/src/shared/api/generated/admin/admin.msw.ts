@@ -53,6 +53,8 @@ import type {
   BrandingPackageReport,
   BrandingSettings,
   BulkInviteSummary,
+  CredentialUseGrant,
+  CredentialUseGrantListResponse,
   GlobalUserInviteResult,
   ListBrandingPackageVersions200,
   Mandate,
@@ -1613,6 +1615,218 @@ export const getListAdminPublishedAgentsResponseMock = (
   ...overrideResponse,
 });
 
+export const getListCredentialUseGrantsResponseMock = (
+  overrideResponse: Partial<
+    Extract<CredentialUseGrantListResponse, object>
+  > = {},
+): CredentialUseGrantListResponse => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.uuid(),
+    tenant_project_id: faker.number.int(),
+    agent_binding_id: faker.string.uuid(),
+    toolkit_id: faker.number.int(),
+    credential_reference_id: faker.string.uuid(),
+    target_binding_id: faker.string.uuid(),
+    capabilities: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    operation_scopes: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    resource_scopes: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    obligations: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    epoch: faker.number.int(),
+    expires_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    proposed_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    approved_by: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  ...overrideResponse,
+});
+
+export const getProposeCredentialUseGrantResponseMock = (
+  overrideResponse: Partial<Extract<CredentialUseGrant, object>> = {},
+): CredentialUseGrant => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  agent_binding_id: faker.string.uuid(),
+  toolkit_id: faker.number.int(),
+  credential_reference_id: faker.string.uuid(),
+  target_binding_id: faker.string.uuid(),
+  capabilities: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  operation_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  resource_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  obligations: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  epoch: faker.number.int(),
+  expires_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  proposed_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  approved_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getApproveCredentialUseGrantResponseMock = (
+  overrideResponse: Partial<Extract<CredentialUseGrant, object>> = {},
+): CredentialUseGrant => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  agent_binding_id: faker.string.uuid(),
+  toolkit_id: faker.number.int(),
+  credential_reference_id: faker.string.uuid(),
+  target_binding_id: faker.string.uuid(),
+  capabilities: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  operation_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  resource_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  obligations: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  epoch: faker.number.int(),
+  expires_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  proposed_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  approved_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getSuspendCredentialUseGrantResponseMock = (
+  overrideResponse: Partial<Extract<CredentialUseGrant, object>> = {},
+): CredentialUseGrant => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  agent_binding_id: faker.string.uuid(),
+  toolkit_id: faker.number.int(),
+  credential_reference_id: faker.string.uuid(),
+  target_binding_id: faker.string.uuid(),
+  capabilities: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  operation_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  resource_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  obligations: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  epoch: faker.number.int(),
+  expires_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  proposed_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  approved_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getRevokeCredentialUseGrantResponseMock = (
+  overrideResponse: Partial<Extract<CredentialUseGrant, object>> = {},
+): CredentialUseGrant => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  agent_binding_id: faker.string.uuid(),
+  toolkit_id: faker.number.int(),
+  credential_reference_id: faker.string.uuid(),
+  target_binding_id: faker.string.uuid(),
+  capabilities: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  operation_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  resource_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  obligations: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  epoch: faker.number.int(),
+  expires_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  proposed_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  approved_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
 export const getGetSystemInfoResponseMock = (
   overrideResponse: Partial<Extract<SystemInfo, object>> = {},
 ): SystemInfo => ({
@@ -2908,6 +3122,138 @@ export const getListAdminPublishedAgentsMockHandler = (
   );
 };
 
+export const getListCredentialUseGrantsMockHandler = (
+  overrideResponse?:
+    | CredentialUseGrantListResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        | Promise<CredentialUseGrantListResponse>
+        | CredentialUseGrantListResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/projects/:projectId/credential_grants",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListCredentialUseGrantsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getProposeCredentialUseGrantMockHandler = (
+  overrideResponse?:
+    | CredentialUseGrant
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CredentialUseGrant> | CredentialUseGrant),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/projects/:projectId/credential_grants",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getProposeCredentialUseGrantResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getApproveCredentialUseGrantMockHandler = (
+  overrideResponse?:
+    | CredentialUseGrant
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CredentialUseGrant> | CredentialUseGrant),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/projects/:projectId/credential_grants/:id\\:approve",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getApproveCredentialUseGrantResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSuspendCredentialUseGrantMockHandler = (
+  overrideResponse?:
+    | CredentialUseGrant
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CredentialUseGrant> | CredentialUseGrant),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/projects/:projectId/credential_grants/:id\\:suspend",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSuspendCredentialUseGrantResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRevokeCredentialUseGrantMockHandler = (
+  overrideResponse?:
+    | CredentialUseGrant
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CredentialUseGrant> | CredentialUseGrant),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/projects/:projectId/credential_grants/:id\\:revoke",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRevokeCredentialUseGrantResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetSystemInfoMockHandler = (
   overrideResponse?:
     | SystemInfo
@@ -2983,5 +3329,10 @@ export const getAdminMock = () => [
   getGetPlatformSettingsMockHandler(),
   getGetBrandingAssetMockHandler(),
   getListAdminPublishedAgentsMockHandler(),
+  getListCredentialUseGrantsMockHandler(),
+  getProposeCredentialUseGrantMockHandler(),
+  getApproveCredentialUseGrantMockHandler(),
+  getSuspendCredentialUseGrantMockHandler(),
+  getRevokeCredentialUseGrantMockHandler(),
   getGetSystemInfoMockHandler(),
 ];

@@ -62,6 +62,7 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/go-chi/chi/v5"
@@ -315,7 +316,11 @@ func RetiredPermissions() []string {
 // both the gates and this catalogue read is the target shape; until it exists,
 // a middleware-gated name stays grantable only while some role holds it.
 func declaredPermissions() []string {
-	declared := make([]string, 0, len(configSections()))
+	declared := make([]string, 0, len(configSections())+len(credentialgrant.Permissions()))
+	// The five governed credential permissions (#1116). No migration grants
+	// them, by requirement, so without this declaration an operator could
+	// never grant them.
+	declared = append(declared, credentialgrant.Permissions()...)
 	for _, section := range configSections() {
 		permission, ok := section["required_permission"].(string)
 		if !ok || permission == "" {

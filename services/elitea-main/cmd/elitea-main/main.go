@@ -327,6 +327,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
+	// The operation decider is held here until its first caller, the
+	// credential broker (#1118), is wired; with the flag off it is nil.
+	credentialDecider, credentialGrantsAdminHandler, err := credentialGrantGovernance(credentialAdmission, pool, credentialGovernanceStore)
+	if err != nil {
+		return err
+	}
+	_ = credentialDecider
 
 	if os.Getenv(v2secrets.MasterKeyEnvVar) != "" {
 		if err := refuseUnwrappedVaultKeys(ctx, pool); err != nil {
@@ -2683,6 +2690,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 
 	r := api.NewRouter(api.RouterConfig{
 		AgentIdentityAdmin:            agentIdentityAdminHandler,
+		CredentialGrantsAdmin:         credentialGrantsAdminHandler,
 		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,
 		OnToolkitCleanupJournal:       startToolkitReconciler,
