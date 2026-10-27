@@ -242,7 +242,7 @@ function RecordedTurn({ stored, onFork }: { stored: StoredTurn; onFork: OnFork }
   return (
     <Box data-testid="history-turn" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
       <YourPrompt text={stored.prompt} fork={fork} images={stored.images} />
-      <TurnTranscript view={view} busy={false} onCancel={() => undefined} onTextContextMenu={(text, event) => copyMenu(text, event, fork)} />
+      <TurnTranscript view={view} busy={false} onTextContextMenu={(text, event) => copyMenu(text, event, fork)} />
       {stored.state === 'interrupted' && view.done === undefined && (
         <Typography variant="bodySmall" sx={quietSx}>
           {t('workspace.history.interrupted', 'This turn did not finish: the app closed while it ran.')}
@@ -341,7 +341,6 @@ export function Exchanges({ turn, prompts, promptImages, onFork, live }: {
           <TurnTranscript
             view={exchange.view}
             busy={exchange.live && turn.busy}
-            onCancel={() => void turn.cancel()}
             onRetryCommit={(executionId) => turn.retryCommit(exchange.key, executionId)}
             onTextContextMenu={(text, event) => copyMenu(text, event, fork)}
             {...(exchange.live ? live : {})}

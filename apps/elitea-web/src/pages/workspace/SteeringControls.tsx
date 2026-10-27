@@ -1,9 +1,6 @@
 /**
- * The composer's steering controls (`useSteering`):
- *
- * - "Stop and send", while a turn runs: stop the turn, then send the text as the next turn.
- * - The texts that did not start the next turn (`UnsentSteers`): they go back into the input, so the person can
- *   change them, and "Send again" sends what the input holds.
+ * The texts that did not start the next turn (`UnsentSteers`, `useSteering`): they go back into the input, so the
+ * person can change them, and "Send again" sends what the input holds.
  */
 import { useEffect, useRef, type RefObject } from 'react';
 
@@ -14,8 +11,8 @@ import { t } from '@/shared/i18n';
 
 import { nextTurnMessage, type UnsentSteers } from './useSteering';
 
-/** The part of the input handle these controls use. */
-interface DraftInput {
+/** The part of the input handle these controls (and `SteeringQueue`'s Edit) use. */
+export interface DraftInput {
   getInputContent(): string;
   setValue(value: string): void;
 }
@@ -44,18 +41,6 @@ export function useRestoredDraft(input: RefObject<DraftInput | null>, unsent: Un
     }, 0);
     return () => window.clearTimeout(timer);
   }, [input, id, text]);
-}
-
-/** "Stop and send": shown while a turn runs, when the page offers it (`shown`). */
-export function StopAndSend({ shown, disabled, onClick }: { shown: boolean; disabled: boolean; onClick: () => void }): React.JSX.Element | null {
-  if (!shown) return null;
-  return (
-    <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-      <Button size="small" variant="outlined" color="error" data-testid="workspace-stop-and-send" disabled={disabled} onClick={onClick}>
-        {t('workspace.steer.stopAndSend', 'Stop and send')}
-      </Button>
-    </Box>
-  );
 }
 
 /** "Send again": shown when texts did not start the next turn and no turn runs. It sends what the input holds. */

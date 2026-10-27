@@ -5,9 +5,9 @@
  * ── WHAT THE COMPOSER DOES DURING A RUN: STEERING (client contract 1.27) ───
  *
  * A message typed while the turn this tab started is still running is sent to
- * the server as a STEERING message (`POST .../steering`). It shows under the
- * running answer as `chat-steering-item` (state `pending`, "Waiting for the
- * next step"). The worker injects it at a safe point of the same turn, and the
+ * the server as a STEERING message (`POST .../steering`). It shows in the queue
+ * at the top of the composer (`chat-queued-messages`) as `chat-steering-item`
+ * (state `pending`). The worker injects it at a safe point of the same turn, and the
  * only safe point is after a tool step. The mock model calls no tool, so
  * nothing here is ever injected: the turn ends, the server marks the messages
  * `turn_ended`, and the end-of-turn rule of the tab hands them off and sends
@@ -16,9 +16,10 @@
  * itself: the tab OFFERS the leftovers (`chat-steering-offer`) and the reader
  * chooses.
  *
- * The old client-side "Waiting messages" strip (A17) still exists, but only as
- * the fallback for a refused steering message, so it is not asserted as the
- * main surface any more. The delivery that ends the journey uses it.
+ * The old client-side A17 queue still exists, but only as the fallback for a
+ * refused steering message (its rows, `chat-queued-item`, share that list), so
+ * it is not asserted as the main surface any more. The delivery that ends the
+ * journey uses it.
  *
  * ── WHY THESE ASSERTIONS AND NOT THE OBVIOUS ONES ───────────────────────────
  *
@@ -305,8 +306,8 @@ test('messages typed during a run are steered, and are delivered in order once i
   await expect(rows.nth(0)).toContainText(queued[0] as string);
   await expect(rows.nth(1)).toContainText(queued[1] as string);
   await expect(rows.nth(2)).toContainText(queued[2] as string);
-  await expect(page.getByTestId('chat-steering-status')).toHaveCount(3);
-  await expect(page.getByTestId('chat-steering-status').first()).toHaveText('Waiting for the next step');
+  // They wait in the queue at the top of the composer, not in the transcript.
+  await expect(page.getByTestId('chat-queued-messages').getByTestId('chat-steering-item')).toHaveCount(3);
   await expect(rows.first()).toHaveAttribute('data-state', 'pending');
   // Steering messages are not turns: nothing may reach the transcript store
   // while they wait.

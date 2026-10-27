@@ -32,8 +32,9 @@
  * the same for that prompt (`RunInCloudNotice`).
  *
  * While a local turn runs, a send steers it (`useSteering`): the text waits for the agent's next safe point
- * (`SteeringQueue`, with Edit and Remove), and what the turn did not take goes as the next turn. When that next
- * turn does not start, the texts go back into the composer with "Send again" (`unsent`).
+ * (`SteeringQueue`, at the top of the composer, with Send now, Edit and Remove), and what the turn did not take goes
+ * as the next turn. When that next turn does not start, the texts go back into the composer with "Send again"
+ * (`unsent`). Esc Esc stops a running turn, as the composer's Stop does (`useDoubleEscape`).
  */
 import { lazy, Suspense, useMemo, useState } from 'react';
 
@@ -42,6 +43,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { composer, replayView, type WorkspaceTurn } from '@/features/workspace';
 import type { CustomCommand, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
+import { useDoubleEscape } from '@/shared/lib/useDoubleEscape';
 import { useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { BypassControls } from './BypassControls';
@@ -49,7 +51,6 @@ import { contextBreakdown, threadMeter } from './contextBreakdown';
 import { AgentChip, RunLocationChip } from './ComposerControls';
 import { HandoffBanner } from './HandoffControls';
 import { RunInCloudNotice } from './RunInCloudNotice';
-import { SteeringQueue } from './SteeringQueue';
 import { firstError, SessionNotices } from './sessionParts';
 import { useProjectSkills, type ComposerSkill } from './useAgentSkills';
 import type { CloudChat } from './useCloudChat';
@@ -93,7 +94,7 @@ function cloudBinding(cloud: CloudChat): Pick<WorkspaceComposerProps, 'canSend' 
   };
 }
 
-type SendBinding = Partial<Pick<WorkspaceComposerProps, 'placeholder' | 'showMode' | 'acceptImages' | 'onSteer' | 'onStopAndSend' | 'unsent'>> & Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'>;
+type SendBinding = Partial<Pick<WorkspaceComposerProps, 'placeholder' | 'showMode' | 'acceptImages' | 'onSteer' | 'queue' | 'unsent'>> & Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'>;
 
 /**
  * Where a message goes: the cloud copy, else the pipeline's cloud run (gated on that run alone, never on the local
@@ -142,10 +143,10 @@ function turnUsages(turn: WorkspaceTurn, recorded: readonly { turnId: string; us
 
 const NO_USAGE: NonNullable<Usage>[] = [];
 
-/** While a local turn runs, Send steers it and "Stop and send" is offered; after it, the texts that did not start a turn. */
-function steeringProps(steering: Steering): Pick<WorkspaceComposerProps, 'onSteer' | 'onStopAndSend' | 'unsent'> {
-  if (steering.active) return { onSteer: steering.steer, onStopAndSend: steering.stopAndSend };
-  return steering.unsent === null ? {} : { unsent: steering.unsent };
+/** The queue (and its refusals) always; while a local turn runs, Send steers it; after it, the texts that did not start a turn. */
+function steeringProps(steering: Steering): Pick<WorkspaceComposerProps, 'onSteer' | 'queue' | 'unsent'> {
+  if (steering.active) return { onSteer: steering.steer, queue: steering };
+  return steering.unsent === null ? { queue: steering } : { queue: steering, unsent: steering.unsent };
 }
 
 /** The local session can start a turn, or the running turn takes a steering message; never while the thread is away. */
@@ -234,6 +235,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     ...steeringProps(steering),
   };
   const bound = sendBinding(cloudMode, cloud, composerPipeline, here);
+  useDoubleEscape(bound.busy, bound.onStop);
   const lastRecorded = useMemo(() => recordedPrompt(session.history, customCommands, offered), [session.history, customCommands, offered]);
   const controls = useRetryAndSteps(workspaceId, commands, session.run, { send: bound.onSend, busy: bound.busy, canSend: bound.canSend }, lastRecorded);
   const openInChat = conversationId === '' ? undefined : () => void navigate({ to: '/chat/$conversationId', params: { conversationId } });
@@ -246,7 +248,6 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
       <HandoffBanner handoff={handoff} projectId={projectId} />
       <SessionNotices error={modelNotice ?? firstError(turnError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={offered} />
       <BypassControls bypass={modes.bypass} active={modes.bypassActive} />
-      {local && <SteeringQueue pending={steering.pending} error={steering.error} onEdit={steering.edit} onRemove={steering.remove} />}
       <RunInCloudNotice cloudOnly={pipeline} refusedPrompt={refusedPrompt} running={runInCloud.running} error={runInCloud.error} onRun={(prompt) => void runInCloud.run(prompt)} />
       <WorkspaceComposer
         ipc={ipc}

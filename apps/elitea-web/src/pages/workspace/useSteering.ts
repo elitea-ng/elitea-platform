@@ -2,11 +2,13 @@
  * Steering a local turn while it runs (IPC.md "Steering").
  *
  * - While the turn runs, a send queues the text against it (`agent_turn_steer`). The agent gets it at its next
- *   safe point; until then the person can change or remove it (`agent_turn_steer_update`).
+ *   safe point; until then the person can take it off the queue (`agent_turn_steer_update` with no text): Remove,
+ *   or Edit, which puts it back into the message box.
  * - When the turn ends (any end), the texts it did not take (`steer_dropped` `turn_ended`) go as the next turn,
  *   joined with a blank line into one message. A text the host refused with `turn_not_running` (the run ended
  *   while it was sent) goes with them.
- * - "Stop and send" cancels the turn, then sends the text as the next turn once the turn ended.
+ * - "Send now" takes one message off the queue and cancels the turn: the next turn starts with that message, then
+ *   the texts the turn did not take. A message the agent already has is not sent again, and the turn runs on.
  *
  * - When that next turn does not start, the texts go back into the composer (`unsent`): the person can change them,
  *   then send them again. They stay until a new turn starts.
@@ -27,7 +29,7 @@ export interface UnsentSteers {
   onRetry: (text: string) => Promise<boolean>;
 }
 
-export type PendingSteer = NonNullable<WorkspaceTurn['view']['pendingSteers']>[number];
+type PendingSteer = NonNullable<WorkspaceTurn['view']['pendingSteers']>[number];
 
 export interface Steering {
   /** The turn runs: a send queues the text against it. */
@@ -40,10 +42,10 @@ export interface Steering {
   unsent: UnsentSteers | null;
   /** Resolves `true` once the text is queued (or kept for the next turn): the composer then clears. */
   steer: (text: string) => Promise<boolean>;
-  edit: (steerId: string, text: string) => Promise<void>;
-  remove: (steerId: string) => Promise<void>;
-  /** Stop the turn, then send `text` (after the texts the turn did not take) as the next turn. */
-  stopAndSend: (text: string) => Promise<boolean>;
+  /** Take the message off the queue; resolves `false` when the host refused (the agent has it already). */
+  remove: (steerId: string) => Promise<boolean>;
+  /** Take the message off the queue and stop the turn: the next turn starts with it. */
+  sendNow: (steerId: string) => Promise<void>;
 }
 
 /** The message of the next turn: the parts that are not empty, joined with a blank line. */
@@ -66,8 +68,8 @@ export function useSteering(ipc: WorkspaceIpc, turn: WorkspaceTurn, sendNext: (p
   const ended = view.done !== undefined;
   const active = busy && turnId !== null && !ended;
   const [error, setError] = useState<string | null>(null);
-  /** The texts that go with the next turn, besides the ones the turn did not take. */
-  const carried = useRef<string[]>([]);
+  /** The texts that go with the next turn, besides the ones the turn did not take; `first`: before them ("Send now"). */
+  const carried = useRef<{ first: string[]; last: string[] }>({ first: [], last: [] });
   /** The turn whose end this hook has handled. A turn already ended at mount counts as handled. */
   const handled = useRef<string | null>(ended ? turnId : null);
   const latestSend = useRef(sendNext);
@@ -79,8 +81,8 @@ export function useSteering(ipc: WorkspaceIpc, turn: WorkspaceTurn, sendNext: (p
 
   /** Send `parts` and the carried texts as the next turn, after the end of `ended`. */
   const flush = useCallback((parts: readonly string[], ended: string) => {
-    const message = nextTurnMessage([...parts, ...carried.current]);
-    carried.current = [];
+    const message = nextTurnMessage([...carried.current.first, ...parts, ...carried.current.last]);
+    carried.current = { first: [], last: [] };
     if (message === '') return;
     void latestSend.current(message).then((sent) => {
       if (sent) return;
@@ -106,10 +108,11 @@ export function useSteering(ipc: WorkspaceIpc, turn: WorkspaceTurn, sendNext: (p
     flush((endedSteers ?? []).map((steer) => steer.text), turnId);
   }, [turnId, ended, busy, endedSteers, flush]);
 
-  /** Keep `text` for the next turn; send it now when the turn's end was already handled. */
+  /** Keep `text` for the next turn (`first`: before what the turn did not take); send it now when the turn's end was already handled. */
   const carry = useCallback(
-    (text: string) => {
-      carried.current = [...carried.current, text];
+    (text: string, first = false) => {
+      const { current } = carried;
+      carried.current = first ? { ...current, first: [...current.first, text] } : { ...current, last: [...current.last, text] };
       if (turnId !== null && handled.current === turnId) flush([], turnId);
     },
     [turnId, flush],
@@ -134,37 +137,39 @@ export function useSteering(ipc: WorkspaceIpc, turn: WorkspaceTurn, sendNext: (p
     [ipc, turnId, carry],
   );
 
-  const update = useCallback(
-    async (steerId: string, text: string | null) => {
-      if (turnId === null) return;
+  const remove = useCallback(
+    async (steerId: string): Promise<boolean> => {
+      if (turnId === null) return false;
       setError(null);
       try {
-        await ipc.updateSteer(turnId, steerId, text);
+        await ipc.updateSteer(turnId, steerId, null);
+        return true;
       } catch (refusal) {
         setError(describeWorkspaceError(refusal));
+        return false;
       }
     },
     [ipc, turnId],
   );
 
-  const stopAndSend = useCallback(
-    async (text: string): Promise<boolean> => {
-      setError(null);
-      carry(text);
+  const pending = view.pendingSteers ?? NONE;
+  const sendNow = useCallback(
+    async (steerId: string): Promise<void> => {
+      const text = pending.find((steer) => steer.steerId === steerId)?.text;
+      if (text === undefined || !(await remove(steerId))) return;
+      carry(text, true);
       await turn.cancel();
-      return true;
     },
-    [carry, turn],
+    [pending, remove, carry, turn],
   );
 
   return {
     active,
-    pending: view.pendingSteers ?? NONE,
+    pending,
     error: error ?? (unsentSteers === null ? null : t('workspace.steer.unsent', 'The messages you queued did not start a new turn. They are back in the message box: change them if you want, then send them again.')),
     unsent: unsentSteers,
     steer,
-    edit: (steerId, text) => update(steerId, text),
-    remove: (steerId) => update(steerId, null),
-    stopAndSend,
+    remove,
+    sendNow,
   };
 }

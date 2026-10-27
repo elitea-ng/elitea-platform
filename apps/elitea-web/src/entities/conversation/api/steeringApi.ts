@@ -3,9 +3,11 @@
  *
  * A message that the user sends while a cloud turn runs is queued against the
  * running answer. The worker injects it at the next safe point. These
- * adapters wrap the five generated operations (`steerChatExecution`,
- * `listChatExecutionSteering`, `updateChatExecutionSteering`,
- * `removeChatExecutionSteering`, `handOffChatExecutionSteering`) and turn
+ * adapters wrap four generated operations (`steerChatExecution`,
+ * `listChatExecutionSteering`, `removeChatExecutionSteering`,
+ * `handOffChatExecutionSteering`; the client changes a waiting message by
+ * taking it off and sending it again, so it calls no
+ * `updateChatExecutionSteering`) and turn
  * each answer into a value: a
  * refusal is `{ ok: false, code }` with the contract's `error` code, never a
  * throw, so that the caller can choose the fallback.
@@ -27,7 +29,6 @@ import {
   listChatExecutionSteering,
   removeChatExecutionSteering,
   steerChatExecution,
-  updateChatExecutionSteering,
 } from '@/shared/api/generated/chat/chat';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 
@@ -88,16 +89,6 @@ export async function queueSteering(target: SteeringTarget, content: string, ide
 export async function listSteering(target: SteeringTarget, signal?: AbortSignal): Promise<SteeringItem[]> {
   const envelope = await listChatExecutionSteering(String(target.projectId), target.responseMessageId, signal ? { signal } : undefined);
   return parseSteeringList(envelope.data);
-}
-
-/** Changes the text of a pending message. 409 `steering_not_pending`: the turn injected it first. */
-export async function editSteering(target: SteeringTarget, steeringId: string, content: string): Promise<SteeringCallResult> {
-  try {
-    const envelope = await updateChatExecutionSteering(String(target.projectId), target.responseMessageId, steeringId, { content });
-    return { ok: true, item: parseSteeringMessage(envelope.data) };
-  } catch (error) {
-    return refusal(error);
-  }
 }
 
 /** Removes a pending message (204, also when it is already removed). 409 `steering_not_pending`: it was injected. */

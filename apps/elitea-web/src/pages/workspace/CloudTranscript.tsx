@@ -79,7 +79,7 @@ export function CloudTranscript({ chat }: { chat: CloudChat }): React.JSX.Elemen
         <Box key={exchange.key} sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
           {exchange.prompt !== undefined && <YourPrompt text={exchange.prompt.content} />}
           {exchange.answers.map((answer) => (
-            <TurnTranscript key={answer.id} view={turnViewOf(answer)} busy={chat.streaming && answer.isStreaming === true} onCancel={chat.stop} onTextContextMenu={copyMenu} />
+            <TurnTranscript key={answer.id} view={turnViewOf(answer)} busy={chat.streaming && answer.isStreaming === true} onTextContextMenu={copyMenu} />
           ))}
         </Box>
       ))}

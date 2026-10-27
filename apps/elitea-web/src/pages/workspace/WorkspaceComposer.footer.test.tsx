@@ -182,7 +182,7 @@ describe('WorkspaceComposer footer', () => {
     expect(screen.queryByTestId('workspace-attach-images')).toBeNull();
   });
 
-  it('turns Send into Stop while a turn runs, and keeps both while Send steers it', async () => {
+  it('turns Send into Stop while a turn runs, also while Send steers it and the input is empty', async () => {
     const onStop = vi.fn();
     const user = userEvent.setup();
     const view = await mount({ busy: true, canSend: false, onStop });
@@ -191,7 +191,7 @@ describe('WorkspaceComposer footer', () => {
     expect(onStop).toHaveBeenCalledOnce();
 
     await view.show({ busy: true, onStop, onSteer: vi.fn().mockResolvedValue(true) });
-    expect(screen.getByTestId('workspace-send-button')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Stop generating' })).toBeInTheDocument();
+    expect(screen.queryByTestId('workspace-send-button')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Stop generating' })).toHaveLength(1);
   });
 });

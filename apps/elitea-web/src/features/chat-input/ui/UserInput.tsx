@@ -128,7 +128,7 @@ export const UserInput = forwardRef(function UserInput(props: UserInputProps, re
   useUserInputMentions({ inputContent, users: mention.users, onMentionChange: mention.onMentionChange, inputRef });
 
   const { isDragOver, handleDragOver, handleDragLeave, handleDrop } = useFileDragAndDrop(sp.container?.onDrop);
-  const footerControls = resolveFooterControls({ isStreaming, isUploading, keepSendWhileStreaming: sendButtonConfig.keepWhileStreaming });
+  const footerControls = resolveFooterControls({ isStreaming, isUploading, keepSendWhileStreaming: sendButtonConfig.keepWhileStreaming, oneButton: NATIVE, hasText: question.trim() !== '' });
 
   const hasHighlights = highlightRanges.length > 0 && inputContent !== '';
 

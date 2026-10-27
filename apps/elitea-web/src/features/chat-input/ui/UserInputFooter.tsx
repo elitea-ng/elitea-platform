@@ -26,6 +26,7 @@ export interface UserInputFooterProps {
    * message queue shows BOTH while a turn is open — Stop ends the run, Send
    * queues the next message (`UserInputSendButtonConfig.keepWhileStreaming`).
    * Without a queue this is `!showStop`, which is the baseline's own either/or.
+   * The desktop shows one of them at a time (`resolveFooterControls`).
    */
   readonly showSend: boolean;
   readonly sendControl: UserInputSlots['sendControl'];
@@ -40,22 +41,29 @@ export interface UserInputFooterProps {
 /** The desktop draws Stop as its one round end button, a square in place of the arrow (a literal MODE test: the web keeps its own). */
 const NATIVE = import.meta.env.MODE === 'desktop';
 
+/**
+ * Stop. `shortcut`: the host is the chat, whose page also stops on Esc Esc
+ * (`useDoubleEscape`), and the tooltip says so; the label stays the name.
+ */
 function StopButton({
   onStop,
   config,
   styles,
+  shortcut,
 }: {
   readonly onStop: (() => void) | undefined;
   readonly config: UserInputFooterProps['stopButtonConfig'];
   readonly styles: UserInputStyles;
+  readonly shortcut: boolean;
 }): ReactNode {
   const label = config?.tooltipTitle ?? t('chatInput.userInput.stopGenerating', 'Stop generating');
+  const tooltip = shortcut ? t('chatInput.userInput.stopShortcut', 'Stop · Esc Esc') : label;
   if (NATIVE) {
-    return <ComposerSendButton label={label} disabled={false} onClick={() => onStop?.()} icon={<StopIcon style={stopIconStyle} />} />;
+    return <ComposerSendButton label={label} tooltip={tooltip} disabled={false} onClick={() => onStop?.()} icon={<StopIcon style={stopIconStyle} />} />;
   }
   return (
     <Tooltip
-      title={label}
+      title={tooltip}
       placement="top"
     >
       <Box component="span">
@@ -84,6 +92,7 @@ export function UserInputFooter(props: UserInputFooterProps): ReactNode {
           onStop={onStop}
           config={stopButtonConfig}
           styles={styles}
+          shortcut={sendControlProps.config?.keepWhileStreaming === true}
         />
       )}
       {showSend && (

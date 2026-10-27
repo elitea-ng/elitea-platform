@@ -364,7 +364,7 @@ describe('WorkspaceSessionPage', () => {
     ipc.emit({ ...at(3), kind: 'tool_call', payload: { call_id: 'c1', tool: 'run_command', args_summary: 'cargo build', remote: false } });
     expect(await screen.findByText('Looking at the build')).toBeInTheDocument();
     expect(screen.getByText('Local')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop generating' })).toBeInTheDocument();
 
     ipc.emit({ ...at(4), kind: 'approval_request', payload: { request_id: 'r1', tool: 'run_command', title: 'Run cargo build', detail: 'Build it', command: ['cargo', 'build'], reason: 'unlisted', can_remember: true } });
     const dialog = await screen.findByRole('dialog', { name: 'Run cargo build' });
@@ -453,14 +453,14 @@ describe('WorkspaceSessionPage', () => {
     mount(ipc, '/workspaces/w1?conversation=77');
 
     expect(await screen.findByText('Answer of t9')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop generating' })).toBeInTheDocument();
     expect(screen.queryAllByTestId('history-turn')).toHaveLength(0);
     // A live event the record already holds is not shown twice; a new one appends.
     ipc.emit({ turn_id: 't9', seq: 2, kind: 'text_delta', payload: { text: 'Answer of t9' } });
     ipc.emit({ turn_id: 't9', seq: 3, kind: 'text_delta', payload: { text: ', and more' } });
     expect(await screen.findByText('Answer of t9, and more')).toBeInTheDocument();
     ipc.emit({ turn_id: 't9', seq: 4, kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: [], changed_files: 0 } });
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop generating' })).toBeNull());
     expect(screen.getByText('Prompt of t9')).toBeInTheDocument();
   });
 
@@ -876,12 +876,12 @@ describe('WorkspaceSessionPage', () => {
     await act(() => openFolder('w2'));
     expect(await screen.findByRole('heading', { name: 'lib' })).toBeInTheDocument();
     expect(screen.queryByText('working in app')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Stop generating' })).toBeNull();
     // One listener: the old session's was removed with it.
     await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
   });
 
-  it('cancels the running turn from the transcript', async () => {
+  it('stops the running turn from the composer: no Cancel in the transcript', async () => {
     serveProject();
     const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
     const user = userEvent.setup();
@@ -893,7 +893,28 @@ describe('WorkspaceSessionPage', () => {
     await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
 
     ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'status', payload: { phase: 'running' } });
-    await user.click(await screen.findByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByTestId('turn-status')).toHaveTextContent('Working');
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+    await user.click(await screen.findByRole('button', { name: 'Stop generating' }));
+    expect(ipc.calls.cancelled).toEqual(['turn-1']);
+  });
+
+  it('stops the running turn on Esc Esc, not on one Escape', async () => {
+    serveProject();
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+    const user = userEvent.setup();
+    mount(ipc, '/workspaces/w1');
+
+    await pickCoder(user);
+    await user.type(screen.getByTestId('chat-message-input'), 'go');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+    ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'status', payload: { phase: 'running' } });
+    await screen.findByRole('button', { name: 'Stop generating' });
+
+    await user.keyboard('{Escape}');
+    expect(ipc.calls.cancelled).toEqual([]);
+    await user.keyboard('{Escape}');
     expect(ipc.calls.cancelled).toEqual(['turn-1']);
   });
 

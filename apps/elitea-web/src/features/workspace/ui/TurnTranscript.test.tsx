@@ -7,7 +7,7 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { TurnTranscript } from './TurnTranscript';
 
 function renderText(text: string): HTMLElement {
-  renderWithTheme(<TurnTranscript view={{ phase: null, items: [{ type: 'text', key: 't1', text }], approvals: [] }} busy={false} onCancel={vi.fn()} />);
+  renderWithTheme(<TurnTranscript view={{ phase: null, items: [{ type: 'text', key: 't1', text }], approvals: [] }} busy={false} />);
   return screen.getByTestId('turn-text');
 }
 
@@ -41,7 +41,6 @@ describe('TurnTranscript', () => {
           approvals: [],
         }}
         busy={false}
-        onCancel={vi.fn()}
       />,
     );
     const link = screen.getByTestId('tool-row-link');
@@ -61,7 +60,7 @@ describe('TurnTranscript', () => {
       { type: 'thinking' as const, key: 'r1', text: 'Check **the** tests', chars: 1234 },
       { type: 'thinking' as const, key: 'r2', text: 'still going' },
     ];
-    renderWithTheme(<TurnTranscript view={{ phase: 'running', items, approvals: [] }} busy onCancel={vi.fn()} />);
+    renderWithTheme(<TurnTranscript view={{ phase: 'running', items, approvals: [] }} busy />);
     const [done, streaming] = screen.getAllByTestId('thinking-block');
     expect(done).toHaveTextContent(`Thinking · ${new Intl.NumberFormat().format(1234)} characters`);
     expect(streaming).toHaveTextContent('Thinking…');
@@ -83,7 +82,7 @@ describe('TurnTranscript', () => {
       approvals: [],
       commitFailed: { executionId: 'e1', code: 'local_turn_unavailable', message: 'The turn could not be saved: later', seq: 9 },
     };
-    renderWithTheme(<TurnTranscript view={view} busy={false} onCancel={vi.fn()} onRetryCommit={onRetry} />);
+    renderWithTheme(<TurnTranscript view={view} busy={false} onRetryCommit={onRetry} />);
     expect(screen.getByTestId('commit-failed')).toHaveTextContent('The turn could not be saved: later');
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(onRetry).toHaveBeenCalledWith('e1'));
@@ -92,26 +91,26 @@ describe('TurnTranscript', () => {
   it('offers Retry on a failure another try may mend, never on a refusal, and shows a model retry while it waits', async () => {
     const onRetryTurn = vi.fn();
     const failed = (code: string) => ({ phase: 'error' as const, items: [], approvals: [], error: { code, message: `failed: ${code}` } });
-    const { rerender } = renderWithTheme(<TurnTranscript view={failed('model_gateway.incomplete_stream')} busy={false} onCancel={vi.fn()} onRetryTurn={onRetryTurn} />);
+    const { rerender } = renderWithTheme(<TurnTranscript view={failed('model_gateway.incomplete_stream')} busy={false} onRetryTurn={onRetryTurn} />);
     await userEvent.setup().click(screen.getByTestId('turn-error-retry'));
     expect(onRetryTurn).toHaveBeenCalledTimes(1);
-    rerender(<TurnTranscript view={failed('model_gateway.member_budget_exhausted')} busy={false} onCancel={vi.fn()} onRetryTurn={onRetryTurn} />);
+    rerender(<TurnTranscript view={failed('model_gateway.member_budget_exhausted')} busy={false} onRetryTurn={onRetryTurn} />);
     expect(screen.getByText('failed: model_gateway.member_budget_exhausted')).toBeInTheDocument();
     expect(screen.queryByTestId('turn-error-retry')).toBeNull();
-    rerender(<TurnTranscript view={{ phase: 'running', items: [], approvals: [], retrying: { attempt: 3, max_attempts: 25, message: 'x' } }} busy onCancel={vi.fn()} />);
+    rerender(<TurnTranscript view={{ phase: 'running', items: [], approvals: [], retrying: { attempt: 3, max_attempts: 25, message: 'x' } }} busy />);
     expect(screen.getByTestId('turn-retrying')).toHaveTextContent('retrying (3 of 25)');
   });
 
   it('offers Continue on a turn stopped at the tool calls one turn can save', async () => {
     const onContinue = vi.fn();
-    renderWithTheme(<TurnTranscript view={{ phase: 'done', note: 'tool_call_limit_reached', items: [], approvals: [] }} busy={false} onCancel={vi.fn()} onContinue={onContinue} />);
+    renderWithTheme(<TurnTranscript view={{ phase: 'done', note: 'tool_call_limit_reached', items: [], approvals: [] }} busy={false} onContinue={onContinue} />);
     await userEvent.setup().click(screen.getByTestId('turn-continue'));
     expect(onContinue).toHaveBeenCalledTimes(1);
   });
 
   it('shows a recorded commit failure without Retry when nothing can resend it', () => {
     const view = { phase: 'done' as const, items: [], approvals: [], commitFailed: { executionId: 'e1', code: 'x', message: 'Not saved.', seq: 3 } };
-    renderWithTheme(<TurnTranscript view={view} busy={false} onCancel={vi.fn()} />);
+    renderWithTheme(<TurnTranscript view={view} busy={false} />);
     expect(screen.getByTestId('commit-failed')).toHaveTextContent('Not saved.');
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
   });

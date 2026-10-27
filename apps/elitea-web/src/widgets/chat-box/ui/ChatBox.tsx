@@ -23,6 +23,7 @@ import { ChatMessageList, useDeleteMessageAlert, currentNodeRecoveryBinding, app
 import { getAllTokens } from '@/features/mcps';
 import { conversationApi } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
+import { useDoubleEscape } from '@/shared/lib/useDoubleEscape';
 
 import {
   buildAgentEditorProps,
@@ -46,7 +47,8 @@ export type { ChatBoxProps } from './ChatBox.types';
 import { buildChatBoxContinuationProps } from './ChatBoxContinuation';
 import { useChatBoxLlmSettingsDialog } from './ChatBoxLlmSettingsDialog';
 import { buildChatBoxAttachmentProps, buildChatBoxInputSlots } from './ChatBoxInputSlots'; import { useChatBoxVoiceFeedback } from './ChatBoxVoiceFeedback';
-import { ChatBoxQueuedMessages, ChatBoxSteeringNotice, ChatBoxSteeringOffer, chatBoxQueueKey, useChatBoxQueuedMessages } from './ChatBoxQueuedMessages';
+import { ChatBoxSteeringNotice, ChatBoxSteeringOffer, chatBoxQueueKey, useChatBoxQueuedMessages } from './ChatBoxQueuedMessages';
+import { ChatBoxComposerQueue } from './ChatBoxComposerQueue';
 import { ChatBoxVoicePlayer } from './ChatBoxVoicePlayer';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
 import { ChatBoxWithdrawnNotice } from './ChatBoxWithdrawnNotice';
@@ -297,6 +299,9 @@ const ChatBoxInner = memo(function ChatBox({
   // Contract 1.27: a send while the owned cloud turn runs STEERS it; a refusal or a leftover goes through the A17 queue.
   const steering = useChatSteering({ conversationKey: chatBoxQueueKey(conversationUuid, conversationId), isStreaming, streamTarget, send: queued.onSend, queueAfterTurn: queued.enqueue, answerFailed: (id) => messages.some((m) => m.id === id && (Boolean(m.exception) || m.failureCode !== undefined)) });
   useReattachSeededTurn({ messages, conversationUuid, reattach: reattachStreamedExecution, onReattached: steering.onReattached }); // #6654: a reload mid-turn observes the run again
+  // The composer's Stop, and Esc Esc anywhere on the page: the leftovers of the turn are offered, not sent.
+  const stopTurn = (): void => { steering.onStop(); stopGeneration(); };
+  useDoubleEscape(isStreaming && !hidden, stopTurn);
   // MUST target the host `ref`, never `chatInputRef` — see `ChatBox.types.ts`.
   useImperativeHandle(ref, () => ({
     onClear: () => { handleClearRef.current(); },
@@ -327,7 +332,7 @@ const ChatBoxInner = memo(function ChatBox({
             onForkFromMessage,
           }, noRegenerate)}
           continuation={{ ...buildChatBoxContinuationProps({ onHitlResume: handleHitlResume, onContinueMcpExecution: handleContinueMcpExecution, onContinueTokenLimitExecution: handleContinueTokenLimit }, projectIdString), staticPause }}
-          tts={buildTtsProps(readAloud, state.isSpeakingMode)} canvas={buildCanvasProps(editorCallbacks)} steering={{ model: steering, onStopAndSend: stopGeneration }}
+          tts={buildTtsProps(readAloud, state.isSpeakingMode)} canvas={buildCanvasProps(editorCallbacks)} steering
         />
         {state.shouldShowStarters && (
           <ChatConversationStarters
@@ -339,7 +344,7 @@ const ChatBoxInner = memo(function ChatBox({
       <Box sx={{ ...CONVERSATION_COLUMN, paddingTop: 1, paddingBottom: 2 }}>
         {readOnlyNotice ?? <>
         <ChatBoxVoicePlayer showPlayer={readAloud.showPlayer} voicePlayerProps={readAloud.voicePlayerProps} />
-        <ChatBoxQueuedMessages queue={queued} /><ChatBoxSteeringNotice notice={steering.notice} onDismiss={steering.dismissNotice} /><ChatBoxSteeringOffer offer={steering.offer} onSend={steering.acceptOffer} onDismiss={steering.dismissOffer} />
+        <ChatBoxComposerQueue queue={queued} steering={steering} conversationKey={chatBoxQueueKey(conversationUuid, conversationId)} isStreaming={isStreaming} onInterrupt={stopGeneration} input={chatInputRef} /><ChatBoxSteeringNotice notice={steering.notice} onDismiss={steering.dismissNotice} /><ChatBoxSteeringOffer offer={steering.offer} onSend={steering.acceptOffer} onDismiss={steering.dismissOffer} />
         <ChatBoxPopups
           {...buildChatBoxPopupsProps({
             state,
@@ -357,7 +362,7 @@ const ChatBoxInner = memo(function ChatBox({
           conversationId={conversationId !== undefined ? String(conversationId) : undefined}
           state={{ isLoading: isComposerBusy, disabledInput: isDraftInputBusy, isStreaming, disabledSend, isCreatingConversation: data.lifecycle.isCreating, allowSendWhileStreaming: true }}
           content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type your message...'), clearInputAfterSubmit: true, slashHighlights: state.combinedHighlightRanges, draftKey: chatDraftKey({ projectId, conversationId, scratch: [isAgentsPage, editorTest] }) }}
-          callbacks={{ onSend: steering.onSend, onStopGeneration: () => { steering.onStop(); stopGeneration(); }, onNormalKeyDown: state.onNormalKeyDown, onInputChange: state.onInputChange }}
+          callbacks={{ onSend: steering.onSend, onStopGeneration: stopTurn, onNormalKeyDown: state.onNormalKeyDown, onInputChange: state.onInputChange }}
           agentEditor={buildAgentEditorProps({
             participantForEditor,
             activeParticipantDetails: agentEditorParticipantDetails,

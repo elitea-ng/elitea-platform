@@ -30,8 +30,9 @@
  * enforces the limits (five images, 10 MiB each); this only stops offering.
  *
  * Steering (`onSteer`): while a turn runs, the input stays open and Send queues the text against the turn
- * (images stay for the next turn). "Stop and send" (`onStopAndSend`) stops the turn and sends the text next.
- * Texts that did not start the next turn (`unsent`) go back into the input, with "Send again" (`SteeringControls`).
+ * (images stay for the next turn); with no text, the round button is Stop. The queued messages sit at the top of the
+ * composer (`queue`, `SteeringQueue`: Send now, Edit, Remove). Texts that did not start the next turn (`unsent`) go
+ * back into the input, with "Send again" (`SteeringControls`).
  *
  * Unsent text is kept per thread (`draftKey`: `workspace:<folder>:<thread>`, `…:new` before the thread exists) and
  * comes back when the thread is opened again. A new thread that gets its id (its first turn started) takes the text
@@ -53,7 +54,8 @@ import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId 
 
 import { AttachImagesButton } from './AttachImagesButton';
 import { FooterControls } from './FooterControls';
-import { RetryUnsent, StopAndSend, useRestoredDraft } from './SteeringControls';
+import { RetryUnsent, useRestoredDraft } from './SteeringControls';
+import { SteeringQueue, type SteeringQueueBinding } from './SteeringQueue';
 import type { UnsentSteers } from './useSteering';
 import type { ComposerSkill } from './useAgentSkills';
 import { threadDraftKey, useCarriedDraft } from './useCarriedDraft';
@@ -128,8 +130,8 @@ export interface WorkspaceComposerProps {
   onFocus?: () => void;
   /** While `busy`: Send queues the text against the running turn; resolves `true` once queued (the input clears). */
   onSteer?: ((text: string) => Promise<boolean>) | undefined;
-  /** While `busy`: stop the turn, then send the text as the next turn. */
-  onStopAndSend?: ((text: string) => Promise<boolean>) | undefined;
+  /** The messages that wait for the running turn, at the top of the composer (a local thread). */
+  queue?: SteeringQueueBinding | undefined;
   /** The texts that did not start the next turn: put into the input, with "Send again" while no turn runs. */
   unsent?: UnsentSteers | undefined;
 }
@@ -336,11 +338,6 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     });
   };
 
-  const stopAndSend = (): void => {
-    const text = inputRef.current?.getInputContent() ?? '';
-    if (text.trim() !== '') void props.onStopAndSend?.(text).then((sent) => sent && clearInput());
-  };
-
   const retryUnsent = (): void => {
     const text = inputRef.current?.getInputContent() ?? '';
     if (text.trim() !== '') void props.unsent?.onRetry(text).then((sent) => sent && clearInput());
@@ -364,8 +361,8 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
           onClose={() => setDismissed(open)}
         />
       )}
-      <StopAndSend shown={steersNow(busy, props.onStopAndSend)} disabled={!hasDraft} onClick={stopAndSend} />
       <RetryUnsent unsent={props.unsent} busy={busy} hasDraft={hasDraft} canSend={canSend} onClick={retryUnsent} />
+      <SteeringQueue queue={props.queue} input={inputRef} onRestored={() => setHasDraft(true)} />
       <NewChatInput
         ref={inputRef}
         // Stop is drawn by `WorkspaceSendControl`, in Send's place: the input draws no Stop of its own.
@@ -382,7 +379,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
           // The whole row goes in the model selector's place: the part of the footer that shrinks.
           modelSelector: footerOf(props, images, attachments.attachPicked),
           sendControl: ({ disabledSend, question, onSend: submit }) => (
-            <WorkspaceSendControl busy={busy} steering={steering} disabled={disabledSend || question.trim() === ''} onSend={submit} onStop={onStop} />
+            <WorkspaceSendControl busy={busy} steering={steering} empty={question.trim() === ''} disabled={disabledSend} onSend={submit} onStop={onStop} />
           ),
         }}
       />

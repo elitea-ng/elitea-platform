@@ -1,6 +1,7 @@
 /**
- * A17 — the "Waiting messages" strip above the composer, and the hook that
- * drives it (ELITEA-2864…2874).
+ * A17 — the waiting messages of the composer, the hook that drives them
+ * (ELITEA-2864…2874), and the steering notice and offer above the composer.
+ * The rows themselves are `ChatBoxComposerQueue`'s.
  *
  * The hook owns three things the composition root would otherwise have to:
  *
@@ -40,7 +41,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import IconButton from '@mui/material/IconButton';
-import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import type { Theme } from '@mui/material/styles';
 import CloseIcon from '@mui/icons-material/Close';
@@ -89,8 +89,10 @@ export interface ChatBoxQueuedMessagesModel {
    * when the composer settles. With `questionId`, that send uses it as its
    * `question_id`.
    */
-  readonly enqueue: (question: string, questionId?: string) => void;
+  readonly enqueue: (question: string, questionId?: string) => string | undefined;
   readonly onRemove: (id: string) => void;
+  /** Moves a waiting message to the head: it goes first when the turn settles ("Send now"). */
+  readonly onPromote: (id: string) => void;
   /** Stamps `interjected` on the transcript rows delivered from this queue. */
   readonly decorate: (messages: readonly ChatMessage[]) => readonly ChatMessage[];
 }
@@ -138,15 +140,20 @@ export function useChatBoxQueuedMessages(params: UseChatBoxQueuedMessagesParams)
   );
 
   const enqueue = useCallback(
-    (question: string, questionId?: string) => {
-      useQueuedMessagesStore.getState().enqueue(conversationKey, question, questionId);
-    },
+    (question: string, questionId?: string) => useQueuedMessagesStore.getState().enqueue(conversationKey, question, questionId)?.id,
     [conversationKey],
   );
 
   const onRemove = useCallback(
     (id: string) => {
       useQueuedMessagesStore.getState().remove(conversationKey, id);
+    },
+    [conversationKey],
+  );
+
+  const onPromote = useCallback(
+    (id: string) => {
+      useQueuedMessagesStore.getState().promote(conversationKey, id);
     },
     [conversationKey],
   );
@@ -189,10 +196,10 @@ export function useChatBoxQueuedMessages(params: UseChatBoxQueuedMessagesParams)
     };
   }, [interjectedIds]);
 
-  return { items, onSend, enqueue, onRemove, decorate };
+  return { items, onSend, enqueue, onRemove, onPromote, decorate };
 }
 
-/* ── the strip ───────────────────────────────────────────────────────────── */
+/* ── the notice and the offer ────────────────────────────────────────────── */
 
 function stripSx(theme: Theme) {
   return {
@@ -212,79 +219,6 @@ const rowSx = {
   gap: '0.5rem',
   width: '100%',
 } as const;
-
-const textSx = {
-  flex: 1,
-  minWidth: 0,
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-} as const;
-
-export interface ChatBoxQueuedMessagesProps {
-  readonly queue: ChatBoxQueuedMessagesModel;
-}
-
-/**
- * Renders nothing while the queue is empty (ELITEA-2869's "queue area hides
- * when empty" — the strip is absent, not merely blank, so a reader cannot
- * mistake an empty box for a lost message).
- */
-export function ChatBoxQueuedMessages({ queue }: ChatBoxQueuedMessagesProps): ReactNode {
-  const { items, onRemove } = queue;
-  if (items.length === 0) return null;
-  const removeLabel = t('widgets.chatBox.queuedRemove', 'Remove from the waiting list');
-  return (
-    <Box
-      sx={stripSx}
-      data-testid="chat-queued-messages"
-    >
-      <Typography
-        variant="labelMedium"
-        color="text.secondary"
-        data-testid="chat-queued-count"
-      >
-        {t('widgets.chatBox.queuedHeading', 'Waiting messages · {{count}}', { count: items.length })}
-      </Typography>
-      {items.map((item) => (
-        <Box
-          key={item.id}
-          sx={rowSx}
-          data-testid="chat-queued-item"
-        >
-          <Typography
-            variant="bodyMedium"
-            color="text.primary"
-            sx={textSx}
-            data-testid="chat-queued-text"
-          >
-            {item.text}
-          </Typography>
-          <Typography
-            variant="labelSmall"
-            color="text.secondary"
-            data-testid="chat-queued-status"
-          >
-            {t('widgets.chatBox.queuedStatus', 'Queued')}
-          </Typography>
-          <Tooltip
-            title={removeLabel}
-            placement="top"
-          >
-            <IconButton
-              size="small"
-              aria-label={removeLabel}
-              data-testid="chat-queued-remove"
-              onClick={() => { onRemove(item.id); }}
-            >
-              <CloseIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Box>
-      ))}
-    </Box>
-  );
-}
 
 export interface ChatBoxSteeringNoticeProps {
   /** A short text about a refused steering message (contract 1.27), or `null`. */

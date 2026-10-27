@@ -248,6 +248,8 @@ export function ComposerMoreMenu({
 
 export interface ComposerSendButtonProps {
   readonly label: string;
+  /** The tooltip, when it says more than the label (Stop's shortcut). */
+  readonly tooltip?: string;
   readonly disabled: boolean;
   readonly onClick: () => void;
   readonly testId?: string;
@@ -257,13 +259,14 @@ export interface ComposerSendButtonProps {
 
 export function ComposerSendButton({
   label,
+  tooltip,
   disabled,
   onClick,
   testId,
   icon,
 }: ComposerSendButtonProps): React.JSX.Element {
   return (
-    <Tooltip title={label}>
+    <Tooltip title={tooltip ?? label}>
       {/* A disabled button fires no events: the span keeps the tooltip. */}
       <span>
         <IconButton

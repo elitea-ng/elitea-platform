@@ -375,7 +375,7 @@ export function ChatMessageList({
                 />
               )}
               {!isUser && steering && (
-                <SteeringMessages responseMessageId={messageId} transcriptIds={transcriptIds} isLive={messageIsStreaming || Boolean(message.isLoading)} model={steering.model} onStopAndSend={steering.onStopAndSend} />
+                <SteeringMessages responseMessageId={messageId} transcriptIds={transcriptIds} isLive={messageIsStreaming || Boolean(message.isLoading)} />
               )}
             </Box>
           );
