@@ -3010,6 +3010,17 @@ main:
     ELITEA_SECRETSTORE_VAULT_TOKEN_FILE: ""
     ELITEA_SECRETSTORE_VAULT_NAMESPACE: ""        # Vault Enterprise only
     ELITEA_SECRETSTORE_VAULT_READINESS_SCOPE: ""
+    # Elitea-native agent assertions (#1153): Main signs a short-lived,
+    # per-run JWT for one relying party (AWS STS, GCP WIF, Keycloak, Vault
+    # JWT, MCP). Read ONLY with the flag above on and a revision that allows
+    # elitea_native. Empty leaves it off and the JWKS routes return 404. One
+    # JSON document: origin (default DEPLOYMENT_URL), rotation_overlap,
+    # keys[] (kid, alg ES256|RS256, not_before, file or vault) and
+    # relying_parties[] (id, audience, algorithm, max_ttl <= 15m,
+    # claims_profile). The keys are dedicated: boot refuses a key shared with
+    # command signing, code-sandbox grants or the egress token key.
+    # Read in cmd/elitea-main/agent_identity_native.go.
+    ELITEA_AGENT_ASSERTION_CONFIG: ""
     # Provider OAuth consent (#1121): one OAuth application per provider
     # (JIRA, CONFLUENCE, AHA). Read ONLY with the flag above on. An empty
     # CLIENT_ID leaves the provider unconfigured. REDIRECT_URI is exact:

@@ -66,6 +66,14 @@ var publicByDesign = map[string]string{
 	// sign-in endpoints and policy — nothing a login page does not show.
 	"/.well-known/elitea-client": "the ADR-0025 discovery document. Anonymous by definition: it is how a client learns how to sign in.",
 
+	// The Elitea-native agent assertion issuer (ADR-0039, issue 1153). A
+	// relying party (AWS STS, GCP WIF, Vault, Keycloak, an MCP server)
+	// fetches them with no credential to verify an assertion. They carry
+	// public keys and URLs only, and are mounted only with governance on
+	// and a relying party configured.
+	"/.well-known/elitea-agent-jwks.json":            "the agent assertion JWKS: public verification keys, no tenant data.",
+	"/agent-issuer/.well-known/openid-configuration": "the agent assertion issuer metadata: issuer and jwks_uri only.",
+
 	// The served API documentation (S251). These three are the static v2.yaml
 	// spec and the page that renders it — the same bytes for every caller,
 	// describing the shape of the API and carrying no tenant data. They are
