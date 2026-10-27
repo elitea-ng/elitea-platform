@@ -155,7 +155,7 @@ func validMutations(mutations []Mutation) bool {
 		if mutation.Collection != RegularSecrets && mutation.Collection != HiddenSecrets {
 			return false
 		}
-		if !validSecretName(mutation.Name) {
+		if !ValidSecretName(mutation.Name) {
 			return false
 		}
 		if mutation.IntegerValue != nil && mutation.Value != "" {
@@ -170,7 +170,9 @@ func validMutations(mutations []Mutation) bool {
 	return true
 }
 
-func validSecretName(name string) bool {
+// ValidSecretName is the vault's name rule: 1..128 bytes of [A-Za-z0-9_].
+// The governed pgvault adapter checks names with it too.
+func ValidSecretName(name string) bool {
 	if len(name) == 0 || len(name) > 128 {
 		return false
 	}

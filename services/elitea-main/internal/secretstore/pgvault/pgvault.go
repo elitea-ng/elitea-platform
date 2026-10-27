@@ -39,8 +39,6 @@ import (
 // The only version a pgvault secret has.
 const onlyVersion int64 = 1
 
-const maxSecretNameBytes = 128
-
 // Sealer is the write half of the vault, satisfied by
 // *repos.CurrentSecretVaultRepository. Both methods run inside a transaction
 // the caller owns and never commit.
@@ -83,19 +81,9 @@ func validateRef(op secretstore.Op, ref secretstore.SecretRef) error {
 	return nil
 }
 
-// validSecretName is the vault's own name rule (centrysecrets).
+// validSecretName is the vault's own name rule.
 func validSecretName(name string) bool {
-	if len(name) == 0 || len(name) > maxSecretNameBytes {
-		return false
-	}
-	for index := 0; index < len(name); index++ {
-		c := name[index]
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' {
-			continue
-		}
-		return false
-	}
-	return true
+	return centrysecrets.ValidSecretName(name)
 }
 
 // Read returns version 1, the only version.
