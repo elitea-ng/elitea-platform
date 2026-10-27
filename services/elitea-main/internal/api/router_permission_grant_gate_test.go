@@ -127,7 +127,7 @@ func (k allowlistKey) String() string {
 // this file guards against.
 //
 // THE ALLOWLIST WAS EMPTY, AND THAT WAS THE POINT. The only entries are the
-// governed credential permissions of #1116 and #1120, ungranted by requirement.
+// governed credential permissions of #1116, #1120 and #1121, ungranted by requirement.
 //
 // #372 added this gate and could not fix what it found: that issue asks for the
 // gate only, and forbids a change to a route gate or to a migration. The first
@@ -160,6 +160,9 @@ var allowlistedGates = map[allowlistKey]string{
 	// #1120: the credential probe, the same decision 8 rule for the probe
 	// permission; mounted only with credential governance on.
 	{mode: "default", permission: "models.credentials.governed.probe"}: "#1120: governed probe, granted per deployment; no default role",
+	// #1121: provider OAuth consent start, the same decision 8 rule for the
+	// use permission; mounted only with credential governance on.
+	{mode: "default", permission: "models.credentials.governed.use"}: "#1121: provider OAuth consent, granted per deployment; no default role",
 }
 
 // gate is one call site that gates a route on a permission.

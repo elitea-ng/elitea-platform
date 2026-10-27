@@ -18,6 +18,10 @@ type OperationCatalog interface {
 	// scopes the adapter of providerType asks for under class; empty when
 	// it names none (the target binding's audience then decides).
 	OAuthResource(providerType string, class credentialgrant.CredentialClass) (resource string, scopes []string)
+	// OAuthAuthority is who issued the consent of an oauth_delegated
+	// credential of providerType: the Entra delegation (on-behalf-of) or
+	// the provider itself (provider OAuth grant). Empty denies the use.
+	OAuthAuthority(providerType string, class credentialgrant.CredentialClass) credentialgrant.OAuthAuthority
 }
 
 // EmptyCatalog knows no operation and no material key: every decision it
@@ -37,6 +41,11 @@ func (EmptyCatalog) MaterialKeys(string, credentialgrant.CredentialClass) []stri
 // OAuthResource implements OperationCatalog.
 func (EmptyCatalog) OAuthResource(string, credentialgrant.CredentialClass) (string, []string) {
 	return "", nil
+}
+
+// OAuthAuthority implements OperationCatalog.
+func (EmptyCatalog) OAuthAuthority(string, credentialgrant.CredentialClass) credentialgrant.OAuthAuthority {
+	return ""
 }
 
 var _ OperationCatalog = EmptyCatalog{}

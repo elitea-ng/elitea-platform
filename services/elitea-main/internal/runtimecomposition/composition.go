@@ -10,6 +10,7 @@ import (
 	"time"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/epoch"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
 
@@ -99,7 +100,12 @@ type Dependencies struct {
 	// CredentialBroker serves RuntimeContentService.RedeemCredential
 	// (#1118). It is built at the composition root only with credential
 	// governance on; nil leaves the RPC Unimplemented.
-	CredentialBroker              storage.CredentialRedeemer
+	CredentialBroker storage.CredentialRedeemer
+	// SecurityInvalidations is the governed-credential invalidation hub
+	// (#1121); built at the composition root only with credential governance
+	// on. The runtime plane carries it between replicas over NATS and checks
+	// governed runs' epochs at ClaimCommand and RenewLease. Nil: neither.
+	SecurityInvalidations         *epoch.Hub
 	OriginalCodeDefinitions       repos.CodeDefinitionSourceReader
 	OriginalCodeWorkspaceVerifier storage.OriginalCodeWorkspaceVerifier
 	OriginalCodeBrokerVerifier    storage.OriginalCodeBrokerVerifier
@@ -1278,6 +1284,37 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct admission pin reader: %w", pinsErr)
 		}
 		controlServer.WithGovernedPins(pins)
+	}
+	if dependencies.CredentialProfile.Governed() {
+		// A governed run's revocation epochs, at claim and lease renewal
+		// (#1121). Flag off, neither path reads anything new.
+		epochs, err := epoch.NewPostgresStore(dependencies.ControlPool)
+		if err != nil {
+			return nil, err
+		}
+		contexts, err := epoch.NewPostgresContextLoader(dependencies.ControlPool)
+		if err != nil {
+			return nil, err
+		}
+		runs, err := epoch.NewRunChecker(contexts, epochs)
+		if err != nil {
+			return nil, err
+		}
+		revoker, err := epoch.NewPostgresAuthorityRevoker(dependencies.ControlPool)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := controlServer.WithGovernedEpochs(runs, revoker); err != nil {
+			return nil, fmt.Errorf("compose governed epoch checks: %w", err)
+		}
+	}
+	if dependencies.SecurityInvalidations != nil {
+		publisherRoot, err = newPublisherSet(publisherRoot, securityInvalidationRunner{
+			hub: dependencies.SecurityInvalidations, transport: natsSecurityInvalidationTransport{conn: runtimeNATS},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("compose security invalidation fan-out: %w", err)
+		}
 	}
 	if dependencies.Workspace.complete() {
 		// The take-back signal rides the lease poll, as cancellation does.

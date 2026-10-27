@@ -113,6 +113,9 @@ type Server struct {
 	// (#1115); nil when this deployment never ran governed, which keeps the
 	// flag-off claim path free of a new read.
 	governedPins AdmissionPinReader
+	// epochs checks a governed run's revocation epochs at claim and lease
+	// renewal (#1121); nil with the governance flag off.
+	epochs *governedEpochs
 }
 
 // AdmissionPinReader reads the credential profile an execution was admitted
@@ -444,6 +447,11 @@ func (s *Server) RenewLease(ctx context.Context, request *runtimev1.RenewLeaseRe
 	if err != nil {
 		code, message, retryable := safeRuntimeError(err)
 		return renewRejection(code, message, retryable), nil
+	}
+	if s.epochs != nil {
+		// Only after the fence renewed: a stale or foreign fence never
+		// reaches the epoch read (#1121).
+		lease.DesiredState = s.epochs.renewDesiredState(ctx, fence, lease.DesiredState)
 	}
 	desiredState, err := desiredStateProto(lease.DesiredState)
 	if err != nil {
@@ -1042,7 +1050,9 @@ func (s *Server) governedClaimRejection(ctx context.Context, request *runtimev1.
 		if !request.GetGovernedSecurityContextV1() {
 			return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_GOVERNED_WORKER_REQUIRED, "The command needs a worker that verifies the execution security context.", false)
 		}
-		return nil
+		// The run's revocation epochs (#1121): a stale binding, mandate or
+		// delegation refuses the claim.
+		return s.epochs.claimRejection(ctx, command)
 	}
 	if s.governedPins == nil {
 		return nil

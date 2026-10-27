@@ -325,9 +325,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 	// agentIdentity.Broker opens the run-scoped agent session at a governed
 	// run's first credential redemption (#1118).
-	agentIdentity, err := agentIdentityAdmin(credentialAdmission, credentialRevision, pool)
+	securityInvalidations, err := securityInvalidationsAtBoot(credentialAdmission, logger)
 	if err != nil {
 		return err
+	}
+	agentIdentity, err := agentIdentityAdmin(credentialAdmission, credentialRevision, pool, securityInvalidations)
+	if err != nil {
+		return err
+	}
+	if agentIdentity.Reconciler != nil {
+		go agentIdentity.Reconciler.Run(ctx)
 	}
 	credentialProbeHandler, err := credentialProbeAdmin(credentialAdmission, pool)
 	if err != nil {
@@ -796,7 +803,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// Governed Entra custody and exchangers (#1117). Nil with the flag off
 	// or without an Entra provider; then neither plane changes.
 	entraGoverned, err := entraGovernanceAtBoot(ctx, credentialAdmission, pool, identityProviderStore,
-		func() ([]byte, error) { return v2secrets.MasterKeyFromEnv(os.Getenv) }, logger)
+		func() ([]byte, error) { return v2secrets.MasterKeyFromEnv(os.Getenv) }, securityInvalidations, logger)
 	if err != nil {
 		return err
 	}
@@ -810,12 +817,21 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// delegation gate reads it where it is configured. Nil with the flag off.
 	credentialCatalog := credentialOperationCatalog()
 	credentialDecider, credentialGrantsAdminHandler, err := credentialGrantGovernance(
-		credentialAdmission, pool, credentialGovernanceStore, entraDelegations(entraGoverned), credentialCatalog)
+		credentialAdmission, pool, credentialGovernanceStore, entraDelegations(entraGoverned), credentialCatalog, securityInvalidations)
+	if err != nil {
+		return err
+	}
+	// Provider delegated OAuth (#1121): consent routes and the token source
+	// the broker reads for Jira, Confluence and Aha! oauth_delegated uses.
+	// Nil with the flag off or with no provider OAuth application.
+	providerOAuthGoverned, err := providerOAuthAtBoot(credentialAdmission, os.LookupEnv, pool,
+		func() ([]byte, error) { return v2secrets.MasterKeyFromEnv(os.Getenv) }, logger)
 	if err != nil {
 		return err
 	}
 	credentialBroker, err := credentialBrokerAtBoot(credentialAdmission, os.LookupEnv, pool, credentialDecider,
-		credentialGovernanceStore, agentIdentity.Broker, entraGoverned, credentialCatalog, logger)
+		credentialGovernanceStore, agentIdentity.Broker, entraGoverned, providerOAuthGoverned.Tokens, credentialCatalog, credentialRevision,
+		securityInvalidations, logger)
 	if err != nil {
 		return err
 	}
@@ -2002,6 +2018,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			AdmissionPool:                    runtimePools.Admission,
 			CredentialProfile:                credentialAdmission,
 			CredentialBroker:                 runtimeCredentialBroker,
+			SecurityInvalidations:            securityInvalidations,
 			ControlPool:                      runtimePools.Control,
 			OutputPool:                       runtimePools.Output,
 			ReplayPool:                       runtimePools.Replay,
@@ -2727,6 +2744,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		AgentIdentityAdmin:            agentIdentity.Admin,
 		CredentialGrantsAdmin:         credentialGrantsAdminHandler,
 		CredentialProbe:               credentialProbeHandler,
+		CredentialConsent:             providerOAuthGoverned.Consent,
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
 		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,

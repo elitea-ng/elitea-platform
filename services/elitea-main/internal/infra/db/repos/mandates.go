@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/epoch"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/mandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
@@ -43,6 +44,15 @@ const (
 type Mandates struct {
 	pool  *pgxpool.Pool
 	audit securityaudit.Appender
+	// notifier signals every replica after an epoch change commits
+	// (#1121); nil signals nothing.
+	notifier epoch.Notifier
+}
+
+// WithNotifier signals n after every committed epoch change.
+func (s *Mandates) WithNotifier(n epoch.Notifier) *Mandates {
+	s.notifier = n
+	return s
 }
 
 // NewMandates builds the store over pool. audit records every change; a nil
@@ -309,6 +319,9 @@ SELECT `+mandateSelectColumnList+` FROM elitea_identity.mandates WHERE id = $1::
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return mandate.Mandate{}, mapMandateWriteError(fmt.Errorf("commit mandate transition: %w", err))
+	}
+	if s.notifier != nil {
+		s.notifier.Notify(ctx, epoch.Change{Epoch: epoch.SecurityEpoch{Kind: epoch.KindMandate, ID: written.ID, Value: written.RevocationEpoch}})
 	}
 	return written, nil
 }

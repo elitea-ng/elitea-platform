@@ -13,6 +13,8 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authzcompose"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/cache"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/epoch"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/mandate"
@@ -20,6 +22,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/delegationstore"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/obo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/provideroauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
@@ -64,6 +67,11 @@ type DelegationCustody interface {
 	RecordRequirement(ctx context.Context, r delegationstore.Requirement) (delegationstore.Requirement, error)
 }
 
+// ProviderTokenSource answers a valid provider access token for a provider
+// OAuth grant. Its tokens never go through the replica cache: the grant
+// row is their authority, read on every use.
+type ProviderTokenSource = provideroauth.ProviderTokenSource
+
 // Store persists invocations, decisions and redemptions.
 type Store interface {
 	// AdmitInvocation inserts the invocation, or matches a replay of it
@@ -99,8 +107,8 @@ type Redemption struct {
 	NotAfter     time.Time
 }
 
-// Config is the broker's dependencies. Exchanger, Custody, Meter, Logger
-// and Now are optional; every other field is required.
+// Config is the broker's dependencies. Exchanger, Custody, ProviderTokens,
+// Meter, Logger and Now are optional; every other field is required.
 type Config struct {
 	Decider     Decider
 	References  credentialgrant.ReferenceReader
@@ -117,15 +125,33 @@ type Config struct {
 	// oauth_delegated credential is BACKEND_UNAVAILABLE.
 	Exchanger obo.Exchanger
 	Custody   DelegationCustody
+	// ProviderTokens answers provider OAuth access tokens (#1121): the
+	// oauth_delegated uses whose descriptor names the provider as the
+	// authority (Atlassian 3LO, Aha! OAuth2). Optional: without it such a
+	// use is BACKEND_UNAVAILABLE.
+	ProviderTokens ProviderTokenSource
 	// Store wraps the security audit appender: the decision and the
 	// redemption events are appended in the store's transactions.
 	Store    Store
 	Pins     profile.PinReader
 	Sessions SessionOpener
 	Catalog  OperationCatalog
-	Meter    metric.Meter
-	Logger   *slog.Logger
-	Now      func() time.Time
+	// Epochs re-reads the revocation epochs of every permitted redemption
+	// before any cache lookup or secret read (#1121). Nil: no epoch check
+	// and no cache.
+	Epochs epoch.Reader
+	// Cache holds OAuth access tokens and, where the run's policy revision
+	// allows it, static secrets. Nil: nothing is cached. Needs Epochs.
+	Cache *cache.Cache
+	// Invalidations is this replica's invalidation hub: the cache listens to
+	// it, and a denial records the revocation-to-deny latency. Optional.
+	Invalidations *epoch.Hub
+	// Revisions answers whether a run's policy revision allows caching
+	// static secrets. Nil: static secrets are never cached.
+	Revisions profile.RevisionStore
+	Meter     metric.Meter
+	Logger    *slog.Logger
+	Now       func() time.Time
 }
 
 // Broker redeems governed credentials. It is built once at the composition
@@ -136,6 +162,10 @@ type Broker struct {
 	logger  *slog.Logger
 	now     func() time.Time
 	newID   func() (uuid.UUID, error)
+
+	epochs    *epochGuard
+	cache     *cache.Cache
+	revisions *revisionMemo
 }
 
 // New builds the broker.
@@ -156,11 +186,25 @@ func New(cfg Config) (*Broker, error) {
 	if (cfg.Exchanger == nil) != (cfg.Custody == nil) {
 		return nil, errors.New("credential broker: the on-behalf-of exchanger and the delegation custody come together")
 	}
+	if cfg.Cache != nil && cfg.Epochs == nil {
+		return nil, errors.New("credential broker: the credential cache needs the epoch reader")
+	}
+	if cfg.Exchanger != nil {
+		// The identity provider's circuit breaker (#1121).
+		cfg.Exchanger = newBreakerExchanger(cfg.Exchanger)
+	}
 	m, err := newMetrics(cfg.Meter)
 	if err != nil {
 		return nil, fmt.Errorf("credential broker: metrics: %w", err)
 	}
-	b := &Broker{cfg: cfg, metrics: m, logger: cfg.Logger, now: cfg.Now, newID: uuid.NewV7}
+	b := &Broker{cfg: cfg, metrics: m, logger: cfg.Logger, now: cfg.Now, newID: uuid.NewV7,
+		epochs: newEpochGuard(cfg.Epochs), cache: cfg.Cache}
+	if cfg.Revisions != nil {
+		b.revisions = &revisionMemo{store: cfg.Revisions, known: map[string]bool{}}
+	}
+	if cfg.Cache != nil {
+		cfg.Invalidations.Listen(cfg.Cache.Listener())
+	}
 	if b.logger == nil {
 		b.logger = slog.Default()
 	}
@@ -261,6 +305,14 @@ func (b *Broker) Redeem(ctx context.Context, req RedeemRequest) (result Result, 
 		return deny(CodeDenied, "obligation_unsupported", decision.DecisionID), nil
 	}
 
+	// 5b. The revocation epochs, re-read in one statement before any cache
+	// lookup or secret read (#1121).
+	current, denial := b.checkEpochs(ctx, sc, facts, decision)
+	if denial != nil {
+		denial.DecisionID = decision.DecisionID
+		return Result{Denial: denial}, nil
+	}
+
 	// 6. The run-scoped agent session, opened at the first redemption.
 	if denial := b.ensureSession(ctx, sc, req, facts); denial != nil {
 		denial.DecisionID = decision.DecisionID
@@ -268,7 +320,7 @@ func (b *Broker) Redeem(ctx context.Context, req RedeemRequest) (result Result, 
 	}
 
 	// 6-7. Material by class, filtered to the catalogue's keys.
-	material, denial := b.acquire(ctx, req, facts, decision)
+	material, denial := b.acquire(ctx, req, facts, decision, current)
 	if denial != nil {
 		denial.DecisionID = decision.DecisionID
 		return Result{Denial: denial}, nil

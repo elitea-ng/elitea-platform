@@ -50,6 +50,11 @@ const (
 	// TypeExternalIdentityChanged is a state change of an external agent
 	// identity (#1151).
 	TypeExternalIdentityChanged EventType = "ai.elitea.security.v1.external.identity.changed"
+	// TypeExternalIdentityDrift is a reconcile finding (#1154): an
+	// out-of-band provider change (action external_identity.drift.disabled,
+	// .missing, .replaced or .changed) or an Elitea-tagged provider object
+	// with no record (action external_identity.orphan).
+	TypeExternalIdentityDrift EventType = "ai.elitea.security.v1.external.identity.drift"
 	// TypeAgentSession is one Broker.OpenSession or Broker.Credential call
 	// (#1151), allowed or denied.
 	TypeAgentSession EventType = "ai.elitea.security.v1.agent.session"
@@ -78,6 +83,7 @@ var ocsfClasses = map[EventType]int{
 	TypeBindingChanged:          OCSFClassEntityManagement,
 	TypeEpochBumped:             OCSFClassEntityManagement,
 	TypeExternalIdentityChanged: OCSFClassEntityManagement,
+	TypeExternalIdentityDrift:   OCSFClassEntityManagement,
 	TypeAgentSession:            OCSFClassAuthorizeSession,
 	TypeProbe:                   OCSFClassAPIActivity,
 }

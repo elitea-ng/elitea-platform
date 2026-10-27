@@ -22,6 +22,7 @@ func Aha() AdapterDescriptor {
 			staticSecret:   {"token"},
 			oauthDelegated: {"access_token"},
 		},
+		OAuthAuthority: credentialgrant.OAuthAuthorityProvider,
 		Qualification: map[credentialgrant.CredentialClass]string{
 			staticSecret:   QualificationFixture,
 			oauthDelegated: QualificationFixture,

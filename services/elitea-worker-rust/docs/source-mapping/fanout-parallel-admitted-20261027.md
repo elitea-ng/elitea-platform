@@ -50,7 +50,7 @@ conversation on the project event stream.
 - Main: `internal/infra/db/repos/execution_interrupts*.go`, `execution_interrupt_wakes.go`, `agent_claim_authority.go`,
   `internal/application/agentexecution/{continue_fanout_wake,fanout_wake_admitter}.go`,
   `internal/api/v2/events/*`, `internal/api/middleware/otel.go` (SSE flush), `internal/domain/{executioninterrupt,
-  pipelinelimits,applicationcomposition}/*`, migration `migrations/shared/0189_execution_interrupt_wakes.sql`.
+  pipelinelimits,applicationcomposition}/*`, migration `migrations/shared/0192_execution_interrupt_wakes.sql`.
 - Web: `src/features/chat-messages/**` (ledger hook, fan-out frames, cards, shared project stream),
   `src/features/pipelines/lib/graphParallelAdmission.helpers.ts`, `src/pages/pipelines/**` (test-chat refusal).
 
@@ -203,8 +203,8 @@ refused the model-checkpoint reclaim (473c27f27), the answered child was parked 
 
 ## Merge with main (2026-10-27)
 
-`main` took migrations 0184–0188 and claim field 18 (`governed_security_context_v1`): the park/wake migration is now
-`migrations/shared/0189_execution_interrupt_wakes.sql` (manifest head 189) and the Worker's opt-in is
+`main` took migrations 0184–0188, 0190 and 0191 and claim field 18 (`governed_security_context_v1`): the park/wake migration is now
+`migrations/shared/0192_execution_interrupt_wakes.sql` (manifest head 192) and the Worker's opt-in is
 `ClaimCommandRequestV1.fanout_interrupt_decisions = 19` (neither was released). Generated Go/Python protobuf code and
 `api.gen.go` were regenerated with the pinned tools (`scripts/contract/generate_proto.sh`, oapi-codegen v2.7.2).
 `main` routed agent claims through a shared fresh-claim builder that dropped the fan-out opt-in; agent claims now use

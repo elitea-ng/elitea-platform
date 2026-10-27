@@ -819,13 +819,23 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// governed process. The material is never stored. No data, no
 	// permission.
 	//
-	// 189: shared/0189_execution_interrupt_wakes.sql, park and wake for the
+	// 190: shared/0190_provider_oauth_grants.sql, provider delegated OAuth
+	// custody (elitea_identity.provider_oauth_grants), the consent states and
+	// elitea_runtime.credential_refresh_leases (#1121). Written only by a
+	// governed process. No token in plaintext. No data, no permission.
+	//
+	// 191: shared/0191_agent_identity_reconcile.sql, the reconcile loop's
+	// elitea_identity.agent_identity_provider_health (pass lease and outage
+	// state per provider) and external_identity_drift_findings (#1154). No
+	// data, no permission.
+	//
+	// 192: shared/0192_execution_interrupt_wakes.sql, park and wake for the
 	// per-interrupt decision ledger (fanout-interrupt-decisions v1.1 §8): the
 	// park columns on execution_interrupt_responses and
 	// elitea_runtime.execution_interrupt_wakes with the partial unique index
 	// "one active continuation per response", and the open-card index a new
 	// turn supersedes through. No data, no permission.
-	require.EqualValues(t, 189, Head(shared))
+	require.EqualValues(t, 192, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

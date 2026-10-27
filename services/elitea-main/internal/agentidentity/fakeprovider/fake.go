@@ -6,6 +6,8 @@ package fakeprovider
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -26,11 +28,38 @@ type Provider struct {
 	ResolveErr error
 	// AssumeErr, when set, is what AssumeApp answers.
 	AssumeErr error
-	// Generation is the generation Resolve answers.
+	// Generation is the generation Resolve answers for an object the fake
+	// does not track, and the generation Provision gives a new object.
 	Generation int64
+	// ListErr, when set, is what List answers: a provider outage.
+	ListErr error
+	// ListOmitsGeneration makes List answer generation 0, as an IdP whose
+	// list API does not report one; Resolve still answers it.
+	ListOmitsGeneration bool
+	// PageSize bounds a List page (2 when zero), so a test pages.
+	PageSize int
 
 	mu    sync.Mutex
 	calls []string
+	// objects is the mock IdP: every object Provision created or a test
+	// added, keyed on the immutable id. An object it does not track is
+	// answered as enabled, with Generation.
+	objects map[string]*Object
+	order   []string
+	seq     int
+}
+
+// Object is one object of the mock IdP.
+type Object struct {
+	Ref               identity.ExternalRef
+	Enabled           bool
+	OwnerRef          string
+	CredentialChanged bool
+	// Deleted: Resolve answers ErrIdentityNotFound and List leaves it out.
+	Deleted bool
+	// Replaced: the object was recreated under the same name. Resolve of
+	// the old id answers ErrIdentityReplaced; List leaves it out.
+	Replaced bool
 }
 
 // New builds a fake that supports app-only, verified OBO, and nothing else.
@@ -73,10 +102,69 @@ func (p *Provider) Provision(_ context.Context, spec agentidentity.ProvisionSpec
 		kind = "fake.agent"
 	}
 	// Idempotent on the record id: the object id is derived from it.
-	return agentidentity.ProvisionResult{Ref: identity.ExternalRef{
+	ref := identity.ExternalRef{
 		Provider: p.ProviderName, ProviderTenant: spec.ProviderTenant, Kind: kind,
 		ID: "obj-" + spec.ExternalAgentIdentityID, Generation: p.Generation,
-	}}, nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, ok := p.objects[ref.ID]; !ok {
+		p.putLocked(&Object{Ref: ref, Enabled: true, OwnerRef: spec.OwnerRef})
+	}
+	return agentidentity.ProvisionResult{Ref: ref}, nil
+}
+
+func (p *Provider) putLocked(o *Object) {
+	if p.objects == nil {
+		p.objects = map[string]*Object{}
+	}
+	if _, ok := p.objects[o.Ref.ID]; !ok {
+		p.order = append(p.order, o.Ref.ID)
+	}
+	p.objects[o.Ref.ID] = o
+}
+
+// Mutate changes the tracked object id under the fake's lock: the
+// out-of-band IdP change a reconcile test simulates. It reports whether the
+// object exists.
+func (p *Provider) Mutate(id string, change func(*Object)) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	o, ok := p.objects[id]
+	if ok {
+		change(o)
+	}
+	return ok
+}
+
+// AddObject adds an Elitea-tagged object to the mock IdP, for example one
+// created outside Elitea (an orphan).
+func (p *Provider) AddObject(o Object) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.putLocked(&o)
+}
+
+// Recreate deletes the object id and creates another under the same name:
+// a new immutable id and the next generation. It answers the new ref.
+func (p *Provider) Recreate(id string) (identity.ExternalRef, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	old, ok := p.objects[id]
+	if !ok {
+		return identity.ExternalRef{}, false
+	}
+	old.Replaced = true
+	p.seq++
+	ref := old.Ref
+	ref.ID = fmt.Sprintf("%s-r%d", id, p.seq)
+	ref.Generation = old.Ref.Generation + 1
+	p.putLocked(&Object{Ref: ref, Enabled: true, OwnerRef: old.OwnerRef})
+	return ref, true
+}
+
+func (o *Object) resolved() agentidentity.Resolved {
+	return agentidentity.Resolved{Ref: o.Ref, Enabled: o.Enabled, OwnerRef: o.OwnerRef, CredentialChanged: o.CredentialChanged}
 }
 
 func (p *Provider) Activate(context.Context, identity.ExternalRef) error {
@@ -88,6 +176,23 @@ func (p *Provider) Resolve(_ context.Context, ref identity.ExternalRef) (agentid
 	p.record("Resolve")
 	if p.ResolveErr != nil {
 		return agentidentity.Resolved{}, p.ResolveErr
+	}
+	p.mu.Lock()
+	o, tracked := p.objects[ref.ID]
+	var found agentidentity.Resolved
+	switch {
+	case tracked && o.Replaced:
+		p.mu.Unlock()
+		return agentidentity.Resolved{}, agentidentity.ErrIdentityReplaced
+	case tracked && o.Deleted:
+		p.mu.Unlock()
+		return agentidentity.Resolved{}, agentidentity.ErrIdentityNotFound
+	case tracked:
+		found = o.resolved()
+	}
+	p.mu.Unlock()
+	if tracked {
+		return found, nil
 	}
 	out := ref
 	out.Generation = p.Generation
@@ -144,9 +249,45 @@ func (p *Provider) Revoke(context.Context, agentidentity.RevokeSpec) error {
 	return nil
 }
 
-func (p *Provider) List(context.Context, agentidentity.ListSpec) (agentidentity.ListPage, error) {
+// List pages the live objects of spec.ProviderTenant (every tenant when it
+// is empty) in creation order. The page token is the offset.
+func (p *Provider) List(_ context.Context, spec agentidentity.ListSpec) (agentidentity.ListPage, error) {
 	p.record("List")
-	return agentidentity.ListPage{}, nil
+	if p.ListErr != nil {
+		return agentidentity.ListPage{}, p.ListErr
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	live := make([]agentidentity.Resolved, 0, len(p.order))
+	for _, id := range p.order {
+		o := p.objects[id]
+		if o.Deleted || o.Replaced || (spec.ProviderTenant != "" && o.Ref.ProviderTenant != spec.ProviderTenant) {
+			continue
+		}
+		object := o.resolved()
+		if p.ListOmitsGeneration {
+			object.Ref.Generation = 0
+		}
+		live = append(live, object)
+	}
+	offset := 0
+	if spec.PageToken != "" {
+		n, err := strconv.Atoi(spec.PageToken)
+		if err != nil || n < 0 || n > len(live) {
+			return agentidentity.ListPage{}, errors.New("fake provider: bad page token")
+		}
+		offset = n
+	}
+	size := p.PageSize
+	if size <= 0 {
+		size = 2
+	}
+	end := min(offset+size, len(live))
+	page := agentidentity.ListPage{Objects: live[offset:end]}
+	if end < len(live) {
+		page.NextPageToken = strconv.Itoa(end)
+	}
+	return page, nil
 }
 
 var _ agentidentity.Provider = (*Provider)(nil)
