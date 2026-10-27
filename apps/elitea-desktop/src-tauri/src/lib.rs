@@ -11,6 +11,7 @@ mod app_events;
 mod attention;
 mod auth;
 mod commands;
+mod compaction_settings;
 mod context_menu;
 mod credentials_file;
 mod d0;
@@ -359,6 +360,10 @@ pub fn run() {
                 })
                 .map_err(|error| error.message)?,
             );
+            // The app-wide compaction settings (threshold, idle compaction).
+            agents.set_compaction_store(Arc::new(
+                compaction_settings::CompactionSettingsStore::open(data_dir.clone()),
+            ));
             // The desktop ⇄ cloud handoff (ADR-0034).
             let handoff = handoff::HandoffHost::new(handoff::HandoffDeps {
                 agents: agents.clone(),
@@ -464,6 +469,9 @@ pub fn run() {
             local_commands::rules_explain,
             local_commands::rules_import_proposed,
             local_commands::agent_turn_start,
+            local_commands::compaction_settings_get,
+            local_commands::compaction_settings_set,
+            local_commands::compaction_idle_hold,
             local_commands::attachment_add,
             local_commands::attachment_add_bytes,
             local_commands::attachment_remove,
@@ -568,6 +576,8 @@ fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
         if let Some(history) = &local.history {
             history.flush();
         }
+        // No idle compaction starts (or lands) once the app quits.
+        local.agents.cancel_idle_compactions();
         // Background processes the agent started end with the app (#1223):
         // `SIGTERM`, then `SIGKILL` to what still runs 2 s later.
         local

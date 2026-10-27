@@ -46,6 +46,7 @@ import { ThreadComposer } from './ThreadComposer';
 import { ThreadToolbar } from './ThreadToolbar';
 import { UnboundFolder } from './UnboundFolder';
 import { threadMeter } from './contextBreakdown';
+import { useIdleCompacted, withIdleCompaction, type IdleCompacted } from './useIdleCompacted';
 import { useCloudChat } from './useCloudChat';
 import { useSessionFork } from './useForkThread';
 import { useAgentSkills } from './useAgentSkills';
@@ -72,8 +73,9 @@ function useThreadSubject(workspace: Workspace, conversationId: string): string 
   return threads.data?.find((x) => x.id === conversationId)?.title ?? workspace.name;
 }
 
-/** The Context tab's figures: none for the cloud copy (its context is the cloud's). */
-const inspectorMeter = (handoff: ThreadHandoff, turn: WorkspaceTurn, history: ThreadHistory) => (handoff.status?.executor === 'cloud' ? undefined : threadMeter(turn, history));
+/** The Context tab's figures, after a background idle compaction: none for the cloud copy (its context is the cloud's). */
+const inspectorMeter = (handoff: ThreadHandoff, turn: WorkspaceTurn, history: ThreadHistory, compacted: IdleCompacted | null) =>
+  handoff.status?.executor === 'cloud' ? undefined : withIdleCompaction(threadMeter(turn, history), compacted);
 
 const indexSettingsOpener = (hasIndex: boolean): (() => void) | undefined => (hasIndex ? () => useDesktopLayout.getState().showInspector('index') : undefined);
 
@@ -81,6 +83,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { ipc, workspace, projectId, conversationId } = props;
   const session = useThreadSession(props);
   const subject = useThreadSubject(workspace, conversationId);
+  const idleCompacted = useIdleCompacted(workspace.id, conversationId);
   const { turn, commands, raw } = session;
   const skills = useAgentSkills(projectId, raw.versionId);
   const hasIndex = useHasIndexHost();
@@ -172,7 +175,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
         decided={session.decided}
         plan={session.plan}
         planMode={commands.planMode}
-        context={inspectorMeter(handoff, turn, session.history)}
+        context={inspectorMeter(handoff, turn, session.history, idleCompacted)}
       />
       <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} />
       <CreateAgentDialog

@@ -86,6 +86,9 @@ pub struct ModelFacts {
     pub vision: bool,
     /// The project's low-tier default model, when the catalogue lists one.
     pub low_tier: Option<LowTierModel>,
+    /// A paid provider with a prompt cache (`catalogue::caches_paid_prompts`):
+    /// only such a model's thread is compacted while idle (`super::idle`).
+    pub prompt_cache: bool,
 }
 
 /// A low-tier model a compaction may summarise with.
@@ -151,6 +154,7 @@ pub async fn model_facts(
             limits: frozen,
             replay: known.as_ref().map(|facts| facts.replay).unwrap_or_default(),
             vision: known.as_ref().is_some_and(|facts| facts.vision),
+            prompt_cache: known.as_ref().is_some_and(|facts| facts.prompt_cache),
             low_tier: known.and_then(|facts| facts.low_tier),
         };
     }
@@ -170,6 +174,7 @@ pub async fn model_facts(
             replay: ReasoningReplay::Never,
             vision: false,
             low_tier: None,
+            prompt_cache: false,
         };
     };
     let facts = facts_of(&catalogue, model_name);
@@ -192,6 +197,7 @@ fn facts_of(catalogue: &Catalogue, model_name: &str) -> ModelFacts {
             .and_then(|model| model.row.get("supports_vision"))
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        prompt_cache: catalogue::caches_paid_prompts(model, model_name),
         low_tier: catalogue.low_tier_default().and_then(|model| {
             Some(LowTierModel {
                 name: model.name.clone(),
@@ -265,6 +271,21 @@ pub fn policy(details: &Map<String, Value>) -> Option<CompactionPolicy> {
         Some(guidance) => Some(policy.with_guidance(guidance)),
         None => Some(policy),
     }
+}
+
+/// `policy` (the agent version's) under the app's compaction settings
+/// (`crate::compaction_settings`): `auto` off leaves only `/compact` and the
+/// overflow retry; `threshold_percent` moves the trigger earlier. The
+/// version's own `context_settings` turning compaction off still wins
+/// ([`policy`] answers `None` before this applies).
+#[must_use]
+pub fn with_settings(
+    mut policy: CompactionPolicy,
+    settings: &crate::compaction_settings::CompactionSettings,
+) -> CompactionPolicy {
+    policy.automatic = settings.auto;
+    policy.threshold_percent = settings.threshold_percent;
+    policy
 }
 
 /// What fills a measured request, in estimated tokens: each part of the
@@ -365,6 +386,7 @@ pub struct ProviderBudget {
     /// lays them out (#1227): the tail weighs what it sends.
     pub tail: Option<Arc<super::model::TurnTail>>,
     pub cache_hints: bool,
+    pub cache_ttl: crate::compaction_settings::CacheTtl,
     /// Where the parts of each measured request go.
     pub parts: MeasuredParts,
 }
@@ -379,6 +401,7 @@ impl ModelRequestBudget for ProviderBudget {
                 images: super::model::Images::Measure,
                 tail: self.tail.as_deref(),
                 cache_hints: self.cache_hints,
+                cache_ttl: self.cache_ttl,
             },
         )?;
         let encoded = serde_json::to_vec(&body)
@@ -401,6 +424,8 @@ impl ModelRequestBudget for ProviderBudget {
 pub struct TurnContext {
     compaction: Mutex<Option<Arc<StepCompaction>>>,
     ran: std::sync::atomic::AtomicBool,
+    /// What the thread's idle compaction needs once the turn committed.
+    idle: Mutex<Option<super::idle::IdleBasis>>,
 }
 
 impl TurnContext {
@@ -420,6 +445,23 @@ impl TurnContext {
             .compaction
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(compaction);
+    }
+
+    pub fn set_idle(&self, basis: super::idle::IdleBasis) {
+        *self
+            .idle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(basis);
+    }
+
+    /// What the turn's model left for its thread's idle compaction (`None`
+    /// when compaction is off for the agent, or its limits admit no budget).
+    #[must_use]
+    pub fn take_idle(&self) -> Option<super::idle::IdleBasis> {
+        self.idle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
     }
 
     /// The latest v1 summary the turn's requests carried (a stored marker's
@@ -780,6 +822,27 @@ mod tests {
         .unwrap();
         assert_eq!(tuned.keep_recent_tokens, 5000);
         assert_eq!(tuned.guidance, "Keep ticket ids.");
+    }
+
+    #[test]
+    fn the_app_settings_tune_the_agents_policy_but_never_switch_it_back_on() {
+        use crate::compaction_settings::CompactionSettings;
+        let manual = CompactionSettings {
+            auto: false,
+            threshold_percent: Some(70),
+            ..CompactionSettings::default()
+        };
+        let tuned = with_settings(CompactionPolicy::default(), &manual);
+        assert!(!tuned.automatic);
+        assert_eq!(tuned.threshold_percent, Some(70));
+        assert_eq!(
+            with_settings(CompactionPolicy::default(), &CompactionSettings::default()),
+            CompactionPolicy::default()
+        );
+        // The version's own `enabled: false` wins: there is no policy to tune.
+        let mut details = Map::new();
+        details.insert("context_settings".into(), json!({"enabled": false}));
+        assert!(policy(&details).is_none());
     }
 
     #[test]

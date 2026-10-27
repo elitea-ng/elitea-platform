@@ -36,6 +36,8 @@ import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { createFakeHandoffIpc } from '@/shared/desktop/handoffIpc.fake';
 import { createFakeIndexIpc } from '@/shared/desktop/indexIpc.fake';
+import { installCompactionIpc } from '@/shared/desktop/compactionSettings';
+import { createFakeCompactionIpc } from '@/shared/desktop/compactionSettings.fake';
 import { PERMISSION_GROUPS, PERMISSIONS } from '@/shared/lib/permissions';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { AppIpcProvider, DesktopFrame, useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
@@ -212,6 +214,9 @@ export function mountDesktopHarness(container: HTMLElement): void {
     allowed: !params.has('handoffOff'),
     ...(params.has('cloud') ? { status: { state: 'CLOUD_IDLE', executor: 'cloud' as const, read_only: true, sent_from_here: true, epoch: 2 } } : {}),
   });
+  // The Context tab's auto-compaction settings; `__harness.compactIdle()` plays a background idle compaction.
+  const compaction = createFakeCompactionIpc();
+  installCompactionIpc(compaction);
   // The cloud copy's reply streams over SSE: a scripted one, played by `__harness.playCloudReply()`.
   const streams = installTestEventSource();
   const vibrancy = params.has('vibrancy');
@@ -295,6 +300,10 @@ export function mountDesktopHarness(container: HTMLElement): void {
     appIpc,
     indexIpc,
     handoffIpc,
+    compaction,
+    /** The host summarized a thread in the background while it was idle. */
+    compactIdle: (workspaceId = 'w1', conversationId = '71') =>
+      compaction.compact({ workspace_id: workspaceId, conversation_id: conversationId, reason: 'idle', before_tokens: 120_000, after_tokens: 24_000 }),
     feed: useActivityFeed,
     /** The cloud copy stops on an approval (`&cloud`, after a message was sent); `cards: 2` is a pause only the chat can answer. */
     playCloudApproval(cards = 1) {

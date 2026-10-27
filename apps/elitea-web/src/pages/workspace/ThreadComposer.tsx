@@ -14,7 +14,9 @@
  * share of the window in use; its tooltip the latest turn's tokens, the
  * thread's, a cost only from the catalogue's price, #1227); a click opens what
  * fills the context, the inspector's Context tab (`ContextPanel`); `/compact`
- * marks the next send, and so does a thread left idle (`useIdleCompaction`).
+ * marks the next send. The host summarizes a thread left idle in the
+ * background unless its composer holds unsent text (`useIdleHold`); a notice
+ * says when it did (`useIdleCompacted`).
  * Beside it the language-server icon (`LspChip`, lazy, #1236): the servers
  * behind the edits' diagnostics; and the index icon (`IndexStatusIcon`): the folder's index state, a click opens the
  * Index tab. The ⋯ menu holds the step limit
@@ -52,6 +54,7 @@ import { useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { BypassControls } from './BypassControls';
 import { contextBreakdown, threadMeter } from './contextBreakdown';
+import { IdleCompactedNotice } from './CompactNotices';
 import { AgentChip, RunLocationControl, WorkInChip } from './ComposerControls';
 import { HandoffBanner } from './HandoffControls';
 import { RunInCloudNotice } from './RunInCloudNotice';
@@ -65,6 +68,8 @@ import type { ThreadSession } from './useThreadSession';
 import { useRetryAndSteps, type SentMessage } from './useRetryAndSteps';
 import type { SessionCommands } from './useSessionCommands';
 import { useComposerModes } from './useComposerModes';
+import { useIdleCompacted } from './useIdleCompacted';
+import { useIdleHold } from './useIdleHold';
 import { useSteering, type Steering } from './useSteering';
 import { useTurnModel, type TurnModelControl } from './useTurnModel';
 import { useWorkIn } from './useWorkIn';
@@ -217,6 +222,14 @@ function useSlashSources(ipc: WorkspaceIpc, workspaceId: string, projectId: numb
   return { customCommands, offered, onFocus };
 }
 
+/** The notice of the thread's latest idle compaction, until it is dismissed or a message is sent. */
+function useIdleNotice(workspaceId: string, conversationId: string): { shown: boolean; dismiss: () => void } {
+  const compacted = useIdleCompacted(workspaceId, conversationId);
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const at = compacted?.at ?? null;
+  return { shown: at !== null && at !== dismissed, dismiss: () => setDismissed(at) };
+}
+
 export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, session, turn, handoff, cloud, skills, canBranch }: ThreadComposerProps): React.JSX.Element {
   const navigate = useNavigate();
   const { commands } = session;
@@ -228,10 +241,13 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   const { pipeline, run: runInCloud, remember, refusedPrompt, turnError } = composerPipeline;
   const model = useTurnModel(workspaceId, projectId, session.raw, turn, session.history);
   const local = !cloudMode && !pipeline;
-  const modes = useComposerModes(workspaceId, local, turn, session.history, commands);
+  const modes = useComposerModes(workspaceId, local, commands);
+  const idle = useIdleNotice(workspaceId, conversationId);
+  const onDraftChange = useIdleHold(workspaceId, conversationId, local);
   const { customCommands, offered, onFocus } = useSlashSources(ipc, workspaceId, projectId, local, skills, session.prewarm, commands.notice === 'help');
   const sendHere: WorkspaceComposerProps['onSend'] = async (prompt, mentions, picked, command, images) => {
     model.dismissNotice();
+    idle.dismiss();
     remember(prompt);
     const sent = await session.send(prompt, modes.mode, mentions, picked, commands.compactNext, model.choice, command, images);
     if (sent && commands.compactNext) commands.compactSent();
@@ -267,6 +283,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
       <HandoffBanner handoff={handoff} projectId={projectId} />
       <SessionNotices error={modelNotice ?? firstError(turnError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={offered} />
       <BypassControls bypass={modes.bypass} active={modes.bypassActive} />
+      {local && <IdleCompactedNotice shown={idle.shown} onClose={idle.dismiss} />}
       <RunInCloudNotice cloudOnly={pipeline} refusedPrompt={refusedPrompt} running={runInCloud.running} error={runInCloud.error} onRun={(prompt) => void runInCloud.run(prompt)} />
       <WorkspaceComposer
         ipc={ipc}
@@ -292,6 +309,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         onCommand={controls.onCommand}
         onStepsCommand={controls.onStepsCommand}
         onFocus={onFocus}
+        onDraftChange={onDraftChange}
         {...bound}
         onSend={workIn.send}
       />

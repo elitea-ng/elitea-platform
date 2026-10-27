@@ -39,7 +39,7 @@
  * along (`useCarriedDraft`), so the next new thread starts empty. The steering texts put back (`useRestoredDraft`)
  * go in after the draft is restored, before it, so neither is lost.
  */
-import { useMemo, useRef, useState, type ComponentRef, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentRef, type KeyboardEvent, type ReactNode } from 'react';
 
 import { useQuery } from '@tanstack/react-query';
 
@@ -134,6 +134,8 @@ export interface WorkspaceComposerProps {
   queue?: SteeringQueueBinding | undefined;
   /** The texts that did not start the next turn: put into the input, with "Send again" while no turn runs. */
   unsent?: UnsentSteers | undefined;
+  /** The input became non-empty or empty (and again when this callback changes): the idle-compaction hold (`useIdleHold`). */
+  onDraftChange?: ((hasDraft: boolean) => void) | undefined;
 }
 
 /** What `/steps <value>` asks for (`composer.stepsCommand`). */
@@ -215,6 +217,8 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   const attachments = useImageAttachments(ipc, workspaceId, images);
   useRestoredDraft(inputRef, props.unsent, () => setHasDraft(true));
   useCarriedDraft(workspaceId, props.conversationId, inputRef);
+  const { onDraftChange } = props;
+  useEffect(() => onDraftChange?.(hasDraft), [hasDraft, onDraftChange]);
 
   const open = token !== null && !sameToken(token, dismissed) ? token : null;
   const files = useQuery({

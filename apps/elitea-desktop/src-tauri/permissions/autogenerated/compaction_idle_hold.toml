@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-compaction-idle-hold"
+description = "Enables the compaction_idle_hold command without any pre-configured scope."
+commands.allow = ["compaction_idle_hold"]
+
+[[permission]]
+identifier = "deny-compaction-idle-hold"
+description = "Denies the compaction_idle_hold command without any pre-configured scope."
+commands.deny = ["compaction_idle_hold"]

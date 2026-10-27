@@ -1251,3 +1251,46 @@ async fn the_doctors_shrink_switches_a_file_to_incremental_vacuum() {
     assert!(reclaim_database(dir.path(), FILE_NAME).unwrap() > 0);
     assert!(database_space(dir.path(), FILE_NAME).incremental);
 }
+
+#[tokio::test]
+async fn an_idle_marker_joins_the_last_committed_turn_and_survives_a_reopen() {
+    let (_dir, state) = open();
+    let sessions = state.store();
+    let service = state.sessions();
+    let me = identity(1, "https://a.example");
+    let key = me.key();
+    sessions.open_session(&me, "fp").await.unwrap();
+    sessions
+        .seed(&key, Vec::new(), Some("0".into()), &[])
+        .await
+        .unwrap();
+    let marker = || text_event("i1", "elitea_context_compaction", "user", "marker");
+    // An empty session has no committed turn to join.
+    assert!(!sessions.append_marker(&key, marker()).await.unwrap());
+    let scope = sessions.begin_turn(&key, "exec-1").unwrap();
+    service
+        .append_event(&key, text_event("i1", "user", "user", "hi"))
+        .await
+        .unwrap();
+    // A turn holds the session: refused, nothing written.
+    assert!(!sessions.append_marker(&key, marker()).await.unwrap());
+    sessions
+        .finish_turn(
+            &key,
+            "exec-1",
+            TurnOutcome::Committed {
+                response_message_id: "resp-1".into(),
+                cursor: Some("2".into()),
+            },
+        )
+        .await
+        .unwrap();
+    drop(scope);
+    assert!(sessions.append_marker(&key, marker()).await.unwrap());
+    let rows = sessions.rows(&key).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].turn_execution_id, "exec-1");
+    assert_eq!(rows[1].response_message_id.as_deref(), Some("resp-1"));
+    // A reopen keeps it: it is a committed turn's event.
+    assert_eq!(sessions.open_session(&me, "fp").await.unwrap().events, 2);
+}

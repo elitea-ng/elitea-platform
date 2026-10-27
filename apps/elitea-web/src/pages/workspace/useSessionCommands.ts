@@ -12,7 +12,7 @@ import type { WorkspaceCommandId, WorkspaceTurn } from '@/features/workspace';
 
 import type { AgentSelection } from './useAgentSelection';
 
-type SessionNotice = 'help' | 'nothingToUndo' | 'compactNext' | 'compactIdle' | 'modelFixed' | 'text' | null;
+type SessionNotice = 'help' | 'nothingToUndo' | 'compactNext' | 'modelFixed' | 'text' | null;
 
 export interface SessionCommands {
   planMode: boolean;
@@ -39,10 +39,6 @@ export interface SessionCommands {
   compactNext: boolean;
   /** The turn that compacts started. */
   compactSent: () => void;
-  /** The thread was idle (`useIdleCompaction`): the next message compacts first, and the notice says why. */
-  armIdleCompact: () => void;
-  /** The next message does not compact after all (the idle notice's button). */
-  cancelCompact: () => void;
   run: (command: WorkspaceCommandId) => void;
 }
 
@@ -110,15 +106,7 @@ export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTur
     compactNext,
     compactSent: () => {
       setCompactNext(false);
-      setNotice((current) => (current === 'compactNext' || current === 'compactIdle' ? null : current));
-    },
-    armIdleCompact: () => {
-      setCompactNext(true);
-      setNotice((current) => current ?? 'compactIdle');
-    },
-    cancelCompact: () => {
-      setCompactNext(false);
-      setNotice(null);
+      setNotice((current) => (current === 'compactNext' ? null : current));
     },
     run: (command) => {
       setNotice(null);
