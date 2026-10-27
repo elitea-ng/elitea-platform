@@ -312,14 +312,25 @@ async fn run_to_end(
 
 /// As [`run_to_end`], also returning every `interrupt_card_v1` raised.
 async fn run_collecting(
-    mut invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
+    invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
 ) -> Result<(Vec<Value>, Vec<Value>), String> {
+    run_keyed(invocation)
+        .await
+        .map(|(members, cards, _)| (members, cards))
+}
+
+/// As [`run_collecting`], also returning each frame's `parent_agent_call_id`
+/// with its first tier's ordinal, in frame order (frames without one skipped).
+async fn run_keyed(
+    mut invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
+) -> Result<(Vec<Value>, Vec<Value>, Vec<(String, Value)>), String> {
     invocation
         .project_start(timestamp(1))
         .expect("pipeline browser start");
     let (mut run, mut projector, completion) = invocation.start().expect("pipeline start");
     let mut members = Vec::new();
     let mut cards = Vec::new();
+    let mut keys = Vec::new();
     loop {
         match run.next_event().await {
             Err(error) => {
@@ -338,6 +349,12 @@ async fn run_collecting(
                     // its only pause terminal is the park (fanout_parked_v1).
                     let metadata: Value =
                         serde_json::from_slice(&frame.response_metadata).unwrap_or_default();
+                    if let Some(key) = metadata["parent_agent_call_id"].as_str() {
+                        keys.push((
+                            key.to_owned(),
+                            metadata["parent_agent_path"][0]["sibling_ordinal"].clone(),
+                        ));
+                    }
                     let legacy = frame.r#type == "mcp_authorization_required"
                         || (frame.r#type == "agent_hitl_interrupt"
                             && (metadata.get("fanout_parked_v1").is_none()
@@ -366,7 +383,7 @@ async fn run_collecting(
     completion
         .select()
         .await
-        .map(|_| (members, cards))
+        .map(|_| (members, cards, keys))
         .map_err(|error| error.to_string())
 }
 
@@ -626,10 +643,31 @@ async fn postgres_fanout_pipeline_branches_that_ask_raise_one_card_each_and_park
                     .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code)
             )
         });
-    let (members, cards) = run_collecting(invocation)
-        .await
-        .expect("the activation parks");
+    let (members, cards, keys) = run_keyed(invocation).await.expect("the activation parks");
     assert_eq!(model_requests(&captured), 3);
+    // One member, one key: its call, its descendants, its card and its
+    // lifecycle all carry the member tier (`fo1_`, its ordinal), so the Web
+    // renders one labelled accordion per member (browser finding 2026-10-27).
+    let tiers = cards
+        .iter()
+        .map(|card| {
+            card["parent_agent_path"][0]["call_id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(tiers.len(), 3);
+    for (key, ordinal) in &keys {
+        let position = tiers
+            .iter()
+            .position(|tier| tier == key)
+            .unwrap_or_else(|| panic!("a frame keyed outside the member tiers: {key}"));
+        if !ordinal.is_null() {
+            assert_eq!(ordinal, &json!(position + 1), "{key}");
+        }
+    }
+    assert!(keys.len() > 9, "{keys:?}");
     assert_eq!(cards.len(), 3, "{cards:?}");
     for (card, (ordinal, branch)) in cards
         .iter()

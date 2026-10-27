@@ -22,6 +22,11 @@ pub(super) struct ParallelEventScope {
     owned_thread: String,
     threads: BTreeSet<String>,
     parent: Option<PipelineNodeEventScope>,
+    /// A Parallel member's tier (`{"call": fo1_…, "ordinal": n}`), stamped on
+    /// its own call so the projector keys the call and every descendant by the
+    /// member tier the fan-out frames and cards use (contract §3.3). `None`
+    /// for a Map item.
+    member_tier: Option<String>,
 }
 
 impl PipelineNodeEventSender {
@@ -45,13 +50,22 @@ impl PipelineNodeEventSender {
         {
             return Err(pipeline_node_event_channel_error());
         }
-        let scope = ParallelEventScope::from_catalog(
+        let mut scope = ParallelEventScope::from_catalog(
             execution.activation_root_thread_id(),
             execution.branch_thread_id(),
             execution.owned_node(),
             execution.admitted_threads().clone(),
             parent,
         )?;
+        scope.member_tier = Some(
+            serde_json::json!({
+                "call": crate::agents::graph::fanout_frames::member_call_id(
+                    execution.branch_thread_id()
+                ),
+                "ordinal": execution.branch_ordinal() + 1,
+            })
+            .to_string(),
+        );
         Ok(Self {
             inner: self.inner.clone(),
             parallel_scope: Some(std::sync::Arc::new(scope)),
@@ -153,7 +167,7 @@ impl PipelineNodeEventSender {
         if !event.tool_calls().is_empty() || !event.tool_results().is_empty() {
             event.provider_metadata.insert(
                 crate::agents::events::FANOUT_MEMBER_CALL_KEY.to_owned(),
-                "1".to_owned(),
+                scope.member_tier.clone().unwrap_or_else(|| "1".to_owned()),
             );
         }
         if let Some(current) = current {
@@ -221,6 +235,7 @@ impl ParallelEventScope {
             owned_thread: format!("{root_thread}/{owned_node}"),
             threads,
             parent,
+            member_tier: None,
         })
     }
 

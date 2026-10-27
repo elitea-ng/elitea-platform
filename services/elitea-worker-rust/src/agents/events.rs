@@ -863,6 +863,9 @@ struct ActiveToolCall {
     display_name: Option<String>,
     /// A fixed Parallel member's call: it may stay open beside its siblings.
     fanout_member: bool,
+    /// The member tier (`fo1_` call id, ordinal) that keys a Parallel
+    /// member's call and its descendants, as its fan-out frames and cards do.
+    member_tier: Option<(String, usize)>,
 }
 
 #[derive(Clone)]
@@ -1563,10 +1566,17 @@ impl AgentEventProjector {
             self.descendants.insert(
                 parent_call_id.to_owned(),
                 DescendantAgentProjector {
-                    tier: AgentPathTier {
-                        name: application.display_name,
-                        call_id: parent_call_id.to_owned(),
-                        sibling_ordinal: active.sibling_ordinal,
+                    tier: match &active.member_tier {
+                        Some((call_id, ordinal)) => AgentPathTier {
+                            name: application.display_name,
+                            call_id: call_id.clone(),
+                            sibling_ordinal: Some(*ordinal),
+                        },
+                        None => AgentPathTier {
+                            name: application.display_name,
+                            call_id: parent_call_id.to_owned(),
+                            sibling_ordinal: active.sibling_ordinal,
+                        },
                     },
                     projector: Box::new(projector),
                 },
@@ -3036,6 +3046,7 @@ impl AgentEventProjector {
                     .or_else(|| self.toolkit_attribution.get(call.name).cloned()),
                 display_name: inner.map(|(_, tool)| tool),
                 fanout_member: event.provider_metadata.contains_key(FANOUT_MEMBER_CALL_KEY),
+                member_tier: fanout_member_tier(event)?,
             };
             let entry = tool_entry(id, &active, None, None, None, None);
             batch.push(self.event(
@@ -6266,6 +6277,31 @@ fn parse_agent_path_tier(value: &Value) -> Result<AgentPathTier, AgentEventProje
     })
 }
 
+/// The member tier a Parallel member's own call carries
+/// (`{"call": fo1_…, "ordinal": n}`); `None` for any other call, including a
+/// Map item's ("1").
+fn fanout_member_tier(event: &Event) -> Result<Option<(String, usize)>, AgentEventProjectionError> {
+    let Some(raw) = event.provider_metadata.get(FANOUT_MEMBER_CALL_KEY) else {
+        return Ok(None);
+    };
+    if raw == "1" {
+        return Ok(None);
+    }
+    let value: Value =
+        serde_json::from_str(raw).map_err(|_| AgentEventProjectionError::invalid_state())?;
+    let call_id = value["call"]
+        .as_str()
+        .filter(|call| sibling_ordinal_bound(call) == MAX_FANOUT_MEMBER_ORDINAL)
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    let ordinal = value["ordinal"]
+        .as_u64()
+        .and_then(|ordinal| usize::try_from(ordinal).ok())
+        .filter(|ordinal| (1..=MAX_FANOUT_MEMBER_ORDINAL).contains(ordinal))
+        .filter(|_| value.as_object().is_some_and(|object| object.len() == 2))
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    Ok(Some((call_id.to_owned(), ordinal)))
+}
+
 /// A fan-out member tier is named by its `fo1_` member call id (contract
 /// §3.3: `"fo1_" + lowercase_hex(SHA-256(…))`); only it reaches ordinal 64.
 fn sibling_ordinal_bound(call_id: &str) -> usize {
@@ -6343,22 +6379,27 @@ fn tool_entry(
         "error": error,
     });
     if let Some(application) = active.application.as_ref() {
+        // A Parallel member's call is keyed by its member tier, like its frames.
+        let (call_id, sibling_ordinal) = match &active.member_tier {
+            Some((call_id, ordinal)) => (call_id.as_str(), Some(*ordinal)),
+            None => (id, active.sibling_ordinal),
+        };
         let metadata = json!({
             "original_name": application.display_name,
             "display_name": application.display_name,
             "agent_type": application.agent_type,
             "toolkit_type": application.toolkit_type(),
-            "parent_agent_call_id": id,
+            "parent_agent_call_id": call_id,
             "parent_agent_path": [],
-            "sibling_ordinal": active.sibling_ordinal,
+            "sibling_ordinal": sibling_ordinal,
         });
         let Value::Object(object) = &mut entry else {
             return entry;
         };
         object.insert("metadata".to_owned(), metadata.clone());
-        object.insert("parent_agent_call_id".to_owned(), json!(id));
+        object.insert("parent_agent_call_id".to_owned(), json!(call_id));
         object.insert("parent_agent_path".to_owned(), json!([]));
-        object.insert("sibling_ordinal".to_owned(), json!(active.sibling_ordinal));
+        object.insert("sibling_ordinal".to_owned(), json!(sibling_ordinal));
         object.insert(
             "tool_meta".to_owned(),
             json!({
@@ -6805,6 +6846,7 @@ mod scoped_static_inventory_tests {
                     toolkit: None,
                     display_name: None,
                     fanout_member: false,
+                    member_tier: None,
                 },
             );
             root.descendants.insert(
@@ -6847,7 +6889,10 @@ mod code_debug;
 mod fanout_member_tier_tests {
     use serde_json::{Map, Value, json};
 
-    use super::{AgentPathTier, overlay_hierarchy_object, parse_agent_path_tier};
+    use super::{
+        AgentPathTier, FANOUT_MEMBER_CALL_KEY, fanout_member_tier, overlay_hierarchy_object,
+        parse_agent_path_tier,
+    };
 
     fn member_call_id(child_thread: &str) -> String {
         elitea_agent_runtime::graph::fanout::identity::member_call_id(child_thread)
@@ -6855,6 +6900,38 @@ mod fanout_member_tier_tests {
 
     fn tier(call_id: &str, ordinal: u64) -> Value {
         json!({"name": "Researcher", "call_id": call_id, "sibling_ordinal": ordinal})
+    }
+
+    /// A Parallel member's call carries its tier; a Map item's carries "1";
+    /// anything else is refused rather than keyed wrongly.
+    #[test]
+    fn a_member_call_stamp_names_its_tier_or_is_refused() {
+        let member = member_call_id("p1:child");
+        let stamped = |raw: &str| {
+            let mut event = adk_rust::Event::new("member");
+            event
+                .provider_metadata
+                .insert(FANOUT_MEMBER_CALL_KEY.to_owned(), raw.to_owned());
+            fanout_member_tier(&event)
+        };
+        assert_eq!(
+            stamped(&json!({"call": member, "ordinal": 64}).to_string()).unwrap(),
+            Some((member.clone(), 64))
+        );
+        assert_eq!(stamped("1").unwrap(), None);
+        assert_eq!(
+            fanout_member_tier(&adk_rust::Event::new("plain")).unwrap(),
+            None
+        );
+        for raw in [
+            json!({"call": member, "ordinal": 0}).to_string(),
+            json!({"call": member, "ordinal": 65}).to_string(),
+            json!({"call": "pipeline-v2:first_call:0", "ordinal": 1}).to_string(),
+            json!({"call": member, "ordinal": 1, "extra": true}).to_string(),
+            "not json".to_owned(),
+        ] {
+            assert!(stamped(&raw).is_err(), "{raw}");
+        }
     }
 
     #[test]
