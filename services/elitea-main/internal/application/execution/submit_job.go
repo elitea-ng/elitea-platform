@@ -13,6 +13,7 @@ import (
 	configurationdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/configurations"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 )
 
 var (
@@ -78,6 +79,11 @@ type AdmissionOutcome struct {
 	// values. Exact idempotent replay must return the original pair.
 	AdmittedAt time.Time
 	Deadline   time.Time
+
+	// SecurityContext is the governed execution's context reference
+	// (#1115), set by an admission whose command is signed from this
+	// outcome; zero otherwise.
+	SecurityContext securitycontext.Reference
 }
 
 // AtomicAdmissionStore owns the transaction that inserts the immutable input

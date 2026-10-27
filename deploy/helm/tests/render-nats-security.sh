@@ -425,6 +425,8 @@ check("elitea-main reads exactly the four families the SSE route forwards",
 gwp = users.get(URI("elitea-llm-gateway"), {}).get("publish", {}).get("allow", [])
 check("the gateway cannot publish on elitea-main's presence family", not any(p.startswith("elitea.") for p in gwp), gwp)
 RT_DURABLES = (("ELITEA_RT_V1_VALIDATE", "elitea-configuration-worker-v1"), ("ELITEA_RT_V1_AGENT", "elitea-agent-worker-v1"), ("ELITEA_RT_V1_INDEX", "elitea-index-worker-v1"))
+# The governed durables (ADR-0039, #1115) follow the legacy three.
+RT_DURABLES += tuple((st, du.replace("-worker-v1", "-worker-governed-v1")) for st, du in RT_DURABLES)
 want_rt_exports = []
 want_w_imports = []
 for st, du in RT_DURABLES:
@@ -438,7 +440,7 @@ for st, du in RT_DURABLES:
         {"service": {"account": "RUNTIME", "subject": f"$JS.API.CONSUMER.MSG.NEXT.{st}.{du}"}, "to": f"JS.RUNTIME.API.CONSUMER.MSG.NEXT.{st}.{du}"},
         {"service": {"account": "RUNTIME", "subject": f"$JS.ACK.{st}.{du}.>"}},
     ]
-check("RUNTIME exports exactly its three worker durables' INFO, MSG.NEXT and ACK services to WORKER, and imports nothing",
+check("RUNTIME exports exactly its six worker durables' INFO, MSG.NEXT and ACK services to WORKER, and imports nothing",
       accts["RUNTIME"].get("exports") == want_rt_exports and not accts["RUNTIME"].get("imports"), accts["RUNTIME"].get("exports"))
 check("WORKER imports exactly those services, the API under the workers' prefix JS.RUNTIME.API, and exports nothing",
       accts["WORKER"].get("imports") == want_w_imports and not accts["WORKER"].get("exports"), accts["WORKER"].get("imports"))
@@ -447,8 +449,9 @@ check("MAIN neither exports nor does GATEWAY import", not accts["MAIN"].get("exp
 # commands and cannot consume them; the worker consumes and cannot publish one.
 rt_main = users.get(URI("elitea-main-runtime"), {}).get("publish", {})
 rt_worker = users.get(URI("elitea-worker"), {}).get("publish", {})
-check("elitea-main-runtime publishes the three command routes and the replay wake-up",
-      {"elitea.rt.v1.validate.d.*", "elitea.rt.v1.agent.d.*", "elitea.rt.v1.index.d.*", "elitea.rt.v1.replay.wake"} <= set(rt_main.get("allow", [])), rt_main.get("allow"))
+check("elitea-main-runtime publishes the three command routes, legacy and governed, and the replay wake-up",
+      {"elitea.rt.v1.validate.d.*", "elitea.rt.v1.agent.d.*", "elitea.rt.v1.index.d.*",
+       "elitea.rt.v1.validate.g.*", "elitea.rt.v1.agent.g.*", "elitea.rt.v1.index.g.*", "elitea.rt.v1.replay.wake"} <= set(rt_main.get("allow", [])), rt_main.get("allow"))
 check("elitea-main-runtime subscribes the replay wake-up (its replicas carry it)",
       "elitea.rt.v1.replay.wake" in users.get(URI("elitea-main-runtime"), {}).get("subscribe", {}).get("allow", []))
 check("elitea-main-runtime may not pull or ack a command",
@@ -760,8 +763,10 @@ for rel in (".github/workflows", "deploy", "scripts"):
         for m in image_re.finditer(f.read_text(errors="replace")):
             seen.setdefault(m.group(1), set()).add(str(f.relative_to(root)))
 check("CI, compose and the test scripts run the chart's NATS image (found some)", seen, seen)
+# The -alpine variant of the pinned release is the same server binary with a
+# shell: CI's service container needs one for its health check (#1457).
 for tag, files in sorted(seen.items()):
-    check(f"nats:{tag} is the chart's pin nats:{pin}", tag == pin, sorted(files))
+    check(f"nats:{tag} is the chart's pin nats:{pin}", tag in (pin, f"{pin}-alpine"), sorted(files))
 # The pin is the scratch image: nothing can exec inside the server container.
 # Each compose file that runs the server must therefore carry no healthcheck on
 # it, and must probe readiness from the nats-health sidecar instead.

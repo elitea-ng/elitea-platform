@@ -3,6 +3,7 @@ pub mod control;
 mod error;
 pub mod node_event;
 pub mod output;
+pub mod security_context;
 pub mod toolkit_execution;
 pub(crate) mod vector_token;
 pub(crate) mod wire;

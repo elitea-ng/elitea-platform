@@ -53,6 +53,11 @@ import type {
   BrandingPackageReport,
   BrandingSettings,
   BulkInviteSummary,
+  CredentialProbeResult,
+  CredentialUseGrant,
+  CredentialUseGrantListResponse,
+  ExternalAgentIdentity,
+  ExternalAgentIdentityListResponse,
   GlobalUserInviteResult,
   ListBrandingPackageVersions200,
   Mandate,
@@ -790,6 +795,237 @@ export const getRevokeMandateResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     null,
   ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getListExternalAgentIdentitiesResponseMock = (
+  overrideResponse: Partial<
+    Extract<ExternalAgentIdentityListResponse, object>
+  > = {},
+): ExternalAgentIdentityListResponse => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.uuid(),
+    tenant_project_id: faker.number.int(),
+    application_id: faker.number.int(),
+    mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    provider_tenant: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    kind: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    external_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    generation: faker.number.int(),
+    provider_config_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    agent_user_ref: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    owner_ref: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    revocation_epoch: faker.number.int(),
+    created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  ...overrideResponse,
+});
+
+export const getCreateExternalAgentIdentityResponseMock = (
+  overrideResponse: Partial<Extract<ExternalAgentIdentity, object>> = {},
+): ExternalAgentIdentity => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_tenant: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  external_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  generation: faker.number.int(),
+  provider_config_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  agent_user_ref: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  owner_ref: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getProvisionExternalAgentIdentityResponseMock = (
+  overrideResponse: Partial<Extract<ExternalAgentIdentity, object>> = {},
+): ExternalAgentIdentity => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_tenant: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  external_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  generation: faker.number.int(),
+  provider_config_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  agent_user_ref: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  owner_ref: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getActivateExternalAgentIdentityResponseMock = (
+  overrideResponse: Partial<Extract<ExternalAgentIdentity, object>> = {},
+): ExternalAgentIdentity => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_tenant: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  external_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  generation: faker.number.int(),
+  provider_config_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  agent_user_ref: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  owner_ref: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getSuspendExternalAgentIdentityResponseMock = (
+  overrideResponse: Partial<Extract<ExternalAgentIdentity, object>> = {},
+): ExternalAgentIdentity => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_tenant: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  external_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  generation: faker.number.int(),
+  provider_config_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  agent_user_ref: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  owner_ref: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getResumeExternalAgentIdentityResponseMock = (
+  overrideResponse: Partial<Extract<ExternalAgentIdentity, object>> = {},
+): ExternalAgentIdentity => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_tenant: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  external_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  generation: faker.number.int(),
+  provider_config_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  agent_user_ref: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  owner_ref: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getRetireExternalAgentIdentityResponseMock = (
+  overrideResponse: Partial<Extract<ExternalAgentIdentity, object>> = {},
+): ExternalAgentIdentity => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_tenant: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  external_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  generation: faker.number.int(),
+  provider_config_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  agent_user_ref: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  owner_ref: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
@@ -1613,6 +1849,229 @@ export const getListAdminPublishedAgentsResponseMock = (
   ...overrideResponse,
 });
 
+export const getListCredentialUseGrantsResponseMock = (
+  overrideResponse: Partial<
+    Extract<CredentialUseGrantListResponse, object>
+  > = {},
+): CredentialUseGrantListResponse => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.uuid(),
+    tenant_project_id: faker.number.int(),
+    agent_binding_id: faker.string.uuid(),
+    toolkit_id: faker.number.int(),
+    credential_reference_id: faker.string.uuid(),
+    target_binding_id: faker.string.uuid(),
+    capabilities: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    operation_scopes: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    resource_scopes: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    obligations: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    epoch: faker.number.int(),
+    expires_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    proposed_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    approved_by: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  ...overrideResponse,
+});
+
+export const getProposeCredentialUseGrantResponseMock = (
+  overrideResponse: Partial<Extract<CredentialUseGrant, object>> = {},
+): CredentialUseGrant => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  agent_binding_id: faker.string.uuid(),
+  toolkit_id: faker.number.int(),
+  credential_reference_id: faker.string.uuid(),
+  target_binding_id: faker.string.uuid(),
+  capabilities: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  operation_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  resource_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  obligations: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  epoch: faker.number.int(),
+  expires_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  proposed_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  approved_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getApproveCredentialUseGrantResponseMock = (
+  overrideResponse: Partial<Extract<CredentialUseGrant, object>> = {},
+): CredentialUseGrant => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  agent_binding_id: faker.string.uuid(),
+  toolkit_id: faker.number.int(),
+  credential_reference_id: faker.string.uuid(),
+  target_binding_id: faker.string.uuid(),
+  capabilities: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  operation_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  resource_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  obligations: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  epoch: faker.number.int(),
+  expires_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  proposed_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  approved_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getSuspendCredentialUseGrantResponseMock = (
+  overrideResponse: Partial<Extract<CredentialUseGrant, object>> = {},
+): CredentialUseGrant => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  agent_binding_id: faker.string.uuid(),
+  toolkit_id: faker.number.int(),
+  credential_reference_id: faker.string.uuid(),
+  target_binding_id: faker.string.uuid(),
+  capabilities: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  operation_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  resource_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  obligations: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  epoch: faker.number.int(),
+  expires_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  proposed_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  approved_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getRevokeCredentialUseGrantResponseMock = (
+  overrideResponse: Partial<Extract<CredentialUseGrant, object>> = {},
+): CredentialUseGrant => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  agent_binding_id: faker.string.uuid(),
+  toolkit_id: faker.number.int(),
+  credential_reference_id: faker.string.uuid(),
+  target_binding_id: faker.string.uuid(),
+  capabilities: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  operation_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  resource_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  obligations: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  epoch: faker.number.int(),
+  expires_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  proposed_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  approved_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getProbeCredentialReferenceResponseMock =
+  (): CredentialProbeResult => ({
+    credential_reference_id: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f11",
+    provider_type: "jira",
+    operation: "jira.project.read",
+    outcome: "unavailable",
+    message: "probe not available for provider",
+    provider_status: null,
+    checked_at: "2026-10-27T12:00:00Z",
+  });
+
 export const getGetSystemInfoResponseMock = (
   overrideResponse: Partial<Extract<SystemInfo, object>> = {},
 ): SystemInfo => ({
@@ -2404,6 +2863,190 @@ export const getRevokeMandateMockHandler = (
   );
 };
 
+export const getListExternalAgentIdentitiesMockHandler = (
+  overrideResponse?:
+    | ExternalAgentIdentityListResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        | Promise<ExternalAgentIdentityListResponse>
+        | ExternalAgentIdentityListResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/external_agent_identities",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListExternalAgentIdentitiesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateExternalAgentIdentityMockHandler = (
+  overrideResponse?:
+    | ExternalAgentIdentity
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExternalAgentIdentity> | ExternalAgentIdentity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/external_agent_identities",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateExternalAgentIdentityResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getProvisionExternalAgentIdentityMockHandler = (
+  overrideResponse?:
+    | ExternalAgentIdentity
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExternalAgentIdentity> | ExternalAgentIdentity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/external_agent_identities/:id\\:provision",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getProvisionExternalAgentIdentityResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getActivateExternalAgentIdentityMockHandler = (
+  overrideResponse?:
+    | ExternalAgentIdentity
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExternalAgentIdentity> | ExternalAgentIdentity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/external_agent_identities/:id\\:activate",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getActivateExternalAgentIdentityResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSuspendExternalAgentIdentityMockHandler = (
+  overrideResponse?:
+    | ExternalAgentIdentity
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExternalAgentIdentity> | ExternalAgentIdentity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/external_agent_identities/:id\\:suspend",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSuspendExternalAgentIdentityResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getResumeExternalAgentIdentityMockHandler = (
+  overrideResponse?:
+    | ExternalAgentIdentity
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExternalAgentIdentity> | ExternalAgentIdentity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/external_agent_identities/:id\\:resume",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getResumeExternalAgentIdentityResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRetireExternalAgentIdentityMockHandler = (
+  overrideResponse?:
+    | ExternalAgentIdentity
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExternalAgentIdentity> | ExternalAgentIdentity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/external_agent_identities/:id\\:retire",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRetireExternalAgentIdentityResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetBrandingSettingsMockHandler = (
   overrideResponse?:
     | BrandingSettings
@@ -2908,6 +3551,164 @@ export const getListAdminPublishedAgentsMockHandler = (
   );
 };
 
+export const getListCredentialUseGrantsMockHandler = (
+  overrideResponse?:
+    | CredentialUseGrantListResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        | Promise<CredentialUseGrantListResponse>
+        | CredentialUseGrantListResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/projects/:projectId/credential_grants",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListCredentialUseGrantsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getProposeCredentialUseGrantMockHandler = (
+  overrideResponse?:
+    | CredentialUseGrant
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CredentialUseGrant> | CredentialUseGrant),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/projects/:projectId/credential_grants",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getProposeCredentialUseGrantResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getApproveCredentialUseGrantMockHandler = (
+  overrideResponse?:
+    | CredentialUseGrant
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CredentialUseGrant> | CredentialUseGrant),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/projects/:projectId/credential_grants/:id\\:approve",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getApproveCredentialUseGrantResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSuspendCredentialUseGrantMockHandler = (
+  overrideResponse?:
+    | CredentialUseGrant
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CredentialUseGrant> | CredentialUseGrant),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/projects/:projectId/credential_grants/:id\\:suspend",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSuspendCredentialUseGrantResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRevokeCredentialUseGrantMockHandler = (
+  overrideResponse?:
+    | CredentialUseGrant
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CredentialUseGrant> | CredentialUseGrant),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/projects/:projectId/credential_grants/:id\\:revoke",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRevokeCredentialUseGrantResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getProbeCredentialReferenceMockHandler = (
+  overrideResponse?:
+    | CredentialProbeResult
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CredentialProbeResult> | CredentialProbeResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/projects/:projectId/credential_references/:id\\:probe",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getProbeCredentialReferenceResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetSystemInfoMockHandler = (
   overrideResponse?:
     | SystemInfo
@@ -2964,6 +3765,13 @@ export const getAdminMock = () => [
   getApproveMandateMockHandler(),
   getSuspendMandateMockHandler(),
   getRevokeMandateMockHandler(),
+  getListExternalAgentIdentitiesMockHandler(),
+  getCreateExternalAgentIdentityMockHandler(),
+  getProvisionExternalAgentIdentityMockHandler(),
+  getActivateExternalAgentIdentityMockHandler(),
+  getSuspendExternalAgentIdentityMockHandler(),
+  getResumeExternalAgentIdentityMockHandler(),
+  getRetireExternalAgentIdentityMockHandler(),
   getGetBrandingSettingsMockHandler(),
   getSaveBrandingSettingsMockHandler(),
   getResetBrandingSettingsMockHandler(),
@@ -2983,5 +3791,11 @@ export const getAdminMock = () => [
   getGetPlatformSettingsMockHandler(),
   getGetBrandingAssetMockHandler(),
   getListAdminPublishedAgentsMockHandler(),
+  getListCredentialUseGrantsMockHandler(),
+  getProposeCredentialUseGrantMockHandler(),
+  getApproveCredentialUseGrantMockHandler(),
+  getSuspendCredentialUseGrantMockHandler(),
+  getRevokeCredentialUseGrantMockHandler(),
+  getProbeCredentialReferenceMockHandler(),
   getGetSystemInfoMockHandler(),
 ];

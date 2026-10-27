@@ -49,6 +49,13 @@ enum RuntimeErrorCodeV1 {
   // outcome was never recorded. The call may have run; the runtime never
   // repeats it. Never retryable.
   RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED = 34;
+  // A governed command (one with a security context reference) was claimed
+  // by a worker that did not opt in to the governed security context. No
+  // claim attempt is created. Never retryable on the same worker.
+  RUNTIME_ERROR_CODE_V1_GOVERNED_WORKER_REQUIRED = 35;
+  // The execution is pinned to the governed profile but its command carries
+  // no security context reference. The job fails closed. Never retryable.
+  RUNTIME_ERROR_CODE_V1_GOVERNED_CONTEXT_MISSING = 36;
 }
 
 // RuntimeErrorV1 contains only a registered safe code/message pair. Detailed

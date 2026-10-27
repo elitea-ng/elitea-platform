@@ -230,6 +230,35 @@ async fn python_vectors_cross_authenticated_claim_and_begin_fence() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn only_a_governed_worker_claims_with_the_security_context_opt_in() {
+    // Off (the default): the claim is the legacy one, byte for byte.
+    let (control, state) = client();
+    assert!(!control.governed_security_context());
+    fresh_claim(&control).await;
+    let legacy = state.claim_requests.lock().expect("claim requests")[0].clone();
+    assert!(!legacy.governed_security_context_v1);
+
+    // On: every fresh claim says the worker verifies the governed context.
+    let (control, state) = client();
+    let control = control.with_governed_security_context(true);
+    fresh_claim(&control).await;
+    control
+        .claim_agent_delivery(&verified(), NOW)
+        .await
+        .expect("delivery claim");
+    let requests = state.claim_requests.lock().expect("claim requests").clone();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.governed_security_context_v1)
+    );
+    let mut unflagged = requests[0].clone();
+    unflagged.governed_security_context_v1 = false;
+    assert_eq!(unflagged, legacy, "the opt-in is the only difference");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn every_python_restart_disposition_maps_to_an_input_free_closed_type() {
     let (control, state) = client();
 

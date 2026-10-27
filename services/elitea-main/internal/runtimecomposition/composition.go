@@ -95,7 +95,11 @@ type Dependencies struct {
 	// CredentialProfile is the credential governance profile every admission
 	// is pinned to (ADR-0039, #1111). Required: the admission repositories
 	// refuse its zero value.
-	CredentialProfile             profile.Admission
+	CredentialProfile profile.Admission
+	// CredentialBroker serves RuntimeContentService.RedeemCredential
+	// (#1118). It is built at the composition root only with credential
+	// governance on; nil leaves the RPC Unimplemented.
+	CredentialBroker              storage.CredentialRedeemer
 	OriginalCodeDefinitions       repos.CodeDefinitionSourceReader
 	OriginalCodeWorkspaceVerifier storage.OriginalCodeWorkspaceVerifier
 	OriginalCodeBrokerVerifier    storage.OriginalCodeBrokerVerifier
@@ -302,7 +306,8 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, err
 	}
-	streamHandles, err := bindCommandStreams(ctx, runtimeJS, config, toolkitRoute)
+	streamHandles, err := bindCommandStreams(ctx, runtimeJS, config, toolkitRoute,
+		dependencies.CredentialProfile.Governed() || dependencies.CredentialProfile.ContinuationGuard())
 	if err != nil {
 		return nil, err
 	}
@@ -496,6 +501,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, fmt.Errorf("construct runtime command outbox: %w", err)
 	}
+	outbox.WithCredentialProfile(dependencies.CredentialProfile)
 	dispatcher, err := executionapp.NewValidationDispatcher(outbox, producer)
 	if err != nil {
 		return nil, err
@@ -534,6 +540,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct index ingest command outbox: %w", err)
 		}
+		indexOutbox.WithCredentialProfile(dependencies.CredentialProfile)
 		if rustIndexing {
 			// Each index command carries the embedding space its index is
 			// stamped with, so the worker refuses another before it writes.
@@ -1261,6 +1268,16 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}, controlPeerAuthorizer, verifier, controlClaims, inputs, settlements)
 	if err != nil {
 		return nil, err
+	}
+	if dependencies.CredentialProfile.Governed() || dependencies.CredentialProfile.ContinuationGuard() {
+		// A governed execution's command without its security context is
+		// refused at the claim (#1115). Flag off with no governed pins, the
+		// claim path reads nothing new.
+		pins, pinsErr := repos.NewCredentialGovernanceStore(dependencies.AdmissionPool)
+		if pinsErr != nil {
+			return nil, fmt.Errorf("construct admission pin reader: %w", pinsErr)
+		}
+		controlServer.WithGovernedPins(pins)
 	}
 	if dependencies.Workspace.complete() {
 		// The take-back signal rides the lease poll, as cancellation does.
@@ -2099,6 +2116,19 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	// the honest old behaviour — the native worker skips the toolkit — instead
 	// of gaining a family whose every call answers 503.
 	contentServer = contentServer.WithRuntimeArtifacts(runtimeArtifacts)
+	if dependencies.CredentialBroker != nil {
+		contentServer.WithCredentialBroker(dependencies.CredentialBroker)
+	}
+	if dependencies.CredentialProfile.Governed() || dependencies.CredentialProfile.ContinuationGuard() {
+		// A governed run's client-token response carries no secrets-header
+		// value (#1118). Flag off with no governed pins, the token path reads
+		// nothing new.
+		contentPins, pinsErr := repos.NewCredentialGovernanceStore(dependencies.ContentPool)
+		if pinsErr != nil {
+			return nil, fmt.Errorf("construct content pin reader: %w", pinsErr)
+		}
+		contentServer.WithGovernedPins(contentPins)
+	}
 	if originalCodeIntents != nil {
 		contentServer.WithOriginalCodeIntents(originalCodeIntents)
 	}

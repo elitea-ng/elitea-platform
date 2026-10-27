@@ -48,9 +48,10 @@ use crate::toolkits::{
     IndexToolAuthority, IndexToolSupport, IndexToolsWithheld, LeftOutToolkit, McpConnector,
     McpMaterializationError, McpMaterializationErrorCode, ToolAdmissionPolicy, ToolBindingError,
     ToolsetMaterializationError, ToolsetMaterializationErrorCode, bind_frozen_toolsets,
-    freeze_toolsets, materialize_configured_toolsets_reporting_refusals,
+    freeze_toolsets, materialize_configured_toolsets_reporting_refusals_governed,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
+use crate::transport::credential_redeemer::governed_client;
 use crate::transport::model_facade::{
     BoundModelFacade, ModelAdapterKind, ModelFacade, ModelFacadeError, ModelInvocation,
     ModelReasoningEffort,
@@ -62,6 +63,7 @@ use crate::transport::platform_writer::ClaimPlatformWriter;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 use elitea_agent_runtime::host::PlatformWriter;
 use elitea_agent_runtime::toolkits::DataAnalysisAuthority;
+use elitea_agent_runtime::toolkits::governed::GovernedOperationClient;
 use sqlx::PgPool;
 
 /// Shared ordinary application/ad-hoc assembler used after `AUTHORIZED_NOW`.
@@ -644,6 +646,9 @@ impl OrdinaryNativeAgentAssembler {
             mcp_tokens,
             &artifact_authority,
             index_support,
+            // A governed command (#1120): every credentialed toolkit redeems
+            // per invocation; `None` (legacy) installs no wrapper at all.
+            governed_client(&self.platform, runtime_context).as_ref(),
         )
         .await?;
         // The configured toolkits and MCP connections, by name: the only
@@ -1269,20 +1274,47 @@ async fn materialize_direct_toolsets(
     mcp_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: &ArtifactToolAuthority,
     index_tools: IndexToolSupport<'_>,
+    governed: Option<&Arc<GovernedOperationClient>>,
 ) -> Result<DirectToolsets, NativeAgentAssemblyError> {
     let crate::toolkits::ConfiguredToolsets {
         mut toolsets,
         mut delegated_authorization,
-        left_out,
-    } = materialize_configured_toolsets_reporting_refusals(
+        mut left_out,
+    } = materialize_configured_toolsets_reporting_refusals_governed(
         snapshot,
         policy,
         mcp_tokens,
         Some(artifacts),
         index_tools,
+        governed,
     )
     .await
     .map_err(tool_materialization_error)?;
+    // A governed run has no MCP credential adapter: every MCP connection is
+    // refused as not governable, and no MCP token is used.
+    if governed.is_some() {
+        left_out.extend(
+            snapshot
+                .iter()
+                .filter(|reference| reference.kind() == FrozenToolKind::Mcp)
+                .map(|reference| {
+                    LeftOutToolkit::not_governable(reference.toolkit_name(), reference.tool_type())
+                }),
+        );
+        let sensitive = sensitive_tools_for_kind(
+            snapshot,
+            FrozenToolKind::Configured,
+            &toolsets,
+            policy.as_ref(),
+        )
+        .await?;
+        return Ok(DirectToolsets {
+            toolsets,
+            sensitive,
+            delegated_authorization,
+            left_out,
+        });
+    }
     let mut sensitive = sensitive_tools_for_kind(
         snapshot,
         FrozenToolKind::Configured,

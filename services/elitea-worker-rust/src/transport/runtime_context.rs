@@ -13,6 +13,10 @@
 use std::fmt;
 use std::time::Duration;
 
+use elitea_agent_runtime::toolkits::governed::{
+    BoundToolInvocation, CredentialEnvelope, CredentialRedeemDenial, EnvelopeKind, RedeemFailure,
+    RedeemOutcome,
+};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 use tokio::time::timeout;
@@ -25,6 +29,10 @@ use super::input_content::{
 };
 use crate::protocol::control::{
     ClaimBoundRuntimeContextAuthority, RuntimeContextRedemptionBinding,
+};
+use crate::protocol::elitea::runtime::v1::{
+    BoundToolInvocationV1, CredentialEnvelopeKindV1, DigestAlgorithmV1, DigestV1,
+    RedeemCredentialRequestV1, RedeemCredentialResponseV1, redeem_credential_response_v1,
 };
 use crate::protocol::elitea::runtime::v1::{
     DeleteArtifactRequestV1, GetApplicationVersionRequestV1, GetAttachmentObjectRequestV1,
@@ -452,6 +460,63 @@ impl RuntimeContextClient {
         timeout(self.config.deadline, operation)
             .await
             .map_err(|_| RuntimeContextError::Timeout("the runtime context request timed out"))?
+    }
+
+    /// Redeem the credential for ONE bound tool invocation of a governed run
+    /// (ADR-0039 decision 10, #1118/#1120), under the live claim and fence
+    /// and the command's security context digest.
+    ///
+    /// A policy refusal is a [`RedeemOutcome::Denial`] with its stable code;
+    /// only transport and binding failures are a [`RedeemFailure`]. The
+    /// envelope is converted straight into the runtime's redacted type: no
+    /// material reaches an error, a log or this client.
+    pub(crate) async fn redeem_credential(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        invocation: BoundToolInvocation,
+    ) -> Result<RedeemOutcome, RedeemFailure> {
+        let digest = authority
+            .governed_context_digest()
+            .ok_or(RedeemFailure::new("governed.not_governed", false))?;
+        let binding = authority.redemption_binding();
+        validate_binding(&binding)
+            .map_err(|_| RedeemFailure::new("governed.claim_malformed", false))?;
+        let request = scoped(
+            &binding,
+            RedeemCredentialRequestV1 {
+                scope: Some(scope(&binding)),
+                invocation: Some(BoundToolInvocationV1 {
+                    invocation_id: invocation.invocation_id,
+                    tool_call_id: invocation.tool_call_id,
+                    toolkit_id: invocation.toolkit_id,
+                    operation_id: invocation.operation_id,
+                    resource_ref: invocation.resource_ref,
+                    arguments_digest: Some(DigestV1 {
+                        algorithm: DigestAlgorithmV1::Sha256 as i32,
+                        value: invocation.arguments_digest.to_vec(),
+                    }),
+                    credential_reference_id: invocation.credential_reference_id,
+                }),
+                security_context_digest: Some(DigestV1 {
+                    algorithm: DigestAlgorithmV1::Sha256 as i32,
+                    value: digest.to_vec(),
+                }),
+            },
+            "the credential redemption authority is malformed",
+        )
+        .map_err(|_| RedeemFailure::new("governed.claim_malformed", false))?;
+        let mut rpc = self.rpc();
+        let operation = async {
+            let response = rpc
+                .redeem_credential(request)
+                .await
+                .map_err(|status| redeem_status(&status))?
+                .into_inner();
+            credential_response(response)
+        };
+        timeout(self.config.deadline, operation)
+            .await
+            .map_err(|_| RedeemFailure::new("governed.redeem_timeout", true))?
     }
 
     /// Load one exact child definition through the same live claim and fence.
@@ -1715,3 +1780,61 @@ impl<'de> Deserialize<'de> for SecretToken {
 
 #[path = "code_debug.rs"]
 mod code_debug;
+
+/// A failed `RedeemCredential` call, by status code. Stable codes only.
+fn redeem_status(status: &Status) -> RedeemFailure {
+    match status.code() {
+        Code::Unauthenticated | Code::PermissionDenied => {
+            RedeemFailure::new("governed.claim_rejected", false)
+        }
+        Code::NotFound | Code::Unimplemented => {
+            RedeemFailure::new("governed.redeem_not_served", false)
+        }
+        Code::InvalidArgument | Code::FailedPrecondition => {
+            RedeemFailure::new("governed.redeem_refused", false)
+        }
+        Code::DeadlineExceeded => RedeemFailure::new("governed.redeem_timeout", true),
+        _ => RedeemFailure::new("governed.redeem_unavailable", true),
+    }
+}
+
+/// The response, as the runtime's redacted types. The envelope's map moves
+/// into zeroizing strings; nothing of it is logged.
+fn credential_response(
+    response: RedeemCredentialResponseV1,
+) -> Result<RedeemOutcome, RedeemFailure> {
+    match response.result {
+        Some(redeem_credential_response_v1::Result::Envelope(envelope)) => {
+            let kind = match CredentialEnvelopeKindV1::try_from(envelope.kind) {
+                Ok(CredentialEnvelopeKindV1::Static) => EnvelopeKind::Static,
+                Ok(CredentialEnvelopeKindV1::OauthAccess) => EnvelopeKind::OauthAccess,
+                Ok(CredentialEnvelopeKindV1::DynamicLease) => EnvelopeKind::DynamicLease,
+                _ => return Err(RedeemFailure::new("governed.envelope_malformed", false)),
+            };
+            let material = envelope
+                .material
+                .into_iter()
+                .map(|(key, value)| (key, Zeroizing::new(value)))
+                .collect();
+            Ok(RedeemOutcome::Envelope(
+                CredentialEnvelope::new(
+                    envelope.redemption_id,
+                    kind,
+                    material,
+                    envelope.not_after_unix_millis,
+                    envelope.target_identity,
+                )
+                .with_obligations(envelope.obligations)
+                .with_decision_id(envelope.decision_id),
+            ))
+        }
+        Some(redeem_credential_response_v1::Result::Denial(denial)) => {
+            Ok(RedeemOutcome::Denial(CredentialRedeemDenial::new(
+                &denial.code,
+                denial.decision_id,
+                denial.authorization_reference,
+            )))
+        }
+        None => Err(RedeemFailure::new("governed.response_malformed", false)),
+    }
+}

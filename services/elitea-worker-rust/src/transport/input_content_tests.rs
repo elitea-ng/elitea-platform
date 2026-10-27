@@ -599,3 +599,179 @@ async fn checkpoint_request_preserves_claim_binding_and_rejects_changed_source()
         );
     }
 }
+
+mod security_context {
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use serde_json::Value;
+
+    use super::{CapturedRequest, Reply, chunk_frame, fake_client, header_frame};
+    use crate::protocol::control::test_governed_lease_monitored_execution;
+    use crate::protocol::elitea::runtime::v1::{
+        DigestAlgorithmV1, DigestV1, ExecutionSecurityContextReferenceV1, InputContentHeaderV1,
+        WorkerCommandV1,
+    };
+    use crate::protocol::security_context::{self, SecurityContextReference};
+    use crate::transport::InputContentError;
+
+    struct Vector {
+        context: Vec<u8>,
+        digest: Vec<u8>,
+    }
+
+    fn vector(index: usize) -> Vector {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/proto/runtime/v1/security-context/vectors.json");
+        let corpus: Value =
+            serde_json::from_slice(&std::fs::read(path).expect("corpus")).expect("corpus JSON");
+        let vector = &corpus["vectors"][index];
+        let hex = |field: &str| {
+            let text = vector[field].as_str().expect("hex");
+            (0..text.len())
+                .step_by(2)
+                .map(|at| u8::from_str_radix(&text[at..at + 2], 16).expect("hex"))
+                .collect::<Vec<u8>>()
+        };
+        Vector {
+            context: hex("context_hex"),
+            digest: hex("reference_digest_hex"),
+        }
+    }
+
+    fn reference(execution_id: &str, digest: &[u8]) -> SecurityContextReference {
+        SecurityContextReference::from_command(&WorkerCommandV1 {
+            execution_id: execution_id.to_owned(),
+            security_context_ref: Some(ExecutionSecurityContextReferenceV1 {
+                content_entry_id: security_context::content_id(execution_id),
+                digest: Some(DigestV1 {
+                    algorithm: DigestAlgorithmV1::Sha256 as i32,
+                    value: digest.to_vec(),
+                }),
+                schema_revision: security_context::SCHEMA_REVISION_V1.to_owned(),
+            }),
+            ..WorkerCommandV1::default()
+        })
+        .expect("reference")
+        .expect("governed")
+    }
+
+    /// What Main's content server sends for stored context bytes.
+    fn served(bytes: &[u8], digest: &[u8], version: &str) -> Reply {
+        Reply::Frames(vec![
+            header_frame(InputContentHeaderV1 {
+                media_type: security_context::MEDIA_TYPE.to_owned(),
+                length: bytes.len() as u64,
+                sha256: digest.to_vec(),
+                source_sha256: digest.to_vec(),
+                source_length: bytes.len() as u64,
+                source_immutable_version: version.to_owned(),
+            }),
+            chunk_frame(bytes),
+        ])
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_governed_execution_fetches_and_verifies_its_context_under_claim() {
+        let accepted = vector(0);
+        let reference = reference("execution-1", &accepted.digest);
+        let version = reference.immutable_version();
+        assert!(version.starts_with("sha256:"));
+        let (client, captured) = fake_client(
+            served(&accepted.context, &accepted.digest, &version),
+            Duration::from_secs(1),
+            1024,
+        );
+        let execution = test_governed_lease_monitored_execution("execution-1", Some(reference));
+        let context = client
+            .0
+            .fetch_security_context(&execution)
+            .await
+            .expect("verified")
+            .expect("governed");
+        assert_eq!(context.message().agent_binding_epoch, 3);
+        assert_eq!(
+            *captured.lock().expect("captured"),
+            [CapturedRequest {
+                execution_id: "execution-1".to_owned(),
+                generation: 2,
+                content_id: "elitea.security-context/execution-1".to_owned(),
+                immutable_version: version,
+                claim: "claim-1".to_owned(),
+                fence: vec![b'f'; 32],
+            }]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_legacy_execution_never_asks_for_a_context() {
+        let (client, captured) = fake_client(Reply::Hang, Duration::from_secs(1), 1024);
+        let execution = test_governed_lease_monitored_execution("execution-1", None);
+        assert!(
+            client
+                .0
+                .fetch_security_context(&execution)
+                .await
+                .expect("legacy")
+                .is_none()
+        );
+        assert!(captured.lock().expect("captured").is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn every_refused_context_fails_the_execution_closed() {
+        let accepted = vector(0);
+        let mismatch = vector(1);
+        let unknown = vector(2);
+        // (execution of the claim, reference, served bytes, served digest)
+        let cases = [
+            // The served bytes do not hash to the signed reference.
+            (
+                "execution-1",
+                reference("execution-1", &accepted.digest),
+                mismatch.context.clone(),
+                accepted.digest.clone(),
+            ),
+            // A context with an unknown field 18, digest and all consistent.
+            (
+                "execution-1",
+                reference("execution-1", &unknown.digest),
+                unknown.context.clone(),
+                unknown.digest.clone(),
+            ),
+            // The reference names another execution's context.
+            (
+                "execution-2",
+                reference("execution-1", &accepted.digest),
+                accepted.context.clone(),
+                accepted.digest.clone(),
+            ),
+            // The header restates another digest.
+            (
+                "execution-1",
+                reference("execution-1", &accepted.digest),
+                accepted.context.clone(),
+                vec![9; 32],
+            ),
+        ];
+        for (execution_id, reference, bytes, served_digest) in cases {
+            let version = reference.immutable_version();
+            let (client, _) = fake_client(
+                served(&bytes, &served_digest, &version),
+                Duration::from_secs(1),
+                1024,
+            );
+            let execution = test_governed_lease_monitored_execution(execution_id, Some(reference));
+            let error = client
+                .0
+                .fetch_security_context(&execution)
+                .await
+                .expect_err("refused");
+            assert!(
+                matches!(error, InputContentError::AuthorizationFailed(_)),
+                "{error:?}"
+            );
+            assert!(!error.retryable());
+        }
+    }
+}

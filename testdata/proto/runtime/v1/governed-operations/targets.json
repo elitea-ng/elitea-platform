@@ -1,0 +1,13 @@
+{
+  "schema": "elitea.runtime.governed-targets.v1",
+  "note": "Canonical target strings (#1118/#1120): Go credentialadapters.CanonicalBaseURL and Rust governed::canonical_target must both map each input to its output exactly. The envelope's target_identity is compared to the worker's canonical target by exact string.",
+  "vectors": [
+    {"input": "https://acme.atlassian.net", "canonical": "https://acme.atlassian.net"},
+    {"input": "https://Acme.Atlassian.NET/", "canonical": "https://acme.atlassian.net"},
+    {"input": "https://acme.atlassian.net:443/", "canonical": "https://acme.atlassian.net"},
+    {"input": "https://jira.example.com:8443/jira/", "canonical": "https://jira.example.com:8443/jira"},
+    {"input": "https://contoso.sharepoint.com/sites/Eng", "canonical": "https://contoso.sharepoint.com/sites/Eng"},
+    {"input": "https://contoso.sharepoint.com/sites/eng//", "canonical": "https://contoso.sharepoint.com/sites/eng"},
+    {"input": "https://qtest.example.com/a%20b", "canonical": "https://qtest.example.com/a%20b"}
+  ]
+}

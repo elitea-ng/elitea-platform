@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"time"
 
-	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
-	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
-	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
 var (
@@ -45,6 +47,21 @@ type CommandOutboxRepository struct {
 	// indexRegistry makes an index command carry the embedding space the
 	// index registry has stamped (ELITEA_INDEXING_RUNTIME=rust only).
 	indexRegistry bool
+	// credentialProfile is the boot-time profile (WithCredentialProfile).
+	// Its zero value reads no security context, so a deployment that never
+	// ran governed sends no new statement at dispatch.
+	credentialProfile profile.Admission
+}
+
+// WithCredentialProfile gives the validation and index dispatch loaders the
+// boot-time credential profile, so a governed command carries its security
+// context reference (#1115). Without it a governed command has no reference
+// and its claim fails closed with GOVERNED_CONTEXT_MISSING.
+func (r *CommandOutboxRepository) WithCredentialProfile(admission profile.Admission) *CommandOutboxRepository {
+	if r != nil {
+		r.credentialProfile = admission
+	}
+	return r
 }
 
 // WithIndexRegistry makes LoadPendingIndexIngest read the expected embedding
@@ -100,7 +117,11 @@ INSERT INTO elitea_runtime.command_outbox (
 	); err != nil {
 		return fmt.Errorf("insert command outbox: %w", err)
 	}
-	return pinExecutionAdmission(ctx, tx, policy.CredentialProfile, admissionPin{executionID: record.Outbox.ExecutionID})
+	// The context reference is read again at dispatch, where these
+	// commands are signed (loadSecurityContextReference).
+	_, err := admitExecutionProfile(ctx, tx, sharedRows(tx), policy.CredentialProfile,
+		admissionPin{executionID: record.Outbox.ExecutionID}, recordFacts(record, timing.AdmittedAt, 0))
+	return err
 }
 
 // RetireNoAuthorityValidation terminalizes at most limit cancelled or expired
@@ -507,6 +528,9 @@ WHERE o.outbox_id = $1
 	}
 	if err := dispatch.Validate(); err != nil {
 		return executionapp.ValidationDispatch{}, fmt.Errorf("invalid stored validation dispatch: %w", err)
+	}
+	if dispatch.SecurityContext, err = loadSecurityContextReference(ctx, sharedRows(r.store), r.credentialProfile, dispatch.ExecutionID); err != nil {
+		return executionapp.ValidationDispatch{}, err
 	}
 	return dispatch, nil
 }

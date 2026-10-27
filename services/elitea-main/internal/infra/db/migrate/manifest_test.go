@@ -790,13 +790,42 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// outbox and the append-only elitea_identity.security_audit_events. No
 	// data, no permission.
 	//
-	// 184: shared/0184_execution_interrupt_wakes.sql, park and wake for the
+	// 184: shared/0184_credential_grants.sql, the credential grant model
+	// (#1116): elitea_identity.target_bindings, credential_references,
+	// agent_toolkit_bindings and credential_use_grants, with the approver !=
+	// proposer CHECK and a unique index on non-revoked grants per (agent
+	// binding, toolkit, credential reference, target). No data; the five
+	// models.credentials.governed.* permissions are granted to no role.
+	//
+	// 185: shared/0185_entra_delegation_custody.sql, the encrypted assertion
+	// columns on elitea_identity.delegations, elitea_identity.signin_assertions
+	// and elitea_identity.credential_authorization_requirements (#1117). No
+	// data, no permission.
+	//
+	// 186: shared/0186_external_agent_identities.sql, the
+	// elitea_identity.external_agent_identities and agent_sessions tables,
+	// the bindings' foreign key to their external identity, and the
+	// models.agent_identity.external.manage grant to administration-mode
+	// super_admin and admin (#1151).
+	//
+	// 187: shared/0187_execution_security_contexts.sql, the immutable
+	// ExecutionSecurityContextV1 bytes and digest of each governed execution
+	// (#1115), written in its admission transaction and served to the
+	// governed worker under its claim. No data, no permission.
+	//
+	// 188: shared/0188_credential_redemptions.sql, the credential broker's
+	// elitea_runtime.bound_tool_invocations, credential_redemptions and
+	// execution_agent_sessions (#1118): immutable rows, written only by a
+	// governed process. The material is never stored. No data, no
+	// permission.
+	//
+	// 189: shared/0189_execution_interrupt_wakes.sql, park and wake for the
 	// per-interrupt decision ledger (fanout-interrupt-decisions v1.1 §8): the
 	// park columns on execution_interrupt_responses and
 	// elitea_runtime.execution_interrupt_wakes with the partial unique index
 	// "one active continuation per response", and the open-card index a new
 	// turn supersedes through. No data, no permission.
-	require.EqualValues(t, 184, Head(shared))
+	require.EqualValues(t, 189, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

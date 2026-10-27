@@ -110,6 +110,8 @@ pub(crate) enum UnsupportedSetting {
     /// A toolkit that stores its files in a bucket (`artifact`, `pptx`,
     /// `docx`, `xlsx`) saved without one, or with a name no bucket can have.
     BucketName,
+    /// A governed run (#1120) and a toolkit no credential adapter governs.
+    ToolkitNotGovernable,
 }
 
 impl UnsupportedSetting {
@@ -138,6 +140,9 @@ impl UnsupportedSetting {
             }
             Self::BucketName => {
                 "the toolkit has no usable bucket: set its bucket to a name of lowercase letters, digits and hyphens that starts with a letter, then save it again"
+            }
+            Self::ToolkitNotGovernable => {
+                "this run is governed by the enterprise credential profile, and this toolkit has no governed credential adapter yet, so its tools were left out"
             }
             Self::SharePointAppOnly => {
                 "a SharePoint credential without an OAuth discovery endpoint (app-only access with a client secret) is not supported by the Rust worker: its SharePoint tools act as the signed-in person with a delegated token, so set the credential's OAuth discovery endpoint. Microsoft retired app-only access to the OneNote Graph API (MC1011142), so the OneNote tools cannot run on an app-only credential at all"

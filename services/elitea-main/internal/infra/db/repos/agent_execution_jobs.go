@@ -716,7 +716,8 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 	); err != nil {
 		return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("insert agent command outbox: %w", err)
 	}
-	if err := pinExecutionAdmission(ctx, tx, r.policy.CredentialProfile, agentAdmissionPin(admission)); err != nil {
+	if _, err := admitExecutionProfile(ctx, tx, pgxRows(tx), r.policy.CredentialProfile, agentAdmissionPin(admission),
+		recordFacts(admission.Record, timing.AdmittedAt, agentApplicationVersionID(admission))); err != nil {
 		return executionapp.AdmissionOutcome{}, nil, err
 	}
 	// Mark the reserved slot materialized in the same commit as the job.
@@ -1478,6 +1479,20 @@ func resumeCurrentAgentStaticTools(ctx context.Context, queries *sqlcgen.Queries
 		return executionapp.ErrInvalidAdmission
 	}
 	return nil
+}
+
+// agentApplicationVersionID is the agent version a turn runs, which selects
+// the agent identity binding in the security context; 0 for an ad hoc turn.
+func agentApplicationVersionID(admission agentexecutionapp.Admission) int64 {
+	switch {
+	case admission.CurrentTurn != nil:
+		return admission.CurrentTurn.ApplicationVersionID
+	case admission.CurrentRegenerateTurn != nil:
+		return admission.CurrentRegenerateTurn.ApplicationVersionID
+	case admission.CurrentContinueTurn != nil:
+		return admission.CurrentContinueTurn.ApplicationVersionID
+	}
+	return 0
 }
 
 // agentAdmissionPin scopes an agent admission to the response message it

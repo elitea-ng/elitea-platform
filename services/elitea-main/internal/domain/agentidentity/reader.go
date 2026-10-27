@@ -8,17 +8,16 @@ import (
 // bindings through. The repository implements it.
 //
 // ActiveForDefinition answers only a binding whose stored state is active.
-// When #1151 adds the external identity table, a binding whose external
-// identity is suspended, retired or replaced must answer as suspended here
-// (issue 1112 addendum, rule 3); until then no binding can become active
-// without ExternalIdentityStates answering active, which the composition root
-// wires fail-closed.
+// A binding whose external identity is not active (provisioning,
+// pending_activation, suspended, retiring, retired, replaced) answers with
+// State BindingSuspended (issue 1112 addendum, rule 3; UsableBinding).
 type BindingReader interface {
 	ActiveForDefinition(ctx context.Context, tenantProjectID, versionID int64, digest [32]byte) (AgentIdentityBinding, error)
 	Get(ctx context.Context, id string) (AgentIdentityBinding, error)
 }
 
 // ExternalIdentityState is the state of an external agent identity (#1151).
+// external.go declares the rest of the states and the transition table.
 type ExternalIdentityState string
 
 const (
@@ -29,17 +28,15 @@ const (
 )
 
 // ExternalIdentityStates answers the state of the external agent identity a
-// binding references. Activation requires ExternalIdentityActive; any error
-// or other state refuses it.
-//
-// The table behind it arrives in #1151. Until then the composition root wires
-// FailClosedExternalIdentities, so no binding becomes active.
+// binding references. Binding approval requires ExternalIdentityActive or
+// ExternalIdentityPendingActivation; any error or other state refuses it.
+// repos.ExternalAgentIdentities implements it.
 type ExternalIdentityStates interface {
 	ExternalIdentityState(ctx context.Context, tenantProjectID int64, externalAgentIdentityID string) (ExternalIdentityState, error)
 }
 
-// FailClosedExternalIdentities answers "not active" for every id. It is the
-// wiring until #1151 adds the external identity record.
+// FailClosedExternalIdentities answers "not active" for every id. Tests
+// use it to prove nothing activates without the external identity record.
 type FailClosedExternalIdentities struct{}
 
 // ExternalIdentityState always refuses.

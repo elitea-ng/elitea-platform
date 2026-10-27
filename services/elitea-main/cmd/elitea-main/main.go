@@ -323,7 +323,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err := startSecurityAuditRelay(ctx, credentialAdmission, credentialRevision, pool, logger); err != nil {
 		return err
 	}
-	agentIdentityAdminHandler, err := agentIdentityAdmin(credentialAdmission, credentialRevision, pool)
+	// agentIdentity.Broker opens the run-scoped agent session at a governed
+	// run's first credential redemption (#1118).
+	agentIdentity, err := agentIdentityAdmin(credentialAdmission, credentialRevision, pool)
+	if err != nil {
+		return err
+	}
+	credentialProbeHandler, err := credentialProbeAdmin(credentialAdmission, pool)
 	if err != nil {
 		return err
 	}
@@ -785,6 +791,38 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		); err != nil {
 			return err
 		}
+	}
+
+	// Governed Entra custody and exchangers (#1117). Nil with the flag off
+	// or without an Entra provider; then neither plane changes.
+	entraGoverned, err := entraGovernanceAtBoot(ctx, credentialAdmission, pool, identityProviderStore,
+		func() ([]byte, error) { return v2secrets.MasterKeyFromEnv(os.Getenv) }, logger)
+	if err != nil {
+		return err
+	}
+	if entraGoverned != nil {
+		oidcOIDCHandler = oidcOIDCHandler.WithEntraGovernance(entraGoverned.Delegations)
+		oidcSessionHandler = oidcSessionHandler.WithEntraGovernance(entraGoverned.Delegations)
+	}
+
+	// The operation decider and the credential broker, its only caller
+	// (#1116, #1118). Built after the Entra custody so the decider's
+	// delegation gate reads it where it is configured. Nil with the flag off.
+	credentialCatalog := credentialOperationCatalog()
+	credentialDecider, credentialGrantsAdminHandler, err := credentialGrantGovernance(
+		credentialAdmission, pool, credentialGovernanceStore, entraDelegations(entraGoverned), credentialCatalog)
+	if err != nil {
+		return err
+	}
+	credentialBroker, err := credentialBrokerAtBoot(credentialAdmission, os.LookupEnv, pool, credentialDecider,
+		credentialGovernanceStore, agentIdentity.Broker, entraGoverned, credentialCatalog, logger)
+	if err != nil {
+		return err
+	}
+	// A nil *Broker boxed into the interface would look composed.
+	var runtimeCredentialBroker storage.CredentialRedeemer
+	if credentialBroker != nil {
+		runtimeCredentialBroker = credentialBroker
 	}
 
 	// A deployment where nobody can sign in through a browser is legal (an
@@ -1963,6 +2001,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		runtimeRoot, err = runtimecomposition.New(ctx, runtimeConfig, runtimecomposition.Dependencies{
 			AdmissionPool:                    runtimePools.Admission,
 			CredentialProfile:                credentialAdmission,
+			CredentialBroker:                 runtimeCredentialBroker,
 			ControlPool:                      runtimePools.Control,
 			OutputPool:                       runtimePools.Output,
 			ReplayPool:                       runtimePools.Replay,
@@ -2685,7 +2724,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 
 	r := api.NewRouter(api.RouterConfig{
-		AgentIdentityAdmin:            agentIdentityAdminHandler,
+		AgentIdentityAdmin:            agentIdentity.Admin,
+		CredentialGrantsAdmin:         credentialGrantsAdminHandler,
+		CredentialProbe:               credentialProbeHandler,
+		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
 		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,
 		OnToolkitCleanupJournal:       startToolkitReconciler,

@@ -21,13 +21,15 @@ use tower::ServiceExt as _;
 use zeroize::Zeroizing;
 
 use crate::protocol::control::{
-    ClaimBoundInputAuthority, LeaseMonitoredAgentExecution, LiveModelCheckpointInspection,
+    ClaimBoundInputAuthority, ClaimBoundSecurityContextAuthority, LeaseMonitoredAgentExecution,
+    LiveModelCheckpointInspection,
 };
 use crate::protocol::elitea::runtime::v1::runtime_content_service_client::RuntimeContentServiceClient;
 use crate::protocol::elitea::runtime::v1::{
     GetInputRequestV1, GetInputResponseV1, InputContentHeaderV1, RuntimeContentScopeV1,
     get_input_response_v1::Part,
 };
+use crate::protocol::security_context::{self, ExecutionSecurityContext};
 
 #[path = "code_intent_content.rs"]
 mod code_intent_content;
@@ -443,6 +445,51 @@ impl InputContentClient {
             .map_err(|_| InputContentError::Timeout("the input content request timed out"))?
     }
 
+    /// Fetch and verify a governed command's security context (ADR-0039,
+    /// #1115) under the live claim. `None` for a legacy command, which never
+    /// reaches the content service for it.
+    ///
+    /// The content id, the size, the SHA-256 against the signed reference, a
+    /// strict decode refusing an unknown field anywhere, the schema revision
+    /// and the profile are all checked before the context is returned. A
+    /// failed check is [`InputContentError::AuthorizationFailed`]: never
+    /// retryable, the execution fails closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a data-free typed error for transport, timeout, authorization,
+    /// response-shape or verification failure.
+    pub async fn fetch_security_context(
+        &self,
+        execution: &LeaseMonitoredAgentExecution,
+    ) -> Result<Option<ExecutionSecurityContext>, InputContentError> {
+        let Some(authority) = execution.security_context_authority() else {
+            return Ok(None);
+        };
+        let operation = fetch_security_context_bytes(self.rpc(), &authority);
+        let bytes = timeout(self.config.deadline, operation)
+            .await
+            .map_err(|_| InputContentError::Timeout("the security context request timed out"))??;
+        let verified =
+            security_context::verify(&bytes, authority.reference, authority.execution_id).map_err(
+                |error| {
+                    tracing::warn!(
+                        event = "security_context_refused",
+                        error_code = error.code(),
+                        retryable = false,
+                    );
+                    InputContentError::AuthorizationFailed(error.message())
+                },
+            )?;
+        tracing::debug!(
+            event = "security_context_verified",
+            execution_id = authority.execution_id,
+            content_id = verified.content_id(),
+            digest = %authority.reference.immutable_version(),
+        );
+        Ok(Some(verified))
+    }
+
     #[cfg(test)]
     pub(super) async fn fetch_test_authority(
         &self,
@@ -450,6 +497,87 @@ impl InputContentClient {
     ) -> Result<MaterializedInput, InputContentError> {
         self.fetch_authority(reference).await
     }
+}
+
+/// One `GetInput` of the security context namespace: exactly one header that
+/// restates the reference, then chunks of exactly its length.
+async fn fetch_security_context_bytes(
+    mut rpc: ContentRpc,
+    authority: &ClaimBoundSecurityContextAuthority<'_>,
+) -> Result<Zeroizing<Vec<u8>>, InputContentError> {
+    let immutable_version = authority.reference.immutable_version();
+    let request = claim_request(
+        GetInputRequestV1 {
+            scope: Some(content_scope(authority.execution_id, authority.generation)),
+            content_id: authority.reference.content_id().to_owned(),
+            immutable_version: immutable_version.clone(),
+        },
+        authority.claim_id,
+        authority.fence_token,
+    )
+    .ok_or(InputContentError::InvalidInput(
+        "the security context request authority is malformed",
+    ))?;
+    let mut stream = rpc
+        .get_input(request)
+        .await
+        .map_err(input_status)?
+        .into_inner();
+    let Some(GetInputResponseV1 {
+        part: Some(Part::Header(header)),
+    }) = stream.message().await.map_err(input_status)?
+    else {
+        return Err(InputContentError::InvalidInput(
+            "the security context stream did not open with its header",
+        ));
+    };
+    let expected = authority.reference.digest();
+    let length = usize::try_from(header.length).unwrap_or(usize::MAX);
+    if header.length == 0
+        || header.length != header.source_length
+        || length > security_context::MAX_BYTES
+    {
+        return Err(InputContentError::AuthorizationFailed(
+            "the security context is empty or too large",
+        ));
+    }
+    if digest_field(&header.sha256)?.ct_eq(expected).unwrap_u8() != 1
+        || digest_field(&header.source_sha256)?
+            .ct_eq(expected)
+            .unwrap_u8()
+            != 1
+        || header.source_immutable_version != immutable_version
+    {
+        return Err(InputContentError::AuthorizationFailed(
+            "the security context does not match its reference digest",
+        ));
+    }
+    if !header
+        .media_type
+        .split(';')
+        .next()
+        .map(str::trim)
+        .is_some_and(|media| media.eq_ignore_ascii_case(security_context::MEDIA_TYPE))
+    {
+        return Err(InputContentError::InvalidInput(
+            "the security context media type is malformed",
+        ));
+    }
+    let mut body = Zeroizing::new(Vec::with_capacity(length));
+    while let Some(message) = stream.message().await.map_err(input_status)? {
+        let Some(Part::Chunk(chunk)) = message.part else {
+            return Err(InputContentError::InvalidInput(
+                "the security context stream carried more than chunks after its header",
+            ));
+        };
+        append_bounded(&mut body, &chunk, length)?;
+    }
+    if body.len() != length {
+        return Err(InputContentError::InvalidInput(
+            "the security context length does not match its response",
+        ));
+    }
+    Ok(body)
 }
 
 fn validate_reference(reference: &ClaimBoundInputAuthority<'_>) -> Result<(), InputContentError> {

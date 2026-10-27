@@ -3,7 +3,11 @@
 //! `docs/runtime-command-bus.md` is the normative contract this module
 //! restates: the stream, consumer and subject names, the per-delivery subject
 //! `elitea.rt.v1.<route>.d.<sha256(delivery_id)>`, the dead-letter record and
-//! the constants that are not configuration. The NATS client lives in
+//! the constants that are not configuration. A governed command (ADR-0039,
+//! #1115) rides the same stream on `elitea.rt.v1.<route>.g.<sha256(delivery_id)>`
+//! and is pulled only through the stream's governed durable
+//! (`elitea-<route>-worker-governed-v1`), which a worker binds only when it
+//! serves the execution security context. The NATS client lives in
 //! [`super::nats_jetstream`]; everything here is pure so the execution layer
 //! and its tests never need a broker.
 //!
@@ -34,6 +38,14 @@ pub const STREAM_INDEX: &str = "ELITEA_RT_V1_INDEX";
 pub const CONSUMER_VALIDATE: &str = "elitea-configuration-worker-v1";
 pub const CONSUMER_AGENT: &str = "elitea-agent-worker-v1";
 pub const CONSUMER_INDEX: &str = "elitea-index-worker-v1";
+/// The governed durables (ADR-0039, #1115): same streams, filter `.g.*`.
+pub const CONSUMER_VALIDATE_GOVERNED: &str = "elitea-configuration-worker-governed-v1";
+pub const CONSUMER_AGENT_GOVERNED: &str = "elitea-agent-worker-governed-v1";
+pub const CONSUMER_INDEX_GOVERNED: &str = "elitea-index-worker-governed-v1";
+/// The subject lane of a legacy command (`<route>.d.<token>`).
+pub const LANE_LEGACY: &str = "d";
+/// The subject lane of a governed command (`<route>.g.<token>`).
+pub const LANE_GOVERNED: &str = "g";
 /// `JetStream` de-duplication header; its value is the subject's hash token.
 pub const HEADER_MSG_ID: &str = "Nats-Msg-Id";
 /// Diagnostic copy of the raw delivery ID. Never authority.
@@ -80,6 +92,13 @@ const ROUTES: [(&str, &str, &str); 3] = [
     (STREAM_INDEX, CONSUMER_INDEX, "index"),
 ];
 
+/// The governed durable of each contract stream, in [`ROUTES`] order.
+const GOVERNED_CONSUMERS: [(&str, &str); 3] = [
+    (STREAM_VALIDATE, CONSUMER_VALIDATE_GOVERNED),
+    (STREAM_AGENT, CONSUMER_AGENT_GOVERNED),
+    (STREAM_INDEX, CONSUMER_INDEX_GOVERNED),
+];
+
 /// The lower-case route token of a contract stream.
 #[must_use]
 pub fn route_token(stream: &str) -> Option<&'static str> {
@@ -98,17 +117,46 @@ pub fn consumer_for_stream(stream: &str) -> Option<&'static str> {
         .map(|(_, consumer, _)| *consumer)
 }
 
+/// The bootstrap-created governed durable of a contract stream.
+#[must_use]
+pub fn governed_consumer_for_stream(stream: &str) -> Option<&'static str> {
+    GOVERNED_CONSUMERS
+        .iter()
+        .find(|(name, _)| *name == stream)
+        .map(|(_, consumer)| *consumer)
+}
+
 /// Whether `(stream, consumer)` is one contract row. Any other pairing is
-/// refused before a connection is opened.
+/// refused before a connection is opened. This is the legacy durable only:
+/// the governed durable is bound beside it, never configured in its place.
 #[must_use]
 pub fn valid_route_pair(stream: &str, consumer: &str) -> bool {
     consumer_for_stream(stream) == Some(consumer)
 }
 
+/// The subject lane a durable of `stream` filters: [`LANE_LEGACY`] for the
+/// legacy durable, [`LANE_GOVERNED`] for the governed one, `None` otherwise.
+#[must_use]
+pub fn consumer_lane(stream: &str, consumer: &str) -> Option<&'static str> {
+    if consumer_for_stream(stream) == Some(consumer) {
+        Some(LANE_LEGACY)
+    } else if governed_consumer_for_stream(stream) == Some(consumer) {
+        Some(LANE_GOVERNED)
+    } else {
+        None
+    }
+}
+
 /// `elitea.rt.v1.<route>.d.*`, the stream subject and consumer filter.
 #[must_use]
 pub fn filter_subject(stream: &str) -> Option<String> {
-    route_token(stream).map(|route| format!("{SUBJECT_ROOT}.{route}.d.*"))
+    route_token(stream).map(|route| format!("{SUBJECT_ROOT}.{route}.{LANE_LEGACY}.*"))
+}
+
+/// `elitea.rt.v1.<route>.g.*`, the governed durable's filter.
+#[must_use]
+pub fn governed_filter_subject(stream: &str) -> Option<String> {
+    route_token(stream).map(|route| format!("{SUBJECT_ROOT}.{route}.{LANE_GOVERNED}.*"))
 }
 
 /// `hex(sha256(delivery_id))`, 64 lower-case hex characters.
@@ -123,6 +171,17 @@ pub fn delivery_token(delivery_id: &str) -> String {
 pub fn delivery_subject(stream: &str, delivery_id: &str) -> Option<String> {
     route_token(stream)
         .map(|route| format!("{SUBJECT_ROOT}.{route}.d.{}", delivery_token(delivery_id)))
+}
+
+/// The one subject a governed delivery is published on.
+#[must_use]
+pub fn governed_delivery_subject(stream: &str, delivery_id: &str) -> Option<String> {
+    route_token(stream).map(|route| {
+        format!(
+            "{SUBJECT_ROOT}.{route}.{LANE_GOVERNED}.{}",
+            delivery_token(delivery_id)
+        )
+    })
 }
 
 /// A delivery's key in [`DEAD_LETTER_BUCKET`].
@@ -291,6 +350,12 @@ impl DeliveryCoordinates {
     pub fn route(&self) -> Option<&'static str> {
         route_token(&self.stream)
     }
+
+    /// Whether the delivery came through the stream's governed durable.
+    #[must_use]
+    pub fn governed(&self) -> bool {
+        consumer_lane(&self.stream, &self.consumer) == Some(LANE_GOVERNED)
+    }
 }
 
 /// Exact command message admitted for signed-command verification.
@@ -307,7 +372,8 @@ pub struct CommandDelivery {
 /// Why a delivery is poison (a stable, low-cardinality dead-letter reason).
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PoisonReason {
-    /// The subject is not `elitea.rt.v1.<route>.d.<64 hex>` for this stream.
+    /// The subject is not `elitea.rt.v1.<route>.<lane>.<64 hex>` for this
+    /// stream and the delivering durable's lane (`d`, or `g` when governed).
     MalformedSubject,
     /// The body exceeds the transport bounds or is empty.
     MalformedMessage,
@@ -508,9 +574,10 @@ pub fn decode_delivery(
 ) -> Result<DecodedDelivery, CommandBusError> {
     let limits = limits.validate()?;
     let info = AckReplyInfo::parse(reply)?;
-    let route = consumer_for_stream(&info.stream)
-        .filter(|consumer| *consumer == info.consumer)
-        .and_then(|_| route_token(&info.stream))
+    // The durable fixes the lane: the legacy durable delivers `.d.` subjects
+    // only, the governed durable `.g.` subjects only.
+    let (route, lane) = consumer_lane(&info.stream, &info.consumer)
+        .and_then(|lane| route_token(&info.stream).map(|route| (route, lane)))
         .ok_or(CommandBusError::InvalidInput(
             "the delivery belongs to another stream or consumer",
         ))?;
@@ -518,7 +585,9 @@ pub fn decode_delivery(
         .strip_prefix(SUBJECT_ROOT)
         .and_then(|rest| rest.strip_prefix('.'))
         .and_then(|rest| rest.strip_prefix(route))
-        .and_then(|rest| rest.strip_prefix(".d."))
+        .and_then(|rest| rest.strip_prefix('.'))
+        .and_then(|rest| rest.strip_prefix(lane))
+        .and_then(|rest| rest.strip_prefix('.'))
         .filter(|token| is_delivery_token(token));
     let bounded_subject = subject.len() <= MAX_SUBJECT_BYTES && subject.is_ascii();
     let coordinates = DeliveryCoordinates {
@@ -846,8 +915,12 @@ impl<C: CommandRetirementClient> CommandRetirer<C> {
     ) -> Result<(), CommandBusError> {
         let (authority_identity, authority_delivery_id, authority_signed_envelope) =
             authority.into_binding();
+        // The stream's governed durable is retired through the same binding:
+        // the transport only ever pulls it when the worker bound it.
         if delivery.coordinates.stream != self.config.stream
-            || delivery.coordinates.consumer != self.config.consumer
+            || (delivery.coordinates.consumer != self.config.consumer
+                && governed_consumer_for_stream(&self.config.stream)
+                    != Some(delivery.coordinates.consumer.as_str()))
         {
             return Err(CommandBusError::InvalidInput(
                 "the delivered command belongs to another stream or consumer",
@@ -935,8 +1008,9 @@ pub(crate) const TEST_AGENT_REPLY: &str =
 mod tests {
     use super::{
         AckReplyInfo, CommandBusLimits, CommandDelivery, DeadLetterRecord, DecodedDelivery,
-        DeliveryVerdict, PoisonReason, decode_delivery, delivery_subject, delivery_token,
-        filter_subject, valid_route_pair,
+        DeliveryVerdict, PoisonReason, consumer_lane, decode_delivery, delivery_subject,
+        delivery_token, filter_subject, governed_consumer_for_stream, governed_delivery_subject,
+        governed_filter_subject, valid_route_pair,
     };
 
     const REPLY: &str =
@@ -959,6 +1033,89 @@ mod tests {
             Some("elitea.rt.v1.validate.d.*")
         );
         assert!(filter_subject("ELITEA_RT_V1_OTHER").is_none());
+    }
+
+    #[test]
+    fn governed_durables_filter_the_g_lane_of_the_same_streams() {
+        for (stream, legacy, governed, route) in [
+            (
+                "ELITEA_RT_V1_VALIDATE",
+                "elitea-configuration-worker-v1",
+                "elitea-configuration-worker-governed-v1",
+                "validate",
+            ),
+            (
+                "ELITEA_RT_V1_AGENT",
+                "elitea-agent-worker-v1",
+                "elitea-agent-worker-governed-v1",
+                "agent",
+            ),
+            (
+                "ELITEA_RT_V1_INDEX",
+                "elitea-index-worker-v1",
+                "elitea-index-worker-governed-v1",
+                "index",
+            ),
+        ] {
+            assert_eq!(governed_consumer_for_stream(stream), Some(governed));
+            assert_eq!(consumer_lane(stream, legacy), Some("d"));
+            assert_eq!(consumer_lane(stream, governed), Some("g"));
+            // The governed durable is bound beside the legacy one, never
+            // configured in its place.
+            assert!(!valid_route_pair(stream, governed));
+            assert_eq!(
+                governed_filter_subject(stream).as_deref(),
+                Some(format!("elitea.rt.v1.{route}.g.*").as_str())
+            );
+        }
+        assert_eq!(
+            consumer_lane("ELITEA_RT_V1_AGENT", "elitea-index-worker-governed-v1"),
+            None
+        );
+        assert_eq!(
+            governed_delivery_subject("ELITEA_RT_V1_AGENT", "outbox-1").as_deref(),
+            Some(
+                "elitea.rt.v1.agent.g.ff7cc06fb9d124826b7f491676dc63e28a1572194bbe1dda72437bfe84b42164"
+            )
+        );
+    }
+
+    #[test]
+    fn a_durable_delivers_only_its_own_lane() {
+        const GOVERNED_REPLY: &str = "$JS.ACK.ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1.1.4.4.1700000000000000000.0";
+        let legacy = delivery_subject("ELITEA_RT_V1_AGENT", "outbox-1").expect("subject");
+        let governed =
+            governed_delivery_subject("ELITEA_RT_V1_AGENT", "outbox-1").expect("subject");
+        let decode = |subject: &str, reply: &str| {
+            decode_delivery(
+                subject,
+                reply,
+                vec![1],
+                subject.len() + reply.len() + 1,
+                CommandBusLimits::runtime_v1(),
+            )
+            .expect("ackable")
+        };
+        match decode(&governed, GOVERNED_REPLY) {
+            DecodedDelivery::Command(delivery) => {
+                assert!(delivery.coordinates().governed());
+                assert_eq!(
+                    delivery.delivery_token(),
+                    "ff7cc06fb9d124826b7f491676dc63e28a1572194bbe1dda72437bfe84b42164"
+                );
+            }
+            DecodedDelivery::Poison(_) => panic!("a governed subject on the governed durable"),
+        }
+        match decode(&legacy, REPLY) {
+            DecodedDelivery::Command(delivery) => assert!(!delivery.coordinates().governed()),
+            DecodedDelivery::Poison(_) => panic!("a legacy subject on the legacy durable"),
+        }
+        for (subject, reply) in [(&legacy, GOVERNED_REPLY), (&governed, REPLY)] {
+            assert!(matches!(
+                decode(subject, reply),
+                DecodedDelivery::Poison(poison) if poison.reason == PoisonReason::MalformedSubject
+            ));
+        }
     }
 
     #[test]

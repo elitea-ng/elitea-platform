@@ -15,11 +15,13 @@ class AgentExecutionTerminalStateV1(int, metaclass=_enum_type_wrapper.EnumTypeWr
     AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_HITL: _ClassVar[AgentExecutionTerminalStateV1]
     AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_MCP_AUTH: _ClassVar[AgentExecutionTerminalStateV1]
     AGENT_EXECUTION_TERMINAL_STATE_V1_PARKED_CHILDREN: _ClassVar[AgentExecutionTerminalStateV1]
+    AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_CREDENTIAL_AUTHORIZATION: _ClassVar[AgentExecutionTerminalStateV1]
 AGENT_EXECUTION_TERMINAL_STATE_V1_UNSPECIFIED: AgentExecutionTerminalStateV1
 AGENT_EXECUTION_TERMINAL_STATE_V1_COMPLETED: AgentExecutionTerminalStateV1
 AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_HITL: AgentExecutionTerminalStateV1
 AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_MCP_AUTH: AgentExecutionTerminalStateV1
 AGENT_EXECUTION_TERMINAL_STATE_V1_PARKED_CHILDREN: AgentExecutionTerminalStateV1
+AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_CREDENTIAL_AUTHORIZATION: AgentExecutionTerminalStateV1
 
 class AgentExecutionCommandV1(_message.Message):
     __slots__ = ("request_entry_id", "client_stream_id", "client_message_id", "sio_event")

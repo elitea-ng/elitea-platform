@@ -138,8 +138,14 @@ type WorkerCommandV1 struct {
 	//	*WorkerCommandV1_ToolkitCallTool
 	//	*WorkerCommandV1_ToolkitExecuteRead
 	CapabilityCommand isWorkerCommandV1_CapabilityCommand `protobuf_oneof:"capability_command"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Set only on a governed command (ADR-0039, #1115). A command with this
+	// field is published on the governed subject and claimed only by a worker
+	// that sets ClaimCommandRequestV1.governed_security_context_v1. Never set
+	// while the credential governance flag is off, so legacy bytes are
+	// unchanged.
+	SecurityContextRef *ExecutionSecurityContextReferenceV1 `protobuf:"bytes,65,opt,name=security_context_ref,json=securityContextRef,proto3" json:"security_context_ref,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *WorkerCommandV1) Reset() {
@@ -401,6 +407,13 @@ func (x *WorkerCommandV1) GetToolkitExecuteRead() *ToolkitExecuteReadCommandV1 {
 	return nil
 }
 
+func (x *WorkerCommandV1) GetSecurityContextRef() *ExecutionSecurityContextReferenceV1 {
+	if x != nil {
+		return x.SecurityContextRef
+	}
+	return nil
+}
+
 type isWorkerCommandV1_CapabilityCommand interface {
 	isWorkerCommandV1_CapabilityCommand()
 }
@@ -445,7 +458,7 @@ var File_elitea_runtime_v1_command_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\n" +
-	"\x1felitea/runtime/v1/command.proto\x12\x11elitea.runtime.v1\x1a\x1delitea/runtime/v1/agent.proto\x1a elitea/runtime/v1/indexing.proto\x1a\x1delitea/runtime/v1/input.proto\x1a\x1felitea/runtime/v1/toolkit.proto\x1a\"elitea/runtime/v1/validation.proto\"\xa0\r\n" +
+	"\x1felitea/runtime/v1/command.proto\x12\x11elitea.runtime.v1\x1a\x1delitea/runtime/v1/agent.proto\x1a elitea/runtime/v1/indexing.proto\x1a\x1delitea/runtime/v1/input.proto\x1a(elitea/runtime/v1/security_context.proto\x1a\x1felitea/runtime/v1/toolkit.proto\x1a\"elitea/runtime/v1/validation.proto\"\x8a\x0e\n" +
 	"\x0fWorkerCommandV1\x12+\n" +
 	"\x11protocol_revision\x18\x01 \x01(\tR\x10protocolRevision\x12\x1d\n" +
 	"\n" +
@@ -482,7 +495,8 @@ const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\findex_ingest\x18\" \x01(\v2'.elitea.runtime.v1.IndexIngestCommandV1H\x00R\vindexIngest\x12U\n" +
 	"\x0fagent_execution\x18# \x01(\v2*.elitea.runtime.v1.AgentExecutionCommandV1H\x00R\x0eagentExecution\x12Y\n" +
 	"\x11toolkit_call_tool\x18$ \x01(\v2+.elitea.runtime.v1.ToolkitCallToolCommandV1H\x00R\x0ftoolkitCallTool\x12b\n" +
-	"\x14toolkit_execute_read\x18@ \x01(\v2..elitea.runtime.v1.ToolkitExecuteReadCommandV1H\x00R\x12toolkitExecuteReadB\x14\n" +
+	"\x14toolkit_execute_read\x18@ \x01(\v2..elitea.runtime.v1.ToolkitExecuteReadCommandV1H\x00R\x12toolkitExecuteRead\x12h\n" +
+	"\x14security_context_ref\x18A \x01(\v26.elitea.runtime.v1.ExecutionSecurityContextReferenceV1R\x12securityContextRefB\x14\n" +
 	"\x12capability_commandJ\x04\b\x0f\x10\x10J\x04\b\x1a\x10 J\x04\b%\x10@R\x11grant_template_id*\x9f\x04\n" +
 	"\x13WorkerCommandTypeV1\x12&\n" +
 	"\"WORKER_COMMAND_TYPE_V1_UNSPECIFIED\x10\x00\x12 \n" +
@@ -514,15 +528,16 @@ func file_elitea_runtime_v1_command_proto_rawDescGZIP() []byte {
 var file_elitea_runtime_v1_command_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_elitea_runtime_v1_command_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_elitea_runtime_v1_command_proto_goTypes = []any{
-	(WorkerCommandTypeV1)(0),                 // 0: elitea.runtime.v1.WorkerCommandTypeV1
-	(*WorkerCommandV1)(nil),                  // 1: elitea.runtime.v1.WorkerCommandV1
-	(*ExecutionInputBundleReferenceV1)(nil),  // 2: elitea.runtime.v1.ExecutionInputBundleReferenceV1
-	(*ConfigurationValidationCommandV1)(nil), // 3: elitea.runtime.v1.ConfigurationValidationCommandV1
-	(*ToolkitAvailableToolsCommandV1)(nil),   // 4: elitea.runtime.v1.ToolkitAvailableToolsCommandV1
-	(*IndexIngestCommandV1)(nil),             // 5: elitea.runtime.v1.IndexIngestCommandV1
-	(*AgentExecutionCommandV1)(nil),          // 6: elitea.runtime.v1.AgentExecutionCommandV1
-	(*ToolkitCallToolCommandV1)(nil),         // 7: elitea.runtime.v1.ToolkitCallToolCommandV1
-	(*ToolkitExecuteReadCommandV1)(nil),      // 8: elitea.runtime.v1.ToolkitExecuteReadCommandV1
+	(WorkerCommandTypeV1)(0),                    // 0: elitea.runtime.v1.WorkerCommandTypeV1
+	(*WorkerCommandV1)(nil),                     // 1: elitea.runtime.v1.WorkerCommandV1
+	(*ExecutionInputBundleReferenceV1)(nil),     // 2: elitea.runtime.v1.ExecutionInputBundleReferenceV1
+	(*ConfigurationValidationCommandV1)(nil),    // 3: elitea.runtime.v1.ConfigurationValidationCommandV1
+	(*ToolkitAvailableToolsCommandV1)(nil),      // 4: elitea.runtime.v1.ToolkitAvailableToolsCommandV1
+	(*IndexIngestCommandV1)(nil),                // 5: elitea.runtime.v1.IndexIngestCommandV1
+	(*AgentExecutionCommandV1)(nil),             // 6: elitea.runtime.v1.AgentExecutionCommandV1
+	(*ToolkitCallToolCommandV1)(nil),            // 7: elitea.runtime.v1.ToolkitCallToolCommandV1
+	(*ToolkitExecuteReadCommandV1)(nil),         // 8: elitea.runtime.v1.ToolkitExecuteReadCommandV1
+	(*ExecutionSecurityContextReferenceV1)(nil), // 9: elitea.runtime.v1.ExecutionSecurityContextReferenceV1
 }
 var file_elitea_runtime_v1_command_proto_depIdxs = []int32{
 	0, // 0: elitea.runtime.v1.WorkerCommandV1.command_type:type_name -> elitea.runtime.v1.WorkerCommandTypeV1
@@ -533,11 +548,12 @@ var file_elitea_runtime_v1_command_proto_depIdxs = []int32{
 	6, // 5: elitea.runtime.v1.WorkerCommandV1.agent_execution:type_name -> elitea.runtime.v1.AgentExecutionCommandV1
 	7, // 6: elitea.runtime.v1.WorkerCommandV1.toolkit_call_tool:type_name -> elitea.runtime.v1.ToolkitCallToolCommandV1
 	8, // 7: elitea.runtime.v1.WorkerCommandV1.toolkit_execute_read:type_name -> elitea.runtime.v1.ToolkitExecuteReadCommandV1
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	9, // 8: elitea.runtime.v1.WorkerCommandV1.security_context_ref:type_name -> elitea.runtime.v1.ExecutionSecurityContextReferenceV1
+	9, // [9:9] is the sub-list for method output_type
+	9, // [9:9] is the sub-list for method input_type
+	9, // [9:9] is the sub-list for extension type_name
+	9, // [9:9] is the sub-list for extension extendee
+	0, // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_command_proto_init() }
@@ -548,6 +564,7 @@ func file_elitea_runtime_v1_command_proto_init() {
 	file_elitea_runtime_v1_agent_proto_init()
 	file_elitea_runtime_v1_indexing_proto_init()
 	file_elitea_runtime_v1_input_proto_init()
+	file_elitea_runtime_v1_security_context_proto_init()
 	file_elitea_runtime_v1_toolkit_proto_init()
 	file_elitea_runtime_v1_validation_proto_init()
 	file_elitea_runtime_v1_command_proto_msgTypes[0].OneofWrappers = []any{

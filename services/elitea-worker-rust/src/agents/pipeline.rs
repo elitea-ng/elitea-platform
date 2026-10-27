@@ -59,7 +59,8 @@ use crate::toolkits::{
     DelegatedAuthorizationCatalog, FrozenToolKind, FrozenToolSnapshot, FrozenToolset,
     IndexToolAuthority, IndexToolSupport, IndexToolsWithheld, McpConnector, SensitiveToolPolicy,
     ToolAdmissionDecision, ToolAdmissionPolicy, ToolBindingError, ToolBindingPlan,
-    bind_frozen_toolsets, freeze_toolsets, materialize_configured_toolsets_with_authorities,
+    bind_frozen_toolsets, freeze_toolsets,
+    materialize_configured_toolsets_with_authorities_governed,
     materialize_configured_toolsets_with_tokens_and_authorization,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
@@ -731,17 +732,35 @@ impl PipelineNativeAgentAssembler {
             Ok(authority) => IndexToolSupport::Lent(authority),
             Err(reason) => IndexToolSupport::Withheld(*reason),
         };
+        // A governed command (#1120): credentialed toolkits redeem per
+        // invocation; a toolkit no adapter governs, or an MCP connection,
+        // refuses the pipeline. `None` (legacy) installs no wrapper.
+        let governed = self.platform.as_ref().and_then(|platform| {
+            crate::transport::credential_redeemer::governed_client(platform, runtime_context)
+        });
+        if runtime_context.governed_context_digest().is_some() && governed.is_none() {
+            return Err(unsupported_pipeline_runtime());
+        }
         let (mut materialized, mut delegated_authorization) =
-            materialize_configured_toolsets_with_authorities(
+            materialize_configured_toolsets_with_authorities_governed(
                 &selected_snapshot,
                 tool_policy,
                 mcp_tokens,
                 artifacts.as_ref(),
                 index_support,
+                governed.as_ref(),
             )
             .await
             .map_err(tool_materialization_error)?;
-        let (mut mcp, mcp_delegated_authorization) =
+        let (mut mcp, mcp_delegated_authorization) = if governed.is_some() {
+            if selected_snapshot
+                .iter()
+                .any(|reference| reference.kind() == FrozenToolKind::Mcp)
+            {
+                return Err(unsupported_pipeline_runtime());
+            }
+            (Vec::new(), DelegatedAuthorizationCatalog::default())
+        } else {
             materialize_mcp_toolsets_with_tokens_and_authorization(
                 &selected_snapshot,
                 self.mcp_connector.as_ref(),
@@ -749,7 +768,8 @@ impl PipelineNativeAgentAssembler {
                 mcp_tokens,
             )
             .await
-            .map_err(|error| mcp_materialization_error(&error))?;
+            .map_err(|error| mcp_materialization_error(&error))?
+        };
         delegated_authorization
             .merge(mcp_delegated_authorization)
             .map_err(|()| unsupported_pipeline_runtime())?;
@@ -2305,6 +2325,11 @@ async fn bind_saved_pipeline_runtimes(
 ) -> Result<BoundSavedPipeline, NativeAgentAssemblyError> {
     let aliases = profile.definition().runtime_toolkit_aliases();
     let selected = snapshot.retain_toolkit_names(&aliases);
+    // A governed run (#1120): saved pipelines have no governed seam yet.
+    crate::transport::credential_redeemer::refuse_ungoverned_credentials(
+        runtime.authority,
+        &selected,
+    )?;
     let (mut materialized, mut delegated_authorization) =
         materialize_configured_toolsets_with_tokens_and_authorization(
             &selected,

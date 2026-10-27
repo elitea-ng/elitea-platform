@@ -1,3 +1,5 @@
+from elitea.runtime.v1 import common_pb2 as _common_pb2
+from elitea.runtime.v1 import credential_pb2 as _credential_pb2
 from elitea.runtime.v1 import toolkit_pb2 as _toolkit_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
@@ -72,6 +74,24 @@ class GetEliteaClientTokenResponseV1(_message.Message):
     CONTEXT_JSON_FIELD_NUMBER: _ClassVar[int]
     context_json: bytes
     def __init__(self, context_json: _Optional[bytes] = ...) -> None: ...
+
+class RedeemCredentialRequestV1(_message.Message):
+    __slots__ = ("scope", "invocation", "security_context_digest")
+    SCOPE_FIELD_NUMBER: _ClassVar[int]
+    INVOCATION_FIELD_NUMBER: _ClassVar[int]
+    SECURITY_CONTEXT_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    scope: RuntimeContentScopeV1
+    invocation: _credential_pb2.BoundToolInvocationV1
+    security_context_digest: _common_pb2.DigestV1
+    def __init__(self, scope: _Optional[_Union[RuntimeContentScopeV1, _Mapping]] = ..., invocation: _Optional[_Union[_credential_pb2.BoundToolInvocationV1, _Mapping]] = ..., security_context_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ...) -> None: ...
+
+class RedeemCredentialResponseV1(_message.Message):
+    __slots__ = ("envelope", "denial")
+    ENVELOPE_FIELD_NUMBER: _ClassVar[int]
+    DENIAL_FIELD_NUMBER: _ClassVar[int]
+    envelope: _credential_pb2.CredentialEnvelopeV1
+    denial: _credential_pb2.CredentialRedeemDenialV1
+    def __init__(self, envelope: _Optional[_Union[_credential_pb2.CredentialEnvelopeV1, _Mapping]] = ..., denial: _Optional[_Union[_credential_pb2.CredentialRedeemDenialV1, _Mapping]] = ...) -> None: ...
 
 class GetApplicationVersionRequestV1(_message.Message):
     __slots__ = ("scope", "application_id", "version_id")

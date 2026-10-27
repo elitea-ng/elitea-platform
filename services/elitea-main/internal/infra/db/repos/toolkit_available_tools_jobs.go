@@ -223,7 +223,9 @@ func (r *ToolkitAvailableToolsJobsRepository) AdmitToolkitAvailableTools(
 	}); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert toolkit discovery command outbox: %w", err)
 	}
-	if err := pinExecutionAdmission(ctx, tx, r.policy.CredentialProfile, admissionPin{executionID: admission.Record.Outbox.ExecutionID}); err != nil {
+	securityContext, err := admitExecutionProfile(ctx, tx, pgxRows(tx), r.policy.CredentialProfile,
+		admissionPin{executionID: admission.Record.Outbox.ExecutionID}, recordFacts(admission.Record, timing.AdmittedAt, 0))
+	if err != nil {
 		return executionapp.AdmissionOutcome{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -231,11 +233,12 @@ func (r *ToolkitAvailableToolsJobsRepository) AdmitToolkitAvailableTools(
 	}
 	committed = true
 	return executionapp.AdmissionOutcome{
-		ExecutionID: admission.Record.Job.ID,
-		CommandID:   admission.Record.Job.CommandID,
-		Created:     true,
-		AdmittedAt:  timing.AdmittedAt,
-		Deadline:    timing.Deadline,
+		ExecutionID:     admission.Record.Job.ID,
+		CommandID:       admission.Record.Job.CommandID,
+		Created:         true,
+		AdmittedAt:      timing.AdmittedAt,
+		Deadline:        timing.Deadline,
+		SecurityContext: securityContext,
 	}, nil
 }
 

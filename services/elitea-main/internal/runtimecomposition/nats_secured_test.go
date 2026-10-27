@@ -63,7 +63,7 @@ func TestRuntimeNATSPlaneOnTheChartsPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handles, err := bindCommandStreams(ctx, js, config, route)
+	handles, err := bindCommandStreams(ctx, js, config, route, false)
 	if err != nil || len(handles) != 3 {
 		t.Fatalf("bind the configured streams: %d handles, %v", len(handles), err)
 	}

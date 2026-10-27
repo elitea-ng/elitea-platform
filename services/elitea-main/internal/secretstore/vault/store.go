@@ -46,6 +46,11 @@ func New(cfg Config) (*Store, error) {
 	return &Store{client: c}, nil
 }
 
+// KVMount is the KV v2 mount every reference to this store must name. The
+// credential broker builds a reference's SecretRef from it (#1118): a
+// credential reference stores a mount-relative locator only.
+func (s *Store) KVMount() string { return s.client.cfg.KVMount }
+
 // apiPath builds /v1/<mount>/<kind>/<path>. The mount must be the configured
 // KV mount: a reference cannot steer the adapter onto another engine.
 func (s *Store) apiPath(op secretstore.Op, ref secretstore.SecretRef, kind string) (string, error) {

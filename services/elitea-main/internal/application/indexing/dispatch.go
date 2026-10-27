@@ -11,6 +11,7 @@ import (
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 )
 
 var ErrInvalidIndexIngestDispatch = errors.New("invalid index ingest dispatch")
@@ -62,6 +63,10 @@ type IndexIngestDispatch struct {
 	// only; empty on the Python path, where the index has no registry row).
 	// Canonical lower-case UUID when set.
 	IndexID string
+
+	// SecurityContext is set for a governed execution only (#1115); zero
+	// leaves WorkerCommandV1.security_context_ref unset.
+	SecurityContext securitycontext.Reference
 }
 
 // MaxExpectedEmbeddingModelBytes bounds the expected model name: the limit the

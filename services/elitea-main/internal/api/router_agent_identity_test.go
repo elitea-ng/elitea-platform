@@ -103,3 +103,84 @@ func TestAgentIdentityRoutesAreMountedAndGatedWhenTheDependencyIsSet(t *testing.
 		t.Errorf("GET /admin/agent_identities without a grant = %d, want a gate refusal", got)
 	}
 }
+
+var externalAgentIdentityRoutes = []string{
+	"GET /api/v2/admin/external_agent_identities",
+	"POST /api/v2/admin/external_agent_identities",
+	"POST /api/v2/admin/external_agent_identities/{id}:provision",
+	"POST /api/v2/admin/external_agent_identities/{id}:activate",
+	"POST /api/v2/admin/external_agent_identities/{id}:suspend",
+	"POST /api/v2/admin/external_agent_identities/{id}:resume",
+	"POST /api/v2/admin/external_agent_identities/{id}:retire",
+}
+
+// unusedExternalService is never reached, like unusedAgentIdentityService.
+type unusedExternalService struct{}
+
+func (unusedExternalService) Create(context.Context, agentidentity.ExternalIdentityRequest, string) (agentidentity.ExternalAgentIdentity, error) {
+	panic("unreachable")
+}
+func (unusedExternalService) List(context.Context, agentidentity.ExternalListFilter) ([]agentidentity.ExternalAgentIdentity, error) {
+	panic("unreachable")
+}
+func (unusedExternalService) Provision(context.Context, string, string) (agentidentity.ExternalAgentIdentity, error) {
+	panic("unreachable")
+}
+func (unusedExternalService) Activate(context.Context, string, string) (agentidentity.ExternalAgentIdentity, error) {
+	panic("unreachable")
+}
+func (unusedExternalService) Suspend(context.Context, string, string) (agentidentity.ExternalAgentIdentity, error) {
+	panic("unreachable")
+}
+func (unusedExternalService) Resume(context.Context, string, string) (agentidentity.ExternalAgentIdentity, error) {
+	panic("unreachable")
+}
+func (unusedExternalService) Retire(context.Context, string, string) (agentidentity.ExternalAgentIdentity, error) {
+	panic("unreachable")
+}
+
+// Flag off (nil field): no external identity route exists, and a probe
+// answers what an unknown admin path answers. Flag on: every route is
+// mounted behind its gate.
+func TestExternalAgentIdentityRoutesFollowTheDependency(t *testing.T) {
+	off := NewRouter(RouterConfig{
+		SkillsRepo: struct{ v2skills.Repository }{}, AuthValidator: testTokenValidator{user: authenticatedTestUser()},
+		PrincipalValidator: testPrincipalValidator{},
+	})
+	routes := walkRoutes(t, off)
+	for _, route := range externalAgentIdentityRoutes {
+		if _, ok := routes[route]; ok {
+			t.Errorf("%s is mounted with ExternalAgentIdentityAdmin nil", route)
+		}
+	}
+	unknown := serveStatus(t, off, http.MethodGet, "/api/v2/admin/no_such_surface_1151")
+	for _, probe := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v2/admin/external_agent_identities"},
+		{http.MethodPost, "/api/v2/admin/external_agent_identities"},
+		{http.MethodPost, "/api/v2/admin/external_agent_identities/0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f11:activate"},
+		{http.MethodPost, "/api/v2/admin/external_agent_identities/0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f11:retire"},
+	} {
+		if got := serveStatus(t, off, probe.method, probe.path); got != unknown {
+			t.Errorf("flag off: %s %s = %d, an unknown route answers %d", probe.method, probe.path, got, unknown)
+		}
+	}
+
+	admin, err := v2agentidentity.NewExternal(unusedExternalService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	on := NewRouter(RouterConfig{
+		SkillsRepo: struct{ v2skills.Repository }{}, AuthValidator: testTokenValidator{user: authenticatedTestUser()},
+		PrincipalValidator: testPrincipalValidator{}, ExternalAgentIdentityAdmin: admin,
+	})
+	routes = walkRoutes(t, on)
+	for _, route := range externalAgentIdentityRoutes {
+		if _, ok := routes[route]; !ok {
+			t.Errorf("%s is not mounted", route)
+		}
+	}
+	got := serveStatus(t, on, http.MethodPost, "/api/v2/admin/external_agent_identities/0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f11:activate")
+	if got == http.StatusNotFound || got == http.StatusOK || got == http.StatusInternalServerError {
+		t.Errorf("activate without a grant = %d, want a gate refusal", got)
+	}
+}

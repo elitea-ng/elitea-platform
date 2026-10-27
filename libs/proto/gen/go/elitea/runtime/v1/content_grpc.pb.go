@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	RuntimeContentService_GetInput_FullMethodName                      = "/elitea.runtime.v1.RuntimeContentService/GetInput"
 	RuntimeContentService_GetEliteaClientToken_FullMethodName          = "/elitea.runtime.v1.RuntimeContentService/GetEliteaClientToken"
+	RuntimeContentService_RedeemCredential_FullMethodName              = "/elitea.runtime.v1.RuntimeContentService/RedeemCredential"
 	RuntimeContentService_GetApplicationVersion_FullMethodName         = "/elitea.runtime.v1.RuntimeContentService/GetApplicationVersion"
 	RuntimeContentService_GetAttachmentObject_FullMethodName           = "/elitea.runtime.v1.RuntimeContentService/GetAttachmentObject"
 	RuntimeContentService_ExecuteHTTPAction_FullMethodName             = "/elitea.runtime.v1.RuntimeContentService/ExecuteHTTPAction"
@@ -106,6 +107,9 @@ type RuntimeContentServiceClient interface {
 	GetInput(ctx context.Context, in *GetInputRequestV1, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetInputResponseV1], error)
 	// The Elitea client-token runtime context of the claimed execution.
 	GetEliteaClientToken(ctx context.Context, in *GetEliteaClientTokenRequestV1, opts ...grpc.CallOption) (*GetEliteaClientTokenResponseV1, error)
+	// The credential material for one bound tool invocation of a governed run
+	// (#1118). Not served (Unimplemented) unless credential governance is on.
+	RedeemCredential(ctx context.Context, in *RedeemCredentialRequestV1, opts ...grpc.CallOption) (*RedeemCredentialResponseV1, error)
 	// One frozen nested (agent-as-tool) application version.
 	GetApplicationVersion(ctx context.Context, in *GetApplicationVersionRequestV1, opts ...grpc.CallOption) (*GetApplicationVersionResponseV1, error)
 	// One stored chat attachment's text.
@@ -193,6 +197,16 @@ func (c *runtimeContentServiceClient) GetEliteaClientToken(ctx context.Context, 
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetEliteaClientTokenResponseV1)
 	err := c.cc.Invoke(ctx, RuntimeContentService_GetEliteaClientToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeContentServiceClient) RedeemCredential(ctx context.Context, in *RedeemCredentialRequestV1, opts ...grpc.CallOption) (*RedeemCredentialResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RedeemCredentialResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeContentService_RedeemCredential_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -603,6 +617,9 @@ type RuntimeContentServiceServer interface {
 	GetInput(*GetInputRequestV1, grpc.ServerStreamingServer[GetInputResponseV1]) error
 	// The Elitea client-token runtime context of the claimed execution.
 	GetEliteaClientToken(context.Context, *GetEliteaClientTokenRequestV1) (*GetEliteaClientTokenResponseV1, error)
+	// The credential material for one bound tool invocation of a governed run
+	// (#1118). Not served (Unimplemented) unless credential governance is on.
+	RedeemCredential(context.Context, *RedeemCredentialRequestV1) (*RedeemCredentialResponseV1, error)
 	// One frozen nested (agent-as-tool) application version.
 	GetApplicationVersion(context.Context, *GetApplicationVersionRequestV1) (*GetApplicationVersionResponseV1, error)
 	// One stored chat attachment's text.
@@ -672,6 +689,9 @@ func (UnimplementedRuntimeContentServiceServer) GetInput(*GetInputRequestV1, grp
 }
 func (UnimplementedRuntimeContentServiceServer) GetEliteaClientToken(context.Context, *GetEliteaClientTokenRequestV1) (*GetEliteaClientTokenResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetEliteaClientToken not implemented")
+}
+func (UnimplementedRuntimeContentServiceServer) RedeemCredential(context.Context, *RedeemCredentialRequestV1) (*RedeemCredentialResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RedeemCredential not implemented")
 }
 func (UnimplementedRuntimeContentServiceServer) GetApplicationVersion(context.Context, *GetApplicationVersionRequestV1) (*GetApplicationVersionResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetApplicationVersion not implemented")
@@ -818,6 +838,24 @@ func _RuntimeContentService_GetEliteaClientToken_Handler(srv interface{}, ctx co
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(RuntimeContentServiceServer).GetEliteaClientToken(ctx, req.(*GetEliteaClientTokenRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeContentService_RedeemCredential_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RedeemCredentialRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeContentServiceServer).RedeemCredential(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeContentService_RedeemCredential_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeContentServiceServer).RedeemCredential(ctx, req.(*RedeemCredentialRequestV1))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1390,6 +1428,10 @@ var RuntimeContentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetEliteaClientToken",
 			Handler:    _RuntimeContentService_GetEliteaClientToken_Handler,
+		},
+		{
+			MethodName: "RedeemCredential",
+			Handler:    _RuntimeContentService_RedeemCredential_Handler,
 		},
 		{
 			MethodName: "GetApplicationVersion",

@@ -150,6 +150,15 @@ pub struct RuntimeDeployConfig {
     pub agent_model_checkpoint_recovery: bool,
     #[serde(default)]
     pub agent_node_recovery: bool,
+    /// Serve the governed execution security context (ADR-0039, #1115):
+    /// bind the stream's governed durable beside the legacy one, claim with
+    /// `governed_security_context_v1`, and fetch and verify the context of a
+    /// governed command before running it. Never read from the deployment
+    /// document: [`GOVERNED_CONTEXT_ENVIRONMENT`] alone sets it (see
+    /// [`RuntimeDeployConfig::with_governed_context_from_env`]). False is the
+    /// legacy worker, byte for byte.
+    #[serde(skip)]
+    pub governed_security_context: bool,
     #[serde(default)]
     pub sandbox_runtimes: Vec<SandboxRuntimeConfig>,
     /// The cloud executor (ADR-0034 decision 9): the sandbox supervisor's
@@ -659,6 +668,45 @@ impl RuntimeLimits {
     }
 }
 
+/// The environment variable that opts a worker into the governed execution
+/// security context (ADR-0039, #1115).
+pub const GOVERNED_CONTEXT_ENVIRONMENT: &str = "ELITEA_WORKER_GOVERNED_CONTEXT";
+
+/// Parse [`GOVERNED_CONTEXT_ENVIRONMENT`]: unset or blank is off; `true`,
+/// `1`, `yes`, `on` and `false`, `0`, `no`, `off` (any case, surrounding
+/// space ignored) are the only accepted spellings. Anything else refuses
+/// startup rather than guessing a security posture.
+///
+/// # Errors
+///
+/// Returns [`RuntimeConfigError::InvalidConfiguration`] for any other value.
+pub fn parse_governed_context(value: Option<&str>) -> Result<bool, RuntimeConfigError> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(false);
+    };
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Ok(true),
+        "false" | "0" | "no" | "off" => Ok(false),
+        _ => Err(RuntimeConfigError::InvalidConfiguration(
+            "ELITEA_WORKER_GOVERNED_CONTEXT must be true or false",
+        )),
+    }
+}
+
+impl RuntimeDeployConfig {
+    /// Apply [`GOVERNED_CONTEXT_ENVIRONMENT`] from the process environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeConfigError::InvalidConfiguration`] for a value
+    /// [`parse_governed_context`] refuses.
+    pub fn with_governed_context_from_env(mut self) -> Result<Self, RuntimeConfigError> {
+        let value = std::env::var(GOVERNED_CONTEXT_ENVIRONMENT).ok();
+        self.governed_security_context = parse_governed_context(value.as_deref())?;
+        Ok(self)
+    }
+}
+
 /// Load one bounded, strict deployment document without following symlinks.
 ///
 /// # Errors
@@ -1020,6 +1068,44 @@ mod tests {
         value["agent_checkpoint_connection_path"] = Value::Null;
         let loaded: super::RuntimeDeployConfig = serde_json::from_value(value).expect("no storage");
         assert!(loaded.validate().is_err());
+    }
+
+    #[test]
+    fn governed_context_is_off_unless_the_environment_names_true() {
+        for (value, expected) in [
+            (None, false),
+            (Some(""), false),
+            (Some("  "), false),
+            (Some("false"), false),
+            (Some("0"), false),
+            (Some("off"), false),
+            (Some("No"), false),
+            (Some("true"), true),
+            (Some(" TRUE "), true),
+            (Some("1"), true),
+            (Some("yes"), true),
+            (Some("on"), true),
+        ] {
+            assert_eq!(
+                super::parse_governed_context(value).expect("accepted spelling"),
+                expected,
+                "{value:?}"
+            );
+        }
+        for refused in ["2", "enabled", "truthy", "t"] {
+            assert!(super::parse_governed_context(Some(refused)).is_err());
+        }
+    }
+
+    #[test]
+    fn governed_context_is_never_read_from_the_document() {
+        let root = tempdir().expect("root");
+        let mut value = config(root.path());
+        let loaded: super::RuntimeDeployConfig =
+            serde_json::from_value(value.clone()).expect("config");
+        assert!(!loaded.governed_security_context);
+        value["governed_security_context"] = json!(true);
+        assert!(serde_json::from_value::<super::RuntimeDeployConfig>(value).is_err());
     }
 
     #[test]

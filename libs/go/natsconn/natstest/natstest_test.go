@@ -71,8 +71,8 @@ func TestEveryIdentityIsInItsPlanesAccount(t *testing.T) {
 func TestBootstrapOwnsAndReconcilesTheAssets(t *testing.T) {
 	s := natstest.Start(t)
 	out := s.Bootstrap(t, nil) // also asserts no bootstrap identity hit a violation
-	if !strings.Contains(out, "14 of 14 expected assertions") {
-		t.Fatalf("bootstrap did not verify fourteen assets:\n%s", out)
+	if !strings.Contains(out, "17 of 17 expected assertions") {
+		t.Fatalf("bootstrap did not verify seventeen assets:\n%s", out)
 	}
 	for _, acct := range []string{"main", "gateway", "runtime"} {
 		if !strings.Contains(out, "account "+acct+": reconciling") {
@@ -311,38 +311,19 @@ func TestBootstrapCreatesTheCommandBus(t *testing.T) {
 			t.Fatal(err)
 		}
 		c := si.Config
-		if len(c.Subjects) != 1 || c.Subjects[0] != "elitea.rt.v1."+want.route+".d.*" || c.Retention != "workqueue" ||
+		// The legacy subject and the governed one (ADR-0039, #1115).
+		if len(c.Subjects) != 2 || c.Subjects[0] != "elitea.rt.v1."+want.route+".d.*" ||
+			c.Subjects[1] != "elitea.rt.v1."+want.route+".g.*" || c.Retention != "workqueue" ||
 			c.Discard != "new" || !c.DiscardNewPerSubject || c.MaxMsgsPerSubject != 1 || c.MaxMsgs != 1024 ||
 			c.MaxBytes != 64<<20 || c.MaxMsgSize != 65536 || c.MaxAge != want.maxAge || c.Duplicates != int64(120e9) ||
 			!c.AllowDirect || !c.DenyDelete || !c.DenyPurge || c.Storage != "file" {
 			t.Errorf("%s is not the contract's shape: %+v", stream, c)
 		}
-		raw, err = cli("consumer", "info", stream, want.durable, "--json").Output()
-		if err != nil {
-			t.Fatalf("consumer info %s/%s: %v", stream, want.durable, err)
-		}
-		var ci struct {
-			Config struct {
-				Durable       string `json:"durable_name"`
-				Filter        string `json:"filter_subject"`
-				AckPolicy     string `json:"ack_policy"`
-				AckWait       int64  `json:"ack_wait"`
-				MaxDeliver    int64  `json:"max_deliver"`
-				MaxAckPending int64  `json:"max_ack_pending"`
-				MaxWaiting    int64  `json:"max_waiting"`
-				MaxBatch      int64  `json:"max_batch"`
-				MaxExpires    int64  `json:"max_expires"`
-				DeliverPolicy string `json:"deliver_policy"`
-			} `json:"config"`
-		}
-		if err := json.Unmarshal(raw, &ci); err != nil {
-			t.Fatal(err)
-		}
-		cc := ci.Config
-		if cc.Durable != want.durable || cc.Filter != "elitea.rt.v1."+want.route+".d.*" || cc.AckPolicy != "explicit" ||
-			cc.AckWait != int64(60e9) || cc.MaxDeliver != -1 || cc.MaxAckPending != 1024 || cc.MaxWaiting != 512 ||
-			cc.MaxBatch != 64 || cc.MaxExpires != int64(30e9) || cc.DeliverPolicy != "all" {
-			t.Errorf("%s/%s is not the contract's consumer: %+v", stream, want.durable, cc)
+		for durable, filter := range map[string]string{
+			want.durable: "elitea.rt.v1." + want.route + ".d.*",
+			strings.Replace(want.durable, "-worker-v1", "-worker-governed-v1", 1): "elitea.rt.v1." + want.route + ".g.*",
+		} {
+			requireCommandConsumer(t, cli, stream, durable, filter)
 		}
 	}
 	// The dead-letter bucket is WORKER's, created by WORKER's bootstrap; the
@@ -537,5 +518,37 @@ func TestSubappHostsCancelOnlyTheirOwnRuns(t *testing.T) {
 		s.RequireViolation(t, own.identity, "Subscription", natsconn.SubappCancelWildcard(own.other))
 		_ = as("pub", "elitea.rt.v1.replay.wake", "").Run()
 		s.RequireViolation(t, own.identity, "Publish", "elitea.rt.v1.replay.wake")
+	}
+}
+
+// requireCommandConsumer checks one command-bus durable against the contract.
+func requireCommandConsumer(t *testing.T, cli func(...string) *exec.Cmd, stream, durable, filter string) {
+	t.Helper()
+	raw, err := cli("consumer", "info", stream, durable, "--json").Output()
+	if err != nil {
+		t.Fatalf("consumer info %s/%s: %v", stream, durable, err)
+	}
+	var ci struct {
+		Config struct {
+			Durable       string `json:"durable_name"`
+			Filter        string `json:"filter_subject"`
+			AckPolicy     string `json:"ack_policy"`
+			AckWait       int64  `json:"ack_wait"`
+			MaxDeliver    int64  `json:"max_deliver"`
+			MaxAckPending int64  `json:"max_ack_pending"`
+			MaxWaiting    int64  `json:"max_waiting"`
+			MaxBatch      int64  `json:"max_batch"`
+			MaxExpires    int64  `json:"max_expires"`
+			DeliverPolicy string `json:"deliver_policy"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(raw, &ci); err != nil {
+		t.Fatal(err)
+	}
+	cc := ci.Config
+	if cc.Durable != durable || cc.Filter != filter || cc.AckPolicy != "explicit" ||
+		cc.AckWait != int64(60e9) || cc.MaxDeliver != -1 || cc.MaxAckPending != 1024 || cc.MaxWaiting != 512 ||
+		cc.MaxBatch != 64 || cc.MaxExpires != int64(30e9) || cc.DeliverPolicy != "all" {
+		t.Errorf("%s/%s is not the contract's consumer: %+v", stream, durable, cc)
 	}
 }

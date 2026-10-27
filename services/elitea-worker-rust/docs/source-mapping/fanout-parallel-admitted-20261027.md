@@ -50,17 +50,17 @@ conversation on the project event stream.
 - Main: `internal/infra/db/repos/execution_interrupts*.go`, `execution_interrupt_wakes.go`, `agent_claim_authority.go`,
   `internal/application/agentexecution/{continue_fanout_wake,fanout_wake_admitter}.go`,
   `internal/api/v2/events/*`, `internal/api/middleware/otel.go` (SSE flush), `internal/domain/{executioninterrupt,
-  pipelinelimits,applicationcomposition}/*`, migration `migrations/shared/0184_execution_interrupt_wakes.sql`.
+  pipelinelimits,applicationcomposition}/*`, migration `migrations/shared/0189_execution_interrupt_wakes.sql`.
 - Web: `src/features/chat-messages/**` (ledger hook, fan-out frames, cards, shared project stream),
   `src/features/pipelines/lib/graphParallelAdmission.helpers.ts`, `src/pages/pipelines/**` (test-chat refusal).
 
-## Tests (final run r8, production profile code paths)
+## Tests (final run after the main merge, production profile code paths)
 
 | Suite | Result |
 |---|---|
-| Main `go test -race ./...` (with `ELITEA_TEST_DATABASE_URL`) | 232 packages ok, 0 failed |
-| Worker `cargo test --all-targets --all-features` | 2765 passed, 0 failed, 103 ignored (pre-existing `#[ignore]`) |
-| agent-runtime `cargo test --all-features` | 1542 passed, 0 failed, 1 ignored |
+| Main `go test -race ./...` (with `ELITEA_TEST_DATABASE_URL`) | all packages ok, 0 failed |
+| Worker `cargo test --all-targets --all-features` | 2786 passed, 0 failed, 103 ignored (pre-existing `#[ignore]`) |
+| agent-runtime `cargo test --all-features` | 1559 passed, 0 failed |
 | Web `vitest run` | 19150 passed, 1 failed (`themePreference`, Node ≥ 26, see below), 6 expected fail, 1 skipped |
 | Clippy (`-D warnings`, all targets) Worker and agent-runtime; `go vet`; oxlint; `tsc --noEmit` | clean |
 
@@ -197,3 +197,15 @@ refused the model-checkpoint reclaim (473c27f27), the answered child was parked 
   consume steering (not used by the fan-out runner).
 - Live member text coalescer (performance).
 - Kubernetes pod replacement for P13; Map (G-WORKER-09).
+- Governance (ADR-0039, merged from main on 2026-10-27): a fan-out wake admission records no application version in
+  its execution security context facts (as other continuation kinds on main); a governed run that parks and wakes is
+  untested.
+
+## Merge with main (2026-10-27)
+
+`main` took migrations 0184–0188 and claim field 18 (`governed_security_context_v1`): the park/wake migration is now
+`migrations/shared/0189_execution_interrupt_wakes.sql` (manifest head 189) and the Worker's opt-in is
+`ClaimCommandRequestV1.fanout_interrupt_decisions = 19` (neither was released). Generated Go/Python protobuf code and
+`api.gen.go` were regenerated with the pinned tools (`scripts/contract/generate_proto.sh`, oapi-codegen v2.7.2).
+`main` routed agent claims through a shared fresh-claim builder that dropped the fan-out opt-in; agent claims now use
+an agent builder with both opt-ins (`ordinary_agent_claims_opt_into_fanout_interrupt_decisions` caught it).

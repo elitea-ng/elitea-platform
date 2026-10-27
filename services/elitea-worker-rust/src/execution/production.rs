@@ -25,7 +25,9 @@ use crate::agents::native_runtime::NativeRuntimeAssembler;
 use crate::agents::ordinary::OrdinaryNativeAgentAssembler;
 use crate::agents::pipeline::PipelineNativeAgentAssembler;
 use crate::bootstrap::ProductionTransportBundle;
-use crate::config::{RuntimeConfigError, load_deploy_config, read_regular_file};
+use crate::config::{
+    RuntimeConfigError, RuntimeDeployConfig, load_deploy_config, read_regular_file,
+};
 use crate::spool::SpoolLimits;
 use crate::state::{CheckpointLimits, SessionLimits};
 use crate::toolkits::{
@@ -33,7 +35,7 @@ use crate::toolkits::{
     ToolAdmissionPolicyErrorCode,
 };
 use crate::transport::command_bus::{CommandRetirementConfig, CommandRetirer};
-use crate::transport::nats_jetstream::NatsCommandBus;
+use crate::transport::nats_jetstream::{NatsCommandBus, NatsGovernedLane};
 use crate::transport::{OutputGrpcConfig, TonicControlRpc};
 
 type ProductionAssembler =
@@ -125,8 +127,11 @@ pub async fn serve_from_config(
     toolkit_security_path: &Path,
 ) -> Result<(), ProductionServeError> {
     let mut signals = ShutdownSignals::install()?;
-    let deployment =
-        Arc::new(load_deploy_config(deployment_path).map_err(|error| map_config_error(&error))?);
+    let deployment = Arc::new(
+        load_deploy_config(deployment_path)
+            .and_then(RuntimeDeployConfig::with_governed_context_from_env)
+            .map_err(|error| map_config_error(&error))?,
+    );
     let tool_policy = load_tool_policy(toolkit_security_path)?;
     tracing::info!(
         event = "production_startup_admitted",
@@ -263,6 +268,10 @@ impl std::error::Error for ProductionRuntimeBuildError {}
 /// no default or missing-policy branch.
 pub(crate) struct ProductionAgentRuntime {
     delivery: CommandDeliveryRuntime<NatsCommandBus, ProductionProcessor>,
+    /// The governed durable's intake (ADR-0039, #1115), only when the worker
+    /// serves the governed security context. It shares the processor, the
+    /// admission bound and the NATS connection with `delivery`.
+    governed: Option<CommandDeliveryRuntime<NatsGovernedLane, ProductionProcessor>>,
     processor: Arc<ProductionProcessor>,
 }
 
@@ -293,6 +302,15 @@ impl ProductionAgentRuntime {
             platform_channel,
         } = bundle;
         let limits = deployment.limits;
+        let governed_lane = if deployment.governed_security_context {
+            Some(
+                command_bus
+                    .governed_lane()
+                    .ok_or(ProductionRuntimeBuildError)?,
+            )
+        } else {
+            None
+        };
         let output_config = OutputGrpcConfig {
             max_queued_frames: limits.output_max_queued_frames,
             max_queued_bytes: limits.output_max_queued_bytes,
@@ -430,11 +448,10 @@ impl ProductionAgentRuntime {
         )
         .with_office(office_runtime)
         .with_web(web_runtime, web_facade);
-        let processor = Arc::new(ExecutionDeliveryProcessor::new(
-            command_authenticator,
-            agent,
-            toolkit,
-        ));
+        let processor = Arc::new(
+            ExecutionDeliveryProcessor::new(command_authenticator, agent, toolkit)
+                .with_governed_security_context(deployment.governed_security_context),
+        );
         let intake = CommandDeliveryIntakeConfig::new(
             limits.delivery_max_concurrency,
             limits.delivery_queue_capacity,
@@ -450,10 +467,14 @@ impl ProductionAgentRuntime {
             limits.shutdown_timeout_millis,
         )
         .map_err(|_| ProductionRuntimeBuildError)?;
+        let governed = governed_lane.map(|lane| {
+            CommandDeliveryRuntime::new(Arc::new(lane), Arc::clone(&processor), runtime_config)
+        });
         let delivery =
             CommandDeliveryRuntime::new(command_bus, Arc::clone(&processor), runtime_config);
         Ok(Self {
             delivery,
+            governed,
             processor,
         })
     }
@@ -466,9 +487,13 @@ impl ProductionAgentRuntime {
     ) -> Result<(), ProductionAgentRuntimeError> {
         let Self {
             delivery,
+            governed,
             processor,
         } = self;
-        let delivery_result = delivery.run(stop).await;
+        let delivery_result = match governed {
+            None => delivery.run(stop).await,
+            Some(governed) => run_both_lanes(delivery, governed, stop).await,
+        };
         let stop_result = processor.stop();
         let close_result = processor.close().await;
         if let Err(error) = delivery_result {
@@ -485,6 +510,45 @@ impl ProductionAgentRuntime {
         }
         Ok(())
     }
+}
+
+/// Run the legacy and the governed intake until Stop, or until either lane
+/// ends: one lane's end stops the other, so a failed lane never leaves the
+/// worker half-serving. The first failure is the result.
+async fn run_both_lanes(
+    delivery: CommandDeliveryRuntime<NatsCommandBus, ProductionProcessor>,
+    governed: CommandDeliveryRuntime<NatsGovernedLane, ProductionProcessor>,
+    mut stop: watch::Receiver<bool>,
+) -> Result<(), crate::execution::command_delivery::CommandDeliveryRuntimeError> {
+    let (lanes_stop, lanes) = watch::channel(false);
+    let lanes_stop = &lanes_stop;
+    let legacy = async {
+        let result = delivery.run(lanes.clone()).await;
+        let _ = lanes_stop.send(true);
+        result
+    };
+    let governed = async {
+        let result = governed.run(lanes.clone()).await;
+        let _ = lanes_stop.send(true);
+        result
+    };
+    let mut ended = lanes.clone();
+    let forward = async {
+        tokio::select! {
+            () = async {
+                while !*stop.borrow() {
+                    if stop.changed().await.is_err() {
+                        break;
+                    }
+                }
+            } => {
+                let _ = lanes_stop.send(true);
+            }
+            _ = ended.wait_for(|stopped| *stopped) => {}
+        }
+    };
+    let (legacy, governed, ()) = tokio::join!(legacy, governed, forward);
+    legacy.and(governed)
 }
 
 /// Stable, data-free runtime exit classification.

@@ -798,7 +798,17 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // listMandates, createMandate and approve/suspend/revokeMandate, the agent
 // identity binding and mandate admin API. Admin routes are not in the
 // manifest, so its count is unchanged.
-const GENERATED_OPERATION_COUNT = 367;
+// 367 -> 372 (issue 1116, ADR-0039): listCredentialUseGrants,
+// proposeCredentialUseGrant and approve/suspend/revokeCredentialUseGrant, the
+// project credential use grant admin API.
+// 372 -> 379 (issue 1151, ADR-0039): listExternalAgentIdentities,
+// createExternalAgentIdentity and provision/activate/suspend/resume/
+// retireExternalAgentIdentity, the external agent identity admin API. Admin
+// routes are not in the manifest, so its count is unchanged.
+// 379 -> 380 (issue 1120, ADR-0039): probeCredentialReference, the
+// governed credential probe. No web code calls it yet, so the manifest
+// count is unchanged.
+const GENERATED_OPERATION_COUNT = 380;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

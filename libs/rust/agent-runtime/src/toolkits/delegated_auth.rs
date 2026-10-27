@@ -242,6 +242,12 @@ pub struct DelegatedAuthorizationRequirement {
         serialize_with = "serialize_sorted_metadata"
     )]
     resource_metadata: Option<Value>,
+    /// The opaque reference of a governed `AUTHORIZATION_REQUIRED` denial
+    /// (ADR-0039, #1117/#1120): the broker's handle on the consent the user
+    /// must give. Never a credential. Absent on every other requirement, so
+    /// their encoding is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    authorization_reference: Option<String>,
 }
 
 /// The encoded requirement is persisted (interrupt state) and compared, so
@@ -335,8 +341,39 @@ impl DelegatedAuthorizationRequirement {
             resource_metadata_url,
             www_authenticate,
             resource_metadata: None,
+            authorization_reference: None,
         };
         valid_requirement(&requirement).then_some(requirement)
+    }
+
+    /// The requirement a governed run raises when Main refuses a redemption
+    /// with `AUTHORIZATION_REQUIRED`: the toolkit, its canonical target and
+    /// the broker's opaque reference. `None` for an invalid target or
+    /// reference.
+    #[must_use]
+    pub fn governed(
+        toolkit_name: String,
+        toolkit_type: String,
+        target: String,
+        authorization_reference: String,
+    ) -> Option<Self> {
+        let requirement = Self {
+            toolkit_name,
+            toolkit_type,
+            server_url: target,
+            resource_metadata_url: None,
+            www_authenticate: None,
+            resource_metadata: None,
+            authorization_reference: Some(authorization_reference),
+        };
+        valid_requirement(&requirement).then_some(requirement)
+    }
+
+    /// The governed authorization reference, when this requirement came
+    /// from a governed denial.
+    #[must_use]
+    pub fn authorization_reference(&self) -> Option<&str> {
+        self.authorization_reference.as_deref()
     }
 
     pub fn with_resource_metadata(mut self, resource_metadata: Value) -> Option<Self> {
@@ -562,6 +599,15 @@ fn valid_requirement(requirement: &DelegatedAuthorizationRequirement) -> bool {
         && requirement
             .resource_metadata()
             .is_none_or(valid_resource_metadata)
+        && requirement
+            .authorization_reference()
+            .is_none_or(valid_authorization_reference)
+}
+
+fn valid_authorization_reference(reference: &str) -> bool {
+    !reference.is_empty()
+        && reference.len() <= MAX_AUTH_METADATA_STRING_BYTES
+        && reference.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
 }
 
 fn valid_resource_metadata(value: &Value) -> bool {

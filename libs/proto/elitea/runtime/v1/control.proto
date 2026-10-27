@@ -53,6 +53,10 @@ message ClaimCommandRequestV1 {
   // Opt in only when the worker implements explicit model checkpoint recovery.
   bool agent_model_checkpoint_recovery = 16;
   bool node_recovery = 17;
+  // Opt in only when the worker fetches and verifies
+  // ExecutionSecurityContextV1 (ADR-0039, #1115). A governed command claimed
+  // without it is refused with GOVERNED_WORKER_REQUIRED.
+  bool governed_security_context_v1 = 18;
   // Opt in only when the worker implements the per-interrupt fan-out decision
   // contract (libs/proto/contracts/fanout-interrupt-decisions-v1.md v1.1):
   // agent_interrupt_pending cards, the claim-fenced interrupts fetch/ack
@@ -60,7 +64,7 @@ message ClaimCommandRequestV1 {
   // meta.fanout_wake_v1 and no decisions. Main never grants a fanout_wake job
   // to a claim without this opt-in; the claim is answered retry-later, so an
   // older worker cannot run a wake as a fresh turn.
-  bool fanout_interrupt_decisions = 18;
+  bool fanout_interrupt_decisions = 19;
 }
 
 // SettlementRecoveryV1 carries only durable recovery material. A worker must

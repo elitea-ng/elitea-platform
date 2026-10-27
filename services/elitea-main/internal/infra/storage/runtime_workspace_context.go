@@ -60,12 +60,9 @@ func (s *EliteaClientTokenService) ResolveAccepting(
 	claim ContentClaim,
 	accept RuntimeContextAccept,
 ) (EliteaClientTokenContext, error) {
-	value, authorization, err := s.resolve(ctx, claim)
+	value, authorization, err := s.resolve(ctx, claim, accept.SecretsHeaderValue)
 	if err != nil {
 		return EliteaClientTokenContext{}, err
-	}
-	if !accept.SecretsHeaderValue {
-		value.SecretsHeaderValue = ""
 	}
 	if s.workspace == nil {
 		return value, nil

@@ -32,6 +32,7 @@ export const deploymentTab: NavTab = {
         { kind: 'page', slug: 'deployment/configuration', title: 'Post-install configuration' },
         { kind: 'page', slug: 'deployment/operations', title: 'Day-2 operations' },
         { kind: 'page', slug: 'deployment/scaling', title: 'Scaling' },
+        { kind: 'page', slug: 'deployment/credential-governance', title: 'Enterprise credential governance' },
       ],
     },
   ],

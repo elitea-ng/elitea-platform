@@ -277,6 +277,10 @@ type ClaimCommandRequestV1 struct {
 	// Opt in only when the worker implements explicit model checkpoint recovery.
 	AgentModelCheckpointRecovery bool `protobuf:"varint,16,opt,name=agent_model_checkpoint_recovery,json=agentModelCheckpointRecovery,proto3" json:"agent_model_checkpoint_recovery,omitempty"`
 	NodeRecovery                 bool `protobuf:"varint,17,opt,name=node_recovery,json=nodeRecovery,proto3" json:"node_recovery,omitempty"`
+	// Opt in only when the worker fetches and verifies
+	// ExecutionSecurityContextV1 (ADR-0039, #1115). A governed command claimed
+	// without it is refused with GOVERNED_WORKER_REQUIRED.
+	GovernedSecurityContextV1 bool `protobuf:"varint,18,opt,name=governed_security_context_v1,json=governedSecurityContextV1,proto3" json:"governed_security_context_v1,omitempty"`
 	// Opt in only when the worker implements the per-interrupt fan-out decision
 	// contract (libs/proto/contracts/fanout-interrupt-decisions-v1.md v1.1):
 	// agent_interrupt_pending cards, the claim-fenced interrupts fetch/ack
@@ -284,7 +288,7 @@ type ClaimCommandRequestV1 struct {
 	// meta.fanout_wake_v1 and no decisions. Main never grants a fanout_wake job
 	// to a claim without this opt-in; the claim is answered retry-later, so an
 	// older worker cannot run a wake as a fresh turn.
-	FanoutInterruptDecisions bool `protobuf:"varint,18,opt,name=fanout_interrupt_decisions,json=fanoutInterruptDecisions,proto3" json:"fanout_interrupt_decisions,omitempty"`
+	FanoutInterruptDecisions bool `protobuf:"varint,19,opt,name=fanout_interrupt_decisions,json=fanoutInterruptDecisions,proto3" json:"fanout_interrupt_decisions,omitempty"`
 	unknownFields            protoimpl.UnknownFields
 	sizeCache                protoimpl.SizeCache
 }
@@ -350,6 +354,13 @@ func (x *ClaimCommandRequestV1) GetAgentModelCheckpointRecovery() bool {
 func (x *ClaimCommandRequestV1) GetNodeRecovery() bool {
 	if x != nil {
 		return x.NodeRecovery
+	}
+	return false
+}
+
+func (x *ClaimCommandRequestV1) GetGovernedSecurityContextV1() bool {
+	if x != nil {
+		return x.GovernedSecurityContextV1
 	}
 	return false
 }
@@ -1805,15 +1816,16 @@ var File_elitea_runtime_v1_control_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"\n" +
-	"\x1felitea/runtime/v1/control.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\x1a%elitea/runtime/v1/compiled_code.proto\x1a elitea/runtime/v1/envelope.proto\x1a\x1eelitea/runtime/v1/errors.proto\x1a\x1delitea/runtime/v1/input.proto\x1a\x1eelitea/runtime/v1/output.proto\x1a\x1felitea/runtime/v1/sandbox.proto\"\xf1\x02\n" +
+	"\x1felitea/runtime/v1/control.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\x1a%elitea/runtime/v1/compiled_code.proto\x1a elitea/runtime/v1/envelope.proto\x1a\x1eelitea/runtime/v1/errors.proto\x1a\x1delitea/runtime/v1/input.proto\x1a\x1eelitea/runtime/v1/output.proto\x1a\x1felitea/runtime/v1/sandbox.proto\"\xb2\x03\n" +
 	"\x15ClaimCommandRequestV1\x12.\n" +
 	"\x13workload_session_id\x18\x01 \x01(\tR\x11workloadSessionId\x12\x1f\n" +
 	"\vproducer_id\x18\x02 \x01(\tR\n" +
 	"producerId\x12W\n" +
 	"\x0esigned_command\x18\x03 \x01(\v20.elitea.runtime.v1.SignedWorkerCommandEnvelopeV1R\rsignedCommand\x12E\n" +
 	"\x1fagent_model_checkpoint_recovery\x18\x10 \x01(\bR\x1cagentModelCheckpointRecovery\x12#\n" +
-	"\rnode_recovery\x18\x11 \x01(\bR\fnodeRecovery\x12<\n" +
-	"\x1afanout_interrupt_decisions\x18\x12 \x01(\bR\x18fanoutInterruptDecisionsJ\x04\b\x04\x10\x10\"\xc5\x02\n" +
+	"\rnode_recovery\x18\x11 \x01(\bR\fnodeRecovery\x12?\n" +
+	"\x1cgoverned_security_context_v1\x18\x12 \x01(\bR\x19governedSecurityContextV1\x12<\n" +
+	"\x1afanout_interrupt_decisions\x18\x13 \x01(\bR\x18fanoutInterruptDecisionsJ\x04\b\x04\x10\x10\"\xc5\x02\n" +
 	"\x14SettlementRecoveryV1\x12C\n" +
 	"\bproposal\x18\x01 \x01(\v2'.elitea.runtime.v1.SettlementProposalV1R\bproposal\x12D\n" +
 	"\x0fproposal_digest\x18\x02 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x0eproposalDigest\x12'\n" +
