@@ -77,7 +77,7 @@
   {
     "slug": "deployment/credential-governance",
     "title": "Enterprise credential governance",
-    "description": "The off-by-default governed credential profile: the boot flag, policy revisions, agent identity bindings and mandates, the Vault/OpenBao secret store and the security audit chain."
+    "description": "The off-by-default governed credential profile: the boot flag, policy revisions, the execution security context and governed workers, agent identity bindings, external identities, credential grants, Entra delegation, the Vault/OpenBao secret store and the security audit chain."
   },
   {
     "slug": "deployment/from-scratch",
