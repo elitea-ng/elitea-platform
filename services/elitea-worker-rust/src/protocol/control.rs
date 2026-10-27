@@ -28,6 +28,7 @@ mod sandbox_authority;
 pub(crate) use sandbox_authority::{ClaimBoundSandboxAuthority, SandboxStopAuthority};
 
 use std::fmt;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use prost::Message;
@@ -58,6 +59,9 @@ use super::output::{
     AgentTerminalOutput, RuntimeFailureKind, ToolkitExecuteReadTerminalOutput,
     build_agent_terminal_output_frame, build_node_event_output_frame,
     build_toolkit_execute_read_terminal_output_frame,
+};
+use super::security_context::{
+    ExecutionSecurityContext, GovernedContext, SecurityContextReference,
 };
 use super::vector_token::VectorClaimToken;
 use crate::agents::result::BoundAgentExecutionResult;
@@ -268,6 +272,9 @@ pub struct AcceptedAgentClaim {
     /// `toolkit_typed_refusals`); without it the terminal is downgraded to
     /// the shapes an older Main accepts.
     toolkit_typed_refusals: bool,
+    /// The command's field 65 (ADR-0039, #1115) and, once preparation
+    /// attached it, the verified context. Empty for a legacy command.
+    governed: GovernedContext,
 }
 
 impl AcceptedAgentClaim {
@@ -623,6 +630,7 @@ impl AcceptedAgentClaim {
             // Output replay needs no vector access; the bearer is erased here.
             vector_token: _,
             toolkit_typed_refusals: _,
+            governed: _,
         } = self;
         AcceptedTerminalClaimRecovery {
             binding: RecoveryClaimBinding {
@@ -1016,6 +1024,17 @@ pub(crate) struct ClaimBoundInputAuthority<'a> {
     pub(crate) media_type: &'a str,
 }
 
+/// Borrowed, post-Begin authority to fetch a governed command's security
+/// context (ADR-0039, #1115) under the live claim. Crate-private like
+/// [`ClaimBoundInputAuthority`].
+pub(crate) struct ClaimBoundSecurityContextAuthority<'a> {
+    pub(crate) execution_id: &'a str,
+    pub(crate) generation: u64,
+    pub(crate) claim_id: &'a str,
+    pub(crate) fence_token: &'a [u8],
+    pub(crate) reference: &'a SecurityContextReference,
+}
+
 /// Opaque authority for one post-authorization runtime-context redemption.
 ///
 /// The Rust worker allows Main to resolve the actual execution actor only after
@@ -1302,6 +1321,40 @@ impl LeaseMonitoredAgentExecution {
     #[must_use]
     pub(crate) fn input_content_authority(&self) -> Option<ClaimBoundInputAuthority<'_>> {
         self.input_content_authority_for_entry(&self.claim.request_entry.entry_id)
+    }
+
+    /// The command's security context reference; `None` for a legacy command.
+    #[must_use]
+    pub fn security_context_reference(&self) -> Option<&SecurityContextReference> {
+        self.claim.governed.reference.as_ref()
+    }
+
+    /// The claim-bound fetch authority of the security context, for a
+    /// governed command only.
+    #[must_use]
+    pub(crate) fn security_context_authority(
+        &self,
+    ) -> Option<ClaimBoundSecurityContextAuthority<'_>> {
+        let reference = self.claim.governed.reference.as_ref()?;
+        Some(ClaimBoundSecurityContextAuthority {
+            execution_id: &self.claim.identity.execution_id,
+            generation: self.claim.identity.generation,
+            claim_id: &self.claim.claim_id,
+            fence_token: &self.claim.fence.fence_token,
+            reference,
+        })
+    }
+
+    /// Attach the verified context; the execution reads it from here on.
+    pub(crate) fn attach_security_context(&mut self, context: Arc<ExecutionSecurityContext>) {
+        self.claim.governed.verified = Some(context);
+    }
+
+    /// The verified security context of a governed execution, read-only.
+    /// `None` for a legacy command.
+    #[must_use]
+    pub fn security_context(&self) -> Option<&Arc<ExecutionSecurityContext>> {
+        self.claim.governed.verified.as_ref()
     }
 
     #[must_use]
@@ -1735,6 +1788,19 @@ pub(crate) fn test_agent_output_authority_with_handoff(
     AgentExecutionOutputAuthority { claim }
 }
 
+/// A lease-monitored execution of `execution_id` carrying `reference` as its
+/// command's security context reference (ADR-0039, #1115).
+#[cfg(test)]
+pub(crate) fn test_governed_lease_monitored_execution(
+    execution_id: &str,
+    reference: Option<SecurityContextReference>,
+) -> LeaseMonitoredAgentExecution {
+    let mut execution = test_lease_monitored_input_execution(1, [1; 32]);
+    execution.claim.identity.execution_id = execution_id.to_owned();
+    execution.claim.governed.reference = reference;
+    execution
+}
+
 #[cfg(test)]
 pub(crate) fn test_lease_monitored_input_execution(
     expected_source_length: u64,
@@ -1773,6 +1839,7 @@ pub(crate) fn test_lease_monitored_input_execution(
             arguments_entry: None,
             vector_token: None,
             toolkit_typed_refusals: false,
+            governed: GovernedContext::default(),
             request_entry: ExecutionInputEntryV1 {
                 entry_id: "agent-request".to_owned(),
                 immutable_version: "v/1".to_owned(),
@@ -2211,6 +2278,9 @@ pub struct AgentControlClient<R> {
     control: ControlGrpcClient<R>,
     workload_session_id: String,
     producer_id: String,
+    /// `ELITEA_WORKER_GOVERNED_CONTEXT`: fresh claims say this worker
+    /// fetches and verifies a governed command's security context.
+    governed_security_context: bool,
 }
 
 impl AgentControlClient<TonicControlRpc> {
@@ -2241,7 +2311,36 @@ impl<R> AgentControlClient<R> {
             control,
             workload_session_id,
             producer_id,
+            governed_security_context: false,
         })
+    }
+
+    /// Claim governed commands (ADR-0039, #1115): every fresh claim sets
+    /// `governed_security_context_v1`. Off, the claim is the legacy one.
+    #[must_use]
+    pub const fn with_governed_security_context(mut self, enabled: bool) -> Self {
+        self.governed_security_context = enabled;
+        self
+    }
+
+    /// Whether fresh claims opt into the governed security context.
+    #[must_use]
+    pub const fn governed_security_context(&self) -> bool {
+        self.governed_security_context
+    }
+
+    /// A fresh claim request with this worker's governed opt-in. The node
+    /// recovery and checkpoint inspection claims never set it: they do not
+    /// fetch the context, so Main refuses them a governed command
+    /// (`GOVERNED_WORKER_REQUIRED`) and the recovery fails closed.
+    fn fresh_claim_request(
+        &self,
+        verified: &impl VerifiedExecutionCommand,
+    ) -> Result<ClaimCommandRequestV1, ControlSemanticError> {
+        let mut request =
+            build_claim_request(verified, &self.workload_session_id, &self.producer_id)?;
+        request.governed_security_context_v1 = self.governed_security_context;
+        Ok(request)
     }
 }
 
@@ -2256,8 +2355,7 @@ impl<R: ControlRpc> AgentControlClient<R> {
         verified: &VerifiedAgentCommand,
         now_unix_millis: i64,
     ) -> Result<AcceptedAgentClaim, AgentControlError> {
-        let request =
-            build_agent_claim_request(verified, &self.workload_session_id, &self.producer_id)?;
+        let request = self.fresh_claim_request(verified)?;
         let response = self.control.claim_command(request).await?;
         parse_accepted_agent_claim(
             verified,
@@ -2284,8 +2382,7 @@ impl<R: ControlRpc> AgentControlClient<R> {
         verified: &VerifiedAgentCommand,
         now_unix_millis: i64,
     ) -> Result<AgentClaimDecision, AgentControlError> {
-        let request =
-            build_agent_claim_request(verified, &self.workload_session_id, &self.producer_id)?;
+        let request = self.fresh_claim_request(verified)?;
         let response = self.control.claim_command(request).await?;
         parse_agent_claim_decision(
             verified,
@@ -2309,7 +2406,7 @@ impl<R: ControlRpc> AgentControlClient<R> {
         verified: &VerifiedToolkitExecuteReadCommand,
         now_unix_millis: i64,
     ) -> Result<AgentClaimDecision, AgentControlError> {
-        let request = build_claim_request(verified, &self.workload_session_id, &self.producer_id)?;
+        let request = self.fresh_claim_request(verified)?;
         let response = self.control.claim_command(request).await?;
         parse_claim_decision(
             verified,
@@ -2577,8 +2674,8 @@ fn build_claim_request(
     Ok(ClaimCommandRequestV1 {
         agent_model_checkpoint_recovery: false,
         node_recovery: false,
-        // This worker does not implement the governed security context yet
-        // (ADR-0039, #1115), so it never claims a governed command.
+        // Legacy by default; AgentControlClient::fresh_claim_request sets it
+        // for a worker that serves the governed security context (#1115).
         governed_security_context_v1: false,
         workload_session_id: workload_session_id.to_owned(),
         producer_id: producer_id.to_owned(),
@@ -3155,6 +3252,16 @@ fn parse_input_claim_binding(
         arguments_entry,
         vector_token: VectorClaimToken::from_receipt(receipt.vector_token),
         toolkit_typed_refusals: receipt.toolkit_typed_refusals,
+        governed: governed_context(verified.command())?,
+    })
+}
+
+/// The command's governed security context reference, as claim state.
+fn governed_context(
+    command: &super::elitea::runtime::v1::WorkerCommandV1,
+) -> Result<GovernedContext, ControlSemanticError> {
+    GovernedContext::from_command(command).map_err(|_| {
+        ControlSemanticError::InvalidInput("the command security context reference is malformed")
     })
 }
 
@@ -3805,16 +3912,13 @@ fn desired_state(value: i32) -> Result<DesiredExecutionState, ControlSemanticErr
 
 fn runtime_rejection(error: &RuntimeErrorV1) -> ControlSemanticError {
     let kind = match RuntimeErrorCodeV1::try_from(error.code).ok() {
-        Some(RuntimeErrorCodeV1::UnsupportedCapability) => {
-            RuntimeControlRejectionKind::UnsupportedCapability
-        }
+        // GOVERNED_WORKER_REQUIRED: a governed command reached a worker that
+        // did not opt in. It cannot run it, like a capability it does not serve.
+        Some(
+            RuntimeErrorCodeV1::UnsupportedCapability | RuntimeErrorCodeV1::GovernedWorkerRequired,
+        ) => RuntimeControlRejectionKind::UnsupportedCapability,
         Some(RuntimeErrorCodeV1::IncompatibleVersion) => {
             RuntimeControlRejectionKind::IncompatibleVersion
-        }
-        // A governed command reached a worker that did not opt in: this
-        // worker cannot run it, like a capability it does not serve.
-        Some(RuntimeErrorCodeV1::GovernedWorkerRequired) => {
-            RuntimeControlRejectionKind::UnsupportedCapability
         }
         // The run is governed but its command lost the context: fail closed.
         Some(RuntimeErrorCodeV1::GovernedContextMissing) => {

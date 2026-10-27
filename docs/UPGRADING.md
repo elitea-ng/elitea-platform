@@ -24,9 +24,10 @@ additive shared migrations (0184–0187) create empty tables.
   Governed commands go only to governed durables. Main refuses to boot
   without the governed subject and durables, and it refuses claims from a
   worker that does not verify the context (`GOVERNED_WORKER_REQUIRED`).
-  **Before turning the flag on, run at least one Rust worker with
-  `ELITEA_WORKER_GOVERNED_CONTEXT=true`**, or governed runs wait until their
-  deadline.
+  The chart sets the Rust worker's `ELITEA_WORKER_GOVERNED_CONTEXT` from the
+  same flag. **Outside the chart, run at least one Rust worker with
+  `ELITEA_WORKER_GOVERNED_CONTEXT=true` before turning the flag on**, or
+  governed runs wait until their deadline.
 * With the flag on, credential use grants are mounted under
   `/api/v2/projects/{project_id}/credential_grants` (0184). The five
   `models.credentials.governed.*` permissions are granted to no role. External

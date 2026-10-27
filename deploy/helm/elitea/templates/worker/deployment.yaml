@@ -220,6 +220,13 @@ spec:
               value: {{ .Values.worker.logLevel | quote }}
             - name: ELITEA_RUST_TRACE
               value: {{ .Values.worker.traceLevel | quote }}
+            # ADR-0039 #1115: with credential governance on, Main publishes a
+            # governed command on the `.g.` subject lane only, which only the
+            # governed durables pull. The worker binds them, claims with the
+            # governed opt-in and verifies each command's security context
+            # exactly when Main governs, so the two cannot disagree.
+            - name: ELITEA_WORKER_GOVERNED_CONTEXT
+              value: {{ get (.Values.main.env | default dict) "ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED" | default "false" | toString | quote }}
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
           volumeMounts:

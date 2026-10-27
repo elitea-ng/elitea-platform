@@ -47,6 +47,7 @@ use crate::protocol::control::{
     InvocationSubmissionPermit, LeaseMonitoredAgentExecution, LiveModelCheckpointInspection,
 };
 use crate::protocol::elitea::runtime::v1::{DigestAlgorithmV1, DigestV1};
+use crate::protocol::security_context::ExecutionSecurityContext;
 use crate::transport::command_bus::{CommandDelivery, CommandRetirementClient, CommandRetirer};
 use crate::transport::{ControlRpc, InputContentClient, InputContentError, MaterializedInput};
 
@@ -118,6 +119,21 @@ pub(crate) trait AgentInputMaterializer: Send + Sync {
         &self,
         execution: &LeaseMonitoredAgentExecution,
     ) -> Result<MaterializedInput, InputContentError>;
+
+    /// Fetch and verify a governed command's security context (ADR-0039,
+    /// #1115); `None` for a legacy command. A materializer that cannot fetch
+    /// it refuses a governed command, so it fails closed.
+    async fn materialize_security_context(
+        &self,
+        execution: &LeaseMonitoredAgentExecution,
+    ) -> Result<Option<ExecutionSecurityContext>, InputContentError> {
+        if execution.security_context_reference().is_some() {
+            return Err(InputContentError::AuthorizationFailed(
+                "the governed security context is unavailable",
+            ));
+        }
+        Ok(None)
+    }
 
     async fn materialize_entry(
         &self,
@@ -193,6 +209,13 @@ impl AgentInputMaterializer for InputContentClient {
         execution: &LeaseMonitoredAgentExecution,
     ) -> Result<MaterializedInput, InputContentError> {
         self.fetch_materialized(execution).await
+    }
+
+    async fn materialize_security_context(
+        &self,
+        execution: &LeaseMonitoredAgentExecution,
+    ) -> Result<Option<ExecutionSecurityContext>, InputContentError> {
+        self.fetch_security_context(execution).await
     }
 
     async fn materialize_entry(
@@ -1778,6 +1801,15 @@ where
     .await
 }
 
+/// How a refused security context ends preparation.
+enum SecurityContextStep {
+    /// A terminal once the final lease check confirms it.
+    AfterFinalLease(PreInvocationTerminalCause),
+    /// A terminal now (the lease already ended).
+    Terminal(PreInvocationTerminalCause),
+    Failed(AgentPreparationError),
+}
+
 struct ActiveAgentPreparation {
     kind: AgentExecutionKind,
     delivery: CommandDelivery,
@@ -1806,6 +1838,15 @@ impl ActiveAgentPreparation {
             }
             Ok(false) => {}
             Err(error) => return preparation_error(error),
+        }
+        tracing::Span::current().record("stage", "security_context");
+        match self.attach_security_context(input).await {
+            Ok(()) => {}
+            Err(SecurityContextStep::AfterFinalLease(cause)) => {
+                return self.terminal_after_final_lease(cause).await;
+            }
+            Err(SecurityContextStep::Terminal(cause)) => return Ok(self.terminal(cause)),
+            Err(SecurityContextStep::Failed(error)) => return preparation_error(error),
         }
         tracing::Span::current().record("stage", "input_materialization");
         tracing::info!(event = "agent_preparation_input_started");
@@ -1870,6 +1911,51 @@ impl ActiveAgentPreparation {
                 lease: self.lease,
             },
         )))
+    }
+
+    /// Fetch, verify and attach a governed command's security context
+    /// (ADR-0039, #1115) before any input is read; a legacy command is
+    /// untouched. Every refusal fails the execution closed.
+    async fn attach_security_context<I>(&mut self, input: &I) -> Result<(), SecurityContextStep>
+    where
+        I: AgentInputMaterializer,
+    {
+        let fetched = self
+            .lease
+            .run_pre_invocation(input.materialize_security_context(&self.execution))
+            .await;
+        let error = match fetched {
+            Ok(Ok(Some(context))) => {
+                self.execution.attach_security_context(Arc::new(context));
+                return Ok(());
+            }
+            Ok(Ok(None)) if self.execution.security_context_reference().is_none() => {
+                return Ok(());
+            }
+            // A governed command whose context did not come back.
+            Ok(Ok(None)) => InputContentError::AuthorizationFailed(
+                "the governed security context is unavailable",
+            ),
+            Ok(Err(error)) => error,
+            Err(error) if is_terminal_lease(&error) => {
+                return Err(SecurityContextStep::Terminal(
+                    PreInvocationTerminalCause::Cancelled(error),
+                ));
+            }
+            Err(error) => {
+                return Err(SecurityContextStep::Failed(AgentPreparationError::Lease(
+                    error,
+                )));
+            }
+        };
+        tracing::warn!(
+            event = "agent_preparation_security_context_failed",
+            error_code = error.code(),
+            retryable = error.retryable(),
+        );
+        Err(SecurityContextStep::AfterFinalLease(
+            PreInvocationTerminalCause::InputContent(error),
+        ))
     }
 
     fn request_from(&self, raw: &[u8]) -> Result<AgentExecutionRequest, ProtocolError> {

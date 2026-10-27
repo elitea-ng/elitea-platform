@@ -635,10 +635,30 @@ where
         &self,
         delivery: CommandDelivery,
         verified: VerifiedToolkitExecuteReadCommand,
-        execution: LeaseMonitoredAgentExecution,
+        mut execution: LeaseMonitoredAgentExecution,
         output: PreparedAgentOutput,
         mut lease: ClaimLeaseMonitor,
     ) -> Result<ToolkitProcessOutcome, ToolkitProcessError> {
+        // A governed command's security context (ADR-0039, #1115) is fetched
+        // and verified before any capability reads an input; a refusal fails
+        // the execution closed.
+        if let Err(failure) = self
+            .attach_security_context(&verified, &mut execution, &mut lease)
+            .await
+        {
+            Box::pin(self.publish_fresh_terminal(
+                delivery,
+                verified,
+                execution.into_output_authority(),
+                output,
+                lease,
+                ToolkitExecuteReadTerminalOutput::Failure(failure),
+            ))
+            .await?;
+            return Ok(ToolkitProcessOutcome::completed(
+                "toolkit_delivery.security_context_terminal_retired",
+            ));
+        }
         if verified.kind() == ToolkitCommandKind::ConfigurationValidate {
             return Box::pin(self.execute_validation(delivery, verified, execution, output, lease))
                 .await;
@@ -1089,6 +1109,46 @@ where
             }
         };
         Ok(request)
+    }
+
+    /// Fetch, verify and attach a governed command's security context; a
+    /// legacy command is untouched.
+    async fn attach_security_context(
+        &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        execution: &mut LeaseMonitoredAgentExecution,
+        lease: &mut ClaimLeaseMonitor,
+    ) -> Result<(), RuntimeFailureKind> {
+        if execution.security_context_reference().is_none() {
+            return Ok(());
+        }
+        if deadline_exceeded(verified, self.clock.as_ref()) {
+            record_toolkit_deadline("pre_security_context_deadline");
+            return Err(RuntimeFailureKind::DeadlineExceeded);
+        }
+        match lease
+            .run_pre_invocation(self.input.materialize_security_context(execution))
+            .await
+        {
+            Ok(Ok(Some(context))) => {
+                execution.attach_security_context(Arc::new(context));
+                Ok(())
+            }
+            // A materializer with no context for a governed command fails closed.
+            Ok(Ok(None)) => Err(RuntimeFailureKind::AuthorizationFailed),
+            Ok(Err(error)) => {
+                record_toolkit_input_failure("security_context", &error);
+                Err(input_failure(&error))
+            }
+            Err(error) => {
+                record_toolkit_execution_failure(
+                    "security_context_lease",
+                    error.code().as_str(),
+                    error.retryable(),
+                );
+                Err(lease_failure(&error))
+            }
+        }
     }
 
     async fn fetch_input(
