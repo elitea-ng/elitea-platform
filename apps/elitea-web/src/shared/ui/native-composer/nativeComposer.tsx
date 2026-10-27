@@ -206,13 +206,18 @@ export function ComposerPicker({
 export function ComposerMoreMenu({
   children,
   testId = "composer-more",
+  label = t("chatInput.more", "More"),
+  icon = <MoreHorizIcon />,
 }: {
   readonly children: (close: () => void) => ReactNode;
   readonly testId?: string;
+  /** The button's tooltip and the menu's name; default "More". */
+  readonly label?: string;
+  /** The button's glyph; default ⋯. */
+  readonly icon?: ReactNode;
 }): React.JSX.Element {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const close = (): void => setAnchor(null);
-  const label = t("chatInput.more", "More");
   const follow = useFollowContent(anchor !== null);
   return (
     <>
@@ -223,7 +228,7 @@ export function ComposerMoreMenu({
         aria-expanded={anchor !== null}
         onClick={(event) => setAnchor(event.currentTarget)}
       >
-        <MoreHorizIcon />
+        {icon}
       </ComposerIconButton>
       <Menu
         anchorEl={anchor}

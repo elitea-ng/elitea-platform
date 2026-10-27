@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { createFakeWorktreeIpc, type FakeWorktreeIpc } from '@/shared/desktop/worktreeIpc.fake';
 
 import { StartInWorktreeError, useStartInWorktree } from './useStartInWorktree';
-import { holdFirstMessage, initialWorkIn, listenForWorktree, preferWorktree, takeFirstMessage } from './workIn';
+import { holdFirstMessage, initialWorkIn, listenForWorktree, preferWorktree, rememberWorkIn, takeFirstMessage } from './workIn';
 
 function start(ipc: FakeWorktreeIpc) {
   const client = new QueryClient();
@@ -43,7 +43,17 @@ describe('workIn hand-offs', () => {
     expect(takeFirstMessage('wt-1')).toBeUndefined();
   });
 
-  it('opens the next new thread on "New worktree", or switches the one on screen', () => {
+  it('proposes a new worktree by default, then the choice the person made for the folder', () => {
+    expect(initialWorkIn('f0')).toBe('worktree');
+    rememberWorkIn('f0', 'folder');
+    expect(initialWorkIn('f0')).toBe('folder');
+    expect(initialWorkIn('f0-other')).toBe('worktree');
+    rememberWorkIn('f0', 'worktree');
+    expect(initialWorkIn('f0')).toBe('worktree');
+  });
+
+  it('opens the next new thread on "New worktree" over a remembered folder, or switches the one on screen', () => {
+    rememberWorkIn('f1', 'folder');
     preferWorktree('f1');
     expect(initialWorkIn('f1')).toBe('worktree');
     expect(initialWorkIn('f1')).toBe('folder');
@@ -52,6 +62,7 @@ describe('workIn hand-offs', () => {
     preferWorktree('f2');
     expect(switched).toBe(1);
     stop();
+    rememberWorkIn('f2', 'folder');
     expect(initialWorkIn('f2')).toBe('folder');
   });
 });

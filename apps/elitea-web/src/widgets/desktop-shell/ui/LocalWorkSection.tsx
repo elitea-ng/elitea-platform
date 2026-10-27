@@ -380,7 +380,7 @@ export function LocalWorkSection({ location, run, projects, projectId }: Section
               )}
               {open && workspace.is_git && (
                 <Suspense fallback={null}>
-                  <WorktreesPanel workspaceId={workspace.id} workspaceName={workspace.name} renderEntry={(parts) => <WorktreeTaskRow {...parts} location={location} run={run} />} />
+                  <WorktreesPanel workspaceId={workspace.id} workspaceName={workspace.name} renderEntry={(parts) => <WorktreeTaskRow {...parts} folder={workspace} location={location} run={run} />} />
                 </Suspense>
               )}
             </li>

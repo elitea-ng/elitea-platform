@@ -52,7 +52,7 @@ import { useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { BypassControls } from './BypassControls';
 import { contextBreakdown, threadMeter } from './contextBreakdown';
-import { AgentChip, RunLocationChip, WorkInChip } from './ComposerControls';
+import { AgentChip, RunLocationControl, WorkInChip } from './ComposerControls';
 import { HandoffBanner } from './HandoffControls';
 import { RunInCloudNotice } from './RunInCloudNotice';
 import { firstError, SessionNotices } from './sessionParts';
@@ -281,7 +281,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         runLocation={
           <>
             {workIn.offered && <WorkInChip value={workIn.value} onChange={workIn.choose} disabled={bound.busy} />}
-            <RunLocationChip handoff={handoff} onOpenInChat={openInChat} />
+            <RunLocationControl handoff={handoff} onOpenInChat={openInChat} />
           </>
         }
         contextMeter={<ComposerMeters usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} contextPercent={contextPercentOf(cloudMode, turn, session.history)} />}

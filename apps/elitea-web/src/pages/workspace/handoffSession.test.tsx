@@ -85,22 +85,23 @@ afterEach(() => {
   delete globals['elitea_ui_config'];
 });
 
-/** Opens the composer footer's run-location menu. */
+/** Opens the small ⌄ menu beside the composer footer's run-location button. */
 async function openLocation(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-  await user.click(await screen.findByTestId('executor-badge'));
+  await user.click(await screen.findByTestId('run-location-more'));
 }
 
 describe('a thread running here', () => {
-  it('offers Send to cloud from the run-location menu and shows Local', async () => {
+  it('offers Send to cloud as a button, the rest in the small menu beside it', async () => {
     serve();
     const handoff = createFakeHandoffIpc();
     const user = userEvent.setup();
     mount(handoff);
     const session = await screen.findByTestId('workspace-session');
-    await waitFor(() => expect(within(session).getByTestId('executor-badge')).toHaveTextContent('Local'));
+    await waitFor(() => expect(within(session).getByTestId('run-location-action')).toHaveTextContent('Send to cloud'));
     await waitFor(() => expect(handoff.calls.statuses).toContain(UUID));
     await openLocation(user);
-    expect(await screen.findByRole('menuitem', { name: 'Send to cloud…' })).toBeInTheDocument();
+    expect(await screen.findByRole('menuitem', { name: 'Handoff settings…' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /Send to cloud/ })).toBeNull();
     await user.keyboard('{Escape}');
     expect(screen.queryByTestId('cloud-thread-banner')).toBeNull();
     // The host was asked about this thread by its UUID, with its project.
@@ -125,8 +126,9 @@ describe('a thread running here', () => {
     const handoff = createFakeHandoffIpc({ allowed: false });
     mount(handoff);
     const session = await screen.findByTestId('workspace-session');
-    // Local, and nothing to do from here: the badge reports, it opens no menu.
-    await waitFor(() => expect(within(session).getByTestId('executor-badge')).toBeDisabled());
+    // Local, and nothing to do from here: no move is offered.
+    await waitFor(() => expect(handoff.calls.statuses).toContain(UUID));
+    expect(within(session).queryByTestId('run-location-action')).toBeNull();
   });
 
   it('hides Send to cloud on a new thread that has no conversation yet', async () => {
@@ -134,7 +136,7 @@ describe('a thread running here', () => {
     const handoff = createFakeHandoffIpc();
     mount(handoff, '/workspaces/w1');
     await screen.findByTestId('workspace-session');
-    expect(screen.queryByTestId('executor-badge')).toBeNull();
+    expect(screen.queryByTestId('run-location-action')).toBeNull();
     expect(handoff.calls.statuses).toEqual([]);
   });
 
@@ -144,8 +146,7 @@ describe('a thread running here', () => {
     const handoff = createFakeHandoffIpc();
     mount(handoff);
     await waitFor(() => expect(handoff.calls.statuses).toContain(UUID));
-    await openLocation(user);
-    await user.click(await screen.findByRole('menuitem', { name: 'Send to cloud…' }));
+    await user.click(await screen.findByTestId('run-location-action'));
 
     const dialog = await screen.findByRole('dialog', { name: 'Send this thread to the cloud' });
     await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Send to cloud' })).toBeEnabled());
@@ -154,7 +155,7 @@ describe('a thread running here', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(handoff.calls.sends).toEqual([{ workspaceId: 'w1', conversationUuid: UUID, leave: [], confirmIncludes: false }]);
     expect(await screen.findByTestId('cloud-thread-banner')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getAllByTestId('executor-badge')[0]).toHaveTextContent('In cloud'));
+    await waitFor(() => expect(screen.getByTestId('run-location-action')).toHaveTextContent('Take back'));
   });
 });
 
@@ -171,7 +172,7 @@ describe('a thread running in the cloud', () => {
 
     const banner = await screen.findByTestId('cloud-thread-banner');
     expect(banner).toHaveTextContent('This thread is running in the cloud executor. Local changes are not seen by it.');
-    expect(within(await screen.findByTestId('workspace-session')).getAllByTestId('executor-badge')[0]).toHaveTextContent('In cloud');
+    expect(within(await screen.findByTestId('workspace-session')).getByTestId('run-location')).toHaveAttribute('data-executor', 'cloud');
     // The transcript is the server's, and it is the only one shown.
     // Looked up again on every try: the session may re-render while the first reads settle.
     await waitFor(() => expect(within(screen.getByTestId('cloud-transcript')).getByText('Done in the cloud.')).toBeInTheDocument());
@@ -189,7 +190,7 @@ describe('a thread running in the cloud', () => {
     expect(within(composer).getByRole('textbox')).toHaveAttribute('placeholder', 'Message the cloud copy…');
     expect(screen.queryByTestId('mode-picker')).toBeNull();
     expect(screen.getByTestId('agent-chip')).toBeDisabled();
-    expect(screen.queryByRole('menuitem', { name: 'Send to cloud…' })).toBeNull();
+    expect(screen.getByTestId('run-location-action')).toHaveTextContent('Take back');
   });
 
   it('shows a take back that waits for the running cloud turn', async () => {
@@ -204,7 +205,8 @@ describe('a thread running in the cloud', () => {
     const banner = await screen.findByTestId('cloud-thread-banner');
     expect(banner).toHaveAttribute('data-executor', 'returning');
     expect(within(banner).getByTestId('banner-returning')).toBeInTheDocument();
-    expect(screen.getAllByTestId('executor-badge')[0]).toHaveTextContent('Returning');
+    expect(screen.getByTestId('run-location-action')).toHaveTextContent('Returning');
+    expect(screen.getByTestId('run-location-action')).toBeDisabled();
     // Read-only: nothing can be typed or sent to a thread on its way back.
     const composer = screen.getByTestId('workspace-composer');
     expect(within(composer).getByRole('textbox')).toBeDisabled();
@@ -357,12 +359,12 @@ describe('chatting with the cloud copy', () => {
     expect(within(screen.getByTestId('workspace-composer')).getByRole('textbox')).toHaveValue('hello');
   });
 
-  it('offers Take back, Erase cloud copy and Open in Chat from the run-location menu', async () => {
+  it('offers Take back as a button, Erase cloud copy and Open in Chat in the menu beside it', async () => {
     serve();
     const user = userEvent.setup();
     mount(createFakeHandoffIpc({ status: cloud }));
-    await user.click(await screen.findByTestId('executor-badge'));
-    expect(await screen.findByRole('menuitem', { name: 'Take back…' })).toBeInTheDocument();
+    expect(await screen.findByTestId('run-location-action')).toHaveTextContent('Take back');
+    await user.click(await screen.findByTestId('run-location-more'));
     expect(screen.getByRole('menuitem', { name: 'Erase cloud copy…' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Open in chat' })).toBeInTheDocument();
   });

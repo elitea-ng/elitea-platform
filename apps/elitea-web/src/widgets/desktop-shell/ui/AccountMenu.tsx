@@ -16,7 +16,6 @@ import { useState, type ReactNode } from 'react';
 
 import BugReportOutlinedIcon from '@mui/icons-material/BugReportOutlined';
 import CheckIcon from '@mui/icons-material/Check';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import DataUsageOutlinedIcon from '@mui/icons-material/DataUsageOutlined';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import HelpOutlineOutlinedIcon from '@mui/icons-material/HelpOutlineOutlined';
@@ -33,7 +32,7 @@ import Box from '@mui/material/Box';
 import ButtonBase from '@mui/material/ButtonBase';
 import IconButton from '@mui/material/IconButton';
 import Menu from '@mui/material/Menu';
-import { useColorScheme, useTheme, type Theme } from '@mui/material/styles';
+import { useColorScheme, type Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
@@ -46,7 +45,7 @@ import { bugReportUrl, whatsNewUrl } from '../lib/accountLinks';
 import type { EliteaItem, EliteaItemValue } from '../lib/eliteaSections';
 import type { ShellAction } from '../lib/shellActions';
 import { useHostInfo } from '../model/useHostInfo';
-import { MenuDivider, MenuHeader, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
+import { MenuDivider, MenuHeader, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText, NativeSubmenu } from '@/shared/ui/native-menu';
 import { modKey } from './shortcutLabel';
 
 type ThemeMode = 'system' | 'light' | 'dark';
@@ -85,53 +84,27 @@ interface ChoiceSubmenuProps<T extends string> {
   readonly testId: string;
 }
 
-/** A menu row that opens its choices beside it (click, or the arrow toward the end side), the current one checked. */
+/** A menu row that opens its choices beside it (on hover, a click, or the arrow toward the end side), the current one checked. */
 function ChoiceSubmenu<T extends string>({ icon, label, value, choices, onChoose, testId }: ChoiceSubmenuProps<T>): React.JSX.Element {
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  // Popover positions are physical: in a right-to-left window the end side is the left.
-  const end = useTheme().direction === 'rtl' ? 'left' : 'right';
-  const start = end === 'left' ? 'right' : 'left';
   return (
-    <>
-      <MenuRow
-        data-testid={testId}
-        aria-haspopup="menu"
-        aria-expanded={anchor !== null}
-        onClick={(event) => setAnchor(event.currentTarget)}
-        onKeyDown={(event) => {
-          if (event.key === (end === 'left' ? 'ArrowLeft' : 'ArrowRight')) setAnchor(event.currentTarget);
-        }}
-      >
-        <MenuRowIcon>{icon}</MenuRowIcon>
-        <MenuRowText>{label}</MenuRowText>
-        <MenuRowIcon>
-          <ChevronRightIcon sx={{ transform: end === 'left' ? 'scaleX(-1)' : undefined }} />
-        </MenuRowIcon>
-      </MenuRow>
-      <Menu
-        anchorEl={anchor}
-        open={anchor !== null}
-        onClose={() => setAnchor(null)}
-        anchorOrigin={{ vertical: 'top', horizontal: end }}
-        transformOrigin={{ vertical: 'top', horizontal: start }}
-        slotProps={{ list: { dense: true, 'aria-label': label } }}
-      >
-        {choices.map((choice) => (
+    <NativeSubmenu testId={testId} icon={icon} label={label} minWidth="10rem">
+      {(close) =>
+        choices.map((choice) => (
           <MenuRow
             key={choice.value}
             role="menuitemradio"
             aria-checked={choice.value === value}
             onClick={() => {
-              setAnchor(null);
+              close();
               onChoose(choice.value);
             }}
           >
             <MenuRowIcon>{choice.value === value ? <CheckIcon /> : null}</MenuRowIcon>
             <MenuRowText>{choice.label}</MenuRowText>
           </MenuRow>
-        ))}
-      </Menu>
-    </>
+        ))
+      }
+    </NativeSubmenu>
   );
 }
 

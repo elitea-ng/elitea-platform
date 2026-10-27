@@ -99,12 +99,13 @@ function conversationActions(conversation: Conversation, actions: ConversationRo
   ];
 }
 
-function RowMenu({ items, label }: { readonly items: readonly ContextAction[]; readonly label: string }): React.JSX.Element {
+/** The row's hover "⋯": the same leaves as its native context menu (the Local work thread rows use it too). */
+export function RowMenu({ items, label, testId = 'shell-conversation-more' }: { readonly items: readonly ContextAction[]; readonly label: string; readonly testId?: string }): React.JSX.Element {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const close = (): void => setAnchor(null);
   return (
     <>
-      <IconButton size="small" aria-label={label} aria-haspopup="menu" data-testid="shell-conversation-more" onClick={(event) => setAnchor(event.currentTarget)}>
+      <IconButton size="small" aria-label={label} aria-haspopup="menu" data-testid={testId} onClick={(event) => setAnchor(event.currentTarget)}>
         <MoreHorizIcon fontSize="inherit" />
       </IconButton>
       <Menu anchorEl={anchor} open={anchor !== null} onClose={close} slotProps={{ list: { dense: true } }}>

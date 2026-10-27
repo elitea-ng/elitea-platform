@@ -380,7 +380,8 @@ describe('WorkspaceSessionPage', () => {
     ipc.emit({ ...at(6), kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: ['m1'], changed_files: 1 } });
     ipc.emit({ ...at(7), kind: 'status', payload: { phase: 'done' } });
 
-    expect(await screen.findByText('src/main.rs')).toBeInTheDocument();
+    // The panel's row: the file name, its folder quiet beside it.
+    expect(await screen.findByText('main.rs')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Undo turn' })).toBeInTheDocument();
     // The thread's ⋯ in the toolbar (the composer has a ⋯ of its own).
     await user.click(screen.getByTestId('thread-more'));
@@ -442,7 +443,12 @@ describe('WorkspaceSessionPage', () => {
     expect(await within(sets[0] as HTMLElement).findByText('t2-live.txt')).toBeInTheDocument();
     expect(within(sets[0] as HTMLElement).getByRole('button', { name: 'Undo turn' })).toBeInTheDocument();
     expect(within(sets[0] as HTMLElement).getByText('Prompt of t2')).toBeInTheDocument();
-    expect(within(sets[1] as HTMLElement).getByText('t1.txt')).toBeInTheDocument();
+    // The older turn starts folded to its header; it unfolds on a click.
+    const olderToggle = within(sets[1] as HTMLElement).getByRole('button', { name: /Prompt of t1/ });
+    expect(olderToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(within(sets[1] as HTMLElement).queryByText('t1.txt')).toBeNull();
+    await user.click(olderToggle);
+    expect(await within(sets[1] as HTMLElement).findByText('t1.txt')).toBeInTheDocument();
     expect(within(sets[1] as HTMLElement).queryByRole('button', { name: 'Undo turn' })).toBeNull();
   });
 
@@ -569,7 +575,7 @@ describe('WorkspaceSessionPage', () => {
       // The new thread opens with the turns up to the fork point, and says the files were not rolled back.
       expect(await screen.findByTestId('fork-notice')).toHaveTextContent('Files stay as they are now.');
       expect(screen.getAllByTestId('history-turn')).toHaveLength(1);
-      expect(screen.getByText('Prompt of t1')).toBeInTheDocument();
+      expect(within(await screen.findByTestId('session-transcript')).getByText('Prompt of t1')).toBeInTheDocument();
       expect(screen.queryByText('Prompt of t2')).toBeNull();
       expect(screen.getByTestId('thread-title')).toHaveTextContent('Fix the build (fork)');
       // The source thread is untouched.
@@ -630,7 +636,7 @@ describe('WorkspaceSessionPage', () => {
       appIpc.chooseFromContextMenu('fork');
       fireEvent.contextMenu(await screen.findByTestId('your-prompt'));
       expect(await screen.findByTestId('fork-notice')).toBeInTheDocument();
-      await waitFor(() => expect(screen.queryByText('Prompt of t1')).toBeInTheDocument());
+      await waitFor(() => expect(within(screen.getByTestId('session-transcript')).queryByText('Prompt of t1')).toBeInTheDocument());
       expect(screen.queryByTestId('fork-restore')).toBeNull();
 
       server.use(
@@ -650,7 +656,7 @@ describe('WorkspaceSessionPage', () => {
       const user = userEvent.setup();
       mount(ipc, '/workspaces/w1?conversation=77');
 
-      await screen.findByText('Prompt of t1');
+      await within(await screen.findByTestId('session-transcript')).findByText('Prompt of t1');
       // The thread's ⋯ in the toolbar (the composer has a ⋯ of its own).
       await user.click(screen.getByTestId('thread-more'));
       await user.click(await screen.findByRole('menuitem', { name: 'Fork Thread' }));
@@ -681,7 +687,7 @@ describe('WorkspaceSessionPage', () => {
 
       expect(await screen.findByTestId('fork-error')).toHaveTextContent('a turn is still running or waits for an approval');
       expect(ipc.calls.forks).toEqual([]);
-      expect(screen.getByText('Prompt of t1')).toBeInTheDocument();
+      expect(within(await screen.findByTestId('session-transcript')).getByText('Prompt of t1')).toBeInTheDocument();
 
       // Asked again (the first answer may have been lost): the same fork_id, so the server makes one fork at most.
       appIpc.chooseFromContextMenu('fork');

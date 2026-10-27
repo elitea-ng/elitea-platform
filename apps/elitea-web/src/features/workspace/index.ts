@@ -11,7 +11,7 @@ import { customCommandDetail, customCommandSource, customCommandToken, invokedPi
 import { matchingSkills, skillToken } from './model/composerSkills';
 import { activeToken, mentionText, referencedPaths } from './model/composerTokens';
 import { useRenameThread, useServerThreadName, useThreadNaming } from './model/threadNames';
-import { readLastLocation, writeLastLocation } from './model/threads';
+import { forgetThread, readLastLocation, writeLastLocation } from './model/threads';
 import { latestPlan } from './model/turnReducer';
 import { sumUsage } from './model/turnUsage';
 import { ApprovalCard } from './ui/ApprovalCard';
@@ -56,8 +56,8 @@ export const composer = {
 /** The folder and thread the person was last in (desktop home), read and written as one pair. */
 export const lastLocation = { read: readLastLocation, write: writeLastLocation };
 
-/** A local thread's name: generated after its first turn, read back from the server, renamed by the person. */
-export const threadNames = { useNaming: useThreadNaming, useServerName: useServerThreadName, useRename: useRenameThread, RenameField: ThreadRenameField };
+/** A local thread's name: generated after its first turn, read back from the server, renamed by the person; `forget` drops a deleted thread's record. */
+export const threadNames = { useNaming: useThreadNaming, useServerName: useServerThreadName, useRename: useRenameThread, RenameField: ThreadRenameField, forget: forgetThread };
 
 /** A tool's approval: the dialog (local turns) and the inline card (cloud transcripts). */
 export const approval = { Dialog: ApprovalDialog, Card: ApprovalCard };

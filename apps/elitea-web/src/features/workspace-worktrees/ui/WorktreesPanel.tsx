@@ -9,7 +9,7 @@
  * Remove asks the person only when the host refuses it for uncommitted work
  * (`useWorktrees`). Renders nothing outside the desktop host.
  */
-import { useMemo, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import CallMergeOutlinedIcon from '@mui/icons-material/CallMergeOutlined';
 import DeleteOutlineOutlinedIcon from '@mui/icons-material/DeleteOutlineOutlined';
@@ -19,9 +19,10 @@ import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 
-import { tauriWorktreeIpc, type WorktreeEntry, type WorktreeIpc } from '@/shared/desktop/worktreeIpc';
+import type { WorktreeEntry, WorktreeIpc } from '@/shared/desktop/worktreeIpc';
 import { t } from '@/shared/i18n';
 
+import { useWorktreeIpc } from '../model/ipcContext';
 import { useWorktrees } from '../model/useWorktrees';
 import { MergeBackDialog } from './MergeBackDialog';
 import { RemoveWorktreeDialog } from './RemoveWorktreeDialog';
@@ -39,7 +40,7 @@ export interface WorktreesPanelProps {
   workspaceId: string;
   workspaceName: string;
   renderEntry: (parts: WorktreeRowParts) => ReactNode;
-  /** The host client; the Tauri one when not given (tests pass a fake). */
+  /** The host client; the provided (`WorktreeIpcProvider`) or Tauri one when not given (tests pass a fake). */
   ipc?: WorktreeIpc;
 }
 
@@ -139,7 +140,8 @@ function Panel({ ipc, workspaceId, workspaceName, renderEntry }: Required<Worktr
 }
 
 export function WorktreesPanel({ workspaceId, workspaceName, renderEntry, ipc: provided }: WorktreesPanelProps): React.JSX.Element | null {
-  const ipc = useMemo(() => provided ?? tauriWorktreeIpc(), [provided]);
+  const fromContext = useWorktreeIpc();
+  const ipc = provided ?? fromContext;
   if (ipc === undefined) return null;
   return <Panel ipc={ipc} workspaceId={workspaceId} workspaceName={workspaceName} renderEntry={renderEntry} />;
 }

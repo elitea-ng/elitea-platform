@@ -21,6 +21,8 @@ In the Elitea desktop app, the foot of the left sidebar shows who you are signed
 | **Troubleshoot** | Opens Settings › Troubleshoot, where you can run the app's diagnostics. |
 | **Sign out** | Signs this computer out of the deployment and returns to the connect screen. |
 
+**Appearance** and **Language** open their choices beside the menu when you point at them, as menus in your operating system do; a click, or the right arrow key, opens them too. The left arrow key or Esc goes back. Every submenu in the app works this way, for example the agent's **Version** and the **Step limit**.
+
 Credentials, Catalog and the Help Center used to be rows in the sidebar. They moved to this menu so the list holds only the places you work in. The command palette (⌘K / Ctrl+K) still finds all of them.
 
 ## The sidebar and its project
@@ -43,17 +45,33 @@ In a Local work thread the row under the text holds, from the left:
 
 - **+** to attach images (you can also paste or drop them).
 - The mode: **Act** (edits with approvals), **Plan** (plans, changes nothing) or **Bypass** (no approvals; the app warns you the first time).
-- The agent and its version, and the model.
-- **⋯** with **Step limit**: how many steps a turn may take.
+- The agent and its version (point at **Version** to see the versions), and the model.
+- **⋯** with **Step limit**: how many steps a turn may take. Point at it to pick the default, a preset, **Unlimited** or a number of your own.
 - In a new thread of a git folder, **Work in**: **This folder**, or **New worktree** (see [Work in a worktree](#work-in-a-worktree)).
-- Where the thread runs (**Local** or in the cloud), the language-server status, the index icon, and a ring showing how much of the model's context the thread uses. Select the ring to open the **Context** tab.
+- **Send to cloud**, or **Take back** for a thread running in the cloud (see [Send a thread to the cloud](#send-a-thread-to-the-cloud)), the language-server status, the index icon, and a ring showing how much of the model's context the thread uses. Select the ring to open the **Context** tab.
 - **Send**, which becomes **Stop** while a turn runs.
 
 The index icon shows the state of the folder's code index by its colour: grey when it is ready or off, the accent colour while it builds, orange when it is out of date and red after an error. Point at it to read the state, for example *Index ready · 257.3K entities*; select it to open the **Index** tab on the right, where the index settings are.
 
-The thread's title at the top (folder › thread) opens a card with the folder's path, **Reveal in Finder** and **Copy Path**. To move the folder to another project, use the folder's menus in the sidebar.
-
 While a turn runs, in a chat or a thread, that round button is **Stop** until you type, then **Send** again: what you send waits in the **Queued** list at the top of the message box. Each queued message has **Send now** (stop the turn and send this message first), **Edit** (take it back into the message box) and **Remove**. Press **Esc** twice quickly to stop the turn from anywhere on the page; a single Esc still just closes a menu or dialog.
+
+### Send a thread to the cloud
+
+A thread that may move to the cloud shows **Send to cloud** in the row under the text. Select it to review what is sent and send the thread. The small **⌄** beside it opens **Handoff settings…**, where you choose what stays on your computer.
+
+While the thread runs in the cloud, the same place shows **Take back**: select it to review the cloud's changes and apply them to your folder. Its **⌄** holds **Erase cloud copy…**, **Open in chat** and **Handoff settings…**. While the thread is on its way back it shows **Returning** and cannot be selected.
+
+When a thread cannot move (your deployment or project has the cloud executor off, or the thread has no messages yet), nothing is shown: the thread runs on your computer.
+
+### The Changes tab
+
+The **Changes** tab on the right lists what each turn changed, newest first. Each turn is one line: the start of your message, the number of files and the lines added and removed. Select it to fold or unfold the turn; the newest turn starts unfolded. Point at a turn for **Undo** (or **Restore folder** after an undo).
+
+Each file is one row: its name, its folder in grey, the lines added and removed and a coloured letter, **M** modified, **A** added, **D** deleted or **R** renamed. Select a row to open its diff below it. Point at the row, or move to it with the keyboard, for **Reveal in Finder**, **Open** and **Revert**.
+
+### The thread's title
+
+The thread's title at the top (folder › thread) opens a card with the folder's path, **Reveal in Finder** and **Copy Path**. To move the folder to another project, use the folder's menus in the sidebar.
 
 ## Language
 
@@ -86,7 +104,9 @@ Strings that have no translation yet are shown in English. Names of products and
 
 A worktree is a separate copy of a git folder on its own branch. The agent works there while you keep using the folder, or while another thread works in it, so several tasks run side by side without touching each other's files.
 
-To start one, open a new thread in a git folder and set **Work in** to **New worktree**, or choose **New thread in a worktree** from the folder's **⋯** or right-click menu. Write your message and send it: the app makes the worktree on a new `elitea/…` branch from the folder's current commit, opens the worktree's thread and sends the message there.
+A new thread in a git folder starts with **Work in** set to **New worktree**. Write your message and send it: the app makes the worktree on a new `elitea/…` branch from the folder's current commit, opens the worktree's thread and sends the message there. To work in the folder itself, set **Work in** to **This folder** before you send.
+
+The app remembers your choice for each folder: after you pick **This folder**, the folder's next new thread starts on **This folder** too, until you pick **New worktree** again. **New thread in a worktree** in the folder's **⋯** or right-click menu always starts on **New worktree**.
 
 A worktree shows under its folder in the sidebar, as one of the folder's threads with a branch icon, the thread's title, and how many commits it is ahead and how many files are not committed. Hover over the name to see the branch and where the worktree is. Hover actions:
 
@@ -95,6 +115,19 @@ A worktree shows under its folder in the sidebar, as one of the folder's threads
 - **Remove** deletes the worktree; the app asks first when it has uncommitted work. Its branch stays when it has commits.
 
 A worktree is never listed as a folder of its own, on the **Local work** page or in the command palette.
+
+## Archive and delete threads
+
+Each thread under **Local work** has **Archive** and **Delete…** in its **⋯** menu (hover over the thread) and in its right-click menu. They work the same for a thread that runs on this computer and one you sent to the cloud.
+
+- **Archive** archives the thread's conversation, as archiving a chat does. The thread leaves **Local work** and shows under **Archived** in the **Chats** section. Unarchive it there and it shows under its folder again.
+- **Delete…** asks first, then deletes the conversation and the thread's history on this computer. It can't be undone.
+
+When the thread works in a worktree, archiving or deleting it also removes the worktree. The app asks first, with **Also remove its worktree** checked; clear it to keep the worktree. The worktree's `elitea/…` branch stays when it has commits. When the worktree has changes that were never committed, the app asks again: **Remove anyway** deletes those changes, **Keep the worktree** leaves it in the sidebar.
+
+Unarchiving a thread whose worktree was removed restores its conversation, but the thread does not show under **Local work** again: its worktree is gone.
+
+If the thread you archive or delete is open, the app opens a new thread in its folder.
 
 ## When the app cannot reach your deployment
 

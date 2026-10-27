@@ -45,8 +45,8 @@ describe('StepLimitMenu', () => {
     expect(row).toHaveTextContent('Step limit');
     expect(row).toHaveTextContent('1024 steps');
     await user.click(row);
-    // The row turns the menu into the choices, the current one checked.
-    expect(screen.getByTestId('steps-chip-default')).toHaveClass('Mui-selected');
+    // The row opens the choices beside it, the current one checked.
+    expect(await screen.findByTestId('steps-chip-default')).toHaveAttribute('aria-checked', 'true');
     await user.click(screen.getByTestId('steps-chip-unlimited'));
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
     expect(host.settings()).toEqual({ step_limit: 'unlimited', diagnostics: false });
@@ -56,7 +56,7 @@ describe('StepLimitMenu', () => {
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
 
     await openSteps();
-    await user.click(screen.getByTestId('steps-chip-custom'));
+    await user.click(await screen.findByTestId('steps-chip-custom'));
     const input = screen.getByTestId('steps-chip-custom-input');
     await user.type(input, '0');
     expect(screen.getByTestId('steps-chip-custom-set')).toBeDisabled();

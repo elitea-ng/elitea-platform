@@ -95,10 +95,11 @@ describe('DesktopFrame sidebar', () => {
     const threads = await within(folders[0] as HTMLElement).findAllByTestId('shell-thread');
     expect(threads.map((thread) => thread.textContent)).toEqual(['quick overview', 'fix the build']);
 
-    await user.click(within(threads[1] as HTMLElement).getByRole('button'));
+    // The row's first button opens it; the second is its hover "⋯".
+    await user.click(within(threads[1] as HTMLElement).getAllByRole('button')[0] as HTMLElement);
     await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/w1'));
     expect(router.state.location.search).toEqual({ conversation: '77' });
-    expect(within(threads[1] as HTMLElement).getByRole('button')).toHaveAttribute('aria-current', 'page');
+    expect(within(threads[1] as HTMLElement).getAllByRole('button')[0]).toHaveAttribute('aria-current', 'page');
 
     // A folder collapses to its row.
     await user.click(within(folders[0] as HTMLElement).getAllByRole('button')[0] as HTMLElement);
@@ -244,7 +245,7 @@ describe('DesktopFrame context menus', () => {
     appIpc.chooseFromContextMenu('chat');
     fireEvent.contextMenu(thread);
     await waitFor(() => expect(appIpc.calls.contextMenus).toHaveLength(1));
-    expect((appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'))).toEqual(['Open', 'Open in chat', 'Copy Link', 'Rename…']);
+    expect((appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'))).toEqual(['Open', 'Open in chat', 'Copy Link', 'Rename…', '-', 'Archive', '-', 'Delete…']);
     await waitFor(() => expect(router.state.location.pathname).toBe('/chat/77'));
   });
 

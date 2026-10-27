@@ -1060,5 +1060,22 @@
   "workspace.indexIcon.building": "Index building…",
   "workspace.indexIcon.off": "Index off: the agent searches files without it",
   "workspace.indexIcon.open": "Click to open the Index tab",
-  "workspace.indexIcon.reading": "Index: reading…"
+  "workspace.indexIcon.reading": "Index: reading…",
+  "desktop.shell.alsoRemoveWorktree": "Also remove its worktree",
+  "desktop.shell.archiveThreadBody": "The thread leaves Local work and moves to the project's Archived chats. Unarchive it there to bring it back.",
+  "desktop.shell.archiveThreadTitle": "Archive “{{name}}”?",
+  "desktop.shell.deleteThread": "Delete",
+  "desktop.shell.deleteThreadBody": "The conversation is deleted, and its history on this computer. This can’t be undone.",
+  "desktop.shell.deleteThreadTitle": "Delete “{{name}}”?",
+  "desktop.shell.keepWorktree": "Keep the worktree",
+  "desktop.shell.threadDeleteFailed": "The thread could not be deleted. Try again.",
+  "desktop.shell.threadMore": "More for {{name}}",
+  "desktop.shell.worktreeBranchKept": "The branch {{branch}} is kept when it has commits.",
+  "desktop.shell.worktreeDirtyBody": "{{branch}} has changes that were never committed. Removing the worktree deletes them for good; the main folder is not touched.",
+  "desktop.shell.worktreeDirtyTitle": "The worktree has uncommitted work",
+  "workspace.changes.diffOf": "Diff of {{path}}",
+  "workspace.changes.fileCount": "{{n}} files",
+  "workspace.changes.fileCountOne": "1 file",
+  "workspace.changes.thisTurn": "This turn",
+  "workspace.handoff.more": "Cloud options"
 }

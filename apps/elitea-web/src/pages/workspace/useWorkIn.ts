@@ -1,6 +1,8 @@
 /**
  * "Work in" on a new thread of a git folder (`WorkInChip`): the folder itself,
- * or a new task worktree. With "New worktree", Send makes the worktree, hands
+ * or a new task worktree, which is proposed by default; the person's own
+ * choice is remembered for the folder (`rememberWorkIn`) and proposed next
+ * time, while the folder menu's "New thread in a worktree" forces it. With "New worktree", Send makes the worktree, hands
  * the message to the worktree's own new thread (`holdFirstMessage`) and opens
  * it; that thread sends it as soon as it can (`takeFirstMessage`), so the
  * person writes once. A worktree the host cannot make (not the repository's
@@ -8,7 +10,7 @@
  */
 import { useEffect, useState } from 'react';
 
-import { holdFirstMessage, initialWorkIn, listenForWorktree, StartInWorktreeError, takeFirstMessage, useStartInWorktree, type WorkIn } from '@/features/workspace-worktrees';
+import { holdFirstMessage, initialWorkIn, listenForWorktree, rememberWorkIn, StartInWorktreeError, takeFirstMessage, useStartInWorktree, type WorkIn } from '@/features/workspace-worktrees';
 import type { WorktreeIpc } from '@/shared/desktop/worktreeIpc';
 import { t } from '@/shared/i18n';
 
@@ -39,11 +41,16 @@ export interface WorkInInput {
   ipc?: WorktreeIpc;
 }
 
-export function useWorkIn({ workspaceId, offered, canSend, send, onError, open, ipc }: WorkInInput): WorkInControl {
+export function useWorkIn({ workspaceId, offered: asked, canSend, send, onError, open, ipc }: WorkInInput): WorkInControl {
   const start = useStartInWorktree(ipc);
-  const [value, setValue] = useState<WorkIn>(() => (offered ? initialWorkIn(workspaceId) : 'folder'));
+  // Without a host that can make worktrees, nothing is offered and the thread works in the folder.
+  const offered = asked && start !== undefined;
+  // Read once, at mount: the folder may become "offered" a moment later (its git state is read), and keeps the proposal.
+  const [initial] = useState<WorkIn>(() => initialWorkIn(workspaceId));
+  const [chosen, setChosen] = useState<WorkIn | undefined>(undefined);
+  const value: WorkIn = offered ? (chosen ?? initial) : 'folder';
 
-  useEffect(() => (offered ? listenForWorktree(workspaceId, () => setValue('worktree')) : undefined), [offered, workspaceId]);
+  useEffect(() => (offered ? listenForWorktree(workspaceId, () => setChosen('worktree')) : undefined), [offered, workspaceId]);
 
   // The message written in the folder's new thread, sent here once this thread can take it.
   useEffect(() => {
@@ -65,5 +72,10 @@ export function useWorkIn({ workspaceId, offered, canSend, send, onError, open, 
     }
   };
 
-  return { offered: offered && start !== undefined, value, choose: setValue, send: offered && value === 'worktree' ? toWorktree : send };
+  const choose = (next: WorkIn): void => {
+    setChosen(next);
+    rememberWorkIn(workspaceId, next);
+  };
+
+  return { offered, value, choose, send: offered && value === 'worktree' ? toWorktree : send };
 }

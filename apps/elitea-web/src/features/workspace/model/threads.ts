@@ -8,9 +8,15 @@
  * `clearNamespace()` sweep wipes it with everything else. Losing it loses
  * nothing on the server: each thread is still an ordinary conversation.
  *
+ * A thread archived from the sidebar keeps its record here and is hidden
+ * while its id is in the archived set (`shared/desktop/archivedThreads`), so
+ * unarchiving the conversation brings it back; a deleted thread is forgotten
+ * (`forgetThread`).
+ *
  * The same module remembers where the person last was (folder + thread), so
  * the desktop opens there after sign-in.
  */
+import { archivedThreadIds, LOCAL_THREADS_KEY } from '@/shared/desktop/archivedThreads';
 import { createStorage } from '@/shared/lib/storage';
 
 export interface WorkspaceThread {
@@ -56,12 +62,26 @@ function validThreads(raw: unknown): WorkspaceThread[] {
   return raw.filter(isThread);
 }
 
-/** Never throws: unavailable or corrupt storage reads as "no threads". */
-export function readThreads(workspaceId: string): WorkspaceThread[] {
+/** Every remembered thread, archived ones included. Never throws: unavailable or corrupt storage reads as "no threads". */
+function readAllThreads(workspaceId: string): WorkspaceThread[] {
   try {
     return createStorage('local').getJSON(threadsKey(workspaceId), validThreads) ?? [];
   } catch {
     return [];
+  }
+}
+
+/** The folder's threads as listed: without the archived ones. Never throws. */
+export function readThreads(workspaceId: string): WorkspaceThread[] {
+  const archived = archivedThreadIds();
+  return readAllThreads(workspaceId).filter((thread) => !archived.has(thread.id));
+}
+
+function writeThreads(workspaceId: string, next: readonly WorkspaceThread[]): void {
+  try {
+    createStorage('local').setJSON(threadsKey(workspaceId), next);
+  } catch {
+    // Storage unavailable: the change is not remembered.
   }
 }
 
@@ -85,24 +105,26 @@ function placed(list: readonly WorkspaceThread[], thread: WorkspaceThread, rewou
  */
 export function recordThread(workspaceId: string, thread: WorkspaceThread, rewoundFrom?: string): WorkspaceThread[] {
   const title = thread.title.trim().slice(0, MAX_TITLE);
-  const next = placed(readThreads(workspaceId), { ...thread, title }, rewoundFrom).slice(0, MAX_THREADS);
-  try {
-    createStorage('local').setJSON(threadsKey(workspaceId), next);
-  } catch {
-    // Storage unavailable: the thread is simply not remembered.
-  }
+  const next = placed(readAllThreads(workspaceId), { ...thread, title }, rewoundFrom).slice(0, MAX_THREADS);
+  writeThreads(workspaceId, next);
   return next;
 }
 
 /** Gives thread `id` the conversation's name `title` in place (its place and time stay); marks it named. */
 export function renameThread(workspaceId: string, id: string, title: string): WorkspaceThread[] {
-  const next = readThreads(workspaceId).map((thread) => (thread.id === id ? { ...thread, title: title.trim().slice(0, MAX_NAME), named: true } : thread));
-  try {
-    createStorage('local').setJSON(threadsKey(workspaceId), next);
-  } catch {
-    // Storage unavailable: the name shows again after the next read from the server.
-  }
+  const next = readAllThreads(workspaceId).map((thread) => (thread.id === id ? { ...thread, title: title.trim().slice(0, MAX_NAME), named: true } : thread));
+  writeThreads(workspaceId, next);
   return next;
+}
+
+/** Forgets thread `id` (deleted); its earlier attempts stay, each standing alone. */
+export function forgetThread(workspaceId: string, id: string): void {
+  const all = readAllThreads(workspaceId);
+  if (!all.some((thread) => thread.id === id)) return;
+  writeThreads(
+    workspaceId,
+    all.filter((thread) => thread.id !== id).map(({ earlierAttemptOf, ...thread }) => (earlierAttemptOf === id || earlierAttemptOf === undefined ? thread : { ...thread, earlierAttemptOf })),
+  );
 }
 
 export function forgetThreads(workspaceId: string): void {
@@ -138,4 +160,4 @@ export function writeLastLocation(location: LastLocation | null): void {
 }
 
 /** The react-query key the sidebar reads a folder's threads under; invalidate it after `recordThread`. */
-export const threadsQueryKey = (workspaceId: string) => ['workspace', 'threads', workspaceId] as const;
+export const threadsQueryKey = (workspaceId: string) => [...LOCAL_THREADS_KEY, workspaceId] as const;
