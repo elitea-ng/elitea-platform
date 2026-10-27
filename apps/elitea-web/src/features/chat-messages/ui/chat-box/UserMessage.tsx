@@ -1,64 +1,64 @@
 /**
  * Renders a user's message row. Ported from `apps/elitea-ui/src/[fsd]/
- * features/chat/ui/chat-box/UserMessage.jsx`.
+ * features/chat/ui/chat-box/UserMessage.jsx`, and drawn as a chat: the
+ * reader's own question is a tinted bubble on the right, hugging its text;
+ * anyone else's is a neutral bubble on the left under their name. The
+ * baseline's `<avatar> <author> to <recipient>` caption line is gone — the
+ * side says who wrote it, and the time rides in the action row.
  */
 import type { ChangeEvent, ReactNode } from 'react';
 import { useCallback, useMemo, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
+import type { Theme } from '@mui/material/styles';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import { MessageAttachmentList } from '../attachments/MessageAttachmentList';
-import { MessageAvatar } from './MessageAvatar';
-import { MessageHeaderRow } from './MessageHeaderRow';
 import { replyActionsRevealSx } from './ReplyActionButton';
 import { UserMessageActions } from './UserMessageActions';
+import { TEXT_MESSAGE_ITEM_TYPE, findAttachmentItems, findQuestionItem, getItemTextContent } from './UserMessage.items';
 
-import type { Attachment } from '@/entities/attachment/model/types';
 import { t } from '@/shared/i18n';
 
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
-import { useParticipantName } from '../../lib/participantName';
-import type { ParticipantNameInput } from '../../lib/participantName';
-
-const TEXT_MESSAGE_ITEM_TYPE = 'text_message';
-const ATTACHMENT_ITEM_TYPE = 'attachment_message';
 
 /**
- * The row shell, measured off the production transcript's own `<li>`
- * (`padding: 12px 0; gap: 8px; flex-direction: column; border-radius: 4px`) —
- * baseline `UserMessage.jsx`'s `styles.containerVertical`. Hovering it
- * reveals the action row under the bubble.
+ * The row shell: a column whose children hug the reader's side (right) or
+ * the author's (left). The gap between turns is the list's (`ChatMessageList`),
+ * not padding here. Hovering it reveals the action row under the bubble.
  */
-const userMessageContainerSx = {
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'flex-start',
-  alignSelf: 'stretch',
-  width: '100%',
-  gap: '0.5rem',
-  padding: '0.75rem 0',
-  borderRadius: '0.25rem',
-  ...replyActionsRevealSx,
-} as const;
-
-/**
- * The quiet bubble the question sits in: the composer's faint fill, no
- * shadow, hugging its text (it used to be the reply's white elevated card).
- */
-function userMessageBodySx(theme: import('@mui/material/styles').Theme) {
+function userMessageContainerSx(isOwn: boolean) {
   return {
-    width: 'fit-content',
-    maxWidth: '100%',
-    boxSizing: 'border-box',
-    background: theme.vars.palette.background.userInputBackground,
-    color: theme.vars.palette.text.secondary,
-    borderRadius: theme.vars.shape.radiusMd,
-    padding: '0.75rem 1rem',
-    position: 'relative',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: isOwn ? 'flex-end' : 'flex-start',
+    alignSelf: 'stretch',
+    width: '100%',
+    gap: 0.5,
+    ...replyActionsRevealSx,
   } as const;
+}
+
+/**
+ * The bubble the question sits in, hugging its text up to 80% of the column:
+ * the selection accent tint for the reader's own, the composer's neutral fill
+ * for anyone else's. No shadow, no border.
+ */
+function userMessageBodySx(isOwn: boolean) {
+  return (theme: Theme) => ({
+    width: 'fit-content',
+    maxWidth: '80%',
+    boxSizing: 'border-box',
+    background: isOwn
+      ? theme.vars.palette.background.select.selected.default
+      : theme.vars.palette.background.userInputBackground,
+    color: theme.vars.palette.text.secondary,
+    borderRadius: theme.vars.shape.radiusLg,
+    padding: '0.625rem 1rem',
+    position: 'relative',
+  } as const);
 }
 
 /** baseline `styles.textContent`. */
@@ -81,6 +81,12 @@ export interface UserMessageProps {
   readonly message: ChatMessage;
   /** Message ID for tracking. */
   readonly messageId: string;
+  /**
+   * Whether the signed-in reader wrote this message (the list decides —
+   * `ChatMessageList`'s `isOtherAuthor`): a right-hand accent bubble with no
+   * name. Otherwise a left-hand neutral bubble under the author's name.
+   */
+  readonly isOwn?: boolean;
   /** Whether the message is loading/streaming. */
   readonly isLoading?: boolean;
   /** Whether the message is streaming. */
@@ -91,8 +97,6 @@ export interface UserMessageProps {
   readonly isLastMessage?: boolean;
   /** Called when the user clicks the copy button. */
   readonly onCopy?: (() => void) | undefined;
-  /** Called (in addition to entering local edit mode) when the user clicks the edit button. */
-  readonly onEdit?: (() => void) | undefined;
   /** Called when the user clicks the delete button. */
   readonly onDelete?: (() => void) | undefined;
   /** "Fork from here": a new conversation up to and including this message. */
@@ -131,34 +135,8 @@ export interface UserMessageProps {
 }
 
 /**
- * `messageItems`' declared type (`MessageItemWire[]`) only models `id`/
- * `item_details.content` — the real wire also carries `item_type`/`uuid`,
- * read here the same defensive way `convertMessagesToChatHistory.ts` does.
- */
-function getRawMessageItems(messageItems: ChatMessage['messageItems']): ReadonlyArray<Record<string, unknown>> {
-  return (messageItems ?? []) as unknown as ReadonlyArray<Record<string, unknown>>;
-}
-
-/** Finds the `text_message` item within a message's raw `messageItems` (baseline: `questionItem`). */
-function findQuestionItem(messageItems: ChatMessage['messageItems']): Record<string, unknown> | undefined {
-  return getRawMessageItems(messageItems).find((item) => item.item_type === TEXT_MESSAGE_ITEM_TYPE);
-}
-
-/** Filters a message's raw `messageItems` down to attachment-typed items (baseline: `attachmentItems`). */
-function findAttachmentItems(messageItems: ChatMessage['messageItems']): readonly Attachment[] {
-  const items = getRawMessageItems(messageItems).filter((item) => item.item_type === ATTACHMENT_ITEM_TYPE);
-  return items as unknown as readonly Attachment[];
-}
-
-/** Reads the text content nested in a `text_message` item's `item_details.content`. */
-function getItemTextContent(item: Record<string, unknown> | undefined): string | undefined {
-  const details = item?.item_details as { content?: string } | undefined;
-  return details?.content;
-}
-
-/**
- * Who to caption a question with: whoever the message NAMES, and nobody
- * otherwise.
+ * Who to caption someone else's question with: whoever the message NAMES,
+ * and nobody otherwise. (The reader's own question carries no caption.)
  *
  * `message.name` covers every author the transcript actually states —
  * including the literal "User No Longer Available" that `entities/message`'s
@@ -183,8 +161,8 @@ function getItemTextContent(item: Record<string, unknown> | undefined): string |
  * re-read), and the socket echo resolves its author from the conversation's
  * participants (`chatStreamMessageSyncFrames.ts`).
  *
- * An empty caption renders as NO caption line (the `Typography` below is
- * gated on it), which is honest; an invented one is not.
+ * An empty caption renders as NO caption (the `Typography` below is gated on
+ * it), which is honest; an invented one is not.
  */
 function resolveAuthorCaption(message: ChatMessage): string {
   return message.name || '';
@@ -193,17 +171,17 @@ function resolveAuthorCaption(message: ChatMessage): string {
 /**
  * `UserMessage` — renders a user's message content with optional action
  * buttons (copy/edit/delete), an edit-and-resubmit flow, and attachments.
- * Shows the user's name (from the message), the message content as text,
- * and — when `onSubmit` is supplied — an Edit button that swaps the bubble
- * for a textarea with Save/Cancel actions.
+ * Shows the content in a bubble on the reader's or the author's side and —
+ * when `onSubmit` is supplied — an Edit button that swaps the bubble for a
+ * column-wide textarea with Save/Cancel actions.
  */
 export function UserMessage({
   message,
   messageId,
+  isOwn = true,
   isLoading = false,
   isStreaming = false,
   onCopy,
-  onEdit,
   onDelete,
   onFork,
   onSubmit,
@@ -211,15 +189,7 @@ export function UserMessage({
   onOpenFileInCanvas,
   projectId,
 }: UserMessageProps): ReactNode {
-  const authorCaption = resolveAuthorCaption(message);
-  // Who the question was addressed to — the "to <name>" half of the caption
-  // line. `sentTo` is already on every normalised user message
-  // (`entities/message/lib/normalise.ts`'s `resolveSentTo`); nothing read it
-  // until now, and `lib/participantName.ts` — the ported resolver for exactly
-  // this — had no caller at all.
-  const sentToParticipant = message.sentTo as ParticipantNameInput | undefined;
-  const resolvedSentToName = useParticipantName(sentToParticipant);
-  const sentToName = sentToParticipant?.entity_name ? resolvedSentToName : undefined;
+  const authorCaption = isOwn ? '' : resolveAuthorCaption(message);
   const questionItem = useMemo(() => findQuestionItem(message.messageItems), [message.messageItems]);
   const attachmentItems = useMemo(() => findAttachmentItems(message.messageItems), [message.messageItems]);
   const resolvedContent = useMemo(
@@ -243,8 +213,7 @@ export function UserMessage({
   const handleEditClick = useCallback(() => {
     setValue(resolvedContent);
     setIsEditing(true);
-    onEdit?.();
-  }, [resolvedContent, onEdit]);
+  }, [resolvedContent]);
 
   const handleCancel = useCallback(() => {
     setIsEditing(false);
@@ -284,14 +253,18 @@ export function UserMessage({
   return (
     <Box
       data-testid="user-message"
-      sx={userMessageContainerSx}
+      sx={userMessageContainerSx(isOwn)}
     >
-      <MessageHeaderRow
-        avatar={<MessageAvatar name={authorCaption} avatarUrl={message.avatar} />}
-        name={authorCaption}
-        sentToName={sentToName}
-        createdAt={message.createdAt}
-      />
+      {authorCaption !== '' && (
+        <Typography
+          variant="bodySmall"
+          data-testid="chat-message-author"
+          sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics, maxWidth: '80%' })}
+          noWrap
+        >
+          {authorCaption}
+        </Typography>
+      )}
       {isEditing ? (
         <Box sx={{ width: '100%' }}>
           <TextField
@@ -347,7 +320,7 @@ export function UserMessage({
       ) : (
         <Box
           data-testid="chat-message-body"
-          sx={userMessageBodySx}
+          sx={userMessageBodySx(isOwn)}
         >
           <Typography
             variant="bodyMedium"
@@ -382,6 +355,8 @@ export function UserMessage({
           onEdit={onSubmit ? handleEditClick : undefined}
           onDelete={onDelete}
           onFork={onFork}
+          isOwn={isOwn}
+          createdAt={message.createdAt}
         />
       )}
       {attachmentError !== null && (

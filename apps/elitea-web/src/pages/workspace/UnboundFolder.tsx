@@ -16,7 +16,9 @@ import type { Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { ShowSidebarButton, TitleBarSpacer, useDesktopLayout } from '@/widgets/desktop-shell';
 
-import { COLUMN, FolderTitle } from './sessionParts';
+import { CONVERSATION_COLUMN as COLUMN } from '@/shared/ui/conversation-column';
+
+import { FolderTitle } from './sessionParts';
 import { useBindableProjects } from './useBindableProjects';
 
 const LIST_KEY = ['workspace', 'list'] as const;

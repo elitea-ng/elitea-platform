@@ -33,6 +33,7 @@ import type { SimpleBarInstance } from '@/shared/ui/ScrollableContainer';
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
 import { TraceStepDetailProvider } from '../../model/traceStepDetail';
 import { t } from '@/shared/i18n';
+import { CONVERSATION_COLUMN } from '@/shared/ui/conversation-column';
 
 import type { ChatMessageListProps } from './ChatMessageList.types';
 
@@ -97,6 +98,20 @@ function isOwnMessage(readerId: string | undefined, authorId: string | undefined
   return reader === author;
 }
 
+/**
+ * Which side a question sits on: someone else's (left) only when BOTH the
+ * reader and the author are stated and differ. Layout is not a permission, so
+ * an unstated side does not refuse the way `isOwnMessage` must — a reloaded
+ * row the server attributed to nobody is far more likely the reader's own
+ * question in their own chat than a stranger's, and drawing it on the left
+ * would make every such conversation look like someone else's.
+ */
+function isOtherAuthor(readerId: string | undefined, authorId: string | undefined): boolean {
+  const reader = statedAuthorId(readerId);
+  const author = statedAuthorId(authorId);
+  return reader !== undefined && author !== undefined && reader !== author;
+}
+
 /** Baseline `ChatMessageWrapper.jsx`'s `canDeleteThisAIMessage` — whether `userId` authored the question this AI answer replies to. */
 function canDeleteAiMessage(
   chatHistory: readonly ChatMessage[],
@@ -157,6 +172,12 @@ export function ChatMessageList({
   // than invented.
   // Steering (contract 1.27): an injected message that the transcript already holds is not shown two times.
   const transcriptIds = useMemo(() => new Set(chatHistory.map((message) => message.id)), [chatHistory]);
+  // A name over each reply only when more than one assistant answers here.
+  const isMultiAssistant = useMemo(() => {
+    const names = new Set(chatHistory.filter((msg) => msg.role !== 'user').map((msg) => msg.authorName ?? assistantName ?? ''));
+    names.delete('');
+    return names.size > 1;
+  }, [chatHistory, assistantName]);
   const lastUserMessageIndex = useMemo(
     () => chatHistory.reduce((last, msg, i) => (msg.role === 'user' ? i : last), -1),
     [chatHistory],
@@ -229,7 +250,7 @@ export function ChatMessageList({
         component="ul"
         ref={listRef}
         data-testid="chat-message-list"
-        sx={{ width: '100%', flexGrow: 1, listStyle: 'none', margin: 0, padding: '0 0.75rem 0.75rem' }}
+        sx={{ ...CONVERSATION_COLUMN, flexGrow: 1, listStyle: 'none', marginY: 0, paddingTop: 2, paddingBottom: 1.5 }}
       >
         {isLoadingMore && (
           <Box component="li" sx={{ display: 'flex', flexDirection: 'column', gap: 1, pb: 1, listStyle: 'none' }}>
@@ -289,12 +310,14 @@ export function ChatMessageList({
               key={messageId}
               data-testid="chat-message-item"
               ref={setMessageRowRef(messageId)}
-              sx={{ listStyle: 'none', width: '100%', mb: 1 }}
+              // The one gap between turns: the rows carry no padding of their own.
+              sx={{ listStyle: 'none', width: '100%', mb: 2 }}
             >
               {isUser ? (
                 <UserMessage
                   message={message}
                   messageId={messageId}
+                  isOwn={!isOtherAuthor(userId, message.userId)}
                   projectId={projectId}
                   onOpenFileInCanvas={onOpenFileInCanvas}
                   onCopy={handleCopy}
@@ -313,7 +336,7 @@ export function ChatMessageList({
                   // the answers — the mode's whole point (reading the reply
                   // back) could not happen.
                   isSpeakingMode={autoSpeak}
-                  author={{ participantName: message.authorName ?? assistantName }}
+                  author={{ participantName: message.authorName ?? assistantName, showCaption: isMultiAssistant }}
                   toolActions={message.toolActions}
                   status={{ isLoading: Boolean(message.isLoading), isStreaming: messageIsStreaming }}
                   actions={{

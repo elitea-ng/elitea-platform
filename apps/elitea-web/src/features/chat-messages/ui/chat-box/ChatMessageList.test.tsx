@@ -233,6 +233,31 @@ describe('ChatMessageList question-edit eligibility', () => {
 });
 
 /**
+ * Which side a question is drawn on — the reader's own on the right, anyone
+ * else's on the left under their name. Decided by the same author ids as the
+ * edit gate, but layout is not a permission: an unstated side draws as the
+ * reader's own rather than as a stranger's.
+ */
+describe('ChatMessageList question side', () => {
+  it("draws the reader's own question on the right with no name", () => {
+    renderList(buildPersistedTranscript(6), '6');
+    expect(screen.getByTestId('user-message')).toHaveStyle({ alignItems: 'flex-end' });
+    expect(screen.queryByTestId('chat-message-author')).toBeNull();
+  });
+
+  it("draws someone else's question on the left under their name", () => {
+    renderList(buildPersistedTranscript(7), '6');
+    expect(screen.getByTestId('user-message')).toHaveStyle({ alignItems: 'flex-start' });
+    expect(screen.getByTestId('chat-message-author')).toHaveTextContent('Reader');
+  });
+
+  it('draws an unattributed question, or one read before the reader resolves, as the reader\'s own', () => {
+    renderList(buildPersistedTranscript(undefined), '6');
+    expect(screen.getByTestId('user-message')).toHaveStyle({ alignItems: 'flex-end' });
+  });
+});
+
+/**
  * The "create canvas from a text selection" affordance on the conversation's
  * LAST message — a finding from the embedded-docs screenshot unit: the
  * control never rendered there, though it worked fine on any earlier message.
@@ -428,6 +453,8 @@ describe('ChatMessageList persisted assistant attribution', () => {
       </QueryClientProvider>
     );
     const view = render(buildList('Default model'));
+    // Two assistants answer here, so each reply is captioned with its own.
+    expect(screen.getAllByTestId('chat-message-author')).toHaveLength(2);
     expect(screen.getByText('Pipeline Alpha')).toBeVisible();
     expect(screen.getByText('Pipeline Beta')).toBeVisible();
     expect(screen.queryByText('Default model')).toBeNull();

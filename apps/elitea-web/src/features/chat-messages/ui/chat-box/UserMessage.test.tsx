@@ -74,7 +74,12 @@ function buildMessage(index: number, overrides: Partial<ChatMessage>): ChatMessa
   };
 }
 
-/** Renders one row per `overrides` entry into a single tree, and hands back its `QueryClient`. */
+/**
+ * Renders one row per `overrides` entry into a single tree, and hands back its
+ * `QueryClient`. Rows render as someone ELSE's question (`isOwn={false}`):
+ * that is the only side that carries an author caption, and attribution is
+ * what most cases here are about.
+ */
 function renderMessages(...overrides: readonly Partial<ChatMessage>[]): QueryClient {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const messages = overrides.map((override, index) => buildMessage(index, override));
@@ -82,7 +87,7 @@ function renderMessages(...overrides: readonly Partial<ChatMessage>[]): QueryCli
     <QueryClientProvider client={queryClient}>
       <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
         {messages.map((message) => (
-          <UserMessage key={message.id} message={message} messageId={message.id} />
+          <UserMessage key={message.id} message={message} messageId={message.id} isOwn={false} />
         ))}
       </ThemeProvider>
     </QueryClientProvider>,
@@ -99,12 +104,9 @@ describe('UserMessage author caption', () => {
     // empty name and NO `userId`.
     const queryClient = renderMessage({ name: '' });
 
-    // The caption line is still there (avatar + timestamp — every production
-    // row has one), but it names NOBODY: no author, and in particular not the
-    // reader. Asserting on the whole row's textContent would pin the caption's
-    // layout rather than its attribution, so the name is asserted directly.
+    // No caption names anybody: no author, and in particular not the reader.
     expect(screen.getByTestId('chat-message-body').textContent).toBe('hello');
-    expect(screen.getByTestId('chat-message-header').textContent).not.toContain(READER);
+    expect(screen.queryByTestId('chat-message-author')).toBeNull();
     expect(screen.queryByText(READER)).toBeNull();
     expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
   });
@@ -144,58 +146,59 @@ describe('UserMessage author caption', () => {
     expect(screen.queryByText(READER)).toBeNull();
   });
 
-  it('still captions the message the reader just sent, which carries its own name', () => {
-    stubCurrentAuthor();
-    // The shape `buildOptimisticUserMessage` builds on send
-    // (`widgets/chat-box/ui/hooks/useChatBoxHandlers.helpers.ts`): the sender
-    // is known at that moment, so the row states it and needs no fallback.
-    const queryClient = renderMessage({ name: READER, userId: 'me' });
-
-    expect(screen.getByText(READER)).toBeTruthy();
-    // ...and it came off the message, not off a re-read of the signed-in user.
-    expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
-  });
 });
 
 
 /**
- * The caption line itself, which did not exist.
- *
- * Every production transcript row — user and assistant alike — opens with
- * `<24px avatar> <author> to <recipient>` and closes with a right-aligned
- * relative timestamp (measured live on next.elitea.ai at 2000px, and visible
- * in every reference screenshot). This component rendered a right-aligned
- * `primary.main` chat bubble with a bare `caption` name above it and no
- * recipient and no timestamp at all — a layout the product has nowhere.
- *
- * Structural, so it is asserted structurally: the elements have to be
- * PRESENT. A style-only assertion would keep passing if the header were
- * dropped again.
+ * The row is drawn as a chat, not as the baseline's caption line
+ * (`<avatar> <author> to <recipient>` over every bubble, the time hard right):
+ * the reader's own question is a right-hand bubble with no name at all,
+ * anyone else's a left-hand bubble under only their name, and the time rides
+ * at the end of the action row. Asserted structurally — a style-only check
+ * would keep passing if the caption line came back.
  */
-describe('UserMessage caption line', () => {
-  it('captions the row with the author, the recipient and the time', () => {
-    stubCurrentAuthor();
-    renderMessage({
-      name: 'Bob Reviewer',
-      userId: 'user-7',
-      sentTo: { entity_name: 'dummy', entity_meta: {}, meta: {} },
-    });
+describe('UserMessage chat layout', () => {
+  function renderOne(isOwn: boolean, override: Partial<ChatMessage>, handlers: { readonly onCopy?: () => void } = {}): void {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <UserMessage message={buildMessage(0, override)} messageId="q0" isOwn={isOwn} {...handlers} />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+  }
 
-    const header = screen.getByTestId('chat-message-header');
-    expect(header.textContent).toContain('Bob Reviewer');
-    // `to <recipient>`: a dummy participant resolves to the deployment's
-    // system sender name, which defaults to the baseline's 'Elitea'.
-    expect(screen.getByTestId('chat-message-recipient').textContent).toBe('Elitea');
-    expect(screen.getByTestId('chat-message-time')).toBeTruthy();
-    expect(screen.getByTestId('chat-message-avatar')).toBeTruthy();
+  it("draws the reader's own question on the right, with no name, avatar or recipient", () => {
+    stubCurrentAuthor();
+    renderOne(true, { name: READER, userId: 'me', sentTo: { entity_name: 'dummy', entity_meta: {}, meta: {} } });
+
+    expect(screen.getByTestId('user-message')).toHaveStyle({ alignItems: 'flex-end' });
+    expect(screen.getByTestId('chat-message-body').textContent).toBe('hello');
+    expect(screen.queryByText(READER)).toBeNull();
+    expect(screen.queryByTestId('chat-message-author')).toBeNull();
+    expect(screen.queryByTestId('chat-message-avatar')).toBeNull();
+    expect(screen.queryByText('Elitea')).toBeNull();
   });
 
-  it('drops the whole "to ..." clause when the row names no recipient', () => {
+  it("draws someone else's question on the left under only their name", () => {
     stubCurrentAuthor();
-    renderMessage({ name: 'Bob Reviewer', userId: 'user-7' });
+    renderOne(false, { name: 'Bob Reviewer', userId: 'user-7', sentTo: { entity_name: 'dummy', entity_meta: {}, meta: {} } });
 
-    expect(screen.getByTestId('chat-message-header').textContent).toContain('Bob Reviewer');
-    expect(screen.queryByTestId('chat-message-recipient')).toBeNull();
+    expect(screen.getByTestId('user-message')).toHaveStyle({ alignItems: 'flex-start' });
+    expect(screen.getByTestId('chat-message-author').textContent).toBe('Bob Reviewer');
+    // No "to <recipient>" clause and no avatar: the name is the whole caption.
+    expect(screen.queryByText('Elitea')).toBeNull();
+    expect(screen.queryByTestId('chat-message-avatar')).toBeNull();
+  });
+
+  it('puts the time at the end of the action row, not over the bubble', () => {
+    stubCurrentAuthor();
+    renderOne(true, { name: READER }, { onCopy: () => undefined });
+
+    const row = screen.getByTestId('chat-message-time').closest('[data-reply-actions]');
+    expect(row).toBeTruthy();
+    expect(row?.lastElementChild?.contains(screen.getByTestId('chat-message-time'))).toBe(true);
+    expect(screen.getByTestId('chat-message-body').contains(screen.getByTestId('chat-message-time'))).toBe(false);
   });
 
   it('draws its actions as a quiet row under the bubble, not inside it', () => {
@@ -228,9 +231,9 @@ describe('UserMessage caption line', () => {
     expect(screen.getByTestId('message-fork')).toBeTruthy();
   });
 
-  it('renders no action row when no action is offered', () => {
+  it('renders no action row when no action is offered and there is no time to show', () => {
     stubCurrentAuthor();
-    renderMessage({ name: 'Bob Reviewer' });
+    renderMessage({ name: 'Bob Reviewer', createdAt: '' });
     expect(document.querySelector('[data-reply-actions]')).toBeNull();
   });
 });

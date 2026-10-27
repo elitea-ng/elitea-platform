@@ -110,12 +110,18 @@ export interface ApplicationAnswerHitl {
 /** Caption-line identity: who answered, and whether this row is a sub-agent's. Grouped to stay under the §3.5 component-props budget. */
 export interface ApplicationAnswerAuthor {
   /**
-   * The answering participant's display name, shown in the caption line
-   * (`<mark> Elitea to Message`). Supplied by the list, which is where the
+   * The answering participant's display name, shown over the reply when
+   * `showCaption` is set. Supplied by the list, which is where the
    * conversation's participants are known — `entities/message`'s assistant
    * normaliser drops the participant, so the row cannot resolve it alone.
    */
   readonly participantName?: string | undefined;
+  /**
+   * Whether the reply is captioned with its participant's mark and name: the
+   * list sets it only when the transcript has more than one distinct
+   * assistant author. A one-assistant chat carries no name over its replies.
+   */
+  readonly showCaption?: boolean;
   /** Whether this is a swarm child message. */
   readonly isSwarmChild?: boolean;
   /** Display name of the swarm agent. */

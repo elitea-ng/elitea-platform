@@ -41,8 +41,7 @@ import { ApplicationAnswerActions } from './ApplicationAnswerActions';
 import { replyActionsRevealSx } from './ReplyActionButton';
 import { ApplicationAnswerLoading } from './ApplicationAnswerLoading';
 import { ApplicationAnswerApprovals, useAnswerApprovalModel } from './ApplicationAnswerApprovals';
-import { AssistantAvatar } from './MessageAvatar';
-import { MessageHeaderRow } from './MessageHeaderRow';
+import { AssistantCaption } from './MessageAvatar';
 import { actionKey, asDraft, ApplicationAnswerThinking, swarmChildContent } from './ApplicationAnswerThinking';
 import { ChatContinue } from '../chat-continue/ChatContinue';
 import { AskUserAnswerSummary } from '../chat-hitl-actions/AskUserAnswerSummary';
@@ -56,7 +55,6 @@ import { PersistedMessageTrace } from './PersistedMessageTrace';
 import { AnswerContent } from './AnswerContent';
 import { readAnswerItems } from './AnswerMessageItems';
 
-import { t } from '@/shared/i18n';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { Markdown } from '@/shared/ui/Markdown';
 import { TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
@@ -88,6 +86,13 @@ export type {
  * `ApplicationAnswer` — renders an AI assistant's answer with markdown
  * content, tool actions (accordion), error traces, HITL/continue prompts,
  * and action buttons.
+ *
+ * Drawn as a chat reply: plain text on the page background, the full width
+ * of the column, on the left — no card, no shadow, no `<mark> Elitea to
+ * Message` caption line. The thinking / execution-details line comes first,
+ * then the text, then the action row with the time at its end. A name shows
+ * over the reply only when the list says the conversation has more than one
+ * assistant (`author.showCaption`).
  */
 // eslint-disable-next-line eslint/complexity, eslint/max-lines-per-function -- integrates markdown/tool-actions/error-trace/HITL/continue/buttons; oxlint's complexity+max-lines are already disabled repo-wide for this directory (.oxlintrc.json)
 export function ApplicationAnswer({
@@ -96,7 +101,7 @@ export function ApplicationAnswer({
   toolActions = [],
   isSpeakingMode = false,
   isLastMessage = false,
-  author: { participantName, isSwarmChild = false, swarmAgentName = '' } = {},
+  author: { participantName, showCaption = false, isSwarmChild = false, swarmAgentName = '' } = {},
   status: { isLoading = false, isStreaming = false, isRegenerating = false } = {},
   actions: { onCopy, onDelete, onRegenerate, onFork, shouldDisableRegenerate = false, onEditCanvas, selectedCodeBlockInfo, onCreateCanvasFromSelection } = {},
   tts: { onAutoSpeak, speakingMessageId, spokenRange } = {},
@@ -234,12 +239,8 @@ export function ApplicationAnswer({
         alignItems: 'flex-start',
         alignSelf: 'stretch',
         width: '100%',
-        // baseline `applicationAnswerStyles.userMessageContainer` (vertical):
-        // `padding: 0.75rem 0; gap: 0.5rem`. Measured identically on the
-        // production transcript's own `<li>`.
-        gap: '0.5rem',
-        padding: '0.75rem 0',
-        borderRadius: '0.25rem',
+        // The gap between turns is the list's (`ChatMessageList`), not padding here.
+        gap: 0.5,
         ...replyActionsRevealSx,
         ...(isSwarmChild
           ? { ml: 6, pl: 2, borderLeft: '3px solid', borderColor: 'primary.main' }
@@ -250,16 +251,9 @@ export function ApplicationAnswer({
         <Typography variant="bodySmall" sx={{ color: 'text.secondary' }}>
           {swarmAgentName}
         </Typography>
-      ) : (
-        <MessageHeaderRow
-          avatar={<AssistantAvatar />}
-          name={participantName ?? ''}
-          sentToName={t('features.chatMessages.replyTo', 'Message')}
-          sentToInteractive
-          createdAt={displayTime}
-          memoriesUsed={answer.memoriesUsed}
-        />
-      )}
+      ) : showCaption && participantName ? (
+        <AssistantCaption name={participantName} />
+      ) : null}
 
       {!isProcessing && toolActions.length === 0 && <PersistedMessageTrace value={answer.persistedTrace} />}
 
@@ -288,20 +282,13 @@ export function ApplicationAnswer({
         <Box
           data-testid={isLastMessage ? 'skill-test-last-response' : 'chat-answer-content'}
           sx={(theme) => ({
-            // baseline `applicationAnswerStyles.answerBlock`, confirmed against
-            // the live production row: `12px 16px` padding (not a uniform 12),
-            // an 8px radius, a 3rem floor so a one-line answer keeps the same
-            // card height, and the 0.5rem gap under the thinking accordion.
+            // Plain text on the page, full width: no card, shadow or padding
+            // (it used to be the baseline's elevated `answerBlock` card).
             width: '100%',
             boxSizing: 'border-box',
-            backgroundColor: theme.vars.palette.background.aiAnswerBkg,
             color: theme.vars.palette.text.secondary,
-            boxShadow: theme.vars.palette.boxShadow.aiAnswer,
-            borderRadius: theme.vars.shape.radiusMd,
-            padding: '0.75rem 1rem',
-            minHeight: '3rem',
             position: 'relative',
-            marginTop: nonSwarmChildActions.length > 0 || !!exception ? '0.5rem' : 0,
+            marginTop: nonSwarmChildActions.length > 0 || !!exception ? 0.5 : 0,
           })}
         >
           {recovery && <NodeRecoveryNotice binding={recovery} />}
@@ -347,7 +334,8 @@ export function ApplicationAnswer({
       )}
 
       {shouldRenderAnswerBlock && (
-        // Below the card, not inside it (`ApplicationAnswerActions`' module doc).
+        // Below the text (`ApplicationAnswerActions`' module doc), the time and
+        // the "Using N memories" chip at its end.
         // #870's "Remember this" rides on the feedback gate (a resolved project
         // id, not still processing); `conversationId` is not yet threaded to
         // this row (no `ChatMessage` field carries it), so a memory saved here
@@ -371,6 +359,7 @@ export function ApplicationAnswer({
           }}
           feedback={showFeedback ? { projectId: feedbackProjectId as string, messageId } : undefined}
           memoryContent={answer.content}
+          meta={{ createdAt: displayTime, memoriesUsed: answer.memoriesUsed }}
         />
       )}
     </Box>

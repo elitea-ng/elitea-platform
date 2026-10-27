@@ -38,7 +38,9 @@ import { CloudTranscript } from './CloudTranscript';
 import { CreateAgentDialog } from './CreateAgentDialog';
 import { HandoffDialogs } from './HandoffControls';
 import { ForkNotices } from './forkNotices';
-import { COLUMN, EarlierTurns, Exchanges, ThreadIntro } from './sessionParts';
+import { CONVERSATION_COLUMN as COLUMN } from '@/shared/ui/conversation-column';
+
+import { EarlierTurns, Exchanges, ThreadIntro } from './sessionParts';
 import { SessionInspector } from './SessionPanel';
 import { ThreadComposer } from './ThreadComposer';
 import { ThreadToolbar } from './ThreadToolbar';

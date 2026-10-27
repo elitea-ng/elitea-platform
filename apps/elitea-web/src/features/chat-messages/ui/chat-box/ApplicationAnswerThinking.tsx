@@ -7,7 +7,7 @@
  * see `ApplicationAnswer.tsx`'s module doc).
  */
 import type { ReactNode, SyntheticEvent } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
@@ -275,14 +275,10 @@ export function ApplicationAnswerThinking({
   /*
    * The panel's own open state is always defined, so the accordion stays
    * controlled for its whole life (MUI fixes controlled-vs-uncontrolled on
-   * first render). Open while the model is thinking (and not collapsible
-   * then), folded to "Thought for …" once the answer settles or parks; the
-   * reader opens it again on demand.
+   * first render). Folded to its one line — while the model is still
+   * thinking too — until the reader opens it.
    */
   const [openedByReader, setOpenedByReader] = useState(false);
-  useEffect(() => {
-    if (!isStreaming) setOpenedByReader(false);
-  }, [isStreaming]);
   const handleToggle = useCallback((_event: SyntheticEvent, value: boolean) => {
     setOpenedByReader(value);
   }, []);
@@ -301,8 +297,8 @@ export function ApplicationAnswerThinking({
       uppercase={false}
       showMode="left"
       defaultExpanded={false}
-      expanded={isStreaming || openedByReader}
-      {...(isStreaming ? {} : { onChange: handleToggle })}
+      expanded={openedByReader}
+      onChange={handleToggle}
       slotSx={{ root: { width: '100%' }, ...thinkingSlotSx }}
       items={[
         {

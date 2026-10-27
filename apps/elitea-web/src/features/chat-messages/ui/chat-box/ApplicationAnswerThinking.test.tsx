@@ -63,16 +63,17 @@ describe('ApplicationAnswerThinking', () => {
     expect(order.at(-1)).toBe('Summarise');
   });
 
-  it('is open and fixed while streaming, folds once the answer settles, and opens on demand', () => {
+  it('stays folded while streaming and after, until the reader opens it', () => {
     const list = actions([coord('c1', 'Plan')]);
     const { rerender } = renderWithTheme(<ApplicationAnswerThinking isStreaming actions={list} />);
     const button = () => screen.getByRole('button', { name: /Thought for/ });
-    fireEvent.click(button());
-    expect(button().getAttribute('aria-expanded')).toBe('true');
-    rerender(<ApplicationAnswerThinking isStreaming={false} actions={list} />);
     expect(button().getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(button());
     expect(button().getAttribute('aria-expanded')).toBe('true');
+    rerender(<ApplicationAnswerThinking isStreaming={false} actions={list} />);
+    expect(button().getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(button());
+    expect(button().getAttribute('aria-expanded')).toBe('false');
   });
 
   it('stops the shimmer of an instance that owns a pending card', () => {

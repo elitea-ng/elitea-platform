@@ -37,6 +37,8 @@ import {
   resolveConversationStarters, shouldDisableClearChat,
 } from './ChatBox.helpers';
 import { buildMessageActions } from './ChatBox.messageActions';
+import { CONVERSATION_COLUMN } from '@/shared/ui/conversation-column';
+
 import { chatDraftKey, withDraftCarry } from './ChatBox.draft';
 import { unwrapChatBoxConversation } from './ChatBox.props';
 import type { ChatBoxHandle, ChatBoxProps } from './ChatBox.types';
@@ -334,7 +336,7 @@ const ChatBoxInner = memo(function ChatBox({
           />
         )}
       </Box>
-      <Box sx={{ p: 1 }}>
+      <Box sx={{ ...CONVERSATION_COLUMN, paddingTop: 1, paddingBottom: 2 }}>
         {readOnlyNotice ?? <>
         <ChatBoxVoicePlayer showPlayer={readAloud.showPlayer} voicePlayerProps={readAloud.voicePlayerProps} />
         <ChatBoxQueuedMessages queue={queued} /><ChatBoxSteeringNotice notice={steering.notice} onDismiss={steering.dismissNotice} /><ChatBoxSteeringOffer offer={steering.offer} onSend={steering.acceptOffer} onDismiss={steering.dismissOffer} />

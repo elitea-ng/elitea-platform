@@ -38,7 +38,6 @@ const linkSx = (theme: Theme) => ({
   '& a:hover': { textDecoration: 'underline' },
 });
 
-export const COLUMN = { width: '100%', maxWidth: '46rem', marginX: 'auto', paddingX: 3, boxSizing: 'border-box' } as const;
 
 interface HelpNoticeProps {
   onClose: () => void;

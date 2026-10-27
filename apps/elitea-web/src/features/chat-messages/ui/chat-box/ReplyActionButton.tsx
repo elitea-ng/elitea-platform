@@ -66,9 +66,13 @@ export const replyActionsRevealSx = { [`&:hover [${REPLY_ACTIONS_ATTR}]`]: { opa
  * not `shown` it is faded by opacity, not hidden, so Tab still reaches every
  * control: it fades in on the message's hover (`replyActionsRevealSx`), when
  * focus enters it, and is always shown on a device with no hover.
+ *
+ * `align` follows the message: `start` under a reply or someone else's
+ * question, `end` under the reader's own right-hand bubble.
  */
-export function ReplyActionsRow({ shown, className, children }: {
+export function ReplyActionsRow({ shown, align = 'start', className, children }: {
   readonly shown: boolean;
+  readonly align?: 'start' | 'end' | undefined;
   readonly className?: string | undefined;
   readonly children: ReactNode;
 }): ReactNode {
@@ -79,10 +83,11 @@ export function ReplyActionsRow({ shown, className, children }: {
       sx={{
         display: 'flex',
         alignItems: 'center',
+        alignSelf: align === 'end' ? 'flex-end' : 'flex-start',
         gap: 0.5,
-        // The message's text starts 1rem in; a 28px target around a 16px icon
-        // puts the first icon on that edge.
-        paddingLeft: '0.625rem',
+        // A 28px target around a 16px icon: pulling a left-hand row out by
+        // the 6px inset puts its first icon on the message's own edge.
+        marginLeft: align === 'end' ? 0 : '-0.375rem',
         marginTop: '-0.25rem',
         opacity: shown ? 1 : 0,
         transition: 'opacity 120ms',

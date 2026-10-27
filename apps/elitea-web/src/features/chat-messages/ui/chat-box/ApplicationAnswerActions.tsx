@@ -1,11 +1,11 @@
 /**
  * The action row under an assistant reply, drawn as ChatGPT and Claude draw
- * theirs: one compact, left-aligned row OUTSIDE the reply card, quiet 16px
+ * theirs: one compact, left-aligned row under the reply's text, quiet 16px
  * outlined icons (`ReplyActionButton`), the frequent actions inline and the
  * rest behind ⋯.
  *
  *   Copy · Good · Bad · Read out · Regenerate · ⋯ (Remember this, Open as
- *   document, Fork from here, — , Delete)
+ *   document, Fork from here, — , Delete) · Using N memories · 2 minutes ago
  *
  * It used to sit inside the card, spread across its full width (the thumbs
  * and bookmark at the left, six icons at the right), at MUI's default
@@ -35,6 +35,7 @@ import { t } from '@/shared/i18n';
 import { MenuDivider, MenuRow, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
 
 import { MessageFeedbackControl } from './MessageFeedbackControl';
+import { MessageMeta, type MessageMetaProps } from './MessageMeta';
 import { ReplyActionButton, ReplyActionsRow } from './ReplyActionButton';
 import { RememberMemoryMenuRow, useRememberMemory, type RememberMemory } from './RememberMemoryAction';
 
@@ -73,6 +74,8 @@ export interface ApplicationAnswerActionsProps {
   readonly memoryContent: string;
   /** The latest reply's row never fades. */
   readonly alwaysVisible: boolean;
+  /** The muted tail of the row: the "Using N memories" chip and the time. */
+  readonly meta?: MessageMetaProps | undefined;
 }
 
 function InlineActions({ state, handlers, feedback }: Pick<ApplicationAnswerActionsProps, 'state' | 'handlers' | 'feedback'>): ReactNode {
@@ -149,7 +152,7 @@ function MoreMenu({ state, handlers, memory, anchor, onAnchor }: MoreMenuProps):
   );
 }
 
-function ActionsRow({ state, handlers, feedback, alwaysVisible, memory }: Omit<ApplicationAnswerActionsProps, 'memoryContent'> & { readonly memory: RememberMemory | undefined }): ReactNode {
+function ActionsRow({ state, handlers, feedback, alwaysVisible, memory, meta }: Omit<ApplicationAnswerActionsProps, 'memoryContent'> & { readonly memory: RememberMemory | undefined }): ReactNode {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const shown = alwaysVisible || anchor !== null;
   return (
@@ -157,6 +160,7 @@ function ActionsRow({ state, handlers, feedback, alwaysVisible, memory }: Omit<A
       <InlineActions state={state} handlers={handlers} feedback={feedback} />
       <MoreMenu state={state} handlers={handlers} memory={memory} anchor={anchor} onAnchor={setAnchor} />
       {memory?.toast}
+      {meta && <MessageMeta {...meta} />}
     </ReplyActionsRow>
   );
 }
