@@ -7,7 +7,9 @@
 //   - the key set: /discovery/v2.0/keys;
 //   - the token endpoint /<tid>/oauth2/v2.0/token with the authorization
 //     code grant, classic OBO and Agent ID OBO, plus scripted
-//     interaction_required and claims-challenge answers.
+//     interaction_required and claims-challenge answers;
+//   - the Entra Agent ID blueprint and agent identity grants and the
+//     Microsoft Graph agent identity routes (agentid.go, #1152).
 //
 // Test fixtures only: nothing in a production build imports it.
 package entratest
@@ -49,6 +51,18 @@ type Server struct {
 	MiddleTierClientID string
 	// BlueprintAudience is the `aud` an Agent OBO assertion must carry.
 	BlueprintAudience string
+	// BlueprintAppID is the agent identity blueprint's application id.
+	BlueprintAppID string
+
+	blueprintAssertion string
+	agents             map[string]*AgentIdentity
+	deleted            map[string]*AgentIdentity
+	nextToken          []Response
+	nextGraph          []Response
+	tokenRequests      []TokenRequest
+	graphRequests      []GraphRequest
+	issuedT1           []string
+	unindexed          map[string]bool
 }
 
 // Authorization is one pending authorization code.
@@ -101,6 +115,7 @@ func New(t testing.TB) *Server {
 		AgentID:            "33333333-3333-3333-3333-333333333333",
 		AgentAssertion:     "agent-t1-assertion",
 	}
+	s.initAgentID()
 	s.Server = httptest.NewTLSServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.Close)
 	return s
@@ -179,6 +194,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.writeDiscovery(w, parts[0])
 	case len(parts) == 4 && parts[1] == "oauth2" && parts[2] == "v2.0" && parts[3] == "token":
 		s.token(w, r, parts[0])
+	case len(parts) > 1 && parts[0] == "v1.0":
+		s.graph(w, r, path)
 	case len(parts) == 4 && parts[1] == "oauth2" && parts[2] == "v2.0" && parts[3] == "authorize":
 		http.Error(w, "the mock has no interactive authorize page", http.StatusNotImplemented)
 	default:
@@ -220,7 +237,11 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request, tenant string) {
 	case "authorization_code":
 		s.codeGrant(w, r, tenant)
 	case "urn:ietf:params:oauth:grant-type:jwt-bearer":
+		setRequestIDs(w, r)
 		s.oboGrant(w, r, tenant)
+	case "client_credentials":
+		setRequestIDs(w, r)
+		s.clientCredentialsGrant(w, r, tenant)
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported_grant_type"})
 	}
@@ -303,7 +324,20 @@ func (s *Server) oboGrant(w http.ResponseWriter, r *http.Request, tenant string)
 		return
 	}
 	expectedAudience := s.MiddleTierClientID
-	if record.ClientID == s.AgentID {
+	directoryAgent, inDirectory := s.agentByAppID(record.ClientID)
+	if inDirectory {
+		// Agent ID OBO for a directory agent identity: T1 minted for it,
+		// and the identity must be enabled.
+		if !s.validT1(form.Get("client_assertion"), tenant, directoryAgent.AppID) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid_client", "error_codes": []int{7000215}})
+			return
+		}
+		if !directoryAgent.AccountEnabled {
+			writeJSON(w, http.StatusBadRequest, disabledBody())
+			return
+		}
+		expectedAudience = s.BlueprintAudience
+	} else if record.ClientID == s.AgentID {
 		// Agent ID OBO: the agent identity authenticates with T1 and the
 		// user assertion was issued to the blueprint.
 		if form.Get("client_assertion") != s.AgentAssertion {
@@ -319,9 +353,12 @@ func (s *Server) oboGrant(w http.ResponseWriter, r *http.Request, tenant string)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_grant", "error_codes": []int{50013}})
 		return
 	}
+	token := s.AccessToken(tenant, fmt.Sprint(claims["oid"]), "https://graph.microsoft.com", "Sites.Selected", time.Hour)
+	if inDirectory {
+		token = s.agentToken(tenant, directoryAgent, GraphResource, "user", fmt.Sprint(claims["oid"]))
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"token_type": "Bearer", "expires_in": "3599", "scope": form.Get("scope"),
-		"access_token": s.AccessToken(tenant, fmt.Sprint(claims["oid"]), "https://graph.microsoft.com", "Sites.Selected", time.Hour),
+		"token_type": "Bearer", "expires_in": "3599", "scope": form.Get("scope"), "access_token": token,
 	})
 }
 

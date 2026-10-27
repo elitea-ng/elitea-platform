@@ -329,13 +329,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
-	agentIdentity, err := agentIdentityAdmin(credentialAdmission, credentialRevision, pool, securityInvalidations)
-	if err != nil {
-		return err
-	}
-	if agentIdentity.Reconciler != nil {
-		go agentIdentity.Reconciler.Run(ctx)
-	}
 	credentialProbeHandler, err := credentialProbeAdmin(credentialAdmission, pool)
 	if err != nil {
 		return err
@@ -810,6 +803,29 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if entraGoverned != nil {
 		oidcOIDCHandler = oidcOIDCHandler.WithEntraGovernance(entraGoverned.Delegations)
 		oidcSessionHandler = oidcSessionHandler.WithEntraGovernance(entraGoverned.Delegations)
+	}
+
+	// The Elitea-native agent assertion issuer (#1153): its provider for the
+	// registry and its public JWKS and issuer metadata. Empty unless governed
+	// with a relying party configured.
+	eliteaNative, err := eliteaNativeAgentIdentityAtBoot(ctx, credentialAdmission, credentialRevision,
+		os.LookupEnv, pool, publicProjectID, logger)
+	if err != nil {
+		return err
+	}
+	// The agent identity registry, admin APIs and session broker. Built
+	// after the Entra custody: the Entra Agent ID provider (#1152) reads
+	// the delegations for Agent OBO.
+	agentIdentity, err := agentIdentityAdmin(credentialAdmission, credentialRevision, pool, securityInvalidations,
+		agentIdentityProviderSources{
+			Native: eliteaNative.Provider,
+			Entra:  entraAgentIdentitySource(credentialAdmission, credentialRevision, os.LookupEnv, entraGoverned, logger),
+		})
+	if err != nil {
+		return err
+	}
+	if agentIdentity.Reconciler != nil {
+		go agentIdentity.Reconciler.Run(ctx)
 	}
 
 	// The operation decider and the credential broker, its only caller
@@ -2743,6 +2759,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CredentialProbe:               credentialProbeHandler,
 		CredentialConsent:             providerOAuthGoverned.Consent,
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
+		AgentAssertionWellKnown:       eliteaNative.WellKnown,
 		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,
 		OnToolkitCleanupJournal:       startToolkitReconciler,

@@ -495,7 +495,13 @@ func (b *Broker) credential(ctx context.Context, claim SessionClaim, req Credent
 		return SessionCredential{}, deny(ReasonTTLTooShort, nil)
 	}
 	spec := AssumeSpec{Ref: external.Ref, ProviderConfigKey: external.ProviderConfigKey, SessionID: session.ID,
-		Audience: audience, Scopes: scopes, TTL: ttl}
+		Audience: audience, Scopes: scopes, TTL: ttl, Run: RunContext{
+			TenantProjectID: session.TenantProjectID, ExecutionID: session.ExecutionID, Generation: session.Generation,
+			AgentBindingID: session.AgentBindingID, AgentBindingEpoch: session.AgentBindingEpoch,
+			ExternalAgentIdentityID: session.ExternalAgentIdentityID, ExternalEpoch: session.ExternalEpoch,
+			VersionDigest: binding.DefinitionDigest, PolicyRevisionID: session.PolicyRevisionID,
+			SessionExpiresAt: session.ExpiresAt,
+		}}
 	var credential SessionCredential
 	switch session.EvidenceKind {
 	case EvidenceVerified:

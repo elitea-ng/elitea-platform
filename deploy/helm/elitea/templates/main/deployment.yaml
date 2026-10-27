@@ -389,6 +389,13 @@ spec:
               mountPath: {{ .Values.egressProxy.signingKey.mountPath }}
               readOnly: true
             {{- end }}
+            {{- with (dig "agentAssertion" "keysSecret" "" .Values.main) }}
+            # The Elitea-native agent assertion keys (main.agentAssertion).
+            # Read by eliteanative.ReadMountedKey through the kubelet links.
+            - name: agent-assertion-keys
+              mountPath: {{ $.Values.main.agentAssertion.mountPath }}
+              readOnly: true
+            {{- end }}
             {{- if .Values.main.runtime.enabled }}
             # The runtime material (issue #382): signing key, verification
             # keyring, the runtime CA and the three server keypairs.
@@ -424,6 +431,14 @@ spec:
             items:
               - key: {{ .Values.egressProxy.signingKey.key }}
                 path: {{ .Values.egressProxy.signingKey.key }}
+        {{- end }}
+        {{- with (dig "agentAssertion" "keysSecret" "" .Values.main) }}
+        - name: agent-assertion-keys
+          secret:
+            secretName: {{ . }}
+            # The egress signing key's mode, for the same reason: no fsGroup,
+            # root-owned files, a non-root reader.
+            defaultMode: 0444
         {{- end }}
         {{- if .Values.main.runtime.enabled }}
         - name: runtime-material

@@ -11,15 +11,15 @@ import (
 // the router mounts no agent identity route and admission has no session to
 // open (field 17 stays unset). A nil pool proves nothing is dialled.
 func TestAgentIdentityCompositionIsEmptyWithTheFlagOff(t *testing.T) {
-	got, err := agentIdentityAdmin(profile.LegacyAdmission(false), profile.PolicyRevision{}, nil, nil)
+	got, err := agentIdentityAdmin(profile.LegacyAdmission(false), profile.PolicyRevision{}, nil, nil, agentIdentityProviderSources{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Admin != nil || got.ExternalAdmin != nil || got.Broker != nil || got.Reconciler != nil {
 		t.Fatalf("flag off built %+v", got)
 	}
-	if len(agentIdentityProviders()) != 0 {
-		t.Fatal("an adapter is configured before #1152/#1153 exist")
+	if providers, err := agentIdentityProviders(agentIdentityProviderSources{}, nil); err != nil || len(providers) != 0 {
+		t.Fatalf("no configured adapter built %v (%v)", providers, err)
 	}
 }
 
@@ -30,7 +30,7 @@ func TestAgentIdentityReconcileIsNotBuiltWithoutProviders(t *testing.T) {
 	revision := profile.PolicyRevision{ID: "2026-10-r1", Document: profile.PolicyDocument{
 		Schema: profile.PolicySchemaV1, AllowedIdentityModes: []agentidentity.IdentityMode{agentidentity.IdentityModeDedicatedAgent},
 		MaxMandateTTLSeconds: 3600, AuditBacklogAlertThreshold: 100}}
-	got, err := agentIdentityAdmin(profile.GovernedAdmission(revision), revision, nil, nil)
+	got, err := agentIdentityAdmin(profile.GovernedAdmission(revision), revision, nil, nil, agentIdentityProviderSources{})
 	if err != nil {
 		t.Fatal(err)
 	}

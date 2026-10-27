@@ -110,6 +110,18 @@ VALUES ($1::uuid, $2, $3, $4, $5, $6::uuid, $7, $8::uuid, $9, $10, $11, $12, $13
 	return nil
 }
 
+// SessionByID reads one session by its id, without locking it. The Entra
+// agent identity adapter (#1152) reads the execution, generation and
+// delegation of a session the broker already claimed.
+func (s *AgentSessions) SessionByID(ctx context.Context, id string) (agentidentity.AgentSession, error) {
+	if err := s.ready(); err != nil {
+		return agentidentity.AgentSession{}, err
+	}
+	return scanAgentSession(s.pool.QueryRow(ctx, `
+SELECT `+agentSessionSelectColumnList+`
+FROM elitea_identity.agent_sessions WHERE id = $1::uuid`, id))
+}
+
 // ClaimSession locks the session row, passes it to check and writes the
 // worker claim check returned when it changed.
 func (s *AgentSessions) ClaimSession(ctx context.Context, refDigest [32]byte, check func(agentidentity.AgentSession) (agentidentity.AgentSession, error)) (agentidentity.AgentSession, error) {
