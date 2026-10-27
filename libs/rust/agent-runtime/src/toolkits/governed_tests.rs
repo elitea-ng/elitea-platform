@@ -603,3 +603,24 @@ async fn a_governed_pass_refuses_unadapted_toolkits_and_the_legacy_pass_is_uncha
     assert_eq!(legacy.toolsets.len(), 2);
     assert_eq!(legacy.left_out.len(), 0);
 }
+
+/// The worker's canonical target equals Main's for every shared vector: the
+/// envelope's `target_identity` is compared by exact string.
+#[test]
+fn canonical_target_matches_the_shared_vectors() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../testdata/proto/runtime/v1/governed-operations/targets.json"
+    );
+    let vectors: Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("targets")).expect("JSON");
+    for vector in vectors["vectors"].as_array().expect("vectors") {
+        let input = vector["input"].as_str().expect("input");
+        let url = reqwest::Url::parse(input).expect("vector URL");
+        assert_eq!(
+            super::governed::canonical_target(&url),
+            vector["canonical"].as_str().expect("canonical"),
+            "{input}"
+        );
+    }
+}
