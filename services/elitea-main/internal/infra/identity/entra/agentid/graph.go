@@ -111,9 +111,7 @@ func (p *Provider) graphDo(ctx context.Context, method, target string, body, out
 		return ErrUnavailable
 	case response.StatusCode == http.StatusUnauthorized:
 		// A revoked or expired Graph token: drop it so the next call mints one.
-		p.graphMu.Lock()
-		p.graph = issued{}
-		p.graphMu.Unlock()
+		p.dropGraphToken()
 		return ErrUnavailable
 	case response.StatusCode < 200 || response.StatusCode > 299:
 		return ErrRejected
@@ -179,6 +177,16 @@ func (p *Provider) getDeletedAgent(ctx context.Context, id string) (agentObject,
 
 func (p *Provider) setAccountEnabled(ctx context.Context, id string, enabled bool) error {
 	return p.graphDo(ctx, http.MethodPatch, p.objectURL(id), map[string]any{"accountEnabled": enabled}, nil, false)
+}
+
+// adoptPatch disables an adopted object and gives it the managed tag in one
+// PATCH (tags replace the whole collection, so the existing ones are kept).
+func (p *Provider) adoptPatch(ctx context.Context, object agentObject) error {
+	tags := slices.Clone(object.Tags)
+	if !object.managed() {
+		tags = append(tags, tagManaged)
+	}
+	return p.graphDo(ctx, http.MethodPatch, p.objectURL(object.ID), map[string]any{"accountEnabled": false, "tags": tags}, nil, false)
 }
 
 func (p *Provider) deleteAgent(ctx context.Context, id string) error {

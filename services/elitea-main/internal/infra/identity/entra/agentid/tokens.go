@@ -4,12 +4,10 @@ import (
 	"bytes"
 	"container/list"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
-	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +17,8 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/entraoauth"
 )
 
 const (
@@ -70,19 +70,9 @@ func (c tokenClaims) clientID() string {
 }
 
 func unverifiedClaims(token string) (tokenClaims, bool) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return tokenClaims{}, false
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return tokenClaims{}, false
-	}
 	var claims tokenClaims
-	if err := json.Unmarshal(raw, &claims); err != nil {
-		return tokenClaims{}, false
-	}
-	return claims, true
+	ok := entraoauth.UnverifiedPayload(token, &claims)
+	return claims, ok
 }
 
 // readFederatedToken re-reads the projected token on every call, so a
@@ -123,7 +113,7 @@ func (p *Provider) requestToken(ctx context.Context, form url.Values) (issued, e
 		return issued{}, ErrUnavailable
 	}
 	out := issued{requestID: response.Header.Get("x-ms-request-id"), correlationID: correlation}
-	if !jsonContentType(response.Header) {
+	if !entraoauth.JSONContentType(response.Header) {
 		return out, ErrUnavailable
 	}
 	switch response.StatusCode {
@@ -145,7 +135,7 @@ func (p *Provider) requestToken(ctx context.Context, form url.Values) (issued, e
 	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&answer); err != nil {
 		return out, ErrUnavailable
 	}
-	seconds, ok := expiresInSeconds(answer.ExpiresIn)
+	seconds, ok := entraoauth.ExpiresInSeconds(answer.ExpiresIn)
 	if !ok || answer.AccessToken == "" || len(answer.AccessToken) > maxTokenBytes ||
 		strings.ContainsFunc(answer.AccessToken, unicode.IsControl) || !strings.EqualFold(answer.TokenType, "Bearer") {
 		return out, ErrUnavailable
@@ -156,26 +146,6 @@ func (p *Provider) requestToken(ctx context.Context, form url.Values) (issued, e
 	}
 	out.token, out.expiresAt = answer.AccessToken, p.now().Add(lifetime).UTC()
 	return out, nil
-}
-
-func jsonContentType(header http.Header) bool {
-	mediaType, _, err := mime.ParseMediaType(header.Get("Content-Type"))
-	return err == nil && mediaType == "application/json"
-}
-
-func expiresInSeconds(raw json.RawMessage) (int64, bool) {
-	var number int64
-	if err := json.Unmarshal(raw, &number); err == nil {
-		return number, number > 0
-	}
-	var text string
-	if err := json.Unmarshal(raw, &text); err != nil {
-		return 0, false
-	}
-	if err := json.Unmarshal([]byte(text), &number); err != nil {
-		return 0, false
-	}
-	return number, number > 0
 }
 
 // blueprintForm is a client credentials request of the blueprint,
@@ -192,23 +162,50 @@ func (p *Provider) blueprintForm(scope string) (url.Values, error) {
 }
 
 // graphToken is the blueprint's Microsoft Graph token, cached until close to
-// its expiry.
+// its expiry. The lock guards only the cached value: a refresh runs outside
+// it, and concurrent callers share one refresh (singleflight) instead of
+// queueing behind it or each minting their own.
 func (p *Provider) graphToken(ctx context.Context) (string, error) {
 	p.graphMu.Lock()
-	defer p.graphMu.Unlock()
-	if p.graph.token != "" && p.now().Add(tokenRefreshSkew).Before(p.graph.expiresAt) {
-		return p.graph.token, nil
+	cached := p.graph
+	p.graphMu.Unlock()
+	if cached.token != "" && p.now().Add(tokenRefreshSkew).Before(cached.expiresAt) {
+		return cached.token, nil
 	}
-	form, err := p.blueprintForm(graphScope)
-	if err != nil {
-		return "", err
+	// The shared refresh must not die with the first caller's context;
+	// each caller still stops waiting when its own context ends.
+	result := p.graphFlight.DoChan("graph", func() (any, error) {
+		refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultHTTPTimeout)
+		defer cancel()
+		form, err := p.blueprintForm(graphScope)
+		if err != nil {
+			return "", err
+		}
+		token, err := p.requestToken(refreshCtx, form)
+		if err != nil {
+			return "", err
+		}
+		p.graphMu.Lock()
+		p.graph = token
+		p.graphMu.Unlock()
+		return token.token, nil
+	})
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case r := <-result:
+		if r.Err != nil {
+			return "", r.Err
+		}
+		return r.Val.(string), nil
 	}
-	token, err := p.requestToken(ctx, form)
-	if err != nil {
-		return "", err
-	}
-	p.graph = token
-	return token.token, nil
+}
+
+// dropGraphToken forgets a Graph token Graph refused.
+func (p *Provider) dropGraphToken() {
+	p.graphMu.Lock()
+	p.graph = issued{}
+	p.graphMu.Unlock()
 }
 
 // t1 returns the blueprint token for one agent identity: the client
@@ -279,13 +276,17 @@ type t1ErrorKey struct{}
 // every source error to one value, and a disabled identity must stay one.
 type t1Failure struct{ err error }
 
-// agentCache is the bounded LRU of agent identities this process resolved:
-// object id → client id and the cached T1.
+// agentCache is the bounded LRU of the agent identities this process may
+// mint tokens for: object id → client id and the cached T1. Only an
+// identity last seen owned by this blueprint and enabled is put here;
+// every disable (Suspend, Entra refusing a disabled client, a Resolve that
+// reads it disabled or not owned) evicts it.
 type agentCache struct {
-	mu    sync.Mutex
-	size  int
-	order *list.List
-	items map[string]*list.Element
+	mu      sync.Mutex
+	size    int
+	order   *list.List
+	objects map[string]*list.Element
+	apps    map[string]*list.Element
 }
 
 type agentEntry struct {
@@ -296,13 +297,13 @@ type agentEntry struct {
 }
 
 func newAgentCache(size int) *agentCache {
-	return &agentCache{size: size, order: list.New(), items: map[string]*list.Element{}}
+	return &agentCache{size: size, order: list.New(), objects: map[string]*list.Element{}, apps: map[string]*list.Element{}}
 }
 
 func (c *agentCache) appID(objectID string) (string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	element, ok := c.items[objectID]
+	element, ok := c.objects[objectID]
 	if !ok {
 		return "", false
 	}
@@ -313,42 +314,43 @@ func (c *agentCache) appID(objectID string) (string, bool) {
 func (c *agentCache) put(objectID, appID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if element, ok := c.items[objectID]; ok {
+	if element, ok := c.objects[objectID]; ok {
 		entry := element.Value.(*agentEntry)
-		if entry.appID != appID {
-			entry.appID, entry.t1, entry.t1Expiry = appID, "", time.Time{}
+		if entry.appID == appID {
+			c.order.MoveToFront(element)
+			return
 		}
-		c.order.MoveToFront(element)
-		return
+		c.removeLocked(element)
 	}
-	c.items[objectID] = c.order.PushFront(&agentEntry{objectID: objectID, appID: appID})
+	if element, ok := c.apps[appID]; ok {
+		c.removeLocked(element)
+	}
+	element := c.order.PushFront(&agentEntry{objectID: objectID, appID: appID})
+	c.objects[objectID], c.apps[appID] = element, element
 	for c.order.Len() > c.size {
-		oldest := c.order.Back()
-		c.order.Remove(oldest)
-		delete(c.items, oldest.Value.(*agentEntry).objectID)
+		c.removeLocked(c.order.Back())
 	}
 }
 
-func (c *agentCache) byApp(appID string) *list.Element {
-	for element := c.order.Front(); element != nil; element = element.Next() {
-		if element.Value.(*agentEntry).appID == appID {
-			return element
-		}
-	}
-	return nil
+func (c *agentCache) removeLocked(element *list.Element) {
+	entry := element.Value.(*agentEntry)
+	c.order.Remove(element)
+	delete(c.objects, entry.objectID)
+	delete(c.apps, entry.appID)
 }
 
 func (c *agentCache) knownApp(appID string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.byApp(appID) != nil
+	_, ok := c.apps[appID]
+	return ok
 }
 
 func (c *agentCache) t1(appID string, validAt time.Time) (string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	element := c.byApp(appID)
-	if element == nil {
+	element, ok := c.apps[appID]
+	if !ok {
 		return "", false
 	}
 	entry := element.Value.(*agentEntry)
@@ -361,7 +363,7 @@ func (c *agentCache) t1(appID string, validAt time.Time) (string, bool) {
 func (c *agentCache) putT1(appID, t1 string, expiry time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if element := c.byApp(appID); element != nil {
+	if element, ok := c.apps[appID]; ok {
 		entry := element.Value.(*agentEntry)
 		entry.t1, entry.t1Expiry = t1, expiry
 	}
@@ -370,17 +372,21 @@ func (c *agentCache) putT1(appID, t1 string, expiry time.Time) {
 func (c *agentCache) evict(objectID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if element, ok := c.items[objectID]; ok {
-		c.order.Remove(element)
-		delete(c.items, objectID)
+	if element, ok := c.objects[objectID]; ok {
+		c.removeLocked(element)
 	}
 }
 
 func (c *agentCache) evictApp(appID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if element := c.byApp(appID); element != nil {
-		c.order.Remove(element)
-		delete(c.items, element.Value.(*agentEntry).objectID)
+	if element, ok := c.apps[appID]; ok {
+		c.removeLocked(element)
 	}
+}
+
+func (c *agentCache) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.order.Len()
 }

@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
-	"mime"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -14,6 +13,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/entraoauth"
 )
 
 const (
@@ -23,7 +24,7 @@ const (
 	maxAssertionBytes       = 16 << 10
 	maxScopes               = 16
 	maxScopeBytes           = 256
-	maxClaimsBytes          = 8 << 10
+	maxClaimsBytes          = entraoauth.MaxClaimsBytes
 	defaultExchangeTimeout  = 10 * time.Second
 	minIssuedTokenLifetime  = 30 * time.Second
 	clientCapabilityCP1     = "cp1"
@@ -39,19 +40,6 @@ var tenantIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[
 
 // ValidTenantID reports whether tid is a lower-case GUID tenant id.
 func ValidTenantID(tid string) bool { return tenantIDPattern.MatchString(tid) }
-
-// AADSTS codes the mapping reads from `error_codes`.
-const (
-	aadstsAudienceMismatch   = 50013
-	aadstsMFARequired        = 50076
-	aadstsMFAEnrollment      = 50079
-	aadstsConsentRequired    = 65001
-	aadstsStrongAuthRequired = 50072
-	aadstsExternalChallenge  = 50158
-	aadstsAgentConsent       = 82014
-)
-
-var interactionCodes = []int{aadstsMFARequired, aadstsMFAEnrollment, aadstsConsentRequired, aadstsStrongAuthRequired, aadstsExternalChallenge}
 
 // endpoint is the token endpoint half both exchangers share.
 type endpoint struct {
@@ -210,23 +198,18 @@ func (e endpoint) post(ctx context.Context, tid string, form url.Values, correla
 	}
 	switch response.StatusCode {
 	case http.StatusOK:
-		if !jsonContentType(response.Header) {
+		if !entraoauth.JSONContentType(response.Header) {
 			return AccessToken{}, ErrUnavailable
 		}
 		return e.issuedToken(body)
 	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
-		if !jsonContentType(response.Header) {
+		if !entraoauth.JSONContentType(response.Header) {
 			return AccessToken{}, ErrUnavailable
 		}
 		return AccessToken{}, mapOAuthError(body)
 	default:
 		return AccessToken{}, ErrUnavailable
 	}
-}
-
-func jsonContentType(header http.Header) bool {
-	mediaType, _, err := mime.ParseMediaType(header.Get("Content-Type"))
-	return err == nil && mediaType == "application/json"
 }
 
 func (e endpoint) issuedToken(body []byte) (AccessToken, error) {
@@ -240,7 +223,7 @@ func (e endpoint) issuedToken(body []byte) (AccessToken, error) {
 	if err := decoder.Decode(&issued); err != nil {
 		return AccessToken{}, ErrUnavailable
 	}
-	seconds, ok := expiresInSeconds(issued.ExpiresIn)
+	seconds, ok := entraoauth.ExpiresInSeconds(issued.ExpiresIn)
 	if issued.AccessToken == "" || len(issued.AccessToken) > maxAssertionBytes ||
 		strings.ContainsFunc(issued.AccessToken, unicode.IsControl) ||
 		!strings.EqualFold(issued.TokenType, "Bearer") || !ok {
@@ -257,67 +240,23 @@ func (e endpoint) issuedToken(body []byte) (AccessToken, error) {
 	}, nil
 }
 
-// expiresInSeconds accepts the number or the numeric string Entra sends.
-func expiresInSeconds(raw json.RawMessage) (int64, bool) {
-	if len(raw) == 0 {
-		return 0, false
-	}
-	var number int64
-	if err := json.Unmarshal(raw, &number); err == nil {
-		return number, number > 0
-	}
-	var text string
-	if err := json.Unmarshal(raw, &text); err != nil {
-		return 0, false
-	}
-	if err := json.Unmarshal([]byte(text), &number); err != nil {
-		return 0, false
-	}
-	return number, number > 0
-}
-
-// oauthError is the structured part of an Entra token error. The
-// description fields are not read.
-type oauthError struct {
-	Error      string `json:"error"`
-	SubError   string `json:"suberror"`
-	ErrorCodes []int  `json:"error_codes"`
-	Claims     string `json:"claims"`
-}
-
-// mapOAuthError maps by `error`, `suberror` and `error_codes` only.
+// mapOAuthError maps the shared classification to this package's errors.
+// An application-disabled refusal is a plain rejection here.
 func mapOAuthError(body []byte) error {
-	var parsed oauthError
-	if err := json.Unmarshal(body, &parsed); err != nil || parsed.Error == "" {
-		return ErrUnavailable
-	}
-	codes := parsed.ErrorCodes
-	switch {
-	case slices.Contains(codes, aadstsAgentConsent):
+	c := entraoauth.Classify(body)
+	switch c.Kind {
+	case entraoauth.KindAgentConsent:
 		return ErrAgentConsentNotGranted
-	case parsed.Claims != "" && (parsed.Error == "interaction_required" || parsed.Error == "invalid_grant" ||
-		parsed.Error == "insufficient_claims"):
-		if len(parsed.Claims) > maxClaimsBytes {
-			return ErrRejected
-		}
-		return &ErrClaimsChallenge{Claims: parsed.Claims}
-	case slices.Contains(codes, aadstsAudienceMismatch):
+	case entraoauth.KindClaimsChallenge:
+		return &ErrClaimsChallenge{Claims: c.Claims}
+	case entraoauth.KindAudienceMismatch:
 		return ErrAudienceMismatch
-	case parsed.Error == "interaction_required", parsed.Error == "consent_required", parsed.Error == "login_required":
+	case entraoauth.KindInteractionRequired:
 		return ErrInteractionRequired
-	case slices.ContainsFunc(codes, func(code int) bool { return slices.Contains(interactionCodes, code) }):
-		return ErrInteractionRequired
-	case parsed.Error == "invalid_grant":
-		switch parsed.SubError {
-		case "basic_action", "additional_action", "message_only", "consent_required", "token_expired", "user_password_expired":
-			return ErrInteractionRequired
-		}
-		return ErrRejected
-	case parsed.Error == "temporarily_unavailable", parsed.Error == "server_error":
+	case entraoauth.KindUnavailable:
 		return ErrUnavailable
-	default:
-		return ErrRejected
 	}
+	return ErrRejected
 }
 
 // tokenPayload is the part of an unverified JWT payload the local checks read.
@@ -340,19 +279,9 @@ func (p tokenPayload) hasAudience(audience string) bool {
 }
 
 func unverifiedPayload(token string) (tokenPayload, bool) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return tokenPayload{}, false
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return tokenPayload{}, false
-	}
 	var payload tokenPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return tokenPayload{}, false
-	}
-	return payload, true
+	ok := entraoauth.UnverifiedPayload(token, &payload)
+	return payload, ok
 }
 
 func validAudiences(audiences []string) bool {

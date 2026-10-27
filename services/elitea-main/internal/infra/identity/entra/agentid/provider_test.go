@@ -87,6 +87,7 @@ type harness struct {
 	custody   *custody
 	logs      *bytes.Buffer
 	tokenFile string
+	cfg       agentid.Config
 }
 
 func newHarness(t *testing.T, mutate ...func(*agentid.Config)) *harness {
@@ -110,8 +111,17 @@ func newHarness(t *testing.T, mutate ...func(*agentid.Config)) *harness {
 	}
 	provider, err := agentid.New(cfg)
 	require.NoError(t, err)
-	h.provider = provider
+	h.provider, h.cfg = provider, cfg
 	return h
+}
+
+// replica builds another Provider on the same mock: a second elitea-main
+// replica with its own caches.
+func (h *harness) replica(t *testing.T) *agentid.Provider {
+	t.Helper()
+	provider, err := agentid.New(h.cfg)
+	require.NoError(t, err)
+	return provider
 }
 
 // session registers a session of the run and returns its id.
