@@ -75,6 +75,11 @@
     "description": "Console and operator settings: identity, e-mail, egress, budgets, workers, observability and maintenance."
   },
   {
+    "slug": "deployment/credential-governance",
+    "title": "Enterprise credential governance",
+    "description": "The off-by-default governed credential profile: the boot flag, policy revisions, agent identity bindings and mandates, the Vault/OpenBao secret store and the security audit chain."
+  },
+  {
     "slug": "deployment/from-scratch",
     "title": "Deploy from scratch",
     "description": "A complete Kubernetes install on an empty cluster: decisions to make first, the external database and object store, every Secret and certificate authority, the edge in front of it, and the first sign-in."

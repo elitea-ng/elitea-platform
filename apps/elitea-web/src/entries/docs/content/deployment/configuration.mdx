@@ -116,6 +116,10 @@ See [DeepWiki and Inventory](/menus/deepwiki-and-inventory) for the product-faci
 
 Traces flow over OpenTelemetry to the chart's own `otelCollector` (on by default, `otel/opentelemetry-collector-contrib`), which receives OTLP from elitea-main, elitea-scheduler and elitea-main's own tracing ingest proxy. The shipped pipeline exports to `debug` (log-only) — swap the `otelCollector.config` exporter for a real sink (an OTLP/HTTP endpoint, a vendor backend) before relying on traces outliving the pod. There is no bundled Langfuse or third-party APM integration; every other component's `OTEL_EXPORTER_OTLP_ENDPOINT` should point at the collector's Service (`http://<fullname>:4318` in-namespace).
 
+## Enterprise credential governance
+
+Off by default. `main.env.ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED` pins every new run to a governed profile and an immutable policy revision, mounts the agent identity admin API, and can require an external Vault/OpenBao store. See [Enterprise credential governance](/deployment/credential-governance) before you turn it on.
+
 ## Maintenance and the banner
 
 Both are console-editable under **Configuration**, not chart settings: a dismissible banner with its own icon/style/message, and a maintenance mode that answers `503` with a splash screen to every caller without administration access (the admin console and authentication routes stay reachable, so the window is reversible from inside itself). See [Features and configuration](/admin/features-and-configuration#configuration) for the click-through.

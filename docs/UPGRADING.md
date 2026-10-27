@@ -34,7 +34,8 @@ on:
 enforce it. No credential path reads the pin until the credential broker
 lands (#1118), so a governed run uses credentials exactly as a legacy run
 does. Turn the flag on in this release only to stage revisions, bindings and
-mandates. When enforcement lands, drain before turning the flag off: a
+mandates. The operator guide is the embedded docs page
+"Enterprise credential governance" (`/docs/deployment/credential-governance`). When enforcement lands, drain before turning the flag off: a
 governed run still active then fails closed at its next credential use.
 
 ## elitea-main: applied migrations were reworded in their comments
