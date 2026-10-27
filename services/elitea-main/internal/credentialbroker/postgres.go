@@ -149,7 +149,7 @@ WHERE execution_id = $1 AND generation = $2 AND NOT EXISTS (SELECT 1 FROM insert
 }
 
 // SessionCeiling implements Store: the audience, or else the canonical
-// identity, of every target the binding's active grants name.
+// identity, of every target the binding's active, unexpired grants name.
 func (s *PostgresStore) SessionCeiling(ctx context.Context, tenantProjectID int64, agentBindingID string) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `
 SELECT DISTINCT COALESCE(NULLIF(t.audience, ''), t.target_identity) AS audience
@@ -157,6 +157,7 @@ FROM elitea_identity.credential_use_grants AS g
 JOIN elitea_identity.target_bindings AS t
   ON t.id = g.target_binding_id AND t.tenant_project_id = g.tenant_project_id
 WHERE g.tenant_project_id = $1 AND g.agent_binding_id = $2::uuid AND g.state = 'active'
+  AND (g.expires_at IS NULL OR g.expires_at > clock_timestamp())
 ORDER BY audience
 LIMIT 64`, tenantProjectID, agentBindingID)
 	if err != nil {
