@@ -65,6 +65,10 @@ import type {
   BulkInviteRequest,
   BulkInviteSummary,
   CancelBackgroundJobParams,
+  CompleteCredentialConsentParams,
+  CredentialConsentResult,
+  CredentialConsentStart,
+  CredentialConsentStartRequest,
   CredentialProbeResult,
   CredentialUseGrant,
   CredentialUseGrantCreate,
@@ -14658,6 +14662,528 @@ export function useProbeCredentialReference<
   const queryOptions = getProbeCredentialReferenceQueryOptions(
     projectId,
     id,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type startCredentialConsentResponse200 = {
+  data: CredentialConsentStart;
+  status: 200;
+};
+
+export type startCredentialConsentResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type startCredentialConsentResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type startCredentialConsentResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type startCredentialConsentResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type startCredentialConsentResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type startCredentialConsentResponseSuccess =
+  startCredentialConsentResponse200 & {
+    headers: Headers;
+  };
+export type startCredentialConsentResponseError = (
+  | startCredentialConsentResponse400
+  | startCredentialConsentResponse401
+  | startCredentialConsentResponse403
+  | startCredentialConsentResponse404
+  | startCredentialConsentResponse409
+) & {
+  headers: Headers;
+};
+
+export type startCredentialConsentResponse =
+  startCredentialConsentResponseSuccess | startCredentialConsentResponseError;
+
+export const getStartCredentialConsentUrl = (provider: string) => {
+  return `/credential_consent/${provider}:start`;
+};
+
+/**
+ * Starts the provider delegated OAuth consent of ADR-0039 decision 3 for one agent binding and one target binding of the provider. The server stores a random state bound to the caller, the project, the agent binding, the target binding and the provider, with a short lifetime and single use, and an S256 PKCE verifier. It answers the provider authorization URL with the exact configured redirect URI. Gated on `models.credentials.governed.use` in `project_id`. Mounted only when the enterprise credential governance flag is on and a provider OAuth application is configured; otherwise the path answers like any unknown route.
+ * @summary Start provider OAuth consent
+ */
+export const startCredentialConsent = async (
+  provider: string,
+  credentialConsentStartRequest: CredentialConsentStartRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<startCredentialConsentResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<startCredentialConsentResponse>(
+    getStartCredentialConsentUrl(provider),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(credentialConsentStartRequest),
+    },
+  );
+};
+
+export const getStartCredentialConsentQueryKey = (
+  provider: string,
+  credentialConsentStartRequest?: CredentialConsentStartRequest,
+) => {
+  return [
+    "POST",
+    `/credential_consent/${provider}:start`,
+    credentialConsentStartRequest,
+  ] as const;
+};
+
+export const getStartCredentialConsentQueryOptions = <
+  TData = Awaited<ReturnType<typeof startCredentialConsent>>,
+  TError = ErrorResponse | N401Response,
+>(
+  provider: string,
+  credentialConsentStartRequest: CredentialConsentStartRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startCredentialConsent>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getStartCredentialConsentQueryKey(provider, credentialConsentStartRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof startCredentialConsent>>
+  > = ({ signal }) =>
+    startCredentialConsent(provider, credentialConsentStartRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: provider !== null && provider !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof startCredentialConsent>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type StartCredentialConsentQueryResult = NonNullable<
+  Awaited<ReturnType<typeof startCredentialConsent>>
+>;
+export type StartCredentialConsentQueryError = ErrorResponse | N401Response;
+
+export function useStartCredentialConsent<
+  TData = Awaited<ReturnType<typeof startCredentialConsent>>,
+  TError = ErrorResponse | N401Response,
+>(
+  provider: string,
+  credentialConsentStartRequest: CredentialConsentStartRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startCredentialConsent>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof startCredentialConsent>>,
+          TError,
+          Awaited<ReturnType<typeof startCredentialConsent>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useStartCredentialConsent<
+  TData = Awaited<ReturnType<typeof startCredentialConsent>>,
+  TError = ErrorResponse | N401Response,
+>(
+  provider: string,
+  credentialConsentStartRequest: CredentialConsentStartRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startCredentialConsent>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof startCredentialConsent>>,
+          TError,
+          Awaited<ReturnType<typeof startCredentialConsent>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useStartCredentialConsent<
+  TData = Awaited<ReturnType<typeof startCredentialConsent>>,
+  TError = ErrorResponse | N401Response,
+>(
+  provider: string,
+  credentialConsentStartRequest: CredentialConsentStartRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startCredentialConsent>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Start provider OAuth consent
+ */
+
+export function useStartCredentialConsent<
+  TData = Awaited<ReturnType<typeof startCredentialConsent>>,
+  TError = ErrorResponse | N401Response,
+>(
+  provider: string,
+  credentialConsentStartRequest: CredentialConsentStartRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startCredentialConsent>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getStartCredentialConsentQueryOptions(
+    provider,
+    credentialConsentStartRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type completeCredentialConsentResponse200 = {
+  data: CredentialConsentResult;
+  status: 200;
+};
+
+export type completeCredentialConsentResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type completeCredentialConsentResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type completeCredentialConsentResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type completeCredentialConsentResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type completeCredentialConsentResponse502 = {
+  data: ErrorResponse;
+  status: 502;
+};
+
+export type completeCredentialConsentResponseSuccess =
+  completeCredentialConsentResponse200 & {
+    headers: Headers;
+  };
+export type completeCredentialConsentResponseError = (
+  | completeCredentialConsentResponse400
+  | completeCredentialConsentResponse401
+  | completeCredentialConsentResponse403
+  | completeCredentialConsentResponse404
+  | completeCredentialConsentResponse502
+) & {
+  headers: Headers;
+};
+
+export type completeCredentialConsentResponse =
+  | completeCredentialConsentResponseSuccess
+  | completeCredentialConsentResponseError;
+
+export const getCompleteCredentialConsentUrl = (
+  provider: string,
+  params: CompleteCredentialConsentParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/credential_consent/${provider}:callback?${stringifiedParams}`
+    : `/credential_consent/${provider}:callback`;
+};
+
+/**
+ * The provider redirects the user's browser here. The server consumes the state once (an unknown, expired, reused or foreign state is refused), checks again that the caller holds `models.credentials.governed.use` in the state's project, exchanges the code with the PKCE verifier and the exact redirect URI, seals the refresh and access tokens and writes a security audit event. Mounted on the same condition as startCredentialConsent.
+ * @summary Complete provider OAuth consent
+ */
+export const completeCredentialConsent = async (
+  provider: string,
+  params: CompleteCredentialConsentParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<completeCredentialConsentResponse> => {
+  return eliteaFetch<completeCredentialConsentResponse>(
+    getCompleteCredentialConsentUrl(provider, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getCompleteCredentialConsentQueryKey = (
+  provider: string,
+  params?: CompleteCredentialConsentParams,
+) => {
+  return [
+    `/credential_consent/${provider}:callback`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getCompleteCredentialConsentQueryOptions = <
+  TData = Awaited<ReturnType<typeof completeCredentialConsent>>,
+  TError = ErrorResponse | N401Response,
+>(
+  provider: string,
+  params: CompleteCredentialConsentParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeCredentialConsent>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCompleteCredentialConsentQueryKey(provider, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof completeCredentialConsent>>
+  > = ({ signal }) =>
+    completeCredentialConsent(provider, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: provider !== null && provider !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof completeCredentialConsent>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CompleteCredentialConsentQueryResult = NonNullable<
+  Awaited<ReturnType<typeof completeCredentialConsent>>
+>;
+export type CompleteCredentialConsentQueryError = ErrorResponse | N401Response;
+
+export function useCompleteCredentialConsent<
+  TData = Awaited<ReturnType<typeof completeCredentialConsent>>,
+  TError = ErrorResponse | N401Response,
+>(
+  provider: string,
+  params: CompleteCredentialConsentParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeCredentialConsent>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof completeCredentialConsent>>,
+          TError,
+          Awaited<ReturnType<typeof completeCredentialConsent>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCompleteCredentialConsent<
+  TData = Awaited<ReturnType<typeof completeCredentialConsent>>,
+  TError = ErrorResponse | N401Response,
+>(
+  provider: string,
+  params: CompleteCredentialConsentParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeCredentialConsent>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof completeCredentialConsent>>,
+          TError,
+          Awaited<ReturnType<typeof completeCredentialConsent>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCompleteCredentialConsent<
+  TData = Awaited<ReturnType<typeof completeCredentialConsent>>,
+  TError = ErrorResponse | N401Response,
+>(
+  provider: string,
+  params: CompleteCredentialConsentParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeCredentialConsent>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Complete provider OAuth consent
+ */
+
+export function useCompleteCredentialConsent<
+  TData = Awaited<ReturnType<typeof completeCredentialConsent>>,
+  TError = ErrorResponse | N401Response,
+>(
+  provider: string,
+  params: CompleteCredentialConsentParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeCredentialConsent>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCompleteCredentialConsentQueryOptions(
+    provider,
+    params,
     options,
   );
 

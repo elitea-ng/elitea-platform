@@ -20,6 +20,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/delegationstore"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/obo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/provideroauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
@@ -64,6 +65,12 @@ type DelegationCustody interface {
 	RecordRequirement(ctx context.Context, r delegationstore.Requirement) (delegationstore.Requirement, error)
 }
 
+// ProviderTokenSource answers a valid provider access token for a provider
+// OAuth grant (*provideroauth.TokenSource). A credential cache can wrap it.
+type ProviderTokenSource interface {
+	AccessToken(ctx context.Context, key provideroauth.GrantKey) (provideroauth.AccessToken, error)
+}
+
 // Store persists invocations, decisions and redemptions.
 type Store interface {
 	// AdmitInvocation inserts the invocation, or matches a replay of it
@@ -99,8 +106,8 @@ type Redemption struct {
 	NotAfter     time.Time
 }
 
-// Config is the broker's dependencies. Exchanger, Custody, Meter, Logger
-// and Now are optional; every other field is required.
+// Config is the broker's dependencies. Exchanger, Custody, ProviderTokens,
+// Meter, Logger and Now are optional; every other field is required.
 type Config struct {
 	Decider     Decider
 	References  credentialgrant.ReferenceReader
@@ -117,6 +124,11 @@ type Config struct {
 	// oauth_delegated credential is BACKEND_UNAVAILABLE.
 	Exchanger obo.Exchanger
 	Custody   DelegationCustody
+	// ProviderTokens answers provider OAuth access tokens (#1121): the
+	// oauth_delegated uses whose descriptor names the provider as the
+	// authority (Atlassian 3LO, Aha! OAuth2). Optional: without it such a
+	// use is BACKEND_UNAVAILABLE.
+	ProviderTokens ProviderTokenSource
 	// Store wraps the security audit appender: the decision and the
 	// redemption events are appended in the store's transactions.
 	Store    Store

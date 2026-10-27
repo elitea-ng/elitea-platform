@@ -433,6 +433,7 @@ func credentialBrokerAtBoot(
 	pins profile.PinReader,
 	sessions *agentidentitycore.Broker,
 	entra *entraGovernance,
+	providerTokens credentialbroker.ProviderTokenSource,
 	catalog credentialbroker.OperationCatalog,
 	logger *slog.Logger,
 ) (*credentialbroker.Broker, error) {
@@ -487,6 +488,9 @@ func credentialBrokerAtBoot(
 		Sessions:     sessions,
 		Catalog:      catalog,
 		Logger:       logger,
+		// Jira, Confluence and Aha! oauth_delegated uses (#1121); nil when
+		// no provider OAuth application is configured.
+		ProviderTokens: providerTokens,
 	}
 	if delegations := entraDelegations(entra); delegations != nil {
 		cfg.Delegations = delegations

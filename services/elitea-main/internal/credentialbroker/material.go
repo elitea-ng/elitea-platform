@@ -11,6 +11,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/delegationstore"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/obo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/provideroauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore"
 )
 
@@ -38,7 +39,19 @@ func (b *Broker) acquire(ctx context.Context, req RedeemRequest, facts requestFa
 		}
 		return acquired{envelope: &Envelope{Kind: KindStatic, Material: material, NotAfter: notAfter}}, nil
 	case credentialgrant.ClassOAuthDelegated:
-		token, denial := b.exchange(ctx, req, facts)
+		var token obo.AccessToken
+		var denial *Denial
+		// The descriptor names who issued the consent: the user's Entra
+		// delegation (SharePoint, Graph on-behalf-of) or the provider
+		// itself (Jira, Confluence, Aha!). Nothing else selects the path.
+		switch b.cfg.Catalog.OAuthAuthority(reference.ProviderType, reference.Class) {
+		case credentialgrant.OAuthAuthorityEntraOBO:
+			token, denial = b.exchange(ctx, req, facts)
+		case credentialgrant.OAuthAuthorityProvider:
+			token, denial = b.providerToken(ctx, facts)
+		default:
+			denial = &Denial{Code: CodeClassNotSupported, reason: "oauth_authority_unknown"}
+		}
 		if denial != nil {
 			return acquired{}, denial
 		}
@@ -129,6 +142,44 @@ func shapeMaterial(raw []byte, keys []string) (map[string][]byte, bool) {
 		}
 	}
 	return out, true
+}
+
+// providerToken answers the access token of the provider OAuth grant the
+// use rests on (ADR-0039 decision 3: the user consented to the provider
+// directly). The grant is the authority: it is the one of the run's subject
+// user, for this tenant project, provider, target binding and agent
+// binding. A run with no user subject has no such grant and is denied, and
+// so is a decision subject that is not the run's own user (an autonomous
+// mandate's approver).
+func (b *Broker) providerToken(ctx context.Context, facts requestFacts) (obo.AccessToken, *Denial) {
+	if b.cfg.ProviderTokens == nil {
+		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "provider_oauth_not_configured"}
+	}
+	r := facts.request
+	if facts.runSubjectUser <= 0 || r.Subject.UserID != facts.runSubjectUser {
+		return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "provider_oauth_no_user_subject"}
+	}
+	key := provideroauth.GrantKey{
+		TenantProjectID: r.Context.TenantProjectID, Provider: facts.reference.ProviderType,
+		TargetBindingID: facts.reference.TargetBindingID, SubjectUserID: facts.runSubjectUser,
+		AgentBindingID: r.Agent.BindingID,
+	}
+	token, err := b.cfg.ProviderTokens.AccessToken(ctx, key)
+	switch {
+	case err == nil:
+	case errors.Is(err, provideroauth.ErrConsentRequired):
+		return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "provider_consent_required"}
+	case errors.Is(err, provideroauth.ErrInvalid):
+		return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "provider_oauth_key_invalid"}
+	case errors.Is(err, provideroauth.ErrProviderNotConfigured):
+		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "provider_oauth_not_configured"}
+	default:
+		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "provider_oauth_unavailable"}
+	}
+	if token.Token == "" {
+		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "oauth_empty_token"}
+	}
+	return obo.AccessToken{Token: token.Token, ExpiresAt: token.ExpiresAt}, nil
 }
 
 // exchange runs the on-behalf-of exchange of an oauth_delegated use. Entra

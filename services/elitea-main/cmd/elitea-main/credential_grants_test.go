@@ -53,7 +53,7 @@ func TestCredentialBrokerBuildsNothingWithTheFlagOff(t *testing.T) {
 	broker, err := credentialBrokerAtBoot(profile.LegacyAdmission(true), func(string) (string, bool) {
 		t.Fatal("the flag-off broker composition read the environment")
 		return "", false
-	}, nil, nil, nil, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil, nil, nil, nil)
 	if err != nil || broker != nil {
 		t.Fatalf("flag off built broker=%v err=%v", broker, err)
 	}
@@ -64,7 +64,7 @@ func TestCredentialBrokerBuildsNothingWithTheFlagOff(t *testing.T) {
 func TestCredentialBrokerRefusesMissingDependenciesWithTheFlagOn(t *testing.T) {
 	governed := profile.GovernedAdmission(profile.PolicyRevision{ID: "2026-10-r1", Digest: [32]byte{1}})
 	if _, err := credentialBrokerAtBoot(governed, func(string) (string, bool) { return "", false },
-		nil, nil, noPins{}, nil, nil, credentialOperationCatalog(), nil); err == nil {
+		nil, nil, noPins{}, nil, nil, nil, credentialOperationCatalog(), nil); err == nil {
 		t.Fatal("flag on without a decider or a database was accepted")
 	}
 }

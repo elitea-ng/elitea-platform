@@ -65,6 +65,26 @@ func TestNewRegistryRefusesInvalidDescriptors(t *testing.T) {
 		},
 		"rotation for an undeclared class": func(d *AdapterDescriptor) { d.RotationRequired = []credentialgrant.CredentialClass{oauthDelegated} },
 		"negative cost hint":               func(d *AdapterDescriptor) { d.Operations[0].CostHint = -1 },
+		"OAuth authority without oauth_delegated": func(d *AdapterDescriptor) {
+			d.OAuthAuthority = credentialgrant.OAuthAuthorityProvider
+		},
+		"oauth_delegated without an OAuth authority": func(d *AdapterDescriptor) {
+			d.AuthClasses = append(d.AuthClasses, oauthDelegated)
+			d.MaterialKeys[oauthDelegated] = []string{"access_token"}
+			d.Qualification[oauthDelegated] = QualificationFixture
+		},
+		"unknown OAuth authority": func(d *AdapterDescriptor) {
+			d.AuthClasses = append(d.AuthClasses, oauthDelegated)
+			d.MaterialKeys[oauthDelegated] = []string{"access_token"}
+			d.Qualification[oauthDelegated] = QualificationFixture
+			d.OAuthAuthority = "saml"
+		},
+		"Entra on-behalf-of without an audience": func(d *AdapterDescriptor) {
+			d.AuthClasses = append(d.AuthClasses, oauthDelegated)
+			d.MaterialKeys[oauthDelegated] = []string{"access_token"}
+			d.Qualification[oauthDelegated] = QualificationFixture
+			d.OAuthAuthority = credentialgrant.OAuthAuthorityEntraOBO
+		},
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -183,5 +203,30 @@ func TestCanonicalBaseURL(t *testing.T) {
 	}
 	if _, err := CanonicalTenantSite("https:///sites/eng"); !errors.Is(err, ErrInvalidTarget) {
 		t.Errorf("tenant site without a host: %v", err)
+	}
+}
+
+// #1121: SharePoint's oauth_delegated class is the Entra on-behalf-of
+// exchange; Jira, Confluence and Aha! use the provider's own OAuth grant.
+func TestBuiltinOAuthAuthorities(t *testing.T) {
+	r, err := NewBuiltinRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]credentialgrant.OAuthAuthority{
+		"sharepoint": credentialgrant.OAuthAuthorityEntraOBO,
+		"jira":       credentialgrant.OAuthAuthorityProvider,
+		"confluence": credentialgrant.OAuthAuthorityProvider,
+		"aha":        credentialgrant.OAuthAuthorityProvider,
+		"qtest":      "",
+		"unknown":    "",
+	}
+	for provider, authority := range want {
+		if got := r.OAuthAuthority(provider, oauthDelegated); got != authority {
+			t.Errorf("%s: OAuthAuthority = %q, want %q", provider, got, authority)
+		}
+		if got := r.OAuthAuthority(provider, staticSecret); got != "" {
+			t.Errorf("%s: static_secret has an OAuth authority %q", provider, got)
+		}
 	}
 }

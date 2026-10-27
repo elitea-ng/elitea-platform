@@ -59,6 +59,10 @@ type requestFacts struct {
 	mandate    *mandate.Mandate
 	delegation *mandate.Delegation
 	actorChain []string
+	// runSubjectUser is the stored context's own subject user, before the
+	// autonomous-mandate rule replaces the decision subject with the
+	// approver. 0 when the run has none.
+	runSubjectUser int64
 }
 
 // buildRequest builds the operation request from the stored context and the
@@ -125,6 +129,7 @@ func (b *Broker) buildRequest(ctx context.Context, sc *securitycontextView, req 
 	}
 
 	subjectUser := parseUserID(sc.subjectPrincipal)
+	facts.runSubjectUser = subjectUser
 	source := authSource(sc.authSource)
 	var authority authzcompose.AuthorityRef
 	var externalSubject string
