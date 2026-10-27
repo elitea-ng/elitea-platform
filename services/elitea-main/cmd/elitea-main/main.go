@@ -329,6 +329,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
+	// The Elitea-native agent assertion issuer (#1153): its provider for the
+	// registry and its public JWKS and issuer metadata. Empty unless governed
+	// with a relying party configured.
+	eliteaNative, err := eliteaNativeAgentIdentityAtBoot(ctx, credentialAdmission, credentialRevision,
+		os.LookupEnv, pool, publicProjectID, logger)
+	if err != nil {
+		return err
+	}
 	agentIdentity, err := agentIdentityAdmin(credentialAdmission, credentialRevision, pool, securityInvalidations)
 	if err != nil {
 		return err
@@ -2743,6 +2751,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CredentialProbe:               credentialProbeHandler,
 		CredentialConsent:             providerOAuthGoverned.Consent,
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
+		AgentAssertionWellKnown:       eliteaNative.WellKnown,
 		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,
 		OnToolkitCleanupJournal:       startToolkitReconciler,

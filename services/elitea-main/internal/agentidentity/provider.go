@@ -152,6 +152,27 @@ type AssumeSpec struct {
 	Audience          string
 	Scopes            []string
 	TTL               time.Duration
+	// Run is what the broker read for this call. An adapter that issues its
+	// own assertion (Elitea-native, #1153) states it in the claims; an
+	// adapter that exchanges with an IdP ignores it.
+	Run RunContext
+}
+
+// RunContext names the run a credential is for: references and the epochs
+// the broker checked, never a token.
+type RunContext struct {
+	TenantProjectID         int64
+	ExecutionID             string
+	Generation              int64
+	AgentBindingID          string
+	AgentBindingEpoch       int64
+	ExternalAgentIdentityID string
+	ExternalEpoch           int64
+	// VersionDigest is the binding's frozen definition digest.
+	VersionDigest    [32]byte
+	PolicyRevisionID string
+	// SessionExpiresAt bounds every credential of the session.
+	SessionExpiresAt time.Time
 }
 
 // OBOSpec asks for a credential of the agent acting for a user.

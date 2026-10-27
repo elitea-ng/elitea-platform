@@ -16,6 +16,7 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity/eliteanative"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/adminui"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/browserauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/gateway"
@@ -701,6 +702,12 @@ type RouterConfig struct {
 	// API (ADR-0039, issue 1151). Set, like AgentIdentityAdmin, only with the
 	// credential governance flag on; nil mounts none of its routes.
 	ExternalAgentIdentityAdmin *v2agentidentity.ExternalHandler
+	// AgentAssertionWellKnown serves the Elitea-native agent assertion JWKS
+	// and issuer metadata (ADR-0039, issue 1153). The composition root sets
+	// it only with the credential governance flag on and at least one
+	// relying party configured; nil mounts neither route, so both answer
+	// 404. It holds public keys only: no route signs.
+	AgentAssertionWellKnown *eliteanative.WellKnown
 	// CredentialProbe serves the credential probe (ADR-0039, issue 1120).
 	// Set only with the credential governance flag on; nil mounts no route.
 	CredentialProbe *v2credentialprobe.Handler
@@ -1640,6 +1647,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	})
 	r.Get(v2discovery.Path, discoveryHandler.ServeHTTP)
 	r.Head(v2discovery.Path, discoveryHandler.ServeHTTP)
+	// The agent assertion issuer's public documents (issue 1153). Public
+	// for the same reason as discovery: a relying party fetches them with
+	// no credential, and they carry public keys and URLs only.
+	if cfg.AgentAssertionWellKnown != nil {
+		r.Get(eliteanative.JWKSPath, cfg.AgentAssertionWellKnown.ServeJWKS)
+		r.Get(eliteanative.MetadataPath, cfg.AgentAssertionWellKnown.ServeMetadata)
+	}
 	// Uploaded brand assets (ADR-0024 decision 3): public for the same
 	// reason as /icons — <img src>, <link rel="icon"> and @font-face fetches
 	// carry no credential. Content-addressed and immutable; the route
