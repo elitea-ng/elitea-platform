@@ -24,6 +24,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/maintenance"
 	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/nativeauthretention"
 	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/pricesync"
+	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/securityauditretention"
 	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/syncretention"
 )
 
@@ -154,6 +155,24 @@ func main() {
 		go runRoutine(ctx, routineStore, logger, "scheduler.audit_retention",
 			"Deletes audit events older than the retention window.",
 			cfg.AuditRetentionInterval, time.Minute, auditSweeper.Pass)
+	}
+
+	// Security audit outbox retention (elitea-main shared 0183, #1114):
+	// deletes only outbox rows that are exported, older than the window and
+	// present in the append-only durable store. Default: no deletion
+	// (SECURITY_AUDIT_OUTBOX_RETENTION_DAYS unset or 0).
+	if secAuditCfg, secAuditErr := securityauditretention.ConfigFromEnv(os.LookupEnv); secAuditErr != nil {
+		slog.Error("security audit outbox retention did not start", "err", secAuditErr)
+	} else if secAuditSweeper, secAuditErr := securityauditretention.New(
+		pool, maintenanceSwitch.Active, secAuditCfg, logger,
+	); errors.Is(secAuditErr, securityauditretention.ErrDisabled) {
+		slog.Info("security audit outbox retention is off; exported outbox rows are kept")
+	} else if secAuditErr != nil {
+		slog.Error("security audit outbox retention did not start", "err", secAuditErr)
+	} else {
+		go runRoutine(ctx, routineStore, logger, "scheduler.security_audit_outbox_retention",
+			"Deletes exported security audit outbox rows older than the retention window.",
+			secAuditSweeper.Interval(), time.Minute, secAuditSweeper.Pass)
 	}
 
 	// Incremental-sync tombstone retention (ADR-0025 WP6, elitea-main tenant

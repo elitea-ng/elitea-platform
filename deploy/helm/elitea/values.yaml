@@ -2897,6 +2897,30 @@ main:
     # Read in cmd/elitea-main/deployment_kind_config.go.
     ELITEA_DEPLOYMENT_KIND: "self_hosted"
 
+    # --- Enterprise credential governance (ADR-0039) ---------------------------
+    # "true" | "false". Off (the default), nothing changes: no pins, no new
+    # dependency, no new read on any request path. On, every new admission is
+    # pinned to the governed profile and the policy revision named below, and
+    # boot REFUSES unless that revision exists (create it with
+    # `elitea-main credential-policy put`), hashes to its digest and allows at
+    # least one identity mode. Read in cmd/elitea-main/credential_governance.go.
+    ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED: "false"
+    ELITEA_CREDENTIAL_GOVERNANCE_POLICY_REVISION: ""
+    # External Vault/OpenBao KV v2 store for governed credentials (#1113).
+    # Read ONLY with the flag above on. All empty means unconfigured, which is
+    # fine unless the active revision lists a vault_required_credential_class.
+    # Any value set makes all of them validated: https only, no defaults.
+    # Role per workload scope is "<ROLE_PREFIX>-<scope>".
+    ELITEA_SECRETSTORE_VAULT_ADDR: ""
+    ELITEA_SECRETSTORE_VAULT_CA_FILE: ""
+    ELITEA_SECRETSTORE_VAULT_AUTH_METHOD: ""      # jwt | kubernetes
+    ELITEA_SECRETSTORE_VAULT_AUTH_MOUNT: ""
+    ELITEA_SECRETSTORE_VAULT_ROLE_PREFIX: ""
+    ELITEA_SECRETSTORE_VAULT_KV_MOUNT: ""
+    ELITEA_SECRETSTORE_VAULT_TOKEN_FILE: ""
+    ELITEA_SECRETSTORE_VAULT_NAMESPACE: ""        # Vault Enterprise only
+    ELITEA_SECRETSTORE_VAULT_READINESS_SCOPE: ""
+
     # --- Outbound e-mail (ADR-0024 WP7; gap G7) ---------------------------------
     # These are the BOOTSTRAP DEFAULTS, not the whole configuration. Since gap
     # G7 the relay is administered at Admin > E-mail, which stores the settings
@@ -4248,6 +4272,11 @@ scheduler:
     # keeps repeating with the ceiling raised, the next step is monthly RANGE
     # partitioning of the table on `timestamp` — not a bigger number here.
     AUDIT_RETENTION_MAX_BATCHES: "50"
+    # Governed security audit outbox retention (ADR-0039, #1114). "0" (the
+    # default) deletes NOTHING. A positive value deletes only outbox rows that
+    # are exported, older than that many days and present in the append-only
+    # durable store with the same hash; the durable store is never pruned.
+    SECURITY_AUDIT_OUTBOX_RETENTION_DAYS: "0"
     # Incremental-sync tombstone retention (ADR-0025 WP6): how long the
     # deletion and lost-access records behind `changes_since` are kept. 97 is
     # the FLOOR — the longest offline_retention_days (90) plus a week, the

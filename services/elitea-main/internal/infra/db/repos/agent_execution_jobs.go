@@ -653,6 +653,9 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 	); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert agent command outbox: %w", err)
 	}
+	if err := pinExecutionAdmission(ctx, tx, r.policy.CredentialProfile, agentAdmissionPin(admission)); err != nil {
+		return executionapp.AdmissionOutcome{}, err
+	}
 	// Mark the reserved slot materialized in the same commit as the job.
 	marked, err := txQueries.MarkAgentAdmissionMaterialized(
 		ctx,
@@ -1412,4 +1415,29 @@ func resumeCurrentAgentStaticTools(ctx context.Context, queries *sqlcgen.Queries
 		return executionapp.ErrInvalidAdmission
 	}
 	return nil
+}
+
+// agentAdmissionPin scopes an agent admission to the response message it
+// produces, so a continuation (HITL, output-limit, authorization or static
+// resume) of that response keeps the governed pin its run started under. A
+// later turn of the same conversation writes a different response, so its
+// revision never leaks into the resume of an earlier one.
+func agentAdmissionPin(admission agentexecutionapp.Admission) admissionPin {
+	pin := admissionPin{executionID: admission.Record.Outbox.ExecutionID}
+	var conversationID, responseID string
+	switch {
+	case admission.CurrentTurn != nil:
+		conversationID, responseID = admission.CurrentTurn.ConversationUUID, admission.CurrentTurn.ResponseMessageID
+	case admission.CurrentAdhocTurn != nil:
+		conversationID, responseID = admission.CurrentAdhocTurn.ConversationUUID, admission.CurrentAdhocTurn.ResponseMessageID
+	case admission.CurrentRegenerateTurn != nil:
+		conversationID, responseID = admission.CurrentRegenerateTurn.ConversationUUID, admission.CurrentRegenerateTurn.ResponseMessageID
+	case admission.CurrentContinueTurn != nil:
+		conversationID, responseID = admission.CurrentContinueTurn.ConversationUUID, admission.CurrentContinueTurn.ResponseMessageID
+		pin.continuation = true
+	}
+	if conversationID != "" && responseID != "" {
+		pin.continuationScope = "agent-response:" + conversationID + ":" + responseID
+	}
+	return pin
 }

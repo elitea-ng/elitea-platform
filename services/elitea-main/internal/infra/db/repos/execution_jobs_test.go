@@ -9,6 +9,7 @@ import (
 	"time"
 
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	configurationdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/configurations"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
@@ -252,6 +253,7 @@ func TestExecutionJobsRepositoryPersistsOneDatabaseAuthoredAdmissionClock(t *tes
 
 func testDispatchPolicy() ValidationDispatchPolicy {
 	return ValidationDispatchPolicy{
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "runtime:commands",
 		CapabilityVersion: "1.0.0",
 		ResourceClass:     "validation-small",

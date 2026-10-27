@@ -73,6 +73,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authcomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/wikichat"
@@ -89,6 +90,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/material"
 	providerproxy "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/providerhost/proxy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/vectorintrospection"
 )
@@ -113,6 +115,24 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == legacyOrphansCommand {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		code := runLegacyPgvectorOrphans(ctx, os.Args[2:], os.LookupEnv, os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
+
+	// The security audit chain verifier (#1114): it runs and exits.
+	if len(os.Args) > 2 && os.Args[1] == "security-audit" && os.Args[2] == "verify" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := securityaudit.RunVerify(ctx, os.Args[3:], os.LookupEnv, os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
+
+	// The credential policy operator command (credential_governance.go).
+	if len(os.Args) > 1 && os.Args[1] == credentialPolicyCommand {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := runCredentialPolicy(ctx, os.Args[2:], os.LookupEnv, os.Stdout, os.Stderr, func(p *pgxpool.Pool) func(context.Context) ([]profile.Prerequisite, error) {
+			return credentialGovernancePrerequisites(os.LookupEnv, p)
+		})
 		stop()
 		os.Exit(code)
 	}
@@ -282,6 +302,32 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return err
 	}
 	defer pool.Close()
+
+	// The credential governance profile (ADR-0039, #1111). Resolved before any
+	// admission path exists, so a refused governed boot admits nothing.
+	credentialGovernanceStore, err := dbrepos.NewCredentialGovernanceStore(pool)
+	if err != nil {
+		return err
+	}
+	credentialAdmission, credentialRevision, err := credentialGovernanceAtBoot(
+		ctx, os.LookupEnv, credentialGovernanceStore,
+		credentialGovernancePrerequisites(os.LookupEnv, pool),
+	)
+	if err != nil {
+		return err
+	}
+	logger.Info("credential governance profile resolved",
+		"profile", string(credentialAdmission.Profile()),
+		"policy_revision", credentialRevision.ID,
+		"continuation_guard", credentialAdmission.ContinuationGuard())
+	if err := startSecurityAuditRelay(ctx, credentialAdmission, credentialRevision, pool, logger); err != nil {
+		return err
+	}
+	agentIdentityAdminHandler, err := agentIdentityAdmin(credentialAdmission, credentialRevision, pool)
+	if err != nil {
+		return err
+	}
+
 	if os.Getenv(v2secrets.MasterKeyEnvVar) != "" {
 		if err := refuseUnwrappedVaultKeys(ctx, pool); err != nil {
 			return err
@@ -1916,6 +1962,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 		runtimeRoot, err = runtimecomposition.New(ctx, runtimeConfig, runtimecomposition.Dependencies{
 			AdmissionPool:                    runtimePools.Admission,
+			CredentialProfile:                credentialAdmission,
 			ControlPool:                      runtimePools.Control,
 			OutputPool:                       runtimePools.Output,
 			ReplayPool:                       runtimePools.Replay,
@@ -2635,6 +2682,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 
 	r := api.NewRouter(api.RouterConfig{
+		AgentIdentityAdmin:            agentIdentityAdminHandler,
 		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,
 		OnToolkitCleanupJournal:       startToolkitReconciler,

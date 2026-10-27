@@ -266,6 +266,9 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 	}); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert tool-run command outbox: %w", err)
 	}
+	if err := pinExecutionAdmission(ctx, tx, r.policy.CredentialProfile, admissionPin{executionID: admission.Record.Outbox.ExecutionID}); err != nil {
+		return executionapp.AdmissionOutcome{}, err
+	}
 	// Commit command bytes with admission. A replacement process needs no caller state.
 	if r.preparer != nil {
 		envelope, err := r.prepareAdmissionEnvelope(ctx, admission, timing.Deadline)

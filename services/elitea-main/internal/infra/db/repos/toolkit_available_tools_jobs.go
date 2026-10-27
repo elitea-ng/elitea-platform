@@ -223,6 +223,9 @@ func (r *ToolkitAvailableToolsJobsRepository) AdmitToolkitAvailableTools(
 	}); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert toolkit discovery command outbox: %w", err)
 	}
+	if err := pinExecutionAdmission(ctx, tx, r.policy.CredentialProfile, admissionPin{executionID: admission.Record.Outbox.ExecutionID}); err != nil {
+		return executionapp.AdmissionOutcome{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("commit toolkit discovery admission: %w", err)
 	}
