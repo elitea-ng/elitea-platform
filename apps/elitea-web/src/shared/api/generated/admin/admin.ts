@@ -65,6 +65,7 @@ import type {
   BulkInviteRequest,
   BulkInviteSummary,
   CancelBackgroundJobParams,
+  CredentialProbeResult,
   CredentialUseGrant,
   CredentialUseGrantCreate,
   CredentialUseGrantListResponse,
@@ -14409,6 +14410,252 @@ export function useRevokeCredentialUseGrant<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getRevokeCredentialUseGrantQueryOptions(
+    projectId,
+    id,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type probeCredentialReferenceResponse200 = {
+  data: CredentialProbeResult;
+  status: 200;
+};
+
+export type probeCredentialReferenceResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type probeCredentialReferenceResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type probeCredentialReferenceResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type probeCredentialReferenceResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type probeCredentialReferenceResponse502 = {
+  data: ErrorResponse;
+  status: 502;
+};
+
+export type probeCredentialReferenceResponseSuccess =
+  probeCredentialReferenceResponse200 & {
+    headers: Headers;
+  };
+export type probeCredentialReferenceResponseError = (
+  | probeCredentialReferenceResponse401
+  | probeCredentialReferenceResponse403
+  | probeCredentialReferenceResponse404
+  | probeCredentialReferenceResponse409
+  | probeCredentialReferenceResponse502
+) & {
+  headers: Headers;
+};
+
+export type probeCredentialReferenceResponse =
+  | probeCredentialReferenceResponseSuccess
+  | probeCredentialReferenceResponseError;
+
+export const getProbeCredentialReferenceUrl = (
+  projectId: string,
+  id: string,
+) => {
+  return `/projects/${projectId}/credential_references/${id}:probe`;
+};
+
+/**
+ * Runs the provider adapter's probe operation server side, with the material held only for that call, and answers the outcome. Gated on `models.credentials.governed.probe` in the project, and needs an active credential use grant for this reference that lists the `probe` capability; `use` alone is refused (403). The response never holds material. With no probe available for the provider the outcome is `unavailable`. Mounted only when the enterprise credential governance flag is on; otherwise the path answers like any unknown route.
+ * @summary Probe a governed credential
+ */
+export const probeCredentialReference = async (
+  projectId: string,
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<probeCredentialReferenceResponse> => {
+  return eliteaFetch<probeCredentialReferenceResponse>(
+    getProbeCredentialReferenceUrl(projectId, id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getProbeCredentialReferenceQueryKey = (
+  projectId: string,
+  id: string,
+) => {
+  return [
+    "POST",
+    `/projects/${projectId}/credential_references/${id}:probe`,
+  ] as const;
+};
+
+export const getProbeCredentialReferenceQueryOptions = <
+  TData = Awaited<ReturnType<typeof probeCredentialReference>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof probeCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getProbeCredentialReferenceQueryKey(projectId, id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof probeCredentialReference>>
+  > = ({ signal }) =>
+    probeCredentialReference(projectId, id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      id !== null &&
+      id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof probeCredentialReference>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ProbeCredentialReferenceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof probeCredentialReference>>
+>;
+export type ProbeCredentialReferenceQueryError = N401Response | ErrorResponse;
+
+export function useProbeCredentialReference<
+  TData = Awaited<ReturnType<typeof probeCredentialReference>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof probeCredentialReference>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof probeCredentialReference>>,
+          TError,
+          Awaited<ReturnType<typeof probeCredentialReference>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useProbeCredentialReference<
+  TData = Awaited<ReturnType<typeof probeCredentialReference>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof probeCredentialReference>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof probeCredentialReference>>,
+          TError,
+          Awaited<ReturnType<typeof probeCredentialReference>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useProbeCredentialReference<
+  TData = Awaited<ReturnType<typeof probeCredentialReference>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof probeCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Probe a governed credential
+ */
+
+export function useProbeCredentialReference<
+  TData = Awaited<ReturnType<typeof probeCredentialReference>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof probeCredentialReference>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getProbeCredentialReferenceQueryOptions(
     projectId,
     id,
     options,
