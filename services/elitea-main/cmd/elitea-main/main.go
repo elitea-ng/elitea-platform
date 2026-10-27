@@ -323,7 +323,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err := startSecurityAuditRelay(ctx, credentialAdmission, credentialRevision, pool, logger); err != nil {
 		return err
 	}
-	agentIdentityAdminHandler, err := agentIdentityAdmin(credentialAdmission, credentialRevision, pool)
+	// agentIdentity.Broker is for admission (#1115) and the credential
+	// broker (#1118); nothing calls it yet.
+	agentIdentity, err := agentIdentityAdmin(credentialAdmission, credentialRevision, pool)
 	if err != nil {
 		return err
 	}
@@ -2682,7 +2684,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 
 	r := api.NewRouter(api.RouterConfig{
-		AgentIdentityAdmin:            agentIdentityAdminHandler,
+		AgentIdentityAdmin:            agentIdentity.Admin,
+		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
 		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,
 		OnToolkitCleanupJournal:       startToolkitReconciler,

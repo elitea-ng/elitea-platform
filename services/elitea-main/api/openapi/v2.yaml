@@ -6373,6 +6373,93 @@ components:
           items:
             $ref: '#/components/schemas/Mandate'
 
+    ExternalAgentIdentity:
+      type: object
+      description: >
+        ADR-0039 external agent identity: one logical agent's identity in an
+        external identity provider. References only: no field holds a token,
+        assertion, secret or key.
+      required: [id, tenant_project_id, application_id, mode, provider, provider_tenant,
+        kind, external_id, generation, provider_config_key, agent_user_ref, owner_ref,
+        state, revocation_epoch, created_by, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        tenant_project_id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        mode:
+          type: string
+          description: One of dedicated_agent, runtime_domain_binding, elitea_native.
+        provider:
+          type: string
+          description: The provider adapter name, for example entra.
+        provider_tenant:
+          type: string
+          description: The provider tenant (Entra tenant id, realm or account).
+        kind:
+          type: string
+          nullable: true
+          description: The provider object kind; null until provisioned.
+        external_id:
+          type: string
+          nullable: true
+          description: The immutable provider object id; null until provisioned.
+        generation:
+          type: integer
+          format: int64
+          description: Increases when the provider object is recreated or rotated.
+        provider_config_key:
+          type: string
+          description: Operator configuration key, for example an Entra blueprint. Never a credential.
+        agent_user_ref: { type: string, nullable: true }
+        owner_ref: { type: string }
+        state:
+          type: string
+          description: >
+            One of provisioning, pending_activation, active, suspended,
+            retiring, retired, replaced.
+        revocation_epoch:
+          type: integer
+          format: int64
+          description: Increases by exactly one on every transition.
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ExternalAgentIdentityCreate:
+      type: object
+      additionalProperties: false
+      required: [tenant_project_id, application_id, mode, provider, provider_tenant]
+      properties:
+        tenant_project_id: { type: integer, format: int64, minimum: 1 }
+        application_id: { type: integer, format: int64, minimum: 1 }
+        mode:
+          type: string
+          description: One of dedicated_agent, runtime_domain_binding, elitea_native.
+        provider:
+          type: string
+          maxLength: 32
+          description: A lower-case provider adapter name.
+        provider_tenant:
+          type: string
+          minLength: 1
+          maxLength: 128
+        provider_config_key:
+          type: string
+          maxLength: 128
+          description: Operator configuration key; never a credential.
+        owner_ref:
+          type: string
+          maxLength: 128
+
+    ExternalAgentIdentityListResponse:
+      type: object
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExternalAgentIdentity'
+
     OkResponse:
       type: object
       required: [ok]
@@ -16993,6 +17080,340 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '503':
           description: The active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+
+  /admin/external_agent_identities:
+    get:
+      operationId: listExternalAgentIdentities
+      summary: List external agent identities
+      description: >
+        ADR-0039 external agent identities, newest first: one per logical
+        agent, application and provider tenant, shared by every version of
+        the agent. Gated on `models.agent_identity.external.manage` in
+        administration mode. Mounted only when the enterprise credential
+        governance flag is on; otherwise the path answers like any unknown
+        route.
+      tags: [admin]
+      parameters:
+        - name: tenant_project_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: application_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: state
+          in: query
+          required: false
+          description: >
+            One of provisioning, pending_activation, active, suspended,
+            retiring, retired, replaced.
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: One page of external agent identities
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAgentIdentityListResponse' }
+        '400':
+          description: A malformed filter
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    post:
+      operationId: createExternalAgentIdentity
+      summary: Create an external agent identity record
+      description: >
+        Writes a record in `provisioning`. No identity provider is called;
+        `:provision` creates the provider object. A second live record for
+        the same tenant project, application, provider and provider tenant
+        (modes dedicated_agent and elitea_native) is refused with 409. A mode
+        the active policy revision does not allow is refused with 403. Gated
+        on `models.agent_identity.external.manage`.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExternalAgentIdentityCreate' }
+      responses:
+        '201':
+          description: The new record
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAgentIdentity' }
+        '400':
+          description: A malformed request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or the mode is not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: A live external agent identity already exists for this agent and provider tenant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: The active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/external_agent_identities/{id}:provision:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The external agent identity id (uuid).
+        schema: { type: string }
+    post:
+      operationId: provisionExternalAgentIdentity
+      summary: Create the provider object of an external agent identity
+      description: >
+        Gated on `models.agent_identity.external.manage` in administration mode. Mounted only when the enterprise credential governance flag
+        is on. Every transition increases `revocation_epoch` by exactly one
+        and runs under a row lock. Provisioning never activates: the record moves to `pending_activation`, or stays in `provisioning` while an asynchronous provider finishes.
+      tags: [admin]
+      responses:
+        '200':
+          description: The external agent identity after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAgentIdentity' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or the identity mode is not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such external agent identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The current state does not allow provisioning
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '502':
+          description: The identity provider call failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: No provider adapter is configured, or the active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/external_agent_identities/{id}:activate:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The external agent identity id (uuid).
+        schema: { type: string }
+    post:
+      operationId: activateExternalAgentIdentity
+      summary: Activate an external agent identity
+      description: >
+        Gated on `models.agent_identity.external.manage` and `models.agent_identity.bindings.approve` in administration mode. Mounted only when the enterprise credential governance flag
+        is on. Every transition increases `revocation_epoch` by exactly one
+        and runs under a row lock. Needs an active binding that references the identity and a policy revision that allows its mode.
+      tags: [admin]
+      responses:
+        '200':
+          description: The external agent identity after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAgentIdentity' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or the identity mode is not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such external agent identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The current state does not allow activation, or no approved binding references the identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '502':
+          description: The identity provider call failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: No provider adapter is configured, or the active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/external_agent_identities/{id}:suspend:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The external agent identity id (uuid).
+        schema: { type: string }
+    post:
+      operationId: suspendExternalAgentIdentity
+      summary: Suspend an external agent identity
+      description: >
+        Gated on `models.agent_identity.external.manage` in administration mode. Mounted only when the enterprise credential governance flag
+        is on. Every transition increases `revocation_epoch` by exactly one
+        and runs under a row lock. The record is suspended before the provider is told, so a 502 or 503 still leaves it suspended. New sessions and credentials for its agent are denied.
+      tags: [admin]
+      responses:
+        '200':
+          description: The external agent identity after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAgentIdentity' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or the identity mode is not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such external agent identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The current state does not allow suspension
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '502':
+          description: The identity provider call failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: No provider adapter is configured, or the active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/external_agent_identities/{id}:resume:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The external agent identity id (uuid).
+        schema: { type: string }
+    post:
+      operationId: resumeExternalAgentIdentity
+      summary: Resume a suspended external agent identity
+      description: >
+        Gated on `models.agent_identity.external.manage` in administration mode. Mounted only when the enterprise credential governance flag
+        is on. Every transition increases `revocation_epoch` by exactly one
+        and runs under a row lock. Sessions opened before the suspension stay denied: their epoch is stale.
+      tags: [admin]
+      responses:
+        '200':
+          description: The external agent identity after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAgentIdentity' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or the identity mode is not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such external agent identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The current state does not allow resumption
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '502':
+          description: The identity provider call failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: No provider adapter is configured, or the active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/external_agent_identities/{id}:retire:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The external agent identity id (uuid).
+        schema: { type: string }
+    post:
+      operationId: retireExternalAgentIdentity
+      summary: Retire an external agent identity
+      description: >
+        Gated on `models.agent_identity.external.manage` in administration mode. Mounted only when the enterprise credential governance flag
+        is on. Every transition increases `revocation_epoch` by exactly one
+        and runs under a row lock. The record moves to `retiring`, the provider object is revoked, and the record moves to `retired`. After a 502 or 503 it stays `retiring`; calling retire again retries the revocation.
+      tags: [admin]
+      responses:
+        '200':
+          description: The external agent identity after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAgentIdentity' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or the identity mode is not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such external agent identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The identity is already retired or replaced
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '502':
+          description: The identity provider call failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: No provider adapter is configured, or the active policy revision could not be read
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

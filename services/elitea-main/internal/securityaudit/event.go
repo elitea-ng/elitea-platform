@@ -47,7 +47,13 @@ const (
 	TypeMandateChanged    EventType = "ai.elitea.security.v1.mandate.changed"
 	TypeDelegationChanged EventType = "ai.elitea.security.v1.delegation.changed"
 	TypeEpochBumped       EventType = "ai.elitea.security.v1.epoch.bumped"
-	TypeProbe             EventType = "ai.elitea.security.v1.probe"
+	// TypeExternalIdentityChanged is a state change of an external agent
+	// identity (#1151).
+	TypeExternalIdentityChanged EventType = "ai.elitea.security.v1.external.identity.changed"
+	// TypeAgentSession is one Broker.OpenSession or Broker.Credential call
+	// (#1151), allowed or denied.
+	TypeAgentSession EventType = "ai.elitea.security.v1.agent.session"
+	TypeProbe        EventType = "ai.elitea.security.v1.probe"
 )
 
 // OCSF class and category uids (https://schema.ocsf.io).
@@ -64,14 +70,16 @@ const (
 // ocsfClasses is the OCSF class of each event type. An event type with no
 // entry is unknown and refused.
 var ocsfClasses = map[EventType]int{
-	TypeDecision:          OCSFClassAuthorizeSession,
-	TypeCredentialRedeem:  OCSFClassAuthorizeSession,
-	TypeGrantChanged:      OCSFClassUserAccessManagement,
-	TypeMandateChanged:    OCSFClassUserAccessManagement,
-	TypeDelegationChanged: OCSFClassUserAccessManagement,
-	TypeBindingChanged:    OCSFClassEntityManagement,
-	TypeEpochBumped:       OCSFClassEntityManagement,
-	TypeProbe:             OCSFClassAPIActivity,
+	TypeDecision:                OCSFClassAuthorizeSession,
+	TypeCredentialRedeem:        OCSFClassAuthorizeSession,
+	TypeGrantChanged:            OCSFClassUserAccessManagement,
+	TypeMandateChanged:          OCSFClassUserAccessManagement,
+	TypeDelegationChanged:       OCSFClassUserAccessManagement,
+	TypeBindingChanged:          OCSFClassEntityManagement,
+	TypeEpochBumped:             OCSFClassEntityManagement,
+	TypeExternalIdentityChanged: OCSFClassEntityManagement,
+	TypeAgentSession:            OCSFClassAuthorizeSession,
+	TypeProbe:                   OCSFClassAPIActivity,
 }
 
 // OCSFClassUID returns the OCSF class of t and whether t is known.

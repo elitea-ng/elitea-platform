@@ -412,3 +412,28 @@ func TestMandateApprovalReadsTheBindingTheStoreLocked(t *testing.T) {
 		t.Fatalf("revoke: %+v %v", revoked, err)
 	}
 }
+
+// #1151: an external identity activates only once an approved binding
+// references it, so approval accepts pending_activation. Every other
+// non-active state still refuses.
+func TestApproveBindingAcceptsAPendingActivationExternalIdentity(t *testing.T) {
+	for state, ok := range map[agentidentity.ExternalIdentityState]bool{
+		agentidentity.ExternalIdentityPendingActivation: true,
+		agentidentity.ExternalIdentityProvisioning:      false,
+		agentidentity.ExternalIdentityRetiring:          false,
+		agentidentity.ExternalIdentityRetired:           false,
+		agentidentity.ExternalIdentityReplaced:          false,
+	} {
+		f := newFixture(t)
+		ctx := context.Background()
+		b, err := f.service.ProposeBinding(ctx, proposal(externalID), "100")
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.external[externalID] = state
+		_, err = f.service.TransitionBinding(ctx, b.ID, agentidentity.ActionApprove, "200")
+		if ok != (err == nil) {
+			t.Errorf("external %s: approve = %v", state, err)
+		}
+	}
+}

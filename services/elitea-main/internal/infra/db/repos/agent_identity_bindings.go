@@ -34,6 +34,7 @@ import (
 const (
 	agentIdentityBindingUniqueIndex      = "agent_identity_bindings_one_live_per_definition"
 	agentIdentityBindingApproverCheck    = "agent_identity_bindings_approver_not_proposer"
+	agentIdentityBindingExternalFK       = "agent_identity_bindings_external_same_application"
 	agentIdentityListDefaultLimit        = 50
 	agentIdentityListMaxLimit            = 200
 	agentIdentityBindingSelectColumnList = `id::text, tenant_project_id, application_id, application_version_id,
@@ -112,6 +113,10 @@ func mapAgentIdentityWriteError(err error) error {
 			return agentidentity.ErrSelfApproval
 		case pgErr.Code == "23503" && strings.Contains(pgErr.ConstraintName, "policy_revision"):
 			return fmt.Errorf("%w: the policy revision is not stored", agentidentity.ErrInvalidBinding)
+		case pgErr.Code == "23503" && pgErr.ConstraintName == agentIdentityBindingExternalFK:
+			// A fork or an import gets its own external identity (ADR-0039
+			// decision 1): the reference must be of the same application.
+			return fmt.Errorf("%w: external_agent_identity_id must name an external identity of the same tenant project and application", agentidentity.ErrInvalidBinding)
 		}
 	}
 	return err
@@ -168,18 +173,39 @@ SELECT `+agentIdentityBindingSelectColumnList+`
 FROM elitea_identity.agent_identity_bindings WHERE id = $1::uuid`, id))
 }
 
-// ActiveForDefinition reads the active binding of one agent version. Until
-// #1151 it reads the stored state only (see agentidentity.BindingReader).
+// ActiveForDefinition reads the active binding of one agent version. A
+// binding whose external identity is missing or not active answers with
+// State BindingSuspended (agentidentity.BindingReader, #1151).
 func (s *AgentIdentityBindings) ActiveForDefinition(ctx context.Context, tenantProjectID, versionID int64, digest [32]byte) (agentidentity.AgentIdentityBinding, error) {
 	if err := s.ready(); err != nil {
 		return agentidentity.AgentIdentityBinding{}, err
 	}
-	return scanAgentIdentityBinding(s.pool.QueryRow(ctx, `
-SELECT `+agentIdentityBindingSelectColumnList+`
-FROM elitea_identity.agent_identity_bindings
+	var externalState string
+	row := s.pool.QueryRow(ctx, `
+SELECT `+agentIdentityBindingSelectColumnList+`,
+       COALESCE((SELECT e.state FROM elitea_identity.external_agent_identities AS e
+                 WHERE e.id = b.external_agent_identity_id AND e.tenant_project_id = b.tenant_project_id), '')
+FROM elitea_identity.agent_identity_bindings AS b
 WHERE tenant_project_id = $1 AND application_version_id = $2 AND definition_digest = $3
-  AND state = 'active'`, tenantProjectID, versionID, digest[:]))
+  AND state = 'active'`, tenantProjectID, versionID, digest[:])
+	b, err := scanAgentIdentityBinding(scanTail{row: row, tail: &externalState})
+	if err != nil {
+		return agentidentity.AgentIdentityBinding{}, err
+	}
+	if !agentidentity.UsableBinding(b, agentidentity.ExternalIdentityState(externalState)) {
+		b.State = agentidentity.BindingSuspended
+	}
+	return b, nil
 }
+
+// scanTail lets scanAgentIdentityBinding read a row with extra trailing
+// columns: it appends tail to the destinations.
+type scanTail struct {
+	row  pgx.Row
+	tail *string
+}
+
+func (s scanTail) Scan(dest ...any) error { return s.row.Scan(append(dest, s.tail)...) }
 
 func agentIdentityListWindow(limit, offset int) (int, int) {
 	if limit <= 0 {

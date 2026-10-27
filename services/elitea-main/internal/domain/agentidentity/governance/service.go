@@ -153,7 +153,7 @@ func (s *Service) ListBindings(ctx context.Context, filter agentidentity.ListFil
 
 // TransitionBinding applies action by actor. An approval also requires the
 // mode to be allowed by the CURRENT revision and the external identity to be
-// active; suspend and revoke never depend on policy, so a withdrawn revision
+// active or pending_activation; suspend and revoke never depend on policy, so a withdrawn revision
 // can still stop an agent.
 func (s *Service) TransitionBinding(ctx context.Context, id string, action agentidentity.Action, actor string) (agentidentity.AgentIdentityBinding, error) {
 	var revision profile.PolicyRevision
@@ -174,8 +174,12 @@ func (s *Service) TransitionBinding(ctx context.Context, id string, action agent
 		if current.ExternalAgentIdentityID == "" {
 			return agentidentity.AgentIdentityBinding{}, agentidentity.ErrExternalIdentityNotActive
 		}
+		// pending_activation is accepted as well: activating the external
+		// identity needs an approved binding (#1151), so requiring an active
+		// one here would deadlock. The binding is usable only once the
+		// external identity is active (agentidentity.UsableBinding).
 		state, err := s.external.ExternalIdentityState(ctx, current.TenantProjectID, current.ExternalAgentIdentityID)
-		if err != nil || state != agentidentity.ExternalIdentityActive {
+		if err != nil || (state != agentidentity.ExternalIdentityActive && state != agentidentity.ExternalIdentityPendingActivation) {
 			return agentidentity.AgentIdentityBinding{}, agentidentity.ErrExternalIdentityNotActive
 		}
 		return next, nil
