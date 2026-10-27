@@ -15,9 +15,11 @@ import {
   executorOf,
   isLocalWork,
   executorOfState,
+  FORGE_CREDENTIAL_CONTRACT,
   HANDOFF_CONTRACT,
   type LocalWorkThread,
 } from '@/features/localWork/model';
+import { credentialButtonTitle } from '@/features/localWork/forgeCredential';
 import { useWorkspaceInfo } from '@/state/workspaceInfo';
 import { useOnline } from '@/lib/network';
 
@@ -33,6 +35,10 @@ export interface LocalWorkState {
   erasing: boolean;
   takeBack: () => void;
   erase: () => void;
+  /** The owner's control over the cloud's push and pull-request credential (contract 1.29); null hides it. */
+  credentialTitle: string | null;
+  /** The thread's uuid, for the credential sheet. */
+  uuid: string | null;
 }
 
 const REFUSED: Record<number, string> = {
@@ -97,6 +103,9 @@ export function useLocalWork({
   const canEditSettings = usePermissionToEditProjectSettings(projectId, thread !== null && thread.executor !== 'local' && !thread.isOwner && online && !offlineCopy);
   const canTakeBack = thread !== null && canRequestReclaim(thread) && online && !offlineCopy;
   const canErase = thread !== null && canEraseCloudCopy(thread, canEditSettings) && online && !offlineCopy;
+  // The credential is the owner's choice, made while the cloud runs the thread, on a 1.29 server.
+  const speaksForge = speaksContract(workspace?.discovery, FORGE_CREDENTIAL_CONTRACT.major, FORGE_CREDENTIAL_CONTRACT.minor);
+  const canChooseCredential = thread !== null && thread.executor === 'cloud' && thread.isOwner && speaksForge && online && !offlineCopy && uuid !== null;
 
   const [requesting, setRequesting] = useState(false);
   const [requestedHere, setRequestedHere] = useState(false);
@@ -153,5 +162,7 @@ export function useLocalWork({
     erasing,
     takeBack,
     erase,
+    credentialTitle: canChooseCredential ? credentialButtonTitle(live.data?.pull_request_credential) : null,
+    uuid,
   };
 }

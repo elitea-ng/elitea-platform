@@ -13,6 +13,7 @@ import (
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/commandbus"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,6 +27,7 @@ import (
 func TestPostgresServiceBackedIndexIngestDispatch(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	policy := IndexIngestDispatchPolicy{
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "elitea:runtime:index:commands",
 		CapabilityVersion: "1",
 		ResourceClass:     "indexing",

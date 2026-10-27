@@ -308,11 +308,34 @@ test('an ask_user pause renders answerable controls, and the answer finishes the
   // resumed answer to be durable — which is exactly the state whose absence
   // produced the refusal — so a spec that asserts the answer first can never
   // reach the window. Send at the moment the product invites it.
+  //
+  // THE SIGNAL IS THE END OF THE TURN, NOT AN EDITABLE COMPOSER. Since A17 the
+  // composer stays editable while a turn runs, and since contract 1.27 a send
+  // during a run is a STEERING message (`POST .../steering`): the worker reads
+  // it at the next safe point of the SAME turn, and no start POST is made. On
+  // a slow runner the composer was editable while the resumed run was still
+  // open, so the follow-up was steered into the resumed turn ("Delivered"
+  // under an answer that echoed the follow-up, not the clarification) and the
+  // start POST below never came (PR #1449, 3/3 tries in one job). That is the
+  // product doing what it is designed to do; the spec read the wrong signal.
+  //
+  // The resumed answer on screen comes from the run's own stream, so after it
+  // shows, Stop going away is the moment the run settles: the old "composer
+  // released" moment, and so still the window this section is about. The
+  // stored answer is NOT read here, for the reason above.
+  await expect(
+    page.getByText(/MOCK: resumed/).first(),
+    'the resumed run must stream its answer to the clarification',
+  ).toBeVisible({ timeout: 150_000 });
+  await expect(
+    page.getByRole('button', { name: 'Stop generating' }),
+    'the resumed run must end: a send while it runs steers it instead of starting a turn',
+  ).toBeHidden({ timeout: 90_000 });
   const composer = page.getByTestId('chat-message-input');
   await expect(
     composer,
     'the composer must be released once the answered run ends',
-  ).toBeEditable({ timeout: 90_000 });
+  ).toBeEditable({ timeout: 30_000 });
 
   const followUpToken = `hitl${Date.now().toString(36)}${Math.floor(Math.random() * 46_656).toString(36)}`;
   const followUpStarted = page.waitForResponse(

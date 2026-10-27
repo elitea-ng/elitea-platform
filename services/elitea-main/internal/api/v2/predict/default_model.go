@@ -33,28 +33,38 @@ func WithDefaultModel(next Completer, models ModelCatalog, publicProjectID int32
 }
 
 func (c *defaultModelCompleter) Complete(ctx context.Context, req CompletionRequest) (string, error) {
+	resolved, err := c.resolve(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	return c.next.Complete(ctx, resolved)
+}
+
+// resolve fills an omitted model from the project catalog default. Complete
+// and CompleteStream share it, so the two modes cannot pick different models.
+func (c *defaultModelCompleter) resolve(ctx context.Context, req CompletionRequest) (CompletionRequest, error) {
 	if req.Model != "" {
-		return c.next.Complete(ctx, req)
+		return req, nil
 	}
 	projectID, err := strconv.ParseInt(req.ProjectID, 10, 32)
 	if err != nil || projectID <= 0 {
-		return "", ErrDefaultModelUnavailable
+		return req, ErrDefaultModelUnavailable
 	}
 	catalog, err := c.models.Get(ctx, configurationapp.CurrentModelCatalogQuery{
 		Section: configurationapp.CurrentModelSectionLLM, ProjectID: int32(projectID),
 		PublicProjectID: c.publicProjectID, IncludeShared: true,
 	})
 	if err != nil {
-		return "", fmt.Errorf("predict: resolve default model: %w", err)
+		return req, fmt.Errorf("predict: resolve default model: %w", err)
 	}
 	if catalog.DefaultModelName == nil || catalog.DefaultModelProjectID == nil || *catalog.DefaultModelName == "" {
-		return "", ErrDefaultModelUnavailable
+		return req, ErrDefaultModelUnavailable
 	}
 	for _, item := range catalog.Items {
 		if item.Name == *catalog.DefaultModelName && item.ProjectID == *catalog.DefaultModelProjectID {
 			req.Model = item.Name
-			return c.next.Complete(ctx, req)
+			return req, nil
 		}
 	}
-	return "", ErrDefaultModelUnavailable
+	return req, ErrDefaultModelUnavailable
 }

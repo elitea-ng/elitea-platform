@@ -8,6 +8,7 @@ import (
 	"time"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/commandbus"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -15,6 +16,7 @@ import (
 func TestPostgresAgentDispatchRetainsExactEnvelopeAcrossBusOutageAndACKLoss(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	policy := AgentExecutionDispatchPolicy{
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "elitea:runtime:agent:commands",
 		CapabilityVersion: "1",
 		ResourceClass:     "agent",
@@ -102,6 +104,7 @@ WHERE outbox_id = 'outbox-agent'`); err != nil {
 func TestPostgresAgentDispatchHeldPublisherStillAppendsDurableWinner(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	policy := AgentExecutionDispatchPolicy{
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "elitea:runtime:agent:commands",
 		CapabilityVersion: "1",
 		ResourceClass:     "agent",

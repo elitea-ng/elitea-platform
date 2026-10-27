@@ -132,7 +132,7 @@ func TestRuntimeContextServesTheWorkspaceFieldToAWorkerThatAsks(t *testing.T) {
 
 	var field map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(keys["workspace"], &field))
-	require.ElementsMatch(t, []string{"thread", "epoch", "expected_old_cloud", "limits", "network", "shell", "network_allowlist", "has_upstream", "env_secret", "rewind", "rewind_to", "egress"}, mapKeys(field))
+	require.ElementsMatch(t, []string{"thread", "epoch", "expected_old_cloud", "limits", "network", "shell", "network_allowlist", "has_upstream", "env_secret", "rewind", "rewind_to", "egress", "pull_requests", "pull_request_credential"}, mapKeys(field))
 	var egress map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(field["egress"], &egress))
 	require.ElementsMatch(t, []string{"mode", "proxy_url", "token", "reason"}, mapKeys(egress))
@@ -141,6 +141,9 @@ func TestRuntimeContextServesTheWorkspaceFieldToAWorkerThatAsks(t *testing.T) {
 	require.Equal(t, uint64(2), decoded.Epoch)
 	require.Equal(t, []string{"github.com", "pypi.org"}, decoded.NetworkAllowlist)
 	require.Equal(t, uint64(5_555_555), decoded.Limits.UnpackedBytes)
+	// Pull requests are off in this policy, so a credential is not offered.
+	require.Equal(t, workspaceruntime.PullRequestsOff, decoded.PullRequests)
+	require.False(t, decoded.PullRequestCredential)
 	require.True(t, decoded.HasUpstream)
 	// The policy is recomputed at this claim, for the claim's project.
 	require.Equal(t, int32(1), policies.calls.Load())

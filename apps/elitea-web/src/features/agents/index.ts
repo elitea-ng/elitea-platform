@@ -30,6 +30,7 @@
  * layer will need the same entry point for.
  */
 export { CreateAgentForm } from './ui/CreateAgentForm';
+export { GenerateAgentModal } from './ui/generate-agent-modal/GenerateAgentModal';
 
 /**
  * The "Edit with AI" trigger for an agent's Instructions field. Exported as

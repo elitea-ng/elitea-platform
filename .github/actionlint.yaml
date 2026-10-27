@@ -1,0 +1,10 @@
+# actionlint configuration (no-binaries.yml runs actionlint over every workflow).
+paths:
+  .github/workflows/ci-go.yml:
+    ignore:
+      # Service containers take `command` and `entrypoint` (GitHub docs,
+      # "Use Docker service containers"). actionlint learned both in
+      # rhysd/actionlint#645, merged after the pinned 1.7.12, the latest
+      # release. no-binaries.yml fails once the pin moves past 1.7.12 while
+      # this entry remains. The path scope keeps every other workflow linted.
+      - 'unexpected key "(command|entrypoint)" for "services" section'

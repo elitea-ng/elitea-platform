@@ -79,6 +79,21 @@ export const WorkspaceHandoffPolicy = zod
       .describe("When not null, the only names that can be sent."),
     limits: WorkspaceHandoffLimits,
     env_limits: WorkspaceHandoffEnvLimits,
+    pull_requests: zod
+      .boolean()
+      .describe(
+        "Contract 1.29 (ADR-0034 decision 10, amended 2026-10-26). Whether a cloud turn may open a pull request (the platform cloud_executor.pull_requests, narrowed by the project).",
+      ),
+    pull_request_approval: zod
+      .boolean()
+      .describe(
+        "Contract 1.29. Whether a person approves each pull request before it is opened: an approve or reject card in the conversation.",
+      ),
+    pull_request_credentials: zod
+      .boolean()
+      .describe(
+        "Contract 1.29. Whether this deployment can store a thread's pull-request credential (setWorkspaceHandoffPullRequestCredential).",
+      ),
   })
   .describe(
     "NOTE(W2): internal/api/v2/workspacehandoff/route.go:680 (`policy`).",

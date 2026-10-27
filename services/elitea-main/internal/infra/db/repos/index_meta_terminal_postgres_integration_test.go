@@ -7,6 +7,7 @@ import (
 	"time"
 
 	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 )
 
 // TestPostgresCurrentIndexMetaTerminalClaimRecovery crosses the real source
@@ -17,6 +18,8 @@ func TestPostgresCurrentIndexMetaTerminalClaimRecovery(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 
 	policy := IndexIngestDispatchPolicy{
+
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "elitea:runtime:index:commands",
 		CapabilityVersion: "1",
 		ResourceClass:     "indexing",

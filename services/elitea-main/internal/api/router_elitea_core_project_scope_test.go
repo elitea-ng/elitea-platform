@@ -242,6 +242,10 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	// see the registration in router.go for why that substitution is the safe
 	// direction.
 	{http.MethodPost, "/api/v2/elitea_core/generate_application_draft/prompt_lib/7", "/api/v2/elitea_core/generate_application_draft/prompt_lib/8", "models.applications.applications.create"},
+	// ADR-0037: the streamed draft spends the same budget; the schema read is
+	// gated with it so only builders reach it.
+	{http.MethodPost, "/api/v2/elitea_core/generate_application_draft_stream/prompt_lib/7", "/api/v2/elitea_core/generate_application_draft_stream/prompt_lib/8", "models.applications.applications.create"},
+	{http.MethodGet, "/api/v2/elitea_core/agent_schema/prompt_lib/7", "/api/v2/elitea_core/agent_schema/prompt_lib/8", "models.applications.applications.create"},
 	{http.MethodPost, "/api/v2/elitea_core/generate_skill_draft/prompt_lib/7", "/api/v2/elitea_core/generate_skill_draft/prompt_lib/8", "models.applications.skills.create"},
 	{http.MethodPost, "/api/v2/elitea_core/generate_project_context_draft/prompt_lib/7", "/api/v2/elitea_core/generate_project_context_draft/prompt_lib/8", "models.project_context.edit"},
 

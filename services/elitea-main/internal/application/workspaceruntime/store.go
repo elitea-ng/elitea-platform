@@ -84,6 +84,10 @@ const (
 	RefusalUnsupportedObjectFormat RefusalCode = "unsupported_object_format"
 	RefusalSegmentTooLarge         RefusalCode = "segment_too_large"
 	RefusalQuotaExceeded           RefusalCode = "workspace_quota_exceeded"
+	// RefusalNoForgeCredential and RefusalPullRequestsDisabled answer
+	// WorkspaceForgeCredential (ADR-0034 decision 10, amended 2026-10-26).
+	RefusalNoForgeCredential    RefusalCode = "no_forge_credential"
+	RefusalPullRequestsDisabled RefusalCode = "pull_requests_disabled"
 )
 
 // Refusal is the error a Store returns for a business refusal.
@@ -200,8 +204,8 @@ type Store interface {
 	// logged, audited or cached.
 	EnvSecret(ctx context.Context, claim ClaimRef) (map[string]string, error)
 	// RecordEvent writes an audit event the worker observed in the running
-	// turn (decision 12): EventScanBlocked or EventPullRequestOpened, with
-	// the allowlisted attributes only (never a path).
+	// turn (decision 12): EventScanBlocked, EventPullRequestOpened or
+	// EventBranchPushed, with the allowlisted attributes only (never a path).
 	RecordEvent(ctx context.Context, claim ClaimRef, event ExecutorEvent) error
 	// RecordChanges keeps the files the running turn's published commit
 	// changed (ADR-0034 Phase 2): changes.Commit must be the thread's
@@ -210,16 +214,38 @@ type Store interface {
 	RecordChanges(ctx context.Context, claim ClaimRef, changes TurnChanges) error
 }
 
-// The executor audit events (workspacehandoff.EventScanBlocked and
-// EventPullRequestOpened).
+// ForgeCredentialSource is the optional Store call behind
+// WorkspaceForgeCredential: the claim's thread's pull-request credential,
+// redeemed (ADR-0034 decision 10, amended 2026-10-26). It answers
+// RefusalNoForgeCredential when the owner chose none (or it no longer
+// resolves) and RefusalPullRequestsDisabled when the policy is off. The
+// values are a credential: never logged, audited or cached.
+type ForgeCredentialSource interface {
+	ForgeCredential(ctx context.Context, claim ClaimRef) (ForgeCredential, error)
+}
+
+// ForgeCredential is a redeemed forge credential: the forge (`github` or
+// `gitlab`) and the configuration's data. A credential: never logged.
+type ForgeCredential struct {
+	Forge         string
+	Configuration map[string]any
+}
+
+// MaxForgeCredentialBytes bounds the encoded credential the worker receives.
+const MaxForgeCredentialBytes = 32 << 10
+
+// The executor audit events (workspacehandoff.EventScanBlocked,
+// EventPullRequestOpened and EventBranchPushed).
 const (
 	EventScanBlocked       = "handoff.scan_blocked"
 	EventPullRequestOpened = "pull_request.opened"
+	EventBranchPushed      = "branch.pushed"
 )
 
 // ExecutorEvent is one executor audit event: its kind and its attributes
 // (scan_blocked: findings, rules; pull_request.opened: toolkit, branch,
-// base, number, url, files).
+// base, number, url, files; branch.pushed: toolkit, branch, base, url,
+// commits).
 type ExecutorEvent struct {
 	Kind  string
 	Attrs map[string]string

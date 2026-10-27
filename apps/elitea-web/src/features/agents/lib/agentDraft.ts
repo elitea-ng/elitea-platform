@@ -1,5 +1,3 @@
-import type { ApplicationDraft } from '@/shared/api/generated/model';
-
 /**
  * `AgentDraft` — the shape `GenerateAgentReviewForm`/`GenerateAgentModal`
  * edit and submit, ported from the field set the baseline's
@@ -14,7 +12,7 @@ import type { ApplicationDraft } from '@/shared/api/generated/model';
  * served by `services/elitea-main/internal/api/v2/drafts` and described in
  * `api/openapi/v2.yaml` as `generateApplicationDraft`. It answers with the
  * generated `ApplicationDraft` — `{name, description, instructions,
- * welcome_message, conversation_starters}` — so `mapApplicationDraft` below
+ * welcome_message, conversation_starters}` — so `readDraft` (client-core)
  * carries the real fields across instead of dropping a chat completion into
  * `instructions` and blanking the rest.
  *
@@ -22,7 +20,7 @@ import type { ApplicationDraft } from '@/shared/api/generated/model';
  * the project's toolkit instances, agents, pipelines and skills against the
  * generated draft (Go-side lexical matching, not an LLM candidate pick —
  * see `internal/api/v2/drafts/suggestions.go`'s own doc comment for why) and
- * returns up to 5 matches per category. `mapApplicationDraft` copies all
+ * returns up to 5 matches per category. `readDraft` copies all
  * five straight through — every id on the wire already resolves to a real
  * project entity, so no client-side re-derivation is needed, same as the
  * text fields above.
@@ -82,33 +80,4 @@ export const EMPTY_AGENT_DRAFT: AgentDraft = {
  */
 export function filterEmptyStrings(values: readonly string[]): string[] {
   return values.filter((value) => value.trim().length > 0);
-}
-
-/**
- * `mapApplicationDraft` carries the served contract into the shape the review
- * form edits. Every field is copied, not derived: the endpoint validates and
- * caps each one server-side (name at 32 characters, welcome message at 768,
- * four conversation starters at most), so there is nothing left here to
- * repair. `filterEmptyStrings` still runs over the starters because the form
- * lets the user empty one before submitting.
- *
- * The five `suggested_*` lists are copied straight through too (#881) —
- * `?? []` guards a response from an older cached client/mock that predates
- * the fields, not a documented "sometimes absent" case (the OpenAPI schema
- * requires all five).
- */
-export function mapApplicationDraft(draft: ApplicationDraft): AgentDraft {
-  return {
-    ...EMPTY_AGENT_DRAFT,
-    name: draft.name,
-    description: draft.description,
-    instructions: draft.instructions,
-    welcome_message: draft.welcome_message,
-    conversation_starters: filterEmptyStrings(draft.conversation_starters),
-    suggested_toolkits: draft.suggested_toolkits ?? [],
-    suggested_mcp: draft.suggested_mcp ?? [],
-    suggested_pipelines: draft.suggested_pipelines ?? [],
-    suggested_agents: draft.suggested_agents ?? [],
-    suggested_skills: draft.suggested_skills ?? [],
-  };
 }

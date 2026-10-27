@@ -29,6 +29,7 @@ import (
 	"testing"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
+	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
 	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	v2applicationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
@@ -240,6 +241,10 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// never serves a request, so an inert handler is enough.
 		CurrentAgentStart:         http.NotFoundHandler(),
 		CurrentNotificationEvents: http.NotFoundHandler(),
+		// ADR-0039 (#1112): the agent identity binding and mandate admin
+		// operations, mounted only with credential governance on. The walk
+		// never serves a request, so the zero handler is enough.
+		AgentIdentityAdmin: &v2agentidentity.Handler{},
 		// Client contract 1.3: cancelChatExecution, registered only when the
 		// cancel route is composed (production_router.go).
 		CurrentAgentCancel: http.NotFoundHandler(),

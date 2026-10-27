@@ -786,7 +786,19 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 353 -> 354 (client contract 1.27): handOffChatExecutionSteering, the
 // hand-off of the turn_ended steering messages as the next message. The
 // manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 354;
+// 354 -> 356 (client contract 1.28, ADR-0037): generateApplicationDraftStream
+// and getAgentSchema, the conversational agent builder's streamed draft and
+// the published agent schemas.
+// 356 -> 357 (client contract 1.29, ADR-0034 decision 10 amended):
+// setWorkspaceHandoffPullRequestCredential, the GitHub or GitLab configuration a cloud
+// thread opens pull requests through, chosen from the cloud notice of the
+// web chat (pages/chat). Generated; the manifest gains it.
+// 357 -> 367 (issue 1112, ADR-0039): listAgentIdentityBindings,
+// createAgentIdentityBinding, approve/suspend/revokeAgentIdentityBinding,
+// listMandates, createMandate and approve/suspend/revokeMandate, the agent
+// identity binding and mandate admin API. Admin routes are not in the
+// manifest, so its count is unchanged.
+const GENERATED_OPERATION_COUNT = 367;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1005,11 +1017,21 @@ const GENERATED_OPERATION_COUNT = 354;
  * workspaceHandoff.changes and workspaceHandoff.diff, the Files changed
  * view of a cloud thread in the web chat (pages/chat). Generated.
  *
- * 285 -> 287 (Point 5 2a-2, fixed Parallel): chat.listExecutionInterrupts
+ * 285 -> 286 (client contract 1.28, ADR-0037):
+ * applications.generateAgentDraftStream, the streamed agent draft of the
+ * Build with AI builder (features/agents `useAgentDraftStream`). Handwritten:
+ * an SSE answer to a POST, read through `eliteaFetch`'s `stream` flag.
+ *
+ * 286 -> 288 (client contract 1.29, ADR-0034 decision 10 amended):
+ * workspaceHandoff.setPullRequestCredential, and
+ * configurations.listForPullRequests (the GitHub or GitLab configurations it is
+ * chosen from), the cloud notice of the web chat (pages/chat). Generated.
+ *
+ * 288 -> 290 (Point 5 2a-2, fixed Parallel): chat.listExecutionInterrupts
  * and chat.decideExecutionInterrupt, the open fan-out cards of a response
  * and their decision (features/chat-messages interruptLedgerApi). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 287;
+const MANIFEST_ENTRY_COUNT = 290;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

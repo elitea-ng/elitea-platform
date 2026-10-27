@@ -50,6 +50,7 @@ export function useShellActions(): (action: ShellAction) => void {
         send_to_cloud: () => layout.session?.sendToCloud?.(),
         open_in_chat: () => layout.session?.openInChat?.(),
         choose_agent: () => layout.session?.chooseAgent?.(),
+        create_agent: () => layout.session?.createAgent?.(),
         index_settings: () => layout.session?.indexSettings?.(),
         handoff_settings: () => layout.session?.handoffSettings?.(),
         back: () => router.history.back(),

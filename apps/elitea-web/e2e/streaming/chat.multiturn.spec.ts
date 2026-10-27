@@ -186,11 +186,17 @@ test('a second turn lands in the SAME conversation and the transcript accumulate
   ).toContainText(MODEL_NAME, { timeout: 30_000 });
 
   // ── Turn 2 ──────────────────────────────────────────────────────────────
-  // The composer releasing is the state the product uses to say "your turn
-  // again", so it is what gates the second send — not a sleep. `toBeEditable`
-  // fails on the disabled-while-streaming composer, so a run that never
-  // settles fails here naming that, rather than timing out later on a missing
-  // second answer.
+  // The END OF TURN 1 gates the second send — not a sleep, and not an
+  // editable composer. Since A17 the composer stays editable while a turn
+  // runs, and since contract 1.27 a send during a run is a STEERING message
+  // that turn 1 reads at its next safe point: no start POST would come. The
+  // stored answer above can be read while the run is still streaming, so Stop
+  // going away is the signal. A run that never settles fails here naming
+  // that, rather than timing out later on a missing second answer.
+  await expect(
+    page.getByRole('button', { name: 'Stop generating' }),
+    'turn 1 must end before the second question: a send while it runs steers it instead',
+  ).toBeHidden({ timeout: 120_000 });
   const composer = page.getByTestId('chat-message-input');
   await expect(composer, 'the composer must be released before a second question is possible').toBeEditable({
     timeout: 120_000,

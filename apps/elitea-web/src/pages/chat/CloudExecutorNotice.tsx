@@ -40,6 +40,8 @@ import cloudCatalogue from './i18n/en.chatCloud.json';
 
 // The Files changed dialog loads when it is opened.
 const CloudFilesChanged = lazy(() => import('./CloudFilesChanged'));
+// The pull-request credential picker: the owner's only (ADR-0034 decision 10, amended 2026-10-26).
+const CloudPullRequestCredential = lazy(() => import('@/features/forge-credential').then((module) => ({ default: module.CloudPullRequestCredential })));
 
 // The notice's strings ride with this (lazy) chat chunk, not the web app's
 // initial catalogue: only a handed-off Local work thread renders them. Deep
@@ -135,7 +137,13 @@ function FilesChanged({ projectId, conversationUuid, running }: { projectId: str
   );
 }
 
-function useHandoffInfo(projectId: string, conversationUuid: string): { readonly requested: boolean; readonly running: boolean } {
+interface HandoffView {
+  readonly requested: boolean;
+  readonly running: boolean;
+  readonly pullRequestCredential: WorkspaceHandoffInfo['pull_request_credential'];
+}
+
+function useHandoffInfo(projectId: string, conversationUuid: string): HandoffView {
   const queryClient = useQueryClient();
   // The desktop taking the thread back (or an erase elsewhere) moves it without this page doing anything: the live stream says so at once, the poll is the fallback.
   useHandoffLiveEvents(projectId);
@@ -157,7 +165,7 @@ function useHandoffInfo(projectId: string, conversationUuid: string): { readonly
     // The thread is local again: re-read the conversation, so the composer and the badge follow.
     if (state === 'LOCAL') void queryClient.invalidateQueries({ queryKey: ['conversation'] });
   }, [state, queryClient]);
-  return { requested: info.data?.reclaim_pending === true, running: state === 'CLOUD_RUNNING' };
+  return { requested: info.data?.reclaim_pending === true, running: state === 'CLOUD_RUNNING', pullRequestCredential: info.data?.pull_request_credential };
 }
 
 export default function CloudExecutorNotice({ projectId, conversationUuid, executor, isOwner }: CloudExecutorNoticeProps): React.JSX.Element {
@@ -165,7 +173,7 @@ export default function CloudExecutorNotice({ projectId, conversationUuid, execu
   const canEditSettings = useCanEditProjectSettings(projectId);
   const [confirming, setConfirming] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
-  const { requested, running } = useHandoffInfo(projectId, conversationUuid);
+  const { requested, running, pullRequestCredential } = useHandoffInfo(projectId, conversationUuid);
 
   const reclaim = useMutation({
     mutationFn: () => requestWorkspaceReclaim(projectId, conversationUuid),
@@ -204,6 +212,17 @@ export default function CloudExecutorNotice({ projectId, conversationUuid, execu
               : t('pages.chat.cloud.body', 'This thread works on a copy of your desktop folder in the cloud. Take it back to continue on your desktop.')}
           </Typography>
           <FilesChanged projectId={projectId} conversationUuid={conversationUuid} running={running} />
+          {isOwner && !returning && (
+            <Suspense fallback={null}>
+              <CloudPullRequestCredential
+                projectId={projectId}
+                conversationUuid={conversationUuid}
+                current={pullRequestCredential}
+                onSaved={() => void queryClient.invalidateQueries({ queryKey: handoffInfoKey(projectId, conversationUuid) })}
+                onError={(message) => setToast({ severity: 'error', message })}
+              />
+            </Suspense>
+          )}
           <Actions
             returning={returning}
             isOwner={isOwner}

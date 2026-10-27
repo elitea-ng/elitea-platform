@@ -5,6 +5,7 @@
     "listConversations",
     "listApplications",
     "getApplication",
+    "deleteApplication",
     "getConversation",
     "generateConversationName",
     "listConversationMessages",
@@ -60,10 +61,14 @@
     "getWorkspaceHandoff",
     "eraseWorkspaceHandoff",
     "requestWorkspaceHandoffReclaim",
+    "setWorkspaceHandoffPullRequestCredential",
+    "listConfigurations",
     "permissionList",
     "archiveConversation",
     "unarchiveConversation",
     "forkConversation",
-    "markConversationRead"
+    "markConversationRead",
+    "generateApplicationDraftStream",
+    "createApplication"
   ]
 }

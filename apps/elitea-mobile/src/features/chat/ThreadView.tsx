@@ -912,6 +912,10 @@ export function ThreadView({
                 erasing={localWork.erasing}
                 onTakeBack={localWork.takeBack}
                 onErase={localWork.erase}
+                credentialTitle={localWork.credentialTitle}
+                onChooseCredential={() => {
+                  if (localWork.uuid !== null) router.push({ pathname: '/pr-credential', params: { uuid: localWork.uuid } });
+                }}
               />
             ) : null}
             {turn.steeringOffer !== null ? (

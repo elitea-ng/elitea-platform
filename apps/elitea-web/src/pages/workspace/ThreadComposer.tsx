@@ -223,7 +223,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   const agentHint = cloudMode ? t('workspace.cloud.agentHint', 'The cloud copy answers with this thread’s own agent.') : undefined;
   return (
     <>
-      <HandoffBanner handoff={handoff} />
+      <HandoffBanner handoff={handoff} projectId={projectId} />
       <SessionNotices error={modelNotice ?? firstError(turnError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={offered} />
       <BypassControls bypass={modes.bypass} active={modes.bypassActive} />
       {local && <SteeringQueue pending={steering.pending} error={steering.error} onEdit={steering.edit} onRemove={steering.remove} />}

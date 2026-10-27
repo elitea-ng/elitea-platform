@@ -18,9 +18,29 @@ func TestCloudExecutorDefaultsAreOffWithTheADRValues(t *testing.T) {
 		AllowUserInclude: true, EnvHarvest: false,
 		EnvDeny: []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "PWD", "OLDPWD", "TMPDIR", "TERM*", "LANG",
 			"LC_*", "SSH_*", "GPG_*", "XPC_*", "__CF*", "DISPLAY", "ELITEA_*"},
+		PullRequests: true, PullRequestApproval: true,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("defaults = %+v", got)
+	}
+}
+
+// Amendment 2026-10-26: pull requests from the cloud are allowed and asked
+// about by default; an administrator turns either off.
+func TestCloudExecutorPullRequestKeys(t *testing.T) {
+	var values Values
+	if err := json.Unmarshal([]byte(`{"pull_requests": false, "pull_request_approval": false}`), &values); err != nil {
+		t.Fatal(err)
+	}
+	got := CloudExecutorSettingsFromValues(values)
+	if got.PullRequests || got.PullRequestApproval {
+		t.Fatalf("overlay = %+v", got)
+	}
+	if err := json.Unmarshal([]byte(`{"pull_requests": "yes", "pull_request_approval": 0}`), &values); err != nil {
+		t.Fatal(err)
+	}
+	if got := CloudExecutorSettingsFromValues(values); !got.PullRequests || !got.PullRequestApproval {
+		t.Fatalf("a wrong-typed value must keep the default: %+v", got)
 	}
 }
 

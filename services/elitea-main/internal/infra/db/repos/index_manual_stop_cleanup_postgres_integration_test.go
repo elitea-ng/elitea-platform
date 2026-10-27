@@ -7,6 +7,7 @@ import (
 	"time"
 
 	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 )
 
 // TestPostgresServiceBackedCurrentIndexManualStopCleanupIntent crosses real
@@ -19,6 +20,8 @@ func TestPostgresServiceBackedCurrentIndexManualStopCleanupIntent(t *testing.T) 
 	defer cancel()
 
 	policy := IndexIngestDispatchPolicy{
+
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "elitea:runtime:index:commands",
 		CapabilityVersion: "1",
 		ResourceClass:     "indexing",

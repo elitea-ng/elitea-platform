@@ -100,7 +100,7 @@ INSERT INTO elitea_runtime.command_outbox (
 	); err != nil {
 		return fmt.Errorf("insert command outbox: %w", err)
 	}
-	return nil
+	return pinExecutionAdmission(ctx, tx, policy.CredentialProfile, admissionPin{executionID: record.Outbox.ExecutionID})
 }
 
 // RetireNoAuthorityValidation terminalizes at most limit cancelled or expired

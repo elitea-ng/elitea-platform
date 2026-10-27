@@ -4,8 +4,8 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.27
- * operations sha256:  783025a1641da0a5b9253902c5b1a2dfcf89af67eb4083a7bb707da0de98447f
+ * client contract:    1.29
+ * operations sha256:  4131ed493bddee7047f4460fe33337842dfc94ddfa1e03fa6eaf5c9f44105609
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -231,6 +231,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/configurations/configurations/{project_id}": {
+        parameters: {
+            query?: {
+                /** @description Adds the `shared` block, read from the PUBLIC project's schema and never from the caller's own. Without a configured public project the block stays empty. That is the honest answer: the caller's own schema is a wrong answer, not a fallback. */
+                include_shared?: boolean;
+                /** @description Page size. The default is 20 and the clamp is 200. */
+                limit?: number;
+                offset?: number;
+                /** @description Label search. A value longer than 1024 characters is refused with 400. It is not truncated. */
+                query?: string;
+                /** @description Repeatable. The client fires ONE request per section, and this filter used to be ignored: every section received the whole table, so one credential rendered under all seven headings. */
+                section?: string[];
+                shared_limit?: number;
+                shared_offset?: number;
+                sort_by?: string;
+                sort_order?: "asc" | "desc";
+                /** @description Repeatable credential-type filter, for example `sharepoint`. */
+                type?: string[];
+            };
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a project's stored credentials and integrations
+         * @description NOTE(W2): internal/api/v2/configurations/handler.go, List
+         *     (compatibility) and internal/application/configurations/crud.go
+         *     (reviewed). The page carries every row the project OWNS, shared or
+         *     not. The old `shared = false` predicate hid a shared credential from
+         *     its own project.
+         *
+         *     A project whose tenant schema does not exist yet answers 200 with an
+         *     empty page. Every OTHER database error answers 500. An empty page
+         *     reports a timeout as a project that holds no credentials, and the user
+         *     then creates a credential that already exists.
+         *
+         *     The app calls this through a hand-written client today
+         *     (apps/elitea-web/src/features/credentials/api/configurations.ts). It is
+         *     described here so a generated client exists to migrate onto.
+         */
+        get: operations["listConfigurations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/configurations/models/{project_id}": {
         parameters: {
             query?: {
@@ -331,7 +383,13 @@ export interface paths {
         get: operations["getApplication"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Remove an application and all associated versions
+         * @description NOTE(W2): internal/api/v2/applications/handler.go:625-668 — 204 with
+         *     no body on success (also when already gone); 400 {"error": ...} when
+         *     a published/embedded version exists (:639-644).
+         */
+        delete: operations["deleteApplication"];
         options?: never;
         head?: never;
         patch?: never;
@@ -355,7 +413,13 @@ export interface paths {
          */
         get: operations["listApplications"];
         put?: never;
-        post?: never;
+        /**
+         * Create a new application shell
+         * @description NOTE(W2): internal/api/v2/applications/handler.go:345-479 — responds
+         *     201 (not 200) with the created shell; versions[0] in the body seeds
+         *     the first version.
+         */
+        post: operations["createApplication"];
         delete?: never;
         options?: never;
         head?: never;
@@ -841,6 +905,57 @@ export interface paths {
          *     upload take.
          */
         post: operations["createConversation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/generate_application_draft_stream/prompt_lib/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Draft an agent conversationally, streamed as Server-Sent Events
+         * @description Client contract 1.28 (ADR-0037 decision 4). The streaming twin of
+         *     generateApplicationDraft: one gateway completion per call, through
+         *     the same gRPC-over-mTLS hop (`GatewayService.ChatCompletions`,
+         *     server-streaming), billed to the caller against the project budget
+         *     like `predict_llm`. Nothing is saved: the client reviews the draft
+         *     and saves it through createApplication.
+         *
+         *     `conversation_history` carries the builder conversation so far and
+         *     `current_draft` the draft being improved, so a person can refine a
+         *     draft over several turns. Gated on
+         *     `models.applications.applications.create`, as the one-shot route.
+         *
+         *     FAILURES BEFORE THE STREAM OPENS answer a plain JSON status: 400 an
+         *     unusable body, 503 no LLM gateway configured. The stream then opens
+         *     at once, before the gateway answers, so the keepalive can hold the
+         *     connection while a reasoning model thinks. From then on the status
+         *     is 200 and a failure is the last frame, `draft.error`, whose
+         *     `status` is what the one-shot route answers for the same failure
+         *     (502 the gateway hop failed, 422 an unusable draft).
+         *
+         *     FRAMES (`event:`, each `data` one JSON object):
+         *     `draft.token` (DraftStreamToken: a model text delta, for display
+         *     only — it is the raw JSON the model writes), `draft.complete`
+         *     (ApplicationDraft: the full draft, truncated to the caps and
+         *     validated against AgentDefinition exactly as the one-shot route
+         *     does, then the stream ends), `draft.error` (DraftStreamError, then
+         *     the stream ends). Comment lines (`: keepalive`) keep an idle
+         *     connection open while the model thinks. A client must ignore an
+         *     unknown event type.
+         */
+        post: operations["generateApplicationDraftStream"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1654,6 +1769,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/elitea_core/workspace_handoff_pull_request_credential/prompt_lib/{project_id}/{conversation_uuid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The Local work thread's conversation UUID, lowercase canonical. */
+                conversation_uuid: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Choose the GitHub or GitLab configuration a cloud thread pushes and opens pull requests through
+         * @description Client contract 1.29 (ADR-0034 decision 10, amended 2026-10-26). The
+         *     cloud executor's `git_push` and `open_pull_request` (a merge request
+         *     on GitLab) write through this configuration: Main expands it as the
+         *     owner only for a running cloud turn of the thread, over the
+         *     claim-bound runtime plane, and the token never reaches the sandbox;
+         *     the worker sends it only to the configuration's own host over HTTPS.
+         *     The worker refuses a configuration whose host or repository is not
+         *     the folder's upstream remote's. The thread's
+         *     owner only, cookie or token, while the thread has a cloud copy; a
+         *     choice (not `null`) only while the policy allows pull requests.
+         */
+        put: operations["setWorkspaceHandoffPullRequestCredential"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/elitea_core/workspace_handoff_reclaim_request/prompt_lib/{project_id}/{conversation_uuid}": {
         parameters: {
             query?: never;
@@ -1892,6 +2041,51 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description ADR-0037 decision 5: the intended cloud agent, as a conversational builder produces it. It is NOT the database passthrough (ApplicationVersionDetail); the review form maps it onto the reviewed create-application body. Served as JSON Schema by getAgentSchema and compiled into the validator both draft routes run before they answer (internal/api/v2/drafts/schema.go), so this component is the one source. Self-contained on purpose: no $ref and no `nullable`, so it is valid JSON Schema as written.
+         * @example {
+         *       "name": "Incident Triager",
+         *       "description": "Sorts new incidents by severity and names the owning team.",
+         *       "instructions": "## Role\nYou triage incidents. Read the report, assign a severity, name the owning team.",
+         *       "welcome_message": "What broke?",
+         *       "conversation_starters": [
+         *         "Triage this page",
+         *         "Summarise the last hour"
+         *       ]
+         *     }
+         */
+        AgentDefinition: {
+            conversation_starters?: string[];
+            description: string;
+            /** @description The agent's system prompt, in Markdown. */
+            instructions: string;
+            /** @description The model the agent runs on. Absent means the project default. */
+            llm_settings?: {
+                max_tokens?: number;
+                model_name?: string;
+                /** @enum {string} */
+                reasoning_effort?: "low" | "medium" | "high";
+                temperature?: number;
+            };
+            /** @description A short, specific name. */
+            name: string;
+            /** @description References to existing project skills. */
+            skills?: {
+                id: string;
+                name?: string;
+            }[];
+            /** @description References to existing project toolkits. Attaching them is a human step in review. */
+            tools?: {
+                id: string;
+                name?: string;
+                type?: string;
+            }[];
+            variables?: {
+                name: string;
+                value?: string;
+            }[];
+            welcome_message?: string;
+        };
         /** @description NOTE(W2): internal/domain/applications/types.go:15-50 — required set = json tags WITHOUT omitempty (id, name, tags, created_at, owner_id, is_forked, meta, has_interrupt) PLUS updated_at, whose omitempty is ineffective on a time.Time (always marshaled; zero sentinel when unscanned). Every other omitempty field is optional (absent when zero-valued). */
         Application: {
             agent_type?: string;
@@ -1923,6 +2117,29 @@ export interface components {
              * @description When the agent last changed. ALWAYS present despite the omitempty tag — encoding/json never omits struct types. It used to be the zero sentinel "0001-01-01T00:00:00Z" on every row, because `applications` had no such column and nothing scanned one: migrations/tenant/0134 adds it and every write stamps it inside the statement that makes the change — a rename, a version save, a new version, a version delete and a default-version change (repos/applications.go). A request that changes nothing does not move it.
              */
             updated_at: string;
+        };
+        /** @description NOTE(W2): Create response map, internal/api/v2/applications/handler.go:465-478. version_details and versions (a single-element echo of version_details) appear only when the request carried a `versions` array (:374-463). */
+        ApplicationCreatedResponse: {
+            /** Format: date-time */
+            created_at: string;
+            description: string;
+            icon: string;
+            id: string;
+            name: string;
+            owner_id: string;
+            type: string;
+            version_details?: components["schemas"]["ApplicationVersionDetail"];
+            versions?: components["schemas"]["ApplicationVersionDetail"][];
+        };
+        ApplicationCreateRequest: {
+            description?: string;
+            icon?: string;
+            name?: string;
+            type?: string;
+            /** @description Only versions[0] is honoured; it seeds the first version (internal/api/v2/applications/handler.go:374-463). */
+            versions?: components["schemas"]["VersionWriteRequest"][];
+        } & {
+            [key: string]: unknown;
         };
         /** @description NOTE(W2): Get response map, internal/api/v2/applications/handler.go:121-139. version_details is present only when the application has at least one version whose detail row loads (:132-137). */
         ApplicationDetail: {
@@ -2441,6 +2658,16 @@ export interface components {
             /** @description The minimum this client must update to. */
             min_client_version: string;
         };
+        /** @description NOTE(W2): internal/api/v2/configurations/handler.go, ListResponse (compat) and dto.go, CurrentConfigurationListDTO (reviewed). */
+        ConfigurationListResponse: {
+            items: components["schemas"]["ConfigurationRow"][];
+            limit: number;
+            offset: number;
+            /** @description Present only when `include_shared=true`. `compat` emits an empty block rather than omitting the key. */
+            shared?: components["schemas"]["ConfigurationSharedPage"];
+            /** @description Rows that match the filter, not rows in this page. It is counted before the page is read, so it survives a page that comes back short. */
+            total: number;
+        };
         /** @description NOTE(W2): the union of internal/api/v2/configurations/handler.go's Model (compat) and internal/application/configurations/models.go's CurrentModelCatalogItem (reviewed). */
         ConfigurationModelItem: {
             /** @description `reviewed` only, and section=llm only. What the gateway charges per 1M cached input tokens, in USD; it applies no cache discount today, so it equals the input price. Absent or null when unknown or when the caller may not see amounts (the budget routes' can_see_amounts rule). */
@@ -2512,6 +2739,57 @@ export interface components {
             low_tier_default_model_name?: string | null;
             /** @description `reviewed` only, and omitted when unset. */
             low_tier_default_model_project_id?: number | null;
+            total: number;
+        };
+        /** @description NOTE(W2): the union of internal/api/v2/configurations/handler.go's Configuration (compat) and internal/api/v2/configurations/dto.go's CurrentConfigurationDTO (reviewed). */
+        ConfigurationRow: {
+            /** @description BOTH. */
+            author_id?: number | null;
+            /** @description BOTH. */
+            created_at: string;
+            data?: {
+                [key: string]: unknown;
+            };
+            /** @description BOTH. The row's stored title, and the name every reader resolves a credential by: a toolkit stores the reference `{"github_configuration": {"elitea_title": …}}`, and the credential picker builds its options from this field. `compat` served the column as `name` alone until the two were aligned, so against that handler the picker offered nothing to link. */
+            elitea_title?: string;
+            /** @description The `configuration` row id. BOTH handlers emit it. */
+            id?: number;
+            /** @description `reviewed` only. */
+            is_pinned?: boolean;
+            /** @description BOTH. `compat` omits the key when the column is empty; `reviewed` emits null. */
+            label?: string | null;
+            meta?: {
+                [key: string]: unknown;
+            };
+            /** @description `compat` only, and the same column it also serves as `elitea_title`. Kept for the clients that already read it. */
+            name?: string;
+            options?: {
+                [key: string]: unknown;
+            };
+            /** @description BOTH, and a NUMBER on both. It was a string on `compat` until the two were aligned, and a client comparing the two routes with `===` broke on exactly one deployment. */
+            project_id: number;
+            /** @description The catalogue section the type belongs to. The list is filtered on it, one request per section. */
+            section: string;
+            /** @description BOTH. True when the row is published to the public project. */
+            shared: boolean;
+            /** @description BOTH. Which writer created the row. */
+            source: string;
+            /** @description BOTH. Why `status_ok` is what it is. */
+            status_logs?: string | null;
+            /** @description BOTH. The admission verdict for the row. It is NOT a live connection check. */
+            status_ok: boolean;
+            /** @description The credential type, for example `sharepoint`. */
+            type: string;
+            /** @description BOTH. */
+            updated_at?: string | null;
+            /** @description BOTH. `compat` omits the key when the column is empty; `reviewed` emits an empty string instead. */
+            uuid?: string;
+        };
+        /** @description NOTE(W2): the `shared` block, read from the PUBLIC project's schema. `compat` always emits the block and leaves it empty when no public project is configured; `reviewed` omits the key instead. */
+        ConfigurationSharedPage: {
+            items: components["schemas"]["ConfigurationRow"][];
+            limit?: number;
+            offset?: number;
             total: number;
         };
         /** @description Client contract 1.12. The activity status of a conversation. A turn transition (a start, a pause, a finish, a failure or a cancel) re-delivers the list row in the `changes_since` delta; a streamed token does not. The project event stream (`conversation_activity` events) also sends each transition to the members who can see the conversation. */
@@ -2906,6 +3184,19 @@ export interface components {
              */
             server_version: string;
         };
+        DraftConversationTurn: {
+            content: string;
+            /** @enum {string} */
+            role: "user" | "assistant";
+        };
+        /** @description The model override, the same subset predict_llm honours. When it is absent the gateway answers with its own model-resolution error rather than this service guessing a model on the caller's behalf. */
+        DraftLlmSettings: {
+            max_tokens?: number;
+            model_name?: string;
+            /** @description One of low, medium or high, for reasoning models. */
+            reasoning_effort?: string;
+            temperature?: number;
+        };
         /** @description Immutable Test identity. Main derives actor and project from authenticated authority. */
         EditorTestContext: {
             actor_id: string;
@@ -2979,6 +3270,30 @@ export interface components {
             mode?: string;
             /** @description The new conversation's name. Absent: the source name with " (fork)" added ("New conversation (fork)" when the source name is blank). Trimmed; blank, longer than 256 characters or with a control character answers 400. */
             name?: string;
+        };
+        /**
+         * @example {
+         *       "user_description": "Make it also name the on-call engineer.",
+         *       "conversation_history": [
+         *         {
+         *           "role": "user",
+         *           "content": "An agent that triages incidents."
+         *         }
+         *       ],
+         *       "current_draft": {
+         *         "name": "Incident Triager",
+         *         "description": "Sorts new incidents by severity.",
+         *         "instructions": "Assign a severity."
+         *       }
+         *     }
+         */
+        GenerateApplicationDraftStreamRequest: {
+            /** @description The builder conversation so far, oldest first. At most 20 turns; entries with an empty role or content are dropped. */
+            conversation_history?: components["schemas"]["DraftConversationTurn"][];
+            current_draft?: components["schemas"]["AgentDefinition"];
+            llm_settings?: components["schemas"]["DraftLlmSettings"];
+            /** @description This turn's request, in plain text. Required and non-blank. */
+            user_description: string;
         };
         GenerateConversationNameRequest: {
             /**
@@ -3421,6 +3736,12 @@ export interface components {
         };
         PipelineSettings: {
             [key: string]: unknown;
+        };
+        PredictLLMUnavailableResponse: {
+            /** @description Always llm_gateway_not_configured. A machine-readable code distinct from any upstream failure, so an operator can tell an unconfigured deployment from a broken one. */
+            code: string;
+            /** @description Human-readable message naming the missing configuration. */
+            error: string;
         };
         /** @description NOTE(W2): internal/api/v2/projects/handler.go — the Group struct. */
         ProjectGroup: {
@@ -3882,6 +4203,39 @@ export interface components {
             name?: string | null;
             value?: string | null;
         };
+        VersionWriteRequest: {
+            /** @description Defaults to "openai" when empty on the CREATE paths (handler.go:398-400, 731-733). On the PUT, omit the key to leave the stored value alone; an explicit empty string is REFUSED with a 400, for the same reason as `name` (issue 824). */
+            agent_type?: string;
+            conversation_starters?: components["schemas"]["ConversationStarters"];
+            /** @description Omit the key to leave the stored text alone. An explicit empty string CLEARS the column — it is the clearing value, since the property is not nullable and a client must be able to erase the text it wrote (issue 824). */
+            instructions?: string;
+            llm_settings?: components["schemas"]["LlmSettings"];
+            /** @description A PATCH on the PUT, not the whole object. `meta` is a bag of keys owned by different features — `step_limit` (the number the runtime admits an agent on), `icon_meta`, `internal_tools`, `variables`, and the three fork-provenance keys — and no client sends them all. Send the keys you are changing; the server merges them into the stored object and leaves every key you omit alone. A key you DO send replaces its own value outright, so an empty array clears the array it names. Omit the property entirely to leave the whole object untouched. On the two create paths there is nothing to merge into: the object is stored as sent, with a default `step_limit` added when it carries none and the top-level `variables` folded in. */
+            meta?: components["schemas"]["VersionMeta"];
+            /** @description Omit the key to leave the stored name alone. An explicit empty string is REFUSED with a 400 on the PUT: the column is NOT NULL and unique per application, and the create paths substitute the default version name for an empty value, so a blank name is not a state the platform can read back (issue 824). */
+            name?: string;
+            /** @description NOTE(#898): the editor's free-text notes, accepted at the top level the way the legacy runtime accepts them and folded into `meta.notes` by every write path (create, create-version and the PUT). Omit the key to leave the stored value alone; an explicit empty string clears it. Longer than 1000 characters is REFUSED with a 400 — the legacy runtime's own ceiling (models/pd/version.py:116). The agent editor sends the value inside `meta` instead, which is the same store; both spellings are accepted so a client written against the legacy runtime keeps working. */
+            notes?: string;
+            /** @description Pipeline flow-graph layout ({nodes, edges, orientation, layout_version}). Written verbatim to the application_versions.pipeline_settings jsonb column by create and update operations. On update, omit the key to leave the stored value untouched. */
+            pipeline_settings?: components["schemas"]["PipelineSettings"];
+            /** @description NOTE(#345): the version's topical tags. Send the key to replace the stored set; an empty array removes every association row. Omit the key to leave the stored set alone. Each entry is matched by `name`: an existing `tags` row is reused, a new name creates one. The application and version create paths persist supplied tags and return the stored set. PUT persists the supplied set and leaves existing tags unchanged when the key is absent. */
+            tags?: components["schemas"]["VersionTag"][];
+            variables?: components["schemas"]["VersionVariable"][];
+            /** @description Omit the key to leave the stored text alone. An explicit empty string CLEARS the column, exactly as for `instructions` (issue 824). */
+            welcome_message?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description Contract 1.29. A reference to a GitHub or GitLab configuration, the way a toolkit setting holds one, with its type: a configuration of the project (or a shared one), or with `private` one of the caller's own. Never a secret. NOTE(W2): internal/application/workspacehandoff/forge_credential.go:25. */
+        WorkspaceForgeCredential: {
+            elitea_title: string;
+            private: boolean;
+            /**
+             * @description The configuration's type, which is the forge the cloud pushes to.
+             * @enum {string}
+             */
+            type: "github" | "gitlab";
+        };
         /** @description An empty object. */
         WorkspaceHandoffEmpty: Record<string, never>;
         /** @description NOTE(W2): internal/api/v2/workspacehandoff/route.go:336 (`erase`). */
@@ -3904,6 +4258,14 @@ export interface components {
             /** @description `cloud_handoff_disabled`: one of `platform_off`, `project_off`, `device_off`, `no_executor`, `storage_encryption_unconfirmed`. */
             reason?: string;
         };
+        /** @description Contract 1.29. NOTE(W2): internal/api/v2/workspacehandoff/route.go:832 (`setPullRequestCredential`). */
+        WorkspaceHandoffPullRequestCredential: {
+            pull_request_credential: components["schemas"]["WorkspaceForgeCredential"] | null;
+        };
+        WorkspaceHandoffPullRequestCredentialUpdate: {
+            /** @description The configuration to push and open pull requests through; null clears the choice. */
+            credential: components["schemas"]["WorkspaceForgeCredential"] | null;
+        };
         /** @description The banner state; only `state` and `epoch` when the thread has no handoff. NOTE(W2): internal/api/v2/workspacehandoff/route.go:288 (`state`). */
         WorkspaceHandoffState: {
             cloud_sha?: string | null;
@@ -3916,6 +4278,8 @@ export interface components {
             handoff_id?: string;
             has_upstream?: boolean;
             history_mode?: string;
+            /** @description Contract 1.29. The GitHub or GitLab configuration the owner chose for the cloud executor's pushes and pull requests; null when none. */
+            pull_request_credential?: components["schemas"]["WorkspaceForgeCredential"] | null;
             reclaim_pending?: boolean;
             /** @description Contract 1.25. True while the owner's desktop may take back the cloud turns the last release left (LOCAL, within the return grace `delete_after`), and during that take back (RECLAIMING). */
             rest_pending?: boolean;
@@ -4372,6 +4736,66 @@ export interface operations {
             };
         };
     };
+    listConfigurations: {
+        parameters: {
+            query?: {
+                /** @description Adds the `shared` block, read from the PUBLIC project's schema and never from the caller's own. Without a configured public project the block stays empty. That is the honest answer: the caller's own schema is a wrong answer, not a fallback. */
+                include_shared?: boolean;
+                /** @description Page size. The default is 20 and the clamp is 200. */
+                limit?: number;
+                offset?: number;
+                /** @description Label search. A value longer than 1024 characters is refused with 400. It is not truncated. */
+                query?: string;
+                /** @description Repeatable. The client fires ONE request per section, and this filter used to be ignored: every section received the whole table, so one credential rendered under all seven headings. */
+                section?: string[];
+                shared_limit?: number;
+                shared_offset?: number;
+                sort_by?: string;
+                sort_order?: "asc" | "desc";
+                /** @description Repeatable credential-type filter, for example `sharepoint`. */
+                type?: string[];
+            };
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of configurations */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationListResponse"];
+                };
+            };
+            /** @description A filter is out of bounds: more than 64 values, a value longer than 128 characters, or a `query` longer than 1024 characters. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            500: components["responses"]["500"];
+            /** @description The configuration store is not available. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     listConfigurationModels: {
         parameters: {
             query?: {
@@ -4469,6 +4893,32 @@ export interface operations {
             426: components["responses"]["ClientUpgradeRequired"];
         };
     };
+    deleteApplication: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted (no content); also returned when already absent */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+        };
+    };
     listApplications: {
         parameters: {
             query?: {
@@ -4508,6 +4958,36 @@ export interface operations {
             401: components["responses"]["401"];
             403: components["responses"]["403"];
             426: components["responses"]["ClientUpgradeRequired"];
+        };
+    };
+    createApplication: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApplicationCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created application */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApplicationCreatedResponse"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
         };
     };
     uploadConversationAttachment: {
@@ -5246,6 +5726,66 @@ export interface operations {
             403: components["responses"]["403"];
             426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
+        };
+    };
+    generateApplicationDraftStream: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GenerateApplicationDraftStreamRequest"];
+            };
+        };
+        responses: {
+            /** @description The draft stream. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example event: draft.token
+                     *     data: {"text":"{\"name\": \"Inci"}
+                     *
+                     *     event: draft.complete
+                     *     data: {"name":"Incident Triager","description":"Sorts incidents.","instructions":"Assign a severity.","welcome_message":"","conversation_starters":[],"suggested_toolkits":[],"suggested_mcp":[],"suggested_pipelines":[],"suggested_agents":[],"suggested_skills":[]}
+                     */
+                    "text/event-stream": string;
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            /** @description The request body is above the 1 MiB bound. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+            /** @description No completion backend is composed because LLM_GATEWAY_URL is empty. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PredictLLMUnavailableResponse"];
+                };
+            };
         };
     };
     listMemories: {
@@ -6819,6 +7359,96 @@ export interface operations {
             403: components["responses"]["403"];
             426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
+        };
+    };
+    setWorkspaceHandoffPullRequestCredential: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The Local work thread's conversation UUID, lowercase canonical. */
+                conversation_uuid: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceHandoffPullRequestCredentialUpdate"];
+            };
+        };
+        responses: {
+            /** @description The choice is stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffPullRequestCredential"];
+                };
+            };
+            /** @description A malformed body (`invalid_handoff`), or an `X-Client-Version` that does not parse. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            /** @description No project permission, or `pull_requests_disabled`: the policy does not allow pull requests from the cloud. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
+            /** @description No such thread or handoff for this caller (`handoff_not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
+            /** @description `handoff_not_in_cloud` (the thread is back on the desktop) or `handoff_erased` (the cloud copy was erased). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
+            /** @description `invalid_handoff` (no `credential` key, or not a reference) or `pull_request_credential_invalid` (not a configuration of that type the caller can use). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+            /** @description A dependency is unavailable, or the deployment cannot store a credential (`handoff_unavailable`); retry with the same body. */
+            503: {
+                headers: {
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
         };
     };
     requestWorkspaceHandoffReclaim: {

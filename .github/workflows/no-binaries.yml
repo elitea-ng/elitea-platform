@@ -589,5 +589,12 @@ jobs:
             || { echo "::error::the downloaded shellcheck is not ${SHELLCHECK_VERSION}"; exit 1; }
           count="$(find .github/workflows -name '*.yml' -o -name '*.yaml' | wc -l)"
           [ "${count}" -ge 10 ] || { echo "::error::found ${count} workflow file(s); the glob stopped matching"; exit 1; }
+          # .github/actionlint.yaml ignores service `command`/`entrypoint` for
+          # 1.7.12 only (rhysd/actionlint#645 is unreleased there); a newer
+          # pin must drop the ignore so those keys are linted again.
+          if [ "${ACTIONLINT_VERSION}" != "1.7.12" ] && grep -q 'for "services" section' .github/actionlint.yaml; then
+            echo "::error::actionlint ${ACTIONLINT_VERSION} lints service command/entrypoint; delete that ignore from .github/actionlint.yaml"
+            exit 1
+          fi
           "${RUNNER_TEMP}/actionlint" -color -shellcheck "${shellcheck}"
           echo "actionlint: ${count} workflow file(s) clean"

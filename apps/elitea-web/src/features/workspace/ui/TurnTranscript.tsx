@@ -18,6 +18,7 @@ import ButtonBase from '@mui/material/ButtonBase';
 import Chip from '@mui/material/Chip';
 import CircularProgress from '@mui/material/CircularProgress';
 import Collapse from '@mui/material/Collapse';
+import Link from '@mui/material/Link';
 import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
@@ -161,6 +162,12 @@ function ToolRow({ item }: { item: ToolItem }): React.JSX.Element {
             {result.truncated && ` ${t('workspace.tool.truncated', '(output truncated)')}`}
           </Typography>
         </Collapse>
+      )}
+      {item.link !== undefined && (
+        // `target="_blank"`: the desktop hands it to the system browser (`installExternalLinks`), never a webview.
+        <Link href={item.link.href} target="_blank" rel="noopener noreferrer" variant="bodySmall" data-testid="tool-row-link" sx={{ display: 'block', marginLeft: 3, fontWeight: 600 }}>
+          {item.link.label}
+        </Link>
       )}
       {item.process !== undefined && <ToolProcessOutput process={item.process} />}
     </Box>

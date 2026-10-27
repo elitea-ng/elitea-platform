@@ -2132,6 +2132,38 @@ pub(in crate::toolkits) async fn open_pull_request_from_diff(
         })
 }
 
+/// Open a pull request from `head`, a branch the cloud executor pushed
+/// (ADR-0034 decision 10, amendment 2026-10-26), into `base`.
+///
+/// # Errors
+///
+/// The sentence of the failure: a refused name, or GitHub's answer.
+pub(in crate::toolkits) async fn open_pull_request_from_branch(
+    client: &GitHubClient,
+    title: &str,
+    body: &str,
+    head: &str,
+    base: &str,
+) -> Result<(u64, String), String> {
+    let sentence = |fail: Fail| match fail {
+        Fail::Argument(sentence) => sentence,
+        client_fail @ Fail::Client(..) => fail_sentence(&client_fail),
+    };
+    branch_name("branch", head).map_err(sentence)?;
+    branch_name("base", base).map_err(sentence)?;
+    let (owner, repo) = repository(client, &Map::new()).map_err(sentence)?;
+    let pull = json!({"title": title, "body": body, "head": head, "base": base});
+    let reply = client
+        .write(
+            Method::POST,
+            &["repos", &owner, &repo, "pulls"],
+            Some(&pull),
+        )
+        .await
+        .map_err(sentence)?;
+    created(&reply, "number").map_err(sentence)
+}
+
 #[allow(
     clippy::too_many_lines,
     reason = "one ordered flow: refuse, branch, apply, open"

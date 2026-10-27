@@ -204,6 +204,9 @@ func (a *Adapter) ResolveCloudTurn(ctx context.Context, claim workspaceruntime.T
 		EnvSecret:     started.EnvSecret(),
 		Rewind:        started.RewindTo != nil,
 		RewindTo:      started.RewindTo,
+		// The reference only; the credential travels over
+		// WorkspaceForgeCredential.
+		ForgeCredential: started.ForgeCredential != nil,
 	}, true, nil
 }
 
@@ -228,6 +231,9 @@ func (a *Adapter) EffectiveCloudPolicy(ctx context.Context, projectID int64, _ s
 		CPUMillis:        a.resources.CPUMillis,
 		MemoryBytes:      a.resources.MemoryBytes,
 		DiskBytes:        a.resources.DiskBytes,
+		// Decision 10, amended 2026-10-26.
+		PullRequests:        policy.PullRequests,
+		PullRequestApproval: policy.PullRequestApproval,
 	}, nil
 }
 
@@ -357,9 +363,45 @@ func (a *Adapter) EnvSecret(ctx context.Context, claim workspaceruntime.ClaimRef
 	return env, nil
 }
 
+// forgeCredentials is the optional Handoffs call behind
+// WorkspaceForgeCredential (*workspacehandoff.Service).
+type forgeCredentials interface {
+	ForgeCredentialForTurn(ctx context.Context, handoff workspacehandoff.Handoff) (workspacehandoff.RedeemedForgeCredential, error)
+}
+
+var _ workspaceruntime.ForgeCredentialSource = (*Adapter)(nil)
+
+// ForgeCredential redeems the running turn's pull-request credential
+// (ADR-0034 decision 10, amended 2026-10-26). The claim is bound to the
+// thread first, as every Store call is.
+func (a *Adapter) ForgeCredential(ctx context.Context, claim workspaceruntime.ClaimRef) (workspaceruntime.ForgeCredential, error) {
+	handoff, _, err := a.running(ctx, claim)
+	if err != nil {
+		return workspaceruntime.ForgeCredential{}, err
+	}
+	forge, ok := a.handoffs.(forgeCredentials)
+	if !ok {
+		return workspaceruntime.ForgeCredential{}, workspaceruntime.ErrUnavailable
+	}
+	credential, err := forge.ForgeCredentialForTurn(ctx, handoff)
+	switch {
+	case errors.Is(err, workspacehandoff.ErrNoForgeCredential), errors.Is(err, workspacehandoff.ErrForgeCredentialInvalid):
+		return workspaceruntime.ForgeCredential{}, workspaceruntime.Refuse(workspaceruntime.RefusalNoForgeCredential)
+	case errors.Is(err, workspacehandoff.ErrPullRequestsDisabled):
+		return workspaceruntime.ForgeCredential{}, workspaceruntime.Refuse(workspaceruntime.RefusalPullRequestsDisabled)
+	case errors.Is(err, workspacehandoff.ErrUnavailable):
+		return workspaceruntime.ForgeCredential{}, workspaceruntime.ErrUnavailable
+	case err != nil:
+		return workspaceruntime.ForgeCredential{}, storeError(err)
+	}
+	return workspaceruntime.ForgeCredential{Forge: credential.Type, Configuration: credential.Configuration}, nil
+}
+
 // RecordEvent writes the running turn's executor audit event.
 func (a *Adapter) RecordEvent(ctx context.Context, claim workspaceruntime.ClaimRef, event workspaceruntime.ExecutorEvent) error {
-	if event.Kind != workspaceruntime.EventScanBlocked && event.Kind != workspaceruntime.EventPullRequestOpened {
+	switch event.Kind {
+	case workspaceruntime.EventScanBlocked, workspaceruntime.EventPullRequestOpened, workspaceruntime.EventBranchPushed:
+	default:
 		return workspaceruntime.ErrInvalidRequest
 	}
 	handoff, _, err := a.running(ctx, claim)

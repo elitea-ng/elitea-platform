@@ -23,6 +23,15 @@ use crate::protocol::elitea::runtime::v1::WorkspaceClaimV1;
 pub(crate) enum ExecutorEvent {
     /// The hydrated tree held credential-shaped content.
     ScanBlocked { findings: u32, rules: Vec<String> },
+    /// `git_push` (or `open_pull_request`) created a branch on the forge.
+    BranchPushed {
+        toolkit: String,
+        branch: String,
+        base: String,
+        /// The branch's web page.
+        url: String,
+        commits: u32,
+    },
     /// `open_pull_request` opened one.
     PullRequestOpened {
         toolkit: String,
@@ -39,6 +48,7 @@ impl ExecutorEvent {
     pub(crate) const fn kind(&self) -> &'static str {
         match self {
             Self::ScanBlocked { .. } => "handoff.scan_blocked",
+            Self::BranchPushed { .. } => "branch.pushed",
             Self::PullRequestOpened { .. } => "pull_request.opened",
         }
     }
@@ -164,6 +174,17 @@ fn log_undelivered(event: &ExecutorEvent, execution_id: &str, error: &StoreCallE
             error_code = error.code(),
             findings,
             rules = rules.join(","),
+            "an executor audit event was not recorded by Main"
+        ),
+        ExecutorEvent::BranchPushed {
+            toolkit, commits, ..
+        } => tracing::warn!(
+            event = "workspace.audit_undelivered",
+            audit = event.kind(),
+            execution_id,
+            error_code = error.code(),
+            toolkit = toolkit.as_str(),
+            commits,
             "an executor audit event was not recorded by Main"
         ),
         ExecutorEvent::PullRequestOpened {

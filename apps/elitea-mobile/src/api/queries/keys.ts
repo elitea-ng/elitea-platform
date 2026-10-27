@@ -13,6 +13,8 @@ export const queryKeys = {
   archived: (projectId: number) => ['p', projectId, 'archived'] as const,
   /** One Local work thread's handoff state (the cloud executor banner), keyed below by conversation uuid. */
   handoff: (projectId: number, conversationUuid: string) => ['p', projectId, 'handoff', conversationUuid] as const,
+  /** The GitHub and GitLab configurations a cloud thread's owner may push through (the project's, then their own). */
+  forgeCredentials: (projectId: number, personalProjectId: number | null) => ['p', projectId, 'forge-credentials', personalProjectId ?? 0] as const,
   /** The caller's permissions in a project (who may erase a cloud copy). */
   permissions: (projectId: number) => ['p', projectId, 'permissions'] as const,
   conversation: (projectId: number, conversationId: string) =>

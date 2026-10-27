@@ -9,11 +9,13 @@ import (
 
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 func toolRunDispatchPolicy() ToolkitCallToolDispatchPolicy {
 	return ToolkitCallToolDispatchPolicy{
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "elitea:runtime:index:commands",
 		CapabilityVersion: "1",
 		ResourceClass:     "indexing",

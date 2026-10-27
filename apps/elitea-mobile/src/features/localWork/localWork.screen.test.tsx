@@ -23,7 +23,13 @@ jest.mock('@/state/selfIdentity', () => ({
   ...jest.requireActual('@/state/selfIdentity'),
   useSelfUserId: () => mockSelf,
 }));
-jest.mock('expo-router', () => ({ useIsFocused: () => true, useLocalSearchParams: () => ({ id: '3' }), Stack: { Screen: () => null }, router: { replace: jest.fn() } }));
+const mockPush = jest.fn();
+jest.mock('expo-router', () => ({
+  useIsFocused: () => true,
+  useLocalSearchParams: () => ({ id: '3' }),
+  Stack: { Screen: () => null },
+  router: { replace: jest.fn(), push: (...args: unknown[]) => mockPush(...args) },
+}));
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 jest.mock('expo-crypto', () => ({ randomUUID: () => '3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b' }));
@@ -45,6 +51,8 @@ interface Setup {
   answerRanOn?: 'desktop';
   contract?: string;
   folder?: string;
+  /** The handoff read's `pull_request_credential` (contract 1.29). */
+  credential?: { type: 'github' | 'gitlab'; elitea_title: string; private: boolean } | null;
 }
 
 let queries: QueryClient | null = null;
@@ -71,7 +79,7 @@ async function open(setup: Setup = {}) {
   });
   server.on('GET', `/elitea_core/message_traces/prompt_lib/${P}`, { status: 200, body: { total: 0, rows: [] } });
   if (setup.state !== undefined) {
-    server.on('GET', HANDOFF, { status: 200, body: { state: setup.state, epoch: 3, reclaim_pending: setup.reclaimPending === true } });
+    server.on('GET', HANDOFF, { status: 200, body: { state: setup.state, epoch: 3, reclaim_pending: setup.reclaimPending === true, pull_request_credential: setup.credential ?? null } });
   }
   server.on('GET', `/auth/permissions/prompt_lib/${P}`, {
     status: 200,
@@ -266,5 +274,29 @@ describe('a thread the laptop runs', () => {
       await queries!.refetchQueries({ queryKey: queryKeys.handoff(P, UUID) });
     });
     expect(reads()).toBe(before);
+  });
+});
+
+describe('the push and pull-request credential (contract 1.29)', () => {
+  it('the owner sees the chosen credential and opens the sheet that changes it', async () => {
+    mockPush.mockClear();
+    await open({ executor: 'cloud', state: 'CLOUD_IDLE', contract: '1.29', credential: { type: 'gitlab', elitea_title: 'work', private: false } });
+    await fireEvent.press(await screen.findByRole('button', { name: 'Pushes and pull requests: work (GitLab)' }));
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/pr-credential', params: { uuid: UUID } });
+  });
+
+  it('offers a choice when none is set', async () => {
+    await open({ executor: 'cloud', state: 'CLOUD_IDLE', contract: '1.29' });
+    expect(await screen.findByRole('button', { name: 'Pushes and pull requests: choose a credential' })).toBeTruthy();
+  });
+
+  it('is not offered to someone else, nor by an older server', async () => {
+    await open({ executor: 'cloud', state: 'CLOUD_IDLE', contract: '1.29', owner: false });
+    await screen.findByText('Running in the cloud');
+    expect(screen.queryByTestId('cloud-pr-credential')).toBeNull();
+    queries?.clear();
+    await open({ executor: 'cloud', state: 'CLOUD_IDLE', contract: '1.28' });
+    await screen.findByText('Running in the cloud');
+    expect(screen.queryByTestId('cloud-pr-credential')).toBeNull();
   });
 });

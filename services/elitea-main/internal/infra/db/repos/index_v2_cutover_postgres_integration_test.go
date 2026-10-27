@@ -9,6 +9,7 @@ import (
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
 	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/cutover"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -46,6 +47,8 @@ WHERE execution_id = $1
 	}
 
 	v2Jobs, err := NewIndexIngestJobsRepository(pool, IndexIngestDispatchPolicy{
+
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "commands.v2.index.ingest.indexing.shared.1.0",
 		CapabilityVersion: "2",
 		ResourceClass:     "indexing",
@@ -330,6 +333,7 @@ func admitPostgresV1CutoverExecution(
 ) postgresV1CutoverFixture {
 	t.Helper()
 	jobs, err := NewIndexIngestJobsRepository(pool, IndexIngestDispatchPolicy{
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "commands.v1.index.ingest.indexing.shared.1.0",
 		CapabilityVersion: "1",
 		ResourceClass:     "indexing",

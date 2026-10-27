@@ -12,6 +12,7 @@ import (
 	executionsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/executions"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,6 +26,7 @@ import (
 func TestPostgresNodeEventThenTerminalProjection(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	dispatchPolicy := IndexIngestDispatchPolicy{
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "elitea:runtime:index:commands",
 		CapabilityVersion: "1",
 		ResourceClass:     "indexing",
@@ -550,6 +552,7 @@ WHERE execution_id = $1 AND generation = 1 AND event_type = 'execution.node_even
 func preparePostgresNodeEventConcurrencyFixture(t *testing.T, pool *pgxpool.Pool, suffix string) (outputapp.NodeEventFrame, outputapp.IndexIngestFrame) {
 	t.Helper()
 	dispatchPolicy := IndexIngestDispatchPolicy{
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "elitea:runtime:index:commands",
 		CapabilityVersion: "1",
 		ResourceClass:     "indexing",

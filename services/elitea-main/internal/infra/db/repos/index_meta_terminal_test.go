@@ -10,6 +10,7 @@ import (
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -396,6 +397,7 @@ func TestIndexGenerationMigrationDefinesTargetScopedAuthority(t *testing.T) {
 func TestPostgresCurrentIndexMetaLogicalGenerationSupersession(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	policy := IndexIngestDispatchPolicy{
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "elitea:runtime:index:commands",
 		CapabilityVersion: "1",
 		ResourceClass:     "indexing",

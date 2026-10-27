@@ -275,6 +275,9 @@ func (r *IndexIngestJobsRepository) AdmitIndexIngest(ctx context.Context, admiss
 	}); err != nil {
 		return indexingapp.AdmissionOutcome{}, fmt.Errorf("insert index command outbox: %w", err)
 	}
+	if err := pinExecutionAdmission(ctx, tx, r.policy.CredentialProfile, admissionPin{executionID: admission.Record.Outbox.ExecutionID}); err != nil {
+		return indexingapp.AdmissionOutcome{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return indexingapp.AdmissionOutcome{}, fmt.Errorf("commit index admission: %w", err)
 	}

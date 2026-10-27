@@ -429,6 +429,46 @@ impl GitLabClient {
         Ok(response)
     }
 
+    /// Open a merge request from `source` (a branch the cloud executor
+    /// pushed, ADR-0034 decision 10, amendment 2026-10-26) into `target`:
+    /// its `iid` and `web_url`.
+    ///
+    /// # Errors
+    ///
+    /// A refused argument or GitLab's answer.
+    pub(in crate::toolkits) async fn open_merge_request(
+        &self,
+        source: &str,
+        target: &str,
+        title: &str,
+        description: &str,
+    ) -> Result<(u64, String), GitLabClientError> {
+        validate_text(source, MAX_BRANCH_BYTES)?;
+        validate_text(target, MAX_BRANCH_BYTES)?;
+        validate_text(title, 8 * 1_024)?;
+        validate_size(description, MAX_TEXT_BYTES)?;
+        let payload = json!({
+            "source_branch": source,
+            "target_branch": target,
+            "title": title,
+            "description": description,
+        });
+        let response = self
+            .call(Method::POST, &["merge_requests"], &[], Some(&payload), true)
+            .await?;
+        let body = response.body.as_ref();
+        let iid = body
+            .and_then(|value| value.get("iid"))
+            .and_then(Value::as_u64)
+            .ok_or_else(unknown_outcome)?;
+        let url = body
+            .and_then(|value| value.get("web_url"))
+            .and_then(Value::as_str)
+            .filter(|url| url.starts_with("https://") && url.len() <= 2_048)
+            .ok_or_else(unknown_outcome)?;
+        Ok((iid, url.to_owned()))
+    }
+
     async fn get_object(
         &self,
         suffix: &[&str],

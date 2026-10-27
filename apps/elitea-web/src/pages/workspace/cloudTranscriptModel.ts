@@ -8,6 +8,7 @@ import type { ChatMessage } from '@/features/chat-messages';
 import type { ComponentProps } from 'react';
 
 import type { TurnTranscript } from '@/features/workspace';
+import { forgeLinkLabel, forgeLinkOf, GIT_PUSH, OPEN_PULL_REQUEST } from '@/shared/lib/forgeLink';
 
 /** What the local transcript renders for one turn, and one entry of it. */
 type TurnView = ComponentProps<typeof TurnTranscript>['view'];
@@ -41,11 +42,33 @@ interface RawAction {
   readonly content?: unknown;
 }
 
+/** `git_push`'s and `open_pull_request`'s answers read as their sentence ("Pull request #7 opened: <url>"), not their JSON (ADR-0034 decision 10). */
+function forgeSentence(tool: string, output: unknown): string | undefined {
+  if ((tool !== OPEN_PULL_REQUEST && tool !== GIT_PUSH) || typeof output !== 'string') return undefined;
+  try {
+    const parsed = JSON.parse(output) as { readonly message?: unknown } | null;
+    return typeof parsed?.message === 'string' ? parsed.message : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A finished step's result, and the forge page it produced (opened in the system browser: the desktop's external-link path). */
+function finished(action: RawAction, tool: string): Pick<TranscriptItem & { type: 'tool' }, 'result' | 'link'> {
+  const failed = action.isError === true;
+  const output = failed ? action.content : (action.toolOutputs ?? action.content);
+  const summary = forgeSentence(tool, output) ?? resultText(output);
+  const link = failed ? undefined : forgeLinkOf(tool, output);
+  return {
+    result: { ok: !failed, summary, truncated: false },
+    ...(link === undefined ? {} : { link: { href: link.url, label: forgeLinkLabel(link) } }),
+  };
+}
+
 function toolItem(action: RawAction, index: number): TranscriptItem | undefined {
   if (action.type !== undefined && action.type !== 'tool') return undefined;
   const callId = typeof action.id === 'string' ? action.id : `tool-${String(index)}`;
   const done = action.status === 'complete' || action.status === 'error' || action.isError === true;
-  const summary = resultText(action.isError === true ? action.content : (action.toolOutputs ?? action.content));
   const tool = action.name ?? action.original_name ?? 'tool';
   return {
     type: 'tool',
@@ -55,7 +78,7 @@ function toolItem(action: RawAction, index: number): TranscriptItem | undefined 
     argsSummary: argsSummary(action.toolInputs),
     // The cloud runs it: the row says "Remote".
     remote: true,
-    ...(done ? { result: { ok: action.isError !== true, summary, truncated: false } } : {}),
+    ...(done ? finished(action, tool) : {}),
   };
 }
 

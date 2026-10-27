@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.27",
+  "client_contract": "1.29",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -3153,6 +3153,136 @@
                 },
                 "total": {
                   "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /elitea_core/agent_schema/prompt_lib/{project_id}": {
+      "operation_id": "getAgentSchema",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "agent_definition",
+                "local_agent_definition",
+                "schema_version"
+              ],
+              "properties": {
+                "agent_definition": {
+                  "type": "object",
+                  "open": true
+                },
+                "local_agent_definition": {
+                  "type": "object",
+                  "open": true
+                },
+                "schema_version": {
+                  "type": "string"
                 }
               }
             }
@@ -9766,6 +9896,32 @@
                 "history_mode": {
                   "type": "string"
                 },
+                "pull_request_credential": {
+                  "type": "object",
+                  "nullable": true,
+                  "required": [
+                    "elitea_title",
+                    "private",
+                    "type"
+                  ],
+                  "properties": {
+                    "elitea_title": {
+                      "type": "string",
+                      "min_length": 1,
+                      "max_length": 256
+                    },
+                    "private": {
+                      "type": "boolean"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "github",
+                        "gitlab"
+                      ]
+                    }
+                  }
+                },
                 "reclaim_pending": {
                   "type": "boolean"
                 },
@@ -10915,6 +11071,9 @@
                 "limits",
                 "network",
                 "path_deny",
+                "pull_request_approval",
+                "pull_request_credentials",
+                "pull_requests",
                 "shell"
               ],
               "properties": {
@@ -11023,6 +11182,15 @@
                   "items": {
                     "type": "string"
                   }
+                },
+                "pull_request_approval": {
+                  "type": "boolean"
+                },
+                "pull_request_credentials": {
+                  "type": "boolean"
+                },
+                "pull_requests": {
+                  "type": "boolean"
                 },
                 "shell": {
                   "type": "boolean"
@@ -15533,6 +15701,331 @@
                 "error"
               ],
               "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /elitea_core/generate_application_draft_stream/prompt_lib/{project_id}": {
+      "operation_id": "generateApplicationDraftStream",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "request_body": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "type": "object",
+            "required": [
+              "user_description"
+            ],
+            "properties": {
+              "conversation_history": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "content",
+                    "role"
+                  ],
+                  "properties": {
+                    "content": {
+                      "type": "string",
+                      "max_length": 16384
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "assistant",
+                        "user"
+                      ]
+                    }
+                  }
+                },
+                "max_items": 20
+              },
+              "current_draft": {
+                "type": "object",
+                "required": [
+                  "description",
+                  "instructions",
+                  "name"
+                ],
+                "properties": {
+                  "conversation_starters": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "min_length": 1,
+                      "max_length": 768
+                    },
+                    "max_items": 4
+                  },
+                  "description": {
+                    "type": "string",
+                    "min_length": 1,
+                    "max_length": 2304
+                  },
+                  "instructions": {
+                    "type": "string",
+                    "min_length": 1,
+                    "max_length": 32768
+                  },
+                  "llm_settings": {
+                    "type": "object",
+                    "properties": {
+                      "max_tokens": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "model_name": {
+                        "type": "string",
+                        "min_length": 1
+                      },
+                      "reasoning_effort": {
+                        "type": "string",
+                        "enum": [
+                          "high",
+                          "low",
+                          "medium"
+                        ]
+                      },
+                      "temperature": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 2
+                      }
+                    }
+                  },
+                  "name": {
+                    "type": "string",
+                    "min_length": 1,
+                    "max_length": 32
+                  },
+                  "skills": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "min_length": 1
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "tools": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "min_length": 1
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "variables": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "name"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                        },
+                        "value": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "max_items": 32
+                  },
+                  "welcome_message": {
+                    "type": "string",
+                    "max_length": 768
+                  }
+                }
+              },
+              "llm_settings": {
+                "type": "object",
+                "properties": {
+                  "max_tokens": {
+                    "type": "integer"
+                  },
+                  "model_name": {
+                    "type": "string"
+                  },
+                  "reasoning_effort": {
+                    "type": "string"
+                  },
+                  "temperature": {
+                    "type": "number"
+                  }
+                }
+              },
+              "user_description": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "text/event-stream": {
+              "type": "string"
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "413": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "503": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "code",
+                "error"
+              ],
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
                 "error": {
                   "type": "string"
                 }
@@ -24370,6 +24863,441 @@
                   "type": "string"
                 }
               }
+            }
+          }
+        }
+      }
+    },
+    "PUT /elitea_core/workspace_handoff_pull_request_credential/prompt_lib/{project_id}/{conversation_uuid}": {
+      "operation_id": "setWorkspaceHandoffPullRequestCredential",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:conversation_uuid": {
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "request_body": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "type": "object",
+            "required": [
+              "credential"
+            ],
+            "properties": {
+              "credential": {
+                "type": "object",
+                "nullable": true,
+                "required": [
+                  "elitea_title",
+                  "private",
+                  "type"
+                ],
+                "properties": {
+                  "elitea_title": {
+                    "type": "string",
+                    "min_length": 1,
+                    "max_length": 256
+                  },
+                  "private": {
+                    "type": "boolean"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "github",
+                      "gitlab"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "pull_request_credential"
+              ],
+              "properties": {
+                "pull_request_credential": {
+                  "type": "object",
+                  "nullable": true,
+                  "required": [
+                    "elitea_title",
+                    "private",
+                    "type"
+                  ],
+                  "properties": {
+                    "elitea_title": {
+                      "type": "string",
+                      "min_length": 1,
+                      "max_length": 256
+                    },
+                    "private": {
+                      "type": "boolean"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "github",
+                        "gitlab"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "details": {
+                      "type": "object",
+                      "properties": {
+                        "current": {
+                          "type": "object",
+                          "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "details": {
+                  "type": "object",
+                  "properties": {
+                    "current": {
+                      "type": "object",
+                      "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "details": {
+                  "type": "object",
+                  "properties": {
+                    "current": {
+                      "type": "object",
+                      "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "409": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "details": {
+                  "type": "object",
+                  "properties": {
+                    "current": {
+                      "type": "object",
+                      "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "details": {
+                  "type": "object",
+                  "properties": {
+                    "current": {
+                      "type": "object",
+                      "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "503": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "details": {
+                  "type": "object",
+                  "properties": {
+                    "current": {
+                      "type": "object",
+                      "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "retry-after": {
+              "type": "string"
             }
           }
         }

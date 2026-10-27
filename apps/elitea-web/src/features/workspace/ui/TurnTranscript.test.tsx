@@ -21,6 +21,36 @@ describe('TurnTranscript', () => {
     expect(text.textContent).not.toContain('**');
   });
 
+  it("links a step's forge page in a new tab, which the desktop hands to the system browser", () => {
+    renderWithTheme(
+      <TurnTranscript
+        view={{
+          phase: null,
+          items: [
+            {
+              type: 'tool',
+              key: 'c1',
+              callId: 'c1',
+              tool: 'open_pull_request',
+              argsSummary: '',
+              remote: true,
+              result: { ok: true, summary: 'Pull request #7 opened', truncated: false },
+              link: { href: 'https://github.com/o/r/pull/7', label: 'Open pull request #7' },
+            },
+          ],
+          approvals: [],
+        }}
+        busy={false}
+        onCancel={vi.fn()}
+      />,
+    );
+    const link = screen.getByTestId('tool-row-link');
+    expect(link).toHaveAttribute('href', 'https://github.com/o/r/pull/7');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(link).toHaveTextContent('Open pull request #7');
+  });
+
   it('drops raw HTML the model writes instead of rendering it', () => {
     const text = renderText('before <img src="https://example.invalid/x.png" onerror="alert(1)"> after');
     expect(text.querySelector('img')).toBeNull();

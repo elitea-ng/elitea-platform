@@ -17,6 +17,7 @@ import (
 	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
 	indexregistryapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexregistry"
 	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -60,7 +61,8 @@ func admitRegistryRun(
 ) (string, error) {
 	t.Helper()
 	jobs, err := NewIndexIngestJobsRepository(pool, IndexIngestDispatchPolicy{
-		StreamName: "elitea:runtime:index:commands", CapabilityVersion: "1", ResourceClass: "indexing",
+		CredentialProfile: profile.LegacyAdmission(false),
+		StreamName:        "elitea:runtime:index:commands", CapabilityVersion: "1", ResourceClass: "indexing",
 		IsolationClass: "project", Priority: 1, DeadlineTTL: time.Hour, LimitsRevision: "index-limits-v1", MaxOutstanding: 100,
 	})
 	if err != nil {
@@ -905,7 +907,8 @@ func TestIndexRegistryResultIsAppliedByTheOutputProjectionOnlyInRustMode(t *test
 		t.Run(fmt.Sprintf("rust=%v", rust), func(t *testing.T) {
 			pool := newMigratedPostgresIntegrationPool(t)
 			policy := IndexIngestDispatchPolicy{
-				StreamName: "elitea:runtime:index:commands", CapabilityVersion: "1", ResourceClass: "indexing",
+				CredentialProfile: profile.LegacyAdmission(false),
+				StreamName:        "elitea:runtime:index:commands", CapabilityVersion: "1", ResourceClass: "indexing",
 				IsolationClass: "project", Priority: 1, DeadlineTTL: time.Hour, LimitsRevision: "index-limits-v1", MaxOutstanding: 1,
 			}
 			jobs, err := NewIndexIngestJobsRepository(pool, policy)

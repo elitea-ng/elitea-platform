@@ -1942,6 +1942,20 @@ cargo test --lib handoff::tests::live -- --ignored --test-threads=1
 The quota case narrows the project setting to `max_project_workspace_gb: 0`
 for one send and restores it.
 
+CI runs all of this: the `handoff-journey` job of `ci-web-e2e.yml` brings up
+the full standalone stack and runs `deploy/scripts/handoff-live.sh run`
+(overlay `deploy/docker-compose.handoff-live.yml`: an encrypted RustFS bucket
+and no presigned URLs; the script seeds the policy sections, the project
+setting and a native device session, builds the simulator and runs the tests).
+The send → cloud turn → web reads → take back journey also asserts what the
+web's "Files changed" reads: the simulator takes `-changes FILE` (a JSON array
+of `{scope, path, from_path, status, additions, deletions, diff}`, the worker's
+`WorkspaceRecordChanges` payload) and records it as the first cloud turn, and
+the test reads the banner state, `workspace_handoff_changes`,
+`workspace_handoff_diff` and the conversation as the browser does. The job runs
+on a change to the handoff code (`reaches-handoff` in
+`scripts/ci/e2e-lane-filter.sh`), on main's nightly run and on dispatch.
+
 ## App and native shell (`src/platform.rs`, `src/local_commands.rs`)
 
 | Command | Arguments | Result |

@@ -155,6 +155,8 @@ import type {
   WorkspaceHandoffErased,
   WorkspaceHandoffError,
   WorkspaceHandoffPolicy,
+  WorkspaceHandoffPullRequestCredential,
+  WorkspaceHandoffPullRequestCredentialUpdate,
   WorkspaceHandoffReclaimPending,
   WorkspaceHandoffReclaimRequest,
   WorkspaceHandoffReclaimed,
@@ -10352,6 +10354,359 @@ export function useRequestWorkspaceHandoffReclaim<
   const queryOptions = getRequestWorkspaceHandoffReclaimQueryOptions(
     projectId,
     conversationUuid,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type setWorkspaceHandoffPullRequestCredentialResponse200 = {
+  data: WorkspaceHandoffPullRequestCredential;
+  status: 200;
+};
+
+export type setWorkspaceHandoffPullRequestCredentialResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type setWorkspaceHandoffPullRequestCredentialResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type setWorkspaceHandoffPullRequestCredentialResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type setWorkspaceHandoffPullRequestCredentialResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type setWorkspaceHandoffPullRequestCredentialResponse409 = {
+  data: WorkspaceHandoffError;
+  status: 409;
+};
+
+export type setWorkspaceHandoffPullRequestCredentialResponse422 = {
+  data: WorkspaceHandoffError;
+  status: 422;
+};
+
+export type setWorkspaceHandoffPullRequestCredentialResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type setWorkspaceHandoffPullRequestCredentialResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type setWorkspaceHandoffPullRequestCredentialResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type setWorkspaceHandoffPullRequestCredentialResponseSuccess =
+  setWorkspaceHandoffPullRequestCredentialResponse200 & {
+    headers: Headers;
+  };
+export type setWorkspaceHandoffPullRequestCredentialResponseError = (
+  | setWorkspaceHandoffPullRequestCredentialResponse400
+  | setWorkspaceHandoffPullRequestCredentialResponse401
+  | setWorkspaceHandoffPullRequestCredentialResponse403
+  | setWorkspaceHandoffPullRequestCredentialResponse404
+  | setWorkspaceHandoffPullRequestCredentialResponse409
+  | setWorkspaceHandoffPullRequestCredentialResponse422
+  | setWorkspaceHandoffPullRequestCredentialResponse426
+  | setWorkspaceHandoffPullRequestCredentialResponse500
+  | setWorkspaceHandoffPullRequestCredentialResponse503
+) & {
+  headers: Headers;
+};
+
+export type setWorkspaceHandoffPullRequestCredentialResponse =
+  | setWorkspaceHandoffPullRequestCredentialResponseSuccess
+  | setWorkspaceHandoffPullRequestCredentialResponseError;
+
+export const getSetWorkspaceHandoffPullRequestCredentialUrl = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return `/elitea_core/workspace_handoff_pull_request_credential/prompt_lib/${projectId}/${conversationUuid}`;
+};
+
+/**
+ * Client contract 1.29 (ADR-0034 decision 10, amended 2026-10-26). The
+ * cloud executor's `git_push` and `open_pull_request` (a merge request
+ * on GitLab) write through this configuration: Main expands it as the
+ * owner only for a running cloud turn of the thread, over the
+ * claim-bound runtime plane, and the token never reaches the sandbox;
+ * the worker sends it only to the configuration's own host over HTTPS.
+ * The worker refuses a configuration whose host or repository is not
+ * the folder's upstream remote's. The thread's
+ * owner only, cookie or token, while the thread has a cloud copy; a
+ * choice (not `null`) only while the policy allows pull requests.
+ * @summary Choose the GitHub or GitLab configuration a cloud thread pushes and opens pull requests through
+ */
+export const setWorkspaceHandoffPullRequestCredential = async (
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffPullRequestCredentialUpdate: WorkspaceHandoffPullRequestCredentialUpdate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<setWorkspaceHandoffPullRequestCredentialResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<setWorkspaceHandoffPullRequestCredentialResponse>(
+    getSetWorkspaceHandoffPullRequestCredentialUrl(projectId, conversationUuid),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(workspaceHandoffPullRequestCredentialUpdate),
+    },
+  );
+};
+
+export const getSetWorkspaceHandoffPullRequestCredentialQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffPullRequestCredentialUpdate?: WorkspaceHandoffPullRequestCredentialUpdate,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/workspace_handoff_pull_request_credential/prompt_lib/${projectId}/${conversationUuid}`,
+    workspaceHandoffPullRequestCredentialUpdate,
+  ] as const;
+};
+
+export const getSetWorkspaceHandoffPullRequestCredentialQueryOptions = <
+  TData = Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffPullRequestCredentialUpdate: WorkspaceHandoffPullRequestCredentialUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSetWorkspaceHandoffPullRequestCredentialQueryKey(
+      projectId,
+      conversationUuid,
+      workspaceHandoffPullRequestCredentialUpdate,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>
+  > = ({ signal }) =>
+    setWorkspaceHandoffPullRequestCredential(
+      projectId,
+      conversationUuid,
+      workspaceHandoffPullRequestCredentialUpdate,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SetWorkspaceHandoffPullRequestCredentialQueryResult = NonNullable<
+  Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>
+>;
+export type SetWorkspaceHandoffPullRequestCredentialQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useSetWorkspaceHandoffPullRequestCredential<
+  TData = Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffPullRequestCredentialUpdate: WorkspaceHandoffPullRequestCredentialUpdate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>,
+          TError,
+          Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetWorkspaceHandoffPullRequestCredential<
+  TData = Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffPullRequestCredentialUpdate: WorkspaceHandoffPullRequestCredentialUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>,
+          TError,
+          Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetWorkspaceHandoffPullRequestCredential<
+  TData = Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffPullRequestCredentialUpdate: WorkspaceHandoffPullRequestCredentialUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Choose the GitHub or GitLab configuration a cloud thread pushes and opens pull requests through
+ */
+
+export function useSetWorkspaceHandoffPullRequestCredential<
+  TData = Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffPullRequestCredentialUpdate: WorkspaceHandoffPullRequestCredentialUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setWorkspaceHandoffPullRequestCredential>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSetWorkspaceHandoffPullRequestCredentialQueryOptions(
+    projectId,
+    conversationUuid,
+    workspaceHandoffPullRequestCredentialUpdate,
     options,
   );
 

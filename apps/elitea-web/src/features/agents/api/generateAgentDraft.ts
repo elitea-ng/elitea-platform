@@ -19,7 +19,7 @@ import type { ApplicationDraft } from '@/shared/api/generated/model';
  *     which has no such field. It is gone.
  *  2. **Response body.** `ApplicationDraft` — `{name, description,
  *     instructions, welcome_message, conversation_starters}` — is a structured
- *     draft, not a chat-completion envelope. `mapApplicationDraft` in
+ *     draft, not a chat-completion envelope. `readDraft` in
  *     `../lib/agentDraft` turns it into the `AgentDraft` the review form edits.
  *
  * ONE GAP REMAINS, and it is a backend one rather than a client mapping: the
@@ -27,7 +27,7 @@ import type { ApplicationDraft } from '@/shared/api/generated/model';
  * `suggested_agents` / `suggested_pipelines` / `suggested_skills`. Legacy
  * builds those from a project-resource inventory elitea-main composes no
  * reader for; see the `ApplicationDraft` schema description. `AgentDraft`
- * still declares all five and `mapApplicationDraft` leaves them empty, so
+ * still declares all five and `readDraft` leaves them empty, so
  * `ResourceSuggestions` renders nothing for them — the same graceful
  * degradation as before, now for a reason recorded in the contract.
  *

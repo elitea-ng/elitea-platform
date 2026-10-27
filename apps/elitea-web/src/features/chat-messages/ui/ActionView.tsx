@@ -13,6 +13,7 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 
 import { BudgetUsageLink, toolResultBudgetCode } from './error-trace/BudgetUsageLink';
+import { PullRequestLink } from './PullRequestLink';
 import { ToolModal } from './ToolModal';
 import type { Theme } from '@mui/material/styles';
 
@@ -132,6 +133,8 @@ export function ActionView({ action, onClick, isSelected = false }: ActionViewPr
         {/* A metered tool the budget refused (#1238) links to Usage exactly as
             a refused model call does. */}
         {isError ? <BudgetUsageLink code={toolResultBudgetCode(action.toolOutputs)} /> : null}
+        {/* A cloud thread's pull request (ADR-0034 decision 10) links to the forge. */}
+        {isError ? null : <PullRequestLink name={action.name} output={action.toolOutputs} />}
       </Box>
       <ToolModal
         open={isModalOpen}

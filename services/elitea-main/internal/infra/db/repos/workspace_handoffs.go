@@ -90,7 +90,7 @@ const handoffColumns = `project_id, conversation_uuid::text, handoff_id::text, s
        COALESCE(running_execution_id, ''), COALESCE(running_response_message_id::text, ''), expires_at,
        state_changed_at, updated_at, delete_after, deleted_at, note,
        included_excluded, env_names, COALESCE(env_secret_name, ''), released, rest_pending,
-       COALESCE(delete_after > clock_timestamp(), FALSE)`
+       COALESCE(delete_after > clock_timestamp(), FALSE), forge_credential`
 
 type handoffRow struct {
 	workspacehandoff.Handoff
@@ -104,18 +104,26 @@ func scanHandoff(row pgx.Row) (handoffRow, error) {
 		stats                 []byte
 		excluded              []byte
 		includes, environment []byte
+		forgeCredential       []byte
 	)
 	err := row.Scan(&out.ProjectID, &out.ConversationUUID, &out.HandoffID, &state, &out.Epoch, &out.ReclaimPending,
 		&out.ReclaimRequestedAt, &out.OwnerUserID, &out.DeviceID, &out.DeviceName, &out.HistoryMode, &out.HasUpstream,
 		&out.BaseSHA, &out.UpstreamSHA, &out.HandoffSHA, &out.CloudSHA, &stats, &excluded, &out.LastSeq,
 		&out.RunningExecutionID, &out.RunningResponseID, &out.ExpiresAt,
 		&out.StateChangedAt, &out.UpdatedAt, &out.DeleteAfter, &out.DeletedAt, &out.note,
-		&includes, &environment, &out.EnvSecretName, &out.Released, &out.RestPending, &out.ReturnGraceOpen)
+		&includes, &environment, &out.EnvSecretName, &out.Released, &out.RestPending, &out.ReturnGraceOpen,
+		&forgeCredential)
 	if err != nil {
 		return handoffRow{}, err
 	}
 	out.State = workspacestore.State(state)
 	out.Stats = json.RawMessage(stats)
+	if len(forgeCredential) > 0 {
+		var credential workspacehandoff.ForgeCredential
+		if json.Unmarshal(forgeCredential, &credential) == nil && workspacehandoff.ValidForgeCredential(credential) {
+			out.ForgeCredential = &credential
+		}
+	}
 	_ = json.Unmarshal(excluded, &out.Excluded)
 	if out.Excluded == nil {
 		out.Excluded = []string{}
@@ -1104,7 +1112,8 @@ func (r *WorkspaceHandoffsRepository) MarkErased(ctx context.Context, thread wor
 	return r.inTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 UPDATE elitea_runtime.workspace_handoffs
-SET deleted_at = clock_timestamp(), updated_at = clock_timestamp(), env_secret_name = NULL, env_names = '[]'::jsonb
+SET deleted_at = clock_timestamp(), updated_at = clock_timestamp(), env_secret_name = NULL, env_names = '[]'::jsonb,
+    forge_credential = NULL
 WHERE project_id = $1 AND conversation_uuid = $2::uuid AND state = 'LOCAL' AND epoch = $3
   AND deleted_at IS NULL AND delete_after <= clock_timestamp()`, thread.ProjectID, thread.ConversationUUID, epoch)
 		if err != nil {
@@ -1127,7 +1136,8 @@ func qualifiedHandoffColumns(alias string) string {
 		`COALESCE(` + alias + `.running_response_message_id::text, ''), ` + alias + `.expires_at, ` +
 		alias + `.state_changed_at, ` + alias + `.updated_at, ` + alias + `.delete_after, ` + alias + `.deleted_at, ` + alias + `.note, ` +
 		alias + `.included_excluded, ` + alias + `.env_names, COALESCE(` + alias + `.env_secret_name, ''), ` +
-		alias + `.released, ` + alias + `.rest_pending, COALESCE(` + alias + `.delete_after > clock_timestamp(), FALSE)`
+		alias + `.released, ` + alias + `.rest_pending, COALESCE(` + alias + `.delete_after > clock_timestamp(), FALSE), ` +
+		alias + `.forge_credential`
 }
 
 // handoffEventParticipantKind marks the tenant schema's system participant
@@ -1388,4 +1398,34 @@ func writeCloudRegenerateRewind(ctx context.Context, tx pgx.Tx, projectID int64,
 		return fmt.Errorf("mark the regenerated answer's rewind: %w", err)
 	}
 	return nil
+}
+
+// SetForgeCredential stores (or, with nil, clears) the owner's pull-request
+// credential reference (shared/0179). The row must be the owner's, not LOCAL
+// and not erased; the service has checked that, and the WHERE re-checks it,
+// so a racing take back or erase leaves nothing behind.
+func (r *WorkspaceHandoffsRepository) SetForgeCredential(ctx context.Context, thread workspacehandoff.Thread,
+	ownerUserID int64, credential *workspacehandoff.ForgeCredential) (workspacehandoff.Handoff, error) {
+	var value *string
+	if credential != nil {
+		encoded, err := json.Marshal(credential)
+		if err != nil {
+			return workspacehandoff.Handoff{}, fmt.Errorf("workspace handoff: encode forge credential: %w", err)
+		}
+		text := string(encoded)
+		value = &text
+	}
+	row, err := scanHandoff(r.pool.QueryRow(ctx, `
+UPDATE elitea_runtime.workspace_handoffs
+SET forge_credential = $4::jsonb, updated_at = clock_timestamp()
+WHERE project_id = $1 AND conversation_uuid = $2::uuid AND owner_user_id = $3
+  AND state <> 'LOCAL' AND deleted_at IS NULL
+RETURNING `+handoffColumns, thread.ProjectID, thread.ConversationUUID, ownerUserID, value))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return workspacehandoff.Handoff{}, workspacehandoff.ErrNotFound
+	}
+	if err != nil {
+		return workspacehandoff.Handoff{}, fmt.Errorf("workspace handoff: set forge credential: %w", err)
+	}
+	return row.Handoff, nil
 }

@@ -10,6 +10,7 @@ import (
 
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
@@ -20,6 +21,7 @@ import (
 func TestPostgresServiceBackedIndexIngestAdmission(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	policy := IndexIngestDispatchPolicy{
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "elitea:runtime:index:commands",
 		CapabilityVersion: "1",
 		ResourceClass:     "indexing",
@@ -245,6 +247,7 @@ WHERE execution_id = $1`, created.ExecutionID); err == nil {
 func TestPostgresIndexIngestSameTargetAdmissionExclusion(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	policy := IndexIngestDispatchPolicy{
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "elitea:runtime:index:commands",
 		CapabilityVersion: "1",
 		ResourceClass:     "indexing",
@@ -312,6 +315,7 @@ WHERE toolkit_id = 19
 func TestPostgresConcurrentSameTargetReturnsExactWinner(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	policy := IndexIngestDispatchPolicy{
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "elitea:runtime:index:commands",
 		CapabilityVersion: "1",
 		ResourceClass:     "indexing",
@@ -398,6 +402,7 @@ WHERE j.resource_project_id = 1
 func TestPostgresIndexMetaInitializationRejectsCancelledAdmission(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	policy := IndexIngestDispatchPolicy{
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "elitea:runtime:index:commands",
 		CapabilityVersion: "1",
 		ResourceClass:     "indexing",

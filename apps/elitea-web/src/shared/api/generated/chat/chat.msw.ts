@@ -89,6 +89,7 @@ import type {
   WorkspaceHandoffEmpty,
   WorkspaceHandoffErased,
   WorkspaceHandoffPolicy,
+  WorkspaceHandoffPullRequestCredential,
   WorkspaceHandoffReclaimPending,
   WorkspaceHandoffReclaimed,
   WorkspaceHandoffReleased,
@@ -1181,6 +1182,9 @@ export const getGetWorkspaceHandoffPolicyResponseMock = (
     project_workspace_bytes_left: faker.number.int(),
   },
   env_limits: { max_vars: faker.number.int(), max_bytes: faker.number.int() },
+  pull_requests: faker.datatype.boolean(),
+  pull_request_approval: faker.datatype.boolean(),
+  pull_request_credentials: faker.datatype.boolean(),
   ...overrideResponse,
 });
 
@@ -1288,6 +1292,17 @@ export const getGetWorkspaceHandoffResponseMock = (
     undefined,
   ]),
   workspace_bytes: faker.helpers.arrayElement([faker.number.int(), undefined]),
+  pull_request_credential: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        type: faker.helpers.arrayElement(["github", "gitlab"] as const),
+        elitea_title: faker.string.alpha({ length: { min: 1, max: 256 } }),
+        private: faker.datatype.boolean(),
+      },
+      null,
+    ]),
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -1332,6 +1347,22 @@ export const getReclaimWorkspaceHandoffResponseMock = (
 export const getRequestWorkspaceHandoffReclaimResponseMock = (
   overrideResponse: Partial<Extract<WorkspaceHandoffEmpty, object>> = {},
 ): WorkspaceHandoffEmpty => ({ ...overrideResponse });
+
+export const getSetWorkspaceHandoffPullRequestCredentialResponseMock = (
+  overrideResponse: Partial<
+    Extract<WorkspaceHandoffPullRequestCredential, object>
+  > = {},
+): WorkspaceHandoffPullRequestCredential => ({
+  pull_request_credential: faker.helpers.arrayElement([
+    {
+      type: faker.helpers.arrayElement(["github", "gitlab"] as const),
+      elitea_title: faker.string.alpha({ length: { min: 1, max: 256 } }),
+      private: faker.datatype.boolean(),
+    },
+    null,
+  ]),
+  ...overrideResponse,
+});
 
 export const getReleaseWorkspaceHandoffResponseMock =
   (): WorkspaceHandoffReleased => ({
@@ -3143,6 +3174,34 @@ export const getRequestWorkspaceHandoffReclaimMockHandler = (
   );
 };
 
+export const getSetWorkspaceHandoffPullRequestCredentialMockHandler = (
+  overrideResponse?:
+    | WorkspaceHandoffPullRequestCredential
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) =>
+        | Promise<WorkspaceHandoffPullRequestCredential>
+        | WorkspaceHandoffPullRequestCredential),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/workspace_handoff_pull_request_credential/prompt_lib/:projectId/:conversationUuid",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetWorkspaceHandoffPullRequestCredentialResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getReleaseWorkspaceHandoffMockHandler = (
   overrideResponse?:
     | WorkspaceHandoffReleased
@@ -4093,6 +4152,7 @@ export const getChatMock = () => [
   getCompleteWorkspaceHandoffMockHandler(),
   getReclaimWorkspaceHandoffMockHandler(),
   getRequestWorkspaceHandoffReclaimMockHandler(),
+  getSetWorkspaceHandoffPullRequestCredentialMockHandler(),
   getReleaseWorkspaceHandoffMockHandler(),
   getGetWorkspaceHandoffChangesMockHandler(),
   getGetWorkspaceHandoffDiffMockHandler(),

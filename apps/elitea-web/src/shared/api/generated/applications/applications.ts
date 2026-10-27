@@ -55,6 +55,7 @@ import type {
 
 import type {
   AgentCategoriesResponse,
+  AgentSchemaResponse,
   ApplicationCreateRequest,
   ApplicationCreatedResponse,
   ApplicationDetail,
@@ -76,6 +77,7 @@ import type {
   DeleteApplicationVersionParams,
   DesktopOperationError,
   DocumentLoadersResponse,
+  DraftRefusedResponse,
   ErrorResponse,
   EvalDataset,
   EvalDatasetCase,
@@ -94,6 +96,7 @@ import type {
   ForkRequest,
   ForkResponse,
   GenerateApplicationDraftRequest,
+  GenerateApplicationDraftStreamRequest,
   GetApplicationIconsParams,
   GetEvalDatasetParams,
   GetEvalScorecardParams,
@@ -4358,7 +4361,7 @@ export type generateApplicationDraftResponse413 = {
 };
 
 export type generateApplicationDraftResponse422 = {
-  data: ErrorResponse;
+  data: DraftRefusedResponse;
   status: 422;
 };
 
@@ -4469,6 +4472,7 @@ export const getGenerateApplicationDraftQueryOptions = <
     | N401Response
     | N403Response
     | ErrorResponse
+    | DraftRefusedResponse
     | PredictLLMUnavailableResponse,
 >(
   projectId: string,
@@ -4521,6 +4525,7 @@ export type GenerateApplicationDraftQueryError =
   | N401Response
   | N403Response
   | ErrorResponse
+  | DraftRefusedResponse
   | PredictLLMUnavailableResponse;
 
 export function useGenerateApplicationDraft<
@@ -4530,6 +4535,7 @@ export function useGenerateApplicationDraft<
     | N401Response
     | N403Response
     | ErrorResponse
+    | DraftRefusedResponse
     | PredictLLMUnavailableResponse,
 >(
   projectId: string,
@@ -4563,6 +4569,7 @@ export function useGenerateApplicationDraft<
     | N401Response
     | N403Response
     | ErrorResponse
+    | DraftRefusedResponse
     | PredictLLMUnavailableResponse,
 >(
   projectId: string,
@@ -4596,6 +4603,7 @@ export function useGenerateApplicationDraft<
     | N401Response
     | N403Response
     | ErrorResponse
+    | DraftRefusedResponse
     | PredictLLMUnavailableResponse,
 >(
   projectId: string,
@@ -4625,6 +4633,7 @@ export function useGenerateApplicationDraft<
     | N401Response
     | N403Response
     | ErrorResponse
+    | DraftRefusedResponse
     | PredictLLMUnavailableResponse,
 >(
   projectId: string,
@@ -4648,6 +4657,594 @@ export function useGenerateApplicationDraft<
     generateApplicationDraftRequest,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type generateApplicationDraftStreamResponse200 = {
+  data: string;
+  status: 200;
+};
+
+export type generateApplicationDraftStreamResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type generateApplicationDraftStreamResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type generateApplicationDraftStreamResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type generateApplicationDraftStreamResponse413 = {
+  data: ErrorResponse;
+  status: 413;
+};
+
+export type generateApplicationDraftStreamResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type generateApplicationDraftStreamResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type generateApplicationDraftStreamResponse503 = {
+  data: PredictLLMUnavailableResponse;
+  status: 503;
+};
+
+export type generateApplicationDraftStreamResponseSuccess =
+  generateApplicationDraftStreamResponse200 & {
+    headers: Headers;
+  };
+export type generateApplicationDraftStreamResponseError = (
+  | generateApplicationDraftStreamResponse400
+  | generateApplicationDraftStreamResponse401
+  | generateApplicationDraftStreamResponse403
+  | generateApplicationDraftStreamResponse413
+  | generateApplicationDraftStreamResponse426
+  | generateApplicationDraftStreamResponse500
+  | generateApplicationDraftStreamResponse503
+) & {
+  headers: Headers;
+};
+
+export type generateApplicationDraftStreamResponse =
+  | generateApplicationDraftStreamResponseSuccess
+  | generateApplicationDraftStreamResponseError;
+
+export const getGenerateApplicationDraftStreamUrl = (projectId: string) => {
+  return `/elitea_core/generate_application_draft_stream/prompt_lib/${projectId}`;
+};
+
+/**
+ * Client contract 1.28 (ADR-0037 decision 4). The streaming twin of
+ * generateApplicationDraft: one gateway completion per call, through
+ * the same gRPC-over-mTLS hop (`GatewayService.ChatCompletions`,
+ * server-streaming), billed to the caller against the project budget
+ * like `predict_llm`. Nothing is saved: the client reviews the draft
+ * and saves it through createApplication.
+ *
+ * `conversation_history` carries the builder conversation so far and
+ * `current_draft` the draft being improved, so a person can refine a
+ * draft over several turns. Gated on
+ * `models.applications.applications.create`, as the one-shot route.
+ *
+ * FAILURES BEFORE THE STREAM OPENS answer a plain JSON status: 400 an
+ * unusable body, 503 no LLM gateway configured. The stream then opens
+ * at once, before the gateway answers, so the keepalive can hold the
+ * connection while a reasoning model thinks. From then on the status
+ * is 200 and a failure is the last frame, `draft.error`, whose
+ * `status` is what the one-shot route answers for the same failure
+ * (502 the gateway hop failed, 422 an unusable draft).
+ *
+ * FRAMES (`event:`, each `data` one JSON object):
+ * `draft.token` (DraftStreamToken: a model text delta, for display
+ * only — it is the raw JSON the model writes), `draft.complete`
+ * (ApplicationDraft: the full draft, truncated to the caps and
+ * validated against AgentDefinition exactly as the one-shot route
+ * does, then the stream ends), `draft.error` (DraftStreamError, then
+ * the stream ends). Comment lines (`: keepalive`) keep an idle
+ * connection open while the model thinks. A client must ignore an
+ * unknown event type.
+ * @summary Draft an agent conversationally, streamed as Server-Sent Events
+ */
+export const generateApplicationDraftStream = async (
+  projectId: string,
+  generateApplicationDraftStreamRequest: GenerateApplicationDraftStreamRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<generateApplicationDraftStreamResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<generateApplicationDraftStreamResponse>(
+    getGenerateApplicationDraftStreamUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(generateApplicationDraftStreamRequest),
+    },
+  );
+};
+
+export const getGenerateApplicationDraftStreamQueryKey = (
+  projectId: string,
+  generateApplicationDraftStreamRequest?: GenerateApplicationDraftStreamRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/generate_application_draft_stream/prompt_lib/${projectId}`,
+    generateApplicationDraftStreamRequest,
+  ] as const;
+};
+
+export const getGenerateApplicationDraftStreamQueryOptions = <
+  TData = Awaited<ReturnType<typeof generateApplicationDraftStream>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateApplicationDraftStreamRequest: GenerateApplicationDraftStreamRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateApplicationDraftStream>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGenerateApplicationDraftStreamQueryKey(
+      projectId,
+      generateApplicationDraftStreamRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof generateApplicationDraftStream>>
+  > = ({ signal }) =>
+    generateApplicationDraftStream(
+      projectId,
+      generateApplicationDraftStreamRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof generateApplicationDraftStream>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GenerateApplicationDraftStreamQueryResult = NonNullable<
+  Awaited<ReturnType<typeof generateApplicationDraftStream>>
+>;
+export type GenerateApplicationDraftStreamQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | ErrorResponse
+  | ClientUpgradeRequiredResponse
+  | N500Response
+  | PredictLLMUnavailableResponse;
+
+export function useGenerateApplicationDraftStream<
+  TData = Awaited<ReturnType<typeof generateApplicationDraftStream>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateApplicationDraftStreamRequest: GenerateApplicationDraftStreamRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateApplicationDraftStream>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof generateApplicationDraftStream>>,
+          TError,
+          Awaited<ReturnType<typeof generateApplicationDraftStream>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGenerateApplicationDraftStream<
+  TData = Awaited<ReturnType<typeof generateApplicationDraftStream>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateApplicationDraftStreamRequest: GenerateApplicationDraftStreamRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateApplicationDraftStream>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof generateApplicationDraftStream>>,
+          TError,
+          Awaited<ReturnType<typeof generateApplicationDraftStream>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGenerateApplicationDraftStream<
+  TData = Awaited<ReturnType<typeof generateApplicationDraftStream>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateApplicationDraftStreamRequest: GenerateApplicationDraftStreamRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateApplicationDraftStream>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Draft an agent conversationally, streamed as Server-Sent Events
+ */
+
+export function useGenerateApplicationDraftStream<
+  TData = Awaited<ReturnType<typeof generateApplicationDraftStream>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response
+    | PredictLLMUnavailableResponse,
+>(
+  projectId: string,
+  generateApplicationDraftStreamRequest: GenerateApplicationDraftStreamRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateApplicationDraftStream>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGenerateApplicationDraftStreamQueryOptions(
+    projectId,
+    generateApplicationDraftStreamRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getAgentSchemaResponse200 = {
+  data: AgentSchemaResponse;
+  status: 200;
+};
+
+export type getAgentSchemaResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type getAgentSchemaResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getAgentSchemaResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getAgentSchemaResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type getAgentSchemaResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getAgentSchemaResponseSuccess = getAgentSchemaResponse200 & {
+  headers: Headers;
+};
+export type getAgentSchemaResponseError = (
+  | getAgentSchemaResponse400
+  | getAgentSchemaResponse401
+  | getAgentSchemaResponse403
+  | getAgentSchemaResponse426
+  | getAgentSchemaResponse500
+) & {
+  headers: Headers;
+};
+
+export type getAgentSchemaResponse =
+  getAgentSchemaResponseSuccess | getAgentSchemaResponseError;
+
+export const getGetAgentSchemaUrl = (projectId: string) => {
+  return `/elitea_core/agent_schema/prompt_lib/${projectId}`;
+};
+
+/**
+ * Client contract 1.28 (ADR-0037 decision 5). The AgentDefinition and
+ * LocalAgentDefinition components of this contract, as JSON Schema, and
+ * a `schema_version` that changes exactly when one of them changes
+ * (also the strong `ETag`). Both draft routes validate their draft
+ * against this AgentDefinition before they answer. The route reads no
+ * tenant state: every authorized project gets the same body. Gated on
+ * `models.applications.applications.create`, the permission of the
+ * builders that use it.
+ * @summary The published agent schemas
+ */
+export const getAgentSchema = async (
+  projectId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAgentSchemaResponse> => {
+  return eliteaFetch<getAgentSchemaResponse>(getGetAgentSchemaUrl(projectId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetAgentSchemaQueryKey = (projectId: string) => {
+  return [`/elitea_core/agent_schema/prompt_lib/${projectId}`] as const;
+};
+
+export const getGetAgentSchemaQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAgentSchema>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentSchema>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAgentSchemaQueryKey(projectId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getAgentSchema>>> = ({
+    signal,
+  }) => getAgentSchema(projectId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAgentSchema>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAgentSchemaQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAgentSchema>>
+>;
+export type GetAgentSchemaQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useGetAgentSchema<
+  TData = Awaited<ReturnType<typeof getAgentSchema>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentSchema>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentSchema>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentSchema>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentSchema<
+  TData = Awaited<ReturnType<typeof getAgentSchema>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentSchema>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentSchema>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentSchema>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentSchema<
+  TData = Awaited<ReturnType<typeof getAgentSchema>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentSchema>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary The published agent schemas
+ */
+
+export function useGetAgentSchema<
+  TData = Awaited<ReturnType<typeof getAgentSchema>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentSchema>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAgentSchemaQueryOptions(projectId, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

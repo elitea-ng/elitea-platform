@@ -332,6 +332,18 @@
       ]
     },
     {
+      "id": "applications.generateAgentDraftStream",
+      "method": "POST",
+      "path": "/elitea_core/generate_application_draft_stream/prompt_lib/{project_id}",
+      "operationId": "generateApplicationDraftStream",
+      "source": "handwritten",
+      "responseSchema": null,
+      "fixture": null,
+      "usedBy": [
+        "features/agents"
+      ]
+    },
+    {
       "id": "applications.getAgentCategories",
       "method": "GET",
       "path": "/elitea_core/agent_categories/prompt_lib/{project_id}",
@@ -3372,6 +3384,26 @@
       "operationId": "getWorkspaceHandoffDiff",
       "source": "generated",
       "responseSchema": "WorkspaceHandoffDiff",
+      "fixture": null,
+      "usedBy": ["pages/chat"]
+    },
+    {
+      "id": "workspaceHandoff.setPullRequestCredential",
+      "method": "PUT",
+      "path": "/elitea_core/workspace_handoff_pull_request_credential/prompt_lib/{project_id}/{conversation_uuid}",
+      "operationId": "setWorkspaceHandoffPullRequestCredential",
+      "source": "generated",
+      "responseSchema": "WorkspaceHandoffPullRequestCredential",
+      "fixture": null,
+      "usedBy": ["pages/chat"]
+    },
+    {
+      "id": "configurations.listForPullRequests",
+      "method": "GET",
+      "path": "/configurations/configurations/{projectId}",
+      "operationId": "listConfigurations",
+      "source": "generated",
+      "responseSchema": "ConfigurationListResponse",
       "fixture": null,
       "usedBy": ["pages/chat"]
     }

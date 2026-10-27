@@ -40,11 +40,22 @@ export default function AppLayout() {
       <Stack.Screen name="workspaces" options={{ title: 'Workspaces', ...switcher }} />
       {/* Rename a chat (client contract 1.4): a sheet with Cancel and Save in its bar (§4.10). */}
       <Stack.Screen name="rename" options={{ title: 'Rename', ...sheetOptions(design, 'half') }} />
+      {/* A cloud thread's push and pull-request credential (client contract 1.29): choosing a row saves it. */}
+      <Stack.Screen name="pr-credential" options={{ title: 'Pushes and pull requests', ...switcher }} />
       {/* A modal always has a visible way out (audit 2.10): Cancel for VoiceOver and Switch Control. */}
       <Stack.Screen
         name="new"
         options={{
           title: 'New chat',
+          presentation: 'modal',
+          headerLeft: () => <Button title="Cancel" variant="plain" size="small" onPress={() => router.back()} />,
+        }}
+      />
+      {/* Create an agent (client contract 1.28), from New chat; Save opens a chat with it. */}
+      <Stack.Screen
+        name="agent-new"
+        options={{
+          title: 'New agent',
           presentation: 'modal',
           headerLeft: () => <Button title="Cancel" variant="plain" size="small" onPress={() => router.back()} />,
         }}

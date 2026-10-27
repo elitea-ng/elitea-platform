@@ -54,7 +54,7 @@ pub mod error;
 pub mod fault;
 pub mod memory;
 pub mod objects;
-mod pack;
+pub mod pack;
 pub mod refs;
 #[cfg(feature = "rest")]
 pub mod rest;

@@ -8,6 +8,14 @@
 #                              DeepWiki, conformance, visual) run
 #   reaches-model=true|false   the real-model lane runs
 #
+# A third line, reaches-handoff=true|false, says whether the pull request
+# touches what the desktop <-> cloud handoff journey (the `handoff-journey`
+# lane, ADR-0034) exercises: the desktop host's handoff code, the shared
+# crates it links, Main's handoff services and routes, and the lane's own
+# files. It is decided on EVERY changed path, desktop included, which the
+# stack lanes skip: a change to apps/elitea-desktop/src-tauri/src/handoff*.rs
+# must still reach the one lane that runs that code against a real Main.
+#
 # ── WHAT IS SKIPPED, AND WHY EACH IS SAFE ───────────────────────────────────
 #
 # Measured 2026-10-20: Web E2E ran on 97% of pull-request SHAs, because its
@@ -51,6 +59,23 @@ SKIP_TREE='^(deploy/helm/|apps/elitea-desktop/)'
 MD_PROSE='^([^/]+|docs/.+|\.github/.+)\.md$'
 COMPOSE_DIR="${COMPOSE_DIR:-deploy}"
 
+# What the handoff journey runs, in the desktop and in Main. Keep it a
+# superset of the files the lane builds and runs from: the whole desktop host
+# crate (not just handoff*.rs), every shared Rust crate it links, the stack
+# wrapper, compose files and image actions the lane brings up,
+# and Main's handoff packages. It is only ever too wide, never too narrow, because a miss is a lane that stops gating.
+HANDOFF='^('\
+'apps/elitea-desktop/src-tauri/|'\
+'libs/(rust|proto)/|rust-toolchain\.toml$|scripts/ci/assert-rust-toolchain\.sh$|'\
+'apps/elitea-web/scripts/lib/compose-detect\.sh$|'\
+'deploy/(scripts/(standalone-stack|handoff-live)\.sh|scripts/lib/|docker-compose\.(standalone-full|standalone-rust-agent|handoff-live)\.yml)|'\
+'\.github/(actions/(stack-images|build-stack-images|pull-stack-images)/|workflows/ci-web-e2e\.yml)|'\
+'scripts/ci/(e2e-lane-filter|stack-images)|'\
+'services/elitea-main/(cmd/handoff-live-cloudturn/|migrations/|'\
+'internal/(application/(workspacehandoff|workspacestore|workspacechanges|workspaceruntime|workspaceexecutor|nativeauth)/|'\
+'api/v2/workspacehandoff|nativeauth|transport/runtimegrpc/workspace|platformconfig/|infra/db/repos/workspace_))'\
+')'
+
 # Every deploy/helm path a compose file references, as a repository path.
 # A compose file names it relative to deploy/ (`./helm/...`).
 helm_used=()
@@ -72,9 +97,11 @@ MODEL='^(services/elitea-llm-gateway/|services/elitea-worker-rust/|libs/rust/llm
 
 total=0
 reaching=()
+handoff=false
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   total=$((total + 1))
+  if [[ "$f" =~ $HANDOFF ]]; then handoff=true; fi
   if [[ "$f" =~ $SKIP_TREE ]] && ! used_by_compose "$f"; then
     continue
   fi
@@ -88,6 +115,7 @@ if [ "$total" -eq 0 ]; then
   echo "::warning::no changed path was read; every lane runs" >&2
   echo "reaches-stack=true"
   echo "reaches-model=true"
+  echo "reaches-handoff=true"
   exit 0
 fi
 
@@ -95,6 +123,7 @@ if [ "${#reaching[@]}" -eq 0 ]; then
   echo "all ${total} changed path(s) are outside the stack (docs, desktop, helm): stack lanes skipped" >&2
   echo "reaches-stack=false"
   echo "reaches-model=false"
+  echo "reaches-handoff=${handoff}"
   exit 0
 fi
 
@@ -109,3 +138,4 @@ else
   echo "no model-path file changed; the real-model lane is skipped" >&2
   echo "reaches-model=false"
 fi
+echo "reaches-handoff=${handoff}"

@@ -158,6 +158,53 @@ impl SensitiveToolCatalog {
         Ok(self)
     }
 
+    /// Add the cloud executor's `open_pull_request` and `git_push` (ADR-0034
+    /// decision 10, amendment 2026-10-26) as name-wide confirmations: every
+    /// call is a HITL interrupt, and an approved call that an earlier
+    /// continuation dispatched without a recorded outcome is never run again
+    /// (a second branch or pull request), like any other writing tool.
+    ///
+    /// # Errors
+    ///
+    /// Another tool already has either name (as for the workspace command).
+    pub(crate) fn with_workspace_pull_request(mut self) -> Result<Self, NativeAgentAssemblyError> {
+        use elitea_agent_runtime::toolkits::workspace_pull_request::{GIT_PUSH, OPEN_PULL_REQUEST};
+        const TOOLKIT: &str = "workspace";
+        let tools = [
+            (
+                OPEN_PULL_REQUEST,
+                SensitiveToolPolicy::workspace_pull_request(),
+            ),
+            (GIT_PUSH, SensitiveToolPolicy::workspace_git_push()),
+        ];
+        for (tool, _) in &tools {
+            let identity = SensitiveToolIdentity {
+                toolkit_name: TOOLKIT.into(),
+                tool_name: (*tool).into(),
+            };
+            if self.scoped_entries.contains_key(&identity)
+                || self.provider_entries.contains_key(*tool)
+                || self.other_provider_names.contains(*tool)
+            {
+                return Err(invalid_configuration());
+            }
+        }
+        for (tool, policy) in tools {
+            let entry = SensitiveToolEntry {
+                policy,
+                read_only: false,
+                conditional: false,
+            };
+            let identity = SensitiveToolIdentity {
+                toolkit_name: TOOLKIT.into(),
+                tool_name: tool.into(),
+            };
+            self.scoped_entries.insert(identity, entry.clone());
+            self.provider_entries.insert(tool.into(), entry);
+        }
+        Ok(self)
+    }
+
     #[must_use]
     pub(crate) fn policy_for(&self, tool_name: &str) -> Option<&SensitiveToolPolicy> {
         self.provider_entries
@@ -697,6 +744,50 @@ mod tests {
             SensitiveToolCatalog::default()
                 .with_other_tool("kit", "run_command", false)
                 .with_workspace_command()
+                .is_err()
+        );
+    }
+
+    /// ADR-0034 decision 10 (amended 2026-10-26): `open_pull_request` is
+    /// confirmed on every call, never re-run after a dispatch, and never
+    /// takes over another tool's name.
+    #[test]
+    fn the_cloud_pull_request_is_confirmed_on_every_call() {
+        let catalog = SensitiveToolCatalog::default()
+            .with_workspace_command()
+            .expect("workspace command")
+            .with_workspace_pull_request()
+            .expect("pull request");
+        assert!(catalog.tool_names().any(|name| name == "open_pull_request"));
+        assert!(
+            !catalog.tool_names().any(|name| name == "run_command"),
+            "the command stays conditional"
+        );
+        assert_eq!(
+            catalog.reruns_after_dispatch("open_pull_request"),
+            Some(false)
+        );
+        let policy = catalog.policy_for("open_pull_request").expect("policy");
+        assert_eq!(policy.action_name(), "open_pull_request");
+        assert_eq!(catalog.reruns_after_dispatch("git_push"), Some(false));
+        assert_eq!(
+            catalog
+                .policy_for("git_push")
+                .expect("policy")
+                .action_name(),
+            "git_push"
+        );
+        assert!(catalog.with_workspace_pull_request().is_err());
+        assert!(
+            SensitiveToolCatalog::default()
+                .with_other_tool("kit", "git_push", false)
+                .with_workspace_pull_request()
+                .is_err()
+        );
+        assert!(
+            SensitiveToolCatalog::default()
+                .with_other_tool("kit", "open_pull_request", false)
+                .with_workspace_pull_request()
                 .is_err()
         );
     }
