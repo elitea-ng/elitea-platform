@@ -870,6 +870,59 @@ func TestFetchAndAckUnderTheLiveClaim(t *testing.T) {
 	}
 }
 
+// The ledger authority accepts the live ordinary claim, first or reclaimed with
+// model-checkpoint recovery (the production reclaim of a fan-out run), and
+// refuses node recovery claims in either desired state and a foreign
+// projection, for fetch and ACK alike (contract section 7).
+func TestTheLedgerAcceptsAnOrdinaryClaimFirstOrModelCheckpointReclaimed(t *testing.T) {
+	h := newInterruptHarness(t)
+	response := h.newResponse()
+	fence := h.bindLiveClaim(response)
+	key := h.raise(response, "fanout-interrupt-card-v1.json")
+	if _, err := h.decide(interruptOwner, response, key, "reclaim", "approve", ""); err != nil {
+		t.Fatal(err)
+	}
+	restore := func() {
+		h.exec(`UPDATE elitea_runtime.execution_claims SET recovery_mode = 'NONE', model_checkpoint_digest = NULL WHERE claim_id = $1`, fence.ClaimID)
+		h.exec(`UPDATE elitea_runtime.execution_jobs SET desired_state = 'RUNNING', projection_project_id = 1 WHERE execution_id = $1`, fence.ExecutionID)
+	}
+	for _, mode := range []string{"NONE", "AGENT_MODEL_CHECKPOINT"} {
+		h.exec(`UPDATE elitea_runtime.execution_claims SET recovery_mode = $2 WHERE claim_id = $1`, fence.ClaimID, mode)
+		fetch, err := h.repo.FetchDecided(t.Context(), fence)
+		if err != nil || len(fetch.Decisions) != 1 {
+			t.Fatalf("%s fetch = %+v %v", mode, fetch, err)
+		}
+		restore()
+	}
+	for name, statement := range map[string]string{
+		"node recovery claim, running":   `UPDATE elitea_runtime.execution_claims SET recovery_mode = 'NODE_RECOVERY' WHERE claim_id = $1`,
+		"node recovery claim, suspended": `WITH c AS (UPDATE elitea_runtime.execution_claims SET recovery_mode = 'NODE_RECOVERY' WHERE claim_id = $1 RETURNING execution_id) UPDATE elitea_runtime.execution_jobs j SET desired_state = 'SUSPENDED' FROM c WHERE j.execution_id = c.execution_id`,
+		"model checkpoint, suspended":    `WITH c AS (UPDATE elitea_runtime.execution_claims SET recovery_mode = 'AGENT_MODEL_CHECKPOINT' WHERE claim_id = $1 RETURNING execution_id) UPDATE elitea_runtime.execution_jobs j SET desired_state = 'SUSPENDED' FROM c WHERE j.execution_id = c.execution_id`,
+		"foreign projection":             `UPDATE elitea_runtime.execution_jobs SET projection_project_id = 2 WHERE execution_id = (SELECT execution_id FROM elitea_runtime.execution_claims WHERE claim_id = $1)`,
+	} {
+		h.exec(statement, fence.ClaimID)
+		if _, err := h.repo.FetchDecided(t.Context(), fence); !errors.Is(err, domain.ErrStaleFence) {
+			t.Errorf("%s fetch: %v", name, err)
+		}
+		restore()
+	}
+	// A model-checkpoint reclaim applies the decision: its ACK is accepted.
+	h.exec(`UPDATE elitea_runtime.execution_claims SET recovery_mode = 'AGENT_MODEL_CHECKPOINT' WHERE claim_id = $1`, fence.ClaimID)
+	fetch, err := h.repo.FetchDecided(t.Context(), fence)
+	if err != nil || len(fetch.Decisions) != 1 {
+		t.Fatalf("reclaimed fetch = %+v %v", fetch, err)
+	}
+	checkpoint := "ckpt-reclaim"
+	result, err := h.ack(fence, domain.Ack{InterruptKey: key, RequestID: fetch.Decisions[0].RequestID, Revision: fetch.Decisions[0].Revision,
+		DecisionSHA256: fetch.Decisions[0].DecisionSHA256, Outcome: domain.AckApplied, ChildCheckpointID: &checkpoint})
+	if err != nil {
+		t.Fatalf("reclaimed ack = %+v %v", result, err)
+	}
+	if state := h.row(response, key).state; state != "CONSUMED" {
+		t.Fatalf("state after the reclaimed ack = %s", state)
+	}
+}
+
 func TestFetchAndAckRefuseStaleFences(t *testing.T) {
 	h := newInterruptHarness(t)
 	response := h.newResponse()

@@ -279,7 +279,9 @@ Same transport as node recovery control (`libs/proto/contracts/node-recovery-v1.
 mTLS HTTPS content listener, the verified workload certificate, `X-Elitea-Claim-Id` and `X-Elitea-Fence` (32 bytes,
 base64 RawURL, no padding). Main rechecks the current live claim and session, the immutable manifest, the original
 actor's permissions, the deadline and "no terminal result" under the job lock, and repeats the authority lookup with
-the DB clock after taking the lock. The claim must be an ordinary `RUNNING` claim; a `NODE_RECOVERY` claim is refused.
+the DB clock after taking the lock. The claim must be an ordinary `RUNNING` claim: the first claim (`NONE`) or a
+reclaim with model-checkpoint recovery (`AGENT_MODEL_CHECKPOINT`, how production reclaims a run after process loss); a
+`NODE_RECOVERY` claim is refused.
 One bounded attempt per call, no redirects, no automatic network retry.
 
 ```
@@ -347,7 +349,7 @@ a conflicting replay is 409.
 
 - The claim authority is **one shared query** for node recovery control and the ledger (FU-063), parameterised by the
   claim's recovery mode: node recovery accepts only `NODE_RECOVERY` claims with desired state `SUSPENDED` or
-  `RUNNING`; the ledger accepts only `NONE` (ordinary) claims with desired state `RUNNING`. It runs twice under the job
+  `RUNNING`; the ledger accepts only ordinary claims (`NONE` or `AGENT_MODEL_CHECKPOINT`) with desired state `RUNNING`. It runs twice under the job
   lock so the second evaluation uses the database clock after the locks are held.
 
 ## 8. Park and wake

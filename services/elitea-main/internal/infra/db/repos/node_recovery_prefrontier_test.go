@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -185,7 +186,7 @@ func TestNodeRecoveryPreFrontierModePromotionRechecksFullFenceAndKeepsDigest(t *
 }
 
 func TestNodeRecoveryPreFrontierPrivateControlRequiresNodeMode(t *testing.T) {
-	if nodeRecoveryClaimMode.recoveryMode != "NODE_RECOVERY" || !strings.Contains(agentClaimAuthoritySQL, "c.recovery_mode = $6") {
+	if !slices.Equal(nodeRecoveryClaimMode.recoveryModes, []string{"NODE_RECOVERY"}) || !strings.Contains(agentClaimAuthoritySQL, "c.recovery_mode = ANY($6::text[])") {
 		t.Fatal("inspection claim can use historical node control")
 	}
 	claim := recoveryClaim()

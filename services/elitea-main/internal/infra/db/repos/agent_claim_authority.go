@@ -13,17 +13,19 @@ import (
 // lock the same rows with the same lease, session, deadline, manifest and
 // terminal predicates.
 type agentClaimMode struct {
-	recoveryMode  string
+	recoveryModes []string
 	desiredStates []string
 }
 
 var (
 	// nodeRecoveryClaimMode: a NODE_RECOVERY claim of a job suspended for
 	// recovery (or resumed, while it reconciles).
-	nodeRecoveryClaimMode = agentClaimMode{recoveryMode: "NODE_RECOVERY", desiredStates: []string{"SUSPENDED", "RUNNING"}}
-	// interruptClaimMode: an ordinary RUNNING claim; a NODE_RECOVERY claim is
-	// refused (fanout-interrupt-decisions-v1.md section 7).
-	interruptClaimMode = agentClaimMode{recoveryMode: "NONE", desiredStates: []string{"RUNNING"}}
+	nodeRecoveryClaimMode = agentClaimMode{recoveryModes: []string{"NODE_RECOVERY"}, desiredStates: []string{"SUSPENDED", "RUNNING"}}
+	// interruptClaimMode: an ordinary RUNNING claim, first or reclaimed with
+	// model-checkpoint recovery (the production reclaim label of the same
+	// ordinary claim); a NODE_RECOVERY claim is refused
+	// (fanout-interrupt-decisions-v1.md section 7).
+	interruptClaimMode = agentClaimMode{recoveryModes: []string{"NONE", "AGENT_MODEL_CHECKPOINT"}, desiredStates: []string{"RUNNING"}}
 )
 
 // agentClaimScope is what the authority returns: the execution's resource
@@ -39,7 +41,7 @@ type agentClaimScope struct {
 }
 
 // agentClaimAuthoritySQL is the one live-claim authority of the private agent
-// routes. $6 is the claim's recovery mode and $7 the accepted desired states.
+// routes. $6 is the accepted claim recovery modes and $7 the accepted desired states.
 const agentClaimAuthoritySQL = `
 SELECT j.resource_project_id, j.actor_id::bigint, binding.client_message_id, j.desired_state, j.input_bundle_id, bundle.manifest_digest
 FROM elitea_runtime.execution_jobs j
@@ -50,7 +52,7 @@ JOIN elitea_runtime.command_outbox command USING (execution_id, generation)
 JOIN elitea_runtime.agent_execution_jobs binding USING (execution_id, generation)
 JOIN elitea_runtime.input_bundles bundle ON bundle.input_bundle_id = j.input_bundle_id
 WHERE c.claim_id = $1 AND c.execution_id = $2 AND c.generation = $3 AND c.workload_identity = $4 AND c.fence_token = $5
- AND c.released_at IS NULL AND c.lease_expires_at > clock_timestamp() AND c.recovery_mode = $6
+ AND c.released_at IS NULL AND c.lease_expires_at > clock_timestamp() AND c.recovery_mode = ANY($6::text[])
  AND ws.issued_at <= clock_timestamp() AND ws.expires_at > clock_timestamp() AND ws.revoked_at IS NULL
  AND j.state = 'RUNNING' AND j.desired_state = ANY($7::text[])
  AND j.tenant_id = j.resource_project_id::text AND j.projection_project_id = j.resource_project_id
@@ -73,7 +75,7 @@ var errAgentClaimRefused = errors.New("agent claim is not the live claim")
 func lockAgentClaim(ctx context.Context, tx sqlExecutor, mode agentClaimMode, claimID, executionID string, generation int64, workloadIdentity string, fence []byte) (agentClaimScope, error) {
 	var scope agentClaimScope
 	for range 2 {
-		err := tx.QueryRow(ctx, agentClaimAuthoritySQL, claimID, executionID, generation, workloadIdentity, fence, mode.recoveryMode, mode.desiredStates).
+		err := tx.QueryRow(ctx, agentClaimAuthoritySQL, claimID, executionID, generation, workloadIdentity, fence, mode.recoveryModes, mode.desiredStates).
 			Scan(&scope.projectID, &scope.actorID, &scope.responseID, &scope.desired, &scope.bundleID, &scope.manifestDigest)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return agentClaimScope{}, errAgentClaimRefused
