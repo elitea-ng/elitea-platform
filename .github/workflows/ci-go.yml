@@ -265,6 +265,23 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
+      # Backs ELITEA_TEST_NATS_URL below: elitea-main's live-update plane
+      # (internal/api/v2/canvaspresence's JetStream KV store and the boot
+      # path in cmd/elitea-main). The -alpine tag because the plain image is
+      # scratch, with no shell for a health command; its entrypoint passes
+      # flag arguments to nats-server. The undeclared-skip gate fails the run
+      # if those tests skip, so losing this container cannot read as green.
+      nats:
+        image: nats:2.12.0-alpine
+        command: -js -m 8222
+        ports:
+          - 4222:4222
+          - 8222:8222
+        options: >-
+          --health-cmd="wget -qO- 'http://127.0.0.1:8222/healthz?js-enabled-only=true'"
+          --health-interval=2s
+          --health-timeout=2s
+          --health-retries=30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -342,35 +359,6 @@ jobs:
       - name: Start storage emulators
         run: docker compose -f deploy/docker-compose.storage-test.yml up -d --wait
 
-      # Backs ELITEA_TEST_NATS_URL below: elitea-main's live-update plane
-      # (internal/api/v2/canvaspresence's JetStream KV store and the boot
-      # path in cmd/elitea-main). A step rather than a `services:` entry
-      # because JetStream needs the `-js` argument and a service container
-      # cannot take one. The undeclared-skip gate fails the run if those
-      # tests skip, so losing this container cannot read as green.
-      - name: Start NATS (JetStream)
-        run: |
-          set -euo pipefail
-          docker run -d --name ci-nats -p 4222:4222 -p 8222:8222 nats:2.12.0 -js -m 8222
-          for _ in $(seq 1 30); do
-            if curl -fsS "http://127.0.0.1:8222/healthz?js-enabled-only=true" >/dev/null; then
-              # The same server binary, out of the container, for the
-              # restart test (TestNATSStoreFollowsTheBucketAcrossAServerRestart
-              # stops and starts its own server). Its path is read from the
-              # image's entrypoint, not assumed. The image is scratch, so
-              # nothing can run a shell inside the container.
-              bin=$(docker inspect --format '{{index .Config.Entrypoint 0}}' nats:2.12.0)
-              test -n "$bin"
-              docker cp "ci-nats:${bin}" "${RUNNER_TEMP}/nats-server"
-              chmod +x "${RUNNER_TEMP}/nats-server"
-              "${RUNNER_TEMP}/nats-server" --version
-              exit 0
-            fi
-            sleep 1
-          done
-          docker logs ci-nats
-          exit 1
-
       # The secured NATS permission tests (#1076): libs/go/natsconn/natstest
       # starts nats-server on the nats.conf `helm template deploy/helm/elitea`
       # renders and runs elitea-main's and the scheduler's real NATS paths as
@@ -378,11 +366,23 @@ jobs:
       # renders that config (helm + the upstream subchart), fetches the pinned
       # nats CLI the bootstrap runs, and sets ELITEA_REQUIRE_NATS_SECURE_TEST,
       # so a missing piece fails those tests instead of skipping them. The
-      # plaintext ci-nats container above still backs the plaintext suites.
+      # nats service container still backs the plaintext suites.
       - name: Set up Helm
         uses: azure/setup-helm@v5
         with:
           version: v4.3.1
+
+      # The server binary out of the nats service container, so the restart
+      # test (TestNATSStoreFollowsTheBucketAcrossAServerRestart owns its
+      # server's process) and natstest run the same build as the service, on
+      # one pin. Set explicitly on both consumers below.
+      - name: Copy nats-server out of the nats service container
+        env:
+          NATS_CONTAINER: ${{ job.services.nats.id }}
+        run: |
+          set -euo pipefail
+          docker cp "${NATS_CONTAINER}:/usr/local/bin/nats-server" "${RUNNER_TEMP}/nats-server"
+          "${RUNNER_TEMP}/nats-server" --version
 
       - name: Provision the secured NATS permission tests
         env:
@@ -432,7 +432,7 @@ jobs:
           ELITEA_REQUIRE_LEGACY_RBAC_POSTGRES_TEST: "true"
           ELITEA_REQUIRE_PROMPT_CONTEXT_POSTGRES_TEST: "true"
 
-          # The NATS (JetStream) container started above.
+          # The nats service container, and its binary (copied above).
           ELITEA_TEST_NATS_URL: "nats://127.0.0.1:4222"
           ELITEA_TEST_NATS_SERVER_BIN: "${{ runner.temp }}/nats-server"
 
@@ -551,9 +551,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The Vault/OpenBao adapter's integration tests need a real KV v2 server.
-    # OpenBao dev mode with TLS, the same fixture as
-    # deploy/docker-compose.secretstore.yml; the test provisions its own
-    # mounts, JWT auth, policy and role through the root token.
+    # OpenBao dev mode with TLS, the same fixture (entrypoint, command, user)
+    # as deploy/docker-compose.secretstore.yml; the test provisions its own
+    # mounts, JWT auth, policy and role through the root token. The adapter
+    # refuses plain http, so the server needs -dev-tls. The entrypoint is
+    # bao itself: the image's script drops to the openbao user, which cannot
+    # write the root-owned host directory -dev-tls fills. vault-ca.pem comes
+    # out mode 0444, so the test reads it from the host. A service definition
+    # cannot read the runner context, so the directory is per run under /tmp
+    # instead of $RUNNER_TEMP.
+    services:
+      openbao:
+        image: quay.io/openbao/openbao:2.4.1
+        entrypoint: bao
+        command: >-
+          server -dev -dev-tls -dev-tls-cert-dir=/tls
+          -dev-listen-address=0.0.0.0:8200 -dev-root-token-id=elitea-secretstore-it-root
+        ports:
+          - 127.0.0.1:8210:8200
+        volumes:
+          - /tmp/openbao-tls-${{ github.run_id }}-${{ github.run_attempt }}:/tls
+        options: >-
+          --cap-add=IPC_LOCK
+          --health-cmd="bao status -address=https://127.0.0.1:8200 -ca-cert=/tls/vault-ca.pem"
+          --health-interval=2s
+          --health-timeout=2s
+          --health-retries=30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -567,28 +590,11 @@ jobs:
             services/elitea-main/go.sum
             libs/go/*/go.sum
             libs/proto/gen/go/go.sum
-      - name: Start OpenBao (dev mode, TLS)
-        run: |
-          mkdir -p "$RUNNER_TEMP/openbao-tls"
-          chmod 777 "$RUNNER_TEMP/openbao-tls"
-          docker run -d --name openbao --cap-add IPC_LOCK -p 127.0.0.1:8210:8200 \
-            -v "$RUNNER_TEMP/openbao-tls:/tls" quay.io/openbao/openbao:2.4.1 \
-            server -dev -dev-tls -dev-tls-cert-dir=/tls \
-            -dev-listen-address=0.0.0.0:8200 -dev-root-token-id=elitea-secretstore-it-root
-          for _ in $(seq 1 60); do
-            if [ -s "$RUNNER_TEMP/openbao-tls/vault-ca.pem" ] && \
-               curl -fsS --cacert "$RUNNER_TEMP/openbao-tls/vault-ca.pem" https://127.0.0.1:8210/v1/sys/health >/dev/null; then
-              exit 0
-            fi
-            sleep 1
-          done
-          docker logs openbao
-          exit 1
       - name: Run the OpenBao integration tests
         working-directory: services/elitea-main
         env:
           ELITEA_TEST_OPENBAO_ADDR: https://127.0.0.1:8210
-          ELITEA_TEST_OPENBAO_CA_FILE: ${{ runner.temp }}/openbao-tls/vault-ca.pem
+          ELITEA_TEST_OPENBAO_CA_FILE: /tmp/openbao-tls-${{ github.run_id }}-${{ github.run_attempt }}/vault-ca.pem
           ELITEA_TEST_OPENBAO_ROOT_TOKEN: elitea-secretstore-it-root
           ELITEA_REQUIRE_OPENBAO_TEST: "true"
         run: go test -race -count=1 -run 'TestOpenBao' ./internal/secretstore/vault/
