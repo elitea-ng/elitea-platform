@@ -153,9 +153,8 @@ var allowlistedGates = map[allowlistKey]string{
 	// #1116 (ADR-0039 decision 8): the governed credential grant admin API is
 	// gated on two of the five models.credentials.governed.* permissions,
 	// which the issue requires no existing role to receive. The routes mount
-	// only with ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED on, and an
-	// operator of such a deployment grants the permissions from the Roles
-	// matrix (the admin catalogue declares them, so they are grantable).
+	// only with credential governance on, and an operator of such a
+	// deployment grants the permissions from the Roles matrix (the admin catalogue declares them, so they are grantable).
 	{mode: "default", permission: "models.credentials.governed.manage"}:  "#1116: governed grants, granted per deployment; no default role",
 	{mode: "default", permission: "models.credentials.governed.approve"}: "#1116: governed grants, granted per deployment; no default role",
 }
