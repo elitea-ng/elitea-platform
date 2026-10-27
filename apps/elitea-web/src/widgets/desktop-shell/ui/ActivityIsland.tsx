@@ -1,8 +1,9 @@
 /**
  * The activity island: a capsule centred in the toolbar that says what the
  * app is doing — an approval waiting, a turn running (phase or tool, a timer,
- * steps), a commit, a send to the cloud, a thread in the cloud, an index
- * build — most important first. Hover or click opens the list of everything
+ * steps), a commit, a send to the cloud, a thread in the cloud — most
+ * important first. An index build is not here: it is a state of the folder,
+ * shown by the composer's index icon and the inspector's Index tab. Hover or click opens the list of everything
  * running, with progress and a cancel where the host has one. Nothing
  * running shows the idle line the page gives it, if any, or nothing at all.
  *
@@ -44,13 +45,14 @@ function useNow(active: boolean): number {
   return now;
 }
 
+const NO_INDEXES = {};
+
 function useActivities(): Activity[] {
   const turns = useActivityFeed((s) => s.turns);
-  const indexes = useActivityFeed((s) => s.indexes);
   const sends = useActivityFeed((s) => s.sends);
   const cloud = useActivityFeed((s) => s.cloud);
   const cloudRuns = useActivityFeed((s) => s.cloudRuns);
-  return useMemo(() => buildActivities({ turns, indexes, sends, cloud, cloudRuns }), [turns, indexes, sends, cloud, cloudRuns]);
+  return useMemo(() => buildActivities({ turns, indexes: NO_INDEXES, sends, cloud, cloudRuns }), [turns, sends, cloud, cloudRuns]);
 }
 
 const tonePulse = { '@keyframes elitea-island-pulse': { '0%, 100%': { opacity: 1 }, '50%': { opacity: 0.35 } } } as const;
