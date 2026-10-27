@@ -181,7 +181,14 @@ impl OrdinaryNoToolProfile {
         request: &AgentExecutionRequest,
         resume: bool,
     ) -> Result<Self, NativeAgentAssemblyError> {
-        let mode = if resume {
+        let mode = if request
+            .payload
+            .meta
+            .contains_key(super::graph::fanout_wake::FANOUT_WAKE_META_KEY)
+        {
+            // Its marker is checked strictly by `FanoutWake::from_payload`.
+            CommonProfileMode::FanoutWake
+        } else if resume {
             CommonProfileMode::Continuation
         } else if request.payload.is_regenerate {
             CommonProfileMode::Regenerate
@@ -535,6 +542,10 @@ enum CommonProfileMode {
     DirectGuardrailContinuation,
     McpAuthorization,
     OutputContinuation,
+    /// A fixed Parallel's wake (contract §8.1): the parked execution's frozen
+    /// fresh turn with an empty input, no decision fields and the wake marker
+    /// as its only meta; its decisions come from the ledger.
+    FanoutWake,
 }
 
 #[allow(clippy::too_many_lines)] // Keep profile admission visibly ordered before credential redemption.
@@ -545,7 +556,10 @@ fn validate_common_profile(
     let payload = &request.payload;
     match &payload.user_input {
         UserInput::ContentBlocks(_) => return Err(unsupported_profile()),
-        UserInput::Text(text) if text.is_empty() || text.contains('\0') => {
+        UserInput::Text(text)
+            if (text.is_empty() && mode != CommonProfileMode::FanoutWake)
+                || text.contains('\0') =>
+        {
             return Err(invalid_profile());
         }
         UserInput::Text(text) if text.len() > MAX_AGENT_USER_INPUT_BYTES => {
@@ -568,7 +582,9 @@ fn validate_common_profile(
     let allows_session_tokens = allows_mcp_authority
         || matches!(
             mode,
-            CommonProfileMode::Fresh | CommonProfileMode::Regenerate
+            CommonProfileMode::Fresh
+                | CommonProfileMode::Regenerate
+                | CommonProfileMode::FanoutWake
         );
     let output_continuation = mode == CommonProfileMode::OutputContinuation;
     let valid_truncated_content = payload
@@ -591,6 +607,11 @@ fn validate_common_profile(
         || payload.next_input_suggestion.enabled
         || payload.debug
         || !(payload.meta.is_empty()
+            || (mode == CommonProfileMode::FanoutWake
+                && payload.meta.len() == 1
+                && payload
+                    .meta
+                    .contains_key(super::graph::fanout_wake::FANOUT_WAKE_META_KEY))
             || (mode == CommonProfileMode::DirectGuardrailContinuation
                 && payload.meta.len() == 1
                 && super::graph::static_tool_pause::parse_static_tool_decisions(&payload.meta)
@@ -619,7 +640,7 @@ fn validate_common_profile(
         || !payload.hitl_decisions.is_empty();
     let starts_without_interrupt = matches!(
         mode,
-        CommonProfileMode::Fresh | CommonProfileMode::Regenerate
+        CommonProfileMode::Fresh | CommonProfileMode::Regenerate | CommonProfileMode::FanoutWake
     );
     if (starts_without_interrupt && has_direct_hitl_fields)
         || (!starts_without_interrupt && !has_direct_hitl_fields)
