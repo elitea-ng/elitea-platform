@@ -793,7 +793,12 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // setWorkspaceHandoffPullRequestCredential, the GitHub or GitLab configuration a cloud
 // thread opens pull requests through, chosen from the cloud notice of the
 // web chat (pages/chat). Generated; the manifest gains it.
-const GENERATED_OPERATION_COUNT = 357;
+// 357 -> 367 (issue 1112, ADR-0039): listAgentIdentityBindings,
+// createAgentIdentityBinding, approve/suspend/revokeAgentIdentityBinding,
+// listMandates, createMandate and approve/suspend/revokeMandate, the agent
+// identity binding and mandate admin API. Admin routes are not in the
+// manifest, so its count is unchanged.
+const GENERATED_OPERATION_COUNT = 367;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

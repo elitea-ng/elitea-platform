@@ -8,6 +8,7 @@ import (
 
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
@@ -17,6 +18,7 @@ import (
 func TestPostgresToolkitExecuteReadMigrationAdmitsInputAndOutput(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	policy := ToolkitExecuteReadDispatchPolicy{
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "elitea:runtime:agent:commands",
 		CapabilityVersion: "1",
 		ResourceClass:     "agent",

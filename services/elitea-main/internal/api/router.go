@@ -24,6 +24,7 @@ import (
 	nativeapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/nativeauth"
 	scimapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/scim"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
 	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	v2apps "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applications"
 	v2applicationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
@@ -682,6 +683,11 @@ type RouterConfig struct {
 	// lesson of #126 — a capability gated on a dependency the composition root
 	// never assigns is a 404 nobody can tell from a typo.
 	PredictCompleter v2predict.Completer
+	// AgentIdentityAdmin serves the agent identity binding and mandate admin
+	// API (ADR-0039, issue 1112). The composition root sets it only with
+	// the credential governance flag on; nil mounts none of
+	// its routes, so they answer like any unknown path.
+	AgentIdentityAdmin *v2agentidentity.Handler
 }
 
 type RuntimeRoutes struct {
@@ -2647,6 +2653,39 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/platform_routines/administration", adminHandler.PlatformRoutines)
 				r.With(central("configuration.scheduling.schedules.edit")).
 					Put("/platform_routines/administration/{id}", adminHandler.UpdatePlatformRoutine)
+
+				// Agent identity bindings and mandates (ADR-0039, issue 1112).
+				// Mounted only with the governance flag on. Shared 0181 grants
+				// the four permissions. Listing needs manage OR approve, so an
+				// approver can see what waits; approval (which also reactivates a
+				// suspended record) needs approve; propose, suspend and revoke
+				// need manage. `{id}:verb` is one chi segment: the param stops at
+				// the colon.
+				if cfg.AgentIdentityAdmin != nil {
+					agentIdentities := cfg.AgentIdentityAdmin
+					bindingsManage := central("models.agent_identity.bindings.manage")
+					bindingsApprove := central("models.agent_identity.bindings.approve")
+					bindingsRead := apimw.RequireCentralPermissions(
+						permissionResolver, platformauth.PermissionModeAdministration,
+						"models.agent_identity.bindings.manage", "models.agent_identity.bindings.approve",
+					)
+					mandatesManage := central("models.agent_identity.mandates.manage")
+					mandatesApprove := central("models.agent_identity.mandates.approve")
+					mandatesRead := apimw.RequireCentralPermissions(
+						permissionResolver, platformauth.PermissionModeAdministration,
+						"models.agent_identity.mandates.manage", "models.agent_identity.mandates.approve",
+					)
+					r.With(bindingsRead).Get("/agent_identities", agentIdentities.ListBindings)
+					r.With(bindingsManage).Post("/agent_identities", agentIdentities.CreateBinding)
+					r.With(bindingsApprove).Post("/agent_identities/{id}:approve", agentIdentities.ApproveBinding)
+					r.With(bindingsManage).Post("/agent_identities/{id}:suspend", agentIdentities.SuspendBinding)
+					r.With(bindingsManage).Post("/agent_identities/{id}:revoke", agentIdentities.RevokeBinding)
+					r.With(mandatesRead).Get("/mandates", agentIdentities.ListMandates)
+					r.With(mandatesManage).Post("/mandates", agentIdentities.CreateMandate)
+					r.With(mandatesApprove).Post("/mandates/{id}:approve", agentIdentities.ApproveMandate)
+					r.With(mandatesManage).Post("/mandates/{id}:suspend", agentIdentities.SuspendMandate)
+					r.With(mandatesManage).Post("/mandates/{id}:revoke", agentIdentities.RevokeMandate)
+				}
 
 				// Regular app admin endpoints (with projectID)
 				//

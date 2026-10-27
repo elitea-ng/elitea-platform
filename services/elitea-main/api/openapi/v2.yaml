@@ -6212,6 +6212,167 @@ components:
           type: string
           maxLength: 64
 
+    AgentIdentityBinding:
+      type: object
+      description: >
+        ADR-0039 agent identity binding of one agent version. References
+        only: no field holds a token, assertion, secret or key.
+      required: [id, tenant_project_id, application_id, application_version_id,
+        definition_digest, mode, external_agent_identity_id, workload_identity,
+        state, revocation_epoch, policy_revision_id, proposed_by, approved_by,
+        created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        tenant_project_id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        application_version_id: { type: integer, format: int64 }
+        definition_digest:
+          type: string
+          description: Frozen definition digest, sha256 as 64 lowercase hex characters.
+        mode:
+          type: string
+          description: One of dedicated_agent, runtime_domain_binding, elitea_native.
+        external_agent_identity_id:
+          type: string
+          nullable: true
+          description: >
+            The external agent identity this version binds to. Activation
+            requires it to be active.
+        workload_identity:
+          type: string
+          description: SPIFFE id pattern; set only for runtime_domain_binding.
+        state:
+          type: string
+          description: One of proposed, active, suspended, revoked.
+        revocation_epoch:
+          type: integer
+          format: int64
+          description: Increases by exactly one on every transition.
+        policy_revision_id:
+          type: string
+          description: The policy revision the last decision was taken under.
+        proposed_by: { type: string }
+        approved_by: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AgentIdentityBindingCreate:
+      type: object
+      additionalProperties: false
+      required: [tenant_project_id, application_id, application_version_id, definition_digest, mode]
+      properties:
+        tenant_project_id: { type: integer, format: int64, minimum: 1 }
+        application_id: { type: integer, format: int64, minimum: 1 }
+        application_version_id: { type: integer, format: int64, minimum: 1 }
+        definition_digest:
+          type: string
+          minLength: 64
+          maxLength: 64
+          description: sha256 of the frozen definition, as hex.
+        mode:
+          type: string
+          description: One of dedicated_agent, runtime_domain_binding, elitea_native.
+        external_agent_identity_id:
+          type: string
+          description: Optional at proposal; required for approval.
+        workload_identity:
+          type: string
+          maxLength: 512
+          description: Required (spiffe://...) for runtime_domain_binding, empty otherwise.
+
+    AgentIdentityBindingListResponse:
+      type: object
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentIdentityBinding'
+
+    Mandate:
+      type: object
+      description: >
+        ADR-0039 mandate, a stored and revocable authority for an unattended
+        run. Scopes only; no field holds a token, assertion, secret or key.
+      required: [id, tenant_project_id, kind, agent_binding_id, subject_user_id,
+        delegation_id, operation_scopes, resource_scopes, not_before, expires_at,
+        state, revocation_epoch, policy_revision_id, issued_by, approved_by,
+        created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        tenant_project_id: { type: integer, format: int64 }
+        kind:
+          type: string
+          description: One of autonomous, delegated_background.
+        agent_binding_id: { type: string, format: uuid }
+        subject_user_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: The user a delegated_background mandate acts for; null for autonomous.
+        delegation_id: { type: string, nullable: true }
+        operation_scopes:
+          type: array
+          items: { type: string }
+        resource_scopes:
+          type: array
+          items: { type: string }
+        not_before: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        state:
+          type: string
+          description: Effective state, one of proposed, active, suspended, revoked, expired.
+        revocation_epoch: { type: integer, format: int64 }
+        policy_revision_id: { type: string }
+        issued_by: { type: string }
+        approved_by: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    MandateCreate:
+      type: object
+      additionalProperties: false
+      required: [tenant_project_id, kind, agent_binding_id, operation_scopes, expires_at]
+      properties:
+        tenant_project_id: { type: integer, format: int64, minimum: 1 }
+        kind:
+          type: string
+          description: One of autonomous, delegated_background.
+        agent_binding_id: { type: string, format: uuid }
+        subject_user_id:
+          type: integer
+          format: int64
+          description: Required for delegated_background; absent for autonomous.
+        delegation_id:
+          type: string
+          description: Optional for delegated_background; absent for autonomous.
+        operation_scopes:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items: { type: string, maxLength: 256 }
+        resource_scopes:
+          type: array
+          maxItems: 64
+          items: { type: string, maxLength: 256 }
+        not_before:
+          type: string
+          format: date-time
+          description: Defaults to now.
+        expires_at:
+          type: string
+          format: date-time
+          description: Required; at most the policy maximum mandate lifetime from now.
+
+    MandateListResponse:
+      type: object
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/Mandate'
+
     OkResponse:
       type: object
       required: [ok]
@@ -16370,6 +16531,472 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/agent_identities:
+    get:
+      operationId: listAgentIdentityBindings
+      summary: List agent identity bindings
+      description: >
+        ADR-0039 agent identity bindings, newest first. Gated on
+        `models.agent_identity.bindings.manage` or
+        `models.agent_identity.bindings.approve` in administration mode.
+        Mounted only when the enterprise credential governance flag is on;
+        otherwise the path answers like any unknown route.
+      tags: [admin]
+      parameters:
+        - name: tenant_project_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: state
+          in: query
+          required: false
+          description: One of proposed, active, suspended, revoked.
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: One page of bindings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentIdentityBindingListResponse' }
+        '400':
+          description: A malformed filter
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    post:
+      operationId: createAgentIdentityBinding
+      summary: Propose an agent identity binding
+      description: >
+        Writes a `proposed` binding of one application version and frozen
+        definition digest. The caller is recorded as the proposer and may
+        not approve it. A mode the active policy revision does not allow is
+        refused with 403. Gated on `models.agent_identity.bindings.manage`.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentIdentityBindingCreate' }
+      responses:
+        '201':
+          description: The proposed binding
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentIdentityBinding' }
+        '400':
+          description: A malformed proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or the mode is not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: A non-revoked binding already exists for this version and digest
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: The active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/agent_identities/{id}:approve:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The binding id (uuid).
+        schema: { type: string }
+    post:
+      operationId: approveAgentIdentityBinding
+      summary: Approve, or reactivate, an agent identity binding
+      description: >
+        Gated on `models.agent_identity.bindings.approve` in administration mode. Mounted only when the
+        enterprise credential governance flag is on. Every transition
+        increases `revocation_epoch` by exactly one and runs under a row
+        lock, so of two concurrent approvals one succeeds and one answers 409.
+      tags: [admin]
+      responses:
+        '200':
+          description: The binding after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentIdentityBinding' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            The caller lacks the permission, or (approve) is the proposer or
+            issuer, or the identity mode is not allowed by the active policy
+            revision
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such binding
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: >
+            The current state does not allow this action, or (approve) the
+            external agent identity or the binding is not active
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: The active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/agent_identities/{id}:suspend:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The binding id (uuid).
+        schema: { type: string }
+    post:
+      operationId: suspendAgentIdentityBinding
+      summary: Suspend an active agent identity binding
+      description: >
+        Gated on `models.agent_identity.bindings.manage` in administration mode. Mounted only when the
+        enterprise credential governance flag is on. Every transition
+        increases `revocation_epoch` by exactly one and runs under a row
+        lock, so of two concurrent approvals one succeeds and one answers 409.
+      tags: [admin]
+      responses:
+        '200':
+          description: The binding after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentIdentityBinding' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            The caller lacks the permission, or (approve) is the proposer or
+            issuer, or the identity mode is not allowed by the active policy
+            revision
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such binding
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: >
+            The current state does not allow this action, or (approve) the
+            external agent identity or the binding is not active
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: The active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/agent_identities/{id}:revoke:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The binding id (uuid).
+        schema: { type: string }
+    post:
+      operationId: revokeAgentIdentityBinding
+      summary: Revoke an agent identity binding for good
+      description: >
+        Gated on `models.agent_identity.bindings.manage` in administration mode. Mounted only when the
+        enterprise credential governance flag is on. Every transition
+        increases `revocation_epoch` by exactly one and runs under a row
+        lock, so of two concurrent approvals one succeeds and one answers 409.
+      tags: [admin]
+      responses:
+        '200':
+          description: The binding after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentIdentityBinding' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            The caller lacks the permission, or (approve) is the proposer or
+            issuer, or the identity mode is not allowed by the active policy
+            revision
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such binding
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: >
+            The current state does not allow this action, or (approve) the
+            external agent identity or the binding is not active
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: The active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/mandates:
+    get:
+      operationId: listMandates
+      summary: List mandates
+      description: >
+        ADR-0039 mandates, newest first. `state` is the effective state: a
+        non-revoked mandate past `expires_at` is `expired`. Gated on
+        `models.agent_identity.mandates.manage` or
+        `models.agent_identity.mandates.approve`. Mounted only when the
+        enterprise credential governance flag is on.
+      tags: [admin]
+      parameters:
+        - name: tenant_project_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: state
+          in: query
+          required: false
+          description: One of proposed, active, suspended, revoked, expired (effective state).
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+        - name: agent_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: One page of mandates
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MandateListResponse' }
+        '400':
+          description: A malformed filter
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    post:
+      operationId: createMandate
+      summary: Issue a mandate
+      description: >
+        Writes a `proposed` mandate for a non-revoked binding in the same
+        tenant project. `expires_at` is required and at most the active
+        policy revision's maximum mandate lifetime from now. The caller is
+        recorded as the issuer and may not approve it. Gated on
+        `models.agent_identity.mandates.manage`.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MandateCreate' }
+      responses:
+        '201':
+          description: The proposed mandate
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Mandate' }
+        '400':
+          description: >
+            A malformed request, a missing `expires_at`, or an expiry beyond
+            the policy maximum
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: The binding is revoked or in another tenant project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: The active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/mandates/{id}:approve:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The mandate id (uuid).
+        schema: { type: string }
+    post:
+      operationId: approveMandate
+      summary: Approve, or reactivate, a mandate
+      description: >
+        Gated on `models.agent_identity.mandates.approve` in administration mode. Mounted only when the
+        enterprise credential governance flag is on. Every transition
+        increases `revocation_epoch` by exactly one and runs under a row
+        lock, so of two concurrent approvals one succeeds and one answers 409.
+      tags: [admin]
+      responses:
+        '200':
+          description: The mandate after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Mandate' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            The caller lacks the permission, or (approve) is the proposer or
+            issuer, or the identity mode is not allowed by the active policy
+            revision
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such mandate
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: >
+            The current state does not allow this action, or (approve) the
+            external agent identity or the binding is not active
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: The active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/mandates/{id}:suspend:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The mandate id (uuid).
+        schema: { type: string }
+    post:
+      operationId: suspendMandate
+      summary: Suspend an active mandate
+      description: >
+        Gated on `models.agent_identity.mandates.manage` in administration mode. Mounted only when the
+        enterprise credential governance flag is on. Every transition
+        increases `revocation_epoch` by exactly one and runs under a row
+        lock, so of two concurrent approvals one succeeds and one answers 409.
+      tags: [admin]
+      responses:
+        '200':
+          description: The mandate after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Mandate' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            The caller lacks the permission, or (approve) is the proposer or
+            issuer, or the identity mode is not allowed by the active policy
+            revision
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such mandate
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: >
+            The current state does not allow this action, or (approve) the
+            external agent identity or the binding is not active
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: The active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/mandates/{id}:revoke:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The mandate id (uuid).
+        schema: { type: string }
+    post:
+      operationId: revokeMandate
+      summary: Revoke a mandate for good
+      description: >
+        Gated on `models.agent_identity.mandates.manage` in administration mode. Mounted only when the
+        enterprise credential governance flag is on. Every transition
+        increases `revocation_epoch` by exactly one and runs under a row
+        lock, so of two concurrent approvals one succeeds and one answers 409.
+      tags: [admin]
+      responses:
+        '200':
+          description: The mandate after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Mandate' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            The caller lacks the permission, or (approve) is the proposer or
+            issuer, or the identity mode is not allowed by the active policy
+            revision
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such mandate
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: >
+            The current state does not allow this action, or (approve) the
+            external agent identity or the binding is not active
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: The active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
 
   /admin/branding/administration:
     # ADR-0024 decision 5: the typed editor of the brand pack's DATABASE

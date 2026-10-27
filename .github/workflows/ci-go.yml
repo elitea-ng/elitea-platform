@@ -546,6 +546,53 @@ jobs:
           path: ${{ runner.temp }}/editor-lifecycle
           if-no-files-found: error
 
+  secretstore-openbao:
+    name: SecretStore KV v2 against OpenBao (#1113)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The Vault/OpenBao adapter's integration tests need a real KV v2 server.
+    # OpenBao dev mode with TLS, the same fixture as
+    # deploy/docker-compose.secretstore.yml; the test provisions its own
+    # mounts, JWT auth, policy and role through the root token.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          cache: false
+          go-version-file: go.work
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
+      - name: Start OpenBao (dev mode, TLS)
+        run: |
+          mkdir -p "$RUNNER_TEMP/openbao-tls"
+          chmod 777 "$RUNNER_TEMP/openbao-tls"
+          docker run -d --name openbao --cap-add IPC_LOCK -p 127.0.0.1:8210:8200 \
+            -v "$RUNNER_TEMP/openbao-tls:/tls" quay.io/openbao/openbao:2.4.1 \
+            server -dev -dev-tls -dev-tls-cert-dir=/tls \
+            -dev-listen-address=0.0.0.0:8200 -dev-root-token-id=elitea-secretstore-it-root
+          for _ in $(seq 1 60); do
+            if [ -s "$RUNNER_TEMP/openbao-tls/vault-ca.pem" ] && \
+               curl -fsS --cacert "$RUNNER_TEMP/openbao-tls/vault-ca.pem" https://127.0.0.1:8210/v1/sys/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs openbao
+          exit 1
+      - name: Run the OpenBao integration tests
+        working-directory: services/elitea-main
+        env:
+          ELITEA_TEST_OPENBAO_ADDR: https://127.0.0.1:8210
+          ELITEA_TEST_OPENBAO_CA_FILE: ${{ runner.temp }}/openbao-tls/vault-ca.pem
+          ELITEA_TEST_OPENBAO_ROOT_TOKEN: elitea-secretstore-it-root
+          ELITEA_REQUIRE_OPENBAO_TEST: "true"
+        run: go test -race -count=1 -run 'TestOpenBao' ./internal/secretstore/vault/
+
   integration:
     name: Integration (Postgres)
     runs-on: ubuntu-latest

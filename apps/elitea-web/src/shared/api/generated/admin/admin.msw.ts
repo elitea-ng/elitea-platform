@@ -46,6 +46,8 @@ import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
 import type {
+  AgentIdentityBinding,
+  AgentIdentityBindingListResponse,
   BackgroundJobListResponse,
   BrandingAsset,
   BrandingPackageReport,
@@ -53,6 +55,8 @@ import type {
   BulkInviteSummary,
   GlobalUserInviteResult,
   ListBrandingPackageVersions200,
+  Mandate,
+  MandateListResponse,
   MessageResponse,
   ModeRoleAssignResult,
   ModeRoleListing,
@@ -465,6 +469,328 @@ export const getUpdatePlatformRoutineResponseMock = (
     ]),
     undefined,
   ]),
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getListAgentIdentityBindingsResponseMock = (
+  overrideResponse: Partial<
+    Extract<AgentIdentityBindingListResponse, object>
+  > = {},
+): AgentIdentityBindingListResponse => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.uuid(),
+    tenant_project_id: faker.number.int(),
+    application_id: faker.number.int(),
+    application_version_id: faker.number.int(),
+    definition_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    external_agent_identity_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    workload_identity: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    revocation_epoch: faker.number.int(),
+    policy_revision_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    proposed_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    approved_by: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  ...overrideResponse,
+});
+
+export const getCreateAgentIdentityBindingResponseMock = (
+  overrideResponse: Partial<Extract<AgentIdentityBinding, object>> = {},
+): AgentIdentityBinding => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_version_id: faker.number.int(),
+  definition_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  external_agent_identity_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  workload_identity: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  policy_revision_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  proposed_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  approved_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getApproveAgentIdentityBindingResponseMock = (
+  overrideResponse: Partial<Extract<AgentIdentityBinding, object>> = {},
+): AgentIdentityBinding => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_version_id: faker.number.int(),
+  definition_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  external_agent_identity_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  workload_identity: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  policy_revision_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  proposed_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  approved_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getSuspendAgentIdentityBindingResponseMock = (
+  overrideResponse: Partial<Extract<AgentIdentityBinding, object>> = {},
+): AgentIdentityBinding => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_version_id: faker.number.int(),
+  definition_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  external_agent_identity_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  workload_identity: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  policy_revision_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  proposed_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  approved_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getRevokeAgentIdentityBindingResponseMock = (
+  overrideResponse: Partial<Extract<AgentIdentityBinding, object>> = {},
+): AgentIdentityBinding => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_version_id: faker.number.int(),
+  definition_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  external_agent_identity_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  workload_identity: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  policy_revision_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  proposed_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  approved_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getListMandatesResponseMock = (
+  overrideResponse: Partial<Extract<MandateListResponse, object>> = {},
+): MandateListResponse => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.uuid(),
+    tenant_project_id: faker.number.int(),
+    kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    agent_binding_id: faker.string.uuid(),
+    subject_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    delegation_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    operation_scopes: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    resource_scopes: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    not_before: faker.date.past().toISOString().slice(0, 19) + "Z",
+    expires_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    revocation_epoch: faker.number.int(),
+    policy_revision_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    issued_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    approved_by: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  ...overrideResponse,
+});
+
+export const getCreateMandateResponseMock = (
+  overrideResponse: Partial<Extract<Mandate, object>> = {},
+): Mandate => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  agent_binding_id: faker.string.uuid(),
+  subject_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  delegation_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  operation_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  resource_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  not_before: faker.date.past().toISOString().slice(0, 19) + "Z",
+  expires_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  policy_revision_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  issued_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  approved_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getApproveMandateResponseMock = (
+  overrideResponse: Partial<Extract<Mandate, object>> = {},
+): Mandate => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  agent_binding_id: faker.string.uuid(),
+  subject_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  delegation_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  operation_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  resource_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  not_before: faker.date.past().toISOString().slice(0, 19) + "Z",
+  expires_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  policy_revision_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  issued_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  approved_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getSuspendMandateResponseMock = (
+  overrideResponse: Partial<Extract<Mandate, object>> = {},
+): Mandate => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  agent_binding_id: faker.string.uuid(),
+  subject_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  delegation_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  operation_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  resource_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  not_before: faker.date.past().toISOString().slice(0, 19) + "Z",
+  expires_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  policy_revision_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  issued_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  approved_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getRevokeMandateResponseMock = (
+  overrideResponse: Partial<Extract<Mandate, object>> = {},
+): Mandate => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  agent_binding_id: faker.string.uuid(),
+  subject_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  delegation_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  operation_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  resource_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  not_before: faker.date.past().toISOString().slice(0, 19) + "Z",
+  expires_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  policy_revision_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  issued_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  approved_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
 });
@@ -1816,6 +2142,268 @@ export const getUpdatePlatformRoutineMockHandler = (
   );
 };
 
+export const getListAgentIdentityBindingsMockHandler = (
+  overrideResponse?:
+    | AgentIdentityBindingListResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        | Promise<AgentIdentityBindingListResponse>
+        | AgentIdentityBindingListResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/agent_identities",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAgentIdentityBindingsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateAgentIdentityBindingMockHandler = (
+  overrideResponse?:
+    | AgentIdentityBinding
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentIdentityBinding> | AgentIdentityBinding),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/agent_identities",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateAgentIdentityBindingResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getApproveAgentIdentityBindingMockHandler = (
+  overrideResponse?:
+    | AgentIdentityBinding
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentIdentityBinding> | AgentIdentityBinding),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/agent_identities/:id\\:approve",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getApproveAgentIdentityBindingResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSuspendAgentIdentityBindingMockHandler = (
+  overrideResponse?:
+    | AgentIdentityBinding
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentIdentityBinding> | AgentIdentityBinding),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/agent_identities/:id\\:suspend",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSuspendAgentIdentityBindingResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRevokeAgentIdentityBindingMockHandler = (
+  overrideResponse?:
+    | AgentIdentityBinding
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentIdentityBinding> | AgentIdentityBinding),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/agent_identities/:id\\:revoke",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRevokeAgentIdentityBindingResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListMandatesMockHandler = (
+  overrideResponse?:
+    | MandateListResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<MandateListResponse> | MandateListResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/mandates",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListMandatesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateMandateMockHandler = (
+  overrideResponse?:
+    | Mandate
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<Mandate> | Mandate),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/mandates",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateMandateResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getApproveMandateMockHandler = (
+  overrideResponse?:
+    | Mandate
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<Mandate> | Mandate),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/mandates/:id\\:approve",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getApproveMandateResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSuspendMandateMockHandler = (
+  overrideResponse?:
+    | Mandate
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<Mandate> | Mandate),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/mandates/:id\\:suspend",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSuspendMandateResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRevokeMandateMockHandler = (
+  overrideResponse?:
+    | Mandate
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<Mandate> | Mandate),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/mandates/:id\\:revoke",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRevokeMandateResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetBrandingSettingsMockHandler = (
   overrideResponse?:
     | BrandingSettings
@@ -2366,6 +2954,16 @@ export const getAdminMock = () => [
   getCancelBackgroundJobMockHandler(),
   getListPlatformRoutinesMockHandler(),
   getUpdatePlatformRoutineMockHandler(),
+  getListAgentIdentityBindingsMockHandler(),
+  getCreateAgentIdentityBindingMockHandler(),
+  getApproveAgentIdentityBindingMockHandler(),
+  getSuspendAgentIdentityBindingMockHandler(),
+  getRevokeAgentIdentityBindingMockHandler(),
+  getListMandatesMockHandler(),
+  getCreateMandateMockHandler(),
+  getApproveMandateMockHandler(),
+  getSuspendMandateMockHandler(),
+  getRevokeMandateMockHandler(),
   getGetBrandingSettingsMockHandler(),
   getSaveBrandingSettingsMockHandler(),
   getResetBrandingSettingsMockHandler(),

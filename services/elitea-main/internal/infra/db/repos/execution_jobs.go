@@ -9,6 +9,7 @@ import (
 	"time"
 
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -39,6 +40,11 @@ type ExecutionDispatchPolicy struct {
 	DeadlineTTL       time.Duration
 	LimitsRevision    string
 	MaxOutstanding    int64
+	// CredentialProfile is the credential governance profile new admissions
+	// are pinned to (ADR-0039, #1111). Its zero value is invalid, so a
+	// composition that forgets it fails here instead of admitting legacy
+	// work while the governed flag is on.
+	CredentialProfile profile.Admission
 }
 
 // Capability-specific aliases keep composition explicit while sharing the
@@ -51,6 +57,9 @@ type ToolkitExecuteReadDispatchPolicy = ExecutionDispatchPolicy
 func (p ExecutionDispatchPolicy) validate() error {
 	if p.StreamName == "" || p.CapabilityVersion == "" || p.ResourceClass == "" || p.IsolationClass == "" || p.Priority == 0 || p.Priority > math.MaxInt32 || p.DeadlineTTL < minValidationDeadlineTTL || p.DeadlineTTL > maxValidationDeadlineTTL || p.DeadlineTTL%time.Millisecond != 0 || p.LimitsRevision == "" || p.MaxOutstanding <= 0 || p.MaxOutstanding > MaxSupportedOutstandingJobs {
 		return errors.New("execution dispatch policy is incomplete")
+	}
+	if err := p.CredentialProfile.Validate(); err != nil {
+		return fmt.Errorf("execution dispatch policy: %w", err)
 	}
 	for _, value := range []string{p.StreamName, p.CapabilityVersion, p.ResourceClass, p.IsolationClass, p.LimitsRevision} {
 		if len(value) > 256 || strings.ContainsRune(value, '\x00') {

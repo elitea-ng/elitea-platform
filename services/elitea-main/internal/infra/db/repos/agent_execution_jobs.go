@@ -653,6 +653,9 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 	); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert agent command outbox: %w", err)
 	}
+	if err := pinExecutionAdmission(ctx, tx, r.policy.CredentialProfile, agentAdmissionPin(admission)); err != nil {
+		return executionapp.AdmissionOutcome{}, err
+	}
 	// Mark the reserved slot materialized in the same commit as the job.
 	marked, err := txQueries.MarkAgentAdmissionMaterialized(
 		ctx,
@@ -1412,4 +1415,27 @@ func resumeCurrentAgentStaticTools(ctx context.Context, queries *sqlcgen.Queries
 		return executionapp.ErrInvalidAdmission
 	}
 	return nil
+}
+
+// agentAdmissionPin scopes an agent admission to its conversation, so a
+// continuation (HITL, output-limit, authorization or static resume) keeps
+// the governed pin its run started under.
+func agentAdmissionPin(admission agentexecutionapp.Admission) admissionPin {
+	pin := admissionPin{executionID: admission.Record.Outbox.ExecutionID}
+	conversationID := ""
+	switch {
+	case admission.CurrentTurn != nil:
+		conversationID = admission.CurrentTurn.ConversationUUID
+	case admission.CurrentAdhocTurn != nil:
+		conversationID = admission.CurrentAdhocTurn.ConversationUUID
+	case admission.CurrentRegenerateTurn != nil:
+		conversationID = admission.CurrentRegenerateTurn.ConversationUUID
+	case admission.CurrentContinueTurn != nil:
+		conversationID = admission.CurrentContinueTurn.ConversationUUID
+		pin.continuation = true
+	}
+	if conversationID != "" {
+		pin.continuationScope = "agent-conversation:" + conversationID
+	}
+	return pin
 }

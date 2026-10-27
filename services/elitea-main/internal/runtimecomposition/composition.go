@@ -10,6 +10,7 @@ import (
 	"time"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
 
 	executionapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/executions"
@@ -90,7 +91,11 @@ const (
 )
 
 type Dependencies struct {
-	AdmissionPool                 *pgxpool.Pool
+	AdmissionPool *pgxpool.Pool
+	// CredentialProfile is the credential governance profile every admission
+	// is pinned to (ADR-0039, #1111). Required: the admission repositories
+	// refuse its zero value.
+	CredentialProfile             profile.Admission
 	OriginalCodeDefinitions       repos.CodeDefinitionSourceReader
 	OriginalCodeWorkspaceVerifier storage.OriginalCodeWorkspaceVerifier
 	OriginalCodeBrokerVerifier    storage.OriginalCodeBrokerVerifier
@@ -315,6 +320,8 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 
 	dispatchPolicy := repos.ValidationDispatchPolicy{
+
+		CredentialProfile: dependencies.CredentialProfile,
 		StreamName:        config.CommandStream,
 		CapabilityVersion: capabilityVersion,
 		ResourceClass:     resourceClass,
@@ -325,6 +332,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		MaxOutstanding:    config.MaxOutstanding,
 	}
 	indexDispatchPolicy := repos.IndexIngestDispatchPolicy{
+		CredentialProfile: dependencies.CredentialProfile,
 		StreamName:        config.IndexIngestCommandStream,
 		CapabilityVersion: indexCapabilityVersion,
 		ResourceClass:     indexResourceClass,
@@ -335,6 +343,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		MaxOutstanding:    config.MaxOutstanding,
 	}
 	toolkitCallToolDispatchPolicy := repos.ToolkitCallToolDispatchPolicy{
+		CredentialProfile: dependencies.CredentialProfile,
 		StreamName:        toolkitRoute.stream,
 		CapabilityVersion: toolkitCallToolCapabilityVersion,
 		ResourceClass:     toolkitRoute.resourceClass,
@@ -345,6 +354,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		MaxOutstanding:    config.MaxOutstanding,
 	}
 	agentDispatchPolicy := repos.AgentExecutionDispatchPolicy{
+		CredentialProfile: dependencies.CredentialProfile,
 		StreamName:        config.AgentExecutionCommandStream,
 		CapabilityVersion: agentCapabilityVersion,
 		ResourceClass:     agentResourceClass,
@@ -355,6 +365,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		MaxOutstanding:    config.MaxOutstanding,
 	}
 	toolkitDispatchPolicy := repos.ToolkitExecuteReadDispatchPolicy{
+		CredentialProfile: dependencies.CredentialProfile,
 		StreamName:        config.AgentExecutionCommandStream,
 		CapabilityVersion: agentCapabilityVersion,
 		ResourceClass:     agentResourceClass,

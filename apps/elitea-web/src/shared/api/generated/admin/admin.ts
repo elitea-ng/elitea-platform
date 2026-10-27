@@ -54,6 +54,9 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  AgentIdentityBinding,
+  AgentIdentityBindingCreate,
+  AgentIdentityBindingListResponse,
   BackgroundJobListResponse,
   BrandingAsset,
   BrandingPackageReport,
@@ -69,9 +72,14 @@ import type {
   ImportBrandingPackageBody,
   ImportBrandingPackageParams,
   ListAdminPublishedAgentsParams,
+  ListAgentIdentityBindingsParams,
   ListBackgroundJobsParams,
   ListBrandingPackageVersions200,
+  ListMandatesParams,
   ListNativeDevicesAdministrationParams,
+  Mandate,
+  MandateCreate,
+  MandateListResponse,
   MessageResponse,
   ModeRoleAssignRequest,
   ModeRoleAssignResult,
@@ -4924,6 +4932,2147 @@ export function useUpdatePlatformRoutine<
     platformRoutineUpdate,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listAgentIdentityBindingsResponse200 = {
+  data: AgentIdentityBindingListResponse;
+  status: 200;
+};
+
+export type listAgentIdentityBindingsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listAgentIdentityBindingsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listAgentIdentityBindingsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listAgentIdentityBindingsResponseSuccess =
+  listAgentIdentityBindingsResponse200 & {
+    headers: Headers;
+  };
+export type listAgentIdentityBindingsResponseError = (
+  | listAgentIdentityBindingsResponse400
+  | listAgentIdentityBindingsResponse401
+  | listAgentIdentityBindingsResponse403
+) & {
+  headers: Headers;
+};
+
+export type listAgentIdentityBindingsResponse =
+  | listAgentIdentityBindingsResponseSuccess
+  | listAgentIdentityBindingsResponseError;
+
+export const getListAgentIdentityBindingsUrl = (
+  params?: ListAgentIdentityBindingsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/agent_identities?${stringifiedParams}`
+    : `/admin/agent_identities`;
+};
+
+/**
+ * ADR-0039 agent identity bindings, newest first. Gated on `models.agent_identity.bindings.manage` or `models.agent_identity.bindings.approve` in administration mode. Mounted only when the enterprise credential governance flag is on; otherwise the path answers like any unknown route.
+ * @summary List agent identity bindings
+ */
+export const listAgentIdentityBindings = async (
+  params?: ListAgentIdentityBindingsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listAgentIdentityBindingsResponse> => {
+  return eliteaFetch<listAgentIdentityBindingsResponse>(
+    getListAgentIdentityBindingsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListAgentIdentityBindingsQueryKey = (
+  params?: ListAgentIdentityBindingsParams,
+) => {
+  return [`/admin/agent_identities`, ...(params ? [params] : [])] as const;
+};
+
+export const getListAgentIdentityBindingsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAgentIdentityBindings>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListAgentIdentityBindingsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentIdentityBindings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListAgentIdentityBindingsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAgentIdentityBindings>>
+  > = ({ signal }) =>
+    listAgentIdentityBindings(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAgentIdentityBindings>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListAgentIdentityBindingsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAgentIdentityBindings>>
+>;
+export type ListAgentIdentityBindingsQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useListAgentIdentityBindings<
+  TData = Awaited<ReturnType<typeof listAgentIdentityBindings>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params: undefined | ListAgentIdentityBindingsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentIdentityBindings>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentIdentityBindings>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentIdentityBindings>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentIdentityBindings<
+  TData = Awaited<ReturnType<typeof listAgentIdentityBindings>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListAgentIdentityBindingsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentIdentityBindings>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentIdentityBindings>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentIdentityBindings>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentIdentityBindings<
+  TData = Awaited<ReturnType<typeof listAgentIdentityBindings>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListAgentIdentityBindingsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentIdentityBindings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List agent identity bindings
+ */
+
+export function useListAgentIdentityBindings<
+  TData = Awaited<ReturnType<typeof listAgentIdentityBindings>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListAgentIdentityBindingsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentIdentityBindings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListAgentIdentityBindingsQueryOptions(
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createAgentIdentityBindingResponse201 = {
+  data: AgentIdentityBinding;
+  status: 201;
+};
+
+export type createAgentIdentityBindingResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type createAgentIdentityBindingResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createAgentIdentityBindingResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type createAgentIdentityBindingResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type createAgentIdentityBindingResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type createAgentIdentityBindingResponseSuccess =
+  createAgentIdentityBindingResponse201 & {
+    headers: Headers;
+  };
+export type createAgentIdentityBindingResponseError = (
+  | createAgentIdentityBindingResponse400
+  | createAgentIdentityBindingResponse401
+  | createAgentIdentityBindingResponse403
+  | createAgentIdentityBindingResponse409
+  | createAgentIdentityBindingResponse503
+) & {
+  headers: Headers;
+};
+
+export type createAgentIdentityBindingResponse =
+  | createAgentIdentityBindingResponseSuccess
+  | createAgentIdentityBindingResponseError;
+
+export const getCreateAgentIdentityBindingUrl = () => {
+  return `/admin/agent_identities`;
+};
+
+/**
+ * Writes a `proposed` binding of one application version and frozen definition digest. The caller is recorded as the proposer and may not approve it. A mode the active policy revision does not allow is refused with 403. Gated on `models.agent_identity.bindings.manage`.
+ * @summary Propose an agent identity binding
+ */
+export const createAgentIdentityBinding = async (
+  agentIdentityBindingCreate: AgentIdentityBindingCreate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createAgentIdentityBindingResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createAgentIdentityBindingResponse>(
+    getCreateAgentIdentityBindingUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentIdentityBindingCreate),
+    },
+  );
+};
+
+export const getCreateAgentIdentityBindingQueryKey = (
+  agentIdentityBindingCreate?: AgentIdentityBindingCreate,
+) => {
+  return [
+    "POST",
+    `/admin/agent_identities`,
+    agentIdentityBindingCreate,
+  ] as const;
+};
+
+export const getCreateAgentIdentityBindingQueryOptions = <
+  TData = Awaited<ReturnType<typeof createAgentIdentityBinding>>,
+  TError = ErrorResponse | N401Response,
+>(
+  agentIdentityBindingCreate: AgentIdentityBindingCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateAgentIdentityBindingQueryKey(agentIdentityBindingCreate);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createAgentIdentityBinding>>
+  > = ({ signal }) =>
+    createAgentIdentityBinding(agentIdentityBindingCreate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof createAgentIdentityBinding>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateAgentIdentityBindingQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createAgentIdentityBinding>>
+>;
+export type CreateAgentIdentityBindingQueryError = ErrorResponse | N401Response;
+
+export function useCreateAgentIdentityBinding<
+  TData = Awaited<ReturnType<typeof createAgentIdentityBinding>>,
+  TError = ErrorResponse | N401Response,
+>(
+  agentIdentityBindingCreate: AgentIdentityBindingCreate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createAgentIdentityBinding>>,
+          TError,
+          Awaited<ReturnType<typeof createAgentIdentityBinding>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateAgentIdentityBinding<
+  TData = Awaited<ReturnType<typeof createAgentIdentityBinding>>,
+  TError = ErrorResponse | N401Response,
+>(
+  agentIdentityBindingCreate: AgentIdentityBindingCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createAgentIdentityBinding>>,
+          TError,
+          Awaited<ReturnType<typeof createAgentIdentityBinding>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateAgentIdentityBinding<
+  TData = Awaited<ReturnType<typeof createAgentIdentityBinding>>,
+  TError = ErrorResponse | N401Response,
+>(
+  agentIdentityBindingCreate: AgentIdentityBindingCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Propose an agent identity binding
+ */
+
+export function useCreateAgentIdentityBinding<
+  TData = Awaited<ReturnType<typeof createAgentIdentityBinding>>,
+  TError = ErrorResponse | N401Response,
+>(
+  agentIdentityBindingCreate: AgentIdentityBindingCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateAgentIdentityBindingQueryOptions(
+    agentIdentityBindingCreate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type approveAgentIdentityBindingResponse200 = {
+  data: AgentIdentityBinding;
+  status: 200;
+};
+
+export type approveAgentIdentityBindingResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type approveAgentIdentityBindingResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type approveAgentIdentityBindingResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type approveAgentIdentityBindingResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type approveAgentIdentityBindingResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type approveAgentIdentityBindingResponseSuccess =
+  approveAgentIdentityBindingResponse200 & {
+    headers: Headers;
+  };
+export type approveAgentIdentityBindingResponseError = (
+  | approveAgentIdentityBindingResponse401
+  | approveAgentIdentityBindingResponse403
+  | approveAgentIdentityBindingResponse404
+  | approveAgentIdentityBindingResponse409
+  | approveAgentIdentityBindingResponse503
+) & {
+  headers: Headers;
+};
+
+export type approveAgentIdentityBindingResponse =
+  | approveAgentIdentityBindingResponseSuccess
+  | approveAgentIdentityBindingResponseError;
+
+export const getApproveAgentIdentityBindingUrl = (id: string) => {
+  return `/admin/agent_identities/${id}:approve`;
+};
+
+/**
+ * Gated on `models.agent_identity.bindings.approve` in administration mode. Mounted only when the enterprise credential governance flag is on. Every transition increases `revocation_epoch` by exactly one and runs under a row lock, so of two concurrent approvals one succeeds and one answers 409.
+ * @summary Approve, or reactivate, an agent identity binding
+ */
+export const approveAgentIdentityBinding = async (
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<approveAgentIdentityBindingResponse> => {
+  return eliteaFetch<approveAgentIdentityBindingResponse>(
+    getApproveAgentIdentityBindingUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getApproveAgentIdentityBindingQueryKey = (id: string) => {
+  return ["POST", `/admin/agent_identities/${id}:approve`] as const;
+};
+
+export const getApproveAgentIdentityBindingQueryOptions = <
+  TData = Awaited<ReturnType<typeof approveAgentIdentityBinding>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getApproveAgentIdentityBindingQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof approveAgentIdentityBinding>>
+  > = ({ signal }) =>
+    approveAgentIdentityBinding(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof approveAgentIdentityBinding>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ApproveAgentIdentityBindingQueryResult = NonNullable<
+  Awaited<ReturnType<typeof approveAgentIdentityBinding>>
+>;
+export type ApproveAgentIdentityBindingQueryError =
+  N401Response | ErrorResponse;
+
+export function useApproveAgentIdentityBinding<
+  TData = Awaited<ReturnType<typeof approveAgentIdentityBinding>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof approveAgentIdentityBinding>>,
+          TError,
+          Awaited<ReturnType<typeof approveAgentIdentityBinding>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApproveAgentIdentityBinding<
+  TData = Awaited<ReturnType<typeof approveAgentIdentityBinding>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof approveAgentIdentityBinding>>,
+          TError,
+          Awaited<ReturnType<typeof approveAgentIdentityBinding>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApproveAgentIdentityBinding<
+  TData = Awaited<ReturnType<typeof approveAgentIdentityBinding>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Approve, or reactivate, an agent identity binding
+ */
+
+export function useApproveAgentIdentityBinding<
+  TData = Awaited<ReturnType<typeof approveAgentIdentityBinding>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getApproveAgentIdentityBindingQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type suspendAgentIdentityBindingResponse200 = {
+  data: AgentIdentityBinding;
+  status: 200;
+};
+
+export type suspendAgentIdentityBindingResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type suspendAgentIdentityBindingResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type suspendAgentIdentityBindingResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type suspendAgentIdentityBindingResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type suspendAgentIdentityBindingResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type suspendAgentIdentityBindingResponseSuccess =
+  suspendAgentIdentityBindingResponse200 & {
+    headers: Headers;
+  };
+export type suspendAgentIdentityBindingResponseError = (
+  | suspendAgentIdentityBindingResponse401
+  | suspendAgentIdentityBindingResponse403
+  | suspendAgentIdentityBindingResponse404
+  | suspendAgentIdentityBindingResponse409
+  | suspendAgentIdentityBindingResponse503
+) & {
+  headers: Headers;
+};
+
+export type suspendAgentIdentityBindingResponse =
+  | suspendAgentIdentityBindingResponseSuccess
+  | suspendAgentIdentityBindingResponseError;
+
+export const getSuspendAgentIdentityBindingUrl = (id: string) => {
+  return `/admin/agent_identities/${id}:suspend`;
+};
+
+/**
+ * Gated on `models.agent_identity.bindings.manage` in administration mode. Mounted only when the enterprise credential governance flag is on. Every transition increases `revocation_epoch` by exactly one and runs under a row lock, so of two concurrent approvals one succeeds and one answers 409.
+ * @summary Suspend an active agent identity binding
+ */
+export const suspendAgentIdentityBinding = async (
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<suspendAgentIdentityBindingResponse> => {
+  return eliteaFetch<suspendAgentIdentityBindingResponse>(
+    getSuspendAgentIdentityBindingUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getSuspendAgentIdentityBindingQueryKey = (id: string) => {
+  return ["POST", `/admin/agent_identities/${id}:suspend`] as const;
+};
+
+export const getSuspendAgentIdentityBindingQueryOptions = <
+  TData = Awaited<ReturnType<typeof suspendAgentIdentityBinding>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof suspendAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getSuspendAgentIdentityBindingQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof suspendAgentIdentityBinding>>
+  > = ({ signal }) =>
+    suspendAgentIdentityBinding(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof suspendAgentIdentityBinding>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SuspendAgentIdentityBindingQueryResult = NonNullable<
+  Awaited<ReturnType<typeof suspendAgentIdentityBinding>>
+>;
+export type SuspendAgentIdentityBindingQueryError =
+  N401Response | ErrorResponse;
+
+export function useSuspendAgentIdentityBinding<
+  TData = Awaited<ReturnType<typeof suspendAgentIdentityBinding>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof suspendAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof suspendAgentIdentityBinding>>,
+          TError,
+          Awaited<ReturnType<typeof suspendAgentIdentityBinding>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSuspendAgentIdentityBinding<
+  TData = Awaited<ReturnType<typeof suspendAgentIdentityBinding>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof suspendAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof suspendAgentIdentityBinding>>,
+          TError,
+          Awaited<ReturnType<typeof suspendAgentIdentityBinding>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSuspendAgentIdentityBinding<
+  TData = Awaited<ReturnType<typeof suspendAgentIdentityBinding>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof suspendAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Suspend an active agent identity binding
+ */
+
+export function useSuspendAgentIdentityBinding<
+  TData = Awaited<ReturnType<typeof suspendAgentIdentityBinding>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof suspendAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSuspendAgentIdentityBindingQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type revokeAgentIdentityBindingResponse200 = {
+  data: AgentIdentityBinding;
+  status: 200;
+};
+
+export type revokeAgentIdentityBindingResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type revokeAgentIdentityBindingResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type revokeAgentIdentityBindingResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type revokeAgentIdentityBindingResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type revokeAgentIdentityBindingResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type revokeAgentIdentityBindingResponseSuccess =
+  revokeAgentIdentityBindingResponse200 & {
+    headers: Headers;
+  };
+export type revokeAgentIdentityBindingResponseError = (
+  | revokeAgentIdentityBindingResponse401
+  | revokeAgentIdentityBindingResponse403
+  | revokeAgentIdentityBindingResponse404
+  | revokeAgentIdentityBindingResponse409
+  | revokeAgentIdentityBindingResponse503
+) & {
+  headers: Headers;
+};
+
+export type revokeAgentIdentityBindingResponse =
+  | revokeAgentIdentityBindingResponseSuccess
+  | revokeAgentIdentityBindingResponseError;
+
+export const getRevokeAgentIdentityBindingUrl = (id: string) => {
+  return `/admin/agent_identities/${id}:revoke`;
+};
+
+/**
+ * Gated on `models.agent_identity.bindings.manage` in administration mode. Mounted only when the enterprise credential governance flag is on. Every transition increases `revocation_epoch` by exactly one and runs under a row lock, so of two concurrent approvals one succeeds and one answers 409.
+ * @summary Revoke an agent identity binding for good
+ */
+export const revokeAgentIdentityBinding = async (
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<revokeAgentIdentityBindingResponse> => {
+  return eliteaFetch<revokeAgentIdentityBindingResponse>(
+    getRevokeAgentIdentityBindingUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getRevokeAgentIdentityBindingQueryKey = (id: string) => {
+  return ["POST", `/admin/agent_identities/${id}:revoke`] as const;
+};
+
+export const getRevokeAgentIdentityBindingQueryOptions = <
+  TData = Awaited<ReturnType<typeof revokeAgentIdentityBinding>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getRevokeAgentIdentityBindingQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof revokeAgentIdentityBinding>>
+  > = ({ signal }) =>
+    revokeAgentIdentityBinding(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof revokeAgentIdentityBinding>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RevokeAgentIdentityBindingQueryResult = NonNullable<
+  Awaited<ReturnType<typeof revokeAgentIdentityBinding>>
+>;
+export type RevokeAgentIdentityBindingQueryError = N401Response | ErrorResponse;
+
+export function useRevokeAgentIdentityBinding<
+  TData = Awaited<ReturnType<typeof revokeAgentIdentityBinding>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeAgentIdentityBinding>>,
+          TError,
+          Awaited<ReturnType<typeof revokeAgentIdentityBinding>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeAgentIdentityBinding<
+  TData = Awaited<ReturnType<typeof revokeAgentIdentityBinding>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeAgentIdentityBinding>>,
+          TError,
+          Awaited<ReturnType<typeof revokeAgentIdentityBinding>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeAgentIdentityBinding<
+  TData = Awaited<ReturnType<typeof revokeAgentIdentityBinding>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Revoke an agent identity binding for good
+ */
+
+export function useRevokeAgentIdentityBinding<
+  TData = Awaited<ReturnType<typeof revokeAgentIdentityBinding>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeAgentIdentityBinding>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRevokeAgentIdentityBindingQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listMandatesResponse200 = {
+  data: MandateListResponse;
+  status: 200;
+};
+
+export type listMandatesResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listMandatesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listMandatesResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listMandatesResponseSuccess = listMandatesResponse200 & {
+  headers: Headers;
+};
+export type listMandatesResponseError = (
+  listMandatesResponse400 | listMandatesResponse401 | listMandatesResponse403
+) & {
+  headers: Headers;
+};
+
+export type listMandatesResponse =
+  listMandatesResponseSuccess | listMandatesResponseError;
+
+export const getListMandatesUrl = (params?: ListMandatesParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/mandates?${stringifiedParams}`
+    : `/admin/mandates`;
+};
+
+/**
+ * ADR-0039 mandates, newest first. `state` is the effective state: a non-revoked mandate past `expires_at` is `expired`. Gated on `models.agent_identity.mandates.manage` or `models.agent_identity.mandates.approve`. Mounted only when the enterprise credential governance flag is on.
+ * @summary List mandates
+ */
+export const listMandates = async (
+  params?: ListMandatesParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listMandatesResponse> => {
+  return eliteaFetch<listMandatesResponse>(getListMandatesUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListMandatesQueryKey = (params?: ListMandatesParams) => {
+  return [`/admin/mandates`, ...(params ? [params] : [])] as const;
+};
+
+export const getListMandatesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listMandates>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListMandatesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listMandates>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListMandatesQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listMandates>>> = ({
+    signal,
+  }) => listMandates(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listMandates>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListMandatesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listMandates>>
+>;
+export type ListMandatesQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useListMandates<
+  TData = Awaited<ReturnType<typeof listMandates>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params: undefined | ListMandatesParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listMandates>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listMandates>>,
+          TError,
+          Awaited<ReturnType<typeof listMandates>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListMandates<
+  TData = Awaited<ReturnType<typeof listMandates>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListMandatesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listMandates>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listMandates>>,
+          TError,
+          Awaited<ReturnType<typeof listMandates>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListMandates<
+  TData = Awaited<ReturnType<typeof listMandates>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListMandatesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listMandates>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List mandates
+ */
+
+export function useListMandates<
+  TData = Awaited<ReturnType<typeof listMandates>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListMandatesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listMandates>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListMandatesQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createMandateResponse201 = {
+  data: Mandate;
+  status: 201;
+};
+
+export type createMandateResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type createMandateResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createMandateResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createMandateResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type createMandateResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type createMandateResponseSuccess = createMandateResponse201 & {
+  headers: Headers;
+};
+export type createMandateResponseError = (
+  | createMandateResponse400
+  | createMandateResponse401
+  | createMandateResponse403
+  | createMandateResponse409
+  | createMandateResponse503
+) & {
+  headers: Headers;
+};
+
+export type createMandateResponse =
+  createMandateResponseSuccess | createMandateResponseError;
+
+export const getCreateMandateUrl = () => {
+  return `/admin/mandates`;
+};
+
+/**
+ * Writes a `proposed` mandate for a non-revoked binding in the same tenant project. `expires_at` is required and at most the active policy revision's maximum mandate lifetime from now. The caller is recorded as the issuer and may not approve it. Gated on `models.agent_identity.mandates.manage`.
+ * @summary Issue a mandate
+ */
+export const createMandate = async (
+  mandateCreate: MandateCreate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createMandateResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createMandateResponse>(getCreateMandateUrl(), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(mandateCreate),
+  });
+};
+
+export const getCreateMandateQueryKey = (mandateCreate?: MandateCreate) => {
+  return ["POST", `/admin/mandates`, mandateCreate] as const;
+};
+
+export const getCreateMandateQueryOptions = <
+  TData = Awaited<ReturnType<typeof createMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  mandateCreate: MandateCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof createMandate>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getCreateMandateQueryKey(mandateCreate);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof createMandate>>> = ({
+    signal,
+  }) => createMandate(mandateCreate, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof createMandate>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateMandateQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createMandate>>
+>;
+export type CreateMandateQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useCreateMandate<
+  TData = Awaited<ReturnType<typeof createMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  mandateCreate: MandateCreate,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof createMandate>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createMandate>>,
+          TError,
+          Awaited<ReturnType<typeof createMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateMandate<
+  TData = Awaited<ReturnType<typeof createMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  mandateCreate: MandateCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof createMandate>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createMandate>>,
+          TError,
+          Awaited<ReturnType<typeof createMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateMandate<
+  TData = Awaited<ReturnType<typeof createMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  mandateCreate: MandateCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof createMandate>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Issue a mandate
+ */
+
+export function useCreateMandate<
+  TData = Awaited<ReturnType<typeof createMandate>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  mandateCreate: MandateCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof createMandate>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateMandateQueryOptions(mandateCreate, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type approveMandateResponse200 = {
+  data: Mandate;
+  status: 200;
+};
+
+export type approveMandateResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type approveMandateResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type approveMandateResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type approveMandateResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type approveMandateResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type approveMandateResponseSuccess = approveMandateResponse200 & {
+  headers: Headers;
+};
+export type approveMandateResponseError = (
+  | approveMandateResponse401
+  | approveMandateResponse403
+  | approveMandateResponse404
+  | approveMandateResponse409
+  | approveMandateResponse503
+) & {
+  headers: Headers;
+};
+
+export type approveMandateResponse =
+  approveMandateResponseSuccess | approveMandateResponseError;
+
+export const getApproveMandateUrl = (id: string) => {
+  return `/admin/mandates/${id}:approve`;
+};
+
+/**
+ * Gated on `models.agent_identity.mandates.approve` in administration mode. Mounted only when the enterprise credential governance flag is on. Every transition increases `revocation_epoch` by exactly one and runs under a row lock, so of two concurrent approvals one succeeds and one answers 409.
+ * @summary Approve, or reactivate, a mandate
+ */
+export const approveMandate = async (
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<approveMandateResponse> => {
+  return eliteaFetch<approveMandateResponse>(getApproveMandateUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getApproveMandateQueryKey = (id: string) => {
+  return ["POST", `/admin/mandates/${id}:approve`] as const;
+};
+
+export const getApproveMandateQueryOptions = <
+  TData = Awaited<ReturnType<typeof approveMandate>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof approveMandate>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getApproveMandateQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof approveMandate>>> = ({
+    signal,
+  }) => approveMandate(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof approveMandate>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ApproveMandateQueryResult = NonNullable<
+  Awaited<ReturnType<typeof approveMandate>>
+>;
+export type ApproveMandateQueryError = N401Response | ErrorResponse;
+
+export function useApproveMandate<
+  TData = Awaited<ReturnType<typeof approveMandate>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof approveMandate>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof approveMandate>>,
+          TError,
+          Awaited<ReturnType<typeof approveMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApproveMandate<
+  TData = Awaited<ReturnType<typeof approveMandate>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof approveMandate>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof approveMandate>>,
+          TError,
+          Awaited<ReturnType<typeof approveMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApproveMandate<
+  TData = Awaited<ReturnType<typeof approveMandate>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof approveMandate>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Approve, or reactivate, a mandate
+ */
+
+export function useApproveMandate<
+  TData = Awaited<ReturnType<typeof approveMandate>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof approveMandate>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getApproveMandateQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type suspendMandateResponse200 = {
+  data: Mandate;
+  status: 200;
+};
+
+export type suspendMandateResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type suspendMandateResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type suspendMandateResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type suspendMandateResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type suspendMandateResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type suspendMandateResponseSuccess = suspendMandateResponse200 & {
+  headers: Headers;
+};
+export type suspendMandateResponseError = (
+  | suspendMandateResponse401
+  | suspendMandateResponse403
+  | suspendMandateResponse404
+  | suspendMandateResponse409
+  | suspendMandateResponse503
+) & {
+  headers: Headers;
+};
+
+export type suspendMandateResponse =
+  suspendMandateResponseSuccess | suspendMandateResponseError;
+
+export const getSuspendMandateUrl = (id: string) => {
+  return `/admin/mandates/${id}:suspend`;
+};
+
+/**
+ * Gated on `models.agent_identity.mandates.manage` in administration mode. Mounted only when the enterprise credential governance flag is on. Every transition increases `revocation_epoch` by exactly one and runs under a row lock, so of two concurrent approvals one succeeds and one answers 409.
+ * @summary Suspend an active mandate
+ */
+export const suspendMandate = async (
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<suspendMandateResponse> => {
+  return eliteaFetch<suspendMandateResponse>(getSuspendMandateUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getSuspendMandateQueryKey = (id: string) => {
+  return ["POST", `/admin/mandates/${id}:suspend`] as const;
+};
+
+export const getSuspendMandateQueryOptions = <
+  TData = Awaited<ReturnType<typeof suspendMandate>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof suspendMandate>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getSuspendMandateQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof suspendMandate>>> = ({
+    signal,
+  }) => suspendMandate(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof suspendMandate>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SuspendMandateQueryResult = NonNullable<
+  Awaited<ReturnType<typeof suspendMandate>>
+>;
+export type SuspendMandateQueryError = N401Response | ErrorResponse;
+
+export function useSuspendMandate<
+  TData = Awaited<ReturnType<typeof suspendMandate>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof suspendMandate>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof suspendMandate>>,
+          TError,
+          Awaited<ReturnType<typeof suspendMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSuspendMandate<
+  TData = Awaited<ReturnType<typeof suspendMandate>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof suspendMandate>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof suspendMandate>>,
+          TError,
+          Awaited<ReturnType<typeof suspendMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSuspendMandate<
+  TData = Awaited<ReturnType<typeof suspendMandate>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof suspendMandate>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Suspend an active mandate
+ */
+
+export function useSuspendMandate<
+  TData = Awaited<ReturnType<typeof suspendMandate>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof suspendMandate>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSuspendMandateQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type revokeMandateResponse200 = {
+  data: Mandate;
+  status: 200;
+};
+
+export type revokeMandateResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type revokeMandateResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type revokeMandateResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type revokeMandateResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type revokeMandateResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type revokeMandateResponseSuccess = revokeMandateResponse200 & {
+  headers: Headers;
+};
+export type revokeMandateResponseError = (
+  | revokeMandateResponse401
+  | revokeMandateResponse403
+  | revokeMandateResponse404
+  | revokeMandateResponse409
+  | revokeMandateResponse503
+) & {
+  headers: Headers;
+};
+
+export type revokeMandateResponse =
+  revokeMandateResponseSuccess | revokeMandateResponseError;
+
+export const getRevokeMandateUrl = (id: string) => {
+  return `/admin/mandates/${id}:revoke`;
+};
+
+/**
+ * Gated on `models.agent_identity.mandates.manage` in administration mode. Mounted only when the enterprise credential governance flag is on. Every transition increases `revocation_epoch` by exactly one and runs under a row lock, so of two concurrent approvals one succeeds and one answers 409.
+ * @summary Revoke a mandate for good
+ */
+export const revokeMandate = async (
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<revokeMandateResponse> => {
+  return eliteaFetch<revokeMandateResponse>(getRevokeMandateUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRevokeMandateQueryKey = (id: string) => {
+  return ["POST", `/admin/mandates/${id}:revoke`] as const;
+};
+
+export const getRevokeMandateQueryOptions = <
+  TData = Awaited<ReturnType<typeof revokeMandate>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof revokeMandate>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getRevokeMandateQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof revokeMandate>>> = ({
+    signal,
+  }) => revokeMandate(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof revokeMandate>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RevokeMandateQueryResult = NonNullable<
+  Awaited<ReturnType<typeof revokeMandate>>
+>;
+export type RevokeMandateQueryError = N401Response | ErrorResponse;
+
+export function useRevokeMandate<
+  TData = Awaited<ReturnType<typeof revokeMandate>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof revokeMandate>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeMandate>>,
+          TError,
+          Awaited<ReturnType<typeof revokeMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeMandate<
+  TData = Awaited<ReturnType<typeof revokeMandate>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof revokeMandate>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeMandate>>,
+          TError,
+          Awaited<ReturnType<typeof revokeMandate>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeMandate<
+  TData = Awaited<ReturnType<typeof revokeMandate>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof revokeMandate>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Revoke a mandate for good
+ */
+
+export function useRevokeMandate<
+  TData = Awaited<ReturnType<typeof revokeMandate>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof revokeMandate>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRevokeMandateQueryOptions(id, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

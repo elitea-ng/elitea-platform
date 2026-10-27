@@ -8,6 +8,7 @@ import (
 	"time"
 
 	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -19,6 +20,8 @@ func TestPostgresIndexMetaInitializationQuarantineConvergesExpiredExecution(
 	defer cancel()
 
 	policy := IndexIngestDispatchPolicy{
+
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "elitea:runtime:index:commands",
 		CapabilityVersion: "1",
 		ResourceClass:     "indexing",
@@ -388,6 +391,8 @@ func newPostgresIndexMetaInitializationRaceFixture(
 	}
 
 	policy := IndexIngestDispatchPolicy{
+
+		CredentialProfile: profile.LegacyAdmission(false),
 		StreamName:        "elitea:runtime:index:commands",
 		CapabilityVersion: "1",
 		ResourceClass:     "indexing",

@@ -767,7 +767,29 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// GitHub or GitLab configuration reference (never a secret) a cloud turn
 	// pushes and opens pull (merge) requests through (ADR-0034 decision 10,
 	// amended). No data, no permission.
-	require.EqualValues(t, 179, Head(shared))
+	//
+	// 180: shared/0180_credential_governance_profile.sql, the immutable
+	// elitea_identity.credential_policy_revisions and the per-execution
+	// elitea_runtime.execution_admission_profiles pin (ADR-0039, #1111).
+	// Both empty while the governance flag is off. No data, no permission.
+	//
+	// 181: shared/0181_agent_identity_mandates.sql, the
+	// elitea_identity.agent_identity_bindings, delegations (metadata only)
+	// and mandates, with the approver != proposer CHECKs and a unique index on
+	// non-revoked bindings per (tenant project, version, digest) (#1112).
+	// Grants the four models.agent_identity.* permissions to
+	// administration-mode super_admin and admin.
+	//
+	// 182: shared/0182_secret_write_ledger.sql, the governed SecretStore
+	// staged-write ledger (elitea_identity.secret_write_ledger): a crashed
+	// backend write is swept and its version retired (#1113). No data, no
+	// permission.
+	//
+	// 183: shared/0183_security_audit_outbox.sql, the durable security audit
+	// outbox (#1114): per-partition hash-chain heads, the transactional
+	// outbox and the append-only elitea_identity.security_audit_events. No
+	// data, no permission.
+	require.EqualValues(t, 183, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
