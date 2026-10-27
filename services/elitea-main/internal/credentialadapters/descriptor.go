@@ -81,6 +81,12 @@ type AdapterDescriptor struct {
 	// Audience is the OAuth resource the delegated token is for, when the
 	// provider needs one (SharePoint: Microsoft Graph).
 	Audience string
+	// OAuthAuthority is who issued the consent of the oauth_delegated
+	// class: credentialgrant.OAuthAuthorityEntraOBO (SharePoint) or
+	// credentialgrant.OAuthAuthorityProvider (Atlassian 3LO, Aha! OAuth2).
+	// Required when the descriptor declares oauth_delegated; empty
+	// otherwise.
+	OAuthAuthority credentialgrant.OAuthAuthority
 	// Scopes are the OAuth scopes requested per class, least privilege first.
 	Scopes map[credentialgrant.CredentialClass][]string
 	// RotationRequired lists the classes whose material is long lived and

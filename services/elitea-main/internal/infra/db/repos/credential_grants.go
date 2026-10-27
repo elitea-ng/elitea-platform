@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/foldervisibility"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/epoch"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/projectaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
@@ -46,6 +47,15 @@ const (
 type CredentialGrants struct {
 	pool  *pgxpool.Pool
 	audit securityaudit.Appender
+	// notifier signals every replica after an epoch change commits
+	// (#1121); nil signals nothing.
+	notifier epoch.Notifier
+}
+
+// WithNotifier signals n after every committed epoch change.
+func (s *CredentialGrants) WithNotifier(n epoch.Notifier) *CredentialGrants {
+	s.notifier = n
+	return s
 }
 
 // NewCredentialGrants builds the store over pool. audit records every grant
@@ -260,6 +270,9 @@ RETURNING `+credentialGrantColumnList,
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return credentialgrant.CredentialUseGrant{}, mapCredentialGrantWriteError(fmt.Errorf("commit grant transition: %w", err))
+	}
+	if s.notifier != nil {
+		s.notifier.Notify(ctx, epoch.Change{Epoch: epoch.SecurityEpoch{Kind: epoch.KindGrant, ID: written.ID, Value: written.Epoch}})
 	}
 	return written, nil
 }

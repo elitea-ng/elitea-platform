@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/epoch"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/mandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/obo"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
@@ -52,6 +53,26 @@ type Store struct {
 	sealer *sealer
 	audit  securityaudit.Appender
 	now    func() time.Time
+	// notifier signals every replica after a delegation epoch change
+	// commits (#1121); nil signals nothing.
+	notifier epoch.Notifier
+}
+
+// WithNotifier signals n after every committed delegation revocation.
+func (s *Store) WithNotifier(n epoch.Notifier) *Store {
+	s.notifier = n
+	return s
+}
+
+func (s *Store) notify(ctx context.Context, revoked map[string]int64) {
+	if s.notifier == nil || len(revoked) == 0 {
+		return
+	}
+	changes := make([]epoch.Change, 0, len(revoked))
+	for id, value := range revoked {
+		changes = append(changes, epoch.Change{Epoch: epoch.SecurityEpoch{Kind: epoch.KindDelegation, ID: id, Value: value}})
+	}
+	s.notifier.Notify(ctx, changes...)
 }
 
 // New builds the store. Every change appends a security audit event in its
@@ -285,13 +306,16 @@ func (s *Store) Revoke(ctx context.Context, delegationID, actor string) (int64, 
 	if !isUUID(delegationID) || !validText(actor) {
 		return 0, ErrInvalid
 	}
-	var epoch int64
+	var revokedEpoch int64
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var err error
-		epoch, err = s.revokeLocked(ctx, tx, delegationID, actor, "revoke.operator")
+		revokedEpoch, err = s.revokeLocked(ctx, tx, delegationID, actor, "revoke.operator")
 		return err
 	})
-	return epoch, err
+	if err == nil {
+		s.notify(ctx, map[string]int64{delegationID: revokedEpoch})
+	}
+	return revokedEpoch, err
 }
 
 // RevokeSession revokes everything a browser session created: its sign-in
@@ -304,6 +328,7 @@ func (s *Store) RevokeSession(ctx context.Context, sessionID string) (int, error
 	digest := SessionDigest(sessionID)
 	now := s.now().UTC()
 	revoked := 0
+	epochs := map[string]int64{}
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 UPDATE elitea_identity.signin_assertions
@@ -352,13 +377,18 @@ ORDER BY id FOR UPDATE`, digest[:])
 			return fmt.Errorf("delegationstore: read session delegations: %w", err)
 		}
 		for _, id := range ids {
-			if _, err := s.revokeLocked(ctx, tx, id, "session", "revoke.logout"); err != nil {
+			value, err := s.revokeLocked(ctx, tx, id, "session", "revoke.logout")
+			if err != nil {
 				return err
 			}
+			epochs[id] = value
 		}
 		revoked = len(ids)
 		return nil
 	})
+	if err == nil {
+		s.notify(ctx, epochs)
+	}
 	return revoked, err
 }
 

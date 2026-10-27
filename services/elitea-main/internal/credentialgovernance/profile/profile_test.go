@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity"
 )
@@ -240,5 +241,40 @@ func TestProfileIsReadFromTheEnvironmentOnly(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The reconcile parameters (#1154) are optional: absent keeps the defaults
+// and the canonical bytes of a revision written before they existed.
+func TestReconcileParametersAreOptionalAndBounded(t *testing.T) {
+	doc, canonical, err := ParsePolicyDocument([]byte(validPolicy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.ReconcileInterval() != DefaultReconcileInterval || doc.ReconcileOutageFailures() != DefaultReconcileOutageThreshold {
+		t.Fatal("absent reconcile parameters must read as the defaults")
+	}
+	if strings.Contains(string(canonical), "reconcile") {
+		t.Fatalf("absent reconcile parameters must not change the canonical bytes: %s", canonical)
+	}
+	set := strings.Replace(validPolicy, `}`, `,"reconcile_interval_seconds":300,"reconcile_outage_threshold":5}`, 1)
+	doc, _, err = ParsePolicyDocument([]byte(set))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.ReconcileInterval() != 5*time.Minute || doc.ReconcileOutageFailures() != 5 {
+		t.Fatalf("reconcile parameters not read: %v %d", doc.ReconcileInterval(), doc.ReconcileOutageFailures())
+	}
+	for name, extra := range map[string]string{
+		"interval too short": `,"reconcile_interval_seconds":10}`,
+		"interval too long":  `,"reconcile_interval_seconds":999999}`,
+		"negative interval":  `,"reconcile_interval_seconds":-1}`,
+		"negative threshold": `,"reconcile_outage_threshold":-1}`,
+		"huge threshold":     `,"reconcile_outage_threshold":1000}`,
+	} {
+		raw := strings.Replace(validPolicy, `}`, extra, 1)
+		if _, _, err := ParsePolicyDocument([]byte(raw)); !errors.Is(err, ErrInvalidPolicy) {
+			t.Fatalf("%s: err = %v, want ErrInvalidPolicy", name, err)
+		}
 	}
 }

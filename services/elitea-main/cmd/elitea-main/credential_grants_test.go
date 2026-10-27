@@ -19,7 +19,7 @@ func (noPins) ReadPin(context.Context, string) (profile.Pin, error) {
 // so the router mounts no grant route (router_credential_grants_test.go
 // proves a nil handler answers 404). Nothing is dialled: the pool may be nil.
 func TestCredentialGrantGovernanceBuildsNothingWithTheFlagOff(t *testing.T) {
-	decider, handler, err := credentialGrantGovernance(profile.LegacyAdmission(false), nil, nil, nil, nil)
+	decider, handler, err := credentialGrantGovernance(profile.LegacyAdmission(false), nil, nil, nil, nil, nil)
 	if err != nil || decider != nil || handler != nil {
 		t.Fatalf("flag off built decider=%v handler=%v err=%v", decider, handler, err)
 	}
@@ -29,7 +29,7 @@ func TestCredentialGrantGovernanceBuildsNothingWithTheFlagOff(t *testing.T) {
 // exists; a missing database refuses boot.
 func TestCredentialGrantGovernanceBuildsTheDeciderWithTheFlagOn(t *testing.T) {
 	governed := profile.GovernedAdmission(profile.PolicyRevision{ID: "2026-10-r1", Digest: [32]byte{1}})
-	if _, _, err := credentialGrantGovernance(governed, nil, noPins{}, nil, credentialOperationCatalog()); err == nil {
+	if _, _, err := credentialGrantGovernance(governed, nil, noPins{}, nil, credentialOperationCatalog(), nil); err == nil {
 		t.Fatal("flag on without a database was accepted")
 	}
 	// pgxpool.New does not connect; construction must not need a live database.
@@ -38,7 +38,7 @@ func TestCredentialGrantGovernanceBuildsTheDeciderWithTheFlagOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	decider, handler, err := credentialGrantGovernance(governed, pool, noPins{}, nil, credentialOperationCatalog())
+	decider, handler, err := credentialGrantGovernance(governed, pool, noPins{}, nil, credentialOperationCatalog(), nil)
 	if err != nil || decider == nil || handler == nil {
 		t.Fatalf("flag on: decider=%v handler=%v err=%v", decider, handler, err)
 	}
@@ -53,7 +53,7 @@ func TestCredentialBrokerBuildsNothingWithTheFlagOff(t *testing.T) {
 	broker, err := credentialBrokerAtBoot(profile.LegacyAdmission(true), func(string) (string, bool) {
 		t.Fatal("the flag-off broker composition read the environment")
 		return "", false
-	}, nil, nil, nil, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil, nil, nil, profile.PolicyRevision{}, nil, nil)
 	if err != nil || broker != nil {
 		t.Fatalf("flag off built broker=%v err=%v", broker, err)
 	}
@@ -64,7 +64,7 @@ func TestCredentialBrokerBuildsNothingWithTheFlagOff(t *testing.T) {
 func TestCredentialBrokerRefusesMissingDependenciesWithTheFlagOn(t *testing.T) {
 	governed := profile.GovernedAdmission(profile.PolicyRevision{ID: "2026-10-r1", Digest: [32]byte{1}})
 	if _, err := credentialBrokerAtBoot(governed, func(string) (string, bool) { return "", false },
-		nil, nil, noPins{}, nil, nil, credentialOperationCatalog(), nil); err == nil {
+		nil, nil, noPins{}, nil, nil, nil, credentialOperationCatalog(), profile.PolicyRevision{}, nil, nil); err == nil {
 		t.Fatal("flag on without a decider or a database was accepted")
 	}
 }

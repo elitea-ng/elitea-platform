@@ -5,6 +5,7 @@ package agentidentity
 //	GET  /api/v2/admin/external_agent_identities
 //	POST /api/v2/admin/external_agent_identities
 //	POST /api/v2/admin/external_agent_identities/{id}:provision|:activate|:suspend|:resume|:retire
+//	GET  /api/v2/admin/external_agent_identities/drift   (the reconcile loop's open findings, #1154)
 //
 // router.go mounts these only when RouterConfig.ExternalAgentIdentityAdmin is
 // set, which the composition root does only with the governance flag on.
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity/reconcile"
 	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity/governance"
 )
@@ -39,17 +41,34 @@ type ExternalService interface {
 
 var _ ExternalService = (*agentidentity.ExternalIdentityService)(nil)
 
+// DriftReader is what the drift route reads. *repos.AgentIdentityReconcile
+// implements it.
+type DriftReader interface {
+	OpenFindings(ctx context.Context, provider string, limit, offset int) ([]reconcile.Finding, error)
+	Health(ctx context.Context) ([]reconcile.ProviderHealth, error)
+}
+
 // ExternalHandler serves the external identity routes.
 type ExternalHandler struct {
 	service ExternalService
+	drift   DriftReader
 }
 
-// NewExternal builds the handler. A nil service is refused.
-func NewExternal(service ExternalService) (*ExternalHandler, error) {
+// NewExternal builds the handler. A nil service is refused. drift is
+// optional: without it the drift route answers no findings, which is true
+// of a deployment where no reconcile store exists.
+func NewExternal(service ExternalService, drift ...DriftReader) (*ExternalHandler, error) {
 	if service == nil {
 		return nil, errors.New("external agent identity admin: a service is required")
 	}
-	return &ExternalHandler{service: service}, nil
+	h := &ExternalHandler{service: service}
+	if len(drift) > 1 {
+		return nil, errors.New("external agent identity admin: at most one drift reader")
+	}
+	if len(drift) == 1 {
+		h.drift = drift[0]
+	}
+	return h, nil
 }
 
 type externalView struct {
@@ -206,4 +225,84 @@ func (h *ExternalHandler) ResumeExternalIdentity(w http.ResponseWriter, r *http.
 // RetireExternalIdentity serves POST /admin/external_agent_identities/{id}:retire.
 func (h *ExternalHandler) RetireExternalIdentity(w http.ResponseWriter, r *http.Request) {
 	h.transition("retire", h.service.Retire)(w, r)
+}
+
+type driftFindingView struct {
+	ID                      string  `json:"id"`
+	Kind                    string  `json:"kind"`
+	Provider                string  `json:"provider"`
+	ProviderTenant          string  `json:"provider_tenant"`
+	ExternalID              string  `json:"external_id"`
+	ExternalAgentIdentityID *string `json:"external_agent_identity_id"`
+	TenantProjectID         *int64  `json:"tenant_project_id"`
+	ApplicationID           *int64  `json:"application_id"`
+	RevocationEpoch         int64   `json:"revocation_epoch"`
+	DetectedAt              string  `json:"detected_at"`
+	LastSeenAt              string  `json:"last_seen_at"`
+}
+
+type providerHealthView struct {
+	Provider            string  `json:"provider"`
+	ConsecutiveFailures int     `json:"consecutive_failures"`
+	AdmissionDenied     bool    `json:"admission_denied"`
+	LastPassAt          *string `json:"last_pass_at"`
+	LastSuccessAt       *string `json:"last_success_at"`
+}
+
+func optionalTime(t time.Time) *string {
+	if t.IsZero() {
+		return nil
+	}
+	formatted := t.UTC().Format(time.RFC3339Nano)
+	return &formatted
+}
+
+func optionalID(v int64) *int64 {
+	if v == 0 {
+		return nil
+	}
+	return &v
+}
+
+// ListDriftFindings serves GET /admin/external_agent_identities/drift: the
+// open drift findings, newest first, and every reconciled provider's
+// health (an admission_denied provider opens no new agent session).
+func (h *ExternalHandler) ListDriftFindings(w http.ResponseWriter, r *http.Request) {
+	window, ok := parseListWindow(r)
+	provider := r.URL.Query().Get("provider")
+	if !ok || window.tenantProjectID != 0 || window.state != "" || (provider != "" && !domain.ValidProviderName(provider)) {
+		writeError(w, http.StatusBadRequest, "invalid provider, limit or offset")
+		return
+	}
+	findings := []driftFindingView{}
+	providers := []providerHealthView{}
+	if h.drift != nil {
+		rows, err := h.drift.OpenFindings(r.Context(), provider, window.limit, window.offset)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "external agent identity admin: internal error")
+			return
+		}
+		for _, f := range rows {
+			findings = append(findings, driftFindingView{
+				ID: f.ID, Kind: string(f.Kind), Provider: f.Provider, ProviderTenant: f.ProviderTenant,
+				ExternalID: f.ExternalID, ExternalAgentIdentityID: optional(f.ExternalAgentIdentityID),
+				TenantProjectID: optionalID(f.TenantProjectID), ApplicationID: optionalID(f.ApplicationID),
+				RevocationEpoch: f.RevocationEpoch,
+				DetectedAt:      f.DetectedAt.UTC().Format(time.RFC3339Nano), LastSeenAt: f.LastSeenAt.UTC().Format(time.RFC3339Nano),
+			})
+		}
+		health, err := h.drift.Health(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "external agent identity admin: internal error")
+			return
+		}
+		for _, p := range health {
+			if provider != "" && p.Provider != provider {
+				continue
+			}
+			providers = append(providers, providerHealthView{Provider: p.Provider, ConsecutiveFailures: p.ConsecutiveFailures,
+				AdmissionDenied: p.AdmissionDenied, LastPassAt: optionalTime(p.LastPassAt), LastSuccessAt: optionalTime(p.LastSuccessAt)})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rows": findings, "providers": providers})
 }

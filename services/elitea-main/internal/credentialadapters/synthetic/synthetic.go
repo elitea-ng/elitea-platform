@@ -36,6 +36,7 @@ func Descriptor() credentialadapters.AdapterDescriptor {
 			credentialgrant.ClassStaticSecret:   {"token"},
 			credentialgrant.ClassOAuthDelegated: {"access_token"},
 		},
+		OAuthAuthority: credentialgrant.OAuthAuthorityProvider,
 		Qualification: map[credentialgrant.CredentialClass]string{
 			credentialgrant.ClassStaticSecret:   credentialadapters.QualificationUnqualified,
 			credentialgrant.ClassOAuthDelegated: credentialadapters.QualificationUnqualified,

@@ -4,6 +4,90 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## P4
+
+* **elitea-main: agent identity reconciliation (#1154, off by default).**
+  Nobody has to act while `ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED`
+  stays `false`. One additive shared migration (0191) creates two empty
+  tables: `agent_identity_provider_health` and
+  `external_identity_drift_findings`. With the flag on, one replica per
+  identity provider compares the external agent identities with the
+  provider. It suspends or replaces a record on drift, and records orphans.
+  The loop starts only for configured providers; none is configured yet.
+* Two optional policy revision fields set the loop:
+  `reconcile_interval_seconds` (default 600, range 60..86400) and
+  `reconcile_outage_threshold` (default 3, range 1..100). A revision without
+  them keeps its digest. After the threshold of failed passes, new agent
+  sessions for that provider are denied until a pass succeeds.
+* New admin route: `GET /api/v2/admin/external_agent_identities/drift`. It
+  uses the existing `models.agent_identity.external.manage` permission.
+* New metric: `agentidentity_reconcile_errors_total{provider}`.
+
+### Revocation epochs, credential cache and invalidation (#1121)
+
+**Affects:** nobody has to act while
+`ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED` stays `false`: no epoch
+check, no cache and no NATS subscription exist, and no migration is added.
+With the flag on, the chart's NATS permission table needs the new subject;
+upgrade the chart with the release.
+
+**What changed.**
+
+* A governed run's revocation epochs (binding, mandate, delegation, and at
+  redemption also the grant, the credential reference and the external
+  identity) are re-read in one statement at `ClaimCommand`, `RenewLease` and
+  `RedeemCredential`. A stale claim is refused (`AUTHORIZATION_FAILED`), a
+  stale renewal answers desired state `CANCELLED` and cancels the run, a stale
+  redemption is denied `DENIED`. Legacy runs keep today's behaviour.
+* Each Main replica caches Entra on-behalf-of access tokens, and static
+  secrets only when the run's policy revision sets
+  `cache.cache_static_secrets`. The optional `cache` block of the policy
+  document (`max_entries`, `max_bytes`, `skew_seconds`,
+  `cache_static_secrets`) bounds it; a revision without it keeps its digest.
+* Committed epoch changes are published on the core NATS subject
+  `elitea.rt.v1.security.invalidation`. The chart grants publish and
+  subscribe on it to `elitea-main-runtime`. A deployment that keeps its own
+  NATS permission file must add the subject to that identity's publish and
+  subscribe lists; without it, invalidation falls back to the per-redemption
+  epoch re-read (correct, but a replica keeps a dead entry until it is next
+  looked up).
+* PostgreSQL or Entra unavailable denies new redemptions
+  (`BACKEND_UNAVAILABLE`); each has a circuit breaker.
+
+The operator guide (`/docs/deployment/credential-governance`, "Revocation and
+caching") lists the metrics.
+
+### Provider OAuth consent and single-flight refresh (off by default)
+
+**Affects:** nobody has to act while
+`ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED` stays `false`, or while no
+`ELITEA_PROVIDER_OAUTH_<P>_CLIENT_ID` is set. One additive shared migration
+(0190) creates three empty tables: `elitea_identity.provider_oauth_grants`,
+`elitea_identity.provider_oauth_consent_states` and
+`elitea_runtime.credential_refresh_leases`.
+
+**What changed.**
+
+* Jira, Confluence and Aha! `oauth_delegated` credentials use the user's own
+  provider OAuth grant (Atlassian 3LO, Aha! OAuth2), not Entra. SharePoint
+  still uses the Entra on-behalf-of exchange (#1121).
+* With the flag on and a provider configured, two routes are mounted:
+  `POST /api/v2/credential_consent/{provider}:start` and
+  `GET /api/v2/credential_consent/{provider}:callback`. Start needs
+  `models.credentials.governed.use` in the project. No default role holds it.
+* A refresh runs one time across all replicas, with a fenced lease in
+  PostgreSQL. A rotated refresh token is written with the new access token.
+
+**What to do to use it.**
+
+* Register an OAuth application per provider. Set its callback URL to
+  `https://<host>/api/v2/credential_consent/<provider>:callback`.
+* Set `ELITEA_PROVIDER_OAUTH_<P>_CLIENT_ID`, `_CLIENT_SECRET` (from a
+  Secret) and `_REDIRECT_URI`. For Aha!, also set `_AUTHORIZE_URL` and
+  `_TOKEN_URL`. See `/docs/deployment/credential-governance`.
+* Keep `SECRETS_MASTER_KEY` set. With a provider configured and no key,
+  elitea-main refuses to start.
+
 ## elitea-main: governed credential broker (off by default)
 
 **Affects:** nobody has to act while

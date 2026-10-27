@@ -34,12 +34,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	agentidentitycore "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity/reconcile"
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
 	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authzcompose"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialadapters"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/cache"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/epoch"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity/governance"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
@@ -272,6 +275,43 @@ type agentIdentityComposition struct {
 	// Broker opens run-scoped agent sessions for admission and turns them
 	// into credentials for the credential broker (#1151). Its only callers.
 	Broker *agentidentitycore.Broker
+	// Reconciler compares external agent identities with their providers
+	// (#1154). Nil with the flag off, and with no provider configured.
+	Reconciler *reconcile.Reconciler
+}
+
+// agentIdentityEpochNotifier passes the reconcile loop's committed epoch
+// bumps to the invalidation hub (#1121), so replicas drop cached entries of
+// a drifted identity at once. Correctness does not depend on it: every
+// enforcement point re-reads the epoch. A nil hub is a nil notifier.
+func agentIdentityEpochNotifier(hub *epoch.Hub) reconcile.Notifier {
+	if hub == nil {
+		return nil
+	}
+	return reconcileEpochNotifier{hub: hub}
+}
+
+type reconcileEpochNotifier struct{ hub *epoch.Hub }
+
+func (n reconcileEpochNotifier) EpochChanged(ctx context.Context, change reconcile.EpochChange) {
+	n.hub.Notify(ctx, epoch.Change{
+		Epoch:     epoch.SecurityEpoch{Kind: epoch.Kind(change.Kind), ID: change.ID, Value: change.Epoch},
+		ChangedAt: time.Now(),
+	})
+}
+
+// securityInvalidationsAtBoot builds this replica's governed-credential
+// invalidation hub (#1121). Nil with the flag off: nothing is signalled, no
+// subscription is made.
+func securityInvalidationsAtBoot(admission profile.Admission, logger *slog.Logger) (*epoch.Hub, error) {
+	if !admission.Governed() {
+		return nil, nil
+	}
+	hub, err := epoch.NewHub(epoch.HubOptions{Logger: logger})
+	if err != nil {
+		return nil, fmt.Errorf("construct the security invalidation hub: %w", err)
+	}
+	return hub, nil
 }
 
 // agentIdentityProviders is the adapter set the registry is built from. No
@@ -283,7 +323,7 @@ func agentIdentityProviders() []agentidentitycore.Provider { return nil }
 // agentIdentityAdmin builds the agent identity admin APIs and the session
 // broker. With the flag off it builds nothing, and the router then mounts
 // none of the routes.
-func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevision, pool *pgxpool.Pool) (agentIdentityComposition, error) {
+func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevision, pool *pgxpool.Pool, invalidations *epoch.Hub) (agentIdentityComposition, error) {
 	if !admission.Governed() {
 		return agentIdentityComposition{}, nil
 	}
@@ -296,11 +336,18 @@ func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevi
 	}
 	bindings := repos.NewAgentIdentityBindings(pool, audit)
 	identities := repos.NewExternalAgentIdentities(pool, audit)
+	mandates := repos.NewMandates(pool, audit)
+	if invalidations != nil {
+		// Every committed epoch change signals the replicas (#1121).
+		bindings.WithNotifier(invalidations)
+		identities.WithNotifier(invalidations)
+		mandates.WithNotifier(invalidations)
+	}
 	revisions := governance.FixedRevision(revision)
 	service, err := governance.New(governance.Config{
 		Revisions:          revisions,
 		Bindings:           bindings,
-		Mandates:           repos.NewMandates(pool, audit),
+		Mandates:           mandates,
 		ExternalIdentities: identities,
 	})
 	if err != nil {
@@ -320,7 +367,8 @@ func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevi
 	if err != nil {
 		return agentIdentityComposition{}, fmt.Errorf("construct external agent identity service: %w", err)
 	}
-	externalAdmin, err := v2agentidentity.NewExternal(external)
+	reconcileStore := repos.NewAgentIdentityReconcile(pool, audit)
+	externalAdmin, err := v2agentidentity.NewExternal(external, reconcileStore)
 	if err != nil {
 		return agentIdentityComposition{}, err
 	}
@@ -332,11 +380,26 @@ func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevi
 		Bindings:   bindings,
 		Identities: identities,
 		Sessions:   repos.NewAgentSessions(pool, audit),
+		// A provider the reconcile loop reports past the outage threshold
+		// opens no new session on any replica (#1154).
+		ProviderHealth: reconcileStore,
 	})
 	if err != nil {
 		return agentIdentityComposition{}, fmt.Errorf("construct agent identity broker: %w", err)
 	}
-	return agentIdentityComposition{Admin: admin, ExternalAdmin: externalAdmin, Broker: broker}, nil
+	out := agentIdentityComposition{Admin: admin, ExternalAdmin: externalAdmin, Broker: broker}
+	// The reconcile loop runs only for configured providers: with an empty
+	// registry it is not built.
+	if len(registry.Names()) > 0 {
+		out.Reconciler, err = reconcile.New(reconcile.Config{
+			Registry: registry, Store: reconcileStore, Interval: revision.Document.ReconcileInterval(),
+			OutageThreshold: revision.Document.ReconcileOutageFailures(), Notifier: agentIdentityEpochNotifier(invalidations),
+		})
+		if err != nil {
+			return agentIdentityComposition{}, fmt.Errorf("construct agent identity reconcile loop: %w", err)
+		}
+	}
+	return out, nil
 }
 
 // credentialOperationCatalog is THE seam where the composition passes the
@@ -368,6 +431,7 @@ func credentialGrantGovernance(
 	pins profile.PinReader,
 	delegations authzcompose.DelegationReader,
 	operations credentialgrant.OperationRegistry,
+	invalidations *epoch.Hub,
 ) (*authzcompose.Decider, *v2credentialgrants.Handler, error) {
 	if !admission.Governed() {
 		return nil, nil, nil
@@ -383,6 +447,9 @@ func credentialGrantGovernance(
 		return nil, nil, fmt.Errorf("construct credential grant security audit appender: %w", err)
 	}
 	grants := repos.NewCredentialGrants(pool, audit)
+	if invalidations != nil {
+		grants.WithNotifier(invalidations)
+	}
 	decider, err := authzcompose.NewGovernedDecider(authzcompose.Dependencies{
 		AuthSources:  authzcompose.DefaultAuthSources{},
 		Permissions:  legacyrbac.NewPostgresResolver(pool),
@@ -433,7 +500,10 @@ func credentialBrokerAtBoot(
 	pins profile.PinReader,
 	sessions *agentidentitycore.Broker,
 	entra *entraGovernance,
+	providerTokens credentialbroker.ProviderTokenSource,
 	catalog credentialbroker.OperationCatalog,
+	revision profile.PolicyRevision,
+	invalidations *epoch.Hub,
 	logger *slog.Logger,
 ) (*credentialbroker.Broker, error) {
 	if !admission.Governed() {
@@ -487,6 +557,23 @@ func credentialBrokerAtBoot(
 		Sessions:     sessions,
 		Catalog:      catalog,
 		Logger:       logger,
+		// Jira, Confluence and Aha! oauth_delegated uses (#1121); nil when
+		// no provider OAuth application is configured.
+		ProviderTokens: providerTokens,
+	}
+	// Revocation epochs, the credential cache and its invalidation (#1121).
+	// The cache's bounds are the active revision's; whether a run may reuse
+	// a static secret is its own pinned revision's.
+	if cfg.Epochs, err = epoch.NewPostgresStore(pool); err != nil {
+		return nil, err
+	}
+	settings := revision.Document.CacheSettings()
+	if cfg.Cache, err = cache.New(cache.Limits{MaxEntries: settings.MaxEntries, MaxBytes: settings.MaxBytes, Skew: settings.Skew}, nil); err != nil {
+		return nil, fmt.Errorf("construct the credential cache: %w", err)
+	}
+	cfg.Invalidations = invalidations
+	if revisions, ok := pins.(profile.RevisionStore); ok {
+		cfg.Revisions = revisions
 	}
 	if delegations := entraDelegations(entra); delegations != nil {
 		cfg.Delegations = delegations
@@ -527,6 +614,7 @@ func entraGovernanceAtBoot(
 	pool *pgxpool.Pool,
 	providers v2auth.IdentityProviderSource,
 	masterKey func() ([]byte, error),
+	invalidations *epoch.Hub,
 	logger *slog.Logger,
 ) (*entraGovernance, error) {
 	if !admission.Governed() || providers == nil {
@@ -560,6 +648,9 @@ func entraGovernanceAtBoot(
 	store, err := delegationstore.New(pool, key, audit)
 	if err != nil {
 		return nil, fmt.Errorf("construct Entra delegation custody: %w", err)
+	}
+	if invalidations != nil {
+		store.WithNotifier(invalidations)
 	}
 	governed := &entraGovernance{Delegations: store}
 

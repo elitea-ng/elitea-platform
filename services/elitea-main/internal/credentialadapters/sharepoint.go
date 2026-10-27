@@ -26,6 +26,7 @@ func SharePoint() AdapterDescriptor {
 		MaterialKeys: map[credentialgrant.CredentialClass][]string{
 			oauthDelegated: {"access_token"},
 		},
+		OAuthAuthority: credentialgrant.OAuthAuthorityEntraOBO,
 		Qualification: map[credentialgrant.CredentialClass]string{
 			oauthDelegated: QualificationFixture,
 		},

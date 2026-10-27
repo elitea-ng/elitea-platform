@@ -154,7 +154,9 @@ function extractMermaidBlocks(body: string): string[] {
 
 function extractJsxComponentNames(prose: string): Set<string> {
   const jsxComponentNames = new Set<string>();
-  for (const match of prose.matchAll(/<\/?([A-Z][A-Za-z0-9]*)\b/g)) {
+  // Inline code is literal text to MDX (`ELITEA_X_<P>_ID` is no component).
+  const withoutInlineCode = prose.replace(/`[^`\n]*`/g, '');
+  for (const match of withoutInlineCode.matchAll(/<\/?([A-Z][A-Za-z0-9]*)\b/g)) {
     if (match[1] !== undefined) jsxComponentNames.add(match[1]);
   }
   return jsxComponentNames;

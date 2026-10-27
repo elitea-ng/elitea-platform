@@ -37,7 +37,8 @@ type Provider interface {
 	Provision(ctx context.Context, spec ProvisionSpec) (ProvisionResult, error)
 	Activate(ctx context.Context, ref identity.ExternalRef) error
 	// Resolve reads the provider object. A recreated object or a generation
-	// mismatch is ErrIdentityReplaced.
+	// mismatch is ErrIdentityReplaced; an object that no longer exists is
+	// ErrIdentityNotFound.
 	Resolve(ctx context.Context, ref identity.ExternalRef) (Resolved, error)
 	AssumeApp(ctx context.Context, spec AssumeSpec) (SessionCredential, error)
 	// AssumeOnBehalfOf answers *InteractionRequired or an error when the
@@ -46,12 +47,18 @@ type Provider interface {
 	Suspend(ctx context.Context, ref identity.ExternalRef) error
 	Resume(ctx context.Context, ref identity.ExternalRef) error
 	Revoke(ctx context.Context, spec RevokeSpec) error
+	// List pages the provider objects tagged as Elitea-owned (the reconcile
+	// loop, #1154). An object Elitea holds no record for is an orphan.
 	List(ctx context.Context, spec ListSpec) (ListPage, error)
 }
 
 // ErrIdentityReplaced means the provider object behind a ref is not the one
 // recorded: it was recreated, or its generation moved.
 var ErrIdentityReplaced = errors.New("agent identity provider: the external identity was replaced")
+
+// ErrIdentityNotFound means the provider object behind a ref no longer
+// exists. Any other Resolve error is a provider failure, not a finding.
+var ErrIdentityNotFound = errors.New("agent identity provider: the external identity was not found")
 
 // InteractionRequired is the OBO failure a user must resolve interactively
 // (consent, step-up, a claims challenge the run cannot satisfy). It is a
@@ -124,10 +131,17 @@ type ProvisionResult struct {
 	Pending      bool
 }
 
-// Resolved is what Resolve reads.
+// Resolved is what Resolve reads, and one object of a List page.
 type Resolved struct {
 	Ref     identity.ExternalRef
 	Enabled bool
+	// OwnerRef is the owner the provider reports. Empty: the provider does
+	// not report one, and the reconcile loop does not compare it.
+	OwnerRef string
+	// CredentialChanged reports a credential added, removed or rotated on
+	// the object outside Elitea, where the provider can tell. A provider
+	// that cannot tell leaves it false.
+	CredentialChanged bool
 }
 
 // AssumeSpec asks for an app-only credential of the agent.
@@ -160,9 +174,9 @@ type ListSpec struct {
 	PageSize          int
 }
 
-// ListPage is one page.
+// ListPage is one page. An empty NextPageToken is the last page.
 type ListPage struct {
-	Refs          []identity.ExternalRef
+	Objects       []Resolved
 	NextPageToken string
 }
 

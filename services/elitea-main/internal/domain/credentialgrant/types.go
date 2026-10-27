@@ -63,6 +63,24 @@ func (c CredentialClass) Valid() bool {
 	return false
 }
 
+// OAuthAuthority is who issued the consent an oauth_delegated credential
+// rests on (ADR-0039 decision 3). The provider adapter descriptor states it.
+type OAuthAuthority string
+
+const (
+	// OAuthAuthorityEntraOBO: the user's Entra delegation, exchanged on
+	// behalf of the user for the provider resource (SharePoint: Graph).
+	OAuthAuthorityEntraOBO OAuthAuthority = "entra_obo"
+	// OAuthAuthorityProvider: the user consented to the provider directly
+	// (Atlassian 3LO, Aha! OAuth2); the provider grant is the authority.
+	OAuthAuthorityProvider OAuthAuthority = "provider"
+)
+
+// Valid reports whether a is a modelled authority.
+func (a OAuthAuthority) Valid() bool {
+	return a == OAuthAuthorityEntraOBO || a == OAuthAuthorityProvider
+}
+
 // ReferenceState is where a credential reference is in its rotation.
 type ReferenceState string
 

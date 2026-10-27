@@ -26,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/epoch"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/mandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
@@ -48,6 +49,15 @@ const (
 type AgentIdentityBindings struct {
 	pool  *pgxpool.Pool
 	audit securityaudit.Appender
+	// notifier signals every replica after an epoch change commits
+	// (#1121); nil signals nothing.
+	notifier epoch.Notifier
+}
+
+// WithNotifier signals n after every committed epoch change.
+func (s *AgentIdentityBindings) WithNotifier(n epoch.Notifier) *AgentIdentityBindings {
+	s.notifier = n
+	return s
 }
 
 // NewAgentIdentityBindings builds the store over pool. audit records every
@@ -347,6 +357,13 @@ RETURNING `+agentIdentityBindingSelectColumnList,
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return agentidentity.AgentIdentityBinding{}, mapAgentIdentityWriteError(fmt.Errorf("commit binding transition: %w", err))
+	}
+	if s.notifier != nil {
+		changes := []epoch.Change{{Epoch: epoch.SecurityEpoch{Kind: epoch.KindBinding, ID: written.ID, Value: written.RevocationEpoch}}}
+		for _, m := range cascaded {
+			changes = append(changes, epoch.Change{Epoch: epoch.SecurityEpoch{Kind: epoch.KindMandate, ID: m.ID, Value: m.RevocationEpoch}})
+		}
+		s.notifier.Notify(ctx, changes...)
 	}
 	return written, nil
 }

@@ -8,9 +8,12 @@ import (
 	"strings"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authzcompose"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/cache"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/epoch"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/delegationstore"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/obo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/provideroauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore"
 )
 
@@ -22,7 +25,8 @@ type acquired struct{ envelope *Envelope }
 // acquire reads or exchanges the material of a permitted use and keeps only
 // the catalogue's keys. Every failure is a typed denial; nothing is logged
 // but codes.
-func (b *Broker) acquire(ctx context.Context, req RedeemRequest, facts requestFacts, decision authzcompose.OperationDecision) (acquired, *Denial) {
+func (b *Broker) acquire(ctx context.Context, req RedeemRequest, facts requestFacts, decision authzcompose.OperationDecision,
+	current []epoch.SecurityEpoch) (acquired, *Denial) {
 	reference := facts.reference
 	keys := b.cfg.Catalog.MaterialKeys(reference.ProviderType, reference.Class)
 	if len(keys) == 0 {
@@ -30,20 +34,58 @@ func (b *Broker) acquire(ctx context.Context, req RedeemRequest, facts requestFa
 	}
 	now := b.now()
 	notAfter := now.Add(MaxEnvelopeTTL)
+	// A cached entry is reachable only after the epoch check of this
+	// redemption passed, and only at the epochs it read.
+	cacheable := b.cache != nil && len(current) > 0
 	switch reference.Class {
 	case credentialgrant.ClassStaticSecret:
+		cacheable = cacheable && b.revisions.staticAllowed(ctx, facts.request.Context.PolicyRevisionID)
+		var key cache.PartitionKey
+		if cacheable {
+			key = b.partitionKey(req, facts, keys)
+			if entry, ok := b.cache.Get(key, current, now); ok {
+				return acquired{envelope: fromCache(entry, KindStatic, now)}, nil
+			}
+		}
 		material, denial := b.readStatic(ctx, req, reference, decision, keys)
 		if denial != nil {
 			return acquired{}, denial
 		}
+		if cacheable {
+			b.cache.Put(key, cache.Entry{Kind: string(KindStatic), Material: material, NotAfter: now.Add(staticEntryTTL), Epochs: current})
+		}
 		return acquired{envelope: &Envelope{Kind: KindStatic, Material: material, NotAfter: notAfter}}, nil
 	case credentialgrant.ClassOAuthDelegated:
-		token, denial := b.exchange(ctx, req, facts)
-		if denial != nil {
-			return acquired{}, denial
-		}
 		if len(keys) != 1 {
 			return acquired{}, &Denial{Code: CodeDenied, reason: "material_shape"}
+		}
+		// The descriptor names who issued the consent: the user's Entra
+		// delegation (SharePoint, Graph on-behalf-of) or the provider
+		// itself (Jira, Confluence, Aha!). Nothing else selects the path.
+		authority := b.cfg.Catalog.OAuthAuthority(reference.ProviderType, reference.Class)
+		// Only on-behalf-of tokens use the replica cache. A provider OAuth
+		// token is read from its grant row on every use: that row is its
+		// authority, and its refresh is single-flight across replicas.
+		cacheable = cacheable && authority == credentialgrant.OAuthAuthorityEntraOBO
+		var key cache.PartitionKey
+		if cacheable {
+			key = b.partitionKey(req, facts, b.oauthScopes(facts))
+			if entry, ok := b.cache.Get(key, current, now); ok {
+				return acquired{envelope: fromCache(entry, KindOAuthAccess, now)}, nil
+			}
+		}
+		var token obo.AccessToken
+		var denial *Denial
+		switch authority {
+		case credentialgrant.OAuthAuthorityEntraOBO:
+			token, denial = b.exchange(ctx, req, facts)
+		case credentialgrant.OAuthAuthorityProvider:
+			token, denial = b.providerToken(ctx, facts)
+		default:
+			denial = &Denial{Code: CodeClassNotSupported, reason: "oauth_authority_unknown"}
+		}
+		if denial != nil {
+			return acquired{}, denial
 		}
 		if !token.ExpiresAt.IsZero() && token.ExpiresAt.Before(notAfter) {
 			notAfter = token.ExpiresAt
@@ -53,6 +95,11 @@ func (b *Broker) acquire(ctx context.Context, req RedeemRequest, facts requestFa
 		}
 		// A Go string cannot be zeroed; the copy below can.
 		material := map[string][]byte{keys[0]: []byte(token.Token)}
+		if cacheable && !token.ExpiresAt.IsZero() {
+			// Cached until the token's own expiry; served until that minus
+			// the skew.
+			b.cache.Put(key, cache.Entry{Kind: string(KindOAuthAccess), Material: material, NotAfter: token.ExpiresAt, Epochs: current})
+		}
 		return acquired{envelope: &Envelope{Kind: KindOAuthAccess, Material: material, NotAfter: notAfter}}, nil
 	}
 	return acquired{}, &Denial{Code: CodeClassNotSupported, reason: "class_not_supported"}
@@ -131,6 +178,44 @@ func shapeMaterial(raw []byte, keys []string) (map[string][]byte, bool) {
 	return out, true
 }
 
+// providerToken answers the access token of the provider OAuth grant the
+// use rests on (ADR-0039 decision 3: the user consented to the provider
+// directly). The grant is the authority: it is the one of the run's subject
+// user, for this tenant project, provider, target binding and agent
+// binding. A run with no user subject has no such grant and is denied, and
+// so is a decision subject that is not the run's own user (an autonomous
+// mandate's approver).
+func (b *Broker) providerToken(ctx context.Context, facts requestFacts) (obo.AccessToken, *Denial) {
+	if b.cfg.ProviderTokens == nil {
+		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "provider_oauth_not_configured"}
+	}
+	r := facts.request
+	if facts.runSubjectUser <= 0 || r.Subject.UserID != facts.runSubjectUser {
+		return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "provider_oauth_no_user_subject"}
+	}
+	key := provideroauth.GrantKey{
+		TenantProjectID: r.Context.TenantProjectID, Provider: facts.reference.ProviderType,
+		TargetBindingID: facts.reference.TargetBindingID, SubjectUserID: facts.runSubjectUser,
+		AgentBindingID: r.Agent.BindingID,
+	}
+	token, err := b.cfg.ProviderTokens.AccessToken(ctx, key)
+	switch {
+	case err == nil:
+	case errors.Is(err, provideroauth.ErrConsentRequired):
+		return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "provider_consent_required"}
+	case errors.Is(err, provideroauth.ErrInvalid):
+		return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "provider_oauth_key_invalid"}
+	case errors.Is(err, provideroauth.ErrProviderNotConfigured):
+		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "provider_oauth_not_configured"}
+	default:
+		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "provider_oauth_unavailable"}
+	}
+	if token.Token == "" {
+		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "oauth_empty_token"}
+	}
+	return obo.AccessToken{Token: token.Token, ExpiresAt: token.ExpiresAt}, nil
+}
+
 // exchange runs the on-behalf-of exchange of an oauth_delegated use. Entra
 // asking for interaction records an authorization requirement and denies
 // with its opaque reference.
@@ -146,8 +231,7 @@ func (b *Broker) exchange(ctx context.Context, req RedeemRequest, facts requestF
 		return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "no_delegation"}
 	}
 	delegationID := facts.delegation.ID
-	resource, adapterScopes := b.cfg.Catalog.OAuthResource(facts.reference.ProviderType, facts.reference.Class)
-	scopes := exchangeScopes(facts.target, resource, adapterScopes)
+	scopes := b.oauthScopes(facts)
 	if len(scopes) == 0 {
 		return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "target_has_no_audience"}
 	}
@@ -166,6 +250,8 @@ func (b *Broker) exchange(ctx context.Context, req RedeemRequest, facts requestF
 	})
 	var challenge *obo.ErrClaimsChallenge
 	switch {
+	case breakerOpen(err):
+		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "oauth_circuit_open"}
 	case err == nil:
 		if token.Token == "" {
 			return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "oauth_empty_token"}
@@ -179,6 +265,12 @@ func (b *Broker) exchange(ctx context.Context, req RedeemRequest, facts requestF
 		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "oauth_unavailable"}
 	}
 	return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "oauth_rejected"}
+}
+
+// oauthScopes is the exchange's scope list for the redemption's target.
+func (b *Broker) oauthScopes(facts requestFacts) []string {
+	resource, adapterScopes := b.cfg.Catalog.OAuthResource(facts.reference.ProviderType, facts.reference.Class)
+	return exchangeScopes(facts.target, resource, adapterScopes)
 }
 
 // exchangeScopes is the Entra v2 scope list of an exchange. The resource is

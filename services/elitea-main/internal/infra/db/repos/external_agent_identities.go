@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/epoch"
 	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
@@ -41,6 +42,15 @@ const (
 type ExternalAgentIdentities struct {
 	pool  *pgxpool.Pool
 	audit securityaudit.Appender
+	// notifier signals every replica after an epoch change commits
+	// (#1121); nil signals nothing.
+	notifier epoch.Notifier
+}
+
+// WithNotifier signals n after every committed epoch change.
+func (s *ExternalAgentIdentities) WithNotifier(n epoch.Notifier) *ExternalAgentIdentities {
+	s.notifier = n
+	return s
 }
 
 // NewExternalAgentIdentities builds the store. A nil audit makes every call
@@ -215,6 +225,19 @@ func (s *ExternalAgentIdentities) TransitionExternalIdentity(
 	id string,
 	apply func(current domain.ExternalAgentIdentity, activeBindings int) (domain.ExternalAgentIdentity, error),
 ) (domain.ExternalAgentIdentity, error) {
+	return s.transitionExternalIdentity(ctx, id, apply, nil)
+}
+
+// transitionExternalIdentity is TransitionExternalIdentity with an optional
+// hook that writes more in the same transaction, after the record and its
+// change event (the reconcile loop's finding and drift event, #1154). A hook
+// error rolls everything back.
+func (s *ExternalAgentIdentities) transitionExternalIdentity(
+	ctx context.Context,
+	id string,
+	apply func(current domain.ExternalAgentIdentity, activeBindings int) (domain.ExternalAgentIdentity, error),
+	also func(ctx context.Context, tx pgx.Tx, written domain.ExternalAgentIdentity) error,
+) (domain.ExternalAgentIdentity, error) {
 	if err := s.ready(); err != nil {
 		return domain.ExternalAgentIdentity{}, err
 	}
@@ -267,8 +290,16 @@ RETURNING `+externalIdentitySelectColumnList,
 	if err := s.audit.Append(ctx, tx, externalIdentityAuditEvent(written, &current)); err != nil {
 		return domain.ExternalAgentIdentity{}, fmt.Errorf("audit external identity transition: %w", err)
 	}
+	if also != nil {
+		if err := also(ctx, tx, written); err != nil {
+			return domain.ExternalAgentIdentity{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.ExternalAgentIdentity{}, mapExternalIdentityWriteError(fmt.Errorf("commit external identity transition: %w", err))
+	}
+	if s.notifier != nil {
+		s.notifier.Notify(ctx, epoch.Change{Epoch: epoch.SecurityEpoch{Kind: epoch.KindExternalIdentity, ID: written.ID, Value: written.RevocationEpoch}})
 	}
 	return written, nil
 }

@@ -3,12 +3,16 @@ package agentidentity
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	coreagentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity/reconcile"
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity"
@@ -57,7 +61,16 @@ func (f *fakeExternal) Retire(ctx context.Context, id, by string) (domain.Extern
 // newExternalRouter mounts the handler with the gates router.go uses.
 func newExternalRouter(t *testing.T, service ExternalService, permissions ...string) http.Handler {
 	t.Helper()
-	h, err := NewExternal(service)
+	return newExternalRouterWith(t, service, nil, permissions...)
+}
+
+func newExternalRouterWith(t *testing.T, service ExternalService, drift DriftReader, permissions ...string) http.Handler {
+	t.Helper()
+	var drifts []DriftReader
+	if drift != nil {
+		drifts = append(drifts, drift)
+	}
+	h, err := NewExternal(service, drifts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +88,7 @@ func newExternalRouter(t *testing.T, service ExternalService, permissions ...str
 	r.Route("/api/v2/admin", func(r chi.Router) {
 		r.With(manage).Get("/external_agent_identities", h.ListExternalIdentities)
 		r.With(manage).Post("/external_agent_identities", h.CreateExternalIdentity)
+		r.With(manage).Get("/external_agent_identities/drift", h.ListDriftFindings)
 		r.With(manage).Post("/external_agent_identities/{id}:provision", h.ProvisionExternalIdentity)
 		r.With(manage, approve).Post("/external_agent_identities/{id}:activate", h.ActivateExternalIdentity)
 		r.With(manage).Post("/external_agent_identities/{id}:suspend", h.SuspendExternalIdentity)
@@ -138,3 +152,73 @@ func TestCreateExternalIdentityRefusesUnknownFieldsAndRecordsTheCaller(t *testin
 		t.Fatalf("view = %v", view)
 	}
 }
+
+type fakeDrift struct {
+	findings     []reconcile.Finding
+	health       []reconcile.ProviderHealth
+	err          error
+	lastProvider string
+	lastLimit    int
+}
+
+func (f *fakeDrift) OpenFindings(_ context.Context, provider string, limit, _ int) ([]reconcile.Finding, error) {
+	f.lastProvider, f.lastLimit = provider, limit
+	return f.findings, f.err
+}
+
+func (f *fakeDrift) Health(context.Context) ([]reconcile.ProviderHealth, error) {
+	return f.health, f.err
+}
+
+// #1154: the drift route lists open findings and provider health; it needs
+// the external identity permission; an orphan has no record fields.
+func TestDriftRouteListsOpenFindingsAndHealth(t *testing.T) {
+	at := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
+	drift := &fakeDrift{
+		findings: []reconcile.Finding{
+			{ID: bindingID, Kind: reconcile.KindDisabled, Provider: "entra", ProviderTenant: "t1", ExternalID: "obj-1",
+				ExternalAgentIdentityID: bindingID, TenantProjectID: 7, ApplicationID: 11, RevocationEpoch: 4, DetectedAt: at, LastSeenAt: at},
+			{ID: bindingID, Kind: reconcile.KindOrphan, Provider: "entra", ProviderTenant: "t1", ExternalID: "obj-2", DetectedAt: at, LastSeenAt: at},
+		},
+		health: []reconcile.ProviderHealth{{Provider: "entra", ConsecutiveFailures: 3, AdmissionDenied: true, LastPassAt: at},
+			{Provider: "other"}},
+	}
+	path := "/api/v2/admin/external_agent_identities/drift"
+	if got := serve(newExternalRouterWith(t, &fakeExternal{}, drift), http.MethodGet, path, "").Code; got != http.StatusForbidden {
+		t.Fatalf("without the permission = %d, want 403", got)
+	}
+	router := newExternalRouterWith(t, &fakeExternal{}, drift, PermissionExternalManage)
+	got := serve(router, http.MethodGet, path+"?provider=entra&limit=5", "")
+	if got.Code != http.StatusOK || drift.lastProvider != "entra" || drift.lastLimit != 5 {
+		t.Fatalf("drift = %d %s; reader saw %q %d", got.Code, got.Body, drift.lastProvider, drift.lastLimit)
+	}
+	var body struct {
+		Rows      []map[string]any `json:"rows"`
+		Providers []map[string]any `json:"providers"`
+	}
+	if err := json.Unmarshal(got.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Rows) != 2 || body.Rows[0]["kind"] != "disabled" || body.Rows[0]["revocation_epoch"] != float64(4) ||
+		body.Rows[1]["external_agent_identity_id"] != nil || body.Rows[1]["tenant_project_id"] != nil {
+		t.Fatalf("rows = %v", body.Rows)
+	}
+	if len(body.Providers) != 1 || body.Providers[0]["admission_denied"] != true || body.Providers[0]["last_success_at"] != nil {
+		t.Fatalf("providers = %v", body.Providers)
+	}
+	for _, query := range []string{"?provider=Bad%20Name", "?limit=0", "?limit=201", "?offset=-1", "?state=active", "?tenant_project_id=7"} {
+		if got := serve(router, http.MethodGet, path+query, "").Code; got != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", query, got)
+		}
+	}
+	drift.err = errors.New("db down")
+	if got := serve(router, http.MethodGet, path, ""); got.Code != http.StatusInternalServerError || bytesContain(got.Body.Bytes(), "db down") {
+		t.Fatalf("a store error = %d %s", got.Code, got.Body)
+	}
+	empty := serve(newExternalRouter(t, &fakeExternal{}, PermissionExternalManage), http.MethodGet, path, "")
+	if empty.Code != http.StatusOK || empty.Body.String() != "{\"providers\":[],\"rows\":[]}\n" {
+		t.Fatalf("no drift reader = %d %q", empty.Code, empty.Body)
+	}
+}
+
+func bytesContain(b []byte, s string) bool { return strings.Contains(string(b), s) }

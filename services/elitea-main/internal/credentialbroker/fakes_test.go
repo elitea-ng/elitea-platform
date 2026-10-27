@@ -289,10 +289,11 @@ func (allowEntities) AgentAccessible(context.Context, int64, int64, int64) (bool
 }
 
 type fakeCatalog struct {
-	ops      map[credentialgrant.OperationID]string
-	keys     map[credentialgrant.CredentialClass][]string
-	resource string
-	scopes   []string
+	ops       map[credentialgrant.OperationID]string
+	keys      map[credentialgrant.CredentialClass][]string
+	resource  string
+	scopes    []string
+	authority map[string]credentialgrant.OAuthAuthority
 }
 
 func (c fakeCatalog) Known(id credentialgrant.OperationID) bool   { _, ok := c.ops[id]; return ok }
@@ -300,6 +301,18 @@ func (c fakeCatalog) Class(id credentialgrant.OperationID) string { return c.ops
 func (c fakeCatalog) MaterialKeys(_ string, class credentialgrant.CredentialClass) []string {
 	return slices.Clone(c.keys[class])
 }
+
+// OAuthAuthority is the Entra exchange unless the test names the provider.
+func (c fakeCatalog) OAuthAuthority(provider string, class credentialgrant.CredentialClass) credentialgrant.OAuthAuthority {
+	if class != credentialgrant.ClassOAuthDelegated {
+		return ""
+	}
+	if a, ok := c.authority[provider]; ok {
+		return a
+	}
+	return credentialgrant.OAuthAuthorityEntraOBO
+}
+
 func (c fakeCatalog) OAuthResource(string, credentialgrant.CredentialClass) (string, []string) {
 	return c.resource, slices.Clone(c.scopes)
 }
