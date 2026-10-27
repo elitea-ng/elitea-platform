@@ -1046,5 +1046,7 @@
   "desktop.shell.moveFolderTitle": "کیا «{{folder}}» کو {{project}} میں منتقل کریں؟",
   "desktop.shell.moveToProject": "پروجیکٹ میں منتقل کریں",
   "desktop.shell.projects": "پروجیکٹس",
-  "desktop.shell.project": "پروجیکٹ"
+  "desktop.shell.project": "پروجیکٹ",
+  "desktop.shell.noProjectsFound": "کوئی مماثل پروجیکٹ نہیں",
+  "desktop.shell.searchProjects": "پروجیکٹس تلاش کریں"
 }

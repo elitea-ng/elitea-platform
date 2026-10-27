@@ -1046,5 +1046,7 @@
   "desktop.shell.moveFolderTitle": "將「{{folder}}」移動到 {{project}}？",
   "desktop.shell.moveToProject": "移動到專案",
   "desktop.shell.projects": "專案",
-  "desktop.shell.project": "專案"
+  "desktop.shell.project": "專案",
+  "desktop.shell.noProjectsFound": "沒有相符的專案",
+  "desktop.shell.searchProjects": "搜尋專案"
 }

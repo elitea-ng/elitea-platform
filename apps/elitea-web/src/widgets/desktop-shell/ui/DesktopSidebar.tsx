@@ -40,6 +40,7 @@ import type { ShellAction } from '../lib/shellActions';
 import { SIDEBAR_TINT_OPACITY } from '../lib/sidebarTint';
 import { useDesktopLayout } from '../model/desktopLayout.store';
 import { useChatsSectionOpen } from '../model/useEliteaSectionOpen';
+import { useSwitchProject } from '../model/useSwitchProject';
 import { AccountMenu } from './AccountMenu';
 import { ChatsSection } from './ChatsSection';
 import type { ShellLocation } from '../model/useShellLocation';
@@ -132,6 +133,7 @@ function highlightedItem(pathname: string, selected: EliteaItemValue | undefined
 
 export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
   const { location, run, permissions, selectedProjectId } = props;
+  const switchProject = useSwitchProject(location.pathname, props.onSelectProject);
   const items = useMemo(
     () => eliteaItems(permissions, computeIsSelectedProjectPublic(selectedProjectId)),
     [permissions, selectedProjectId],
@@ -216,7 +218,7 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
       </Box>
       <Box component="section" aria-label={t('desktop.shell.project', 'Project')} sx={{ paddingX: 1 }}>
         <SectionCaption>{t('desktop.shell.project', 'Project')}</SectionCaption>
-        <ProjectSwitcher projects={props.projects} selectedProjectId={selectedProjectId} onSelectProject={props.onSelectProject} />
+        <ProjectSwitcher projects={props.projects} selectedProjectId={selectedProjectId} onSelectProject={switchProject} />
       </Box>
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingX: 1 }}>
         <LocalWorkSection location={location} run={run} projects={props.projects} projectId={selectedProjectId} />

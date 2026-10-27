@@ -1046,5 +1046,7 @@
   "desktop.shell.moveFolderTitle": "Spostare «{{folder}}» in {{project}}?",
   "desktop.shell.moveToProject": "Sposta nel progetto",
   "desktop.shell.projects": "Progetti",
-  "desktop.shell.project": "Progetto"
+  "desktop.shell.project": "Progetto",
+  "desktop.shell.noProjectsFound": "Nessun progetto corrispondente",
+  "desktop.shell.searchProjects": "Cerca progetti"
 }

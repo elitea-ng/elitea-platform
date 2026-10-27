@@ -1046,5 +1046,7 @@
   "desktop.shell.moveFolderTitle": "Przenieść „{{folder}}” do {{project}}?",
   "desktop.shell.moveToProject": "Przenieś do projektu",
   "desktop.shell.projects": "Projekty",
-  "desktop.shell.project": "Projekt"
+  "desktop.shell.project": "Projekt",
+  "desktop.shell.noProjectsFound": "Brak pasujących projektów",
+  "desktop.shell.searchProjects": "Szukaj projektów"
 }

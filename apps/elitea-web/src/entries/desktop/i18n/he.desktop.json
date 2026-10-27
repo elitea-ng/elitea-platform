@@ -1046,5 +1046,7 @@
   "desktop.shell.moveFolderTitle": "להעביר את „{{folder}}” אל {{project}}?",
   "desktop.shell.moveToProject": "העברה לפרויקט",
   "desktop.shell.projects": "פרויקטים",
-  "desktop.shell.project": "פרויקט"
+  "desktop.shell.project": "פרויקט",
+  "desktop.shell.noProjectsFound": "אין פרויקטים תואמים",
+  "desktop.shell.searchProjects": "חיפוש פרויקטים"
 }

@@ -25,6 +25,9 @@ const SIZES: Record<string, number> = {
   subtitle: 11,
 };
 
+/** Menus and popovers (ms): on screen at once, a short grow out. */
+const MENU_TRANSITION = { enter: 0, exit: 120 } as const;
+
 /** Controls stay between 22 and 28px: small 22, medium 28. */
 const CONTROL = { small: 22, medium: 28 } as const;
 
@@ -151,9 +154,15 @@ export function withDesktopComponents(outer: Theme): Theme {
         inputSizeSmall: { padding: '2px 8px' },
       },
     },
+    // A native menu is on screen the moment it is asked for; MUI's default Grow takes ~250ms each way.
     MuiMenu: {
       ...outer.components?.MuiMenu,
+      defaultProps: { ...outer.components?.MuiMenu?.defaultProps, transitionDuration: MENU_TRANSITION },
       styleOverrides: { paper: { borderRadius: 8, marginTop: 4 }, list: { padding: 4 } },
+    },
+    MuiPopover: {
+      ...outer.components?.MuiPopover,
+      defaultProps: { ...outer.components?.MuiPopover?.defaultProps, transitionDuration: MENU_TRANSITION },
     },
     MuiMenuItem: {
       ...outer.components?.MuiMenuItem,

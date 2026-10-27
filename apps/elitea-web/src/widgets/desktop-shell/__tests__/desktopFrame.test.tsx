@@ -35,10 +35,10 @@ const PROJECTS = [
   { id: 7, name: 'Sales', suspended: false },
 ];
 
-function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Workspace[]; nextOpen?: Workspace; handoffIpc?: FakeHandoffIpc; onSelectProject?: (id: string, name: string) => void } = {}) {
+function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Workspace[]; nextOpen?: Workspace; handoffIpc?: FakeHandoffIpc; onSelectProject?: (id: string, name: string) => void; projects?: typeof PROJECTS } = {}) {
   const rootRoute = createRootRoute({
     component: () => (
-      <DesktopFrame permissions={new Set()} projects={PROJECTS} selectedProjectId="42" onSelectProject={options.onSelectProject ?? (() => undefined)}>
+      <DesktopFrame permissions={new Set()} projects={options.projects ?? PROJECTS} selectedProjectId="42" onSelectProject={options.onSelectProject ?? (() => undefined)}>
         <Outlet />
       </DesktopFrame>
     ),
@@ -350,8 +350,38 @@ describe('DesktopFrame sidebar layout', () => {
     const switcher = within(sidebar).getByTestId('shell-project-switcher');
     expect(switcher).toHaveAccessibleName('Project: Marketing');
     await user.click(switcher);
-    await user.click(await screen.findByRole('menuitem', { name: 'Sales' }));
+    expect(await screen.findByRole('option', { name: 'Marketing' })).toHaveAttribute('aria-selected', 'true');
+    await user.click(screen.getByRole('option', { name: 'Sales' }));
     expect(onSelectProject).toHaveBeenCalledWith('7', 'Sales');
+  });
+
+  it('searches the projects as the person types and draws a long list a page at a time', async () => {
+    const user = userEvent.setup();
+    const many = Array.from({ length: 120 }, (_, index) => ({ id: 1000 + index, name: `Team ${index}`, suspended: false }));
+    const onSelectProject = vi.fn();
+    mount({ projects: [...PROJECTS, ...many], onSelectProject });
+    await user.click(await screen.findByTestId('shell-project-switcher'));
+    const list = await screen.findByRole('listbox', { name: 'Projects' });
+    expect(within(list).getAllByRole('option')).toHaveLength(50);
+    const search = screen.getByTestId('project-picker-search');
+    expect(search).toHaveFocus();
+    await user.type(search, 'team 11');
+    expect(within(list).getAllByRole('option').map((option) => option.textContent)).toEqual(['Team 11', ...Array.from({ length: 10 }, (_, index) => `Team ${110 + index}`)]);
+    await user.keyboard('{ArrowDown}{Enter}');
+    expect(onSelectProject).toHaveBeenCalledWith('1110', 'Team 110');
+    await user.click(screen.getByTestId('shell-project-switcher'));
+    await user.type(await screen.findByTestId('project-picker-search'), 'nothing like it');
+    expect(screen.getByText('No projects match')).toBeInTheDocument();
+  });
+
+  it("leaves a folder's thread for the start screen when switching to another project", async () => {
+    const user = userEvent.setup();
+    const onSelectProject = vi.fn();
+    const { router } = mount({ path: `/workspaces/${APP.id}`, onSelectProject });
+    await user.click(await screen.findByTestId('shell-project-switcher'));
+    await user.click(await screen.findByRole('option', { name: 'Sales' }));
+    await waitFor(() => expect(onSelectProject).toHaveBeenCalledWith('7', 'Sales'));
+    expect(router.state.location.pathname).toBe('/workspaces');
   });
 
   it('moves a folder to another project only after a confirmation; one with no project joins at once', async () => {

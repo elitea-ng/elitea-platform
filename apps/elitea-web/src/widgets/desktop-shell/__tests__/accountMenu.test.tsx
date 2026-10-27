@@ -79,8 +79,9 @@ describe('AccountMenu', () => {
     await user.click(screen.getByTestId('shell-account'));
     await user.click(await screen.findByTestId('shell-account-language'));
     const languages = await screen.findByRole('menu', { name: 'Language' });
-    expect(within(languages).getByRole('menuitem', { name: 'English' })).toHaveClass('Mui-selected');
-    await user.click(within(languages).getByRole('menuitem', { name: 'Español' }));
+    expect(within(languages).getByRole('menuitemradio', { name: 'English' })).toBeChecked();
+    expect(within(languages).getByRole('menuitemradio', { name: 'Español' })).not.toBeChecked();
+    await user.click(within(languages).getByRole('menuitemradio', { name: 'Español' }));
     expect(createStorage('local').get('lang')).toBe('es');
     expect(reload).toHaveBeenCalledOnce();
   });
@@ -90,7 +91,7 @@ describe('AccountMenu', () => {
     const { reload } = mount();
     await user.click(screen.getByTestId('shell-account'));
     await user.click(await screen.findByTestId('shell-account-language'));
-    await user.click(within(await screen.findByRole('menu', { name: 'Language' })).getByRole('menuitem', { name: 'English' }));
+    await user.click(within(await screen.findByRole('menu', { name: 'Language' })).getByRole('menuitemradio', { name: 'English' }));
     expect(reload).not.toHaveBeenCalled();
     expect(createStorage('local').get('lang')).toBeNull();
   });

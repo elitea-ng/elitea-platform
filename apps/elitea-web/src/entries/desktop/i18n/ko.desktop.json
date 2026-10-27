@@ -1046,5 +1046,7 @@
   "desktop.shell.moveFolderTitle": "“{{folder}}”을(를) {{project}}(으)로 이동할까요?",
   "desktop.shell.moveToProject": "프로젝트로 이동",
   "desktop.shell.projects": "프로젝트",
-  "desktop.shell.project": "프로젝트"
+  "desktop.shell.project": "프로젝트",
+  "desktop.shell.noProjectsFound": "일치하는 프로젝트 없음",
+  "desktop.shell.searchProjects": "프로젝트 검색"
 }
