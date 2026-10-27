@@ -3035,6 +3035,26 @@ main:
     ELITEA_PROVIDER_OAUTH_AHA_TOKEN_URL: ""
     ELITEA_PROVIDER_OAUTH_AHA_SCOPES: ""
     ELITEA_PROVIDER_OAUTH_AHA_TIMEOUT: ""
+    # Entra Agent ID provider (#1152): one agent identity blueprint per
+    # deployment. Read ONLY with the flag above on and a revision that allows
+    # dedicated_agent. TENANT_ID empty (and no CONFIG_FILE) leaves it
+    # unconfigured. TENANT_ID is the tenant GUID: common/organizations REFUSE
+    # to start. FEDERATED_TOKEN_FILE is a projected service account token
+    # with audience api://AzureADTokenExchange; client secrets and
+    # certificates are refused. ALLOWED_RESOURCE_SCOPES is comma separated.
+    # SPONSOR_GROUPS: default=<group id>,<project id>=<group id>.
+    # IDENTITY_LIMIT defaults to 250 (Entra's per-blueprint cap). CONFIG_FILE
+    # is the same block as JSON ({"entra":{"agentid":{...}}}); set it OR the
+    # variables. Read in cmd/elitea-main/agent_identity_entra.go.
+    ELITEA_ENTRA_AGENT_ID_CONFIG_FILE: ""
+    ELITEA_ENTRA_AGENT_ID_TENANT_ID: ""
+    ELITEA_ENTRA_AGENT_ID_BLUEPRINT_APP_ID: ""
+    ELITEA_ENTRA_AGENT_ID_FEDERATED_TOKEN_FILE: ""
+    ELITEA_ENTRA_AGENT_ID_AUTHORITY: ""
+    ELITEA_ENTRA_AGENT_ID_GRAPH_BASE_URL: ""
+    ELITEA_ENTRA_AGENT_ID_ALLOWED_RESOURCE_SCOPES: ""
+    ELITEA_ENTRA_AGENT_ID_SPONSOR_GROUPS: ""
+    ELITEA_ENTRA_AGENT_ID_IDENTITY_LIMIT: ""
 
     # --- Outbound e-mail (ADR-0024 WP7; gap G7) ---------------------------------
     # These are the BOOTSTRAP DEFAULTS, not the whole configuration. Since gap

@@ -148,3 +148,11 @@ ELITEA_LITELLM_ALLOW_PROJECT_OWN_LLMS
 # --- rather than taking it from the values `env` map, because it must name the
 # --- web Service the same release renders.
 ELITEA_WEB_UPSTREAM
+
+# --- Refusal tripwires, NOT knobs (#1152, cmd/elitea-main/agent_identity_entra.go).
+# --- The Entra Agent ID blueprint authenticates with a federated credential
+# --- only in the governed profile. elitea-main reads these two names for one
+# --- reason: to REFUSE TO START when a manifest sets a client secret or a
+# --- certificate, instead of silently ignoring it. The chart must never set them.
+ELITEA_ENTRA_AGENT_ID_CLIENT_SECRET
+ELITEA_ENTRA_AGENT_ID_CERTIFICATE_FILE

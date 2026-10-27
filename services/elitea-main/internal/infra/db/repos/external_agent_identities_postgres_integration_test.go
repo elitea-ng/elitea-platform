@@ -219,3 +219,24 @@ SELECT count(*) FROM elitea_runtime.security_audit_outbox
 WHERE event_type = $1 AND event->'data'->>'effect' = 'deny'`, string(securityaudit.TypeAgentSession)).Scan(&denied))
 	require.Equal(t, 3, denied)
 }
+
+// SessionByID (#1152) reads the execution and generation the Entra adapter
+// derives its client-request-id from; an unknown id is ErrSessionNotFound.
+func TestAgentSessionByIDReadsTheRun(t *testing.T) {
+	s := newIdentityStack(t)
+	ctx := context.Background()
+	binding, _ := s.activeAgent(t, 61, 601)
+	_, err := s.broker.OpenSession(ctx, sessionFor(binding, "exec-by-id"))
+	require.NoError(t, err)
+	var id string
+	require.NoError(t, s.pool.QueryRow(ctx,
+		`SELECT id::text FROM elitea_identity.agent_sessions WHERE execution_id = 'exec-by-id'`).Scan(&id))
+	sessions := NewAgentSessions(s.pool, agentIdentityAudit(t))
+	session, err := sessions.SessionByID(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, "exec-by-id", session.ExecutionID)
+	require.Equal(t, int64(1), session.Generation)
+	require.Equal(t, binding.ID, session.AgentBindingID)
+	_, err = sessions.SessionByID(ctx, "00000000-0000-7000-8000-000000000000")
+	require.ErrorIs(t, err, agentidentity.ErrSessionNotFound)
+}
