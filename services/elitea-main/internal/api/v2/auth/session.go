@@ -41,6 +41,9 @@ type SessionHandler struct {
 	// rejectLegacy ends the legacy-cookie window. See browsersession's package
 	// header for why the default is off.
 	rejectLegacy bool
+	// entraCustody revokes the delegations a session created at logout
+	// (oidc_entra.go). Nil unless credential governance is on.
+	entraCustody EntraCustody
 }
 
 func NewSessionHandler(pool *pgxpool.Pool, secretKey string) *SessionHandler {
@@ -86,6 +89,7 @@ func (h *SessionHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	// that fails must still clear the cookie — the user asked to sign out, and
 	// leaving them signed in because a write failed is the wrong answer.
 	if cookie, err := r.Cookie(browsersession.CookieName); err == nil && cookie.Value != "" {
+		h.revokeEntraSession(r.Context(), cookie.Value)
 		if revokeErr := h.sessions.Revoke(r.Context(), cookie.Value); revokeErr != nil {
 			slog.Error("logout could not revoke the browser session", "err", revokeErr)
 		}

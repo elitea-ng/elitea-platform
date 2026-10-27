@@ -20,6 +20,7 @@ import (
 	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
+	identityoidc "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/oidc"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -101,6 +102,11 @@ type OIDCHandler struct {
 	// attempts is the begin/callback limiter (signin_attempts.go). Nil
 	// unless WithAttemptLimiter attached one.
 	attempts *signInAttempts
+
+	// entraCustody turns Entra mode on (oidc_entra.go). Nil unless
+	// credential governance is on; the `entra` provider marker is then
+	// ignored.
+	entraCustody EntraCustody
 }
 
 // NewOIDCHandler builds the handler.
@@ -236,6 +242,7 @@ func (h *OIDCHandler) Login(w http.ResponseWriter, r *http.Request) {
 	})
 
 	authOptions := []oauth2.AuthCodeOption{oidc.Nonce(nonce), oauth2.S256ChallengeOption(pkceVerifier)}
+	authOptions = append(authOptions, runtime.entra.authOptions()...)
 	// The sign-in page passes the address a person typed, so the identity
 	// provider can pre-fill it (OpenID Connect Core 3.1.2.1 `login_hint`).
 	if hint := loginHint(r.URL.Query().Get("login_hint")); hint != "" {
@@ -466,6 +473,18 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Entra mode: the issuer is one allowed tenant's, and tid and oid are
+	// present. Nil runtime.entra (flag off, or a non-Entra provider) skips it.
+	var entraIdentity identityoidc.EntraIdentity
+	if runtime.entra != nil {
+		entraIdentity, err = runtime.entra.verifyIdentity(idToken)
+		if err != nil {
+			slog.Error("OIDC: id_token refused by the Entra rules", "sub", claims.Sub, "reason", entraRefusalReason(err))
+			http.Error(w, "id_token verification failed", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	// One spelling for every comparison that follows: the account lookup, the
 	// first-login grant list and the session. See normalizeAssertedEmail.
 	claims.Email = normalizeAssertedEmail(claims.Email)
@@ -522,6 +541,10 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		Provider: browsersession.ProviderOIDC,
 	}, r) {
 		return
+	}
+	if runtime.entra != nil {
+		h.retainAssertion(ctx, runtime, entraIdentity, token.AccessToken,
+			issuedSessionCookie(w.Header()), numericUserID)
 	}
 	// The personal project this account needs before the product is usable.
 	// Bounded, and it never blocks the login; see ensurePersonalProject.

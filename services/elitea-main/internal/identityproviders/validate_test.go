@@ -15,6 +15,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"math/big"
@@ -340,4 +341,51 @@ func selfSignedPEM(t *testing.T, public, private any) string {
 		t.Fatalf("create certificate: %v", err)
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+/* ── Entra mode (#1117) ─────────────────────────────────────────────────── */
+
+func TestEntraModeNeedsATenantAllowList(t *testing.T) {
+	provider := validOIDC()
+	provider.OIDC.Entra = true
+	_, err := Validate(provider)
+	requireFieldRefusal(t, err, "entra_tenants")
+
+	for _, tenant := range []string{"common", "organizations", "consumers", "not-a-guid"} {
+		provider.OIDC.EntraTenants = []string{tenant}
+		_, err = Validate(provider)
+		requireFieldRefusal(t, err, "entra_tenants")
+	}
+
+	provider.OIDC.EntraTenants = []string{" AAAAAAAA-0000-4000-8000-000000000001 ", "aaaaaaaa-0000-4000-8000-000000000001"}
+	provider.OIDC.EntraAgentBlueprintID = "22222222-2222-2222-2222-222222222222"
+	stored, err := Validate(provider)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if got := stored.OIDC.EntraTenants; len(got) != 1 || got[0] != "aaaaaaaa-0000-4000-8000-000000000001" {
+		t.Fatalf("tenants = %v, want one normalised id", got)
+	}
+}
+
+func TestEntraSettingsWithoutEntraModeAreRefused(t *testing.T) {
+	provider := validOIDC()
+	provider.OIDC.EntraTenants = []string{"aaaaaaaa-0000-4000-8000-000000000001"}
+	_, err := Validate(provider)
+	requireFieldRefusal(t, err, "entra")
+}
+
+// A document without the Entra fields serialises exactly as before.
+func TestANonEntraDocumentSerialisesWithoutEntraFields(t *testing.T) {
+	stored, err := Validate(validOIDC())
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	encoded, err := json.Marshal(stored.OIDC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "entra") {
+		t.Fatalf("a non-Entra document carries Entra fields: %s", encoded)
+	}
 }

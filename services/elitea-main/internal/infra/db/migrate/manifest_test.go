@@ -796,7 +796,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// proposer CHECK and a unique index on non-revoked grants per (agent
 	// binding, toolkit, credential reference, target). No data; the five
 	// models.credentials.governed.* permissions are granted to no role.
-	require.EqualValues(t, 184, Head(shared))
+	//
+	// 185: shared/0185_entra_delegation_custody.sql, the encrypted assertion
+	// columns on elitea_identity.delegations, elitea_identity.signin_assertions
+	// and elitea_identity.credential_authorization_requirements (#1117). No
+	// data, no permission.
+	require.EqualValues(t, 185, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

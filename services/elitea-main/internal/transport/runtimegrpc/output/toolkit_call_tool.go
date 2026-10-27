@@ -49,6 +49,17 @@ func WithToolkitCallTool(ingestor ToolkitCallToolIngestor) ServerOption {
 	}
 }
 
+// WithCredentialAuthorizationPause admits terminal state
+// PAUSED_CREDENTIAL_AUTHORIZATION: a governed run paused because Entra asked
+// for interaction or sent a claims challenge (#1117). It is composed only
+// with credential governance on; left unset, the state is refused.
+func WithCredentialAuthorizationPause() ServerOption {
+	return func(server *Server) error {
+		server.credentialAuthorization = true
+		return nil
+	}
+}
+
 // NewServerWithCapabilities is the option-taking constructor. Any of indexes,
 // agents and nodeEvents may be nil; each optional capability then answers the
 // same refusal it did before it was composed.
