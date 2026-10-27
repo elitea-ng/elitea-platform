@@ -33,12 +33,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	agentidentitycore "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity"
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
 	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authzcompose"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity/governance"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
@@ -258,30 +258,81 @@ func credentialPolicyPut(
 	return 0
 }
 
-// agentIdentityAdmin builds the binding and mandate admin API (#1112). It is
-// nil with the flag off, and the router then mounts none of its routes.
-func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevision, pool *pgxpool.Pool) (*v2agentidentity.Handler, error) {
+// agentIdentityComposition is what the governed composition root builds for
+// ADR-0039 agent identity. Every field is nil with the flag off.
+type agentIdentityComposition struct {
+	// Admin serves the binding and mandate admin API (#1112).
+	Admin *v2agentidentity.Handler
+	// ExternalAdmin serves the external agent identity admin API (#1151).
+	ExternalAdmin *v2agentidentity.ExternalHandler
+	// Broker opens run-scoped agent sessions for admission and turns them
+	// into credentials for the credential broker (#1151). Its only callers.
+	Broker *agentidentitycore.Broker
+}
+
+// agentIdentityProviders is the adapter set the registry is built from. No
+// adapter exists yet (Entra #1152, Elitea-native #1153, others #1155), so
+// the registry is empty: a governed session for a binding denies with
+// ReasonProviderNotConfigured, and provisioning answers 503.
+func agentIdentityProviders() []agentidentitycore.Provider { return nil }
+
+// agentIdentityAdmin builds the agent identity admin APIs and the session
+// broker. With the flag off it builds nothing, and the router then mounts
+// none of the routes.
+func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevision, pool *pgxpool.Pool) (agentIdentityComposition, error) {
 	if !admission.Governed() {
-		return nil, nil
+		return agentIdentityComposition{}, nil
 	}
-	// Every binding and mandate change appends its security audit event in
-	// the same transaction; an append failure rolls the change back.
+	// Every binding, mandate, external identity and session change appends
+	// its security audit event in the same transaction; an append failure
+	// rolls the change back.
 	audit, err := securityaudit.NewPostgresAppender("elitea-main")
 	if err != nil {
-		return nil, fmt.Errorf("construct agent identity security audit appender: %w", err)
+		return agentIdentityComposition{}, fmt.Errorf("construct agent identity security audit appender: %w", err)
 	}
+	bindings := repos.NewAgentIdentityBindings(pool, audit)
+	identities := repos.NewExternalAgentIdentities(pool, audit)
+	revisions := governance.FixedRevision(revision)
 	service, err := governance.New(governance.Config{
-		Revisions: governance.FixedRevision(revision),
-		Bindings:  repos.NewAgentIdentityBindings(pool, audit),
-		Mandates:  repos.NewMandates(pool, audit),
-		// No binding can activate until external agent identities exist
-		// (#1151): an unknown external identity is never active.
-		ExternalIdentities: agentidentity.FailClosedExternalIdentities{},
+		Revisions:          revisions,
+		Bindings:           bindings,
+		Mandates:           repos.NewMandates(pool, audit),
+		ExternalIdentities: identities,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("construct agent identity governance: %w", err)
+		return agentIdentityComposition{}, fmt.Errorf("construct agent identity governance: %w", err)
 	}
-	return v2agentidentity.New(service)
+	admin, err := v2agentidentity.New(service)
+	if err != nil {
+		return agentIdentityComposition{}, err
+	}
+	registry, err := agentidentitycore.NewRegistry(agentIdentityProviders()...)
+	if err != nil {
+		return agentIdentityComposition{}, fmt.Errorf("construct agent identity provider registry: %w", err)
+	}
+	external, err := agentidentitycore.NewExternalIdentityService(agentidentitycore.ExternalIdentityConfig{
+		Revisions: revisions, Store: identities, Registry: registry,
+	})
+	if err != nil {
+		return agentIdentityComposition{}, fmt.Errorf("construct external agent identity service: %w", err)
+	}
+	externalAdmin, err := v2agentidentity.NewExternal(external)
+	if err != nil {
+		return agentIdentityComposition{}, err
+	}
+	broker, err := agentidentitycore.NewBroker(agentidentitycore.BrokerConfig{
+		Registry: registry,
+		// Asserted user evidence is never accepted (gate D4): no revision
+		// field enables it yet.
+		Policy:     agentidentitycore.DenyAssertedUser{ModePolicy: revision.Document},
+		Bindings:   bindings,
+		Identities: identities,
+		Sessions:   repos.NewAgentSessions(pool, audit),
+	})
+	if err != nil {
+		return agentIdentityComposition{}, fmt.Errorf("construct agent identity broker: %w", err)
+	}
+	return agentIdentityComposition{Admin: admin, ExternalAdmin: externalAdmin, Broker: broker}, nil
 }
 
 // credentialGrantGovernance builds the AND-composed operation decider and

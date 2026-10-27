@@ -695,6 +695,10 @@ type RouterConfig struct {
 	// credential governance flag on; nil mounts none of its routes, so they
 	// answer like any unknown path.
 	CredentialGrantsAdmin *v2credentialgrants.Handler
+	// ExternalAgentIdentityAdmin serves the external agent identity admin
+	// API (ADR-0039, issue 1151). Set, like AgentIdentityAdmin, only with the
+	// credential governance flag on; nil mounts none of its routes.
+	ExternalAgentIdentityAdmin *v2agentidentity.ExternalHandler
 }
 
 type RuntimeRoutes struct {
@@ -2718,6 +2722,24 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(mandatesApprove).Post("/mandates/{id}:approve", agentIdentities.ApproveMandate)
 					r.With(mandatesManage).Post("/mandates/{id}:suspend", agentIdentities.SuspendMandate)
 					r.With(mandatesManage).Post("/mandates/{id}:revoke", agentIdentities.RevokeMandate)
+				}
+
+				// External agent identities (ADR-0039, issue 1151). Mounted
+				// only with the governance flag on. Shared 0186 grants
+				// `models.agent_identity.external.manage`; every route needs it,
+				// and activation also needs the binding approval permission of
+				// shared 0181, because it makes approved bindings usable.
+				if cfg.ExternalAgentIdentityAdmin != nil {
+					externalIdentities := cfg.ExternalAgentIdentityAdmin
+					externalManage := central(v2agentidentity.PermissionExternalManage)
+					externalApprove := central(v2agentidentity.PermissionBindingsApprove)
+					r.With(externalManage).Get("/external_agent_identities", externalIdentities.ListExternalIdentities)
+					r.With(externalManage).Post("/external_agent_identities", externalIdentities.CreateExternalIdentity)
+					r.With(externalManage).Post("/external_agent_identities/{id}:provision", externalIdentities.ProvisionExternalIdentity)
+					r.With(externalManage, externalApprove).Post("/external_agent_identities/{id}:activate", externalIdentities.ActivateExternalIdentity)
+					r.With(externalManage).Post("/external_agent_identities/{id}:suspend", externalIdentities.SuspendExternalIdentity)
+					r.With(externalManage).Post("/external_agent_identities/{id}:resume", externalIdentities.ResumeExternalIdentity)
+					r.With(externalManage).Post("/external_agent_identities/{id}:retire", externalIdentities.RetireExternalIdentity)
 				}
 
 				// Regular app admin endpoints (with projectID)

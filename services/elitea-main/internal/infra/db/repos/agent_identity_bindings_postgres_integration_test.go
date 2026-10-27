@@ -45,6 +45,24 @@ INSERT INTO elitea_identity.credential_policy_revisions (id, digest, canonical, 
 VALUES ($1, $2, $3, $4::jsonb, 'integration-test') ON CONFLICT (id) DO NOTHING`,
 		agentIdentityTestRevision, digest[:], canonical, string(canonical))
 	require.NoError(t, err)
+	// The external identities the test bindings reference (0186 foreign
+	// key): one per tenant project, application 3, active.
+	for tenant, id := range agentIdentityTestExternalIDs {
+		_, err = pool.Exec(context.Background(), `
+INSERT INTO elitea_identity.external_agent_identities (
+    id, tenant_project_id, application_id, mode, provider, provider_tenant, kind, external_id, state,
+    created_by, last_transition_by)
+VALUES ($1::uuid, $2, 3, 'dedicated_agent', 'fake', 't1', 'fake.agent', 'obj-' || $1, 'active', '100', '100')
+ON CONFLICT (id) DO NOTHING`, id, tenant)
+		require.NoError(t, err)
+	}
+}
+
+// agentIdentityTestExternalIDs is the external identity of each test tenant
+// project.
+var agentIdentityTestExternalIDs = map[int64]string{
+	7: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f22",
+	8: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f23",
 }
 
 func proposedTestBinding(t *testing.T, id string, version int64, digestByte byte) agentidentity.AgentIdentityBinding {
@@ -57,7 +75,7 @@ func proposedTestBindingIn(t *testing.T, tenant int64, id string, version int64,
 	b, err := agentidentity.NewBinding(id, agentidentity.Proposal{
 		TenantProjectID: tenant, ApplicationID: 3, ApplicationVersionID: version,
 		DefinitionDigest: [32]byte{digestByte}, Mode: agentidentity.IdentityModeDedicatedAgent,
-		ExternalAgentIdentityID: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f22",
+		ExternalAgentIdentityID: agentIdentityTestExternalIDs[tenant],
 	}, agentIdentityAllowAll{}, agentIdentityTestRevision, "100", time.Now().UTC().Truncate(time.Microsecond))
 	require.NoError(t, err)
 	return b

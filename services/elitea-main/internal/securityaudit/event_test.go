@@ -78,7 +78,7 @@ func TestSecretLikeNamePatternCatchesTheForbiddenNames(t *testing.T) {
 
 func TestEveryEventTypeHasAnOCSFClass(t *testing.T) {
 	for _, typ := range []EventType{TypeDecision, TypeCredentialRedeem, TypeGrantChanged, TypeBindingChanged,
-		TypeMandateChanged, TypeDelegationChanged, TypeEpochBumped, TypeProbe} {
+		TypeMandateChanged, TypeDelegationChanged, TypeEpochBumped, TypeProbe, TypeExternalIdentityChanged, TypeAgentSession} {
 		class, ok := OCSFClassUID(typ)
 		if !ok || class < 1000 {
 			t.Errorf("%s has no OCSF class", typ)

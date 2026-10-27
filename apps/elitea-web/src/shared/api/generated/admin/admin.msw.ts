@@ -55,6 +55,8 @@ import type {
   BulkInviteSummary,
   CredentialUseGrant,
   CredentialUseGrantListResponse,
+  ExternalAgentIdentity,
+  ExternalAgentIdentityListResponse,
   GlobalUserInviteResult,
   ListBrandingPackageVersions200,
   Mandate,
@@ -792,6 +794,237 @@ export const getRevokeMandateResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     null,
   ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getListExternalAgentIdentitiesResponseMock = (
+  overrideResponse: Partial<
+    Extract<ExternalAgentIdentityListResponse, object>
+  > = {},
+): ExternalAgentIdentityListResponse => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.uuid(),
+    tenant_project_id: faker.number.int(),
+    application_id: faker.number.int(),
+    mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    provider_tenant: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    kind: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    external_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    generation: faker.number.int(),
+    provider_config_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    agent_user_ref: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    owner_ref: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    revocation_epoch: faker.number.int(),
+    created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  ...overrideResponse,
+});
+
+export const getCreateExternalAgentIdentityResponseMock = (
+  overrideResponse: Partial<Extract<ExternalAgentIdentity, object>> = {},
+): ExternalAgentIdentity => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_tenant: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  external_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  generation: faker.number.int(),
+  provider_config_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  agent_user_ref: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  owner_ref: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getProvisionExternalAgentIdentityResponseMock = (
+  overrideResponse: Partial<Extract<ExternalAgentIdentity, object>> = {},
+): ExternalAgentIdentity => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_tenant: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  external_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  generation: faker.number.int(),
+  provider_config_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  agent_user_ref: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  owner_ref: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getActivateExternalAgentIdentityResponseMock = (
+  overrideResponse: Partial<Extract<ExternalAgentIdentity, object>> = {},
+): ExternalAgentIdentity => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_tenant: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  external_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  generation: faker.number.int(),
+  provider_config_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  agent_user_ref: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  owner_ref: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getSuspendExternalAgentIdentityResponseMock = (
+  overrideResponse: Partial<Extract<ExternalAgentIdentity, object>> = {},
+): ExternalAgentIdentity => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_tenant: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  external_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  generation: faker.number.int(),
+  provider_config_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  agent_user_ref: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  owner_ref: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getResumeExternalAgentIdentityResponseMock = (
+  overrideResponse: Partial<Extract<ExternalAgentIdentity, object>> = {},
+): ExternalAgentIdentity => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_tenant: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  external_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  generation: faker.number.int(),
+  provider_config_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  agent_user_ref: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  owner_ref: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getRetireExternalAgentIdentityResponseMock = (
+  overrideResponse: Partial<Extract<ExternalAgentIdentity, object>> = {},
+): ExternalAgentIdentity => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_tenant: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  external_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  generation: faker.number.int(),
+  provider_config_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  agent_user_ref: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  owner_ref: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  revocation_epoch: faker.number.int(),
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
@@ -2618,6 +2851,190 @@ export const getRevokeMandateMockHandler = (
   );
 };
 
+export const getListExternalAgentIdentitiesMockHandler = (
+  overrideResponse?:
+    | ExternalAgentIdentityListResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        | Promise<ExternalAgentIdentityListResponse>
+        | ExternalAgentIdentityListResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/external_agent_identities",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListExternalAgentIdentitiesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateExternalAgentIdentityMockHandler = (
+  overrideResponse?:
+    | ExternalAgentIdentity
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExternalAgentIdentity> | ExternalAgentIdentity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/external_agent_identities",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateExternalAgentIdentityResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getProvisionExternalAgentIdentityMockHandler = (
+  overrideResponse?:
+    | ExternalAgentIdentity
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExternalAgentIdentity> | ExternalAgentIdentity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/external_agent_identities/:id\\:provision",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getProvisionExternalAgentIdentityResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getActivateExternalAgentIdentityMockHandler = (
+  overrideResponse?:
+    | ExternalAgentIdentity
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExternalAgentIdentity> | ExternalAgentIdentity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/external_agent_identities/:id\\:activate",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getActivateExternalAgentIdentityResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSuspendExternalAgentIdentityMockHandler = (
+  overrideResponse?:
+    | ExternalAgentIdentity
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExternalAgentIdentity> | ExternalAgentIdentity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/external_agent_identities/:id\\:suspend",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSuspendExternalAgentIdentityResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getResumeExternalAgentIdentityMockHandler = (
+  overrideResponse?:
+    | ExternalAgentIdentity
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExternalAgentIdentity> | ExternalAgentIdentity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/external_agent_identities/:id\\:resume",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getResumeExternalAgentIdentityResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRetireExternalAgentIdentityMockHandler = (
+  overrideResponse?:
+    | ExternalAgentIdentity
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExternalAgentIdentity> | ExternalAgentIdentity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/external_agent_identities/:id\\:retire",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRetireExternalAgentIdentityResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetBrandingSettingsMockHandler = (
   overrideResponse?:
     | BrandingSettings
@@ -3310,6 +3727,13 @@ export const getAdminMock = () => [
   getApproveMandateMockHandler(),
   getSuspendMandateMockHandler(),
   getRevokeMandateMockHandler(),
+  getListExternalAgentIdentitiesMockHandler(),
+  getCreateExternalAgentIdentityMockHandler(),
+  getProvisionExternalAgentIdentityMockHandler(),
+  getActivateExternalAgentIdentityMockHandler(),
+  getSuspendExternalAgentIdentityMockHandler(),
+  getResumeExternalAgentIdentityMockHandler(),
+  getRetireExternalAgentIdentityMockHandler(),
   getGetBrandingSettingsMockHandler(),
   getSaveBrandingSettingsMockHandler(),
   getResetBrandingSettingsMockHandler(),

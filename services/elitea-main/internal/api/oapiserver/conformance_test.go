@@ -249,6 +249,9 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// ADR-0039 (#1116): the credential use grant admin operations,
 		// mounted only with credential governance on. Same zero handler.
 		CredentialGrantsAdmin: &v2credentialgrants.Handler{},
+		// ADR-0039 (#1151): the external agent identity admin operations,
+		// mounted on the same condition.
+		ExternalAgentIdentityAdmin: &v2agentidentity.ExternalHandler{},
 		// Client contract 1.3: cancelChatExecution, registered only when the
 		// cancel route is composed (production_router.go).
 		CurrentAgentCancel: http.NotFoundHandler(),

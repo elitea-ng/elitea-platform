@@ -132,13 +132,6 @@ func capabilityStrings(capabilities []credentialgrant.Capability) []string {
 	return out
 }
 
-func nonNilStrings(values []string) []string {
-	if values == nil {
-		return []string{}
-	}
-	return values
-}
-
 // CreateGrant inserts a proposed grant and its audit event.
 func (s *CredentialGrants) CreateGrant(ctx context.Context, g credentialgrant.CredentialUseGrant) (credentialgrant.CredentialUseGrant, error) {
 	if err := s.writeReady(); err != nil {

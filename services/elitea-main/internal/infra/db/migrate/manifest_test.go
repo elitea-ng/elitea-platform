@@ -801,7 +801,18 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// columns on elitea_identity.delegations, elitea_identity.signin_assertions
 	// and elitea_identity.credential_authorization_requirements (#1117). No
 	// data, no permission.
-	require.EqualValues(t, 185, Head(shared))
+	//
+	// 186: shared/0186_external_agent_identities.sql, the
+	// elitea_identity.external_agent_identities and agent_sessions tables,
+	// the bindings' foreign key to their external identity, and the
+	// models.agent_identity.external.manage grant to administration-mode
+	// super_admin and admin (#1151).
+	//
+	// 187: shared/0187_execution_security_contexts.sql, the immutable
+	// ExecutionSecurityContextV1 bytes and digest of each governed execution
+	// (#1115), written in its admission transaction and served to the
+	// governed worker under its claim. No data, no permission.
+	require.EqualValues(t, 187, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
