@@ -104,4 +104,15 @@ describe('VoiceControlButton', () => {
     expect(props.onVoiceConfigChange).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
+
+  it('renders only the dialog, opened from outside, with hideControls/settingsOpen (the desktop ⋯ menu)', async () => {
+    const onSettingsOpenChange = vi.fn();
+    const { rerender } = renderWithProviders(<VoiceControlButton {...baseProps()} hideControls settingsOpen={false} onSettingsOpenChange={onSettingsOpenChange} />);
+    expect(screen.queryByTestId('chat-voice-play-stop-container')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    rerender(<VoiceControlButton {...baseProps()} hideControls settingsOpen onSettingsOpenChange={onSettingsOpenChange} />);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+    await waitFor(() => expect(onSettingsOpenChange).toHaveBeenCalledWith(false));
+  });
 });

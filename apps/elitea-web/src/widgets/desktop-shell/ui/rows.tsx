@@ -233,18 +233,24 @@ export function ShellRow(props: ShellRowProps): React.JSX.Element {
 
 /**
  * A section header: the name, in sentence case, and an optional action at the
- * right. With `onToggle` the name is a disclosure button (chevron after it).
+ * right. With `onToggle` the name is a disclosure button (chevron after it);
+ * with `onOpen` it is a button to the section's own page (Local work's list,
+ * a new chat).
  */
 export function SectionCaption({
   children,
   action,
   expanded,
   onToggle,
+  onOpen,
+  testId,
 }: {
   children: string;
   action?: ReactNode;
   expanded?: boolean;
   onToggle?: () => void;
+  onOpen?: () => void;
+  testId?: string;
 }): React.JSX.Element {
   const name = (
     <Typography
@@ -258,9 +264,17 @@ export function SectionCaption({
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', minHeight: '1.75rem', paddingLeft: 1, paddingRight: 0.5, paddingTop: 1.5, paddingBottom: 0.25 }}>
       <Box component="h2" sx={{ flex: 1, margin: 0, display: 'flex', minWidth: 0 }}>
-        {onToggle === undefined ? (
-          name
-        ) : (
+        {onOpen !== undefined && (
+          <ButtonBase
+            onClick={onOpen}
+            data-testid={testId}
+            sx={(theme: Theme) => ({ borderRadius: theme.vars.shape.radiusSm, '&:hover span': { color: theme.vars.palette.text.secondary } })}
+          >
+            {name}
+          </ButtonBase>
+        )}
+        {onOpen === undefined && onToggle === undefined && name}
+        {onOpen === undefined && onToggle !== undefined && (
           <ButtonBase
             onClick={onToggle}
             aria-expanded={expanded}

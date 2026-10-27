@@ -5008,5 +5008,17 @@
   "widgets.sidebar.nav.pipelines": "Пайплайни",
   "widgets.sidebar.nav.skills": "Навички",
   "widgets.sidebar.nav.toolkits": "Набори інструментів та індекси",
-  "widgets.sidebar.nav.workspaces": "Робочі простори"
+  "widgets.sidebar.nav.workspaces": "Робочі простори",
+  "chatInput.more": "Ще",
+  "chatInput.resize": "Змінити розмір поля повідомлення",
+  "features.chatMessages.replyActions.copy": "Копіювати в буфер обміну",
+  "features.chatMessages.replyActions.delete": "Видалити",
+  "features.chatMessages.replyActions.more": "Інші дії",
+  "features.chatMessages.replyActions.readOut": "Прочитати вголос",
+  "features.chatMessages.replyActions.regenerate": "Згенерувати знову",
+  "widgets.chatBox.composer.clearHistory": "Очистити історію чату…",
+  "widgets.chatBox.composer.modelSettings": "Налаштування моделі…",
+  "widgets.chatBox.composer.readAloud": "Читати відповіді вголос",
+  "widgets.chatBox.composer.voiceSettings": "Налаштування голосу…",
+  "widgets.llmModelSelector.picker.none": "Немає моделі"
 }

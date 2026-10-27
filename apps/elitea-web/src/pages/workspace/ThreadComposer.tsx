@@ -10,14 +10,15 @@
  *   shown disabled and there is no plan mode;
  * - `returning`: read-only, with its notice.
  *
- * A local thread's footer also shows the usage chip (`UsageChip`, lazy: the
- * latest turn's tokens, the thread's, a cost only from the catalogue's
- * price, #1227); what fills the context is the inspector's Context tab
- * (`ContextPanel`); `/compact` marks the next send, and so does a thread
- * left idle (`useIdleCompaction`). Beside them the
- * language-server chip (`LspChip`, lazy, #1236): the servers behind the
- * edits' diagnostics, and the step-limit chip (`StepsChip`, lazy): the
- * model steps each run here may take (`/steps` sets the same).
+ * A local thread's footer also shows the context ring (`UsageChip`, lazy: the
+ * share of the window in use; its tooltip the latest turn's tokens, the
+ * thread's, a cost only from the catalogue's price, #1227); a click opens what
+ * fills the context, the inspector's Context tab (`ContextPanel`); `/compact`
+ * marks the next send, and so does a thread left idle (`useIdleCompaction`).
+ * Beside it the language-server icon (`LspChip`, lazy, #1236): the servers
+ * behind the edits' diagnostics. The ⋯ menu holds the step limit
+ * (`StepLimitMenu`, lazy): the model steps each run here may take (`/steps`
+ * sets the same).
  * `/retry` sends the last message again and `/steps` shows or sets the
  * folder's step limit (`useRetryAndSteps`).
  * And the model chip (`ModelChip`, `useTurnModel`): the model the next turn
@@ -41,8 +42,10 @@ import { useNavigate } from '@tanstack/react-router';
 import { composer, replayView, type WorkspaceTurn } from '@/features/workspace';
 import type { CustomCommand, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
+import { useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { BypassControls } from './BypassControls';
+import { contextBreakdown, threadMeter } from './contextBreakdown';
 import { AgentChip, RunLocationChip } from './ComposerControls';
 import { HandoffBanner } from './HandoffControls';
 import { RunInCloudNotice } from './RunInCloudNotice';
@@ -63,7 +66,7 @@ import { skillPicks, WorkspaceComposer, type WorkspaceComposerProps } from './Wo
 
 const UsageChip = lazy(() => import('./UsageChip'));
 const LspChip = lazy(() => import('./LspChip'));
-const StepsChip = lazy(() => import('./StepsChip'));
+const StepLimitMenu = lazy(() => import('./StepLimitMenu'));
 
 export interface ThreadComposerProps {
   ipc: WorkspaceIpc;
@@ -152,20 +155,37 @@ interface ComposerMetersProps {
   usages: NonNullable<Usage>[];
   projectId: number;
   workspaceId: string;
-  /** A local thread: the folder's language-server and step-limit chips show (not for the cloud copy). */
+  /** A local thread: the folder's language servers show (not for the cloud copy). */
   local: boolean;
-  /** The step-limit chip could not store a choice: said above the composer. */
-  onStepsError: (message: string) => void;
+  /** The share of the model's window in use, once the host measured it. */
+  contextPercent: number | undefined;
 }
 
-/** The footer's step-limit and language-server chips and the usage chip (all lazy); the usage chip once a model call reported usage. */
-function ComposerMeters({ usages, projectId, workspaceId, local, onStepsError }: ComposerMetersProps): React.JSX.Element | null {
+/** The share of the window the thread's latest call used; none for the cloud copy or before the host measured it. */
+function contextPercentOf(cloudMode: boolean, turn: WorkspaceTurn, history: ThreadSession['history']): number | undefined {
+  const meter = cloudMode ? undefined : threadMeter(turn, history);
+  return meter === undefined ? undefined : contextBreakdown(meter).percent;
+}
+
+const openContextTab = (): void => useDesktopLayout.getState().showInspector('context');
+
+/** The footer's language-server icon and the context ring (both lazy); the ring once a model call reported usage. */
+function ComposerMeters({ usages, projectId, workspaceId, local, contextPercent }: ComposerMetersProps): React.JSX.Element | null {
   if (usages.length === 0 && !local) return null;
   return (
     <Suspense fallback={null}>
-      {local ? <StepsChip workspaceId={workspaceId} onError={onStepsError} /> : null}
       {local ? <LspChip workspaceId={workspaceId} /> : null}
-      {usages.length === 0 ? null : <UsageChip turns={usages} projectId={projectId} />}
+      {usages.length === 0 ? null : <UsageChip turns={usages} projectId={projectId} contextPercent={contextPercent} onOpenContext={openContextTab} />}
+    </Suspense>
+  );
+}
+
+/** The ⋯ menu's rows for a local thread: the step limit (lazy); a choice it cannot store is said above the composer. */
+function moreRows(workspaceId: string, local: boolean, onStepsError: (message: string) => void): WorkspaceComposerProps['more'] {
+  if (!local) return undefined;
+  return (close) => (
+    <Suspense fallback={null}>
+      <StepLimitMenu workspaceId={workspaceId} onError={onStepsError} close={close} />
     </Suspense>
   );
 }
@@ -231,6 +251,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
       <WorkspaceComposer
         ipc={ipc}
         workspaceId={workspaceId}
+        conversationId={conversationId}
         readOnly={handoff.offLaptop && !cloudMode}
         acceptImages={!cloudMode}
         planMode={commands.planMode}
@@ -238,7 +259,8 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} disabledHint={agentHint} />}
         {...modelBinding(model, !local, commands.modelRef)}
         runLocation={<RunLocationChip handoff={handoff} onOpenInChat={openInChat} />}
-        contextMeter={<ComposerMeters usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} onStepsError={commands.showText} />}
+        contextMeter={<ComposerMeters usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} contextPercent={contextPercentOf(cloudMode, turn, session.history)} />}
+        more={moreRows(workspaceId, !cloudMode, commands.showText)}
         onPlanModeChange={commands.setPlanMode}
         skills={offered}
         customCommands={customCommands}

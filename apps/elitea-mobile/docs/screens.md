@@ -252,7 +252,7 @@ G ──────────────────────────
  │ Absolutely. Here's the …      │    agent bubble (surface + hairline)
  │ ▸ Used 2 tools ✓              │    tool steps, collapsed
  └───────────────────────────────┘
-  ⧉  👍  👎  🔊              ↻       action row (last message gets regenerate)
+  ⧉ 👍 👎 🔊 ↻ ⋯                      action row (latest answer only; ↻ when it can regenerate)
 
  ┌ Approval needed ─────────────┐     approval card (§4.7), warning edge
  │ Research wants to run        │
@@ -275,6 +275,9 @@ G ──────────────────────────
   <name>" above its transcript, which opens the source while the reader can still see it.
 - **Mentions:** `@` opens the mention picker above the composer, and `/` opens the slash
   picker (existing `SuggestionStrip`).
+- **Drafts:** text typed and not sent stays in that chat's composer when you leave it (another
+  chat, another project, the background); an accepted send clears it. It survives a relaunch
+  only where the workspace policy allows offline storage (`composerDrafts.ts`).
 - **States:** the thinking indicator (Elitea mark and dots), streaming (caret), error
   (inline `dangerSoft` row "Couldn't get a reply · Retry"), offline outbox messages
   (clock glyph and "Waiting to send"), and paused tool calls (approval card).

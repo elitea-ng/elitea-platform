@@ -5008,5 +5008,17 @@
   "widgets.sidebar.nav.pipelines": "Pipelines",
   "widgets.sidebar.nav.skills": "Skills",
   "widgets.sidebar.nav.toolkits": "Toolkits und Indizes",
-  "widgets.sidebar.nav.workspaces": "Arbeitsbereiche"
+  "widgets.sidebar.nav.workspaces": "Arbeitsbereiche",
+  "chatInput.more": "Mehr",
+  "chatInput.resize": "Größe des Eingabefelds ändern",
+  "features.chatMessages.replyActions.copy": "In die Zwischenablage kopieren",
+  "features.chatMessages.replyActions.delete": "Löschen",
+  "features.chatMessages.replyActions.more": "Weitere Aktionen",
+  "features.chatMessages.replyActions.readOut": "Vorlesen",
+  "features.chatMessages.replyActions.regenerate": "Neu generieren",
+  "widgets.chatBox.composer.clearHistory": "Chatverlauf löschen…",
+  "widgets.chatBox.composer.modelSettings": "Modelleinstellungen…",
+  "widgets.chatBox.composer.readAloud": "Antworten vorlesen",
+  "widgets.chatBox.composer.voiceSettings": "Spracheinstellungen…",
+  "widgets.llmModelSelector.picker.none": "Kein Modell"
 }

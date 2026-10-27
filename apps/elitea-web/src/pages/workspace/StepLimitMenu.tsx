@@ -1,45 +1,31 @@
 /**
- * The composer footer's step-limit chip: the model steps each run of this
+ * The step limit in the composer's ⋯ menu: the model steps each run of this
  * folder's turns may take (the workspace's agent settings, IPC.md "Step
- * limit"), with a menu of the default, a few presets, unlimited and a number
- * of your own. `/steps` reads and sets the same setting; both stay in step
- * (`onStepLimitChange`). At the limit the host asks whether to continue.
+ * limit"). The row "Step limit" shows the current value; picking it turns
+ * the menu into the choices: the default, a few presets, unlimited and a
+ * number of your own. `/steps` reads and sets the same setting; both stay in
+ * step (`onStepLimitChange`). At the limit the host asks whether to continue.
  * Loaded lazily by `ThreadComposer`, for a local thread only.
  */
 import { useEffect, useState, type SyntheticEvent } from 'react';
 
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import CheckOutlinedIcon from '@mui/icons-material/CheckOutlined';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import SpeedOutlinedIcon from '@mui/icons-material/SpeedOutlined';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import ButtonBase from '@mui/material/ButtonBase';
-import Divider from '@mui/material/Divider';
-import Menu from '@mui/material/Menu';
-import MenuItem from '@mui/material/MenuItem';
-import type { Theme } from '@mui/material/styles';
 import TextField from '@mui/material/TextField';
-import Tooltip from '@mui/material/Tooltip';
 
 import { describeWorkspaceError } from '@/features/workspace';
 import { DEFAULT_STEP_LIMIT, MAX_STEP_LIMIT, onStepLimitChange, parseStepCount, readStepLimit, UNLIMITED, writeStepLimit, type StepLimit } from '@/shared/desktop/stepLimit';
 import { t } from '@/shared/i18n';
+import { MenuDivider, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
 
 /** The presets the menu offers between the default and unlimited. */
 const PRESETS: readonly number[] = [100, 500, 2000, 5000];
 
-const chipSx = (theme: Theme) => ({
-  minHeight: 22,
-  gap: 0.5,
-  padding: '0 6px',
-  borderRadius: '6px',
-  fontSize: '0.75rem',
-  fontWeight: 500,
-  color: theme.vars.palette.text.secondary,
-  whiteSpace: 'nowrap',
-  '&:hover, &[aria-expanded="true"]': { background: `color-mix(in srgb, ${theme.vars.palette.text.primary} 8%, transparent)` },
-  '& svg': { fontSize: 14 },
-});
-
-/** "1024 steps", "∞ steps": what the chip shows for `limit` (`null`: the default). */
+/** "1024 steps", "∞ steps": what the row shows for `limit` (`null`: the default). */
 function stepsLabel(limit: StepLimit | null): string {
   if (limit === UNLIMITED) return t('workspace.stepsChip.unlimited', '∞ steps');
   return t('workspace.stepsChip.label', '{{steps}} steps', { steps: String(limit ?? DEFAULT_STEP_LIMIT) });
@@ -86,7 +72,7 @@ function CustomSteps({ initial, onSet }: { initial: string; onSet: (steps: numbe
         error={text !== '' && steps === null}
         helperText={text !== '' && steps === null ? t('workspace.stepsChip.invalid', '1 to {{max}}', { max: String(MAX_STEP_LIMIT) }) : ' '}
         slotProps={{ htmlInput: { inputMode: 'numeric', 'aria-label': t('workspace.stepsChip.customLabel', 'Steps per run'), 'data-testid': 'steps-chip-custom-input' } }}
-        sx={{ width: 120 }}
+        sx={{ width: '7.5rem' }}
       />
       <Button type="submit" size="small" variant="contained" disabled={steps === null} data-testid="steps-chip-custom-set">
         {t('workspace.stepsChip.set', 'Set')}
@@ -95,60 +81,62 @@ function CustomSteps({ initial, onSet }: { initial: string; onSet: (steps: numbe
   );
 }
 
-export default function StepsChip({ workspaceId, onError }: { workspaceId: string; onError: (message: string) => void }): React.JSX.Element | null {
+export interface StepLimitMenuProps {
+  workspaceId: string;
+  onError: (message: string) => void;
+  /** Closes the ⋯ menu. */
+  close: () => void;
+}
+
+/** The ⋯ menu's step-limit rows: "Step limit  1024 steps ›", or, once it is picked, the choices. */
+export default function StepLimitMenu({ workspaceId, onError, close }: StepLimitMenuProps): React.JSX.Element[] | null {
   const limit = useStepLimit(workspaceId);
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [choosing, setChoosing] = useState(false);
   const [custom, setCustom] = useState(false);
   if (limit === undefined) return null;
-  const close = (): void => {
-    setAnchor(null);
-    setCustom(false);
-  };
+  const label = stepsLabel(limit);
+  if (!choosing) {
+    return [
+      <MenuRow key="steps" data-testid="steps-chip" aria-haspopup="menu" aria-label={t('workspace.stepsChip.aria', 'Step limit: {{label}}', { label })} onClick={() => setChoosing(true)}>
+        <MenuRowIcon>
+          <SpeedOutlinedIcon />
+        </MenuRowIcon>
+        <MenuRowText>{t('workspace.stepsChip.menu', 'Step limit')}</MenuRowText>
+        <MenuRowHint>{label}</MenuRowHint>
+        <MenuRowIcon>
+          <ChevronRightIcon />
+        </MenuRowIcon>
+      </MenuRow>,
+    ];
+  }
   const choose = (next: StepLimit | null): void => {
     close();
     writeStepLimit(workspaceId, next).catch((error: unknown) => onError(describeWorkspaceError(error)));
   };
-  const label = stepsLabel(limit);
-  const item = (value: StepLimit | null, text: string) => (
-    <MenuItem key={String(value)} selected={value === limit} onClick={() => choose(value)} data-testid={`steps-chip-${String(value ?? 'default')}`}>
-      {text}
-    </MenuItem>
+  const item = (value: StepLimit | null, text: string): React.JSX.Element => (
+    <MenuRow key={String(value)} selected={value === limit} onClick={() => choose(value)} data-testid={`steps-chip-${String(value ?? 'default')}`}>
+      <MenuRowIcon>{value === limit && <CheckOutlinedIcon />}</MenuRowIcon>
+      <MenuRowText>{text}</MenuRowText>
+    </MenuRow>
   );
-  return (
-    <>
-      <Tooltip title={t('workspace.stepsChip.tooltip', 'Model steps per run here. At the limit the agent asks whether to continue.')}>
-        <ButtonBase
-          data-testid="steps-chip"
-          aria-haspopup="menu"
-          aria-expanded={anchor !== null}
-          aria-label={t('workspace.stepsChip.aria', 'Step limit: {{label}}', { label })}
-          onClick={(event) => setAnchor(event.currentTarget)}
-          sx={chipSx}
-        >
-          {label}
-          <ExpandMoreIcon />
-        </ButtonBase>
-      </Tooltip>
-      <Menu
-        anchorEl={anchor}
-        open={anchor !== null}
-        onClose={close}
-        anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
-        transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-        slotProps={{ list: { dense: true, 'aria-label': t('workspace.stepsChip.menu', 'Step limit') } }}
-      >
-        {item(null, t('workspace.stepsChip.default', 'Default ({{steps}})', { steps: String(DEFAULT_STEP_LIMIT) }))}
-        {PRESETS.map((steps) => item(steps, String(steps)))}
-        {item(UNLIMITED, t('workspace.stepsChip.unlimitedItem', 'Unlimited'))}
-        <Divider />
-        {custom ? (
-          <CustomSteps initial={typeof limit === 'number' ? String(limit) : ''} onSet={choose} />
-        ) : (
-          <MenuItem onClick={() => setCustom(true)} data-testid="steps-chip-custom">
-            {t('workspace.stepsChip.custom', 'Custom…')}
-          </MenuItem>
-        )}
-      </Menu>
-    </>
-  );
+  return [
+    <MenuRow key="back" onClick={() => setChoosing(false)} title={t('workspace.stepsChip.tooltip', 'Model steps per run here. At the limit the agent asks whether to continue.')}>
+      <MenuRowIcon>
+        <ChevronLeftIcon />
+      </MenuRowIcon>
+      <MenuRowText>{t('workspace.stepsChip.menu', 'Step limit')}</MenuRowText>
+    </MenuRow>,
+    item(null, t('workspace.stepsChip.default', 'Default ({{steps}})', { steps: String(DEFAULT_STEP_LIMIT) })),
+    ...PRESETS.map((steps) => item(steps, String(steps))),
+    item(UNLIMITED, t('workspace.stepsChip.unlimitedItem', 'Unlimited')),
+    <MenuDivider key="divider" />,
+    custom ? (
+      <CustomSteps key="custom" initial={typeof limit === 'number' ? String(limit) : ''} onSet={choose} />
+    ) : (
+      <MenuRow key="custom" onClick={() => setCustom(true)} data-testid="steps-chip-custom">
+        <MenuRowIcon />
+        <MenuRowText>{t('workspace.stepsChip.custom', 'Custom…')}</MenuRowText>
+      </MenuRow>
+    ),
+  ];
 }

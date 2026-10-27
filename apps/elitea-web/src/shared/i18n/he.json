@@ -5008,5 +5008,17 @@
   "widgets.sidebar.nav.pipelines": "Pipelines",
   "widgets.sidebar.nav.skills": "מיומנויות",
   "widgets.sidebar.nav.toolkits": "ערכות כלים ואינדקסים",
-  "widgets.sidebar.nav.workspaces": "סביבות עבודה"
+  "widgets.sidebar.nav.workspaces": "סביבות עבודה",
+  "chatInput.more": "עוד",
+  "chatInput.resize": "שינוי גודל תיבת ההודעה",
+  "features.chatMessages.replyActions.copy": "העתקה ללוח",
+  "features.chatMessages.replyActions.delete": "מחיקה",
+  "features.chatMessages.replyActions.more": "פעולות נוספות",
+  "features.chatMessages.replyActions.readOut": "הקראה",
+  "features.chatMessages.replyActions.regenerate": "יצירה מחדש",
+  "widgets.chatBox.composer.clearHistory": "ניקוי היסטוריית הצ׳אט…",
+  "widgets.chatBox.composer.modelSettings": "הגדרות מודל…",
+  "widgets.chatBox.composer.readAloud": "הקראת תשובות",
+  "widgets.chatBox.composer.voiceSettings": "הגדרות קול…",
+  "widgets.llmModelSelector.picker.none": "אין מודל"
 }

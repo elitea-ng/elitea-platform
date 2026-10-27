@@ -5008,5 +5008,17 @@
   "widgets.sidebar.nav.pipelines": "Pipelines",
   "widgets.sidebar.nav.skills": "Skills",
   "widgets.sidebar.nav.toolkits": "Toolkits e índices",
-  "widgets.sidebar.nav.workspaces": "Workspaces"
+  "widgets.sidebar.nav.workspaces": "Workspaces",
+  "chatInput.more": "Mais",
+  "chatInput.resize": "Redimensionar a caixa de mensagem",
+  "features.chatMessages.replyActions.copy": "Copiar para a área de transferência",
+  "features.chatMessages.replyActions.delete": "Excluir",
+  "features.chatMessages.replyActions.more": "Mais ações",
+  "features.chatMessages.replyActions.readOut": "Ler em voz alta",
+  "features.chatMessages.replyActions.regenerate": "Gerar novamente",
+  "widgets.chatBox.composer.clearHistory": "Limpar o histórico do chat…",
+  "widgets.chatBox.composer.modelSettings": "Configurações do modelo…",
+  "widgets.chatBox.composer.readAloud": "Ler respostas em voz alta",
+  "widgets.chatBox.composer.voiceSettings": "Configurações de voz…",
+  "widgets.llmModelSelector.picker.none": "Nenhum modelo"
 }

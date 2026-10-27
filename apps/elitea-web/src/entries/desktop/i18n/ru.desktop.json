@@ -1048,5 +1048,12 @@
   "desktop.shell.projects": "Проекты",
   "desktop.shell.project": "Проект",
   "desktop.shell.noProjectsFound": "Нет подходящих проектов",
-  "desktop.shell.searchProjects": "Поиск проектов"
+  "desktop.shell.searchProjects": "Поиск проектов",
+  "workspace.actMode": "Режим «Действовать» (изменения с одобрением)",
+  "workspace.composer.attachImages": "Прикрепить изображения",
+  "workspace.handoff.whereLabel": "Где",
+  "workspace.mode.actHint": "Изменения с одобрением",
+  "workspace.mode.bypassHint": "Без одобрений",
+  "workspace.mode.planHint": "Планирует, ничего не меняет",
+  "workspace.usage.context": "Контекст: занято {{percent}}% окна"
 }

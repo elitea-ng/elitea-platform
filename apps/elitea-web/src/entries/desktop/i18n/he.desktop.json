@@ -1048,5 +1048,12 @@
   "desktop.shell.projects": "פרויקטים",
   "desktop.shell.project": "פרויקט",
   "desktop.shell.noProjectsFound": "אין פרויקטים תואמים",
-  "desktop.shell.searchProjects": "חיפוש פרויקטים"
+  "desktop.shell.searchProjects": "חיפוש פרויקטים",
+  "workspace.actMode": "מצב ביצוע (שינויים באישור)",
+  "workspace.composer.attachImages": "צירוף תמונות",
+  "workspace.handoff.whereLabel": "רץ",
+  "workspace.mode.actHint": "שינויים באישור",
+  "workspace.mode.bypassHint": "ללא אישורים",
+  "workspace.mode.planHint": "מתכנן, לא משנה דבר",
+  "workspace.usage.context": "הקשר: {{percent}}% מהחלון בשימוש"
 }

@@ -1,8 +1,9 @@
 /**
- * The sidebar's menus (account, project, appearance, language) drawn at the
- * sidebar's own scale, so a menu reads as part of it: 28px rows, a 16px icon
- * 8px from an 11px label, the sidebar's colours, and the search palette's grey
- * highlight. The desktop theme's `MuiMenuItem` is the native context-menu look
+ * The desktop's menus (the sidebar's account and project menus, the
+ * composer's pickers and its ⋯ menu) drawn at the sidebar's scale, so a menu
+ * reads as part of the window: 28px rows, a 16px icon 8px from an 11px label,
+ * the sidebar's colours, and the search palette's grey highlight. The desktop
+ * theme's `MuiMenuItem` is the native context-menu look
  * (24px rows, accent highlight) and stays that for right-click menus.
  *
  * Each part carries its own style: the theme gate keeps `.Mui*` class

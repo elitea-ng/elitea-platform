@@ -10,3 +10,5 @@ export { LLMSettings } from './ui/LLMSettings';
  */
 export { toLlmModel } from './lib/toLlmModel';
 export type { LLMModel, LLMSettingsValues } from './lib/types';
+/** The desktop composer's model picker (`ChatBoxComposerTools`). */
+export { ComposerModelPicker } from './ui/ComposerModelPicker';

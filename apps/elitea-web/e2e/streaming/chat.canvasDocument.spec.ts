@@ -127,7 +127,9 @@ test('a whole reply opens as a document, a heading edited in it round-trips, and
     await expect(answer).toContainText(headingText, { timeout: 30_000 });
 
     // ── the opener: "Open as document" on the WHOLE reply ──────────────────
-    const openAsDocument = answer.getByTestId('answer-open-as-document');
+    // A row in the reply's ⋯ menu, which renders in a portal.
+    await answer.getByTestId('answer-more-actions').click();
+    const openAsDocument = page.getByTestId('answer-open-as-document');
     await expect(openAsDocument, 'a fresh, unsplit reply must offer to open as a document').toBeVisible({
       timeout: 20_000,
     });

@@ -1048,5 +1048,12 @@
   "desktop.shell.projects": "پروجیکٹس",
   "desktop.shell.project": "پروجیکٹ",
   "desktop.shell.noProjectsFound": "کوئی مماثل پروجیکٹ نہیں",
-  "desktop.shell.searchProjects": "پروجیکٹس تلاش کریں"
+  "desktop.shell.searchProjects": "پروجیکٹس تلاش کریں",
+  "workspace.actMode": "عمل موڈ (منظوری کے ساتھ تبدیلیاں)",
+  "workspace.composer.attachImages": "تصاویر منسلک کریں",
+  "workspace.handoff.whereLabel": "کہاں چلتا ہے",
+  "workspace.mode.actHint": "منظوری کے ساتھ تبدیلیاں",
+  "workspace.mode.bypassHint": "بغیر منظوری",
+  "workspace.mode.planHint": "منصوبہ بندی، کوئی تبدیلی نہیں",
+  "workspace.usage.context": "سیاق: ونڈو کا {{percent}}٪ استعمال ہوا"
 }

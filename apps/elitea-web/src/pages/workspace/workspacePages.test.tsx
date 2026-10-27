@@ -83,6 +83,18 @@ afterAll(() => {
   configure({ asyncUtilTimeout });
 });
 
+/** The composers' unsent texts, as kept in this device's storage (`composerDrafts`). */
+const storedDrafts = (): Record<string, { text: string }> => JSON.parse(window.localStorage.getItem('el.composer.drafts') ?? '{}') as Record<string, { text: string }>;
+
+/** Picks a mode in the composer's mode picker ("Act ⌄"). */
+async function pickMode(user: ReturnType<typeof userEvent.setup>, name: string): Promise<void> {
+  await user.click(await screen.findByTestId('mode-picker'));
+  await user.click(await screen.findByRole('menuitemradio', { name }));
+}
+
+/** The mode the picker shows. */
+const shownMode = (): HTMLElement => screen.getByTestId('mode-picker');
+
 /** Bypass mode is kept per folder in storage: each bypass test starts, and leaves, without it. */
 function forgetBypass(): void {
   window.localStorage.removeItem('el.desktop.workspace.w1.bypass');
@@ -302,7 +314,7 @@ describe('WorkspaceSessionPage', () => {
     const session = await screen.findByTestId('workspace-session');
     // The session page opens the index, which checks the folder; its settings are in the ⋯ menu.
     await waitFor(() => expect(indexIpc.calls.opened).toEqual(['w1']));
-    await userEvent.click(within(session).getByRole('button', { name: 'More' }));
+    await userEvent.click(within(session).getByTestId('thread-more'));
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Index settings…' }));
     // The inspector opens on its Index tab.
     expect(await screen.findByTestId('index-panel')).toBeInTheDocument();
@@ -325,7 +337,7 @@ describe('WorkspaceSessionPage', () => {
     await pickCoder(user);
 
     await user.type(screen.getByTestId('chat-message-input'), 'fix the build');
-    await user.click(screen.getByRole('radio', { name: 'Plan mode (no changes)' }));
+    await pickMode(user, 'Plan mode (no changes)');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
@@ -370,7 +382,8 @@ describe('WorkspaceSessionPage', () => {
 
     expect(await screen.findByText('src/main.rs')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Undo turn' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'More' }));
+    // The thread's ⋯ in the toolbar (the composer has a ⋯ of its own).
+    await user.click(screen.getByTestId('thread-more'));
     expect(await screen.findByRole('menuitem', { name: 'Open in chat' })).not.toHaveAttribute('aria-disabled', 'true');
   });
 
@@ -417,7 +430,8 @@ describe('WorkspaceSessionPage', () => {
     expect(screen.getAllByTestId('tool-row')).toHaveLength(1);
     expect(screen.getByText(/did not finish/)).toBeInTheDocument();
     expect(screen.queryByText(/Earlier messages of this thread/)).toBeNull();
-    await user.click(screen.getByRole('button', { name: 'More' }));
+    // The thread's ⋯ in the toolbar (the composer has a ⋯ of its own).
+    await user.click(screen.getByTestId('thread-more'));
     expect(await screen.findByRole('menuitem', { name: 'Open in chat' })).not.toHaveAttribute('aria-disabled', 'true');
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
@@ -637,7 +651,8 @@ describe('WorkspaceSessionPage', () => {
       mount(ipc, '/workspaces/w1?conversation=77');
 
       await screen.findByText('Prompt of t1');
-      await user.click(screen.getByRole('button', { name: 'More' }));
+      // The thread's ⋯ in the toolbar (the composer has a ⋯ of its own).
+      await user.click(screen.getByTestId('thread-more'));
       await user.click(await screen.findByRole('menuitem', { name: 'Fork Thread' }));
 
       await waitFor(() => expect(forkBodies).toEqual([{ fork_id: ANY_FORK_ID }]));
@@ -1214,11 +1229,11 @@ describe('WorkspaceSessionPage', () => {
       onTestFinished(forgetBypass);
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       const user = await ready(ipc);
-      await user.click(await screen.findByRole('radio', { name: 'Bypass mode (no approvals)' }));
+      await pickMode(user, 'Bypass mode (no approvals)');
       const dialog = await screen.findByRole('dialog', { name: 'Run without approvals?' });
       await user.click(within(dialog).getByRole('button', { name: 'Turn on bypass mode' }));
       await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull());
-      expect(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' })).toBeChecked();
+      expect(shownMode()).toHaveTextContent('Bypass');
       expect(screen.getByTestId('workspace-bypass-notice')).toBeInTheDocument();
       const input = screen.getByTestId('chat-message-input');
       await user.type(input, 'go{Enter}');
@@ -1227,10 +1242,10 @@ describe('WorkspaceSessionPage', () => {
       expect(ipc.calls.started[0]?.plan_mode).toBe(false);
       // Off from the notice; on again without the warning (the folder confirmed it).
       await user.click(within(screen.getByTestId('workspace-bypass-notice')).getByRole('button', { name: 'Turn off' }));
-      expect(screen.getByRole('radio', { name: 'Act' })).toBeChecked();
-      await user.click(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' }));
+      expect(shownMode()).toHaveTextContent('Act');
+      await pickMode(user, 'Bypass mode (no approvals)');
       expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull();
-      expect(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' })).toBeChecked();
+      expect(shownMode()).toHaveTextContent('Bypass');
     }, 30_000);
 
     it('keeps plan mode when the bypass warning is cancelled, and leaves it once bypass is on', async () => {
@@ -1238,16 +1253,16 @@ describe('WorkspaceSessionPage', () => {
       onTestFinished(forgetBypass);
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       const user = await ready(ipc);
-      await user.click(await screen.findByRole('radio', { name: 'Plan mode (no changes)' }));
-      await user.click(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' }));
+      await pickMode(user, 'Plan mode (no changes)');
+      await pickMode(user, 'Bypass mode (no approvals)');
       const dialog = await screen.findByRole('dialog', { name: 'Run without approvals?' });
       await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
       await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull());
-      expect(screen.getByRole('radio', { name: 'Plan mode (no changes)' })).toBeChecked();
-      await user.click(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' }));
+      expect(shownMode()).toHaveTextContent('Plan');
+      await pickMode(user, 'Bypass mode (no approvals)');
       await user.click(within(await screen.findByRole('dialog', { name: 'Run without approvals?' })).getByRole('button', { name: 'Turn on bypass mode' }));
       await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Run without approvals?' })).toBeNull());
-      expect(screen.getByRole('radio', { name: 'Bypass mode (no approvals)' })).toBeChecked();
+      expect(shownMode()).toHaveTextContent('Bypass');
     }, 30_000);
 
     it('asks the host to read ahead for the selected agent when the composer gets focus', async () => {
@@ -1268,9 +1283,14 @@ describe('WorkspaceSessionPage', () => {
       await user.type(input, 'one{Shift>}{Enter}{/Shift}two');
       expect(input).toHaveValue('one\ntwo');
       expect(ipc.calls.started).toHaveLength(0);
+      // Unsent, the text is the new thread's draft.
+      await waitFor(() => expect(storedDrafts()['workspace:w1:new']?.text).toBe('one\ntwo'));
       await user.keyboard('{Enter}');
       await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
       expect(ipc.calls.started[0]?.prompt).toBe('one\ntwo');
+      // Sent, it is nobody's draft: not the thread's it started, not the next new thread's.
+      await waitFor(() => expect(input).toHaveValue(''));
+      await waitFor(() => expect(storedDrafts()).toEqual({}));
     });
 
     // Six commands, a turn and a new thread in one test: the default 5 s is not
@@ -1285,7 +1305,7 @@ describe('WorkspaceSessionPage', () => {
       const menu = await screen.findByTestId('workspace-command-menu');
       expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual(['/new', '/plan', '/undo', '/retry', '/agent', '/model', '/steps', '/clear', '/compact', '/help']);
       await user.type(input, 'pl{Enter}');
-      expect(screen.getByRole('radio', { name: 'Plan mode (no changes)' })).toBeChecked();
+      expect(shownMode()).toHaveTextContent('Plan');
       await waitFor(() => expect(input).toHaveValue(''));
 
       await user.type(input, '/help{Enter}');

@@ -124,7 +124,7 @@ export interface UserInputSlots {
 export interface UserInputSlotProps {
   readonly container?: { readonly onDrop?: ((event: DragEvent<HTMLDivElement>) => void) | undefined } | undefined;
   readonly field?:
-    | { readonly placeholder?: string | undefined; readonly color?: string | undefined; readonly iconColor?: string | undefined }
+    | { readonly placeholder?: string | undefined; readonly color?: string | undefined; readonly iconColor?: string | undefined; readonly draftKey?: string | undefined }
     | undefined;
   readonly mention?:
     | {

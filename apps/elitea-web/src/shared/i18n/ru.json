@@ -5008,5 +5008,17 @@
   "widgets.sidebar.nav.pipelines": "Пайплайны",
   "widgets.sidebar.nav.skills": "Навыки",
   "widgets.sidebar.nav.toolkits": "Наборы инструментов и индексы",
-  "widgets.sidebar.nav.workspaces": "Рабочие области"
+  "widgets.sidebar.nav.workspaces": "Рабочие области",
+  "chatInput.more": "Ещё",
+  "chatInput.resize": "Изменить размер поля сообщения",
+  "features.chatMessages.replyActions.copy": "Копировать в буфер обмена",
+  "features.chatMessages.replyActions.delete": "Удалить",
+  "features.chatMessages.replyActions.more": "Другие действия",
+  "features.chatMessages.replyActions.readOut": "Прочитать вслух",
+  "features.chatMessages.replyActions.regenerate": "Сгенерировать заново",
+  "widgets.chatBox.composer.clearHistory": "Очистить историю чата…",
+  "widgets.chatBox.composer.modelSettings": "Настройки модели…",
+  "widgets.chatBox.composer.readAloud": "Читать ответы вслух",
+  "widgets.chatBox.composer.voiceSettings": "Настройки голоса…",
+  "widgets.llmModelSelector.picker.none": "Нет модели"
 }

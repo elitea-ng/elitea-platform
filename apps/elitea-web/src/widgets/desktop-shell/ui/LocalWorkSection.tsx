@@ -319,6 +319,8 @@ export function LocalWorkSection({ location, run, projects, projectId }: Section
         <HandoffLiveEvents key={projectId} projectId={projectId} />
       ))}
       <SectionCaption
+        onOpen={() => run({ type: 'go', to: '/workspaces' })}
+        testId="shell-local-work"
         action={
           <Tooltip title={`${t('desktop.shell.openFolder', 'Open folder')} (${modKey()}O)`}>
             <IconButton size="small" aria-label={t('desktop.shell.openFolder', 'Open folder')} onClick={openFolder}>

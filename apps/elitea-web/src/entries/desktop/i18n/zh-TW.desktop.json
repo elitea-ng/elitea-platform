@@ -1048,5 +1048,12 @@
   "desktop.shell.projects": "專案",
   "desktop.shell.project": "專案",
   "desktop.shell.noProjectsFound": "沒有相符的專案",
-  "desktop.shell.searchProjects": "搜尋專案"
+  "desktop.shell.searchProjects": "搜尋專案",
+  "workspace.actMode": "執行模式（需核准後變更）",
+  "workspace.composer.attachImages": "附加圖片",
+  "workspace.handoff.whereLabel": "執行於",
+  "workspace.mode.actHint": "需核准後變更",
+  "workspace.mode.bypassHint": "無需核准",
+  "workspace.mode.planHint": "僅規劃，不做變更",
+  "workspace.usage.context": "上下文：已使用視窗的 {{percent}}%"
 }

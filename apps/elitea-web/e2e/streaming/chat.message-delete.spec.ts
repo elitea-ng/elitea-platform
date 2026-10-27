@@ -140,7 +140,9 @@ test('deleting the last message removes the whole turn, on screen and in the sto
   const answer = page.getByTestId('application-answer').last();
   await expect(answer).toBeVisible({ timeout: 30_000 });
   await answer.hover();
-  const remove = answer.getByRole('button', { name: 'Delete', exact: true });
+  // Delete is a row in the reply's ⋯ menu (`ApplicationAnswerActions`); the menu is a portal, so it is found on the page.
+  await answer.getByTestId('answer-more-actions').click();
+  const remove = page.getByRole('menuitem', { name: 'Delete', exact: true });
   await expect(remove, 'the last message must offer Delete').toBeVisible({ timeout: 15_000 });
   await remove.click();
 

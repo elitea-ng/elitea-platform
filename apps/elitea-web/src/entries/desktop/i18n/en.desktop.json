@@ -1048,5 +1048,12 @@
   "desktop.shell.projects": "Projects",
   "desktop.shell.project": "Project",
   "desktop.shell.noProjectsFound": "No projects match",
-  "desktop.shell.searchProjects": "Search projects"
+  "desktop.shell.searchProjects": "Search projects",
+  "workspace.actMode": "Act mode (edits with approvals)",
+  "workspace.composer.attachImages": "Attach images",
+  "workspace.handoff.whereLabel": "Runs",
+  "workspace.mode.actHint": "Edits with approvals",
+  "workspace.mode.bypassHint": "No approvals",
+  "workspace.mode.planHint": "Plans, changes nothing",
+  "workspace.usage.context": "Context: {{percent}}% of the window used"
 }

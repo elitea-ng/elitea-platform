@@ -6,6 +6,7 @@ import Tooltip from '@mui/material/Tooltip';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { StopIcon } from '@/shared/ui/icons/stop-icon';
+import { ComposerSendButton } from '@/shared/ui/native-composer';
 
 import type { UserInputSendControlSlotProps, UserInputSlots } from './UserInput.types';
 import type { UserInputStyles } from './UserInput.styles';
@@ -36,6 +37,9 @@ export interface UserInputFooterProps {
   readonly styles: UserInputStyles;
 }
 
+/** The desktop draws Stop as its one round end button, a square in place of the arrow (a literal MODE test: the web keeps its own). */
+const NATIVE = import.meta.env.MODE === 'desktop';
+
 function StopButton({
   onStop,
   config,
@@ -46,6 +50,9 @@ function StopButton({
   readonly styles: UserInputStyles;
 }): ReactNode {
   const label = config?.tooltipTitle ?? t('chatInput.userInput.stopGenerating', 'Stop generating');
+  if (NATIVE) {
+    return <ComposerSendButton label={label} disabled={false} onClick={() => onStop?.()} icon={<StopIcon style={stopIconStyle} />} />;
+  }
   return (
     <Tooltip
       title={label}

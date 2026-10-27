@@ -28,6 +28,12 @@ import { server } from '../../../../test/setup';
 import type { MessageGroupWire, MessageParticipantWire } from '@/entities/message';
 
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
+
+/** A reply's Delete is a row in its ⋯ menu (`ApplicationAnswerActions`): open every reply's menu, then look. */
+function openReplyMenusAndFind(testId: string): HTMLElement | null {
+  for (const more of screen.queryAllByTestId('answer-more-actions')) fireEvent.click(more);
+  return screen.queryByTestId(testId);
+}
 import { convertMessagesToChatHistory } from '../../lib/convertMessagesToChatHistory';
 import { ChatMessageList } from './ChatMessageList';
 
@@ -211,7 +217,7 @@ describe('ChatMessageList question-edit eligibility', () => {
     expect(screen.getByLabelText(EDIT_LABEL)).toBeInTheDocument();
     // The AI answer's delete goes through `canDeleteAiMessage`, i.e. the
     // question's author — the same hatch, on the other control.
-    expect(screen.getByLabelText('Delete')).toBeInTheDocument();
+    expect(openReplyMenusAndFind('answer-delete')).not.toBeNull();
   });
 
   it('withholds edit AND delete on a question that states NO author, when the reader IS known', () => {
@@ -222,7 +228,7 @@ describe('ChatMessageList question-edit eligibility', () => {
     expect(chatHistory[0]?.userId).toBeUndefined();
     renderList(chatHistory, '6');
     expect(screen.queryByLabelText(EDIT_LABEL)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Delete')).not.toBeInTheDocument();
+    expect(openReplyMenusAndFind('answer-delete')).toBeNull();
   });
 });
 

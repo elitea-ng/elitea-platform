@@ -5008,5 +5008,17 @@
   "widgets.sidebar.nav.pipelines": "管線",
   "widgets.sidebar.nav.skills": "技能",
   "widgets.sidebar.nav.toolkits": "工具組與索引",
-  "widgets.sidebar.nav.workspaces": "工作區"
+  "widgets.sidebar.nav.workspaces": "工作區",
+  "chatInput.more": "更多",
+  "chatInput.resize": "調整訊息框大小",
+  "features.chatMessages.replyActions.copy": "複製到剪貼簿",
+  "features.chatMessages.replyActions.delete": "刪除",
+  "features.chatMessages.replyActions.more": "更多動作",
+  "features.chatMessages.replyActions.readOut": "朗讀",
+  "features.chatMessages.replyActions.regenerate": "重新產生",
+  "widgets.chatBox.composer.clearHistory": "清除聊天記錄…",
+  "widgets.chatBox.composer.modelSettings": "模型設定…",
+  "widgets.chatBox.composer.readAloud": "朗讀回覆",
+  "widgets.chatBox.composer.voiceSettings": "語音設定…",
+  "widgets.llmModelSelector.picker.none": "無模型"
 }

@@ -1048,5 +1048,12 @@
   "desktop.shell.projects": "项目",
   "desktop.shell.project": "项目",
   "desktop.shell.noProjectsFound": "没有匹配的项目",
-  "desktop.shell.searchProjects": "搜索项目"
+  "desktop.shell.searchProjects": "搜索项目",
+  "workspace.actMode": "执行模式（需批准后更改）",
+  "workspace.composer.attachImages": "附加图片",
+  "workspace.handoff.whereLabel": "运行于",
+  "workspace.mode.actHint": "需批准后更改",
+  "workspace.mode.bypassHint": "无需批准",
+  "workspace.mode.planHint": "仅规划，不做更改",
+  "workspace.usage.context": "上下文：已用窗口的 {{percent}}%"
 }

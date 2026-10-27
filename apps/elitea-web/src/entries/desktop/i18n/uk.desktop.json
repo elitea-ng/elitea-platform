@@ -1048,5 +1048,12 @@
   "desktop.shell.projects": "Проєкти",
   "desktop.shell.project": "Проєкт",
   "desktop.shell.noProjectsFound": "Немає відповідних проєктів",
-  "desktop.shell.searchProjects": "Пошук проєктів"
+  "desktop.shell.searchProjects": "Пошук проєктів",
+  "workspace.actMode": "Режим «Діяти» (зміни зі схваленням)",
+  "workspace.composer.attachImages": "Прикріпити зображення",
+  "workspace.handoff.whereLabel": "Де",
+  "workspace.mode.actHint": "Зміни зі схваленням",
+  "workspace.mode.bypassHint": "Без схвалень",
+  "workspace.mode.planHint": "Планує, нічого не змінює",
+  "workspace.usage.context": "Контекст: зайнято {{percent}}% вікна"
 }

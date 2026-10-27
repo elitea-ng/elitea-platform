@@ -5008,5 +5008,17 @@
   "widgets.sidebar.nav.pipelines": "Pipelines",
   "widgets.sidebar.nav.skills": "Skills",
   "widgets.sidebar.nav.toolkits": "Toolkits en indexen",
-  "widgets.sidebar.nav.workspaces": "Werkruimten"
+  "widgets.sidebar.nav.workspaces": "Werkruimten",
+  "chatInput.more": "Meer",
+  "chatInput.resize": "Grootte van het berichtvak wijzigen",
+  "features.chatMessages.replyActions.copy": "Kopiëren naar klembord",
+  "features.chatMessages.replyActions.delete": "Verwijderen",
+  "features.chatMessages.replyActions.more": "Meer acties",
+  "features.chatMessages.replyActions.readOut": "Voorlezen",
+  "features.chatMessages.replyActions.regenerate": "Opnieuw genereren",
+  "widgets.chatBox.composer.clearHistory": "Chatgeschiedenis wissen…",
+  "widgets.chatBox.composer.modelSettings": "Modelinstellingen…",
+  "widgets.chatBox.composer.readAloud": "Antwoorden voorlezen",
+  "widgets.chatBox.composer.voiceSettings": "Spraakinstellingen…",
+  "widgets.llmModelSelector.picker.none": "Geen model"
 }

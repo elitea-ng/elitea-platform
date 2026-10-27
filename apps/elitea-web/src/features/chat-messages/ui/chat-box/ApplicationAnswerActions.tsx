@@ -1,139 +1,195 @@
 /**
- * Split out of `ApplicationAnswer.tsx` to stay under the file-length budget
- * (§3.5) — the hover-revealed Copy/Regenerate/Delete/Read-aloud action row,
- * each button only rendering when its handler is supplied.
+ * The action row under an assistant reply, drawn as ChatGPT and Claude draw
+ * theirs: one compact, left-aligned row OUTSIDE the reply card, quiet 16px
+ * outlined icons (`ReplyActionButton`), the frequent actions inline and the
+ * rest behind ⋯.
+ *
+ *   Copy · Good · Bad · Read out · Regenerate · ⋯ (Remember this, Open as
+ *   document, Fork from here, — , Delete)
+ *
+ * It used to sit inside the card, spread across its full width (the thumbs
+ * and bookmark at the left, six icons at the right), at MUI's default
+ * icon-button weight. Every control is still here; each renders only when its
+ * handler is supplied, as before, and Delete still goes through the
+ * caller's confirmation (`onDelete` opens it).
+ *
+ * Visibility: always under the latest reply (`alwaysVisible`); under an
+ * older one it fades in on hover or when focus enters it. It is faded by
+ * opacity, not hidden, so Tab still reaches every control, and it stays
+ * shown while its ⋯ menu is open (the menu's portal takes the hover away)
+ * and on a device with no hover at all.
  */
 import type { ReactNode } from 'react';
+import { useState } from 'react';
 
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import AutorenewIcon from '@mui/icons-material/Autorenew';
+import CallSplitOutlinedIcon from '@mui/icons-material/CallSplitOutlined';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import VolumeUpOutlinedIcon from '@mui/icons-material/VolumeUpOutlined';
 import Box from '@mui/material/Box';
-import IconButton from '@mui/material/IconButton';
-import Tooltip from '@mui/material/Tooltip';
+import Menu from '@mui/material/Menu';
 
 import { t } from '@/shared/i18n';
+import { MenuDivider, MenuRow, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
 
-import { ForkMessageButton } from './ForkMessageButton';
+import { MessageFeedbackControl } from './MessageFeedbackControl';
+import { ReplyActionButton } from './ReplyActionButton';
+import { RememberMemoryMenuRow, useRememberMemory, type RememberMemory } from './RememberMemoryAction';
 
-/** @public Props for `ApplicationAnswerActions`. */
-export interface ApplicationAnswerActionsProps {
+/** Marks the row so the reply around it can reveal it on hover (`replyActionsRevealSx`). */
+const REPLY_ACTIONS_ATTR = 'data-reply-actions';
+
+/** For the reply's own box: hovering anywhere on the reply shows its row. */
+export const replyActionsRevealSx = { [`&:hover [${REPLY_ACTIONS_ATTR}]`]: { opacity: 1 } } as const;
+
+interface ApplicationAnswerActionsState {
   readonly hasContent: boolean;
   readonly isProcessing: boolean;
   readonly shouldDisableRegenerate: boolean;
   readonly hasSpeakableText: boolean;
   readonly isSpeaking: boolean;
+}
+
+interface ApplicationAnswerActionsHandlers {
   readonly onAutoSpeak?: (() => void) | undefined;
   readonly onCopy?: (() => void) | undefined;
   readonly onRegenerate?: (() => void) | undefined;
   readonly onDelete?: (() => void) | undefined;
-  /** "Fork from here" (client contract 1.11); omitted, no button renders. */
+  /** "Fork from here" (client contract 1.11); omitted, no row renders. */
   readonly onFork?: (() => void) | undefined;
   /**
    * Carves the WHOLE answer out into a `document` canvas (issue #879) — the
    * same underlying create route the selection-drag affordance calls, with
    * `kind: 'document'` forced rather than guessed. Omitted — the answer has
    * already been split into items, or the composition root wired no canvas
-   * creation at all — no such button renders.
+   * creation at all — no such row renders.
    */
   readonly onOpenAsDocument?: (() => void) | undefined;
 }
 
-export function ApplicationAnswerActions({
-  hasContent,
-  isProcessing,
-  shouldDisableRegenerate,
-  hasSpeakableText,
-  isSpeaking,
-  onAutoSpeak,
-  onCopy,
-  onRegenerate,
-  onDelete,
-  onFork,
-  onOpenAsDocument,
-}: ApplicationAnswerActionsProps): ReactNode {
+/** @public Props for `ApplicationAnswerActions`. */
+export interface ApplicationAnswerActionsProps {
+  readonly state: ApplicationAnswerActionsState;
+  readonly handlers: ApplicationAnswerActionsHandlers;
+  /** Thumbs and "Remember this" (#880/#870): a resolved project and a settled answer, else `undefined`. */
+  readonly feedback?: { readonly projectId: string; readonly messageId: string } | undefined;
+  /** The text "Remember this" saves. */
+  readonly memoryContent: string;
+  /** The latest reply's row never fades. */
+  readonly alwaysVisible: boolean;
+}
+
+function InlineActions({ state, handlers, feedback }: Pick<ApplicationAnswerActionsProps, 'state' | 'handlers' | 'feedback'>): ReactNode {
+  const { onCopy, onAutoSpeak, onRegenerate } = handlers;
   return (
-    // Always visible, never hover-gated: the production row shows Read
-    // out / Copy / Regenerate / Delete on every answer at rest (measured
-    // `visibility: visible` live, and baseline `RelativeButtonsContainer`
-    // sets no `hidden` base — its `&:hover` rule is vestigial). Hidden until
-    // hover, the transcript looked action-less and the icons the reference
-    // screenshots show were simply absent.
-    <Box className="actionButtons" sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'flex-start', gap: 1, mt: 1, paddingLeft: '2rem' }}>
-      {onAutoSpeak && hasSpeakableText && (
-        <Tooltip title="Read out" placement="top">
-          <span>
-            <IconButton
-              size="small"
-              color="tertiary"
-              disabled={isProcessing || isSpeaking}
-              onClick={onAutoSpeak}
-              aria-label="Read out"
-            >
-              <VolumeUpOutlinedIcon fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
+    <>
+      {onCopy && state.hasContent && (
+        <ReplyActionButton label={t('features.chatMessages.replyActions.copy', 'Copy to clipboard')} disabled={state.isProcessing} onClick={onCopy}>
+          <ContentCopyIcon />
+        </ReplyActionButton>
       )}
-      {onOpenAsDocument && hasContent && (
-        <Tooltip title={t('features.chatMessages.canvas.document.openAsDocument', 'Open as document')} placement="top">
-          <span>
-            <IconButton
-              size="small"
-              color="tertiary"
-              disabled={isProcessing}
-              onClick={onOpenAsDocument}
-              data-testid="answer-open-as-document"
-              aria-label={t('features.chatMessages.canvas.document.openAsDocument', 'Open as document')}
-            >
-              <ArticleOutlinedIcon fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-      )}
-      {onCopy && hasContent && (
-        <Tooltip title="Copy to clipboard" placement="top">
-          <IconButton
-            size="small"
-            color="tertiary"
-            disabled={isProcessing}
-            onClick={onCopy}
-            aria-label="Copy to clipboard"
-          >
-            <ContentCopyIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
+      {feedback && <MessageFeedbackControl projectId={feedback.projectId} messageId={feedback.messageId} />}
+      {onAutoSpeak && state.hasSpeakableText && (
+        <ReplyActionButton label={t('features.chatMessages.replyActions.readOut', 'Read out')} disabled={state.isProcessing || state.isSpeaking} onClick={onAutoSpeak}>
+          <VolumeUpOutlinedIcon />
+        </ReplyActionButton>
       )}
       {onRegenerate && (
-        <Tooltip title="Regenerate" placement="top">
-          <span>
-            <IconButton
-              size="small"
-              color="tertiary"
-              disabled={shouldDisableRegenerate}
-              onClick={onRegenerate}
-              aria-label="Regenerate"
-            >
-              <AutorenewIcon fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
+        <ReplyActionButton label={t('features.chatMessages.replyActions.regenerate', 'Regenerate')} disabled={state.shouldDisableRegenerate} onClick={onRegenerate}>
+          <AutorenewIcon />
+        </ReplyActionButton>
       )}
-      {onFork && <ForkMessageButton onFork={onFork} disabled={isProcessing} />}
-      {onDelete && (
-        <Tooltip title="Delete" placement="top">
-          <IconButton
-            size="small"
-            color="tertiary"
-            onClick={onDelete}
-            aria-label="Delete"
-          >
-            <DeleteOutlinedIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-      )}
+    </>
+  );
+}
+
+interface MoreMenuProps {
+  readonly state: ApplicationAnswerActionsState;
+  readonly handlers: ApplicationAnswerActionsHandlers;
+  readonly memory: RememberMemory | undefined;
+  readonly anchor: HTMLElement | null;
+  readonly onAnchor: (anchor: HTMLElement | null) => void;
+}
+
+function hasMoreRows({ state, handlers, memory }: Pick<MoreMenuProps, 'state' | 'handlers' | 'memory'>): boolean {
+  return Boolean(memory?.available) || Boolean(handlers.onOpenAsDocument && state.hasContent) || Boolean(handlers.onFork) || Boolean(handlers.onDelete);
+}
+
+/** One menu row that runs `action` and closes the menu. */
+function ActionRow({ icon, label, testId, disabled, action, close }: {
+  readonly icon: ReactNode; readonly label: string; readonly testId: string; readonly disabled?: boolean; readonly action: () => void; readonly close: () => void;
+}): ReactNode {
+  return (
+    <MenuRow data-testid={testId} disabled={disabled} onClick={() => { close(); action(); }}>
+      <MenuRowIcon>{icon}</MenuRowIcon>
+      <MenuRowText>{label}</MenuRowText>
+    </MenuRow>
+  );
+}
+
+function MoreMenu({ state, handlers, memory, anchor, onAnchor }: MoreMenuProps): ReactNode {
+  const { onOpenAsDocument, onFork, onDelete } = handlers;
+  if (!hasMoreRows({ state, handlers, memory })) return null;
+  const close = (): void => onAnchor(null);
+  const label = t('features.chatMessages.replyActions.more', 'More actions');
+  const openAsDocument = t('features.chatMessages.canvas.document.openAsDocument', 'Open as document');
+  return (
+    <>
+      <ReplyActionButton label={label} data-testid="answer-more-actions" aria-haspopup="menu" aria-expanded={anchor !== null} onClick={(event) => onAnchor(event.currentTarget)}>
+        <MoreHorizIcon />
+      </ReplyActionButton>
+      <Menu anchorEl={anchor} open={anchor !== null} onClose={close} slotProps={{ list: { dense: true, 'aria-label': label }, paper: { sx: { minWidth: '12rem' } } }}>
+        {memory && <RememberMemoryMenuRow memory={memory} disabled={state.isProcessing} onDone={close} />}
+        {onOpenAsDocument && state.hasContent && (
+          <ActionRow icon={<ArticleOutlinedIcon />} label={openAsDocument} testId="answer-open-as-document" disabled={state.isProcessing} action={onOpenAsDocument} close={close} />
+        )}
+        {onFork && (
+          <ActionRow icon={<CallSplitOutlinedIcon />} label={t('features.chatMessages.forkFromHere', 'Fork from here')} testId="message-fork" disabled={state.isProcessing} action={onFork} close={close} />
+        )}
+        {onDelete && <MenuDivider />}
+        {onDelete && <ActionRow icon={<DeleteOutlinedIcon />} label={t('features.chatMessages.replyActions.delete', 'Delete')} testId="answer-delete" action={onDelete} close={close} />}
+      </Menu>
+    </>
+  );
+}
+
+function ActionsRow({ state, handlers, feedback, alwaysVisible, memory }: Omit<ApplicationAnswerActionsProps, 'memoryContent'> & { readonly memory: RememberMemory | undefined }): ReactNode {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const shown = alwaysVisible || anchor !== null;
+  return (
+    <Box
+      {...{ [REPLY_ACTIONS_ATTR]: '' }}
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 0.5,
+        // The card's text starts 1rem in; a 28px target around a 16px icon
+        // puts the first icon on that edge.
+        paddingLeft: '0.625rem',
+        marginTop: '-0.25rem',
+        opacity: shown ? 1 : 0,
+        transition: 'opacity 120ms',
+        '&:focus-within': { opacity: 1 },
+        '@media (hover: none)': { opacity: 1 },
+      }}
+    >
+      <InlineActions state={state} handlers={handlers} feedback={feedback} />
+      <MoreMenu state={state} handlers={handlers} memory={memory} anchor={anchor} onAnchor={setAnchor} />
+      {memory?.toast}
     </Box>
   );
+}
+
+/** "Remember this" holds a mutation, so it mounts only with a resolved project (the feedback gate), as it always did. */
+function ActionsRowWithMemory(props: ApplicationAnswerActionsProps & { readonly feedback: NonNullable<ApplicationAnswerActionsProps['feedback']> }): ReactNode {
+  const memory = useRememberMemory({ projectId: props.feedback.projectId, content: props.memoryContent });
+  return <ActionsRow {...props} memory={memory} />;
+}
+
+export function ApplicationAnswerActions(props: ApplicationAnswerActionsProps): ReactNode {
+  const { feedback } = props;
+  return feedback ? <ActionsRowWithMemory {...props} feedback={feedback} /> : <ActionsRow {...props} memory={undefined} />;
 }

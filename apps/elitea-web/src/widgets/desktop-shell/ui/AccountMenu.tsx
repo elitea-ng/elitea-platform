@@ -46,7 +46,7 @@ import { bugReportUrl, whatsNewUrl } from '../lib/accountLinks';
 import type { EliteaItem, EliteaItemValue } from '../lib/eliteaSections';
 import type { ShellAction } from '../lib/shellActions';
 import { useHostInfo } from '../model/useHostInfo';
-import { MenuDivider, MenuHeader, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText } from './shellMenu';
+import { MenuDivider, MenuHeader, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
 import { modKey } from './shortcutLabel';
 
 type ThemeMode = 'system' | 'light' | 'dark';

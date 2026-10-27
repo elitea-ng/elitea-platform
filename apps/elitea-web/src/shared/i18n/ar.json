@@ -5008,5 +5008,17 @@
   "widgets.sidebar.nav.pipelines": "Pipelines",
   "widgets.sidebar.nav.skills": "المهارات",
   "widgets.sidebar.nav.toolkits": "مجموعات الأدوات والفهارس",
-  "widgets.sidebar.nav.workspaces": "مساحات العمل"
+  "widgets.sidebar.nav.workspaces": "مساحات العمل",
+  "chatInput.more": "المزيد",
+  "chatInput.resize": "تغيير حجم مربع الرسالة",
+  "features.chatMessages.replyActions.copy": "نسخ إلى الحافظة",
+  "features.chatMessages.replyActions.delete": "حذف",
+  "features.chatMessages.replyActions.more": "إجراءات أخرى",
+  "features.chatMessages.replyActions.readOut": "قراءة بصوت عالٍ",
+  "features.chatMessages.replyActions.regenerate": "إعادة الإنشاء",
+  "widgets.chatBox.composer.clearHistory": "مسح سجل المحادثة…",
+  "widgets.chatBox.composer.modelSettings": "إعدادات النموذج…",
+  "widgets.chatBox.composer.readAloud": "قراءة الردود بصوت عالٍ",
+  "widgets.chatBox.composer.voiceSettings": "إعدادات الصوت…",
+  "widgets.llmModelSelector.picker.none": "لا يوجد نموذج"
 }

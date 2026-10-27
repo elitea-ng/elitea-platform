@@ -5008,5 +5008,17 @@
   "widgets.sidebar.nav.pipelines": "パイプライン",
   "widgets.sidebar.nav.skills": "スキル",
   "widgets.sidebar.nav.toolkits": "ツールキットとインデックス",
-  "widgets.sidebar.nav.workspaces": "ワークスペース"
+  "widgets.sidebar.nav.workspaces": "ワークスペース",
+  "chatInput.more": "その他",
+  "chatInput.resize": "メッセージ欄のサイズを変更",
+  "features.chatMessages.replyActions.copy": "クリップボードにコピー",
+  "features.chatMessages.replyActions.delete": "削除",
+  "features.chatMessages.replyActions.more": "その他の操作",
+  "features.chatMessages.replyActions.readOut": "読み上げ",
+  "features.chatMessages.replyActions.regenerate": "再生成",
+  "widgets.chatBox.composer.clearHistory": "チャット履歴を消去…",
+  "widgets.chatBox.composer.modelSettings": "モデル設定…",
+  "widgets.chatBox.composer.readAloud": "返信を読み上げる",
+  "widgets.chatBox.composer.voiceSettings": "音声設定…",
+  "widgets.llmModelSelector.picker.none": "モデルなし"
 }

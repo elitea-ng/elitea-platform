@@ -5008,5 +5008,17 @@
   "widgets.sidebar.nav.pipelines": "پائپ لائنیں",
   "widgets.sidebar.nav.skills": "مہارتیں",
   "widgets.sidebar.nav.toolkits": "ٹول کٹس اور انڈیکسز",
-  "widgets.sidebar.nav.workspaces": "ورک اسپیسز"
+  "widgets.sidebar.nav.workspaces": "ورک اسپیسز",
+  "chatInput.more": "مزید",
+  "chatInput.resize": "پیغام خانے کا سائز بدلیں",
+  "features.chatMessages.replyActions.copy": "کلپ بورڈ پر کاپی کریں",
+  "features.chatMessages.replyActions.delete": "حذف کریں",
+  "features.chatMessages.replyActions.more": "مزید کارروائیاں",
+  "features.chatMessages.replyActions.readOut": "بلند آواز سے پڑھیں",
+  "features.chatMessages.replyActions.regenerate": "دوبارہ بنائیں",
+  "widgets.chatBox.composer.clearHistory": "چیٹ کی تاریخ صاف کریں…",
+  "widgets.chatBox.composer.modelSettings": "ماڈل کی ترتیبات…",
+  "widgets.chatBox.composer.readAloud": "جوابات بلند آواز سے پڑھیں",
+  "widgets.chatBox.composer.voiceSettings": "آواز کی ترتیبات…",
+  "widgets.llmModelSelector.picker.none": "کوئی ماڈل نہیں"
 }

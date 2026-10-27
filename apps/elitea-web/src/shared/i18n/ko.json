@@ -5008,5 +5008,17 @@
   "widgets.sidebar.nav.pipelines": "파이프라인",
   "widgets.sidebar.nav.skills": "스킬",
   "widgets.sidebar.nav.toolkits": "툴킷 및 인덱스",
-  "widgets.sidebar.nav.workspaces": "워크스페이스"
+  "widgets.sidebar.nav.workspaces": "워크스페이스",
+  "chatInput.more": "더 보기",
+  "chatInput.resize": "메시지 상자 크기 조정",
+  "features.chatMessages.replyActions.copy": "클립보드에 복사",
+  "features.chatMessages.replyActions.delete": "삭제",
+  "features.chatMessages.replyActions.more": "추가 작업",
+  "features.chatMessages.replyActions.readOut": "소리 내어 읽기",
+  "features.chatMessages.replyActions.regenerate": "다시 생성",
+  "widgets.chatBox.composer.clearHistory": "채팅 기록 지우기…",
+  "widgets.chatBox.composer.modelSettings": "모델 설정…",
+  "widgets.chatBox.composer.readAloud": "답변 소리 내어 읽기",
+  "widgets.chatBox.composer.voiceSettings": "음성 설정…",
+  "widgets.llmModelSelector.picker.none": "모델 없음"
 }

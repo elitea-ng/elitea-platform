@@ -75,8 +75,14 @@ interface ChatsRowActionsProps {
 }
 
 /** The Chats caption's actions: a new chat, a new folder, and the disclosure of the conversations under it. */
-function ChatsRowActions({ open, onToggle, onNewFolder }: ChatsRowActionsProps): React.JSX.Element {
+/** A new chat, even on `/chat` itself: `create=1` (`processes/chat/ui/useCreateChatReset.ts`). */
+function useStartChat(): () => void {
   const navigate = useNavigate();
+  return () => void navigate({ to: '/chat', search: { create: '1' } as never });
+}
+
+function ChatsRowActions({ open, onToggle, onNewFolder }: ChatsRowActionsProps): React.JSX.Element {
+  const startChat = useStartChat();
   const newChat = t('desktop.chats.new', 'New chat');
   const newFolder = t('desktop.chats.newFolder', 'New folder');
   const disclosure = open ? t('desktop.chats.hide', 'Hide chats') : t('desktop.chats.show', 'Show chats');
@@ -90,8 +96,7 @@ function ChatsRowActions({ open, onToggle, onNewFolder }: ChatsRowActionsProps):
         </Tooltip>
       )}
       <Tooltip title={newChat}>
-        {/* `create=1` starts a new chat even on `/chat` itself (`processes/chat/ui/useCreateChatReset.ts`). */}
-        <IconButton size="small" aria-label={newChat} data-testid="shell-chats-new" onClick={() => void navigate({ to: '/chat', search: { create: '1' } as never })}>
+        <IconButton size="small" aria-label={newChat} data-testid="shell-chats-new" onClick={startChat}>
           <AddOutlinedIcon fontSize="inherit" />
         </IconButton>
       </Tooltip>
@@ -134,6 +139,7 @@ function highlightedItem(pathname: string, selected: EliteaItemValue | undefined
 export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
   const { location, run, permissions, selectedProjectId } = props;
   const switchProject = useSwitchProject(location.pathname, props.onSelectProject);
+  const newChat = useStartChat();
   const items = useMemo(
     () => eliteaItems(permissions, computeIsSelectedProjectPublic(selectedProjectId)),
     [permissions, selectedProjectId],
@@ -225,7 +231,7 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
         <Box component="nav" aria-label={t('desktop.shell.elitea', 'Elitea')}>
           {hasChat && (
             <>
-              <SectionCaption action={<ChatsRowActions open={chatsOpen} onToggle={toggleChats} onNewFolder={onNewFolder} />}>
+              <SectionCaption onOpen={newChat} testId="shell-chats-caption" action={<ChatsRowActions open={chatsOpen} onToggle={toggleChats} onNewFolder={onNewFolder} />}>
                 {t('widgets.sidebar.nav.chat', 'Chats')}
               </SectionCaption>
               {chatsOpen && (

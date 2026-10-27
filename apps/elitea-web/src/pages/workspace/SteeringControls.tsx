@@ -22,7 +22,8 @@ interface DraftInput {
 
 /**
  * Put the unsent texts into the input once per `id`, before what the person typed since. `onRestored` tells the
- * composer that the input has text now.
+ * composer that the input has text now. A tick later than the effect: the input restores the thread's saved draft
+ * (`draftKey`) in its own effect, and this puts the texts before that draft instead of over it.
  */
 export function useRestoredDraft(input: RefObject<DraftInput | null>, unsent: UnsentSteers | undefined, onRestored: () => void): void {
   const restored = useRef<number | null>(null);
@@ -33,11 +34,15 @@ export function useRestoredDraft(input: RefObject<DraftInput | null>, unsent: Un
   const id = unsent?.id;
   const text = unsent?.text;
   useEffect(() => {
-    const handle = input.current;
-    if (id === undefined || text === undefined || handle === null || restored.current === id) return;
-    restored.current = id;
-    handle.setValue(nextTurnMessage([text, handle.getInputContent()]));
-    latestRestored.current();
+    if (id === undefined || text === undefined || restored.current === id) return undefined;
+    const timer = window.setTimeout(() => {
+      const handle = input.current;
+      if (handle === null) return;
+      restored.current = id;
+      handle.setValue(nextTurnMessage([text, handle.getInputContent()]));
+      latestRestored.current();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [input, id, text]);
 }
 

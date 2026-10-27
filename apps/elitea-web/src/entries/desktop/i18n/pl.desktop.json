@@ -1048,5 +1048,12 @@
   "desktop.shell.projects": "Projekty",
   "desktop.shell.project": "Projekt",
   "desktop.shell.noProjectsFound": "Brak pasujących projektów",
-  "desktop.shell.searchProjects": "Szukaj projektów"
+  "desktop.shell.searchProjects": "Szukaj projektów",
+  "workspace.actMode": "Tryb Działaj (zmiany z zatwierdzeniem)",
+  "workspace.composer.attachImages": "Dołącz obrazy",
+  "workspace.handoff.whereLabel": "Działa",
+  "workspace.mode.actHint": "Zmiany z zatwierdzeniem",
+  "workspace.mode.bypassHint": "Bez zatwierdzeń",
+  "workspace.mode.planHint": "Planuje, niczego nie zmienia",
+  "workspace.usage.context": "Kontekst: użyto {{percent}}% okna"
 }

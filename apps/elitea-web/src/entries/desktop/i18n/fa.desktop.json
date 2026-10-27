@@ -1048,5 +1048,12 @@
   "desktop.shell.projects": "پروژه‌ها",
   "desktop.shell.project": "پروژه",
   "desktop.shell.noProjectsFound": "پروژه‌ای پیدا نشد",
-  "desktop.shell.searchProjects": "جستجوی پروژه‌ها"
+  "desktop.shell.searchProjects": "جستجوی پروژه‌ها",
+  "workspace.actMode": "حالت اجرا (تغییر با تأیید)",
+  "workspace.composer.attachImages": "پیوست تصویر",
+  "workspace.handoff.whereLabel": "محل اجرا",
+  "workspace.mode.actHint": "تغییر با تأیید",
+  "workspace.mode.bypassHint": "بدون تأیید",
+  "workspace.mode.planHint": "برنامه‌ریزی، بدون تغییر",
+  "workspace.usage.context": "بافت: {{percent}}٪ از پنجره استفاده شده"
 }

@@ -415,8 +415,9 @@ describe('ApplicationAnswer "Open as document" action (issue #879)', () => {
       />,
     );
 
-    const button = screen.getByTestId('answer-open-as-document');
-    await user.click(button);
+    // A row in the reply's ⋯ menu.
+    await user.click(screen.getByTestId('answer-more-actions'));
+    await user.click(screen.getByTestId('answer-open-as-document'));
 
     expect(onCreateCanvasFromSelection).toHaveBeenCalledWith({
       messageGroupUuid: answer.id,

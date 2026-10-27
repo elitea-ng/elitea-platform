@@ -43,12 +43,14 @@ export function resolveContent(content: NewChatInputContentProps | undefined): {
   readonly clearInputAfterSubmit: boolean;
   readonly tooltipOfSendButton: string | undefined;
   readonly slashHighlights: readonly { readonly start: number; readonly end: number }[];
+  readonly draftKey: string | undefined;
 } {
   return {
     placeholder: content?.placeholder ?? '',
     clearInputAfterSubmit: content?.clearInputAfterSubmit ?? true,
     tooltipOfSendButton: content?.tooltipOfSendButton,
     slashHighlights: content?.slashHighlights ?? [],
+    draftKey: content?.draftKey,
   };
 }
 

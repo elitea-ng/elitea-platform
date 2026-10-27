@@ -187,7 +187,7 @@ describe('a thread running in the cloud', () => {
     const composer = screen.getByTestId('workspace-composer');
     expect(within(composer).getByRole('textbox')).toBeEnabled();
     expect(within(composer).getByRole('textbox')).toHaveAttribute('placeholder', 'Message the cloud copy…');
-    expect(screen.queryByTestId('mode-segmented')).toBeNull();
+    expect(screen.queryByTestId('mode-picker')).toBeNull();
     expect(screen.getByTestId('agent-chip')).toBeDisabled();
     expect(screen.queryByRole('menuitem', { name: 'Send to cloud…' })).toBeNull();
   });

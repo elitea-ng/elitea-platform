@@ -1,6 +1,6 @@
 /**
  * The images attached to the composer's next message (#1229): pasted from the
- * clipboard, or dropped on the window as files (the shell calls
+ * clipboard, picked with the footer's + (`attachPicked`), or dropped on the window as files (the shell calls
  * `attachFiles` with the paths the host reported). Each goes to the host,
  * which checks, shrinks and holds it in memory and answers a token and a
  * thumbnail; Send carries the tokens (`picks`).
@@ -33,6 +33,8 @@ export interface ImageAttachments {
   clear: () => void;
   /** The input's paste handler: takes image files off the clipboard, leaves text to the input. */
   onPaste: (event: ClipboardEvent<HTMLElement>) => void;
+  /** Image files picked in a file dialog (the footer's +): sent to the host by their bytes, as a paste is. */
+  attachPicked: (files: readonly File[]) => void;
 }
 
 /** A file's bytes as base64, without the `data:` prefix. */
@@ -117,15 +119,20 @@ export function useImageAttachments(ipc: WorkspaceIpc, workspaceId: string, enab
     return () => useDesktopLayout.getState().extendSession({ attachFiles: undefined });
   }, [enabled, attachFiles]);
 
+  // By their bytes (`attachment_add_bytes`), whose tokens the host knows as `clipboard` ones.
+  const attachBlobs = (files: readonly File[]): void => {
+    for (const file of files) {
+      adopt('clipboard', async () => ipc.attachBytes(workspaceId, file.type, await base64Of(file), file.name === '' ? undefined : file.name), release);
+    }
+  };
+
   const onPaste = (event: ClipboardEvent<HTMLElement>): void => {
     if (!enabled) return;
     const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/'));
     if (files.length === 0) return;
     // An image on the clipboard is the paste; any text beside it is the image's caption in some apps, and is dropped.
     event.preventDefault();
-    for (const file of files) {
-      adopt('clipboard', async () => ipc.attachBytes(workspaceId, file.type, await base64Of(file), file.name === '' ? undefined : file.name), release);
-    }
+    attachBlobs(files);
   };
 
   const remove = (index: number): void => {
@@ -153,5 +160,8 @@ export function useImageAttachments(ipc: WorkspaceIpc, workspaceId: string, enab
       setError(null);
     },
     onPaste,
+    attachPicked: (files) => {
+      if (enabled) attachBlobs(files.filter((file) => file.type.startsWith('image/')));
+    },
   };
 }

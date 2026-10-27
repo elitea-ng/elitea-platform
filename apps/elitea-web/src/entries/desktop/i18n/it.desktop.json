@@ -1048,5 +1048,12 @@
   "desktop.shell.projects": "Progetti",
   "desktop.shell.project": "Progetto",
   "desktop.shell.noProjectsFound": "Nessun progetto corrispondente",
-  "desktop.shell.searchProjects": "Cerca progetti"
+  "desktop.shell.searchProjects": "Cerca progetti",
+  "workspace.actMode": "Modalità Agisci (modifiche con approvazione)",
+  "workspace.composer.attachImages": "Allega immagini",
+  "workspace.handoff.whereLabel": "Esecuzione",
+  "workspace.mode.actHint": "Modifiche con approvazione",
+  "workspace.mode.bypassHint": "Nessuna approvazione",
+  "workspace.mode.planHint": "Pianifica, non modifica nulla",
+  "workspace.usage.context": "Contesto: {{percent}}% della finestra in uso"
 }

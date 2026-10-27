@@ -1048,5 +1048,12 @@
   "desktop.shell.projects": "プロジェクト",
   "desktop.shell.project": "プロジェクト",
   "desktop.shell.noProjectsFound": "一致するプロジェクトはありません",
-  "desktop.shell.searchProjects": "プロジェクトを検索"
+  "desktop.shell.searchProjects": "プロジェクトを検索",
+  "workspace.actMode": "実行モード（承認付きで変更）",
+  "workspace.composer.attachImages": "画像を添付",
+  "workspace.handoff.whereLabel": "実行場所",
+  "workspace.mode.actHint": "承認付きで変更",
+  "workspace.mode.bypassHint": "承認なし",
+  "workspace.mode.planHint": "計画のみ、変更しない",
+  "workspace.usage.context": "コンテキスト：ウィンドウの {{percent}}% を使用"
 }

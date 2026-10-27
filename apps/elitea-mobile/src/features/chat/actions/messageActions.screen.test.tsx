@@ -166,3 +166,44 @@ describe('message actions on a captured answer', () => {
     expect(await screen.findByRole('button', { name: 'Dictate' })).toBeTruthy();
   });
 });
+
+describe('the action row sits under the latest answer only', () => {
+  const [answer, question] = conversationDetail13.message_groups;
+  const twoTurns = {
+    ...conversationDetail13,
+    message_count: 4,
+    message_groups: [
+      { ...answer, id: 8, reply_to_id: 7, content: 'A newer answer', uuid: '0661c34b-1930-5cfe-9dca-c204d0ed0048', created_at: '2026-10-06 21:00:02.000000', message_items: [{ ...answer.message_items[0], id: 9, item_details: { content: 'A newer answer' } }] },
+      { ...question, id: 7, content: 'And again', uuid: '36f70ef8-6009-411e-b4e3-ad99917eb648', created_at: '2026-10-06 21:00:01.000000', message_items: [{ ...question.message_items[0], id: 8, item_details: { content: 'And again' } }] },
+      answer,
+      question,
+    ],
+  };
+
+  function installTwoTurns() {
+    const server = installServer();
+    server.on('GET', `/elitea_core/conversation/prompt_lib/${P}/3`, { status: 200, body: twoTurns });
+    server.on('GET', `/elitea_core/message_feedback/prompt_lib/${P}/`, { status: 200, body: feedbackEmpty });
+  }
+
+  it('draws one row, for the newest answer; an older answer keeps its long-press sheet', async () => {
+    installTwoTurns();
+    workspace('1.3');
+    await renderWithQueries(<ThreadScreen />);
+    expect(await screen.findAllByTestId('answer-actions')).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Answer actions' })).toHaveLength(1);
+    // The older answer's actions are its long press.
+    await fireEvent(screen.getByText(/^MOCK: Show me code/), 'longPress');
+    expect(await screen.findByRole('button', { name: 'Copy python code' })).toBeTruthy();
+  });
+
+  it('draws every answer its row while a screen reader runs', async () => {
+    const { AccessibilityInfo } = jest.requireActual<typeof import('react-native')>('react-native');
+    jest.spyOn(AccessibilityInfo, 'isScreenReaderEnabled').mockResolvedValue(true);
+    installTwoTurns();
+    workspace('1.3');
+    await renderWithQueries(<ThreadScreen />);
+    await screen.findByText('A newer answer');
+    await waitFor(() => expect(screen.getAllByTestId('answer-actions')).toHaveLength(2));
+  });
+});

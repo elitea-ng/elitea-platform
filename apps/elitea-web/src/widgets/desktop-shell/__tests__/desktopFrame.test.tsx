@@ -35,10 +35,10 @@ const PROJECTS = [
   { id: 7, name: 'Sales', suspended: false },
 ];
 
-function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Workspace[]; nextOpen?: Workspace; handoffIpc?: FakeHandoffIpc; onSelectProject?: (id: string, name: string) => void; projects?: typeof PROJECTS } = {}) {
+function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Workspace[]; nextOpen?: Workspace; handoffIpc?: FakeHandoffIpc; onSelectProject?: (id: string, name: string) => void; projects?: typeof PROJECTS; permissions?: ReadonlySet<string> } = {}) {
   const rootRoute = createRootRoute({
     component: () => (
-      <DesktopFrame permissions={new Set()} projects={options.projects ?? PROJECTS} selectedProjectId="42" onSelectProject={options.onSelectProject ?? (() => undefined)}>
+      <DesktopFrame permissions={options.permissions ?? new Set()} projects={options.projects ?? PROJECTS} selectedProjectId="42" onSelectProject={options.onSelectProject ?? (() => undefined)}>
         <Outlet />
       </DesktopFrame>
     ),
@@ -52,6 +52,7 @@ function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Wo
       createRoute({ getParentRoute: () => rootRoute, path: '/elitea-catalog', component: page('catalog') }),
       createRoute({ getParentRoute: () => rootRoute, path: '/apps', component: page('apps') }),
       createRoute({ getParentRoute: () => rootRoute, path: '/skills', component: page('skills') }),
+      createRoute({ getParentRoute: () => rootRoute, path: '/chat', component: page('chat') }),
     ]),
     history: createMemoryHistory({ initialEntries: [options.path ?? '/workspaces'] }),
   });
@@ -353,6 +354,16 @@ describe('DesktopFrame sidebar layout', () => {
     expect(await screen.findByRole('option', { name: 'Marketing' })).toHaveAttribute('aria-selected', 'true');
     await user.click(screen.getByRole('option', { name: 'Sales' }));
     expect(onSelectProject).toHaveBeenCalledWith('7', 'Sales');
+  });
+
+  it('opens the Local work page from its caption, and a new chat from the Chats caption', async () => {
+    const user = userEvent.setup();
+    const { router } = mount({ path: '/skills', permissions: new Set(['models.chat.folders.get']) });
+    await user.click(await screen.findByTestId('shell-local-work'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces'));
+    await user.click(screen.getByTestId('shell-chats-caption'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat'));
+    expect(router.state.location.search).toEqual({ create: '1' });
   });
 
   it('searches the projects as the person types and draws a long list a page at a time', async () => {

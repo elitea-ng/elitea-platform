@@ -1048,5 +1048,12 @@
   "desktop.shell.projects": "Projekte",
   "desktop.shell.project": "Projekt",
   "desktop.shell.noProjectsFound": "Keine passenden Projekte",
-  "desktop.shell.searchProjects": "Projekte suchen"
+  "desktop.shell.searchProjects": "Projekte suchen",
+  "workspace.actMode": "Modus „Ausführen“ (Änderungen mit Freigabe)",
+  "workspace.composer.attachImages": "Bilder anhängen",
+  "workspace.handoff.whereLabel": "Läuft",
+  "workspace.mode.actHint": "Änderungen mit Freigabe",
+  "workspace.mode.bypassHint": "Ohne Freigaben",
+  "workspace.mode.planHint": "Plant, ändert nichts",
+  "workspace.usage.context": "Kontext: {{percent}} % des Fensters belegt"
 }

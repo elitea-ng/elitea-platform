@@ -14,10 +14,6 @@
  * exactly.
  */
 import type { ComponentProps, ReactNode, RefObject } from 'react';
-import { useCallback, useState } from 'react';
-
-import Alert from '@mui/material/Alert';
-import Snackbar from '@mui/material/Snackbar';
 
 import { AttachmentButton, ChatInternalToolsConfigButton, ClearChatButton, PlusChatButton, SendButton, VoiceButton } from '@/widgets/chat';
 import type { AttachmentButtonHandle, PlusChatButtonEntitySubmenus, VoiceButtonHandle, VoiceButtonInputHandle } from '@/widgets/chat';
@@ -27,6 +23,10 @@ import { LLMModelSelector } from '@/widgets/llm-model-selector';
 import { t } from '@/shared/i18n';
 
 import { optField } from './ChatBox.helpers';
+import { ChatBoxComposerTools } from './ChatBoxComposerTools';
+
+/** The desktop build's composer row (a literal MODE test: the web keeps its look) — see `nativeSlots`. */
+const NATIVE = import.meta.env.MODE === 'desktop';
 
 /** `NewChatInputSlots`/its two slot-prop types stay unexported from `features/chat-input`'s barrel (same convention as `NewChatInputHandle`/`NewChatInputProps`) — derived the same way. */
 type NewChatInputSlotsType = NonNullable<ComponentProps<typeof NewChatInput>['slots']>;
@@ -66,6 +66,8 @@ interface ChatBoxInputSlotsModel {
   readonly selectedModel: ComponentProps<typeof LLMModelSelector>['selectedModel'];
   readonly onSelectModel: ComponentProps<typeof LLMModelSelector>['onSelectModel'];
   readonly models: readonly LLMModelListItem[];
+  /** The web footer's own rule for its selector (no active participant); the desktop's picker and "Model settings…" follow it. Default shown. */
+  readonly shown?: boolean;
 }
 
 /**
@@ -137,6 +139,8 @@ export interface ChatBoxInputSlotsProps {
   readonly onCreateAgent?: (() => void) | undefined;
   readonly onCreatePipeline?: (() => void) | undefined;
   readonly onCreateToolkit?: ((isMcp?: boolean) => void) | undefined;
+  /** The desktop composer row; defaults to the build (`NATIVE`), a test sets it. */
+  readonly native?: boolean;
 }
 
 export interface ChatBoxInputSlotsResult {
@@ -213,6 +217,7 @@ export function buildChatBoxInputSlots({
   onCreateToolkit,
   voice,
   voiceInput,
+  native = NATIVE,
 }: ChatBoxInputSlotsProps): ChatBoxInputSlotsResult {
   const attachmentButtonProps = {
     disableAttachments: attachments.disabled,
@@ -264,7 +269,7 @@ export function buildChatBoxInputSlots({
     ...optField('onCreatePipeline', onCreatePipeline),
     ...optField('onCreateToolkit', onCreateToolkit),
   };
-  return {
+  const webSlots: ChatBoxInputSlotsResult = {
     sendControl: (props: SendControlSlotProps) => <SendButton {...buildSendButtonProps(props)} />,
     highlightOverlay: (props: HighlightOverlaySlotProps) => <HighlightedText text={props.text} ranges={props.ranges} />,
     // The chips for the files staged on the next message. `UserInput` calls
@@ -309,75 +314,17 @@ export function buildChatBoxInputSlots({
     ),
     modelSelector: <LLMModelSelector {...modelSelectorProps} />,
   };
-}
-
-/**
- * The composer's voice-control feedback seam (issues #932, #934).
- *
- * `VoiceButton` has always exposed two callbacks the chat surface never
- * connected:
- *
- *  - `onRecordingChange` — wired to `() => {}` in `ChatBoxInputSlots.tsx`, so
- *    `NewChatInput`'s `finalIsRecording = voice.isRecording ||
- *    isSpeakingModeRecording` was driven by speaking mode alone. Starting
- *    dictation never reached the send control, which is why the Speaking Mode
- *    wave icon stayed live while the mic was recording and a user could
- *    enter both modes at once (#932, ELITEA-1295).
- *  - `onError` — passed nothing at all. `VoiceButton`'s own module doc
- *    disclosed the gap ("no toast/snackbar primitive exists yet in
- *    `shared/ui`... the caller decides how to surface the message until one
- *    lands") and no caller ever decided, so a denied microphone permission
- *    failed in complete silence (#934, ELITEA-1324).
- *
- * The Snackbar+Alert pair is the same shape `widgets/deepwiki`'s
- * `WikiFileAttach.tsx` already uses for its own inline errors — MUI's `Alert`
- * carries `role="alert"`, so the message is announced, not merely drawn.
- */
-const VOICE_ERROR_AUTO_HIDE_MS = 6000;
-
-export interface ChatBoxVoiceFeedback {
-  /** True while `VoiceButton`'s dictation (NOT speaking mode) is capturing. */
-  readonly isRecording: boolean;
-  readonly onRecordingChange: (isRecording: boolean) => void;
-  readonly onError: (message: string) => void;
-  /** Rendered by `ChatBox` alongside its other overlays. */
-  readonly alert: ReactNode;
-}
-
-export function useChatBoxVoiceFeedback(): ChatBoxVoiceFeedback {
-  const [isRecording, setIsRecording] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const onRecordingChange = useCallback((recording: boolean) => {
-    setIsRecording(recording);
-    // A new session clears the previous session's complaint; leaving it up
-    // would outlive the state it described.
-    if (recording) setError(null);
-  }, []);
-
-  const onError = useCallback((message: string) => {
-    setError(message);
-  }, []);
-
-  const onClose = useCallback(() => {
-    setError(null);
-  }, []);
-
-  const alert = (
-    <Snackbar
-      open={error !== null}
-      autoHideDuration={VOICE_ERROR_AUTO_HIDE_MS}
-      onClose={onClose}
-    >
-      <Alert
-        severity="error"
-        onClose={onClose}
-        data-testid="chat-voice-error"
-      >
-        {error}
-      </Alert>
-    </Snackbar>
-  );
-
-  return { isRecording, onRecordingChange, onError, alert };
+  // The desktop's chat row: [+] [model ⌄] [⋯] … [mic] [send]. The agents
+  // page keeps the web's controls (its own clear and model controls sit
+  // beside the panel). The model picker and ⋯ ride in `clearChat`, the
+  // leading group's last slot, so the model sits between "+" and "⋯".
+  if (!native || isAgentsPage) return webSlots;
+  return {
+    ...webSlots,
+    sendControl: (props: SendControlSlotProps) => <SendButton {...buildSendButtonProps(props)} native />,
+    attachmentButton: <PlusChatButton {...plusButtonProps} native />,
+    clearChat: <ChatBoxComposerTools model={{ ...model, shown: model.shown ?? true }} clearChat={clearChat} voice={voice} />,
+    voiceButton: <VoiceButton ref={refs.voiceButtonRef} inputRef={refs.voiceInputRef} disabled={false} onRecordingChange={voiceInput.onRecordingChange} onError={voiceInput.onError} projectId={voice.projectId} native />,
+    modelSelector: undefined,
+  };
 }

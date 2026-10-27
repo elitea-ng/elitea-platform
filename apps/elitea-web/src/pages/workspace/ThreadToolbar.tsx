@@ -207,7 +207,7 @@ function Overflow({ conversationId, onIndexSettings, onFork, onCreateAgent, onRe
   return (
     <>
       <Tooltip title={t('workspace.more', 'More')}>
-        <IconButton size="small" aria-label={t('workspace.more', 'More')} aria-haspopup="menu" onClick={(event) => setAnchor(event.currentTarget)}>
+        <IconButton size="small" data-testid="thread-more" aria-label={t('workspace.more', 'More')} aria-haspopup="menu" onClick={(event) => setAnchor(event.currentTarget)}>
           <MoreHorizIcon fontSize="inherit" />
         </IconButton>
       </Tooltip>

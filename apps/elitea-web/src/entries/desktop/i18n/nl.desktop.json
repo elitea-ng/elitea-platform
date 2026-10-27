@@ -1048,5 +1048,12 @@
   "desktop.shell.projects": "Projecten",
   "desktop.shell.project": "Project",
   "desktop.shell.noProjectsFound": "Geen projecten gevonden",
-  "desktop.shell.searchProjects": "Projecten zoeken"
+  "desktop.shell.searchProjects": "Projecten zoeken",
+  "workspace.actMode": "Modus Uitvoeren (wijzigingen met goedkeuring)",
+  "workspace.composer.attachImages": "Afbeeldingen bijvoegen",
+  "workspace.handoff.whereLabel": "Draait",
+  "workspace.mode.actHint": "Wijzigingen met goedkeuring",
+  "workspace.mode.bypassHint": "Geen goedkeuringen",
+  "workspace.mode.planHint": "Plant, wijzigt niets",
+  "workspace.usage.context": "Context: {{percent}}% van het venster gebruikt"
 }

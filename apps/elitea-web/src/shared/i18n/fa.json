@@ -5008,5 +5008,17 @@
   "widgets.sidebar.nav.pipelines": "پایپ‌لاین‌ها",
   "widgets.sidebar.nav.skills": "مهارت‌ها",
   "widgets.sidebar.nav.toolkits": "جعبه‌ابزارها و نمایه‌ها",
-  "widgets.sidebar.nav.workspaces": "فضاهای کاری"
+  "widgets.sidebar.nav.workspaces": "فضاهای کاری",
+  "chatInput.more": "بیشتر",
+  "chatInput.resize": "تغییر اندازهٔ کادر پیام",
+  "features.chatMessages.replyActions.copy": "کپی در کلیپ‌بورد",
+  "features.chatMessages.replyActions.delete": "حذف",
+  "features.chatMessages.replyActions.more": "کارهای بیشتر",
+  "features.chatMessages.replyActions.readOut": "خواندن با صدای بلند",
+  "features.chatMessages.replyActions.regenerate": "تولید دوباره",
+  "widgets.chatBox.composer.clearHistory": "پاک کردن تاریخچهٔ گفتگو…",
+  "widgets.chatBox.composer.modelSettings": "تنظیمات مدل…",
+  "widgets.chatBox.composer.readAloud": "خواندن پاسخ‌ها با صدای بلند",
+  "widgets.chatBox.composer.voiceSettings": "تنظیمات صدا…",
+  "widgets.llmModelSelector.picker.none": "بدون مدل"
 }

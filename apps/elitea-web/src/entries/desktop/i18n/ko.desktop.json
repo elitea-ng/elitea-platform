@@ -1048,5 +1048,12 @@
   "desktop.shell.projects": "프로젝트",
   "desktop.shell.project": "프로젝트",
   "desktop.shell.noProjectsFound": "일치하는 프로젝트 없음",
-  "desktop.shell.searchProjects": "프로젝트 검색"
+  "desktop.shell.searchProjects": "프로젝트 검색",
+  "workspace.actMode": "실행 모드 (승인 후 변경)",
+  "workspace.composer.attachImages": "이미지 첨부",
+  "workspace.handoff.whereLabel": "실행 위치",
+  "workspace.mode.actHint": "승인 후 변경",
+  "workspace.mode.bypassHint": "승인 없음",
+  "workspace.mode.planHint": "계획만, 변경 없음",
+  "workspace.usage.context": "컨텍스트: 창의 {{percent}}% 사용"
 }

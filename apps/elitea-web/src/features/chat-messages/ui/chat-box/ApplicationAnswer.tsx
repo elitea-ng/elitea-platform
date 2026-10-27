@@ -37,12 +37,10 @@ import { messageNodeRecoveryBinding } from '../../lib/nodeRecoveryBinding';
 import { NodeRecoveryNotice } from './NodeRecoveryNotice';
 import { SkippedCapabilitiesNotice } from './SkippedCapabilitiesNotice';
 import { skippedCapabilitiesOf } from '../../lib/skippedCapabilities';
-import { ApplicationAnswerActions } from './ApplicationAnswerActions';
+import { ApplicationAnswerActions, replyActionsRevealSx } from './ApplicationAnswerActions';
 import { ApplicationAnswerLoading } from './ApplicationAnswerLoading';
 import { ApplicationAnswerApprovals, useAnswerApprovalModel } from './ApplicationAnswerApprovals';
 import { AssistantAvatar } from './MessageAvatar';
-import { MessageFeedbackControl } from './MessageFeedbackControl';
-import { RememberMemoryAction } from './RememberMemoryAction';
 import { MessageHeaderRow } from './MessageHeaderRow';
 import { actionKey, asDraft, ApplicationAnswerThinking, swarmChildContent } from './ApplicationAnswerThinking';
 import { ChatContinue } from '../chat-continue/ChatContinue';
@@ -241,6 +239,7 @@ export function ApplicationAnswer({
         gap: '0.5rem',
         padding: '0.75rem 0',
         borderRadius: '0.25rem',
+        ...replyActionsRevealSx,
         ...(isSwarmChild
           ? { ml: 6, pl: 2, borderLeft: '3px solid', borderColor: 'primary.main' }
           : {}),
@@ -343,48 +342,35 @@ export function ApplicationAnswer({
             visibleHitlInterrupts.length === 0 && (
               <ApplicationAnswerLoading isStreaming={isStreaming} />
             )}
-
-          <Box
-            sx={{
-              display: 'flex',
-              // `space-between` needs TWO items to place one at each edge — a
-              // single flex child under it sits at flex-start, which would
-              // silently un-right-align the actions row on every message with
-              // no resolved project id. `flex-end` is the ORIGINAL single-row
-              // alignment (`ApplicationAnswerActions`'s own box), kept as the
-              // fallback rather than assumed to still hold once this became a
-              // two-item row.
-              justifyContent: showFeedback ? 'space-between' : 'flex-end',
-              alignItems: 'flex-start',
-            }}
-          >
-            {showFeedback && <MessageFeedbackControl projectId={feedbackProjectId as string} messageId={messageId} />}
-            {showFeedback && (
-              // #870 "Remember this" — same gate as the feedback control
-              // beside it (a resolved project id, not still processing).
-              // `conversationId` is not yet threaded to this row (no
-              // `ChatMessage` field carries it today), so a memory saved
-              // here has no `source_conversation_id` — informational-only
-              // provenance, not a functional gap.
-              <RememberMemoryAction projectId={feedbackProjectId as string} content={answer.content} disabled={isProcessing} />
-            )}
-            <ApplicationAnswerActions
-              hasContent={hasTextContent || !!exception}
-              isProcessing={isProcessing}
-              shouldDisableRegenerate={shouldDisableRegenerate || Boolean(recovery)}
-              hasSpeakableText={hasTextContent}
-              isSpeaking={!!speakingMessageId}
-              onAutoSpeak={onAutoSpeak ? handleAutoSpeak : undefined}
-              onCopy={onCopy}
-              onRegenerate={onRegenerate}
-              onFork={onFork}
-              onDelete={onDelete}
-              onOpenAsDocument={
-                onCreateCanvasFromSelection && wholeAnswerText && wholeAnswerText.trim() !== '' ? onOpenAsDocument : undefined
-              }
-            />
-          </Box>
         </Box>
+      )}
+
+      {shouldRenderAnswerBlock && (
+        // Below the card, not inside it (`ApplicationAnswerActions`' module doc).
+        // #870's "Remember this" rides on the feedback gate (a resolved project
+        // id, not still processing); `conversationId` is not yet threaded to
+        // this row (no `ChatMessage` field carries it), so a memory saved here
+        // has no `source_conversation_id` — informational-only provenance.
+        <ApplicationAnswerActions
+          alwaysVisible={isLastMessage}
+          state={{
+            hasContent: hasTextContent || !!exception,
+            isProcessing,
+            shouldDisableRegenerate: shouldDisableRegenerate || Boolean(recovery),
+            hasSpeakableText: hasTextContent,
+            isSpeaking: !!speakingMessageId,
+          }}
+          handlers={{
+            onAutoSpeak: onAutoSpeak ? handleAutoSpeak : undefined,
+            onCopy,
+            onRegenerate,
+            onFork,
+            onDelete,
+            onOpenAsDocument: onCreateCanvasFromSelection && wholeAnswerText && wholeAnswerText.trim() !== '' ? onOpenAsDocument : undefined,
+          }}
+          feedback={showFeedback ? { projectId: feedbackProjectId as string, messageId } : undefined}
+          memoryContent={answer.content}
+        />
       )}
     </Box>
   );

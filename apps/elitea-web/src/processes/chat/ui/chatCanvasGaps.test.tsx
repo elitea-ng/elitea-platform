@@ -587,7 +587,8 @@ describe('the chat route: "Open as document" opens an editor with a way out, and
       renderChatRoute();
       await screen.findByTestId('answer-text-item', {}, { timeout: 15_000 });
       const user = userEvent.setup();
-      await user.click(await screen.findByTestId('answer-open-as-document', {}, { timeout: 10_000 }));
+      await user.click((await screen.findAllByTestId('answer-more-actions', {}, { timeout: 10_000 })).at(-1) as HTMLElement); // the reply's ⋯ menu holds it
+      await user.click(await screen.findByTestId('answer-open-as-document'));
 
       await waitFor(() => expect(createBodies).toHaveLength(1));
       expect(createBodies[0]?.['canvas_type']).toBe('document');
@@ -775,7 +776,8 @@ describe('the chat route: a canvas create the server refuses says why', () => {
     renderChatRoute();
     await screen.findByTestId('answer-text-item', {}, { timeout: 15_000 });
     const user = userEvent.setup();
-    await user.click(await screen.findByTestId('answer-open-as-document', {}, { timeout: 10_000 }));
+    await user.click((await screen.findAllByTestId('answer-more-actions', {}, { timeout: 10_000 })).at(-1) as HTMLElement); // the reply's ⋯ menu holds it
+    await user.click(await screen.findByTestId('answer-open-as-document'));
     await waitFor(() => expect(createBodies).toHaveLength(1));
     return user;
   }

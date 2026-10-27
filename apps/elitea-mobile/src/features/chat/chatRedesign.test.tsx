@@ -37,9 +37,15 @@ const handlers = {
 describe('the answer action row (§4.6)', () => {
   it('offers copy, like, dislike, read aloud, regenerate and the menu, as in the reference', async () => {
     await withQueries(<AnswerActions message={answer} plan={plan()} {...handlers} />);
-    for (const name of ['Copy answer', 'Like', 'Dislike', 'Read answer aloud', 'Regenerate', 'Answer actions']) {
-      expect(screen.getByRole('button', { name })).toBeTruthy();
-    }
+    // One left-aligned row, in this order, the "…" menu last.
+    expect(screen.getAllByRole('button').map((b) => b.props.accessibilityLabel)).toEqual([
+      'Copy answer',
+      'Like',
+      'Dislike',
+      'Read answer aloud',
+      'Regenerate',
+      'Answer actions',
+    ]);
   });
 
   it('draws no dead buttons: no copy without share-out, no rating before 1.3, no regenerate on an older answer', async () => {

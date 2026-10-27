@@ -26,8 +26,9 @@ export function resolveField(field: UserInputSlotProps['field']): {
   readonly placeholder: string | undefined;
   readonly color: string | undefined;
   readonly iconColor: string | undefined;
+  readonly draftKey: string | undefined;
 } {
-  return { placeholder: field?.placeholder, color: field?.color, iconColor: field?.iconColor };
+  return { placeholder: field?.placeholder, color: field?.color, iconColor: field?.iconColor, draftKey: field?.draftKey };
 }
 
 export function resolveMention(mention: UserInputSlotProps['mention']): {

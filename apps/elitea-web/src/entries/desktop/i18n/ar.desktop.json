@@ -1048,5 +1048,12 @@
   "desktop.shell.projects": "المشاريع",
   "desktop.shell.project": "المشروع",
   "desktop.shell.noProjectsFound": "لا توجد مشاريع مطابقة",
-  "desktop.shell.searchProjects": "البحث في المشاريع"
+  "desktop.shell.searchProjects": "البحث في المشاريع",
+  "workspace.actMode": "وضع التنفيذ (تغييرات بموافقة)",
+  "workspace.composer.attachImages": "إرفاق صور",
+  "workspace.handoff.whereLabel": "مكان التشغيل",
+  "workspace.mode.actHint": "تغييرات بموافقة",
+  "workspace.mode.bypassHint": "بلا موافقات",
+  "workspace.mode.planHint": "يخطط ولا يغيّر شيئًا",
+  "workspace.usage.context": "السياق: {{percent}}٪ من النافذة مستخدم"
 }

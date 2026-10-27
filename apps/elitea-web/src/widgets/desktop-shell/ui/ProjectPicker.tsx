@@ -21,7 +21,7 @@ import Typography from '@mui/material/Typography';
 import type { Project } from '@/entities/project';
 import { t } from '@/shared/i18n';
 
-import { MenuRowIcon, MenuRowText, menuRowSx } from './shellMenu';
+import { MenuRowIcon, MenuRowText, menuRowSx } from '@/shared/ui/native-menu';
 
 /** Rows drawn per page. */
 const PROJECT_PAGE = 50;
