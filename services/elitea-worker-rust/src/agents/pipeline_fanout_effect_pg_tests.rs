@@ -979,6 +979,44 @@ async fn postgres_a_wake_resumes_the_answered_pipeline_branch_and_parks_the_rest
     db.pool.close().await;
 }
 
+fn pipeline_connector() -> Arc<PipelineMcpConnector> {
+    Arc::new(PipelineMcpConnector {
+        connections: Arc::new(AtomicUsize::new(0)),
+        tool_calls: Arc::new(AtomicUsize::new(0)),
+        read_only: false,
+    })
+}
+
+/// Three saved-pipeline branches ask and park; the third card is answered.
+async fn parked_with_the_third_answered(
+    pool: &sqlx::PgPool,
+    ledger: &Arc<crate::agents::graph::fanout_test_ledger::TestLedger>,
+) -> String {
+    let (first, _) = assembler(
+        pool,
+        (0..3)
+            .map(|_| TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()))
+            .collect(),
+        pipeline_connector(),
+        asking_pipeline(),
+    );
+    let request = request_for("continue", "pipeline");
+    let invocation = first
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the fan-out: {error}"));
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .expect("the activation parks");
+    let third = cards[2]["interrupt_key"]
+        .as_str()
+        .expect("the third card's key")
+        .to_owned();
+    ledger.decide(&third, "answer", Some("red"));
+    third
+}
+
 /// Browser finding 2026-10-27: a wake whose process is lost before its first
 /// root save is reclaimed through the production checkpoint recovery (inspect,
 /// authorize, assemble the checkpoint) under its own execution. Its root still
@@ -998,35 +1036,7 @@ async fn postgres_a_wake_lost_before_its_first_root_save_recovers_as_the_wake() 
         .await
         .expect("apply checkpoint migration");
     let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
-    let connector = || {
-        Arc::new(PipelineMcpConnector {
-            connections: Arc::new(AtomicUsize::new(0)),
-            tool_calls: Arc::new(AtomicUsize::new(0)),
-            read_only: false,
-        })
-    };
-    let (first, _) = assembler(
-        &db.pool,
-        (0..3)
-            .map(|_| TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()))
-            .collect(),
-        connector(),
-        asking_pipeline(),
-    );
-    let request = request_for("continue", "pipeline");
-    let invocation = first
-        .with_fanout_decisions_for_tests(ledger.client(1))
-        .assemble(claim(&request, 1))
-        .await
-        .unwrap_or_else(|error| panic!("assemble the fan-out: {error}"));
-    let (_, cards) = run_collecting(invocation)
-        .await
-        .expect("the activation parks");
-    let third = cards[2]["interrupt_key"]
-        .as_str()
-        .expect("the third card's key")
-        .to_owned();
-    ledger.decide(&third, "answer", Some("red"));
+    let third = parked_with_the_third_answered(&db.pool, &ledger).await;
 
     // The wake's first claim was lost before it saved its root: its reclaim
     // inspects the root, which still holds the park of the first execution.
@@ -1035,7 +1045,7 @@ async fn postgres_a_wake_lost_before_its_first_root_save_recovers_as_the_wake() 
         vec![TestModelGatewayOutcome::Response(pipeline_text_response(
             "the saddle is red",
         ))],
-        connector(),
+        pipeline_connector(),
         asking_pipeline(),
     );
     let woken = woken.with_fanout_decisions_for_tests(ledger.client(2));
@@ -1061,6 +1071,104 @@ async fn postgres_a_wake_lost_before_its_first_root_save_recovers_as_the_wake() 
             >= 2,
         "{cards:?}"
     );
+    db.pool.close().await;
+}
+
+/// Browser finding 2026-10-27: the wake applied the answer, its child was in
+/// its model call when the process was lost. The reclaim (production recovery
+/// under the wake's own execution) resumes that model step with the answer
+/// (R): the answer is never asked again and the ledger is never re-read for it.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_wake_lost_mid_model_resumes_the_answered_child() {
+    const WAKE_EXECUTION: &str = "execution-fanout-wake";
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let third = parked_with_the_third_answered(&db.pool, &ledger).await;
+
+    // The wake's first claim applies the answer, then its process is lost
+    // while the answered child's model call is in flight.
+    let (lost, lost_requests) = assembler(
+        &db.pool,
+        vec![TestModelGatewayOutcome::Pending],
+        pipeline_connector(),
+        asking_pipeline(),
+    );
+    let wake = wake_request("continue");
+    let invocation = lost
+        .with_fanout_decisions_for_tests(ledger.client(2))
+        .assemble(AuthorizedNativeAssembly::from_authorized(
+            &wake,
+            test_runtime_context_authority(),
+            // Claim ordinals stay unique across both executions, as claim ids are.
+            test_session_authority_for_reclaim(WAKE_EXECUTION, GENERATION, 2),
+            Arc::new(TestStateWriterLease::current()),
+            AuthorizedNativeCommandBinding::fixture_for_execution(WAKE_EXECUTION),
+        ))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
+    // Dropped inside the gateway's 1 s header timeout: the process is gone.
+    let outcome =
+        tokio::time::timeout(Duration::from_millis(800), run_collecting(invocation)).await;
+    assert!(
+        outcome.is_err(),
+        "the answered child waits in its model call: {outcome:?}"
+    );
+    assert_eq!(
+        model_requests(&lost_requests),
+        1,
+        "the answered child's step was in flight"
+    );
+
+    let (woken, captured) = assembler(
+        &db.pool,
+        vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+            "the saddle is red",
+        ))],
+        pipeline_connector(),
+        asking_pipeline(),
+    );
+    let woken = woken.with_fanout_decisions_for_tests(ledger.client(3));
+    let invocation = recovered(&woken, &wake, WAKE_EXECUTION, 3)
+        .await
+        .unwrap_or_else(|error| panic!("the lost wake recovers: {error}"));
+    let (members, cards) = run_collecting(invocation)
+        .await
+        .expect("the recovered wake finishes the answered child and parks again");
+    assert_eq!(
+        model_requests(&captured),
+        1,
+        "only the answered child's step: {members:?} {:?}",
+        cards
+            .iter()
+            .map(|card| (
+                card["interrupt_key"].clone(),
+                card["display"]["message"].clone()
+            ))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        members
+            .iter()
+            .any(|member| member["fanout_v1"]["member"] == "third" && member["status"] == "end"),
+        "{members:?}"
+    );
+    // The answered member never asks again: only the two unanswered members'
+    // cards are (re-)announced, never a new card of the answered one.
+    let keys = cards
+        .iter()
+        .filter_map(|card| card["interrupt_key"].as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(keys.len(), 2, "{cards:?}");
+    assert!(!keys.contains(third.as_str()), "{cards:?}");
     db.pool.close().await;
 }
 

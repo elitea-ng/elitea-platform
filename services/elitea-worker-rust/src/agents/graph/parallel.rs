@@ -812,9 +812,14 @@ impl AdkParallelBranchRuntime {
                 ));
             }
             let replay = match latest {
-                Some(saved) => {
-                    restored_outcome(self, &branch, &child.thread_id, &child.checkpointer, saved)?
-                }
+                Some(saved) => restored_outcome(
+                    self,
+                    &branch,
+                    &child.thread_id,
+                    &child.checkpointer,
+                    saved,
+                    true,
+                )?,
                 None => None,
             };
             prepared.push(PreparedParallelBranch {
@@ -921,12 +926,17 @@ impl AdkParallelBranchRuntime {
 
 /// Classify one child's saved checkpoint by its lifecycle receipt only.
 /// `None`: not started or found mid-run, so the child must run.
+/// `resuming`: a restore or continuation. A pause receipt carried onto a later
+/// checkpoint there means the child was resumed past that pause (its decision
+/// applied) when its process was lost: it continues from that checkpoint and is
+/// never parked again on the answered pause.
 fn restored_outcome(
     runtime: &dyn ParallelBranchRuntime,
     branch: &ParallelBranchDefinition,
     thread_id: &str,
     store: &Arc<dyn Checkpointer>,
     saved: Checkpoint,
+    resuming: bool,
 ) -> Result<Option<ParallelBranchOutcome>, GraphError> {
     if saved.thread_id != thread_id {
         return Err(parallel_error(
@@ -935,6 +945,13 @@ fn restored_outcome(
         ));
     }
     Ok(match BranchReceiptCheckpointer::receipt(&saved)? {
+        Some(BranchReceipt::Paused { .. })
+            if resuming
+                && !saved.pending_nodes.is_empty()
+                && BranchReceiptCheckpointer::receipt_is_carried(&saved) =>
+        {
+            None
+        }
         Some(BranchReceipt::Completed) if saved.pending_nodes.is_empty() => Some(terminal_outcome(
             runtime.project_result(branch, &saved.state)?,
             saved.checkpoint_id,
@@ -1134,6 +1151,7 @@ impl ParallelChildren {
                 &branch.thread_id,
                 &branch.store,
                 saved,
+                false,
             )? {
                 None => ChildCheckpointView::Running {
                     checkpoint_id: Some(checkpoint_id),
@@ -1346,6 +1364,7 @@ async fn run_child(
             &branch.thread_id,
             &branch.store,
             saved,
+            decisions.is_empty(),
         )?,
         None => None,
     };

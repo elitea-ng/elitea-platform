@@ -1324,9 +1324,10 @@ impl PipelineNativeAgentAssembler {
                     )
                     .await?;
                 wake_rerun = frontier == super::session::RecoveryFrontier::WakePark;
-                if !wake_rerun {
-                    state.model_scopes = state.model_scopes.with_pending_model_recovery();
-                }
+                // A lost wake's answered child may have stopped mid model call
+                // under this execution: it resumes that step (R). A model step of
+                // another execution is never restored.
+                state.model_scopes = state.model_scopes.with_pending_model_recovery();
                 Some(evidence)
             } else {
                 None

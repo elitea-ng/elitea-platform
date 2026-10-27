@@ -24,6 +24,9 @@ const LEGACY_OCCURRENCE_KEYS: [&str; 2] = [
     "elitea.graph.parallel.occurrence.v2",
 ];
 const BRANCH_RECEIPT_KEY: &str = "elitea.graph.parallel.branch-receipt.v1";
+/// The checkpoint a receipt was written for. ADK carries a loaded checkpoint's
+/// metadata into the next save, so a receipt on any other checkpoint is a copy.
+const BRANCH_RECEIPT_CHECKPOINT_KEY: &str = "elitea.graph.parallel.branch-receipt-checkpoint.v1";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -417,6 +420,15 @@ impl BranchReceiptCheckpointer {
         Ok(())
     }
 
+    /// Whether the checkpoint's receipt was carried from an earlier checkpoint:
+    /// a resumed child saved past that pause (receipts without an owner predate it).
+    pub(super) fn receipt_is_carried(checkpoint: &Checkpoint) -> bool {
+        checkpoint
+            .metadata
+            .get(BRANCH_RECEIPT_CHECKPOINT_KEY)
+            .is_some_and(|owner| owner.as_str() != Some(checkpoint.checkpoint_id.as_str()))
+    }
+
     pub(super) fn receipt(checkpoint: &Checkpoint) -> Result<Option<BranchReceipt>, GraphError> {
         super::structure::validate_checkpoint(checkpoint)?;
         checkpoint
@@ -443,6 +455,10 @@ impl Checkpointer for BranchReceiptCheckpointer {
             checkpoint.metadata.insert(
                 BRANCH_RECEIPT_KEY.to_owned(),
                 serde_json::to_value(receipt).map_err(|_| receipt_error())?,
+            );
+            checkpoint.metadata.insert(
+                BRANCH_RECEIPT_CHECKPOINT_KEY.to_owned(),
+                serde_json::Value::String(checkpoint.checkpoint_id.clone()),
             );
         }
         // Typed receipt wrappers add depth and values around pause data.
