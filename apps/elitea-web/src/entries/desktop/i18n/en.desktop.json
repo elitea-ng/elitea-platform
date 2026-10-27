@@ -1038,5 +1038,6 @@
   "desktop.nativeMenu.window": "Window",
   "desktop.nativeMenu.zoomIn": "Zoom In",
   "desktop.nativeMenu.zoomOut": "Zoom Out",
-  "desktop.nativeMenu.zoomReset": "Actual Size"
+  "desktop.nativeMenu.zoomReset": "Actual Size",
+  "desktop.shell.workshop": "Workshop"
 }
