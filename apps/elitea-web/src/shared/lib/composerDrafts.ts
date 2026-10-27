@@ -98,12 +98,15 @@ export function useComposerDraft(key: string | undefined, text: string, restore:
     } else if (saved !== latest.current.text) {
       // Another conversation's text never stays behind: no draft here empties the input.
       latest.current.restore(saved);
+      // The input holds this key's text from now on, even before that render lands: a composer
+      // unmounted first (Create remounts the chat) must not save the text it is leaving under this key.
+      latest.current = { ...latest.current, text: saved };
     }
     return () => writeDraft(key, latest.current.text);
   }, [key]);
   useEffect(() => {
     if (key === undefined) return undefined;
-    const timer = window.setTimeout(() => writeDraft(key, text), SAVE_DELAY_MS);
+    const timer = window.setTimeout(() => writeDraft(key, latest.current.text), SAVE_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [key, text]);
 }

@@ -155,14 +155,16 @@ export function withDesktopComponents(outer: Theme): Theme {
       },
     },
     // A native menu is on screen the moment it is asked for; MUI's default Grow takes ~250ms each way.
+    // No scroll lock either: the window's body never scrolls, and locking it restyles <body>, which
+    // re-lays-out the whole window (a long thread) before the menu can paint.
     MuiMenu: {
       ...outer.components?.MuiMenu,
-      defaultProps: { ...outer.components?.MuiMenu?.defaultProps, transitionDuration: MENU_TRANSITION },
+      defaultProps: { ...outer.components?.MuiMenu?.defaultProps, transitionDuration: MENU_TRANSITION, disableScrollLock: true },
       styleOverrides: { paper: { borderRadius: 8, marginTop: 4 }, list: { padding: 4 } },
     },
     MuiPopover: {
       ...outer.components?.MuiPopover,
-      defaultProps: { ...outer.components?.MuiPopover?.defaultProps, transitionDuration: MENU_TRANSITION },
+      defaultProps: { ...outer.components?.MuiPopover?.defaultProps, transitionDuration: MENU_TRANSITION, disableScrollLock: true },
     },
     MuiMenuItem: {
       ...outer.components?.MuiMenuItem,

@@ -1,4 +1,5 @@
 import { act, fireEvent, screen } from '@testing-library/react';
+import { useEffect, useState } from 'react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -73,6 +74,30 @@ describe('composer drafts', () => {
     rerender(<Composer draftKey="chat:1:c1" />);
     expect(textarea()).toHaveValue('');
     expect(readDraft('chat:1:new')).toBe('not for c1');
+  });
+
+  it('starts a blank new chat when Create switches the key and remounts the chat in one go', async () => {
+    // Create: the conversation's key turns into the new chat's, and the parent remounts the chat
+    // before the emptied input renders. The leaving composer must not save its text as the new chat's.
+    let create = (): void => undefined;
+    function Page(): React.JSX.Element {
+      const [draftKey, setDraftKey] = useState('chat:1:a');
+      const [token, setToken] = useState(0);
+      create = () => setDraftKey('chat:1:new');
+      useEffect(() => {
+        if (draftKey === 'chat:1:new') setToken(1);
+      }, [draftKey]);
+      return <Composer key={token} draftKey={draftKey} />;
+    }
+    const user = userEvent.setup();
+    renderWithTheme(<Page />);
+    await user.type(textarea(), 'left behind');
+    act(() => {
+      create();
+    });
+    expect(textarea()).toHaveValue('');
+    expect(readDraft('chat:1:new')).toBe('');
+    expect(readDraft('chat:1:a')).toBe('left behind');
   });
 
   it('keeps only the newest drafts', () => {

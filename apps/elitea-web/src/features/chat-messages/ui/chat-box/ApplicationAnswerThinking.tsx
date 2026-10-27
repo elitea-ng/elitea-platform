@@ -275,14 +275,13 @@ export function ApplicationAnswerThinking({
   /*
    * The panel's own open state is always defined, so the accordion stays
    * controlled for its whole life (MUI fixes controlled-vs-uncontrolled on
-   * first render). Reference rule (`ApplicationThinkView.jsx`):
-   * `expanded={isStreaming || expanded}`, `onChange` disabled while truly
-   * streaming, and a live tree stays expanded once it settles or parks —
-   * the reader may then collapse it.
+   * first render). Open while the model is thinking (and not collapsible
+   * then), folded to "Thought for …" once the answer settles or parks; the
+   * reader opens it again on demand.
    */
   const [openedByReader, setOpenedByReader] = useState(false);
   useEffect(() => {
-    if (isStreaming) setOpenedByReader(true);
+    if (!isStreaming) setOpenedByReader(false);
   }, [isStreaming]);
   const handleToggle = useCallback((_event: SyntheticEvent, value: boolean) => {
     setOpenedByReader(value);

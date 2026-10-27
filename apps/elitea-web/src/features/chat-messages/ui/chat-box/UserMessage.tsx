@@ -1,9 +1,6 @@
 /**
- * Ported from `apps/elitea-ui/src/[fsd]/features/chat/ui/chat-box/
- * UserMessage.jsx` — renders a user's message row.
- *
- * Port of `apps/elitea-ui/src/[fsd]/features/chat/ui/chat-box/
- * UserMessage.jsx`.
+ * Renders a user's message row. Ported from `apps/elitea-ui/src/[fsd]/
+ * features/chat/ui/chat-box/UserMessage.jsx`.
  */
 import type { ChangeEvent, ReactNode } from 'react';
 import { useCallback, useMemo, useState } from 'react';
@@ -16,6 +13,7 @@ import Typography from '@mui/material/Typography';
 import { MessageAttachmentList } from '../attachments/MessageAttachmentList';
 import { MessageAvatar } from './MessageAvatar';
 import { MessageHeaderRow } from './MessageHeaderRow';
+import { replyActionsRevealSx } from './ReplyActionButton';
 import { UserMessageActions } from './UserMessageActions';
 
 import type { Attachment } from '@/entities/attachment/model/types';
@@ -31,9 +29,8 @@ const ATTACHMENT_ITEM_TYPE = 'attachment_message';
 /**
  * The row shell, measured off the production transcript's own `<li>`
  * (`padding: 12px 0; gap: 8px; flex-direction: column; border-radius: 4px`) —
- * baseline `UserMessage.jsx`'s `styles.containerVertical` over
- * `UserMessageContainerWithMargin`. It used to be a right-aligned
- * `row-reverse` bubble, which is not a layout this product has anywhere.
+ * baseline `UserMessage.jsx`'s `styles.containerVertical`. Hovering it
+ * reveals the action row under the bubble.
  */
 const userMessageContainerSx = {
   display: 'flex',
@@ -44,16 +41,20 @@ const userMessageContainerSx = {
   gap: '0.5rem',
   padding: '0.75rem 0',
   borderRadius: '0.25rem',
+  ...replyActionsRevealSx,
 } as const;
 
-/** baseline `styles.messageVertical`: the full-width card the question sits in. */
+/**
+ * The quiet bubble the question sits in: the composer's faint fill, no
+ * shadow, hugging its text (it used to be the reply's white elevated card).
+ */
 function userMessageBodySx(theme: import('@mui/material/styles').Theme) {
   return {
-    width: '100%',
+    width: 'fit-content',
+    maxWidth: '100%',
     boxSizing: 'border-box',
-    background: theme.vars.palette.background.aiAnswerBkg,
+    background: theme.vars.palette.background.userInputBackground,
     color: theme.vars.palette.text.secondary,
-    boxShadow: theme.vars.palette.boxShadow.aiAnswer,
     borderRadius: theme.vars.shape.radiusMd,
     padding: '0.75rem 1rem',
     position: 'relative',
@@ -373,13 +374,15 @@ export function UserMessage({
             {...(onOpenFileInCanvas !== undefined ? { onOpenFileInCanvas } : {})}
             onError={handleAttachmentError}
           />
-          <UserMessageActions
-            onCopy={onCopy}
-            onEdit={onSubmit ? handleEditClick : undefined}
-            onDelete={onDelete}
-            onFork={onFork}
-          />
         </Box>
+      )}
+      {!isEditing && (
+        <UserMessageActions
+          onCopy={onCopy}
+          onEdit={onSubmit ? handleEditClick : undefined}
+          onDelete={onDelete}
+          onFork={onFork}
+        />
       )}
       {attachmentError !== null && (
         <Typography

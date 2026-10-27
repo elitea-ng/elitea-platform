@@ -16,5 +16,3 @@ export {
   selectBudgetMode,
 } from './lib/authorContextUpdate';
 export type { AuthorContextProfile } from './lib/authorContextUpdate';
-
-export { ContextBudgetIndicator } from './ui/ContextBudgetIndicator';

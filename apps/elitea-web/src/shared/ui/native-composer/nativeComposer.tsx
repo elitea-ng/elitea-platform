@@ -13,7 +13,7 @@
  * The row itself: `ComposerRow`, a leading group that shrinks and a trailing
  * group that does not, so Send never leaves the window.
  */
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
@@ -22,6 +22,7 @@ import Box from "@mui/material/Box";
 import ButtonBase from "@mui/material/ButtonBase";
 import IconButton, { type IconButtonProps } from "@mui/material/IconButton";
 import Menu from "@mui/material/Menu";
+import type { PopoverActions } from "@mui/material/Popover";
 import type { Theme } from "@mui/material/styles";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
@@ -31,6 +32,27 @@ import { t } from "@/shared/i18n";
 const hover = (theme: Theme) => ({
   background: theme.vars.palette.background.button.drawerMenu.hover,
 });
+
+/**
+ * MUI places a menu once, when it opens; a menu whose rows change in place
+ * (Step limit › turns into its choices) would then grow off the window.
+ * This re-places it whenever its paper changes size.
+ */
+function useFollowContent(open: boolean): {
+  action: React.RefObject<PopoverActions | null>;
+  paperRef: (node: HTMLDivElement | null) => void;
+} {
+  const action = useRef<PopoverActions | null>(null);
+  const [paper, setPaper] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open || paper === null || typeof ResizeObserver === "undefined")
+      return undefined;
+    const observer = new ResizeObserver(() => action.current?.updatePosition());
+    observer.observe(paper);
+    return () => observer.disconnect();
+  }, [open, paper]);
+  return { action, paperRef: setPaper };
+}
 
 export interface ComposerIconButtonProps extends Omit<
   IconButtonProps,
@@ -108,6 +130,7 @@ export function ComposerPicker({
 }: ComposerPickerProps): React.JSX.Element {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const close = (): void => setAnchor(null);
+  const follow = useFollowContent(anchor !== null);
   return (
     <>
       <Tooltip title={label}>
@@ -163,11 +186,15 @@ export function ComposerPicker({
         anchorEl={anchor}
         open={anchor !== null}
         onClose={close}
+        action={follow.action}
         anchorOrigin={{ vertical: "top", horizontal: "left" }}
         transformOrigin={{ vertical: "bottom", horizontal: "left" }}
         slotProps={{
           list: { dense: true, "aria-label": label },
-          paper: { sx: { minWidth: minMenuWidth, marginTop: -0.5 } },
+          paper: {
+            ref: follow.paperRef,
+            sx: { minWidth: minMenuWidth, marginTop: -0.5 },
+          },
         }}
       >
         {children(close)}
@@ -186,6 +213,7 @@ export function ComposerMoreMenu({
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const close = (): void => setAnchor(null);
   const label = t("chatInput.more", "More");
+  const follow = useFollowContent(anchor !== null);
   return (
     <>
       <ComposerIconButton
@@ -201,11 +229,15 @@ export function ComposerMoreMenu({
         anchorEl={anchor}
         open={anchor !== null}
         onClose={close}
+        action={follow.action}
         anchorOrigin={{ vertical: "top", horizontal: "left" }}
         transformOrigin={{ vertical: "bottom", horizontal: "left" }}
         slotProps={{
           list: { dense: true, "aria-label": label },
-          paper: { sx: { minWidth: "14rem", marginTop: -0.5 } },
+          paper: {
+            ref: follow.paperRef,
+            sx: { minWidth: "14rem", marginTop: -0.5 },
+          },
         }}
       >
         {children(close)}

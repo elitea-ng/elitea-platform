@@ -20,7 +20,7 @@ import TextField from '@mui/material/TextField';
 import { describeWorkspaceError } from '@/features/workspace';
 import { DEFAULT_STEP_LIMIT, MAX_STEP_LIMIT, onStepLimitChange, parseStepCount, readStepLimit, UNLIMITED, writeStepLimit, type StepLimit } from '@/shared/desktop/stepLimit';
 import { t } from '@/shared/i18n';
-import { MenuDivider, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
+import { MenuDivider, MenuNote, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
 
 /** The presets the menu offers between the default and unlimited. */
 const PRESETS: readonly number[] = [100, 500, 2000, 5000];
@@ -120,7 +120,7 @@ export default function StepLimitMenu({ workspaceId, onError, close }: StepLimit
     </MenuRow>
   );
   return [
-    <MenuRow key="back" onClick={() => setChoosing(false)} title={t('workspace.stepsChip.tooltip', 'Model steps per run here. At the limit the agent asks whether to continue.')}>
+    <MenuRow key="back" onClick={() => setChoosing(false)}>
       <MenuRowIcon>
         <ChevronLeftIcon />
       </MenuRowIcon>
@@ -138,5 +138,6 @@ export default function StepLimitMenu({ workspaceId, onError, close }: StepLimit
         <MenuRowText>{t('workspace.stepsChip.custom', 'Custom…')}</MenuRowText>
       </MenuRow>
     ),
+    <MenuNote key="note">{t('workspace.stepsChip.tooltip', 'Model steps per run here. At the limit the agent asks whether to continue.')}</MenuNote>,
   ];
 }

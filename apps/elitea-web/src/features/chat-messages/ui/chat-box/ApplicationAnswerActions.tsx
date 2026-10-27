@@ -29,21 +29,14 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import VolumeUpOutlinedIcon from '@mui/icons-material/VolumeUpOutlined';
-import Box from '@mui/material/Box';
 import Menu from '@mui/material/Menu';
 
 import { t } from '@/shared/i18n';
 import { MenuDivider, MenuRow, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
 
 import { MessageFeedbackControl } from './MessageFeedbackControl';
-import { ReplyActionButton } from './ReplyActionButton';
+import { ReplyActionButton, ReplyActionsRow } from './ReplyActionButton';
 import { RememberMemoryMenuRow, useRememberMemory, type RememberMemory } from './RememberMemoryAction';
-
-/** Marks the row so the reply around it can reveal it on hover (`replyActionsRevealSx`). */
-const REPLY_ACTIONS_ATTR = 'data-reply-actions';
-
-/** For the reply's own box: hovering anywhere on the reply shows its row. */
-export const replyActionsRevealSx = { [`&:hover [${REPLY_ACTIONS_ATTR}]`]: { opacity: 1 } } as const;
 
 interface ApplicationAnswerActionsState {
   readonly hasContent: boolean;
@@ -160,26 +153,11 @@ function ActionsRow({ state, handlers, feedback, alwaysVisible, memory }: Omit<A
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const shown = alwaysVisible || anchor !== null;
   return (
-    <Box
-      {...{ [REPLY_ACTIONS_ATTR]: '' }}
-      sx={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 0.5,
-        // The card's text starts 1rem in; a 28px target around a 16px icon
-        // puts the first icon on that edge.
-        paddingLeft: '0.625rem',
-        marginTop: '-0.25rem',
-        opacity: shown ? 1 : 0,
-        transition: 'opacity 120ms',
-        '&:focus-within': { opacity: 1 },
-        '@media (hover: none)': { opacity: 1 },
-      }}
-    >
+    <ReplyActionsRow shown={shown}>
       <InlineActions state={state} handlers={handlers} feedback={feedback} />
       <MoreMenu state={state} handlers={handlers} memory={memory} anchor={anchor} onAnchor={setAnchor} />
       {memory?.toast}
-    </Box>
+    </ReplyActionsRow>
   );
 }
 

@@ -1,1 +1,1 @@
-export { MenuDivider, MenuHeader, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText, menuRowSx } from './nativeMenu';
+export { MenuDivider, MenuHeader, MenuNote, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText, menuRowSx } from './nativeMenu';

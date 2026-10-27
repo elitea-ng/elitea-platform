@@ -336,13 +336,11 @@ describe('ApplicationAnswer caption line and reasoning summary', () => {
       />,
     );
 
-    // Reference `ApplicationThinkView.jsx`: a live tree stays expanded when
-    // it settles, and the reader owns it from then on.
+    // Once the turn settles the panel folds to "Thought for …"; the summary
+    // stays live, so the reader can open it again.
     const summary = screen.getByRole('button', { name: /Thought for/ });
-    expect(summary.getAttribute('aria-expanded')).toBe('true');
-
-    await user.click(summary);
     expect(summary.getAttribute('aria-expanded')).toBe('false');
+
     await user.click(summary);
     expect(summary.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('The user is greeting me.')).toBeVisible();

@@ -23,6 +23,7 @@ import Skeleton from '@mui/material/Skeleton';
 import { ApplicationAnswer } from './ApplicationAnswer';
 import { SteeringMessages } from './SteeringMessages';
 import { UserMessage } from './UserMessage';
+import { useStickToBottom } from './useStickToBottom';
 
 import { useChatSessionStore } from '@/entities/conversation';
 import { WELCOME_MESSAGE_ID } from '@/shared/lib/enums';
@@ -136,7 +137,7 @@ export function ChatMessageList({
   steering,
 }: ChatMessageListProps): ReactNode {
   const scrollRef = useRef<SimpleBarInstance | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLUListElement | null>(null);
   const messageRowRefs = useRef<Record<string, HTMLElement | null>>({});
 
   const messageIdToView = useChatSessionStore((state) => state.messageIdToView);
@@ -161,13 +162,16 @@ export function ChatMessageList({
     [chatHistory],
   );
 
-  const firstMessageId = chatHistory[0]?.id;
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ block: 'end' });
-    // A new conversation (first message identity changes) or a newly-arrived
-    // message (list length changes) both warrant scrolling to the bottom —
-    // baseline: `ChatMessageList.jsx`'s own `[activeConversation?.id]` effect.
-  }, [firstMessageId, chatHistory.length]);
+  // Land at the bottom on open/send and follow a streaming reply while the
+  // reader stays at the bottom — see `useStickToBottom` for why the message
+  // count alone (the baseline's `[activeConversation?.id]` effect) is not enough.
+  useStickToBottom({
+    scrollRef,
+    contentRef: listRef,
+    firstId: chatHistory[0]?.id,
+    lastId: chatHistory.at(-1)?.id,
+    count: chatHistory.length,
+  });
 
   useEffect(() => {
     const scrollEl = scrollRef.current?.getScrollElement();
@@ -223,6 +227,7 @@ export function ChatMessageList({
         */}
       <Box
         component="ul"
+        ref={listRef}
         data-testid="chat-message-list"
         sx={{ width: '100%', flexGrow: 1, listStyle: 'none', margin: 0, padding: '0 0.75rem 0.75rem' }}
       >
@@ -352,7 +357,6 @@ export function ChatMessageList({
             </Box>
           );
         })}
-        <Box component="li" ref={messagesEndRef} sx={{ listStyle: 'none' }} />
       </Box>
     </ScrollableContainer>
     </TraceStepDetailProvider>

@@ -198,7 +198,7 @@ describe('UserMessage caption line', () => {
     expect(screen.queryByTestId('chat-message-recipient')).toBeNull();
   });
 
-  it('shows the copy action at rest, not only on hover', () => {
+  it('draws its actions as a quiet row under the bubble, not inside it', () => {
     stubCurrentAuthor();
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -207,17 +207,31 @@ describe('UserMessage caption line', () => {
             message={buildMessage(0, { name: 'Bob Reviewer' })}
             messageId="q0"
             onCopy={() => undefined}
+            onSubmit={() => undefined}
+            onFork={() => undefined}
+            onDelete={() => undefined}
           />
         </ThemeProvider>
       </QueryClientProvider>,
     );
 
-    // The production row's action strip is `visibility: visible` (measured);
-    // this one was hard-coded `hidden`, so the icons the reference screenshots
-    // show were simply never painted.
-    const actions = screen.getByRole('button', { name: 'Copy to clipboard' });
-    expect(actions).toBeTruthy();
-    expect(actions.closest('.actionButtons')).toBeTruthy();
+    const copy = screen.getByRole('button', { name: 'Copy to clipboard' });
+    const row = copy.closest('[data-reply-actions]');
+    expect(row).toBeTruthy();
+    // Outside the bubble, still inside the message (its hover reveals the row).
+    expect(screen.getByTestId('chat-message-body').contains(copy)).toBe(false);
+    expect(screen.getByTestId('user-message').contains(row)).toBe(true);
+    const names = Array.from(row?.querySelectorAll('button') ?? []).map((button) => button.getAttribute('aria-label'));
+    expect(names).toEqual(['Copy to clipboard', 'Edit the message and regenerate answer', 'Fork from here', 'Delete']);
+    // Faded, not hidden: every control stays focusable.
+    for (const button of row?.querySelectorAll('button') ?? []) expect(button).not.toBeDisabled();
+    expect(screen.getByTestId('message-fork')).toBeTruthy();
+  });
+
+  it('renders no action row when no action is offered', () => {
+    stubCurrentAuthor();
+    renderMessage({ name: 'Bob Reviewer' });
+    expect(document.querySelector('[data-reply-actions]')).toBeNull();
   });
 });
 

@@ -46,7 +46,6 @@ import {
 } from '@/features/chat-participants';
 import type { ChatBoxProps } from '@/widgets/chat-box';
 import { ChatBox, toParticipant } from '@/widgets/chat-box';
-import { ContextBudgetIndicator } from '@/widgets/context-budget';
 
 import { ForkErrorSnackbar, ForkedFromLink, useChatFork } from './ChatFork';
 import { ChatParticipantsPanel } from './ChatParticipantsPanel';
@@ -309,7 +308,8 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
               projectId,
               conversationId,
               userId: user?.id,
-              contextIndicator: <ContextBudgetIndicator conversationId={conversationIdOf(activeConversation)} projectId={projectId} />,
+              // The budget lives in the participants rail only (ContextBudget), not over the composer.
+              contextIndicator: null,
             }),
           }}
         />

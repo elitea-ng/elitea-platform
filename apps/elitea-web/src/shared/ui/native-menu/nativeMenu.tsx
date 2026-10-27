@@ -95,3 +95,22 @@ export function MenuHeader({ children }: { readonly children: ReactNode }): Reac
 export function MenuDivider(): React.JSX.Element {
   return <Divider sx={{ '&&': { marginY: 0.5 } }} />;
 }
+
+/** A muted line of explanation at the foot of a menu, where a native menu would say what its choices mean. */
+export function MenuNote({ children }: { readonly children: ReactNode }): React.JSX.Element {
+  return (
+    <Box
+      component="li"
+      role="none"
+      sx={(theme: Theme) => ({
+        ...theme.typography.labelSmall,
+        paddingX: 1,
+        paddingY: 0.5,
+        maxWidth: '16rem',
+        color: theme.vars.palette.text.metrics,
+      })}
+    >
+      {children}
+    </Box>
+  );
+}

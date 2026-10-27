@@ -114,7 +114,7 @@ describe('the Workspaces route in the real app shell', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/apps'));
     // Off the folders, the title row names the page (no back button); Local work stays in the sidebar.
     expect(await screen.findByTestId('page-title')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Local work' })).toBeNull();
+    for (const bar of screen.getAllByTestId('title-bar')) expect(within(bar).queryByRole('button', { name: 'Local work' })).toBeNull();
     expect(within(sidebar).getByRole('navigation', { name: 'Local work' })).toBeInTheDocument();
   });
 
