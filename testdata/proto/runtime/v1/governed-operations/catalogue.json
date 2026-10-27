@@ -1,0 +1,213 @@
+{
+  "schema": "elitea.runtime.governed-operations.v1",
+  "note": "Shared contract (#1120): Go credentialadapters descriptors and the Rust governed tool mapping are both tested against this file. Edit all three together.",
+  "providers": [
+    {
+      "provider_type": "jira",
+      "auth_classes": [
+        "static_secret",
+        "oauth_delegated"
+      ],
+      "target_kind": "base_url",
+      "material_keys": {
+        "static_secret": [
+          "token",
+          "username"
+        ],
+        "oauth_delegated": [
+          "access_token"
+        ]
+      },
+      "qualification": {
+        "static_secret": "fixture",
+        "oauth_delegated": "fixture"
+      },
+      "probe_operation": "jira.project.read",
+      "operations": [
+        {
+          "id": "jira.project.read",
+          "class": "read",
+          "resource_kind": "project"
+        },
+        {
+          "id": "jira.issue.read",
+          "class": "read",
+          "resource_kind": "issue"
+        },
+        {
+          "id": "jira.issue.search",
+          "class": "read",
+          "resource_kind": "project"
+        },
+        {
+          "id": "jira.issue.write",
+          "class": "write",
+          "resource_kind": "issue"
+        }
+      ]
+    },
+    {
+      "provider_type": "confluence",
+      "auth_classes": [
+        "static_secret",
+        "oauth_delegated"
+      ],
+      "target_kind": "base_url",
+      "material_keys": {
+        "static_secret": [
+          "token",
+          "username"
+        ],
+        "oauth_delegated": [
+          "access_token"
+        ]
+      },
+      "qualification": {
+        "static_secret": "fixture",
+        "oauth_delegated": "fixture"
+      },
+      "probe_operation": "confluence.space.read",
+      "operations": [
+        {
+          "id": "confluence.space.read",
+          "class": "read",
+          "resource_kind": "space"
+        },
+        {
+          "id": "confluence.page.read",
+          "class": "read",
+          "resource_kind": "page"
+        },
+        {
+          "id": "confluence.page.search",
+          "class": "read",
+          "resource_kind": "space"
+        },
+        {
+          "id": "confluence.page.write",
+          "class": "write",
+          "resource_kind": "page"
+        }
+      ]
+    },
+    {
+      "provider_type": "aha",
+      "auth_classes": [
+        "static_secret",
+        "oauth_delegated"
+      ],
+      "target_kind": "base_url",
+      "material_keys": {
+        "static_secret": [
+          "token"
+        ],
+        "oauth_delegated": [
+          "access_token"
+        ]
+      },
+      "qualification": {
+        "static_secret": "fixture",
+        "oauth_delegated": "fixture"
+      },
+      "probe_operation": "aha.product.read",
+      "operations": [
+        {
+          "id": "aha.product.read",
+          "class": "read",
+          "resource_kind": "product"
+        },
+        {
+          "id": "aha.feature.read",
+          "class": "read",
+          "resource_kind": "feature"
+        },
+        {
+          "id": "aha.feature.search",
+          "class": "read",
+          "resource_kind": "product"
+        },
+        {
+          "id": "aha.feature.write",
+          "class": "write",
+          "resource_kind": "feature"
+        }
+      ]
+    },
+    {
+      "provider_type": "sharepoint",
+      "auth_classes": [
+        "oauth_delegated"
+      ],
+      "target_kind": "tenant_site",
+      "material_keys": {
+        "oauth_delegated": [
+          "access_token"
+        ]
+      },
+      "qualification": {
+        "oauth_delegated": "fixture"
+      },
+      "probe_operation": "sharepoint.site.read",
+      "operations": [
+        {
+          "id": "sharepoint.site.read",
+          "class": "read",
+          "resource_kind": "site"
+        },
+        {
+          "id": "sharepoint.file.read",
+          "class": "read",
+          "resource_kind": "file"
+        },
+        {
+          "id": "sharepoint.list.read",
+          "class": "read",
+          "resource_kind": "list"
+        },
+        {
+          "id": "sharepoint.file.write",
+          "class": "write",
+          "resource_kind": "file"
+        }
+      ]
+    },
+    {
+      "provider_type": "qtest",
+      "auth_classes": [
+        "static_secret"
+      ],
+      "target_kind": "base_url",
+      "material_keys": {
+        "static_secret": [
+          "token"
+        ]
+      },
+      "qualification": {
+        "static_secret": "fixture"
+      },
+      "probe_operation": "qtest.project.read",
+      "operations": [
+        {
+          "id": "qtest.project.read",
+          "class": "read",
+          "resource_kind": "project"
+        },
+        {
+          "id": "qtest.test_case.read",
+          "class": "read",
+          "resource_kind": "test_case"
+        },
+        {
+          "id": "qtest.test_case.search",
+          "class": "read",
+          "resource_kind": "project"
+        },
+        {
+          "id": "qtest.test_case.write",
+          "class": "write",
+          "resource_kind": "test_case"
+        }
+      ]
+    }
+  ]
+}
