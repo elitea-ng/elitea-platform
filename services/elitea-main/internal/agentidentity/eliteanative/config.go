@@ -59,8 +59,12 @@ const (
 	// DefaultRotationOverlap is how long a new key is published before it
 	// signs.
 	DefaultRotationOverlap = 24 * time.Hour
-	minRotationOverlap     = time.Minute
-	maxRotationOverlap     = 30 * 24 * time.Hour
+	// CacheMaxAge is how long a relying party may cache the JWKS and the
+	// issuer metadata. The rotation overlap must be strictly longer, so a
+	// cache that fetched just before a key was published has refreshed
+	// before that key signs.
+	CacheMaxAge        = 5 * time.Minute
+	maxRotationOverlap = 30 * 24 * time.Hour
 	// retentionSkew keeps a retired key published a little past the expiry
 	// of its last assertion, for relying parties with clock skew.
 	retentionSkew = time.Minute
@@ -162,6 +166,9 @@ func (c Config) retention() time.Duration {
 	}
 	return longest + retentionSkew
 }
+
+// validOverlap: strictly longer than the cache max-age, at most 30 days.
+func validOverlap(d time.Duration) bool { return d > CacheMaxAge && d <= maxRotationOverlap }
 
 // ErrInvalidConfig wraps every configuration refusal. The text names the
 // field, never a key or a path's contents.
@@ -284,8 +291,8 @@ func (c *Config) Validate() error {
 	if len(c.Tenant) > maxTenantBytes || strings.ContainsAny(c.Tenant, " \t\r\n\x00") {
 		return invalid("tenant must be at most %d bytes without whitespace", maxTenantBytes)
 	}
-	if c.RotationOverlap < minRotationOverlap || c.RotationOverlap > maxRotationOverlap {
-		return invalid("rotation_overlap must be %s..%s", minRotationOverlap, maxRotationOverlap)
+	if !validOverlap(c.RotationOverlap) {
+		return invalid("rotation_overlap must be more than the JWKS cache max-age (%s) and at most %s", CacheMaxAge, maxRotationOverlap)
 	}
 	if len(c.RelyingParties) == 0 || len(c.RelyingParties) > maxRelyingParties {
 		return invalid("1..%d relying_parties are required", maxRelyingParties)

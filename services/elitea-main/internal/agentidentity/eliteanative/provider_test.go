@@ -231,7 +231,10 @@ func TestUnknownRelyingPartySuspendedIdentityAndStaleEpochFailBeforeSigning(t *t
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.store.setIdentity(func(e *identity.ExternalAgentIdentity) { e.State = identity.ExternalIdentitySuspended; e.RevocationEpoch++ })
+		f.store.setIdentity(func(e *identity.ExternalAgentIdentity) {
+			e.State = identity.ExternalIdentitySuspended
+			e.RevocationEpoch++
+		})
 		if _, err := f.broker.Credential(ctx, claim(ref), agentidentity.CredentialRequest{Audience: awsAudience}); !errors.Is(err, agentidentity.ErrDenied) {
 			t.Fatalf("err = %v", err)
 		}
@@ -559,7 +562,8 @@ func TestIssuerMetadataNamesTheIssuerAndJWKSOnly(t *testing.T) {
 	if fmt.Sprint(doc["id_token_signing_alg_values_supported"]) != "[ES256 RS256]" {
 		t.Fatalf("algorithms = %v", doc["id_token_signing_alg_values_supported"])
 	}
-	if !strings.HasPrefix(rec.Header().Get("Cache-Control"), "public") {
+	// The served max-age is the one the overlap is validated against.
+	if want := fmt.Sprintf("public, max-age=%d", int(eliteanative.CacheMaxAge.Seconds())); rec.Header().Get("Cache-Control") != want {
 		t.Fatalf("Cache-Control = %q", rec.Header().Get("Cache-Control"))
 	}
 	jwks, jwksBody := fetch(t, f.provider.WellKnown().ServeJWKS, eliteanative.JWKSPath)

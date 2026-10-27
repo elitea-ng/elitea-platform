@@ -3017,7 +3017,9 @@ main:
     # JSON document: origin (default DEPLOYMENT_URL), rotation_overlap,
     # keys[] (kid, alg ES256|RS256, not_before, file or vault) and
     # relying_parties[] (id, audience, algorithm, max_ttl <= 15m,
-    # claims_profile). The keys are dedicated: boot refuses a key shared with
+    # claims_profile). A `file` key lives in the Secret main.agentAssertion
+    # mounts ("/etc/elitea/agent-assertion/<data key>"). rotation_overlap must
+    # exceed the JWKS cache max-age (5m). The keys are dedicated: boot refuses a key shared with
     # command signing, code-sandbox grants or the egress token key.
     # Read in cmd/elitea-main/agent_identity_native.go.
     ELITEA_AGENT_ASSERTION_CONFIG: ""
@@ -3960,6 +3962,18 @@ main:
       #       volumeAttributes:
       #         secretProviderClass: elitea-runtime-material
       volume: {}
+
+  # Elitea-native agent assertion keys (#1153). The Secret whose data keys are
+  # the PKCS#8 PEM private keys that env.ELITEA_AGENT_ASSERTION_CONFIG names
+  # as `file`: "<mountPath>/<data key>". Mounted whole into Main only, with
+  # defaultMode 0444 (the pod sets no fsGroup, so the kubelet's root-owned
+  # files need the other-read bit), the same as egressProxy.signingKey. Main
+  # reads it through the kubelet's symlinks and refuses a group- or
+  # world-writable file. Empty mounts nothing. Use a Secret for these keys
+  # only: they must not be any other purpose's key, and boot checks that.
+  agentAssertion:
+    keysSecret: ""
+    mountPath: /etc/elitea/agent-assertion
 
   # Kubernetes execution path for the versioned migration corpus
   # (services/elitea-main/migrations/{shared,tenant}, applied by the separate

@@ -3,13 +3,14 @@ package eliteanative
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 )
 
-// wellKnownMaxAge is how long a cache may keep either document. It is far
-// below the rotation overlap, so a relying party sees a new key long before
-// it signs.
-const wellKnownMaxAge = "public, max-age=300"
+// wellKnownCacheControl lets a cache keep either document for CacheMaxAge,
+// which the rotation overlap always exceeds, so a relying party sees a new
+// key before it signs.
+var wellKnownCacheControl = "public, max-age=" + strconv.Itoa(int(CacheMaxAge/time.Second))
 
 // WellKnown serves the issuer's public documents: the JWKS and the issuer
 // metadata. It holds the public half of the ring only; nothing here signs.
@@ -69,7 +70,7 @@ func (w *WellKnown) ServeMetadata(rw http.ResponseWriter, _ *http.Request) {
 
 func write(rw http.ResponseWriter, contentType string, body []byte) {
 	rw.Header().Set("Content-Type", contentType)
-	rw.Header().Set("Cache-Control", wellKnownMaxAge)
+	rw.Header().Set("Cache-Control", wellKnownCacheControl)
 	rw.Header().Set("X-Content-Type-Options", "nosniff")
 	rw.WriteHeader(http.StatusOK)
 	_, _ = rw.Write(body)
