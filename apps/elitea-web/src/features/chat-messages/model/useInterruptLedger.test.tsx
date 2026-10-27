@@ -139,4 +139,14 @@ describe('useInterruptLedger', () => {
     act(() => { document.dispatchEvent(new Event('visibilitychange')); });
     await waitFor(() => expect(calls).toHaveLength(2));
   });
+
+  it('re-reads the open cards each time the response parks again, so a tab that missed frames matches the ledger', async () => {
+    const { calls } = installList();
+    const streaming: readonly ChatMessage[] = [{ id: RESPONSE, role: 'assistant', name: 'Pipeline', content: '', createdAt: '2026-10-19T00:00:00Z', fanoutParked: true }];
+    const { view } = harness(streaming);
+    await waitFor(() => expect(calls).toHaveLength(1));
+    view.rerender([{ ...streaming[0]!, fanoutParked: false }]);
+    view.rerender([{ ...streaming[0]!, fanoutParked: true }]);
+    await waitFor(() => expect(calls).toHaveLength(2));
+  });
 });

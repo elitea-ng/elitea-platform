@@ -117,6 +117,23 @@ export function useInterruptLedger({
     }
   }, [workingKey, projectId, setChatHistory]);
 
+  // Each time a response parks (again), its open cards are re-read from the
+  // ledger: a tab that attached to a wake late, or missed a frame, matches
+  // Main at every park instead of only after a reload.
+  const parkedKey = useMemo(() => messages.filter((message) => message.fanoutParked).map((message) => message.id).join('\u0000'), [messages]);
+  // `undefined` until the first render's parked set is known: what is parked
+  // on load is reconciled once by the effect above.
+  const parked = useRef<ReadonlySet<string> | undefined>(undefined);
+  useEffect(() => {
+    const now = new Set(parkedKey ? parkedKey.split('\u0000') : []);
+    const before = parked.current;
+    parked.current = now;
+    if (!before) return;
+    for (const messageId of now) {
+      if (!before.has(messageId)) void reconcileLedgerMessage(projectId, messageId, setChatHistory);
+    }
+  }, [parkedKey, projectId, setChatHistory]);
+
   useEffect(() => {
     if (!workingKey || typeof document === 'undefined') return undefined;
     const onVisibilityChange = (): void => {
