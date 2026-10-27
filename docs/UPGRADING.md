@@ -4,6 +4,25 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## P4
+
+* **elitea-main: agent identity reconciliation (#1154, off by default).**
+  Nobody has to act while `ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED`
+  stays `false`. One additive shared migration (0191) creates two empty
+  tables: `agent_identity_provider_health` and
+  `external_identity_drift_findings`. With the flag on, one replica per
+  identity provider compares the external agent identities with the
+  provider. It suspends or replaces a record on drift, and records orphans.
+  The loop starts only for configured providers; none is configured yet.
+* Two optional policy revision fields set the loop:
+  `reconcile_interval_seconds` (default 600, range 60..86400) and
+  `reconcile_outage_threshold` (default 3, range 1..100). A revision without
+  them keeps its digest. After the threshold of failed passes, new agent
+  sessions for that provider are denied until a pass succeeds.
+* New admin route: `GET /api/v2/admin/external_agent_identities/drift`. It
+  uses the existing `models.agent_identity.external.manage` permission.
+* New metric: `agentidentity_reconcile_errors_total{provider}`.
+
 ## elitea-main: governed credential broker (off by default)
 
 **Affects:** nobody has to act while

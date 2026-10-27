@@ -27,19 +27,23 @@ const (
 	ReasonExternalIdentityStale     DenyReason = "external_identity_epoch_stale"
 	ReasonExternalIdentityReplaced  DenyReason = "external_identity_replaced"
 	ReasonProviderNotConfigured     DenyReason = "provider_not_configured"
-	ReasonProfileEvidenceMismatch   DenyReason = "profile_evidence_mismatch"
-	ReasonAssertedUserNotAccepted   DenyReason = "asserted_user_not_accepted"
-	ReasonVerifiedUserNotSupported  DenyReason = "verified_user_not_supported"
-	ReasonAppOnlyNotSupported       DenyReason = "app_only_not_supported"
-	ReasonSessionNotFound           DenyReason = "session_not_found"
-	ReasonSessionNotOpen            DenyReason = "session_not_open"
-	ReasonSessionExpired            DenyReason = "session_expired"
-	ReasonSessionClaimMismatch      DenyReason = "session_claim_mismatch"
-	ReasonOutsideCeiling            DenyReason = "narrowing_outside_ceiling"
-	ReasonTTLTooShort               DenyReason = "remaining_ttl_below_provider_minimum"
-	ReasonInteractionRequired       DenyReason = "interaction_required"
-	ReasonProviderFailed            DenyReason = "provider_failed"
-	ReasonAuditFailed               DenyReason = "audit_failed"
+	// ReasonProviderUnreconciled: the reconcile loop (#1154) failed against
+	// the provider for the policy's outage threshold of consecutive passes.
+	// New sessions for it are denied until a pass succeeds.
+	ReasonProviderUnreconciled     DenyReason = "provider_unreconciled"
+	ReasonProfileEvidenceMismatch  DenyReason = "profile_evidence_mismatch"
+	ReasonAssertedUserNotAccepted  DenyReason = "asserted_user_not_accepted"
+	ReasonVerifiedUserNotSupported DenyReason = "verified_user_not_supported"
+	ReasonAppOnlyNotSupported      DenyReason = "app_only_not_supported"
+	ReasonSessionNotFound          DenyReason = "session_not_found"
+	ReasonSessionNotOpen           DenyReason = "session_not_open"
+	ReasonSessionExpired           DenyReason = "session_expired"
+	ReasonSessionClaimMismatch     DenyReason = "session_claim_mismatch"
+	ReasonOutsideCeiling           DenyReason = "narrowing_outside_ceiling"
+	ReasonTTLTooShort              DenyReason = "remaining_ttl_below_provider_minimum"
+	ReasonInteractionRequired      DenyReason = "interaction_required"
+	ReasonProviderFailed           DenyReason = "provider_failed"
+	ReasonAuditFailed              DenyReason = "audit_failed"
 )
 
 // ErrDenied matches every broker denial (errors.Is). errors.As with
@@ -102,6 +106,13 @@ type SessionStore interface {
 	AppendEvent(ctx context.Context, event securityaudit.SecurityEvent) error
 }
 
+// ProviderAdmission answers whether admission may open new sessions for a
+// provider. The reconcile loop (#1154) persists the answer per provider, so
+// every replica reads the same one. A read error denies.
+type ProviderAdmission interface {
+	ProviderAdmissionDenied(ctx context.Context, provider string) (bool, error)
+}
+
 // ErrSessionNotFound is a ref with no row.
 var ErrSessionNotFound = errors.New("agent identity: session not found")
 
@@ -112,8 +123,11 @@ type BrokerConfig struct {
 	Bindings   identity.BindingReader
 	Identities ExternalIdentityStore
 	Sessions   SessionStore
-	Now        func() time.Time
-	NewID      func() (string, error)
+	// ProviderHealth is optional. Set, OpenSession denies a provider it
+	// reports as failing reconciliation, and denies when it cannot answer.
+	ProviderHealth ProviderAdmission
+	Now            func() time.Time
+	NewID          func() (string, error)
 }
 
 // Broker opens run-scoped agent sessions for admission and turns them into
@@ -124,6 +138,7 @@ type Broker struct {
 	bindings   identity.BindingReader
 	identities ExternalIdentityStore
 	sessions   SessionStore
+	health     ProviderAdmission
 	now        func() time.Time
 	newID      func() (string, error)
 }
@@ -135,7 +150,7 @@ func NewBroker(cfg BrokerConfig) (*Broker, error) {
 		return nil, errors.New("agent identity broker: registry, policy, bindings, identities and sessions are required")
 	}
 	b := &Broker{registry: cfg.Registry, policy: cfg.Policy, bindings: cfg.Bindings, identities: cfg.Identities,
-		sessions: cfg.Sessions, now: cfg.Now, newID: cfg.NewID}
+		sessions: cfg.Sessions, health: cfg.ProviderHealth, now: cfg.Now, newID: cfg.NewID}
 	if b.now == nil {
 		b.now = func() time.Time { return time.Now().UTC() }
 	}
@@ -323,6 +338,13 @@ func (b *Broker) openSession(ctx context.Context, in SessionAdmission, now time.
 	provider, ok := b.registry.Provider(external.Ref.Provider)
 	if !ok {
 		return "", AgentSession{}, deny(ReasonProviderNotConfigured, nil)
+	}
+	if b.health != nil {
+		// Fail closed: a provider the reconcile loop cannot reach for the
+		// policy's threshold, or a health read that fails, opens nothing.
+		if denied, err := b.health.ProviderAdmissionDenied(ctx, external.Ref.Provider); err != nil || denied {
+			return "", AgentSession{}, deny(ReasonProviderUnreconciled, err)
+		}
 	}
 	kind := EvidenceKindOf(in.Evidence)
 	if err := b.checkEvidence(kind, provider.Capabilities(), binding.Mode); err != nil {

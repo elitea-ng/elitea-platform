@@ -329,6 +329,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
+	if agentIdentity.Reconciler != nil {
+		go agentIdentity.Reconciler.Run(ctx)
+	}
 	credentialProbeHandler, err := credentialProbeAdmin(credentialAdmission, pool)
 	if err != nil {
 		return err

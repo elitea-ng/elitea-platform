@@ -2747,6 +2747,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					externalApprove := central(v2agentidentity.PermissionBindingsApprove)
 					r.With(externalManage).Get("/external_agent_identities", externalIdentities.ListExternalIdentities)
 					r.With(externalManage).Post("/external_agent_identities", externalIdentities.CreateExternalIdentity)
+					// The reconcile loop's open drift findings (issue 1154).
+					r.With(externalManage).Get("/external_agent_identities/drift", externalIdentities.ListDriftFindings)
 					r.With(externalManage).Post("/external_agent_identities/{id}:provision", externalIdentities.ProvisionExternalIdentity)
 					r.With(externalManage, externalApprove).Post("/external_agent_identities/{id}:activate", externalIdentities.ActivateExternalIdentity)
 					r.With(externalManage).Post("/external_agent_identities/{id}:suspend", externalIdentities.SuspendExternalIdentity)

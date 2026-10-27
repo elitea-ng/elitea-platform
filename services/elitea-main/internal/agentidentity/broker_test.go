@@ -386,3 +386,59 @@ func TestRegistryRefusesBadOrDuplicateProviders(t *testing.T) {
 		t.Error("empty registry answered a provider")
 	}
 }
+
+type healthStub struct {
+	denied map[string]bool
+	err    error
+}
+
+func (h healthStub) ProviderAdmissionDenied(_ context.Context, provider string) (bool, error) {
+	return h.denied[provider], h.err
+}
+
+// #1154: a provider the reconcile loop reports as failing denies new
+// sessions, and so does a health read that fails. The adapter is not
+// reached.
+func TestOpenSessionDeniesAProviderFailingReconciliation(t *testing.T) {
+	for name, health := range map[string]healthStub{
+		"over the outage threshold": {denied: map[string]bool{"fake": true}},
+		"health unreadable":         {err: errors.New("db down")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newBrokerFixture(t, nil)
+			registry, err := agentidentity.NewRegistry(f.provider)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.broker, err = agentidentity.NewBroker(agentidentity.BrokerConfig{
+				Registry: registry, Policy: agentidentity.DenyAssertedUser{ModePolicy: allowAllRevision().Document},
+				Bindings: f.store, Identities: f.store, Sessions: f.store, ProviderHealth: health,
+				Now: func() time.Time { return fixedNow },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = f.broker.OpenSession(context.Background(), appOnlyAdmission())
+			wantReason(t, err, agentidentity.ReasonProviderUnreconciled)
+			if calls := f.provider.Calls(); len(calls) != 0 {
+				t.Fatalf("the adapter was reached: %v", calls)
+			}
+		})
+	}
+	t.Run("healthy provider opens", func(t *testing.T) {
+		f := newBrokerFixture(t, nil)
+		registry, _ := agentidentity.NewRegistry(f.provider)
+		broker, err := agentidentity.NewBroker(agentidentity.BrokerConfig{
+			Registry: registry, Policy: agentidentity.DenyAssertedUser{ModePolicy: allowAllRevision().Document},
+			Bindings: f.store, Identities: f.store, Sessions: f.store,
+			ProviderHealth: healthStub{denied: map[string]bool{"other": true}},
+			Now:            func() time.Time { return fixedNow },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := broker.OpenSession(context.Background(), appOnlyAdmission()); err != nil {
+			t.Fatal(err)
+		}
+	})
+}

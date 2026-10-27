@@ -72,6 +72,7 @@ import type {
   ErrorResponse,
   ExternalAgentIdentity,
   ExternalAgentIdentityCreate,
+  ExternalAgentIdentityDriftResponse,
   ExternalAgentIdentityListResponse,
   GetUserProjectPermissionsParams,
   GlobalUserInviteRequest,
@@ -84,6 +85,7 @@ import type {
   ListBrandingPackageVersions200,
   ListCredentialUseGrantsParams,
   ListExternalAgentIdentitiesParams,
+  ListExternalAgentIdentityDriftFindingsParams,
   ListMandatesParams,
   ListNativeDevicesAdministrationParams,
   Mandate,
@@ -7565,6 +7567,238 @@ export function useCreateExternalAgentIdentity<
 } {
   const queryOptions = getCreateExternalAgentIdentityQueryOptions(
     externalAgentIdentityCreate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listExternalAgentIdentityDriftFindingsResponse200 = {
+  data: ExternalAgentIdentityDriftResponse;
+  status: 200;
+};
+
+export type listExternalAgentIdentityDriftFindingsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listExternalAgentIdentityDriftFindingsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listExternalAgentIdentityDriftFindingsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listExternalAgentIdentityDriftFindingsResponseSuccess =
+  listExternalAgentIdentityDriftFindingsResponse200 & {
+    headers: Headers;
+  };
+export type listExternalAgentIdentityDriftFindingsResponseError = (
+  | listExternalAgentIdentityDriftFindingsResponse400
+  | listExternalAgentIdentityDriftFindingsResponse401
+  | listExternalAgentIdentityDriftFindingsResponse403
+) & {
+  headers: Headers;
+};
+
+export type listExternalAgentIdentityDriftFindingsResponse =
+  | listExternalAgentIdentityDriftFindingsResponseSuccess
+  | listExternalAgentIdentityDriftFindingsResponseError;
+
+export const getListExternalAgentIdentityDriftFindingsUrl = (
+  params?: ListExternalAgentIdentityDriftFindingsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/external_agent_identities/drift?${stringifiedParams}`
+    : `/admin/external_agent_identities/drift`;
+};
+
+/**
+ * The open findings of the agent identity reconcile loop (issue 1154), newest first, and the reconcile health of every provider. A pass suspends a record whose provider object was disabled, deleted or changed outside Elitea, marks one whose object was recreated as replaced (terminal), and records Elitea-tagged objects with no record as orphans without changing anything. A later pass resolves a finding it no longer sees. Gated on `models.agent_identity.external.manage` in administration mode. Mounted only when the enterprise credential governance flag is on; otherwise the path answers like any unknown route.
+ * @summary List open external agent identity drift findings
+ */
+export const listExternalAgentIdentityDriftFindings = async (
+  params?: ListExternalAgentIdentityDriftFindingsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listExternalAgentIdentityDriftFindingsResponse> => {
+  return eliteaFetch<listExternalAgentIdentityDriftFindingsResponse>(
+    getListExternalAgentIdentityDriftFindingsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListExternalAgentIdentityDriftFindingsQueryKey = (
+  params?: ListExternalAgentIdentityDriftFindingsParams,
+) => {
+  return [
+    `/admin/external_agent_identities/drift`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListExternalAgentIdentityDriftFindingsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListExternalAgentIdentityDriftFindingsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListExternalAgentIdentityDriftFindingsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>
+  > = ({ signal }) =>
+    listExternalAgentIdentityDriftFindings(params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListExternalAgentIdentityDriftFindingsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>
+>;
+export type ListExternalAgentIdentityDriftFindingsQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useListExternalAgentIdentityDriftFindings<
+  TData = Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params: undefined | ListExternalAgentIdentityDriftFindingsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>,
+          TError,
+          Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListExternalAgentIdentityDriftFindings<
+  TData = Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListExternalAgentIdentityDriftFindingsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>,
+          TError,
+          Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListExternalAgentIdentityDriftFindings<
+  TData = Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListExternalAgentIdentityDriftFindingsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List open external agent identity drift findings
+ */
+
+export function useListExternalAgentIdentityDriftFindings<
+  TData = Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListExternalAgentIdentityDriftFindingsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExternalAgentIdentityDriftFindings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListExternalAgentIdentityDriftFindingsQueryOptions(
+    params,
     options,
   );
 

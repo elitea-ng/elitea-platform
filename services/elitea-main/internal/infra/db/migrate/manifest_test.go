@@ -818,7 +818,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// execution_agent_sessions (#1118): immutable rows, written only by a
 	// governed process. The material is never stored. No data, no
 	// permission.
-	require.EqualValues(t, 188, Head(shared))
+	//
+	// 191: shared/0191_agent_identity_reconcile.sql, the reconcile loop's
+	// elitea_identity.agent_identity_provider_health (pass lease and outage
+	// state per provider) and external_identity_drift_findings (#1154). No
+	// data, no permission.
+	require.EqualValues(t, 191, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

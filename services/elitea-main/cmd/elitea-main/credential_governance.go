@@ -34,6 +34,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	agentidentitycore "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity/reconcile"
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
 	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
@@ -272,7 +273,17 @@ type agentIdentityComposition struct {
 	// Broker opens run-scoped agent sessions for admission and turns them
 	// into credentials for the credential broker (#1151). Its only callers.
 	Broker *agentidentitycore.Broker
+	// Reconciler compares external agent identities with their providers
+	// (#1154). Nil with the flag off, and with no provider configured.
+	Reconciler *reconcile.Reconciler
 }
+
+// agentIdentityEpochNotifier is THE seam where the composition passes the
+// reconcile loop the credential broker's epoch-change notifier (#1121): it
+// is told kind=external_identity, the record id and its new epoch after
+// every drift commit. Nil until #1121 lands; correctness does not depend on
+// it, because every enforcement point re-reads the epoch from the record.
+func agentIdentityEpochNotifier() reconcile.Notifier { return nil }
 
 // agentIdentityProviders is the adapter set the registry is built from. No
 // adapter exists yet (Entra #1152, Elitea-native #1153, others #1155), so
@@ -320,7 +331,8 @@ func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevi
 	if err != nil {
 		return agentIdentityComposition{}, fmt.Errorf("construct external agent identity service: %w", err)
 	}
-	externalAdmin, err := v2agentidentity.NewExternal(external)
+	reconcileStore := repos.NewAgentIdentityReconcile(pool, audit)
+	externalAdmin, err := v2agentidentity.NewExternal(external, reconcileStore)
 	if err != nil {
 		return agentIdentityComposition{}, err
 	}
@@ -332,11 +344,26 @@ func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevi
 		Bindings:   bindings,
 		Identities: identities,
 		Sessions:   repos.NewAgentSessions(pool, audit),
+		// A provider the reconcile loop reports past the outage threshold
+		// opens no new session on any replica (#1154).
+		ProviderHealth: reconcileStore,
 	})
 	if err != nil {
 		return agentIdentityComposition{}, fmt.Errorf("construct agent identity broker: %w", err)
 	}
-	return agentIdentityComposition{Admin: admin, ExternalAdmin: externalAdmin, Broker: broker}, nil
+	out := agentIdentityComposition{Admin: admin, ExternalAdmin: externalAdmin, Broker: broker}
+	// The reconcile loop runs only for configured providers: with an empty
+	// registry it is not built.
+	if len(registry.Names()) > 0 {
+		out.Reconciler, err = reconcile.New(reconcile.Config{
+			Registry: registry, Store: reconcileStore, Interval: revision.Document.ReconcileInterval(),
+			OutageThreshold: revision.Document.ReconcileOutageFailures(), Notifier: agentIdentityEpochNotifier(),
+		})
+		if err != nil {
+			return agentIdentityComposition{}, fmt.Errorf("construct agent identity reconcile loop: %w", err)
+		}
+	}
+	return out, nil
 }
 
 // credentialOperationCatalog is THE seam where the composition passes the

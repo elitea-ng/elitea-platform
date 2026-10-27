@@ -54,6 +54,44 @@ type PolicyDocument struct {
 	// AuditBacklogAlertThreshold is the unexported security audit row count
 	// that raises the backlog alert (gate D7). Rows are never dropped.
 	AuditBacklogAlertThreshold int64 `json:"audit_backlog_alert_threshold"`
+	// ReconcileIntervalSeconds is how often the agent identity reconcile
+	// loop compares each provider with Elitea's records (#1154, gate D5).
+	// Optional: 0 or absent is DefaultReconcileInterval. omitempty keeps the
+	// canonical bytes, and so the digest, of a revision written before the
+	// field existed.
+	ReconcileIntervalSeconds int64 `json:"reconcile_interval_seconds,omitempty"`
+	// ReconcileOutageThreshold is the number of consecutive failed reconcile
+	// passes of one provider after which admission denies new agent sessions
+	// for that provider until a pass succeeds (#1154, gate D5). Optional: 0
+	// or absent is DefaultReconcileOutageThreshold.
+	ReconcileOutageThreshold int64 `json:"reconcile_outage_threshold,omitempty"`
+}
+
+// Reconcile defaults and bounds (#1154).
+const (
+	DefaultReconcileInterval        = 10 * time.Minute
+	DefaultReconcileOutageThreshold = 3
+	minReconcileInterval            = time.Minute
+	maxReconcileInterval            = 24 * time.Hour
+	maxReconcileOutageThreshold     = 100
+)
+
+// ReconcileInterval is ReconcileIntervalSeconds as a duration, or the
+// default when it is unset.
+func (d PolicyDocument) ReconcileInterval() time.Duration {
+	if d.ReconcileIntervalSeconds <= 0 {
+		return DefaultReconcileInterval
+	}
+	return time.Duration(d.ReconcileIntervalSeconds) * time.Second
+}
+
+// ReconcileOutageFailures is ReconcileOutageThreshold, or the default when
+// it is unset.
+func (d PolicyDocument) ReconcileOutageFailures() int {
+	if d.ReconcileOutageThreshold <= 0 {
+		return DefaultReconcileOutageThreshold
+	}
+	return int(d.ReconcileOutageThreshold)
 }
 
 // MaxMandateTTL is MaxMandateTTLSeconds as a duration.
@@ -97,6 +135,14 @@ func (d PolicyDocument) Validate() error {
 	}
 	if d.AuditBacklogAlertThreshold <= 0 {
 		return fmt.Errorf("%w: audit_backlog_alert_threshold must be positive", ErrInvalidPolicy)
+	}
+	if d.ReconcileIntervalSeconds < 0 || (d.ReconcileIntervalSeconds > 0 &&
+		(d.ReconcileInterval() < minReconcileInterval || d.ReconcileInterval() > maxReconcileInterval)) {
+		return fmt.Errorf("%w: reconcile_interval_seconds must be absent or in %d..%d", ErrInvalidPolicy,
+			int64(minReconcileInterval/time.Second), int64(maxReconcileInterval/time.Second))
+	}
+	if d.ReconcileOutageThreshold < 0 || d.ReconcileOutageThreshold > maxReconcileOutageThreshold {
+		return fmt.Errorf("%w: reconcile_outage_threshold must be absent or in 1..%d", ErrInvalidPolicy, maxReconcileOutageThreshold)
 	}
 	return nil
 }

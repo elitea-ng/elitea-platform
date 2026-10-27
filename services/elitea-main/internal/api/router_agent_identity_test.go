@@ -107,6 +107,7 @@ func TestAgentIdentityRoutesAreMountedAndGatedWhenTheDependencyIsSet(t *testing.
 var externalAgentIdentityRoutes = []string{
 	"GET /api/v2/admin/external_agent_identities",
 	"POST /api/v2/admin/external_agent_identities",
+	"GET /api/v2/admin/external_agent_identities/drift",
 	"POST /api/v2/admin/external_agent_identities/{id}:provision",
 	"POST /api/v2/admin/external_agent_identities/{id}:activate",
 	"POST /api/v2/admin/external_agent_identities/{id}:suspend",
@@ -157,6 +158,7 @@ func TestExternalAgentIdentityRoutesFollowTheDependency(t *testing.T) {
 	for _, probe := range []struct{ method, path string }{
 		{http.MethodGet, "/api/v2/admin/external_agent_identities"},
 		{http.MethodPost, "/api/v2/admin/external_agent_identities"},
+		{http.MethodGet, "/api/v2/admin/external_agent_identities/drift"},
 		{http.MethodPost, "/api/v2/admin/external_agent_identities/0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f11:activate"},
 		{http.MethodPost, "/api/v2/admin/external_agent_identities/0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f11:retire"},
 	} {

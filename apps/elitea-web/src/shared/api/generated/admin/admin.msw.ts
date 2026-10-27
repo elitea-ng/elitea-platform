@@ -57,6 +57,7 @@ import type {
   CredentialUseGrant,
   CredentialUseGrantListResponse,
   ExternalAgentIdentity,
+  ExternalAgentIdentityDriftResponse,
   ExternalAgentIdentityListResponse,
   GlobalUserInviteResult,
   ListBrandingPackageVersions200,
@@ -870,6 +871,47 @@ export const getCreateExternalAgentIdentityResponseMock = (
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
 });
+
+export const getListExternalAgentIdentityDriftFindingsResponseMock =
+  (): ExternalAgentIdentityDriftResponse => ({
+    rows: [
+      {
+        id: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f01",
+        kind: "disabled",
+        provider: "entra",
+        provider_tenant: "72f988bf-86f1-41af-91ab-2d7cd011db47",
+        external_id: "3f1c9a52-6b8e-4d2a-9c71-5e0b8f4a2d16",
+        external_agent_identity_id: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0e01",
+        tenant_project_id: 7,
+        application_id: 11,
+        revocation_epoch: 4,
+        detected_at: "2026-10-27T09:00:00Z",
+        last_seen_at: "2026-10-27T09:10:00Z",
+      },
+      {
+        id: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f02",
+        kind: "orphan",
+        provider: "entra",
+        provider_tenant: "72f988bf-86f1-41af-91ab-2d7cd011db47",
+        external_id: "8d2e4b71-0c9f-4a3e-b5d6-1f7a9c3e5b20",
+        external_agent_identity_id: null,
+        tenant_project_id: null,
+        application_id: null,
+        revocation_epoch: 0,
+        detected_at: "2026-10-27T09:00:00Z",
+        last_seen_at: "2026-10-27T09:10:00Z",
+      },
+    ],
+    providers: [
+      {
+        provider: "entra",
+        consecutive_failures: 0,
+        admission_denied: false,
+        last_pass_at: "2026-10-27T09:10:00Z",
+        last_success_at: "2026-10-27T09:10:00Z",
+      },
+    ],
+  });
 
 export const getProvisionExternalAgentIdentityResponseMock = (
   overrideResponse: Partial<Extract<ExternalAgentIdentity, object>> = {},
@@ -2917,6 +2959,34 @@ export const getCreateExternalAgentIdentityMockHandler = (
   );
 };
 
+export const getListExternalAgentIdentityDriftFindingsMockHandler = (
+  overrideResponse?:
+    | ExternalAgentIdentityDriftResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        | Promise<ExternalAgentIdentityDriftResponse>
+        | ExternalAgentIdentityDriftResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/external_agent_identities/drift",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListExternalAgentIdentityDriftFindingsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getProvisionExternalAgentIdentityMockHandler = (
   overrideResponse?:
     | ExternalAgentIdentity
@@ -3767,6 +3837,7 @@ export const getAdminMock = () => [
   getRevokeMandateMockHandler(),
   getListExternalAgentIdentitiesMockHandler(),
   getCreateExternalAgentIdentityMockHandler(),
+  getListExternalAgentIdentityDriftFindingsMockHandler(),
   getProvisionExternalAgentIdentityMockHandler(),
   getActivateExternalAgentIdentityMockHandler(),
   getSuspendExternalAgentIdentityMockHandler(),

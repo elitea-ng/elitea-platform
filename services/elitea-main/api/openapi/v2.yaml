@@ -6586,6 +6586,66 @@ components:
           items:
             $ref: '#/components/schemas/ExternalAgentIdentity'
 
+    ExternalAgentIdentityDriftFinding:
+      type: object
+      description: >
+        One open finding of the agent identity reconcile loop: an out-of-band
+        identity provider change to a record (kind disabled, missing,
+        replaced or changed) or an Elitea-tagged provider object with no
+        record (kind orphan). Ids and epochs only.
+      required: [id, kind, provider, provider_tenant, external_id, external_agent_identity_id,
+        tenant_project_id, application_id, revocation_epoch, detected_at, last_seen_at]
+      properties:
+        id: { type: string, format: uuid }
+        kind:
+          type: string
+          description: One of disabled, missing, replaced, changed, orphan.
+        provider: { type: string }
+        provider_tenant: { type: string }
+        external_id:
+          type: string
+          description: The provider object's immutable id.
+        external_agent_identity_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: The record the finding suspended or replaced; null for an orphan.
+        tenant_project_id: { type: integer, format: int64, nullable: true }
+        application_id: { type: integer, format: int64, nullable: true }
+        revocation_epoch:
+          type: integer
+          format: int64
+          description: The record's epoch the drift transition wrote; 0 for an orphan.
+        detected_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+
+    AgentIdentityProviderReconcileHealth:
+      type: object
+      description: >
+        The reconcile health of one identity provider. While admission_denied
+        is true (the policy's outage threshold of consecutive failed passes
+        was reached), new agent sessions for the provider are denied.
+      required: [provider, consecutive_failures, admission_denied, last_pass_at, last_success_at]
+      properties:
+        provider: { type: string }
+        consecutive_failures: { type: integer, minimum: 0 }
+        admission_denied: { type: boolean }
+        last_pass_at: { type: string, format: date-time, nullable: true }
+        last_success_at: { type: string, format: date-time, nullable: true }
+
+    ExternalAgentIdentityDriftResponse:
+      type: object
+      required: [rows, providers]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExternalAgentIdentityDriftFinding'
+        providers:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentIdentityProviderReconcileHealth'
+
     OkResponse:
       type: object
       required: [ok]
@@ -17303,6 +17363,80 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/external_agent_identities/drift:
+    get:
+      operationId: listExternalAgentIdentityDriftFindings
+      summary: List open external agent identity drift findings
+      description: >
+        The open findings of the agent identity reconcile loop (issue 1154),
+        newest first, and the reconcile health of every provider. A pass
+        suspends a record whose provider object was disabled, deleted or
+        changed outside Elitea, marks one whose object was recreated as
+        replaced (terminal), and records Elitea-tagged objects with no record
+        as orphans without changing anything. A later pass resolves a finding
+        it no longer sees. Gated on `models.agent_identity.external.manage`
+        in administration mode. Mounted only when the enterprise credential
+        governance flag is on; otherwise the path answers like any unknown
+        route.
+      tags: [admin]
+      parameters:
+        - name: provider
+          in: query
+          required: false
+          description: Only this provider's findings and health.
+          schema: { type: string, maxLength: 32 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: One page of open drift findings and the provider health
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAgentIdentityDriftResponse' }
+              example:
+                rows:
+                  - id: 0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f01
+                    kind: disabled
+                    provider: entra
+                    provider_tenant: 72f988bf-86f1-41af-91ab-2d7cd011db47
+                    external_id: 3f1c9a52-6b8e-4d2a-9c71-5e0b8f4a2d16
+                    external_agent_identity_id: 0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0e01
+                    tenant_project_id: 7
+                    application_id: 11
+                    revocation_epoch: 4
+                    detected_at: '2026-10-27T09:00:00Z'
+                    last_seen_at: '2026-10-27T09:10:00Z'
+                  - id: 0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f02
+                    kind: orphan
+                    provider: entra
+                    provider_tenant: 72f988bf-86f1-41af-91ab-2d7cd011db47
+                    external_id: 8d2e4b71-0c9f-4a3e-b5d6-1f7a9c3e5b20
+                    external_agent_identity_id: null
+                    tenant_project_id: null
+                    application_id: null
+                    revocation_epoch: 0
+                    detected_at: '2026-10-27T09:00:00Z'
+                    last_seen_at: '2026-10-27T09:10:00Z'
+                providers:
+                  - provider: entra
+                    consecutive_failures: 0
+                    admission_denied: false
+                    last_pass_at: '2026-10-27T09:10:00Z'
+                    last_success_at: '2026-10-27T09:10:00Z'
+        '400':
+          description: A malformed filter
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
 
   /admin/external_agent_identities/{id}:provision:
     parameters:
