@@ -1,0 +1,9 @@
+# actionlint configuration (no-binaries.yml runs actionlint over every workflow).
+paths:
+  .github/workflows/ci-go.yml:
+    ignore:
+      # Service containers take `command` and `entrypoint` (GitHub docs,
+      # "Use Docker service containers"). actionlint learned both in
+      # rhysd/actionlint#645, merged after the pinned 1.7.12, the latest
+      # release. Delete this entry when the pin moves to a release with it.
+      - 'unexpected key "(command|entrypoint)" for "services" section'
