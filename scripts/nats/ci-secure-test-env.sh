@@ -11,8 +11,7 @@
 #    SHA-256), because the tests create the JetStream assets with the real
 #    bootstrap.sh exactly as the hook Job does.
 # 3. Copies nats-server out of the chart's pinned NATS image when ELITEA_TEST_NATS_SERVER_BIN
-#    is not already set. In CI it never is: this copy also serves the
-#    plaintext restart test (TestNATSStoreFollowsTheBucketAcrossAServerRestart).
+#    is not already set (ci-go.yml copies it out of its nats service container).
 # 4. Sets ELITEA_REQUIRE_NATS_SECURE_TEST=1, so a missing piece FAILS the
 #    tests instead of skipping them: a permission test that skipped would
 #    read exactly like one that passed.
