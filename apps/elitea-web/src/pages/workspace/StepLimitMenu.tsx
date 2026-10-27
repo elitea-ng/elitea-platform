@@ -5,7 +5,7 @@
  * the menu into the choices: the default, a few presets, unlimited and a
  * number of your own. `/steps` reads and sets the same setting; both stay in
  * step (`onStepLimitChange`). At the limit the host asks whether to continue.
- * Loaded lazily by `ThreadComposer`, for a local thread only.
+ * Shown by `ThreadComposer` for a local thread only, its value read ahead (`prefetchStepLimit`).
  */
 import { useEffect, useState, type SyntheticEvent } from 'react';
 
@@ -31,19 +31,38 @@ function stepsLabel(limit: StepLimit | null): string {
   return t('workspace.stepsChip.label', '{{steps}} steps', { steps: String(limit ?? DEFAULT_STEP_LIMIT) });
 }
 
+/**
+ * The limits already read, by workspace: the ⋯ menu opens with its row at once (read on open, the menu
+ * would open empty and grow, re-placing itself frame by frame). `prefetchStepLimit` fills it when the
+ * thread's composer mounts.
+ */
+const known = new Map<string, StepLimit | null>();
+
+/** Reads the workspace's limit into the cache ahead of the menu (a failure leaves the menu to read it). */
+export function prefetchStepLimit(workspaceId: string): void {
+  if (known.has(workspaceId)) return;
+  readStepLimit(workspaceId).then(
+    (read) => known.set(workspaceId, read),
+    () => undefined,
+  );
+}
+
 /** The workspace's limit, kept current by `/steps` and the menu; `undefined` until the host answered (or outside it). */
 function useStepLimit(workspaceId: string): StepLimit | null | undefined {
-  const [limit, setLimit] = useState<StepLimit | null | undefined>(undefined);
+  const [limit, setLimit] = useState<StepLimit | null | undefined>(() => known.get(workspaceId));
   useEffect(() => {
     let live = true;
     readStepLimit(workspaceId).then(
       (read) => {
+        known.set(workspaceId, read);
         if (live) setLimit(read);
       },
       () => undefined,
     );
     const stop = onStepLimitChange((changed, stored) => {
-      if (changed === workspaceId) setLimit(stored);
+      if (changed !== workspaceId) return;
+      known.set(workspaceId, stored);
+      setLimit(stored);
     });
     return () => {
       live = false;

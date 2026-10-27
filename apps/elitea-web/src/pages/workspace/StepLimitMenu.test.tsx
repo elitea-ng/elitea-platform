@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -7,11 +7,11 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { ComposerMoreMenu } from '@/shared/ui/native-composer';
 
-import StepLimitMenu from './StepLimitMenu';
+import StepLimitMenu, { prefetchStepLimit } from './StepLimitMenu';
 
 /** The step limit as the composer offers it: in its ⋯ menu. */
-function renderInMore(onError = vi.fn()) {
-  return renderWithTheme(<ComposerMoreMenu>{(close) => <StepLimitMenu workspaceId="w1" onError={onError} close={close} />}</ComposerMoreMenu>);
+function renderInMore(onError = vi.fn(), workspaceId = 'w1') {
+  return renderWithTheme(<ComposerMoreMenu>{(close) => <StepLimitMenu workspaceId={workspaceId} onError={onError} close={close} />}</ComposerMoreMenu>);
 }
 
 /** The host's agent settings, as `workspace_agent_settings_get` / `_set` keep them. */
@@ -71,8 +71,19 @@ describe('StepLimitMenu', () => {
     await waitFor(() => expect(screen.getByTestId('steps-chip')).toHaveTextContent('1024 steps'));
   });
 
+  it('opens whole once the limit was read ahead: the row is there on the first frame', async () => {
+    fakeHost({ step_limit: 500 });
+    await act(async () => {
+      prefetchStepLimit('w-ahead');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    renderInMore(vi.fn(), 'w-ahead');
+    fireEvent.click(screen.getByTestId('composer-more'));
+    expect(screen.getByTestId('steps-chip')).toHaveTextContent('500 steps');
+  });
+
   it('offers no step limit outside the desktop host', async () => {
-    renderInMore();
+    renderInMore(vi.fn(), 'w-outside');
     await userEvent.click(screen.getByTestId('composer-more'));
     await screen.findByRole('menu');
     expect(screen.queryByTestId('steps-chip')).toBeNull();

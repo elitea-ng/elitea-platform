@@ -36,7 +36,7 @@
  * as the next turn. When that next turn does not start, the texts go back into the composer with "Send again"
  * (`unsent`). Esc Esc stops a running turn, as the composer's Stop does (`useDoubleEscape`).
  */
-import { lazy, Suspense, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
@@ -63,11 +63,11 @@ import type { SessionCommands } from './useSessionCommands';
 import { useComposerModes } from './useComposerModes';
 import { useSteering, type Steering } from './useSteering';
 import { useTurnModel, type TurnModelControl } from './useTurnModel';
+import StepLimitMenu, { prefetchStepLimit } from './StepLimitMenu';
 import { skillPicks, WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
 
 const UsageChip = lazy(() => import('./UsageChip'));
 const LspChip = lazy(() => import('./LspChip'));
-const StepLimitMenu = lazy(() => import('./StepLimitMenu'));
 
 export interface ThreadComposerProps {
   ipc: WorkspaceIpc;
@@ -181,14 +181,10 @@ function ComposerMeters({ usages, projectId, workspaceId, local, contextPercent 
   );
 }
 
-/** The ⋯ menu's rows for a local thread: the step limit (lazy); a choice it cannot store is said above the composer. */
+/** The ⋯ menu's rows for a local thread: the step limit (read ahead, so the menu opens whole); a choice it cannot store is said above the composer. */
 function moreRows(workspaceId: string, local: boolean, onStepsError: (message: string) => void): WorkspaceComposerProps['more'] {
   if (!local) return undefined;
-  return (close) => (
-    <Suspense fallback={null}>
-      <StepLimitMenu workspaceId={workspaceId} onError={onStepsError} close={close} />
-    </Suspense>
-  );
+  return (close) => <StepLimitMenu workspaceId={workspaceId} onError={onStepsError} close={close} />;
 }
 
 /**
@@ -213,6 +209,9 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   const navigate = useNavigate();
   const { commands } = session;
   const cloudMode = handoff.status?.executor === 'cloud';
+  useEffect(() => {
+    if (!cloudMode) prefetchStepLimit(workspaceId);
+  }, [cloudMode, workspaceId]);
   const composerPipeline = useComposerPipeline(projectId, session.raw, turn, cloudMode);
   const { pipeline, run: runInCloud, remember, refusedPrompt, turnError } = composerPipeline;
   const model = useTurnModel(workspaceId, projectId, session.raw, turn, session.history);
