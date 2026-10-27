@@ -34,6 +34,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	agentidentitycore "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity/eliteanative"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity/reconcile"
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
 	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
@@ -314,16 +315,40 @@ func securityInvalidationsAtBoot(admission profile.Admission, logger *slog.Logge
 	return hub, nil
 }
 
-// agentIdentityProviders is the adapter set the registry is built from. No
-// adapter exists yet (Entra #1152, Elitea-native #1153, others #1155), so
-// the registry is empty: a governed session for a binding denies with
-// ReasonProviderNotConfigured, and provisioning answers 503.
-func agentIdentityProviders() []agentidentitycore.Provider { return nil }
+// agentIdentityProviderSources are the configured adapters: the Entra
+// Agent ID provider (#1152), built once the session store exists, and the
+// Elitea-native assertion issuer (#1153). Either may be absent.
+type agentIdentityProviderSources struct {
+	Native *eliteanative.Provider
+	Entra  func(sessions *repos.AgentSessions) (agentidentitycore.Provider, error)
+}
+
+// agentIdentityProviders is the adapter set the registry is built from. An
+// unconfigured adapter is left out, so with none the registry is empty: a
+// governed session for a binding denies with ReasonProviderNotConfigured,
+// and provisioning answers 503.
+func agentIdentityProviders(sources agentIdentityProviderSources, sessions *repos.AgentSessions) ([]agentidentitycore.Provider, error) {
+	var out []agentidentitycore.Provider
+	if sources.Entra != nil {
+		entra, err := sources.Entra(sessions)
+		if err != nil {
+			return nil, err
+		}
+		if entra != nil {
+			out = append(out, entra)
+		}
+	}
+	// A nil *eliteanative.Provider in the interface would not compare nil.
+	if sources.Native != nil {
+		out = append(out, sources.Native)
+	}
+	return out, nil
+}
 
 // agentIdentityAdmin builds the agent identity admin APIs and the session
 // broker. With the flag off it builds nothing, and the router then mounts
 // none of the routes.
-func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevision, pool *pgxpool.Pool, invalidations *epoch.Hub) (agentIdentityComposition, error) {
+func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevision, pool *pgxpool.Pool, invalidations *epoch.Hub, sources agentIdentityProviderSources) (agentIdentityComposition, error) {
 	if !admission.Governed() {
 		return agentIdentityComposition{}, nil
 	}
@@ -357,7 +382,12 @@ func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevi
 	if err != nil {
 		return agentIdentityComposition{}, err
 	}
-	registry, err := agentidentitycore.NewRegistry(agentIdentityProviders()...)
+	sessions := repos.NewAgentSessions(pool, audit)
+	providers, err := agentIdentityProviders(sources, sessions)
+	if err != nil {
+		return agentIdentityComposition{}, err
+	}
+	registry, err := agentidentitycore.NewRegistry(providers...)
 	if err != nil {
 		return agentIdentityComposition{}, fmt.Errorf("construct agent identity provider registry: %w", err)
 	}
@@ -379,7 +409,7 @@ func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevi
 		Policy:     agentidentitycore.DenyAssertedUser{ModePolicy: revision.Document},
 		Bindings:   bindings,
 		Identities: identities,
-		Sessions:   repos.NewAgentSessions(pool, audit),
+		Sessions:   sessions,
 		// A provider the reconcile loop reports past the outage threshold
 		// opens no new session on any replica (#1154).
 		ProviderHealth: reconcileStore,
@@ -674,9 +704,10 @@ func entraGovernanceAtBoot(
 			"provider", provider.Key)
 	}
 	if blueprint := document.EntraAgentBlueprintID; blueprint != "" {
-		// The agent client assertion source is the Entra agent identity
-		// adapter (#1152). Until it exists every Agent OBO exchange is
-		// denied with obo.ErrAgentAssertionUnavailable.
+		// No agent client assertion source: this exchanger serves the
+		// credential broker, which names no agent identity, so it denies
+		// with obo.ErrAgentAssertionUnavailable. Governed Agent OBO runs
+		// through the Entra Agent ID provider (#1152), which holds T1.
 		governed.AgentOBO, err = obo.NewAgentOBO(obo.AgentConfig{
 			Authority:      policy.Authority(),
 			BlueprintAppID: blueprint,

@@ -4,6 +4,28 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## P5
+
+* **elitea-main: Entra Agent ID provider (#1152, off by default).** Nobody
+  has to act while `ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED` stays
+  `false`, or while no `ELITEA_ENTRA_AGENT_ID_*` value is set. With the flag
+  on, a configured block whose policy revision allows `dedicated_agent`
+  joins the agent identity registry and the reconcile loop. The blueprint
+  authenticates only with a federated token file. Boot refuses
+  `ELITEA_ENTRA_AGENT_ID_CLIENT_SECRET`, `ELITEA_ENTRA_AGENT_ID_CERTIFICATE_FILE`
+  and the `common` or `organizations` tenant. No migration is added.
+* **elitea-main: Elitea-native agent assertions (#1153, off by default).**
+  Nobody has to act while the flag stays `false` or
+  `ELITEA_AGENT_ASSERTION_CONFIG` is unset. With both set and a revision that
+  allows `elitea_native`, Main signs per-run ES256 or RS256 assertions for
+  the configured relying parties. It serves the public keys at
+  `GET /.well-known/elitea-agent-jwks.json` and the issuer metadata at
+  `GET /agent-issuer/.well-known/openid-configuration`; without them both
+  answer 404. Boot refuses a key that reuses the command-signing,
+  code-owner recovery or egress-token key (by key id, file or material).
+* With either provider configured, a governed session for a binding of that
+  provider is no longer denied `provider_not_configured`.
+
 ## P4
 
 * **elitea-main: agent identity reconciliation (#1154, off by default).**

@@ -220,3 +220,25 @@ func (b entraAgentIDBlock) config() (agentid.Config, error) {
 	}
 	return cfg, nil
 }
+
+// entraAgentIdentitySource defers building the Entra Agent ID provider
+// until the agent identity composition has its session store. The
+// delegations come from the Entra custody; without it every Agent OBO
+// denies. The provider keeps its own T1 source, so the returned assertion
+// source is not wired elsewhere.
+func entraAgentIdentitySource(
+	admission profile.Admission,
+	revision profile.PolicyRevision,
+	lookup func(string) (string, bool),
+	entra *entraGovernance,
+	logger *slog.Logger,
+) func(*repos.AgentSessions) (agentidentitycore.Provider, error) {
+	var delegations *delegationstore.Store
+	if entra != nil {
+		delegations = entra.Delegations
+	}
+	return func(sessions *repos.AgentSessions) (agentidentitycore.Provider, error) {
+		provider, _, err := entraAgentIdentityAtBoot(admission, revision, lookup, sessions, delegations, logger)
+		return provider, err
+	}
+}
