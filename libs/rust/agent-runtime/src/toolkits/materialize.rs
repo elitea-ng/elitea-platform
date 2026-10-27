@@ -58,6 +58,8 @@ use super::families::{
 #[cfg(feature = "toolkit-office")]
 use super::families::{docx, pptx, xlsx};
 use super::family_error::family_error;
+use super::governed::client::GovernedToolkitSpec;
+use super::governed::{GovernedBuild, GovernedError, GovernedOperationClient, is_credential_free};
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::{AdmittedToolSnapshot, FrozenToolKind, FrozenToolReference};
 
@@ -100,6 +102,13 @@ impl ToolsetMaterializationError {
     #[must_use]
     pub const fn code(self) -> ToolsetMaterializationErrorCode {
         self.code
+    }
+
+    /// Whether a governed run refused this toolkit because no credential
+    /// adapter governs its type (#1120).
+    #[must_use]
+    pub const fn is_toolkit_not_governable(self) -> bool {
+        matches!(self.refusal, Some(UnsupportedSetting::ToolkitNotGovernable))
     }
 
     /// The refused setting, as a sentence that carries no configuration
@@ -185,6 +194,9 @@ pub enum LeftOutReason {
     ToolNotServed,
     /// A tool of the stored selection is blocked by the deployment's policy.
     ToolBlockedByPolicy,
+    /// A governed run refused the toolkit: no credential adapter governs its
+    /// type (#1120).
+    ToolkitNotGovernable,
 }
 
 impl LeftOutReason {
@@ -197,6 +209,7 @@ impl LeftOutReason {
             Self::UnsupportedSetting => "unsupported_setting",
             Self::ToolNotServed => "unsupported_tool_selection",
             Self::ToolBlockedByPolicy => "tool_blocked_by_policy",
+            Self::ToolkitNotGovernable => "toolkit_not_governable",
         }
     }
 }
@@ -227,6 +240,10 @@ impl LeftOutToolkit {
                 tool_name = Some(bounded_label(name));
                 (cause, reason)
             }
+            ToolkitSkip::Setting(UnsupportedSetting::ToolkitNotGovernable) => (
+                LeftOutReason::ToolkitNotGovernable,
+                UnsupportedSetting::ToolkitNotGovernable.reason(),
+            ),
             ToolkitSkip::Setting(setting) => (LeftOutReason::UnsupportedSetting, setting.reason()),
             ToolkitSkip::UnsupportedFamily {
                 index_tools_kept: false,
@@ -263,6 +280,19 @@ impl LeftOutToolkit {
             tool_name: None,
             cause,
             reason,
+        }
+    }
+
+    /// A toolkit a governed run refused because no credential adapter
+    /// governs its type (an MCP connection, an unadapted family).
+    #[must_use]
+    pub fn not_governable(toolkit: &str, kind: &str) -> Self {
+        Self {
+            toolkit_name: bounded_label(toolkit),
+            toolkit_type: bounded_label(kind),
+            tool_name: None,
+            cause: LeftOutReason::ToolkitNotGovernable,
+            reason: UnsupportedSetting::ToolkitNotGovernable.reason(),
         }
     }
 
@@ -506,6 +536,30 @@ pub async fn materialize_configured_toolsets_with_authorities(
     artifacts: Option<&ArtifactToolAuthority>,
     index_tools: IndexToolSupport<'_>,
 ) -> Result<(Vec<Arc<dyn Toolset>>, DelegatedAuthorizationCatalog), ToolsetMaterializationError> {
+    materialize_configured_toolsets_with_authorities_governed(
+        snapshot,
+        policy,
+        delegated_tokens,
+        artifacts,
+        index_tools,
+        None,
+    )
+    .await
+}
+
+/// [`materialize_configured_toolsets_with_authorities`] for a run that may
+/// be governed (#1120). With `governed` set, every toolkit that holds a
+/// provider credential is served through its adapter (no claim-time
+/// credential reaches it) or refused as not governable; `None` is the legacy
+/// path, unchanged.
+pub async fn materialize_configured_toolsets_with_authorities_governed(
+    snapshot: &AdmittedToolSnapshot<'_>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    delegated_tokens: &serde_json::Map<String, serde_json::Value>,
+    artifacts: Option<&ArtifactToolAuthority>,
+    index_tools: IndexToolSupport<'_>,
+    governed: Option<&Arc<GovernedOperationClient>>,
+) -> Result<(Vec<Arc<dyn Toolset>>, DelegatedAuthorizationCatalog), ToolsetMaterializationError> {
     let mut refusal = None;
     let materialized = materialize_all(
         snapshot,
@@ -513,6 +567,7 @@ pub async fn materialize_configured_toolsets_with_authorities(
         delegated_tokens,
         artifacts,
         index_tools,
+        governed,
         &mut |_, skip| {
             // An unported family stays a quiet skip here: these callers have
             // no run notice, and refusing the profile would stop the agent.
@@ -539,6 +594,28 @@ pub async fn materialize_configured_toolsets_reporting_refusals(
     artifacts: Option<&ArtifactToolAuthority>,
     index_tools: IndexToolSupport<'_>,
 ) -> Result<ConfiguredToolsets, ToolsetMaterializationError> {
+    materialize_configured_toolsets_reporting_refusals_governed(
+        snapshot,
+        policy,
+        delegated_tokens,
+        artifacts,
+        index_tools,
+        None,
+    )
+    .await
+}
+
+/// [`materialize_configured_toolsets_reporting_refusals`] for a run that may
+/// be governed (#1120); a toolkit no adapter governs is REPORTED as
+/// `toolkit_not_governable`. `None` is the legacy path, unchanged.
+pub async fn materialize_configured_toolsets_reporting_refusals_governed(
+    snapshot: &AdmittedToolSnapshot<'_>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    delegated_tokens: &serde_json::Map<String, serde_json::Value>,
+    artifacts: Option<&ArtifactToolAuthority>,
+    index_tools: IndexToolSupport<'_>,
+    governed: Option<&Arc<GovernedOperationClient>>,
+) -> Result<ConfiguredToolsets, ToolsetMaterializationError> {
     let mut refused = Vec::new();
     let mut materialized = materialize_all(
         snapshot,
@@ -546,6 +623,7 @@ pub async fn materialize_configured_toolsets_reporting_refusals(
         delegated_tokens,
         artifacts,
         index_tools,
+        governed,
         &mut |reference, skip| refused.push(LeftOutToolkit::new(reference, skip)),
     )
     .await?;
@@ -559,6 +637,7 @@ async fn materialize_all(
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: Option<&ArtifactToolAuthority>,
     index_tools: IndexToolSupport<'_>,
+    governed: Option<&Arc<GovernedOperationClient>>,
     on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, ToolkitSkip<'_>) + Send),
 ) -> Result<ConfiguredToolsets, ToolsetMaterializationError> {
     if snapshot.len() > MAX_AGENT_TOOLSETS {
@@ -605,7 +684,7 @@ async fn materialize_all(
             report_selection = selection_index_only;
             None
         } else {
-            match materialize(reference, policy, delegated_tokens, artifacts).await {
+            match materialize(reference, policy, delegated_tokens, artifacts, governed).await {
                 Ok((toolset, authorization)) => {
                     delegated_authorization
                         .merge(authorization)
@@ -1166,6 +1245,7 @@ async fn materialize(
     policy: &Arc<ToolAdmissionPolicy>,
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: Option<&ArtifactToolAuthority>,
+    governed: Option<&Arc<GovernedOperationClient>>,
 ) -> Result<(Arc<dyn Toolset>, DelegatedAuthorizationCatalog), ToolsetMaterializationError> {
     if reference.kind() != FrozenToolKind::Configured {
         return Err(unsupported_toolkit());
@@ -1179,6 +1259,31 @@ async fn materialize(
     let attachments = artifacts
         .and_then(ArtifactToolAuthority::office)
         .map(|host| AttachmentHost::new(Arc::clone(host)));
+    // A governed run (#1120): no claim-time credential reaches a family.
+    // A credentialed toolkit is served through its adapter, per invocation,
+    // or refused as not governable.
+    if let Some(governed) = governed
+        && !is_credential_free(reference.tool_type())
+    {
+        let office = artifacts.and_then(ArtifactToolAuthority::office);
+        let spec = GovernedToolkitSpec::new(
+            name,
+            reference.tool_type(),
+            reference.tool_id(),
+            settings,
+            policy,
+        )
+        .with_hosts(attachments.as_ref(), office);
+        return governed
+            .toolset(&spec)
+            .map(|toolset| (toolset, DelegatedAuthorizationCatalog::default()))
+            .map_err(|error| match error {
+                GovernedError::ToolkitNotGovernable => {
+                    ToolsetMaterializationError::refused(UnsupportedSetting::ToolkitNotGovernable)
+                }
+                _ => invalid_configuration(),
+            });
+    }
     if reference.tool_type() == "artifact" {
         let toolset = materialize_artifact(name, settings, policy, artifacts)?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
@@ -1693,6 +1798,54 @@ fn materialize_test_management(
         _ => return Err(unsupported_toolkit()),
     };
     Ok(Arc::new(toolset))
+}
+
+/// The family toolset a governed adapter builds for ONE invocation (#1120):
+/// the same constructors the claim-time path uses, over settings whose only
+/// credential is the envelope's. A failure is reported without detail: the
+/// settings carry material.
+pub(crate) fn governed_family_toolset(
+    tool_type: &str,
+    build: &GovernedBuild<'_>,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    delegated_tokens: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Arc<dyn Toolset>, GovernedError> {
+    let name = build.toolkit_name();
+    let policy = build.policy();
+    let attachments = build.attachments();
+    let toolset = match tool_type {
+        "aha" | "confluence" | "jira" => {
+            materialize_ported_saas(tool_type, name, settings, policy, attachments)
+        }
+        "qtest" => materialize_test_management(tool_type, name, settings, policy, attachments),
+        "sharepoint" => {
+            sharepoint::config::SharePointToolkitConfig::parse(name, settings, delegated_tokens)
+                .map_err(|_| invalid_configuration())
+                .and_then(|config| {
+                    if config.requires_authorization() {
+                        return Err(invalid_configuration());
+                    }
+                    sharepoint::tools::build_sharepoint_toolset(
+                        name,
+                        config,
+                        policy,
+                        build.office(),
+                    )
+                    .map_err(|_| invalid_configuration())
+                })
+                .map(|materialized| Arc::new(materialized.toolset) as Arc<dyn Toolset>)
+        }
+        _ => return Err(GovernedError::ToolkitNotGovernable),
+    };
+    toolset.map_err(|error| {
+        if error.code() == ToolsetMaterializationErrorCode::UnsupportedToolkit
+            && error.refusal.is_none()
+        {
+            GovernedError::ToolNotServed
+        } else {
+            GovernedError::InvalidConfiguration
+        }
+    })
 }
 
 const fn invalid_configuration() -> ToolsetMaterializationError {
@@ -2536,6 +2689,7 @@ mod materialize_matrix_tests {
                 &policy,
                 &serde_json::Map::new(),
                 Some(&authority),
+                None,
             )
             .await;
             match result {

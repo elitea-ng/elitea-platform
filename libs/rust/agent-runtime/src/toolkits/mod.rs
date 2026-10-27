@@ -39,6 +39,7 @@
 
 pub(crate) mod delegated_auth;
 pub mod direct_execution;
+pub mod governed;
 // Public only to the worker's composition suites (`test-support`).
 #[cfg(any(test, feature = "test-support"))]
 pub mod families;
@@ -111,6 +112,10 @@ mod gitlab_org_tests;
 mod gitlab_tests;
 #[cfg(test)]
 mod google_places_tests;
+#[cfg(test)]
+mod governed_synthetic_tests;
+#[cfg(test)]
+mod governed_tests;
 #[cfg(test)]
 mod imagegen_tests;
 #[cfg(test)]
@@ -245,8 +250,10 @@ pub use materialize::{
     ToolsetMaterializationError, ToolsetMaterializationErrorCode, bounded_label,
     capped_notice_lines, file_store_tools, left_out_toolkits_notice_text,
     materialize_configured_toolsets_reporting_refusals,
+    materialize_configured_toolsets_reporting_refusals_governed,
     materialize_configured_toolsets_with_artifact_authority,
     materialize_configured_toolsets_with_authorities,
+    materialize_configured_toolsets_with_authorities_governed,
     materialize_configured_toolsets_with_tokens_and_authorization, round_robin_take,
     tool_needs_file_store, toolkit_needs_file_store,
 };

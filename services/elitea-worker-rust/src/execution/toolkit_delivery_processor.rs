@@ -1132,7 +1132,16 @@ where
         {
             Ok(Ok(Some(context))) => {
                 execution.attach_security_context(Arc::new(context));
-                Ok(())
+                // A verified governed toolkit command is still refused
+                // (#1120): a direct call, a validation and an index ingest
+                // would all use claim-time toolkit settings, and none is
+                // wired through the governed operation client yet.
+                tracing::warn!(
+                    event = "toolkit_delivery_governed_refused",
+                    reason_code = "toolkit_not_governable",
+                    "a governed toolkit command was refused: this lane does not redeem governed credentials yet"
+                );
+                Err(RuntimeFailureKind::UnsupportedCapability)
             }
             // A materializer with no context for a governed command fails closed.
             Ok(Ok(None)) => Err(RuntimeFailureKind::AuthorizationFailed),

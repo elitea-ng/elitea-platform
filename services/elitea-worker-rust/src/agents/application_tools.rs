@@ -3551,6 +3551,11 @@ impl ApplicationAssemblyState<'_> {
         ),
         NativeAgentAssemblyError,
     > {
+        // A governed run (#1120): nested agents have no governed seam yet.
+        crate::transport::credential_redeemer::refuse_ungoverned_credentials(
+            self.runtime_context,
+            frozen,
+        )?;
         let (mut toolsets, mut delegated_authorization) =
             materialize_configured_toolsets_with_tokens_and_authorization(
                 frozen,
