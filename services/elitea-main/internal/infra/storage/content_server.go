@@ -17,6 +17,7 @@ import (
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -126,6 +127,11 @@ type ContentServer struct {
 	// token, version and artifact request on the listener.
 	attachmentRequests chan struct{}
 	logger             *slog.Logger
+	// credentialBroker serves RedeemCredential (#1118); nil answers
+	// Unimplemented. governedPins narrows a governed run's client-token
+	// response; nil reads no pin.
+	credentialBroker CredentialRedeemer
+	governedPins     profile.PinReader
 }
 
 func NewContentServer(authorizer ContentAuthorizer, store ContentStore, maxBytes int64) (*ContentServer, error) {
@@ -499,13 +505,22 @@ func (s *ContentServer) GetEliteaClientToken(ctx context.Context, request *runti
 	if err != nil {
 		return nil, contentStatus(codes.Unauthenticated)
 	}
+	// A governed run's toolkit credentials come only from RedeemCredential
+	// (#1118), so its response carries no secrets-header value. The token
+	// itself stays: the worker uses it for the model path, which ADR-0039
+	// does not change. A deployment that never ran governed reads no pin.
+	governed, err := s.governedRun(ctx, claim.ExecutionID)
+	if err != nil {
+		s.logger.WarnContext(ctx, "runtime context unavailable", "stage", "credential_profile_pin")
+		return nil, contentStatus(codes.Unavailable)
+	}
 	// The worker gets only the optional fields it said it can read: both
 	// workers refuse a response that carries a key they do not know (the
 	// native worker parses with `deny_unknown_fields`), so a field served
 	// unconditionally would fail every redemption on a pod a rolling deploy
 	// has not replaced yet. Silence means "no"; an unknown name is ignored.
 	value, err := s.runtimeToken.ResolveAccepting(ctx, claim, RuntimeContextAccept{
-		SecretsHeaderValue: acceptsField(request.GetAcceptFields(), runtimeContextFieldSecretsHeader),
+		SecretsHeaderValue: !governed && acceptsField(request.GetAcceptFields(), runtimeContextFieldSecretsHeader),
 		Workspace:          acceptsField(request.GetAcceptFields(), workspaceruntime.RuntimeContextField),
 	})
 	if err != nil {
@@ -523,6 +538,22 @@ func (s *ContentServer) GetEliteaClientToken(ctx context.Context, request *runti
 		return nil, contentStatus(codes.Unavailable)
 	}
 	return &runtimev1.GetEliteaClientTokenResponseV1{ContextJson: encoded}, nil
+}
+
+// governedRun reports whether the execution is pinned to the governed
+// credential profile. Without a pin reader it reads nothing.
+func (s *ContentServer) governedRun(ctx context.Context, executionID string) (bool, error) {
+	if s.governedPins == nil {
+		return false, nil
+	}
+	pin, err := s.governedPins.ReadPin(ctx, executionID)
+	if errors.Is(err, profile.ErrPinNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return pin.Profile == profile.ProfileGoverned, nil
 }
 
 // GetApplicationVersion serves one frozen nested (agent-as-tool) child

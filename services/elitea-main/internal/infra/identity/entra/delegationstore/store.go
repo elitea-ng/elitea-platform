@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/mandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/obo"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
@@ -438,4 +439,38 @@ func validScopes(scopes []string) bool {
 func isUUID(value string) bool {
 	parsed, err := uuid.Parse(value)
 	return err == nil && parsed.String() == value
+}
+
+// Delegation reads the metadata of one delegation for the operation
+// decision (authzcompose.DelegationReader, #1118). It never opens the
+// assertion. No row is mandate.ErrDelegationNotUsable, so an unknown id is
+// a deny, not an error. A delegation whose assertion was wiped or has
+// expired reads as expired: nothing can be exchanged for it.
+func (s *Store) Delegation(ctx context.Context, id string) (mandate.Delegation, error) {
+	if !isUUID(id) {
+		return mandate.Delegation{}, mandate.ErrDelegationNotUsable
+	}
+	var (
+		d                mandate.Delegation
+		state            string
+		assertionExpires *time.Time
+	)
+	err := s.pool.QueryRow(ctx, `
+SELECT id::text, tenant_project_id, issuer, tenant_id, subject_object_id, agent_binding_id::text,
+       audiences, scopes, consent_recorded_at, expires_at, state, revocation_epoch, assertion_expires_at
+FROM elitea_identity.delegations
+WHERE id = $1::uuid`, id).Scan(
+		&d.ID, &d.TenantProjectID, &d.Issuer, &d.TenantID, &d.SubjectObjectID, &d.AgentBindingID,
+		&d.Audiences, &d.Scopes, &d.ConsentRecordedAt, &d.ExpiresAt, &state, &d.RevocationEpoch, &assertionExpires)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return mandate.Delegation{}, mandate.ErrDelegationNotUsable
+	}
+	if err != nil {
+		return mandate.Delegation{}, fmt.Errorf("delegationstore: read the delegation: %w", err)
+	}
+	d.State, d.ExpiresAt = mandate.State(state), d.ExpiresAt.UTC()
+	if d.State == mandate.StateActive && (assertionExpires == nil || !assertionExpires.After(s.now())) {
+		d.State = mandate.StateExpired
+	}
+	return d, nil
 }

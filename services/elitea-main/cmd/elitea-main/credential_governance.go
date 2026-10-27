@@ -38,6 +38,7 @@ import (
 	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authzcompose"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity/governance"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
@@ -47,7 +48,9 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/obo"
 	identityoidc "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/oidc"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore/backends"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore/pgvault"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
@@ -335,21 +338,40 @@ func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevi
 	return agentIdentityComposition{Admin: admin, ExternalAdmin: externalAdmin, Broker: broker}, nil
 }
 
+// credentialOperationCatalog is THE seam where the composition passes the
+// operation catalogue (#1120): the provider adapter descriptors' operations,
+// classes and material keys. Both the decider's scope gate and the
+// credential broker read this one value. Until the descriptors land it is
+// the fail-closed empty catalogue: every decision denies with
+// OPERATION_UNKNOWN and the broker releases nothing.
+func credentialOperationCatalog() credentialbroker.OperationCatalog {
+	return credentialbroker.EmptyCatalog{}
+}
+
 // credentialGrantGovernance builds the AND-composed operation decider and
 // the credential grant admin API (#1116). Both are nil with the flag off:
 // no decider exists and no grant route mounts. With the flag on, a
 // construction error refuses boot.
 //
-// No request path calls the decider yet; the credential broker (#1118) is
-// its first caller. The operation registry is empty until the adapter
-// descriptors exist (#1120) and delegations are unusable until delegation
-// custody exists (#1117), so every decision it could take today is a deny.
-func credentialGrantGovernance(admission profile.Admission, pool *pgxpool.Pool, pins profile.PinReader) (*authzcompose.Decider, *v2credentialgrants.Handler, error) {
+// delegations is the Entra delegation custody (#1117) when it is
+// configured; nil keeps NoDelegations, so every delegation authority
+// denies. operations is credentialOperationCatalog(). The credential broker
+// (#1118) is the decider's only caller.
+func credentialGrantGovernance(
+	admission profile.Admission,
+	pool *pgxpool.Pool,
+	pins profile.PinReader,
+	delegations authzcompose.DelegationReader,
+	operations credentialgrant.OperationRegistry,
+) (*authzcompose.Decider, *v2credentialgrants.Handler, error) {
 	if !admission.Governed() {
 		return nil, nil, nil
 	}
-	if pool == nil || pins == nil {
-		return nil, nil, errors.New("credential grant governance needs the platform database")
+	if pool == nil || pins == nil || operations == nil {
+		return nil, nil, errors.New("credential grant governance needs the platform database and an operation catalogue")
+	}
+	if delegations == nil {
+		delegations = authzcompose.NoDelegations{}
 	}
 	audit, err := securityaudit.NewPostgresAppender("elitea-main")
 	if err != nil {
@@ -364,9 +386,9 @@ func credentialGrantGovernance(admission profile.Admission, pool *pgxpool.Pool, 
 		Toolkits:     grants,
 		Grants:       grants,
 		References:   grants,
-		Operations:   credentialgrant.EmptyRegistry,
+		Operations:   operations,
 		Mandates:     repos.NewMandates(pool, audit),
-		Delegations:  authzcompose.NoDelegations{},
+		Delegations:  delegations,
 		Pins:         pins,
 	})
 	if err != nil {
@@ -381,6 +403,102 @@ func credentialGrantGovernance(admission profile.Admission, pool *pgxpool.Pool, 
 		return nil, nil, err
 	}
 	return decider, handler, nil
+}
+
+// entraDelegations is the decider's delegation reader: the Entra custody
+// store when it is configured, else nil (credentialGrantGovernance then
+// keeps NoDelegations). It returns a real nil, never a nil *Store boxed in
+// the interface.
+func entraDelegations(entra *entraGovernance) authzcompose.DelegationReader {
+	if entra == nil || entra.Delegations == nil {
+		return nil
+	}
+	return entra.Delegations
+}
+
+// credentialBrokerAtBoot builds the governed credential broker (#1118). Nil
+// with the flag off: RedeemCredential then answers Unimplemented and no
+// statement runs. With the flag on every dependency is required, and a
+// construction error refuses boot.
+func credentialBrokerAtBoot(
+	admission profile.Admission,
+	lookup func(string) (string, bool),
+	pool *pgxpool.Pool,
+	decider *authzcompose.Decider,
+	pins profile.PinReader,
+	sessions *agentidentitycore.Broker,
+	entra *entraGovernance,
+	catalog credentialbroker.OperationCatalog,
+	logger *slog.Logger,
+) (*credentialbroker.Broker, error) {
+	if !admission.Governed() {
+		return nil, nil
+	}
+	if pool == nil || decider == nil || pins == nil || sessions == nil || catalog == nil {
+		return nil, errors.New("the credential broker needs the database, the decider, the pin reader, the agent session broker and the operation catalogue")
+	}
+	audit, err := securityaudit.NewPostgresAppender("elitea-main")
+	if err != nil {
+		return nil, fmt.Errorf("construct credential broker security audit appender: %w", err)
+	}
+	// The built-in vault (pgvault) is the default backend; Vault/OpenBao
+	// joins it when configured (#1113).
+	masterKey, err := encodedVaultMasterKeyFromEnv(lookup)
+	if err != nil {
+		return nil, fmt.Errorf("credential broker vault: %w", err)
+	}
+	vaultReader, err := storage.NewPostgresSecretVaultLoader(pool, masterKey)
+	if err != nil {
+		return nil, fmt.Errorf("credential broker vault: %w", err)
+	}
+	vaultWriter, err := repos.NewCurrentSecretVaultRepository(pool, masterKey)
+	if err != nil {
+		return nil, fmt.Errorf("credential broker vault: %w", err)
+	}
+	pg, err := pgvault.New(pool, vaultReader, vaultWriter)
+	if err != nil {
+		return nil, fmt.Errorf("credential broker vault: %w", err)
+	}
+	stores, _, err := backends.NewFromEnv(lookup, pg)
+	if err != nil {
+		return nil, fmt.Errorf("credential broker secret stores: %w", err)
+	}
+	store, err := credentialbroker.NewPostgresStore(pool, audit)
+	if err != nil {
+		return nil, err
+	}
+	grants := repos.NewCredentialGrants(pool, audit)
+	cfg := credentialbroker.Config{
+		Decider:      decider,
+		References:   grants,
+		Targets:      grants,
+		Toolkits:     grants,
+		Bindings:     repos.NewAgentIdentityBindings(pool, audit),
+		Mandates:     repos.NewMandates(pool, audit),
+		Delegations:  authzcompose.NoDelegations{},
+		SecretStores: stores,
+		Store:        store,
+		Pins:         pins,
+		Sessions:     sessions,
+		Catalog:      catalog,
+		Logger:       logger,
+	}
+	if delegations := entraDelegations(entra); delegations != nil {
+		cfg.Delegations = delegations
+		// Classic OBO first: Agent OBO denies every exchange until the Entra
+		// agent identity adapter (#1152) supplies its client assertion.
+		switch {
+		case entra.ClassicOBO != nil:
+			cfg.Exchanger, cfg.Custody = entra.ClassicOBO, entra.Delegations
+		case entra.AgentOBO != nil:
+			cfg.Exchanger, cfg.Custody = entra.AgentOBO, entra.Delegations
+		}
+	}
+	broker, err := credentialbroker.New(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("construct the credential broker: %w", err)
+	}
+	return broker, nil
 }
 
 // entraGovernance is the governed Entra dependency set (#1117): delegation

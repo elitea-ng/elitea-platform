@@ -425,3 +425,33 @@ func TestDefaultAuthSourcesRefuseUnknownAndDevelopment(t *testing.T) {
 		}
 	}
 }
+
+// An attributed subject (an unattended run under a mandate, #1118) has no
+// authentication source. The gate admits it only with no source and under a
+// mandate; a real gate with the default policy is used, so the source list
+// is not what lets it through.
+func TestAttributedSubjectNeedsAMandateAndNoSource(t *testing.T) {
+	gate, err := NewAuthenticatedContextGate(DefaultAuthSources{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attributed := permitRequest()
+	attributed.Subject.AuthSource, attributed.Subject.Attributed = auth.AuthenticationSourceUnknown, true
+	if result, err := gate.Evaluate(context.Background(), attributed); err != nil || !result.Permit {
+		t.Fatalf("attributed mandate subject: %+v %v", result, err)
+	}
+	for name, mutate := range map[string]func(*OperationRequest){
+		"unattributed without a source": func(r *OperationRequest) { r.Subject.Attributed = false },
+		"attributed with a source":      func(r *OperationRequest) { r.Subject.AuthSource = auth.AuthenticationSourceSession },
+		"attributed under a delegation": func(r *OperationRequest) {
+			r.Authority = AuthorityRef{Kind: AuthorityDelegation, ID: testDelegation, Epoch: 1}
+		},
+	} {
+		r := attributed
+		mutate(&r)
+		result, err := gate.Evaluate(context.Background(), r)
+		if err != nil || result.Permit || !slices.Contains(result.Reasons, ReasonAuthSourceNotAllowed) {
+			t.Errorf("%s: %+v %v", name, result, err)
+		}
+	}
+}

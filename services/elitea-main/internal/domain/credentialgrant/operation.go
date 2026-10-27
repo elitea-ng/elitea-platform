@@ -55,6 +55,13 @@ type ReferenceReader interface {
 
 // ToolkitBindingReader reads the toolkit an agent binding may run. No row is
 // ErrToolkitNotBound.
+// TargetReader reads one target binding of a tenant project. No row is
+// ErrTargetNotFound. The credential broker reads the target a released
+// credential is valid for (#1118).
+type TargetReader interface {
+	TargetBinding(ctx context.Context, tenantProjectID int64, id string) (TargetBinding, error)
+}
+
 type ToolkitBindingReader interface {
 	AgentToolkitBinding(ctx context.Context, agentBindingID string, toolkitID int64) (AgentToolkitBinding, error)
 }

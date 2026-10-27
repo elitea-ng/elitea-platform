@@ -59,6 +59,7 @@ var (
 	_ credentialgrant.GrantReader          = (*CredentialGrants)(nil)
 	_ credentialgrant.ReferenceReader      = (*CredentialGrants)(nil)
 	_ credentialgrant.ToolkitBindingReader = (*CredentialGrants)(nil)
+	_ credentialgrant.TargetReader         = (*CredentialGrants)(nil)
 )
 
 func (s *CredentialGrants) readReady() error {
@@ -307,6 +308,29 @@ WHERE id = $1::uuid AND tenant_project_id = $2`, id, tenantProjectID).Scan(
 	}
 	ref.Class, ref.State = credentialgrant.CredentialClass(class), credentialgrant.ReferenceState(state)
 	return ref, nil
+}
+
+// TargetBinding reads one target binding of a tenant project.
+func (s *CredentialGrants) TargetBinding(ctx context.Context, tenantProjectID int64, id string) (credentialgrant.TargetBinding, error) {
+	if err := s.readReady(); err != nil {
+		return credentialgrant.TargetBinding{}, err
+	}
+	if !agentIdentityIsUUID(id) {
+		return credentialgrant.TargetBinding{}, credentialgrant.ErrTargetNotFound
+	}
+	var t credentialgrant.TargetBinding
+	err := s.pool.QueryRow(ctx, `
+SELECT id::text, tenant_project_id, provider_type, target_identity, audience
+FROM elitea_identity.target_bindings
+WHERE id = $1::uuid AND tenant_project_id = $2`, id, tenantProjectID).Scan(
+		&t.ID, &t.TenantProjectID, &t.ProviderType, &t.TargetIdentity, &t.Audience)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return credentialgrant.TargetBinding{}, credentialgrant.ErrTargetNotFound
+	}
+	if err != nil {
+		return credentialgrant.TargetBinding{}, fmt.Errorf("read target binding: %w", err)
+	}
+	return t, nil
 }
 
 // AgentToolkitBinding reads the toolkit binding of an agent binding.

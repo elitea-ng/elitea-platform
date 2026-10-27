@@ -38,6 +38,13 @@ type Subject struct {
 	// ExternalSubjectID is the IdP subject (Entra oid) of an interactive
 	// delegation; empty otherwise.
 	ExternalSubjectID string
+	// Attributed marks a subject no request authenticated: an unattended
+	// run whose subject Elitea attributes on the basis of a mandate
+	// (ADR-0039 decision 3, asserted evidence). AuthSource is then
+	// AuthenticationSourceUnknown, and the authenticated context gate admits
+	// it only under a mandate authority. For an autonomous mandate the
+	// subject is the mandate's approver (owner decision, #1118).
+	Attributed bool
 }
 
 // AgentRef names the agent version the run executes.

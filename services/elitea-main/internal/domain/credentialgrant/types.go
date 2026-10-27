@@ -175,6 +175,7 @@ var (
 	ErrReferenceNotUsable = errors.New("credential grant: the agent binding, credential reference or target is not usable")
 	ErrReferenceNotFound  = errors.New("credential grant: credential reference not found")
 	ErrToolkitNotBound    = errors.New("credential grant: the toolkit is not bound to the agent")
+	ErrTargetNotFound     = errors.New("credential grant: target binding not found")
 )
 
 const (
