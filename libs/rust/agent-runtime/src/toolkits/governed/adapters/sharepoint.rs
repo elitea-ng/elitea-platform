@@ -19,16 +19,39 @@ use crate::toolkits::governed::{
 };
 use crate::toolkits::materialize::governed_family_toolset;
 
-const LIST: &[&str] = &["list_title"];
-const FILE: &[&str] = &["path", "file_path", "folder"];
-
+// Each row binds the ONE argument the family reads for the resource it
+// touches; `None` where that resource cannot be told from the arguments.
 const SHAREPOINT_TOOLS: &[ToolOperation] = &[
-    row("get_lists", "sharepoint.site.read", "site", &[]),
-    row("read_list", "sharepoint.list.read", "list", LIST),
-    row("get_list_columns", "sharepoint.list.read", "list", LIST),
-    row("get_files_list", "sharepoint.file.read", "file", FILE),
-    row("read_document", "sharepoint.file.read", "file", FILE),
-    row("upload_file", "sharepoint.file.write", "file", FILE),
+    row("get_lists", "sharepoint.site.read", "site", None),
+    row(
+        "read_list",
+        "sharepoint.list.read",
+        "list",
+        Some("list_title"),
+    ),
+    row(
+        "get_list_columns",
+        "sharepoint.list.read",
+        "list",
+        Some("list_title"),
+    ),
+    // A form filter lists a form library's files, not the folder's.
+    row(
+        "get_files_list",
+        "sharepoint.file.read",
+        "file",
+        Some("folder_name"),
+    )
+    .unbound_with(&["form_name"]),
+    row(
+        "read_document",
+        "sharepoint.file.read",
+        "file",
+        Some("path"),
+    ),
+    // Writes `folder_path` + `filename` (or the source file's name): a new
+    // file whose path no single argument names.
+    row("upload_file", "sharepoint.file.write", "file", None),
 ];
 
 /// The `SharePoint` adapter.

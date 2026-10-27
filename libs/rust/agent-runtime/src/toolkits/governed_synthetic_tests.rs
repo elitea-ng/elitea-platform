@@ -32,7 +32,8 @@ const SYNTHETIC_TOOLS: &[ToolOperation] = &[ToolOperation {
     tool: "read_widget",
     operation_id: "synthetic.widget.read",
     resource_kind: "widget",
-    id_arguments: &["widget_id"],
+    id_argument: Some("widget_id"),
+    unbound_with: &[],
 }];
 
 impl AuthAdapter for SyntheticAdapter {

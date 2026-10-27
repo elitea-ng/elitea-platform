@@ -2,9 +2,11 @@
 //! access token); both are a Bearer credential. Target: the account origin.
 //!
 //! The catalogue names products and features only. The feature-specific
-//! tools map directly; the generic record tools map only when their
-//! `record_type` (or `resource_type`) is a feature, and are not mapped
-//! otherwise: a release, idea or initiative has no governed operation.
+//! tools map directly; the generic record tools map only when the kind field
+//! the family reads (`record_type`, or `resource_type` for comments) is a
+//! feature, and are not mapped otherwise: a release, idea or initiative has
+//! no governed operation, and a call whose other kind field disagrees is
+//! ambiguous.
 
 use std::sync::Arc;
 
@@ -20,45 +22,101 @@ use crate::toolkits::governed::{
 };
 use crate::toolkits::materialize::governed_family_toolset;
 
-const FEATURE: &[&str] = &["feature_id", "reference", "record_id", "reference_or_id"];
-const PRODUCT: &[&str] = &["product_id", "id"];
-const RESOURCE: &[&str] = &["resource_id"];
-
+// Each row binds the ONE argument the family reads for the resource it
+// touches; `None` where that resource cannot be told from the arguments.
 const AHA_TOOLS: &[ToolOperation] = &[
-    row("list_products", "aha.product.read", "product", &[]),
-    row("get_product", "aha.product.read", "product", PRODUCT),
-    row("find_project", "aha.product.read", "product", &[]),
-    row("get_feature", "aha.feature.read", "feature", FEATURE),
-    row("get_feature_gql", "aha.feature.read", "feature", FEATURE),
-    row("get_requirement", "aha.feature.read", "feature", FEATURE),
+    row("list_products", "aha.product.read", "product", None),
+    row(
+        "get_product",
+        "aha.product.read",
+        "product",
+        Some("reference_or_id"),
+    ),
+    row("find_project", "aha.product.read", "product", None),
+    row(
+        "get_feature",
+        "aha.feature.read",
+        "feature",
+        Some("reference_or_id"),
+    ),
+    row(
+        "get_feature_gql",
+        "aha.feature.read",
+        "feature",
+        Some("reference"),
+    ),
+    row(
+        "get_requirement",
+        "aha.feature.read",
+        "feature",
+        Some("reference_or_id"),
+    ),
     row(
         "get_requirement_gql",
         "aha.feature.read",
         "feature",
-        FEATURE,
+        Some("reference"),
     ),
-    row("list_features", "aha.feature.search", "product", PRODUCT),
+    // A release filter lists another record's features.
     row(
-        "list_requirements",
+        "list_features",
         "aha.feature.search",
         "product",
-        PRODUCT,
-    ),
+        Some("product_id"),
+    )
+    .unbound_with(&["release_id"]),
+    // Lists a feature's requirements: not a product the search names.
+    row("list_requirements", "aha.feature.search", "product", None),
     // The generic record tools, when the record is a feature
     // (`AhaAdapter::operation_for`).
-    row("read_records", "aha.feature.read", "feature", FEATURE),
-    row("search_records", "aha.feature.search", "product", PRODUCT),
-    row("list_comments", "aha.feature.read", "feature", RESOURCE),
-    row("create_record", "aha.feature.write", "feature", &[]),
-    row("update_record", "aha.feature.write", "feature", FEATURE),
-    row("delete_record", "aha.feature.write", "feature", FEATURE),
-    row("manage_record", "aha.feature.write", "feature", FEATURE),
-    row("copy_record", "aha.feature.write", "feature", FEATURE),
-    row("add_comment", "aha.feature.write", "feature", RESOURCE),
+    row(
+        "read_records",
+        "aha.feature.read",
+        "feature",
+        Some("reference_or_id"),
+    ),
+    row("search_records", "aha.feature.search", "product", None),
+    row(
+        "list_comments",
+        "aha.feature.read",
+        "feature",
+        Some("resource_id"),
+    ),
+    row("create_record", "aha.feature.write", "feature", None),
+    row(
+        "update_record",
+        "aha.feature.write",
+        "feature",
+        Some("record_id"),
+    ),
+    row(
+        "delete_record",
+        "aha.feature.write",
+        "feature",
+        Some("record_id"),
+    ),
+    row(
+        "manage_record",
+        "aha.feature.write",
+        "feature",
+        Some("record_id"),
+    ),
+    row(
+        "copy_record",
+        "aha.feature.write",
+        "feature",
+        Some("record_id"),
+    ),
+    row(
+        "add_comment",
+        "aha.feature.write",
+        "feature",
+        Some("resource_id"),
+    ),
 ];
 
-/// The tools that act on whatever record kind their arguments name.
-const GENERIC_RECORD_TOOLS: [&str; 8] = [
+/// The tools that act on whatever record kind `record_type` names.
+const RECORD_TYPE_TOOLS: [&str; 7] = [
     "read_records",
     "search_records",
     "create_record",
@@ -66,8 +124,10 @@ const GENERIC_RECORD_TOOLS: [&str; 8] = [
     "delete_record",
     "manage_record",
     "copy_record",
-    "list_comments",
 ];
+
+/// The tools that act on whatever record kind `resource_type` names.
+const RESOURCE_TYPE_TOOLS: [&str; 2] = ["list_comments", "add_comment"];
 
 /// The Aha! adapter.
 pub struct AhaAdapter;
@@ -105,8 +165,16 @@ impl AuthAdapter for AhaAdapter {
         tool_name: &str,
         arguments: &Value,
     ) -> Result<BoundOperation, OperationNotMapped> {
-        let generic = GENERIC_RECORD_TOOLS.contains(&tool_name) || tool_name == "add_comment";
-        if generic && !names_feature(arguments) {
+        let kind_field = if RECORD_TYPE_TOOLS.contains(&tool_name) {
+            Some(("record_type", "resource_type"))
+        } else if RESOURCE_TYPE_TOOLS.contains(&tool_name) {
+            Some(("resource_type", "record_type"))
+        } else {
+            None
+        };
+        if let Some((read, other)) = kind_field
+            && !names_feature(arguments, read, other)
+        {
             return Err(OperationNotMapped);
         }
         table_operation(self.provider_type(), AHA_TOOLS, tool_name, arguments)
@@ -133,15 +201,30 @@ impl AuthAdapter for AhaAdapter {
 }
 
 /// Whether a generic record call names a feature (or a requirement, a
-/// feature's child) as its record or comment resource.
-fn names_feature(arguments: &Value) -> bool {
-    ["record_type", "resource_type"]
-        .iter()
-        .filter_map(|name| arguments.get(*name).and_then(Value::as_str))
-        .any(|kind| {
-            matches!(
-                kind.trim().to_ascii_lowercase().as_str(),
-                "feature" | "features" | "requirement" | "requirements"
-            )
-        })
+/// feature's child) in `read`, the field the family reads for the record
+/// kind. A call whose `other` kind field names a different kind is refused:
+/// the record the call touches must not be ambiguous.
+fn names_feature(arguments: &Value, read: &str, other: &str) -> bool {
+    let kind = |name: &str| {
+        arguments
+            .get(name)
+            .filter(|value| !value.is_null())
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(|kind| {
+                        let kind = kind.trim().to_ascii_lowercase();
+                        kind.strip_suffix('s')
+                            .map_or_else(|| kind.clone(), str::to_owned)
+                    })
+                    .unwrap_or_default()
+            })
+    };
+    let Some(read_kind) = kind(read) else {
+        return false;
+    };
+    if kind(other).is_some_and(|other_kind| other_kind != read_kind) {
+        return false;
+    }
+    matches!(read_kind.as_str(), "feature" | "requirement")
 }

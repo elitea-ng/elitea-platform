@@ -19,70 +19,72 @@ use crate::toolkits::governed::{
 };
 use crate::toolkits::materialize::governed_family_toolset;
 
-const TEST_CASE: &[&str] = &["test_case_id", "id"];
-
+// Each row binds the ONE argument the family reads for the resource it
+// touches; `None` where that resource cannot be told from the arguments (a
+// DQL query, a create, a list of test cases).
 const QTEST_TOOLS: &[ToolOperation] = &[
-    row("get_modules", "qtest.project.read", "project", &[]),
+    row("get_modules", "qtest.project.read", "project", None),
     row(
         "get_all_test_cases_fields_for_project",
         "qtest.project.read",
         "project",
-        &[],
+        None,
     ),
     row(
         "find_test_case_by_id",
         "qtest.test_case.read",
         "test_case",
-        TEST_CASE,
+        Some("test_id"),
     ),
     row(
         "get_test_case_versions",
         "qtest.test_case.read",
         "test_case",
-        TEST_CASE,
+        Some("test_case_id"),
     ),
-    row("search_by_dql", "qtest.test_case.search", "project", &[]),
+    row("search_by_dql", "qtest.test_case.search", "project", None),
     row(
         "find_test_cases_by_requirement_id",
         "qtest.test_case.search",
         "project",
-        &[],
+        None,
     ),
     row(
         "create_test_cases",
         "qtest.test_case.write",
         "test_case",
-        &[],
+        None,
     ),
     row(
         "update_test_case",
         "qtest.test_case.write",
         "test_case",
-        TEST_CASE,
+        Some("test_id"),
     ),
+    // Deletes by the internal qTest id, not the `TC-` reference.
     row(
         "delete_test_case",
         "qtest.test_case.write",
         "test_case",
-        TEST_CASE,
+        Some("qtest_id"),
     ),
     row(
         "add_file_to_test_case",
         "qtest.test_case.write",
         "test_case",
-        TEST_CASE,
+        Some("test_case_id"),
     ),
     row(
         "link_tests_to_jira_requirement",
         "qtest.test_case.write",
         "test_case",
-        &[],
+        None,
     ),
     row(
         "link_tests_to_qtest_requirement",
         "qtest.test_case.write",
         "test_case",
-        &[],
+        None,
     ),
 ];
 

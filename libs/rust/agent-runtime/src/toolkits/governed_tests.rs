@@ -16,8 +16,8 @@ use super::governed::adapters::reference_registry;
 use super::governed::client::GovernedToolkitSpec;
 use super::governed::{
     BoundToolInvocation, CredentialClass, CredentialEnvelope, CredentialRedeemDenial,
-    CredentialRedeemer, EnvelopeKind, GovernedOperationClient, RedeemFailure, RedeemOutcome,
-    TargetKind,
+    CredentialRedeemer, EnvelopeKind, GovernedError, GovernedOperationClient, RedeemFailure,
+    RedeemOutcome, TargetKind,
 };
 use super::materialize::{
     LeftOutReason, materialize_configured_toolsets_reporting_refusals,
@@ -148,7 +148,8 @@ fn families() -> Vec<Family> {
             tool: "read_page_by_id",
             arguments: json!({"page_id": [1]}),
             operation: "confluence.page.read",
-            resource: "confluence:page/*",
+            // A list is no page id: the touched page is undeterminable.
+            resource: "",
         },
         Family {
             tool_type: "aha",
@@ -158,7 +159,7 @@ fn families() -> Vec<Family> {
             kind: EnvelopeKind::Static,
             material: &[("token", "envelope-aha")],
             tool: "get_feature",
-            arguments: json!({"feature_id": 42, "unexpected": true}),
+            arguments: json!({"reference_or_id": 42, "unexpected": true}),
             operation: "aha.feature.read",
             resource: "aha:feature/42",
         },
@@ -193,9 +194,9 @@ fn families() -> Vec<Family> {
             kind: EnvelopeKind::Static,
             material: &[("token", "envelope-qtest")],
             tool: "find_test_case_by_id",
-            arguments: json!({"test_case_id": {"not": "an id"}}),
+            arguments: json!({"test_id": {"not": "an id"}}),
             operation: "qtest.test_case.read",
-            resource: "qtest:test_case/*",
+            resource: "",
         },
     ]
 }
@@ -300,6 +301,229 @@ async fn aha_generic_record_tools_map_only_for_features() {
         .is_err()
     );
     assert!(aha.operation_for("get_release", &json!({})).is_err());
+}
+
+/// Aha!'s generic tools read the kind from ONE field (`record_type`, or
+/// `resource_type` for comments); the other one naming a different kind
+/// makes the call ambiguous and unmapped.
+#[test]
+fn aha_reads_the_kind_only_from_the_field_the_family_reads() {
+    let registry = reference_registry();
+    let aha = registry.adapter("aha").expect("aha");
+    for arguments in [
+        json!({"record_type": "release", "resource_type": "feature", "record_id": "R-1"}),
+        json!({"record_type": "feature", "resource_type": "release", "record_id": "F-1"}),
+        json!({"resource_type": "feature", "record_id": "F-1"}),
+    ] {
+        assert!(
+            aha.operation_for("update_record", &arguments).is_err(),
+            "{arguments}"
+        );
+    }
+    assert!(
+        aha.operation_for(
+            "add_comment",
+            &json!({"record_type": "feature", "resource_type": "idea", "resource_id": "I-1"})
+        )
+        .is_err()
+    );
+    let comment = aha
+        .operation_for(
+            "add_comment",
+            &json!({"resource_type": "feature", "record_type": "features",
+                "resource_id": "F-9", "record_id": "F-1"}),
+        )
+        .expect("a feature comment");
+    assert_eq!(comment.resource_ref(), "aha:feature/F-9");
+}
+
+fn bound(adapter: &str, tool: &str, arguments: &Value) -> String {
+    reference_registry()
+        .adapter(adapter)
+        .expect("adapter")
+        .operation_for(tool, arguments)
+        .unwrap_or_else(|_| panic!("{adapter}.{tool} maps"))
+        .resource_ref()
+        .to_owned()
+}
+
+/// Jira `update_issue` acts on the key inside `issue_json`; another key
+/// argument naming a different issue is not mapped.
+#[test]
+fn jira_update_issue_binds_the_key_inside_issue_json() {
+    let registry = reference_registry();
+    let jira = registry.adapter("jira").expect("jira");
+    let bound = |adapter: &str, tool: &str, arguments: Value| bound(adapter, tool, &arguments);
+    // Two issues: no single resource.
+    assert_eq!(
+        bound(
+            "jira",
+            "link_issues",
+            json!({"inward_issue_key": "A-1", "outward_issue_key": "B-2"})
+        ),
+        ""
+    );
+    let issue_json = r#"{"key": "ENG-7", "fields": {"summary": "s"}}"#;
+    assert_eq!(
+        bound("jira", "update_issue", json!({"issue_json": issue_json})),
+        "jira:issue/ENG-7"
+    );
+    assert_eq!(
+        bound(
+            "jira",
+            "update_issue",
+            json!({"issue_json": issue_json, "issue_key": "ENG-7"})
+        ),
+        "jira:issue/ENG-7"
+    );
+    assert_eq!(
+        bound("jira", "update_issue", json!({"issue_json": "not json"})),
+        ""
+    );
+    for other in ["issue_key", "jira_issue_key", "issue_id", "key"] {
+        assert!(
+            jira.operation_for(
+                "update_issue",
+                &json!({"issue_json": issue_json, other: "OPS-1"})
+            )
+            .is_err(),
+            "a mismatched {other} is not mapped"
+        );
+    }
+    assert!(
+        jira.operation_for(
+            "update_issue",
+            &json!({"issue_json": "{}", "issue_key": "OPS-1"})
+        )
+        .is_err()
+    );
+}
+
+/// Each tool binds only the argument it acts on; an argument the tool
+/// ignores never names the resource.
+#[test]
+fn the_resource_is_bound_only_from_the_argument_the_tool_acts_on() {
+    let bound = |adapter: &str, tool: &str, arguments: Value| bound(adapter, tool, &arguments);
+    // A JQL search touches whatever the query matches: no resource.
+    assert_eq!(
+        bound(
+            "jira",
+            "search_using_jql",
+            json!({"jql": "project = ENG", "project_key": "ENG"})
+        ),
+        ""
+    );
+    // `list_comments` reads `issue_key`; `jira_issue_key` is not its argument.
+    assert_eq!(
+        bound(
+            "jira",
+            "list_comments",
+            json!({"jira_issue_key": "OPS-1", "issue_key": "ENG-7"})
+        ),
+        "jira:issue/ENG-7"
+    );
+    assert_eq!(
+        bound("jira", "list_comments", json!({"jira_issue_key": "OPS-1"})),
+        ""
+    );
+    assert_eq!(
+        bound(
+            "confluence",
+            "site_search",
+            json!({"query": "x", "space": "ENG"})
+        ),
+        ""
+    );
+    assert_eq!(
+        bound(
+            "confluence",
+            "update_labels",
+            json!({"page_ids": ["1"], "id": "1"})
+        ),
+        ""
+    );
+    assert_eq!(
+        bound(
+            "confluence",
+            "get_page_tree",
+            json!({"id": "9", "page_id": "4"})
+        ),
+        "confluence:page/4"
+    );
+    assert_eq!(
+        bound("aha", "get_feature", json!({"feature_id": "F-1"})),
+        ""
+    );
+    assert_eq!(
+        bound(
+            "aha",
+            "list_features",
+            json!({"product_id": "P-1", "release_id": "R-1"})
+        ),
+        ""
+    );
+    assert_eq!(
+        bound("aha", "list_features", json!({"product_id": "P-1"})),
+        "aha:product/P-1"
+    );
+    assert_eq!(
+        bound(
+            "qtest",
+            "find_test_case_by_id",
+            json!({"test_case_id": "TC-1"})
+        ),
+        ""
+    );
+    assert_eq!(
+        bound("qtest", "search_by_dql", json!({"dql": "Id = 'TC-1'"})),
+        ""
+    );
+    assert_eq!(
+        bound(
+            "sharepoint",
+            "get_files_list",
+            json!({"folder_name": "Shared", "form_name": "Forms"})
+        ),
+        ""
+    );
+    assert_eq!(
+        bound(
+            "sharepoint",
+            "read_document",
+            json!({"file_path": "/a.docx"})
+        ),
+        ""
+    );
+    assert_eq!(
+        bound("sharepoint", "read_document", json!({"path": "/a.docx"})),
+        "sharepoint:file//a.docx"
+    );
+}
+
+/// Main binds every grant to a toolkit id: a toolkit without one (or with
+/// one Main cannot hold) is not governable and advertises no tools. (The
+/// materializer reports this error as `toolkit_not_governable`, as the
+/// unadapted-family test shows; the frozen snapshot already refuses a stored
+/// toolkit whose id is past `i64::MAX`.)
+#[tokio::test]
+async fn a_toolkit_without_a_bindable_id_is_not_governable() {
+    let family = families().remove(0);
+    let (client, redeemer) = governed(answering(family.kind, family.material, family.target));
+    for toolkit_id in [None, Some(0), Some(u64::MAX), Some(1 << 63)] {
+        let refused = client.toolset(&GovernedToolkitSpec::new(
+            "governed",
+            family.tool_type,
+            toolkit_id,
+            &family.settings,
+            &policy(),
+        ));
+        assert!(
+            matches!(refused, Err(GovernedError::ToolkitNotGovernable)),
+            "{toolkit_id:?}"
+        );
+    }
+
+    assert_eq!(redeemer.calls().len(), 0);
 }
 
 #[tokio::test]

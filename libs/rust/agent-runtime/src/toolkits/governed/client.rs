@@ -72,7 +72,8 @@ impl GovernedOperationClient {
     /// # Errors
     ///
     /// [`GovernedError::ToolkitNotGovernable`] when no adapter governs the
-    /// type; [`GovernedError::InvalidConfiguration`] when the configured
+    /// type, or the toolkit has no positive id Main can bind a grant to (none,
+    /// zero, or past `i64::MAX`); [`GovernedError::InvalidConfiguration`] when the configured
     /// target or the declaration client cannot be built.
     pub fn toolset(
         self: &Arc<Self>,
@@ -83,6 +84,13 @@ impl GovernedOperationClient {
                 .adapter(spec.toolkit_type)
                 .ok_or(GovernedError::ToolkitNotGovernable)?,
         );
+        // Main binds every grant to a toolkit id: without one no call could
+        // redeem, so the toolkit advertises no tools at all.
+        let toolkit_id = spec
+            .toolkit_id
+            .and_then(|id| i64::try_from(id).ok())
+            .filter(|id| *id > 0)
+            .ok_or(GovernedError::ToolkitNotGovernable)?;
         let target = adapter.configured_target(spec.settings)?;
         let settings = spec.settings.clone();
         let declaration = declaration_envelope(adapter.as_ref(), &target)?;
@@ -100,10 +108,7 @@ impl GovernedOperationClient {
         let toolkit = Arc::new(GovernedToolkit {
             adapter,
             name: spec.toolkit_name.to_owned(),
-            toolkit_id: spec
-                .toolkit_id
-                .and_then(|id| i64::try_from(id).ok())
-                .unwrap_or(0),
+            toolkit_id,
             credential_reference_id: credential_reference_id(spec.settings),
             target,
             settings,
@@ -245,7 +250,8 @@ impl<'a> GovernedToolkitSpec<'a> {
 
 /// The toolkit's credential reference, when its frozen settings name one
 /// (top level, then the configuration object). Empty lets Main resolve the
-/// grant by agent and toolkit.
+/// one active grant for the binding, toolkit and operation server-side; an
+/// ambiguous resolution is denied there.
 fn credential_reference_id(settings: &Map<String, Value>) -> String {
     const KEY: &str = "credential_reference_id";
     settings

@@ -386,14 +386,78 @@ impl fmt::Display for OperationNotMapped {
 impl std::error::Error for OperationNotMapped {}
 
 /// One row of an adapter's tool table: the tool, its canonical operation,
-/// the catalogue resource kind, and the argument names that identify the
-/// resource (the first one present wins; none present means `*`).
+/// the catalogue resource kind, and the ONE argument the tool acts on.
+///
+/// The resource is bound only from `id_argument`, the argument the family
+/// itself reads for the resource it touches. A tool whose touched resource
+/// cannot be told from its arguments (a query, a list of ids, a create) has
+/// no `id_argument` and binds an empty resource, which Main's scope gate
+/// refuses for a scoped grant. `unbound_with` names arguments whose presence
+/// makes the touched resource undeterminable too (the family then acts on
+/// something other than, or more than, `id_argument`).
 #[derive(Clone, Copy, Debug)]
 pub struct ToolOperation {
     pub tool: &'static str,
     pub operation_id: &'static str,
     pub resource_kind: &'static str,
-    pub id_arguments: &'static [&'static str],
+    pub id_argument: Option<&'static str>,
+    pub unbound_with: &'static [&'static str],
+}
+
+impl ToolOperation {
+    /// A row whose resource is `id_argument` (`None`: undeterminable).
+    #[must_use]
+    pub const fn new(
+        tool: &'static str,
+        operation_id: &'static str,
+        resource_kind: &'static str,
+        id_argument: Option<&'static str>,
+    ) -> Self {
+        Self {
+            tool,
+            operation_id,
+            resource_kind,
+            id_argument,
+            unbound_with: &[],
+        }
+    }
+
+    /// The same row, binding an empty resource when any of `arguments` is
+    /// present.
+    #[must_use]
+    pub const fn unbound_with(mut self, arguments: &'static [&'static str]) -> Self {
+        self.unbound_with = arguments;
+        self
+    }
+
+    /// The resource this row binds for `arguments`: `<provider>:<kind>/<id>`
+    /// from `id_argument`, or empty when the touched resource cannot be
+    /// determined.
+    #[must_use]
+    pub fn resource_ref(&self, provider_type: &str, arguments: &Value) -> String {
+        if self
+            .unbound_with
+            .iter()
+            .any(|name| arguments.get(*name).is_some_and(|value| !value.is_null()))
+        {
+            return String::new();
+        }
+        self.id_argument
+            .and_then(|name| resource_identifier(arguments.get(name)?))
+            .map(|id| self.resource(provider_type, &id))
+            .unwrap_or_default()
+    }
+
+    /// `<provider>:<kind>/<id>`, or empty when it would be over the bound.
+    #[must_use]
+    pub fn resource(&self, provider_type: &str, id: &str) -> String {
+        let resource = format!("{provider_type}:{}/{id}", self.resource_kind);
+        if resource.len() > MAX_RESOURCE_REF_BYTES {
+            String::new()
+        } else {
+            resource
+        }
+    }
 }
 
 /// What an adapter needs to build a provider client for one toolkit: the
@@ -508,8 +572,8 @@ pub trait AuthAdapter: Send + Sync {
 }
 
 /// The table mapping [`AuthAdapter::operation_for`] performs by default:
-/// the tool's row, its resource as `<provider>:<kind>/<id>` (the first
-/// identifying argument present, else `*`), and the arguments' digest.
+/// the tool's row, its resource ([`ToolOperation::resource_ref`]), and the
+/// arguments' digest.
 ///
 /// # Errors
 ///
@@ -520,23 +584,32 @@ pub fn table_operation(
     tool_name: &str,
     arguments: &Value,
 ) -> Result<BoundOperation, OperationNotMapped> {
-    let row = rows
-        .iter()
-        .find(|row| row.tool == tool_name)
-        .ok_or(OperationNotMapped)?;
-    let id = row
-        .id_arguments
-        .iter()
-        .find_map(|name| resource_identifier(arguments.get(*name)?))
-        .unwrap_or_else(|| "*".to_owned());
-    let mut resource = format!("{provider_type}:{}/{id}", row.resource_kind);
-    if resource.len() > MAX_RESOURCE_REF_BYTES {
-        resource = format!("{provider_type}:{}/*", row.resource_kind);
-    }
-    BoundOperation::new(row.operation_id, resource, arguments)
+    let row = table_row(rows, tool_name)?;
+    BoundOperation::new(
+        row.operation_id,
+        row.resource_ref(provider_type, arguments),
+        arguments,
+    )
 }
 
-fn resource_identifier(value: &Value) -> Option<String> {
+/// The row `rows` lists for `tool_name`.
+///
+/// # Errors
+///
+/// [`OperationNotMapped`] for a tool `rows` does not list.
+pub fn table_row<'a>(
+    rows: &'a [ToolOperation],
+    tool_name: &str,
+) -> Result<&'a ToolOperation, OperationNotMapped> {
+    rows.iter()
+        .find(|row| row.tool == tool_name)
+        .ok_or(OperationNotMapped)
+}
+
+/// A resource identifier argument as text: a non-empty string or a number,
+/// bounded and free of control characters.
+#[must_use]
+pub fn resource_identifier(value: &Value) -> Option<String> {
     let text = match value {
         Value::String(text) => text.trim().to_owned(),
         Value::Number(number) => number.to_string(),
