@@ -25,7 +25,9 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"strings"
+	"unicode"
 )
 
 // ValidationError names the field that was refused and why.
@@ -135,7 +137,59 @@ func validateOIDC(document OIDCDocument) (OIDCDocument, error) {
 	}
 	document.LoginDomains = domains
 
+	if err := validateEntra(&document); err != nil {
+		return OIDCDocument{}, err
+	}
+
 	return document, nil
+}
+
+// entraTenantID is a lower-case GUID. The aliases "common", "organizations"
+// and "consumers" are not tenants.
+var entraTenantID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+const maxEntraTenants = 64
+
+// validateEntra checks the Entra fields. Without `entra` they must be empty,
+// so a stored document never carries settings nothing reads.
+func validateEntra(document *OIDCDocument) error {
+	document.EntraAPIScope = strings.TrimSpace(document.EntraAPIScope)
+	document.EntraFederatedTokenFile = strings.TrimSpace(document.EntraFederatedTokenFile)
+	document.EntraAgentBlueprintID = strings.TrimSpace(document.EntraAgentBlueprintID)
+	if !document.Entra {
+		if len(document.EntraTenants) != 0 || document.EntraAPIScope != "" ||
+			document.EntraFederatedTokenFile != "" || document.EntraAgentBlueprintID != "" {
+			return invalid("entra", "Entra settings need entra: true")
+		}
+		return nil
+	}
+	if len(document.EntraTenants) == 0 || len(document.EntraTenants) > maxEntraTenants {
+		return invalid("entra_tenants", fmt.Sprintf("Entra mode needs 1 to %d tenant ids", maxEntraTenants))
+	}
+	tenants := make([]string, 0, len(document.EntraTenants))
+	seen := map[string]bool{}
+	for _, raw := range document.EntraTenants {
+		tid := strings.ToLower(strings.TrimSpace(raw))
+		if !entraTenantID.MatchString(tid) {
+			return invalid("entra_tenants", "each entry must be a tenant id (GUID); common, organizations and consumers are not tenants")
+		}
+		if !seen[tid] {
+			seen[tid] = true
+			tenants = append(tenants, tid)
+		}
+	}
+	document.EntraTenants = tenants
+	if document.EntraAPIScope != "" && strings.ContainsFunc(document.EntraAPIScope, unicode.IsSpace) {
+		return invalid("entra_api_scope", "the API scope is one scope without whitespace")
+	}
+	if document.EntraFederatedTokenFile != "" && !strings.HasPrefix(document.EntraFederatedTokenFile, "/") {
+		return invalid("entra_federated_token_file", "the federated token file must be an absolute path")
+	}
+	if document.EntraAgentBlueprintID != "" && !entraTenantID.MatchString(strings.ToLower(document.EntraAgentBlueprintID)) {
+		return invalid("entra_agent_blueprint_id", "the blueprint id must be an application id (GUID)")
+	}
+	document.EntraAgentBlueprintID = strings.ToLower(document.EntraAgentBlueprintID)
+	return nil
 }
 
 // normalizeScopes de-duplicates, preserves the operator's order, and guarantees

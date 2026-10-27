@@ -131,6 +131,32 @@ type OIDCDocument struct {
 	// AdoptSCIMUsers lets this provider's FIRST login adopt an account a SCIM
 	// client provisioned. See SAMLDocument.AdoptSCIMUsers.
 	AdoptSCIMUsers bool `json:"adopt_scim_users"`
+
+	// Entra marks a Microsoft Entra ID application (ADR-0039 decision 4).
+	// It takes effect only with ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED
+	// on; with the flag off it is stored and ignored. In Entra mode the
+	// sign-in accepts only the v2 issuer of an EntraTenants tenant, requires
+	// `tid` and `oid`, requests EntraAPIScope and the cp1 capability, and
+	// retains the middle-tier access token as a delegation assertion.
+	Entra bool `json:"entra,omitempty"`
+
+	// EntraTenants is the tenant-id allow-list (lower-case GUIDs). Required
+	// when Entra is set.
+	EntraTenants []string `json:"entra_tenants,omitempty"`
+
+	// EntraAPIScope is the middle-tier API scope requested at sign-in. Empty
+	// means api://<client_id>/.default.
+	EntraAPIScope string `json:"entra_api_scope,omitempty"`
+
+	// EntraFederatedTokenFile is the path of a projected workload identity
+	// token that authenticates the middle tier for on-behalf-of exchange. A
+	// path, never a secret. Empty: no classic OBO exchanger is built unless
+	// the policy revision allows the client secret.
+	EntraFederatedTokenFile string `json:"entra_federated_token_file,omitempty"`
+
+	// EntraAgentBlueprintID is the agent identity blueprint application id
+	// for Agent ID OBO. Empty: no Agent OBO exchanger is built.
+	EntraAgentBlueprintID string `json:"entra_agent_blueprint_id,omitempty"`
 }
 
 // Two fields that a reader might expect here are absent on purpose, because
