@@ -206,14 +206,15 @@ The two cross-account flows, and nothing else (#1076):
 {{- end -}}
 {{- end -}}
 {{- /*
-RUNTIME -> WORKER (#1081): for each of the three worker durables, its INFO
+RUNTIME -> WORKER (#1081): for each of the six worker durables (three
+legacy, three governed: ADR-0039, #1115), its INFO
 and MSG.NEXT API subjects (imported under the JS.RUNTIME.API prefix) and its
 ack subjects, as SERVICE exports to WORKER only; and WORKER imports exactly
 those, mapped as the workers' JetStream API prefix expects.
 */ -}}
 {{- $rtServices := dict -}}
 {{- $rtServiceTo := dict -}}
-{{- range $pair := list "ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1" "ELITEA_RT_V1_AGENT.elitea-agent-worker-v1" "ELITEA_RT_V1_INDEX.elitea-index-worker-v1" -}}
+{{- range $pair := list "ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1" "ELITEA_RT_V1_AGENT.elitea-agent-worker-v1" "ELITEA_RT_V1_INDEX.elitea-index-worker-v1" "ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-governed-v1" "ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1" "ELITEA_RT_V1_INDEX.elitea-index-worker-governed-v1" -}}
 {{- $_ := set $rtServices (printf "$JS.API.CONSUMER.INFO.%s" $pair) "" -}}
 {{- $_ := set $rtServices (printf "$JS.API.CONSUMER.MSG.NEXT.%s" $pair) "stream" -}}
 {{- $_ := set $rtServices (printf "$JS.ACK.%s.>" $pair) "" -}}

@@ -118,6 +118,7 @@ func (s *Service) AvailableTools(ctx context.Context, request Request) (Result, 
 			InputBundleID: admitted.InputBundle.ID, InputBundleVersion: admitted.InputBundle.Version, InputBundleMediaType: admitted.InputBundle.MediaType, InputBundleByteLength: uint64(len(admitted.InputBundle.Manifest)), InputBundleDigest: admitted.InputBundle.Digest,
 			CapabilityID: executiondomain.ToolkitAvailableToolsCapability, CapabilityVersion: s.policy.CapabilityVersion, ResourceClass: s.policy.ResourceClass, IsolationClass: s.policy.IsolationClass, Priority: s.policy.Priority, Deadline: admitted.Outcome.Deadline, LimitsRevision: s.policy.LimitsRevision,
 			ToolkitType: admitted.Binding.ToolkitType, ToolkitID: strconv.FormatInt(request.ToolkitID, 10), SettingsEntryID: admitted.Binding.SettingsEntryID,
+			SecurityContext: admitted.Outcome.SecurityContext,
 		})
 		if err != nil {
 			return Result{}, err

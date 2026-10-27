@@ -61,6 +61,24 @@ var KnownStreams = map[string]string{
 	StreamIndex:    ConsumerIndex,
 }
 
+// The governed durables (ADR-0039, #1115): one per stream, filtered on the
+// governed subjects (elitea.rt.v1.<route>.g.*). Only a worker that verifies
+// the execution security context binds to them, so a governed command never
+// reaches a legacy consumer; the claim refuses it there anyway
+// (GOVERNED_WORKER_REQUIRED).
+const (
+	ConsumerValidateGoverned = "elitea-configuration-worker-governed-v1"
+	ConsumerAgentGoverned    = "elitea-agent-worker-governed-v1"
+	ConsumerIndexGoverned    = "elitea-index-worker-governed-v1"
+)
+
+// KnownGovernedStreams maps each stream to its governed durable consumer.
+var KnownGovernedStreams = map[string]string{
+	StreamValidate: ConsumerValidateGoverned,
+	StreamAgent:    ConsumerAgentGoverned,
+	StreamIndex:    ConsumerIndexGoverned,
+}
+
 // Headers. Neither is authority: only the signed envelope in the body is
 // trusted, and the worker compares the subject's hash token with the signed
 // command's idempotency key before it claims.
@@ -161,6 +179,27 @@ func FilterSubject(stream string) (string, error) {
 		return "", err
 	}
 	return SubjectRoot + "." + route + ".d.*", nil
+}
+
+// GovernedFilterSubject is the governed consumer's filter:
+// elitea.rt.v1.<route>.g.*. The stream carries it beside FilterSubject.
+func GovernedFilterSubject(stream string) (string, error) {
+	route, err := RouteToken(stream)
+	if err != nil {
+		return "", err
+	}
+	return SubjectRoot + "." + route + ".g.*", nil
+}
+
+// GovernedDeliverySubject is the subject a governed command (one with a
+// security context reference) is published on. The hash token is the same
+// as DeliverySubject's, and one delivery id is only ever governed or not.
+func GovernedDeliverySubject(stream, deliveryID string) (string, error) {
+	route, err := RouteToken(stream)
+	if err != nil {
+		return "", err
+	}
+	return SubjectRoot + "." + route + ".g." + DeliveryToken(deliveryID), nil
 }
 
 // DeliveryToken is the hash token that names one delivery:

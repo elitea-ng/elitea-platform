@@ -384,6 +384,9 @@ func (s *ContentServer) GetInput(request *runtimev1.GetInputRequestV1, stream gr
 	if err != nil {
 		return contentStatus(codes.Unauthenticated)
 	}
+	if isSecurityContextContentID(claim.ContentID) {
+		return s.getSecurityContext(ctx, claim, stream)
+	}
 	authorization, err := s.authorizer.AuthorizeContent(ctx, claim)
 	if err != nil || authorization.ResourceProjectID == "" || authorization.InputBundleID == "" || authorization.CapabilityID == "" || authorization.SemanticRole == "" || authorization.ExpectedMediaType == "" || authorization.ExpectedLength <= 0 {
 		return contentStatus(codes.PermissionDenied)

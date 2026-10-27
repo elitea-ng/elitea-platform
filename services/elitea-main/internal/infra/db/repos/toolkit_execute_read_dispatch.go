@@ -65,6 +65,9 @@ func (r *ToolkitExecuteReadJobsRepository) LoadPendingToolkitExecuteRead(
 	if err := dispatch.Validate(); err != nil {
 		return toolkitexecutionapp.ToolkitExecuteReadDispatch{}, fmt.Errorf("invalid stored direct toolkit dispatch: %w", err)
 	}
+	if dispatch.SecurityContext, err = loadSecurityContextReference(ctx, sharedRows(r.store), r.policy.CredentialProfile, dispatch.ExecutionID); err != nil {
+		return toolkitexecutionapp.ToolkitExecuteReadDispatch{}, err
+	}
 	return dispatch, nil
 }
 

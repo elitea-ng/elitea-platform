@@ -121,8 +121,10 @@ func consumerFor(stream string) string {
 // bindCommandStreams verifies every stream a configured route publishes into
 // and returns their handles. A stream shared by two routes must keep the
 // longer route's commands, so its MaxAge requirement is the longest deadline
-// of the routes on it.
-func bindCommandStreams(ctx context.Context, js jetstream.JetStream, config Config, toolkit standaloneToolkitRoute) ([]jetstream.Stream, error) {
+// of the routes on it. governed requires each stream's governed subject and
+// durable: set when governed commands can be published (the flag is on, or
+// the continuation guard saw governed pins at boot).
+func bindCommandStreams(ctx context.Context, js jetstream.JetStream, config Config, toolkit standaloneToolkitRoute, governed bool) ([]jetstream.Stream, error) {
 	deadlines := map[string]time.Duration{config.CommandStream: validationDeadlineTTL}
 	messageBytes := map[string]int{config.CommandStream: productionTransportMessageBytes}
 	need := func(stream string, deadline time.Duration) {
@@ -153,6 +155,7 @@ func bindCommandStreams(ctx context.Context, js jetstream.JetStream, config Conf
 			Stream:          stream,
 			MinMaxAge:       deadlines[stream] + commandbus.MaxAgeMargin,
 			MaxMessageBytes: messageBytes[stream],
+			Governed:        governed,
 		})
 		if err != nil {
 			return nil, err

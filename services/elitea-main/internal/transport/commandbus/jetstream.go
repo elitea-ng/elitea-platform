@@ -97,6 +97,16 @@ func NewJetStreamAppender(js jetstream.JetStream, streams ...jetstream.Stream) (
 // "<stream>:<sequence>" for a stored (or already live, byte-identical)
 // command.
 func (a *JetStreamAppender) Append(ctx context.Context, stream, deliveryID string, value []byte) (string, error) {
+	return a.append(ctx, stream, deliveryID, value, DeliverySubject)
+}
+
+// AppendGoverned publishes a governed command on the stream's governed
+// subject, with the same de-duplication and re-offer compare as Append.
+func (a *JetStreamAppender) AppendGoverned(ctx context.Context, stream, deliveryID string, value []byte) (string, error) {
+	return a.append(ctx, stream, deliveryID, value, GovernedDeliverySubject)
+}
+
+func (a *JetStreamAppender) append(ctx context.Context, stream, deliveryID string, value []byte, subjectFor func(string, string) (string, error)) (string, error) {
 	if !validDeliveryID(deliveryID) {
 		return "", executionapp.ErrInvalidPreparedEnvelope
 	}
@@ -104,7 +114,7 @@ func (a *JetStreamAppender) Append(ctx context.Context, stream, deliveryID strin
 	if !ok {
 		return "", fmt.Errorf("command bus stream %q is not bound to this appender", stream)
 	}
-	subject, err := DeliverySubject(stream, deliveryID)
+	subject, err := subjectFor(stream, deliveryID)
 	if err != nil {
 		return "", err
 	}
@@ -202,6 +212,11 @@ type StreamRequirement struct {
 	// MaxMessageBytes is the largest message the routes may publish; the
 	// stream's MaxMsgSize must admit it.
 	MaxMessageBytes int
+	// Governed requires the governed subject and its durable (#1115): set
+	// when this deployment can publish governed commands. Unset, a stream
+	// with or without the governed subject is accepted, so a flag-off Main
+	// boots on a bootstrap from before or after the governed subjects.
+	Governed bool
 }
 
 // BindStream reads the stream's configuration and refuses one that is not
@@ -221,14 +236,23 @@ func BindStream(ctx context.Context, js jetstream.JetStream, want StreamRequirem
 	if err != nil {
 		return nil, err
 	}
+	governedFilter, err := GovernedFilterSubject(want.Stream)
+	if err != nil {
+		return nil, err
+	}
 	stream, err := js.Stream(ctx, want.Stream)
 	if err != nil {
 		return nil, fmt.Errorf("command bus stream %s is unavailable (the nats-bootstrap Job creates it): %w", want.Stream, err)
 	}
 	c := stream.CachedInfo().Config
 	var problems []string
-	if len(c.Subjects) != 1 || c.Subjects[0] != filter {
-		problems = append(problems, fmt.Sprintf("subjects %v, want [%s]", c.Subjects, filter))
+	legacyOnly := len(c.Subjects) == 1 && c.Subjects[0] == filter
+	withGoverned := len(c.Subjects) == 2 && c.Subjects[0] == filter && c.Subjects[1] == governedFilter
+	switch {
+	case want.Governed && !withGoverned:
+		problems = append(problems, fmt.Sprintf("subjects %v, want [%s %s] (the governed profile needs the governed subject)", c.Subjects, filter, governedFilter))
+	case !want.Governed && !legacyOnly && !withGoverned:
+		problems = append(problems, fmt.Sprintf("subjects %v, want [%s] or [%s %s]", c.Subjects, filter, filter, governedFilter))
 	}
 	if c.Retention != jetstream.WorkQueuePolicy {
 		problems = append(problems, "retention is not WorkQueue")
@@ -269,6 +293,18 @@ func BindStream(ctx context.Context, js jetstream.JetStream, want StreamRequirem
 	if cc.FilterSubject != filter || cc.AckPolicy != jetstream.AckExplicitPolicy || cc.AckWait != AckWait || cc.MaxDeliver != -1 {
 		return nil, fmt.Errorf("command bus consumer %s/%s is not the contract's shape (filter %q, ack %v, ack_wait %s, max_deliver %d); re-run the nats-bootstrap Job",
 			want.Stream, durable, cc.FilterSubject, cc.AckPolicy, cc.AckWait, cc.MaxDeliver)
+	}
+	if want.Governed {
+		governedDurable := KnownGovernedStreams[want.Stream]
+		governed, err := stream.Consumer(ctx, governedDurable)
+		if err != nil {
+			return nil, fmt.Errorf("command bus consumer %s/%s is unavailable (the nats-bootstrap Job creates it): %w", want.Stream, governedDurable, err)
+		}
+		gc := governed.CachedInfo().Config
+		if gc.FilterSubject != governedFilter || gc.AckPolicy != jetstream.AckExplicitPolicy || gc.AckWait != AckWait || gc.MaxDeliver != -1 {
+			return nil, fmt.Errorf("command bus consumer %s/%s is not the contract's shape (filter %q, ack %v, ack_wait %s, max_deliver %d); re-run the nats-bootstrap Job",
+				want.Stream, governedDurable, gc.FilterSubject, gc.AckPolicy, gc.AckWait, gc.MaxDeliver)
+		}
 	}
 	return stream, nil
 }

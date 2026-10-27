@@ -51,6 +51,7 @@ func validationWorkerCommand(protocolRevision string, dispatch executionapp.Vali
 		Traceparent:        dispatch.Traceparent,
 		Tracestate:         dispatch.Tracestate,
 		LimitsRevision:     dispatch.LimitsRevision,
+		SecurityContextRef: dispatch.SecurityContext.ReferenceProto(),
 		CapabilityCommand: &runtimev1.WorkerCommandV1_ConfigurationValidation{
 			ConfigurationValidation: &runtimev1.ConfigurationValidationCommandV1{
 				ConfigurationRevisionId: command.ConfigurationRevisionID,
@@ -106,6 +107,7 @@ func agentExecutionWorkerCommand(protocolRevision string, dispatch agentexecutio
 		Traceparent:        dispatch.Traceparent,
 		Tracestate:         dispatch.Tracestate,
 		LimitsRevision:     dispatch.LimitsRevision,
+		SecurityContextRef: dispatch.SecurityContext.ReferenceProto(),
 		CapabilityCommand: &runtimev1.WorkerCommandV1_AgentExecution{
 			AgentExecution: &runtimev1.AgentExecutionCommandV1{
 				RequestEntryId:  dispatch.RequestEntryID,
@@ -156,6 +158,7 @@ func toolkitExecuteReadWorkerCommand(
 		Traceparent:        dispatch.Traceparent,
 		Tracestate:         dispatch.Tracestate,
 		LimitsRevision:     dispatch.LimitsRevision,
+		SecurityContextRef: dispatch.SecurityContext.ReferenceProto(),
 		CapabilityCommand: &runtimev1.WorkerCommandV1_ToolkitExecuteRead{
 			ToolkitExecuteRead: &runtimev1.ToolkitExecuteReadCommandV1{
 				RequestEntryId: dispatch.RequestEntryID,
@@ -221,6 +224,7 @@ func indexIngestWorkerCommand(protocolRevision string, dispatch indexingapp.Inde
 		Traceparent:        dispatch.Traceparent,
 		Tracestate:         dispatch.Tracestate,
 		LimitsRevision:     dispatch.LimitsRevision,
+		SecurityContextRef: dispatch.SecurityContext.ReferenceProto(),
 		CapabilityCommand: &runtimev1.WorkerCommandV1_IndexIngest{
 			IndexIngest: indexCommand,
 		},

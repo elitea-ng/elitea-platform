@@ -39,6 +39,13 @@ type StreamAppender interface {
 	Append(ctx context.Context, stream, deliveryID string, value []byte) (entryID string, err error)
 }
 
+// GovernedStreamAppender publishes a governed command on the stream's
+// governed subject (GovernedDeliverySubject). A producer refuses a governed
+// command when its appender cannot.
+type GovernedStreamAppender interface {
+	AppendGoverned(ctx context.Context, stream, deliveryID string, value []byte) (entryID string, err error)
+}
+
 type ProducerConfig struct {
 	Stream                 string
 	ProtocolRevision       string
@@ -148,7 +155,18 @@ func (p *Producer) appendPreparedCommand(ctx context.Context, deliveryID string,
 	if !validDeliveryID(deliveryID) || command == nil || command.GetIdempotencyKey() != deliveryID {
 		return executionapp.ErrInvalidPreparedEnvelope
 	}
-	if _, err := p.appender.Append(ctx, p.config.Stream, deliveryID, append([]byte(nil), prepared.Bytes...)); err != nil {
+	value := append([]byte(nil), prepared.Bytes...)
+	if command.GetSecurityContextRef() != nil {
+		governed, ok := p.appender.(GovernedStreamAppender)
+		if !ok {
+			return fmt.Errorf("%w: a governed command needs the governed delivery subject", executionapp.ErrInvalidPreparedEnvelope)
+		}
+		if _, err := governed.AppendGoverned(ctx, p.config.Stream, deliveryID, value); err != nil {
+			return fmt.Errorf("append governed worker command reference: %w", err)
+		}
+		return nil
+	}
+	if _, err := p.appender.Append(ctx, p.config.Stream, deliveryID, value); err != nil {
 		return fmt.Errorf("append worker command reference: %w", err)
 	}
 	return nil

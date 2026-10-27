@@ -9,8 +9,10 @@ import (
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
@@ -106,6 +108,25 @@ type Server struct {
 	// steering hands a live agent claim its queued steering messages;
 	// nil when steering is not composed.
 	steering SteeringClaimer
+	// governedPins reads an execution's credential profile pin, so a
+	// governed execution's command without a security context is refused
+	// (#1115); nil when this deployment never ran governed, which keeps the
+	// flag-off claim path free of a new read.
+	governedPins AdmissionPinReader
+}
+
+// AdmissionPinReader reads the credential profile an execution was admitted
+// under (profile.PinReader).
+type AdmissionPinReader interface {
+	ReadPin(ctx context.Context, executionID string) (profile.Pin, error)
+}
+
+// WithGovernedPins lets the claim refuse a governed execution's command that
+// carries no security context reference. Composed when the governance flag
+// is on or the continuation guard saw governed pins at boot.
+func (s *Server) WithGovernedPins(pins AdmissionPinReader) *Server {
+	s.governedPins = pins
+	return s
 }
 
 // WorkspaceWrapUps answers whether execution executionID is a running cloud
@@ -185,6 +206,9 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 	canonicalEnvelope, err := proto.MarshalOptions{Deterministic: true}.Marshal(request.GetSignedCommand())
 	if err != nil {
 		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION, "The signed worker command is malformed.", false), nil
+	}
+	if rejection := s.governedClaimRejection(ctx, request, command); rejection != nil {
+		return rejection, nil
 	}
 
 	decision, err := s.claims.Claim(ctx, executionapp.ClaimRequest{
@@ -996,3 +1020,39 @@ func settlementOutcomeProto(outcome executionapp.SettlementOutcome) runtimev1.Ex
 }
 
 var _ runtimev1.RuntimeControlServiceServer = (*Server)(nil)
+
+// governedClaimRejection holds a governed command back from a worker that
+// cannot verify its security context, before any claim is attempted
+// (ADR-0039, #1115). A command with field 65 needs a worker that declared
+// governed_security_context_v1; one without it is refused when the
+// execution's pin is governed, because that command lost the context its
+// admission recorded. Neither is retryable: the same command and worker
+// meet the same answer.
+func (s *Server) governedClaimRejection(ctx context.Context, request *runtimev1.ClaimCommandRequestV1, command *runtimev1.WorkerCommandV1) *runtimev1.ClaimCommandResponseV1 {
+	if ref := command.GetSecurityContextRef(); ref != nil {
+		reference, err := securitycontext.ReferenceFromProto(ref)
+		if err == nil && reference.ContentID != securitycontext.ContentIDPrefix+command.GetExecutionId() {
+			err = securitycontext.ErrInvalidContext
+		}
+		if err != nil {
+			logClaimRejection(ctx, "security_context_ref", command, err)
+			return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION, "The security context reference is malformed.", false)
+		}
+		if !request.GetGovernedSecurityContextV1() {
+			return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_GOVERNED_WORKER_REQUIRED, "The command needs a worker that verifies the execution security context.", false)
+		}
+		return nil
+	}
+	if s.governedPins == nil {
+		return nil
+	}
+	pin, err := s.governedPins.ReadPin(ctx, command.GetExecutionId())
+	if err != nil {
+		logClaimRejection(ctx, "read_admission_pin", command, err)
+		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE, "The durable claim state is temporarily unavailable.", true)
+	}
+	if pin.Profile == profile.ProfileGoverned {
+		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_GOVERNED_CONTEXT_MISSING, "The governed execution's command carries no security context.", false)
+	}
+	return nil
+}

@@ -1102,6 +1102,37 @@ nats:
             - service: "$JS.ACK.ELITEA_RT_V1_INDEX.elitea-index-worker-v1.>"
               accounts:
                 - WORKER
+            # The governed durables (ADR-0039, #1115), the same three services each.
+            - service: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-governed-v1"
+              accounts:
+                - WORKER
+            - service: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-governed-v1"
+              response_type: stream
+              accounts:
+                - WORKER
+            - service: "$JS.ACK.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-governed-v1.>"
+              accounts:
+                - WORKER
+            - service: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1"
+              accounts:
+                - WORKER
+            - service: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1"
+              response_type: stream
+              accounts:
+                - WORKER
+            - service: "$JS.ACK.ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1.>"
+              accounts:
+                - WORKER
+            - service: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-governed-v1"
+              accounts:
+                - WORKER
+            - service: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_INDEX.elitea-index-worker-governed-v1"
+              response_type: stream
+              accounts:
+                - WORKER
+            - service: "$JS.ACK.ELITEA_RT_V1_INDEX.elitea-index-worker-governed-v1.>"
+              accounts:
+                - WORKER
           users:
             # elitea-main-runtime: elitea-main's SECOND identity, the PRODUCER
             # of the command bus (ELITEA_RUNTIME_NATS_URL,
@@ -1116,8 +1147,11 @@ nats:
                 publish:
                   allow:
                     - "elitea.rt.v1.validate.d.*"
+                    - "elitea.rt.v1.validate.g.*"
                     - "elitea.rt.v1.agent.d.*"
+                    - "elitea.rt.v1.agent.g.*"
                     - "elitea.rt.v1.index.d.*"
+                    - "elitea.rt.v1.index.g.*"
                     - "elitea.rt.v1.replay.wake"
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_VALIDATE"
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_AGENT"
@@ -1129,8 +1163,11 @@ nats:
                     # The drained preflight (cmd/index-v2-preflight) and the
                     # boot check that the durable exists.
                     - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-governed-v1"
                     - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1"
                     - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-governed-v1"
                   deny:
                     - "$KV.>"
                     - "$JS.ACK.>"
@@ -1169,11 +1206,17 @@ nats:
                     - "$JS.API.STREAM.CREATE.ELITEA_RT_V1_INDEX"
                     - "$JS.API.STREAM.UPDATE.ELITEA_RT_V1_INDEX"
                     - "$JS.API.CONSUMER.CREATE.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1.>"
+                    - "$JS.API.CONSUMER.CREATE.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-governed-v1.>"
                     - "$JS.API.CONSUMER.CREATE.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1.>"
+                    - "$JS.API.CONSUMER.CREATE.ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1.>"
                     - "$JS.API.CONSUMER.CREATE.ELITEA_RT_V1_INDEX.elitea-index-worker-v1.>"
+                    - "$JS.API.CONSUMER.CREATE.ELITEA_RT_V1_INDEX.elitea-index-worker-governed-v1.>"
                     - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-governed-v1"
                     - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1"
                     - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-governed-v1"
                 subscribe:
                   allow:
                     - "_INBOX_elitea-nats-bootstrap-runtime.>"
@@ -1254,6 +1297,40 @@ nats:
             - service:
                 account: RUNTIME
                 subject: "$JS.ACK.ELITEA_RT_V1_INDEX.elitea-index-worker-v1.>"
+            # The governed durables (ADR-0039, #1115), the same three services each.
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-governed-v1"
+              to: "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-governed-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-governed-v1"
+              to: "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-governed-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.ACK.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-governed-v1.>"
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1"
+              to: "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1"
+              to: "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.ACK.ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1.>"
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-governed-v1"
+              to: "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-governed-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_INDEX.elitea-index-worker-governed-v1"
+              to: "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_INDEX.elitea-index-worker-governed-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.ACK.ELITEA_RT_V1_INDEX.elitea-index-worker-governed-v1.>"
           users:
             # elitea-worker: the CONSUMER of the command bus, presented by the
             # Rust and the Python worker alike. It binds to the durables the
@@ -1271,14 +1348,23 @@ nats:
                   allow:
                     # Bind (CONSUMER.INFO) and pull (MSG.NEXT), imported.
                     - "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+                    - "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-governed-v1"
                     - "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+                    - "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1"
                     - "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+                    - "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-governed-v1"
                     - "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+                    - "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-governed-v1"
                     - "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+                    - "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1"
                     - "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+                    - "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_INDEX.elitea-index-worker-governed-v1"
                     - "$JS.ACK.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1.>"
+                    - "$JS.ACK.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-governed-v1.>"
                     - "$JS.ACK.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1.>"
+                    - "$JS.ACK.ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1.>"
                     - "$JS.ACK.ELITEA_RT_V1_INDEX.elitea-index-worker-v1.>"
+                    - "$JS.ACK.ELITEA_RT_V1_INDEX.elitea-index-worker-governed-v1.>"
                     # The dead-letter record: KV put, and the bucket bind, in
                     # WORKER's own JetStream.
                     - "$KV.ELITEA_RT_V1_DEADLETTER.>"
