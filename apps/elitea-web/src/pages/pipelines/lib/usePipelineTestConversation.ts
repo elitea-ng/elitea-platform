@@ -31,6 +31,8 @@ interface State {
   readonly activeParticipant: unknown;
   readonly isCreating: boolean;
   readonly hasFailed: boolean;
+  /** Main's named refusal of the pipeline's composition (FU-249), shown instead of the retry hint. */
+  readonly failureMessage?: string | undefined;
   readonly groups: MessageGroups;
   readonly runs: readonly EditorTestRun[];
   readonly selectedRun: EditorTestRun | undefined;
@@ -53,6 +55,15 @@ const EMPTY: State = {
   selectedRun: undefined,
 };
 const LIVE_TEST_CONVERSATIONS = new Map<string, State>();
+/** The `{code, error}` body Main writes for a refused composition; a retry cannot succeed. */
+function compositionRefusal(error: unknown): string | undefined {
+  const failure = error instanceof Error && "failure" in error ? (error as { failure?: unknown }).failure : undefined;
+  if (typeof failure !== "object" || failure === null || (failure as { kind?: unknown }).kind !== "http") return undefined;
+  const body = (failure as { body?: unknown }).body;
+  if (typeof body !== "object" || body === null) return undefined;
+  const { code, error: message } = body as Readonly<Record<string, unknown>>;
+  return code === "APPLICATION_COMPOSITION_INVALID" && typeof message === "string" && message.trim() !== "" ? message : undefined;
+}
 export function resetPipelineTestConversationsForTests(): void {
   LIVE_TEST_CONVERSATIONS.clear();
 }
@@ -293,9 +304,9 @@ export function usePipelineTestConversation(
         LIVE_TEST_CONVERSATIONS.set(expected, next);
         setState(next);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (window.active && ticket === operation.current)
-          setState({ ...EMPTY, key: expected, hasFailed: true });
+          setState({ ...EMPTY, key: expected, hasFailed: true, failureMessage: compositionRefusal(error) });
       })
       .finally(() => {
         if (window.active && ticket === operation.current) pending.current = false;

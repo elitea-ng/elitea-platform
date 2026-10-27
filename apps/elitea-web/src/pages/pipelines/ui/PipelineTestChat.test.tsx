@@ -164,6 +164,31 @@ describe('PipelineTestChat', () => {
     await waitFor(() => expect(routes.creates).toBe(1));
   });
 
+  it("shows Main's named composition refusal instead of the retry hint (FU-249)", async () => {
+    installConversationRoutes();
+    const refusal = 'Pipeline "FP inner parallel" has Parallel node "inner", so it cannot run inside another agent or pipeline ("FP nested" → "FP inner parallel"): for now a Parallel node runs only in the pipeline you start. Start pipeline "FP inner parallel" directly, or remove the attachment before saving.';
+    server.use(http.post('*/elitea_core/conversations/prompt_lib/:projectId', () =>
+      HttpResponse.json({ code: 'APPLICATION_COMPOSITION_INVALID', error: refusal }, { status: 400 })));
+    const user = userEvent.setup();
+    renderPane(<PipelineTestChat settings={{}} disableChat={false} slotRef={undefined} identity={IDENTITY} user={USER} />);
+
+    await user.click(await screen.findByTestId('chat-message-input'));
+
+    expect(await screen.findByTestId('edit-pipeline-test-chat-error')).toHaveTextContent(refusal);
+  });
+
+  it('keeps the retry hint for any other failure', async () => {
+    installConversationRoutes();
+    server.use(http.post('*/elitea_core/conversations/prompt_lib/:projectId', () =>
+      HttpResponse.json({ error: 'boom' }, { status: 500 })));
+    const user = userEvent.setup();
+    renderPane(<PipelineTestChat settings={{}} disableChat={false} slotRef={undefined} identity={IDENTITY} user={USER} />);
+
+    await user.click(await screen.findByTestId('chat-message-input'));
+
+    expect(await screen.findByTestId('edit-pipeline-test-chat-error')).toHaveTextContent('Could not start a test conversation');
+  });
+
   it('Clear releases the local test context without creating or deleting durable records', async () => {
     const routes = installConversationRoutes();
     const user = userEvent.setup();
