@@ -103,12 +103,30 @@ env = {e["name"]: e.get("value") for e in c["env"]}
 assert env["SSL_CERT_FILE"] == "/run/elitea-runtime/trust-bundle.crt", env
 assert env["ELITEA_RUST_LOG"] == "info", env
 assert env["ELITEA_RUST_TRACE"] == "info", env
+# ADR-0039 #1115: the worker serves governed commands exactly when Main
+# governs credentials; the default is off (the legacy worker).
+assert env["ELITEA_WORKER_GOVERNED_CONTEXT"] == "false", env
 # The retired Python worker's SDK settings. Nothing in the Rust worker reads
 # these names; present, they are dead configuration that reads as governing
 # something — and ELITEA_SENSITIVE_TOOLS would look like the policy while the
 # file beside it is what actually applies.
 for absent in ("ELITEA_DISABLE_SYSTEM_CA", "REQUESTS_CA_BUNDLE", "ELITEA_SENSITIVE_TOOLS"):
     assert absent not in env, f"{absent} is an SDK setting the Rust worker never reads"
+PY
+
+echo "== the governed security context follows Main's credential governance =="
+"$HELM" template t "$CHART" "${RENDER[@]}" \
+  --set-string main.env.ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED=true \
+  >"$TMP/governed.yaml" 2>"$TMP/governed.err" || true
+python3 - "$TMP/governed.yaml" <<'PY' && ok "governed main: the worker opts into the governed context" || bad "governed worker env: $(tail -1 "$TMP/governed.err")"
+import sys, yaml
+
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+dep = next(d for d in docs
+           if d["kind"] == "Deployment" and d["metadata"]["name"] == "elitea-worker")
+c = next(x for x in dep["spec"]["template"]["spec"]["containers"] if x["name"] == "worker")
+env = {e["name"]: e.get("value") for e in c["env"]}
+assert env["ELITEA_WORKER_GOVERNED_CONTEXT"] == "true", env
 PY
 
 echo "== runtime.json is complete =="
