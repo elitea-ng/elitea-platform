@@ -121,6 +121,10 @@ func TestCallbackChecksThePermissionAndAudits(t *testing.T) {
 		{"code refused", use, provideroauth.ErrInvalidGrant, http.StatusBadGateway, "consent.code_rejected"},
 		{"provider down", use, provideroauth.ErrProviderUnavailable, http.StatusBadGateway, ""},
 		{"not configured", use, provideroauth.ErrProviderNotConfigured, http.StatusNotFound, ""},
+		{"target gone", use, provideroauth.ErrTargetNotFound, http.StatusNotFound, "consent.target_missing"},
+		{"binding suspended", use, provideroauth.ErrBindingNotUsable, http.StatusConflict, "consent.binding_not_usable"},
+		{"concurrent consent", use, provideroauth.ErrGrantConflict, http.StatusConflict, "consent.conflict"},
+		{"no access token", use, provideroauth.ErrInvalid, http.StatusBadGateway, "consent.token_invalid"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

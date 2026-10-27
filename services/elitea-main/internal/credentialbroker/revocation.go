@@ -34,9 +34,26 @@ func breakerSettings(name string, isSuccessful func(error) bool) gobreaker.Setti
 		MaxRequests: 1,
 		Timeout:     breakerOpenFor,
 		ReadyToTrip: func(c gobreaker.Counts) bool { return c.ConsecutiveFailures >= breakerTrips },
-		// A caller that gave up says nothing about the dependency.
-		IsExcluded:   func(err error) bool { return errors.Is(err, context.Canceled) },
+		// A caller that gave up (cancelled, or its own deadline passed)
+		// says nothing about the dependency.
+		IsExcluded:   func(err error) bool { return errors.Is(err, errCallerGone) },
 		IsSuccessful: isSuccessful,
+	}
+}
+
+// errCallerGone marks a failure that happened after the caller's context
+// ended: a breaker never counts it.
+var errCallerGone = errors.New("credential broker: the caller's context ended")
+
+// callerAware runs fn and, when it failed after ctx ended, wraps the error
+// so the breaker excludes it. errors.Is still sees the original error.
+func callerAware[T any](ctx context.Context, fn func() (T, error)) func() (T, error) {
+	return func() (T, error) {
+		v, err := fn()
+		if err != nil && ctx.Err() != nil {
+			return v, errors.Join(errCallerGone, err)
+		}
+		return v, err
 	}
 }
 
@@ -44,21 +61,44 @@ func breakerOpen(err error) bool {
 	return errors.Is(err, gobreaker.ErrOpenState) || errors.Is(err, gobreaker.ErrTooManyRequests)
 }
 
+// maxIdPBreakers bounds the per-tenant identity provider breakers one
+// replica keeps; past it, the least recently created is dropped.
+const maxIdPBreakers = 1024
+
 // breakerExchanger trips on identity provider unavailability only: an
 // interaction requirement, a claims challenge or a rejection is the IdP
-// answering.
+// answering. There is one breaker per Entra tenant, so one customer's
+// outage never denies another customer's exchanges.
 type breakerExchanger struct {
-	next    obo.Exchanger
-	breaker *gobreaker.CircuitBreaker[obo.AccessToken]
+	next     obo.Exchanger
+	mu       sync.Mutex
+	breakers map[string]*gobreaker.CircuitBreaker[obo.AccessToken]
+	order    []string
 }
 
 func newBreakerExchanger(next obo.Exchanger) *breakerExchanger {
-	return &breakerExchanger{next: next, breaker: gobreaker.NewCircuitBreaker[obo.AccessToken](breakerSettings(
-		"credential-broker-idp", func(err error) bool { return err == nil || !errors.Is(err, obo.ErrUnavailable) }))}
+	return &breakerExchanger{next: next, breakers: map[string]*gobreaker.CircuitBreaker[obo.AccessToken]{}}
+}
+
+func (e *breakerExchanger) breaker(tenant string) *gobreaker.CircuitBreaker[obo.AccessToken] {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if b, ok := e.breakers[tenant]; ok {
+		return b
+	}
+	if len(e.order) >= maxIdPBreakers {
+		delete(e.breakers, e.order[0])
+		e.order = e.order[1:]
+	}
+	b := gobreaker.NewCircuitBreaker[obo.AccessToken](breakerSettings(
+		"credential-broker-idp", func(err error) bool { return err == nil || !errors.Is(err, obo.ErrUnavailable) }))
+	e.breakers[tenant] = b
+	e.order = append(e.order, tenant)
+	return b
 }
 
 func (e *breakerExchanger) Exchange(ctx context.Context, a obo.Assertion, r obo.ExchangeRequest) (obo.AccessToken, error) {
-	return e.breaker.Execute(func() (obo.AccessToken, error) { return e.next.Exchange(ctx, a, r) })
+	return e.breaker(a.TenantID).Execute(callerAware(ctx, func() (obo.AccessToken, error) { return e.next.Exchange(ctx, a, r) }))
 }
 
 // epochGuard reads the current epochs through the PostgreSQL breaker.
@@ -76,7 +116,7 @@ func newEpochGuard(reader epoch.Reader) *epochGuard {
 }
 
 func (g *epochGuard) read(ctx context.Context, keys []epoch.SecurityEpoch) ([]epoch.SecurityEpoch, error) {
-	return g.breaker.Execute(func() ([]epoch.SecurityEpoch, error) { return g.reader.Read(ctx, keys) })
+	return g.breaker.Execute(callerAware(ctx, func() ([]epoch.SecurityEpoch, error) { return g.reader.Read(ctx, keys) }))
 }
 
 // redemptionKeys are the epochs one permitted redemption depends on: the

@@ -68,10 +68,9 @@ type DelegationCustody interface {
 }
 
 // ProviderTokenSource answers a valid provider access token for a provider
-// OAuth grant (*provideroauth.TokenSource). A credential cache can wrap it.
-type ProviderTokenSource interface {
-	AccessToken(ctx context.Context, key provideroauth.GrantKey) (provideroauth.AccessToken, error)
-}
+// OAuth grant. Its tokens never go through the replica cache: the grant
+// row is their authority, read on every use.
+type ProviderTokenSource = provideroauth.ProviderTokenSource
 
 // Store persists invocations, decisions and redemptions.
 type Store interface {
@@ -349,16 +348,6 @@ func (b *Broker) Redeem(ctx context.Context, req RedeemRequest) (result Result, 
 		return Result{}, fmt.Errorf("credential broker: record the redemption: %w", err)
 	}
 	return Result{Envelope: envelope}, nil
-}
-
-// Cache is the broker's credential cache, for the other credential paths
-// that put material through it (provider OAuth access tokens). Nil when no
-// cache is composed.
-func (b *Broker) Cache() cache.Store {
-	if b.cache == nil {
-		return nil
-	}
-	return b.cache
 }
 
 // verifiedContext checks the stored context against the request digest and

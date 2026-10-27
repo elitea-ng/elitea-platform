@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/refresh"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -289,7 +290,17 @@ func TestConfigFromEnv(t *testing.T) {
 		jiraClientIDEnv: "c", jiraClientSecretEnv: "s",
 		jiraRedirectURIEnv: "https://e.example.com/api/v2/credential_consent/jira:callback", jiraTimeoutEnv: "2h",
 	})); err == nil {
-		t.Fatal("a timeout above one minute was accepted")
+		t.Fatal("a timeout above MaxTimeout was accepted")
+	}
+	// Every accepted timeout fits the default refresh lease, so it boots.
+	if MaxTimeout >= refresh.DefaultLeaseTTL {
+		t.Fatalf("MaxTimeout %s does not fit the refresh lease %s", MaxTimeout, refresh.DefaultLeaseTTL)
+	}
+	if _, err := ConfigFromEnv(env(map[string]string{
+		jiraClientIDEnv: "c", jiraClientSecretEnv: "s",
+		jiraRedirectURIEnv: "https://e.example.com/api/v2/credential_consent/jira:callback", jiraTimeoutEnv: "30s",
+	})); err == nil {
+		t.Fatal("a timeout as long as the refresh lease was accepted")
 	}
 }
 

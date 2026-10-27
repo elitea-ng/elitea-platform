@@ -187,6 +187,12 @@ func (r *Reconciler) Tick(ctx context.Context, provider string) (bool, error) {
 	passCtx, cancel := context.WithTimeout(ctx, r.interval*9/10)
 	defer cancel()
 	_, passErr := r.Pass(passCtx, provider)
+	// Only the provider's own failure counts toward its outage threshold.
+	// A shutdown (the caller's context ended) or a store error says nothing
+	// about the provider: the pass is not recorded, and its lease expires.
+	if passErr != nil && (ctx.Err() != nil || !errors.Is(passErr, ErrProviderUnavailable)) {
+		return true, passErr
+	}
 	if passErr != nil {
 		r.errors.Add(context.WithoutCancel(ctx), 1, metric.WithAttributes(attribute.String("provider", provider)))
 	}
@@ -287,6 +293,12 @@ func (r *Reconciler) Pass(ctx context.Context, provider string) (Report, error) 
 			rec, known := byObject[objectKey{object.Ref.ProviderTenant, object.Ref.ID}]
 			if !known {
 				orphans = append(orphans, object)
+				continue
+			}
+			// List documents no generation semantics: a listed object whose
+			// generation differs (or is not reported) is resolved, and only
+			// Resolve can call it replaced.
+			if object.Ref.Generation != rec.Ref.Generation {
 				continue
 			}
 			seen[rec.ID] = observation{resolved: object}

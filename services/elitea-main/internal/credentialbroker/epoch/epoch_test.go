@@ -333,3 +333,19 @@ func (q failingQuerier) Query(context.Context, string, ...any) (pgx.Rows, error)
 	q.t.Fatal("a statement was sent")
 	return nil, nil
 }
+
+// A record revoked, denied and revoked again is tracked afresh: the denied
+// change leaves no slot behind that could later evict the new one.
+func TestDeniedChangeLeavesNoTrackingSlot(t *testing.T) {
+	h := newTestHub(t, nil, func() time.Time { return t0 })
+	change := Change{Epoch: SecurityEpoch{Kind: KindMandate, ID: idA, Value: 6}, ChangedAt: t0}
+	h.track(change)
+	h.ObserveDenied(context.Background(), []SecurityEpoch{{Kind: KindMandate, ID: idA, Value: 5}})
+	change.Epoch.Value, change.ChangedAt = 7, t0.Add(time.Second)
+	h.track(change)
+	h.trackMu.Lock()
+	defer h.trackMu.Unlock()
+	if len(h.order) != 1 || len(h.changed) != 1 {
+		t.Fatalf("order %d changed %d", len(h.order), len(h.changed))
+	}
+}

@@ -28,7 +28,7 @@ type Config struct {
 	Holder string
 	// LeaseTTL bounds one holder's refresh. It must exceed the provider call
 	// timeout, or a slow holder loses its fence while the provider rotates
-	// the refresh token. Default 30s.
+	// the refresh token. Default DefaultLeaseTTL.
 	LeaseTTL time.Duration
 	// MaxWait bounds how long one call waits for a refresh, its own or
 	// another replica's. Default 45s.
@@ -38,6 +38,9 @@ type Config struct {
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
 }
+
+// DefaultLeaseTTL is the lease lifetime when Config leaves it unset.
+const DefaultLeaseTTL = 30 * time.Second
 
 // Coordinator joins refreshes of one partition inside the process
 // (singleflight) and across replicas (the lease).
@@ -55,7 +58,7 @@ func NewCoordinator(leases LeaseStore, cfg Config) (*Coordinator, error) {
 		return nil, errors.New("refresh: a lease store and a holder name are required")
 	}
 	if cfg.LeaseTTL <= 0 {
-		cfg.LeaseTTL = 30 * time.Second
+		cfg.LeaseTTL = DefaultLeaseTTL
 	}
 	if cfg.MaxWait <= 0 {
 		cfg.MaxWait = 45 * time.Second

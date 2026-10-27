@@ -15200,6 +15200,11 @@ export type completeCredentialConsentResponse404 = {
   status: 404;
 };
 
+export type completeCredentialConsentResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
 export type completeCredentialConsentResponse502 = {
   data: ErrorResponse;
   status: 502;
@@ -15214,6 +15219,7 @@ export type completeCredentialConsentResponseError = (
   | completeCredentialConsentResponse401
   | completeCredentialConsentResponse403
   | completeCredentialConsentResponse404
+  | completeCredentialConsentResponse409
   | completeCredentialConsentResponse502
 ) & {
   headers: Headers;
@@ -15243,7 +15249,7 @@ export const getCompleteCredentialConsentUrl = (
 };
 
 /**
- * The provider redirects the user's browser here. The server consumes the state once (an unknown, expired, reused or foreign state is refused), checks again that the caller holds `models.credentials.governed.use` in the state's project, exchanges the code with the PKCE verifier and the exact redirect URI, seals the refresh and access tokens and writes a security audit event. Mounted on the same condition as startCredentialConsent.
+ * The provider redirects the user's browser here. The server consumes the state once (an unknown, expired, reused or foreign state is refused), checks again that the caller holds `models.credentials.governed.use` in the state's project and that the target binding still exists and the agent binding is still active, exchanges the code with the PKCE verifier and the exact redirect URI, seals the refresh and access tokens and writes a security audit event. Mounted on the same condition as startCredentialConsent.
  * @summary Complete provider OAuth consent
  */
 export const completeCredentialConsent = async (

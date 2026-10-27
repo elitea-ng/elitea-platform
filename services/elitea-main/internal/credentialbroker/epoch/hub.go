@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -222,6 +223,9 @@ func (h *Hub) ObserveDenied(ctx context.Context, stale []SecurityEpoch) {
 				earliest = at
 			}
 			delete(h.changed, k)
+			// Drop its slot too: a later change of the same record is then
+			// tracked afresh, and evicting a stale slot never deletes it.
+			h.order = slices.DeleteFunc(h.order, func(o trackKey) bool { return o == k })
 		}
 	}
 	h.trackMu.Unlock()

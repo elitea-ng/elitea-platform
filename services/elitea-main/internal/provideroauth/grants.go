@@ -121,6 +121,9 @@ SELECT id::text FROM elitea_identity.provider_oauth_grants
 		}
 		aad := k.aad(grantID)
 		access := g.sealer.seal(c.Tokens.AccessToken, aad.with(purposeAccess))
+		// A re-consent whose response carries no refresh token keeps the one
+		// the grant holds (sealed under the same grant id); only a response
+		// that carries one replaces it.
 		var refresh []byte
 		if c.Tokens.RefreshToken != "" {
 			refresh = g.sealer.seal(c.Tokens.RefreshToken, aad.with(purposeRefresh))
@@ -143,7 +146,7 @@ VALUES ($1::uuid, $2, $3, $4::uuid, $5, $6::uuid, $7, $8, $9, $10, $11, $12, $13
 			_, err = tx.Exec(ctx, `
 UPDATE elitea_identity.provider_oauth_grants
    SET state = 'active', generation = generation + 1,
-       refresh_token_ciphertext = $2, access_token_ciphertext = $3, access_token_expires_at = $4,
+       refresh_token_ciphertext = COALESCE($2, refresh_token_ciphertext), access_token_ciphertext = $3, access_token_expires_at = $4,
        granted_scopes = $5, consented_at = $6, consent_redirect_uri = $7, key_label = $8,
        updated_at = clock_timestamp()
  WHERE id = $1::uuid`, grantID, refresh, access, expires, scopes, now, c.RedirectURI, KeyLabel)

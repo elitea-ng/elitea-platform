@@ -28186,8 +28186,10 @@ paths:
         The provider redirects the user's browser here. The server consumes
         the state once (an unknown, expired, reused or foreign state is
         refused), checks again that the caller holds
-        `models.credentials.governed.use` in the state's project, exchanges
-        the code with the PKCE verifier and the exact redirect URI, seals
+        `models.credentials.governed.use` in the state's project and that
+        the target binding still exists and the agent binding is still
+        active, exchanges the code with the PKCE verifier and the exact
+        redirect URI, seals
         the refresh and access tokens and writes a security audit event.
         Mounted on the same condition as startCredentialConsent.
       tags: [admin]
@@ -28223,12 +28225,19 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '404':
-          description: No OAuth application for the provider
+          description: No OAuth application for the provider, or the target binding is gone
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: >
+            The agent binding is no longer active, or another consent for the
+            same grant committed first; start consent again
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '502':
-          description: The provider refused the code or did not answer
+          description: The provider refused the code, answered no access token or did not answer
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

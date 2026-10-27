@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/refresh"
 )
 
 // The provider OAuth variables, one constant each so a search for a
@@ -60,6 +62,11 @@ var supported = []struct {
 	}},
 }
 
+// MaxTimeout bounds one token request. It stays under the default refresh
+// lease, which a refresh must finish inside (NewTokenSource refuses a longer
+// timeout), so every accepted value also boots.
+const MaxTimeout = refresh.DefaultLeaseTTL - 5*time.Second
+
 // envNames are one provider's variables, spelled out so a search for a
 // variable finds where it is read.
 type envNames struct {
@@ -82,7 +89,7 @@ var defaultScopes = map[string][]string{
 //	ELITEA_PROVIDER_OAUTH_<P>_AUTHORIZE_URL   Atlassian default auth.atlassian.com; Aha! required
 //	ELITEA_PROVIDER_OAUTH_<P>_TOKEN_URL       Atlassian default auth.atlassian.com; Aha! required
 //	ELITEA_PROVIDER_OAUTH_<P>_SCOPES          space separated; Atlassian has defaults, Aha! uses none
-//	ELITEA_PROVIDER_OAUTH_<P>_TIMEOUT         Go duration, default 10s
+//	ELITEA_PROVIDER_OAUTH_<P>_TIMEOUT         Go duration, default 10s, at most MaxTimeout
 func ConfigFromEnv(lookup func(string) (string, bool)) ([]ProviderConfig, error) {
 	get := func(name string) string {
 		value, _ := lookup(name)
@@ -108,8 +115,8 @@ func ConfigFromEnv(lookup func(string) (string, bool)) ([]ProviderConfig, error)
 		}
 		if raw := get(s.env.timeout); raw != "" {
 			timeout, err := time.ParseDuration(raw)
-			if err != nil || timeout <= 0 || timeout > time.Minute {
-				return nil, fmt.Errorf("provider OAuth %s: %s must be a duration up to 1m", s.provider, s.env.timeout)
+			if err != nil || timeout <= 0 || timeout > MaxTimeout {
+				return nil, fmt.Errorf("provider OAuth %s: %s must be a duration up to %s", s.provider, s.env.timeout, MaxTimeout)
 			}
 			cfg.Timeout = timeout
 		}

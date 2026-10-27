@@ -251,6 +251,34 @@ func seedGrant(t *testing.T, g *Grants) string {
 	return id
 }
 
+// A re-consent whose token response carries no refresh token keeps the
+// grant's refresh token; one that carries a new one replaces it.
+func TestReconsentWithoutARefreshTokenKeepsTheStoredOne(t *testing.T) {
+	pool := openPool(t, newOAuthDatabase(t))
+	g := newTestGrants(t, pool)
+	id := seedGrant(t, g)
+	again, err := g.save(context.Background(), consented{
+		Key: tKey, RedirectURI: tRedirect, Tokens: TokenResponse{AccessToken: "at-1"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, id, again)
+	snap, err := g.load(context.Background(), tKey)
+	require.NoError(t, err)
+	stored, err := g.openRefresh(snap)
+	require.NoError(t, err)
+	require.Equal(t, "rt-0", stored)
+
+	_, err = g.save(context.Background(), consented{
+		Key: tKey, RedirectURI: tRedirect, Tokens: TokenResponse{AccessToken: "at-2", RefreshToken: "rt-2"},
+	})
+	require.NoError(t, err)
+	snap, err = g.load(context.Background(), tKey)
+	require.NoError(t, err)
+	stored, err = g.openRefresh(snap)
+	require.NoError(t, err)
+	require.Equal(t, "rt-2", stored)
+}
+
 func expireAccessToken(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(),

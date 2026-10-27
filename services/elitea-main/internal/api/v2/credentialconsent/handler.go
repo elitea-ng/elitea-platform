@@ -224,6 +224,23 @@ func (h *Handler) Callback(resolver auth.PermissionResolver, mode string) http.H
 		case errors.Is(err, provideroauth.ErrProviderUnavailable):
 			writeError(w, http.StatusBadGateway, "the provider token endpoint is unavailable")
 			return
+		case errors.Is(err, provideroauth.ErrTargetNotFound):
+			h.refusal(r.Context(), user, name, "consent.target_missing")
+			writeError(w, http.StatusNotFound, "no such target binding for this provider in the project")
+			return
+		case errors.Is(err, provideroauth.ErrBindingNotUsable):
+			h.refusal(r.Context(), user, name, "consent.binding_not_usable")
+			writeError(w, http.StatusConflict, "the agent binding is not active in the project")
+			return
+		case errors.Is(err, provideroauth.ErrGrantConflict):
+			h.refusal(r.Context(), user, name, "consent.conflict")
+			writeError(w, http.StatusConflict, "another consent for this grant completed first; start consent again")
+			return
+		case errors.Is(err, provideroauth.ErrInvalid):
+			// The exchange succeeded but the provider answered no access token.
+			h.refusal(r.Context(), user, name, "consent.token_invalid")
+			writeError(w, http.StatusBadGateway, "the provider answered without an access token")
+			return
 		default:
 			h.logger.ErrorContext(r.Context(), "credential consent callback failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "credential consent: internal error")

@@ -27,6 +27,8 @@ type memStore struct {
 	resolved   map[string]bool
 	health     map[string]*memHealth
 	seq        int
+	// recordsErr, when set, is what Records answers: a store failure.
+	recordsErr error
 }
 
 type memHealth struct {
@@ -95,6 +97,9 @@ func (m *memStore) ClaimPass(_ context.Context, provider, holder string, lease t
 func (m *memStore) Records(_ context.Context, provider string) ([]identity.ExternalAgentIdentity, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.recordsErr != nil {
+		return nil, m.recordsErr
+	}
 	var out []identity.ExternalAgentIdentity
 	for _, e := range m.identities {
 		if e.Ref.Provider == provider {

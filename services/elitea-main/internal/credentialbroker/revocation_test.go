@@ -285,7 +285,44 @@ func TestNoEpochReaderKeepsTheRedemptionPath(t *testing.T) {
 	for i := range 2 {
 		permitted(t, redeem(t, b, nth(t, w, i))).Destroy()
 	}
-	if w.exchanger.calls != 2 || b.Cache() != nil {
+	if w.exchanger.calls != 2 || b.cache != nil {
 		t.Fatalf("exchanges %d", w.exchanger.calls)
+	}
+}
+
+// One Entra tenant's outage opens only that tenant's breaker.
+func TestIdentityProviderBreakerIsPerTenant(t *testing.T) {
+	down := &fakeExchanger{err: fmt.Errorf("%w: 503", obo.ErrUnavailable)}
+	e := newBreakerExchanger(down)
+	ctx := context.Background()
+	for range breakerTrips {
+		_, _ = e.Exchange(ctx, obo.Assertion{TenantID: "tid-a"}, obo.ExchangeRequest{})
+	}
+	if _, err := e.Exchange(ctx, obo.Assertion{TenantID: "tid-a"}, obo.ExchangeRequest{}); !breakerOpen(err) {
+		t.Fatalf("tenant a breaker not open: %v", err)
+	}
+	down.err = nil
+	if _, err := e.Exchange(ctx, obo.Assertion{TenantID: "tid-b"}, obo.ExchangeRequest{}); err != nil {
+		t.Fatalf("tenant b refused by tenant a's breaker: %v", err)
+	}
+}
+
+// A caller whose own deadline passed never trips the database breaker.
+func TestCallerDeadlineDoesNotTripTheEpochBreaker(t *testing.T) {
+	reader := &fakeEpochs{err: context.DeadlineExceeded}
+	g := newEpochGuard(reader)
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	for range breakerTrips * 2 {
+		if _, err := g.read(expired, nil); breakerOpen(err) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("read: %v", err)
+		}
+	}
+	reader.err = errors.New("connection refused")
+	for range breakerTrips {
+		_, _ = g.read(context.Background(), nil)
+	}
+	if _, err := g.read(context.Background(), nil); !breakerOpen(err) {
+		t.Fatalf("a real outage did not open the breaker: %v", err)
 	}
 }

@@ -118,25 +118,8 @@ func (c *Consent) Start(ctx context.Context, r StartRequest) (StartResult, error
 	if !ok {
 		return StartResult{}, ErrProviderNotConfigured
 	}
-	target, err := c.targets.TargetBinding(ctx, r.TenantProjectID, r.TargetBindingID)
-	switch {
-	case errors.Is(err, credentialgrant.ErrTargetNotFound):
-		return StartResult{}, ErrTargetNotFound
-	case err != nil:
-		return StartResult{}, fmt.Errorf("provideroauth: read the target binding: %w", err)
-	}
-	if target.TenantProjectID != r.TenantProjectID || target.ProviderType != r.Provider || target.ID != r.TargetBindingID {
-		return StartResult{}, ErrTargetNotFound
-	}
-	binding, err := c.bindings.GetUsable(ctx, r.AgentBindingID)
-	switch {
-	case errors.Is(err, agentidentity.ErrBindingNotFound):
-		return StartResult{}, ErrBindingNotUsable
-	case err != nil:
-		return StartResult{}, fmt.Errorf("provideroauth: read the agent binding: %w", err)
-	}
-	if binding.TenantProjectID != r.TenantProjectID || binding.State != agentidentity.BindingActive {
-		return StartResult{}, ErrBindingNotUsable
+	if err := c.checkSubjects(ctx, r.TenantProjectID, r.Provider, r.TargetBindingID, r.AgentBindingID); err != nil {
+		return StartResult{}, err
 	}
 
 	state, err := c.randomToken(32)
@@ -177,6 +160,33 @@ VALUES ($1, $2, $3, $4, $5::uuid, $6::uuid, $7, $8, $9, $10)`,
 	}, nil
 }
 
+// checkSubjects answers ErrTargetNotFound unless the target binding exists
+// in the project for the provider, and ErrBindingNotUsable unless the agent
+// binding is active there.
+func (c *Consent) checkSubjects(ctx context.Context, tenantProjectID int64, provider, targetBindingID, agentBindingID string) error {
+	target, err := c.targets.TargetBinding(ctx, tenantProjectID, targetBindingID)
+	switch {
+	case errors.Is(err, credentialgrant.ErrTargetNotFound):
+		return ErrTargetNotFound
+	case err != nil:
+		return fmt.Errorf("provideroauth: read the target binding: %w", err)
+	}
+	if target.TenantProjectID != tenantProjectID || target.ProviderType != provider || target.ID != targetBindingID {
+		return ErrTargetNotFound
+	}
+	binding, err := c.bindings.GetUsable(ctx, agentBindingID)
+	switch {
+	case errors.Is(err, agentidentity.ErrBindingNotFound):
+		return ErrBindingNotUsable
+	case err != nil:
+		return fmt.Errorf("provideroauth: read the agent binding: %w", err)
+	}
+	if binding.TenantProjectID != tenantProjectID || binding.State != agentidentity.BindingActive {
+		return ErrBindingNotUsable
+	}
+	return nil
+}
+
 func (c *Consent) randomToken(n int) (string, error) {
 	b := make([]byte, n)
 	defer clear(b)
@@ -213,7 +223,8 @@ type CallbackResult struct {
 type Authorize func(ctx context.Context, tenantProjectID int64) (userID int64, err error)
 
 // Callback consumes the state (single use), checks it is unexpired, for
-// this provider and the caller's, exchanges the code with the PKCE
+// this provider and the caller's, re-checks the target and the agent
+// binding, exchanges the code with the PKCE
 // verifier and the exact redirect URI, and seals the grant with its audit
 // event.
 func (c *Consent) Callback(ctx context.Context, r CallbackRequest, authorize Authorize) (CallbackResult, error) {
@@ -275,6 +286,12 @@ RETURNING provider_type, tenant_project_id, user_id, agent_binding_id::text, tar
 		// Another user's state: refused, and consumed, so the link cannot
 		// be replayed by its owner either.
 		return CallbackResult{}, ErrStateInvalid
+	}
+	// The binding may have been suspended or the target removed since the
+	// start: re-checked before the code is exchanged, so no grant is stored
+	// for either.
+	if err := c.checkSubjects(ctx, key.TenantProjectID, key.Provider, key.TargetBindingID, key.AgentBindingID); err != nil {
+		return CallbackResult{}, err
 	}
 	tokens, err := client.Exchange(ctx, r.Code, verifier)
 	if err != nil {

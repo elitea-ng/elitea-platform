@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -274,6 +275,51 @@ func TestRecreatedObjectIsReplacedAndCannotBeResumed(t *testing.T) {
 	}
 	if open := f.openFindings(t); len(open) != 0 {
 		t.Fatalf("findings still open: %+v", open)
+	}
+}
+
+// A listed object whose generation differs from the record's (here: the
+// list API reports none) is resolved before anything is called replaced.
+func TestListedGenerationMismatchDefersToResolve(t *testing.T) {
+	f := newFixture(t)
+	f.provider.Generation = 3
+	a := f.activeRecord(t, recordA, 11)
+	f.provider.ListOmitsGeneration = true
+	f.provider.Reset()
+	report := f.pass(t)
+	if got := f.store.Identity(recordA); got != a || len(report.Transitions) != 0 || report.NewOrphans != 0 {
+		t.Fatalf("record = %+v, report %+v", got, report)
+	}
+	if !slices.Contains(f.provider.Calls(), "Resolve") {
+		t.Fatalf("the mismatch was not resolved: %v", f.provider.Calls())
+	}
+}
+
+// Only the provider's own failure counts toward the outage threshold: a
+// pass cut short by shutdown, or a store error, records nothing.
+func TestShutdownAndStoreErrorsAreNotOutages(t *testing.T) {
+	f := newFixture(t)
+	f.activeRecord(t, recordA, 11)
+	f.provider.ListErr = errors.New("idp down")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for pass := 0; pass <= profile.DefaultReconcileOutageThreshold; pass++ {
+		_, _ = f.r.Tick(ctx, "fake")
+		f.clock.Advance(profile.DefaultReconcileInterval)
+	}
+	f.provider.ListErr = nil
+	f.store.recordsErr = errors.New("db down")
+	for pass := 0; pass <= profile.DefaultReconcileOutageThreshold; pass++ {
+		if ran, err := f.r.Tick(context.Background(), "fake"); !ran || err == nil || errors.Is(err, reconcile.ErrProviderUnavailable) {
+			t.Fatalf("store failure: ran %v err %v", ran, err)
+		}
+		f.clock.Advance(profile.DefaultReconcileInterval)
+	}
+	if denied, _ := f.store.ProviderAdmissionDenied(context.Background(), "fake"); denied {
+		t.Fatal("shutdown or store errors denied the provider")
+	}
+	if n := errorCount(t, f.reader, "fake"); n != 0 {
+		t.Fatalf("agentidentity_reconcile_errors_total{provider=fake} = %d", n)
 	}
 }
 

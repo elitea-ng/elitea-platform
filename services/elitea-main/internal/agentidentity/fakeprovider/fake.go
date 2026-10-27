@@ -33,6 +33,9 @@ type Provider struct {
 	Generation int64
 	// ListErr, when set, is what List answers: a provider outage.
 	ListErr error
+	// ListOmitsGeneration makes List answer generation 0, as an IdP whose
+	// list API does not report one; Resolve still answers it.
+	ListOmitsGeneration bool
 	// PageSize bounds a List page (2 when zero), so a test pages.
 	PageSize int
 
@@ -261,7 +264,11 @@ func (p *Provider) List(_ context.Context, spec agentidentity.ListSpec) (agentid
 		if o.Deleted || o.Replaced || (spec.ProviderTenant != "" && o.Ref.ProviderTenant != spec.ProviderTenant) {
 			continue
 		}
-		live = append(live, o.resolved())
+		object := o.resolved()
+		if p.ListOmitsGeneration {
+			object.Ref.Generation = 0
+		}
+		live = append(live, object)
 	}
 	offset := 0
 	if spec.PageToken != "" {
