@@ -130,6 +130,11 @@ type Config struct {
 	// authority (Atlassian 3LO, Aha! OAuth2). Optional: without it such a
 	// use is BACKEND_UNAVAILABLE.
 	ProviderTokens ProviderTokenSource
+	// ProviderAuthorizations mints the authorization_reference of a
+	// provider grant a chat turn's user must consent to (#1123: remote MCP
+	// servers). Optional: without it, or for a provider it does not serve,
+	// a missing provider consent is DENIED.
+	ProviderAuthorizations provideroauth.AuthorizationReferences
 	// Store wraps the security audit appender: the decision and the
 	// redemption events are appended in the store's transactions.
 	Store    Store

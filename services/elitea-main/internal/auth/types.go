@@ -134,6 +134,23 @@ func ContextWithAuthenticatedUser(ctx context.Context, user User, source Authent
 	return context.WithValue(ctx, ctxKeyAuthenticationSource, source)
 }
 
+const ctxKeyCallingApplication ctxKey = "auth.calling_application"
+
+// ContextWithCallingApplication records the client application a verified
+// credential names, for example the OAuth client of an inbound MCP token
+// (#1123). Only an authenticating middleware that verified the credential
+// sets it; the governed security context records it as the caller's
+// calling application. It is never an identity.
+func ContextWithCallingApplication(ctx context.Context, application string) context.Context {
+	return context.WithValue(ctx, ctxKeyCallingApplication, application)
+}
+
+// CallingApplicationFromContext answers the recorded calling application.
+func CallingApplicationFromContext(ctx context.Context) (string, bool) {
+	application, ok := ctx.Value(ctxKeyCallingApplication).(string)
+	return application, ok && application != ""
+}
+
 func AuthenticationSourceFromContext(ctx context.Context) (AuthenticationSource, bool) {
 	source, ok := ctx.Value(ctxKeyAuthenticationSource).(AuthenticationSource)
 	return source, ok && source != AuthenticationSourceUnknown

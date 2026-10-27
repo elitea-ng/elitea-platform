@@ -14,6 +14,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/refresh"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/governedmcp"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/provideroauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
@@ -40,6 +41,21 @@ func providerOAuthAtBoot(
 	masterKey func() ([]byte, error),
 	logger *slog.Logger,
 ) (providerOAuth, error) {
+	return providerOAuthWithMCPAtBoot(admission, lookup, pool, masterKey, nil, logger)
+}
+
+// providerOAuthWithMCPAtBoot is providerOAuthAtBoot with the governed MCP
+// OAuth service (#1123) as one more provider: its grants, consent and
+// refresh are the same custody, under provider type "mcp". Nil mcp is
+// providerOAuthAtBoot.
+func providerOAuthWithMCPAtBoot(
+	admission profile.Admission,
+	lookup func(string) (string, bool),
+	pool *pgxpool.Pool,
+	masterKey func() ([]byte, error),
+	mcp *governedmcp.Service,
+	logger *slog.Logger,
+) (providerOAuth, error) {
 	if !admission.Governed() {
 		return providerOAuth{}, nil
 	}
@@ -47,7 +63,7 @@ func providerOAuthAtBoot(
 	if err != nil {
 		return providerOAuth{}, err
 	}
-	if len(configs) == 0 {
+	if len(configs) == 0 && mcp == nil {
 		return providerOAuth{}, nil
 	}
 	if pool == nil || masterKey == nil {
@@ -88,15 +104,21 @@ func providerOAuthAtBoot(
 	if err != nil {
 		return providerOAuth{}, err
 	}
+	var refreshers []provideroauth.Refresher
+	var perTarget []provideroauth.TargetAuthorizers
+	if mcp != nil {
+		refreshers, perTarget = []provideroauth.Refresher{mcp}, []provideroauth.TargetAuthorizers{mcp}
+		providers = append(providers, mcp.Provider())
+	}
 	tokens, err := provideroauth.NewTokenSource(provideroauth.TokenSourceConfig{
-		Grants: grants, Leases: leases, Coordinator: coordinator, Clients: clients,
+		Grants: grants, Leases: leases, Coordinator: coordinator, Clients: clients, Refreshers: refreshers,
 	})
 	if err != nil {
 		return providerOAuth{}, err
 	}
 	references := repos.NewCredentialGrants(pool, audit)
 	consent, err := provideroauth.NewConsent(provideroauth.ConsentConfig{
-		Grants: grants, Clients: clients, Targets: references, Bindings: repos.NewAgentIdentityBindings(pool, audit),
+		Grants: grants, Clients: clients, PerTarget: perTarget, Targets: references, Bindings: repos.NewAgentIdentityBindings(pool, audit),
 	})
 	if err != nil {
 		return providerOAuth{}, err

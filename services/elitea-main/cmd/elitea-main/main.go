@@ -840,14 +840,22 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// Provider delegated OAuth (#1121): consent routes and the token source
 	// the broker reads for Jira, Confluence and Aha! oauth_delegated uses.
 	// Nil with the flag off or with no provider OAuth application.
-	providerOAuthGoverned, err := providerOAuthAtBoot(credentialAdmission, os.LookupEnv, pool,
-		func() ([]byte, error) { return v2secrets.MasterKeyFromEnv(os.Getenv) }, logger)
+	vaultMasterKey := func() ([]byte, error) { return v2secrets.MasterKeyFromEnv(os.Getenv) }
+	// Governed MCP (#1123): the inbound resource server and remote MCP
+	// OAuth, which joins provider OAuth custody below. Empty with the flag
+	// off.
+	governedMCPComposed, err := governedMCPAtBoot(credentialAdmission, os.LookupEnv, pool, vaultMasterKey, publicOrigin, logger)
+	if err != nil {
+		return err
+	}
+	providerOAuthGoverned, err := providerOAuthWithMCPAtBoot(credentialAdmission, os.LookupEnv, pool,
+		vaultMasterKey, governedMCPComposed.Outbound, logger)
 	if err != nil {
 		return err
 	}
 	credentialBroker, err := credentialBrokerAtBoot(credentialAdmission, os.LookupEnv, pool, credentialDecider,
 		credentialGovernanceStore, agentIdentity.Broker, entraGoverned, providerOAuthGoverned.Tokens, credentialCatalog, credentialRevision,
-		securityInvalidations, logger)
+		securityInvalidations, governedMCPComposed.authorizations(), logger)
 	if err != nil {
 		return err
 	}
@@ -2760,6 +2768,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CredentialConsent:             providerOAuthGoverned.Consent,
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
 		AgentAssertionWellKnown:       eliteaNative.WellKnown,
+		GovernedMCPInbound:            governedMCPComposed.Inbound,
+		GovernedMCPOutbound:           governedMCPComposed.Outbound,
 		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,
 		OnToolkitCleanupJournal:       startToolkitReconciler,
