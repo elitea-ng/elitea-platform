@@ -27,6 +27,18 @@ import { PromptIcon } from '../icons/prompt-icon';
 import { ReasonIcon } from '../icons/reason-icon';
 
 import { SETTINGS_LAYOUT } from './settings.constants';
+import {
+  nativeDrawerSx,
+  nativeHeaderSx,
+  nativeHeaderTextSx,
+  nativeIconSx,
+  nativeItemSx,
+  nativeItemTextSx,
+  nativeMenuContainerSx,
+  nativeSectionGroupSx,
+  nativeSectionHeaderSx,
+  sentenceCase,
+} from './settingsDrawer.native';
 import { t } from '@/shared/i18n';
 import { typeScale } from '@/shared/brand/typeScale';
 
@@ -53,6 +65,11 @@ export interface SettingsDrawerProps {
   sections: SettingsSection[];
   /** Called when a tab item is clicked. */
   onItemClick?: (tabId: string) => void;
+  /**
+   * `native`: the desktop app's sidebar look (its tint, compact rows, sentence-case
+   * section names, no header bar), for Settings in a dialog over the app.
+   */
+  variant?: 'web' | 'native';
 }
 
 /*
@@ -150,7 +167,8 @@ const menuItemTextSx =
  * Left sidebar navigation for the Settings page. Ported from
  * `apps/elitea-ui/src/[fsd]/features/settings/ui/settings-drawer/SettingsDrawer.jsx`.
  */
-export const SettingsDrawer = memo(function SettingsDrawer({ sections, onItemClick }: SettingsDrawerProps) {
+export const SettingsDrawer = memo(function SettingsDrawer({ sections, onItemClick, variant = 'web' }: SettingsDrawerProps) {
+  const native = variant === 'native';
   const location = useLocation();
 
   const isActiveTab = useCallback(
@@ -186,14 +204,14 @@ export const SettingsDrawer = memo(function SettingsDrawer({ sections, onItemCli
       sections.map((section, sectionIndex) => (
         <Box
           key={section.section}
-          sx={sectionGroupSx}
+          sx={native ? nativeSectionGroupSx : sectionGroupSx}
         >
-          {sectionIndex > 0 && <Divider sx={sectionDividerSx} />}
+          {sectionIndex > 0 && !native && <Divider sx={sectionDividerSx} />}
           <Box
             component="span"
-            sx={sectionHeaderSx}
+            sx={native ? nativeSectionHeaderSx : sectionHeaderSx}
           >
-            {section.section}
+            {native ? sentenceCase(section.section) : section.section}
           </Box>
           {section.tabs.map((tab) => {
             const IconComponent = getIconComponent(tab.id);
@@ -212,9 +230,9 @@ export const SettingsDrawer = memo(function SettingsDrawer({ sections, onItemCli
                 type="button"
                 aria-current={isActive ? 'page' : undefined}
                 onClick={() => handleItemClick(tab.id)}
-                sx={menuItemSx(isActive)}
+                sx={native ? nativeItemSx(isActive) : menuItemSx(isActive)}
               >
-                <Box sx={iconWrapperSx(isActive)}>
+                <Box sx={native ? nativeIconSx : iconWrapperSx(isActive)}>
                   <SvgIcon
                     component={IconComponent}
                     inheritViewBox
@@ -223,7 +241,7 @@ export const SettingsDrawer = memo(function SettingsDrawer({ sections, onItemCli
                 </Box>
                 <Box
                   component="span"
-                  sx={menuItemTextSx(isActive)}
+                  sx={native ? nativeItemTextSx : menuItemTextSx(isActive)}
                 >
                   {tab.label}
                 </Box>
@@ -232,21 +250,21 @@ export const SettingsDrawer = memo(function SettingsDrawer({ sections, onItemCli
           })}
         </Box>
       )),
-    [sections, isActiveTab, handleItemClick],
+    [sections, isActiveTab, handleItemClick, native],
   );
 
   return (
-    <Box sx={drawerSx}>
-      <Box sx={headerSx}>
+    <Box sx={native ? nativeDrawerSx : drawerSx}>
+      <Box sx={native ? nativeHeaderSx : headerSx}>
         <Box
           component="span"
-          sx={headerTextSx}
+          sx={native ? nativeHeaderTextSx : headerTextSx}
         >
           {t('shared.ui.settings.drawer.title', 'Settings')}
         </Box>
       </Box>
 
-      <Box sx={menuContainerSx}>{renderedSections}</Box>
+      <Box sx={native ? nativeMenuContainerSx : menuContainerSx}>{renderedSections}</Box>
     </Box>
   );
 });
@@ -331,3 +349,4 @@ const sectionDividerSx: SxProps<Theme> = (theme) => ({
   borderColor: theme.vars.palette.border.table,
   margin: 0,
 });
+

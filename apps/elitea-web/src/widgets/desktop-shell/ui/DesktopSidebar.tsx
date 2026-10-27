@@ -2,7 +2,8 @@
  * The desktop's left sidebar, workspace-first: search (the command palette),
  * "Local work" — each opened folder, expandable to the threads run in it
  * (`LocalWorkSection.tsx`) — then a compact, collapsible "Elitea" list that
- * opens the web features in the main area, and the account menu at the
+ * opens the web features in the main area (agents, pipelines, skills,
+ * toolkits and MCPs in its "Workshop" group, `WorkshopGroup.tsx`), and the account menu at the
  * bottom (`AccountMenu.tsx`), which also carries Credentials, Catalog and help.
  *
  * Each folder carries its project binding (its menu re-binds it), so there is
@@ -13,19 +14,14 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
-import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
 import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
 import AppsOutlinedIcon from '@mui/icons-material/AppsOutlined';
-import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
-import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import ChatBubbleOutlineOutlinedIcon from '@mui/icons-material/ChatBubbleOutlineOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
 import SearchIcon from '@mui/icons-material/Search';
-import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import ViewSidebarOutlinedIcon from '@mui/icons-material/ViewSidebarOutlined';
 import Box from '@mui/material/Box';
 import ButtonBase from '@mui/material/ButtonBase';
@@ -41,7 +37,7 @@ import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { computeIsSelectedProjectPublic } from '@/widgets/sidebar';
 
-import { ACCOUNT_MENU_ITEMS, eliteaItems, selectedEliteaItem, type EliteaItemValue } from '../lib/eliteaSections';
+import { ACCOUNT_MENU_ITEMS, WORKSHOP_ITEMS, eliteaItems, selectedEliteaItem, type EliteaItem, type EliteaItemValue } from '../lib/eliteaSections';
 import type { ShellAction } from '../lib/shellActions';
 import { SIDEBAR_TINT_OPACITY } from '../lib/sidebarTint';
 import { useDesktopLayout } from '../model/desktopLayout.store';
@@ -53,14 +49,11 @@ import { LocalWorkSection } from './LocalWorkSection';
 import { ShellRow, SectionCaption } from './rows';
 import { modKey } from './shortcutLabel';
 import { TitleBarSpacer } from './TitleBarSpacer';
+import { WORKSHOP_ICONS, WorkshopGroup } from './WorkshopGroup';
 
 const ITEM_ICONS: Partial<Record<EliteaItemValue, React.JSX.Element>> = {
+  ...WORKSHOP_ICONS,
   chat: <ChatBubbleOutlineOutlinedIcon />,
-  agents: <SmartToyOutlinedIcon />,
-  pipelines: <AccountTreeOutlinedIcon />,
-  skills: <AutoAwesomeOutlinedIcon />,
-  toolkits: <BuildOutlinedIcon />,
-  mcps: <HubOutlinedIcon />,
   applications: <AppsOutlinedIcon />,
   artifacts: <Inventory2OutlinedIcon />,
 };
@@ -175,6 +168,10 @@ function useExpandOnChat(pathname: string, expandElitea: () => void, expandChats
   }, [onChat, pathname, expandElitea, expandChats]);
 }
 
+function isWorkshopItem(item: EliteaItem): boolean {
+  return WORKSHOP_ITEMS.has(item.value);
+}
+
 /** Which Elitea row is highlighted: on a conversation (or the archived page) its own row is, not Chats. */
 function highlightedItem(pathname: string, selected: EliteaItemValue | undefined): EliteaItemValue | undefined {
   if (selected === 'chat' && pathname !== '/chat' && pathname !== '/chat/') return undefined;
@@ -188,6 +185,7 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
     [permissions, selectedProjectId],
   );
   const sidebarItems = items.filter((item) => !ACCOUNT_MENU_ITEMS.has(item.value));
+  const topItems = sidebarItems.filter((item) => !isWorkshopItem(item));
   const selected = selectedEliteaItem(location.pathname, sidebarItems);
   const vibrancy = useDesktopLayout((state) => state.platform.vibrancy);
   const [eliteaOpen, toggleElitea, expandElitea] = useEliteaSectionOpen();
@@ -274,7 +272,7 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
             {t('desktop.shell.elitea', 'Elitea')}
           </SectionCaption>
           <Box component="ul" sx={{ margin: 0, padding: 0, listStyle: 'none' }}>
-            {(eliteaOpen ? sidebarItems : sidebarItems.filter((item) => item.value === selected)).map((item) => (
+            {(eliteaOpen ? topItems : sidebarItems.filter((item) => item.value === selected)).map((item) => (
               <li key={item.value}>
                 <ShellRow
                   testId={`shell-elitea-${item.value}`}
@@ -291,6 +289,7 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
                 )}
               </li>
             ))}
+            {eliteaOpen && <WorkshopGroup items={sidebarItems.filter(isWorkshopItem)} selected={highlighted} run={run} />}
           </Box>
         </Box>
       </Box>

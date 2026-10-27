@@ -46,6 +46,7 @@ function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Wo
       createRoute({ getParentRoute: () => rootRoute, path: '/settings', component: page('settings') }),
       createRoute({ getParentRoute: () => rootRoute, path: '/elitea-catalog', component: page('catalog') }),
       createRoute({ getParentRoute: () => rootRoute, path: '/apps', component: page('apps') }),
+      createRoute({ getParentRoute: () => rootRoute, path: '/skills', component: page('skills') }),
     ]),
     history: createMemoryHistory({ initialEntries: [options.path ?? '/workspaces'] }),
   });
@@ -183,7 +184,16 @@ describe('DesktopFrame sidebar', () => {
     await user.click(within(sidebar).getByTestId('shell-account'));
     await user.click(await screen.findByRole('menuitem', { name: /^Settings/ }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
-    expect(screen.getByTestId('page-title')).toHaveTextContent('Settings');
+    // Settings opens as a dialog over the page it came from, and closing goes back there.
+    const dialog = await screen.findByTestId('settings-dialog');
+    expect(within(dialog).getByTestId('settings')).toBeInTheDocument();
+    // Behind it, a still copy of the Catalog page: inert, without the live page's test ids.
+    expect(document.querySelector('[inert] main')).not.toBeNull();
+    expect(screen.queryByTestId('catalog')).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/elitea-catalog'));
+    expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument();
+    expect(screen.getByTestId('page-title')).toHaveTextContent('Catalog');
     // The sidebar is the way to everything: the title row carries no "back to Local work" button.
     const main = screen.getByRole('main');
     expect(within(main).queryByRole('button', { name: 'Local work' })).not.toBeInTheDocument();
@@ -192,6 +202,29 @@ describe('DesktopFrame sidebar', () => {
     act(() => useDesktopLayout.getState().setSidebarOpen(false));
     expect(within(main).getByRole('button', { name: 'Show sidebar' })).toBeInTheDocument();
     expect(within(main).queryByRole('button', { name: 'Local work' })).not.toBeInTheDocument();
+  });
+});
+
+describe('DesktopFrame Workshop group', () => {
+  // Without permissions only Skills is offered of the five (agents, pipelines, toolkits and MCPs are gated).
+  it('keeps agents, pipelines and the rest in a group that is closed until opened, and remembers it', async () => {
+    const user = userEvent.setup();
+    const { router } = mount();
+    const sidebar = await screen.findByTestId('desktop-sidebar');
+    const workshop = within(sidebar).getByTestId('shell-elitea-workshop');
+    expect(within(sidebar).queryByTestId('shell-elitea-skills')).not.toBeInTheDocument();
+    expect(within(workshop).getByRole('button', { name: 'Workshop' })).toHaveAttribute('aria-expanded', 'false');
+    await user.click(within(workshop).getByRole('button', { name: 'Workshop' }));
+    expect(localStorage.getItem('el.desktop.workshopOpen')).toBe('true');
+    await user.click(within(within(sidebar).getByTestId('shell-elitea-skills')).getByRole('button'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/skills'));
+    expect(await screen.findByTestId('skills')).toBeInTheDocument();
+  });
+
+  it('opens itself when one of its pages is on screen', async () => {
+    mount({ path: '/skills' });
+    const sidebar = await screen.findByTestId('desktop-sidebar');
+    expect(await within(sidebar).findByTestId('shell-elitea-skills')).toBeInTheDocument();
   });
 });
 
@@ -319,7 +352,7 @@ describe('DesktopFrame commands', () => {
   it('without a host, binds the shortcuts in the page: ⌘K palette, ⌘\\ sidebar, ⌘⌥\\ changes', async () => {
     const user = userEvent.setup();
     // An Elitea page: the frame draws the title row (with "Show sidebar" once it is hidden).
-    mount({ appIpc: null, path: '/settings' });
+    mount({ appIpc: null, path: '/apps' });
     await screen.findByTestId('desktop-sidebar');
 
     await user.keyboard('{Meta>}k{/Meta}');

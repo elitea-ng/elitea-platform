@@ -66,6 +66,15 @@ const ITEM_ICONS: Partial<Record<EliteaItemValue, ReactNode>> = {
   catalog: <StorefrontOutlinedIcon fontSize="small" />,
 };
 
+/** The sidebar's scale (`labelSmall`, 16px icons, compact rows), so the menu reads as part of it rather than as MUI's larger default. */
+const MENU_LIST_SX = (theme: Theme) => ({
+  '& .MuiMenuItem-root': { minHeight: '1.75rem', paddingY: 0.5, ...theme.typography.labelSmall },
+  '& .MuiListItemText-primary': theme.typography.labelSmall,
+  '& .MuiListItemIcon-root': { minWidth: '1.75rem' },
+  '& .MuiListItemIcon-root .MuiSvgIcon-root, & .MuiMenuItem-root > .MuiSvgIcon-root': { fontSize: '1rem' },
+  '& .MuiListSubheader-root': { ...theme.typography.labelSmall, lineHeight: '1.75rem' },
+});
+
 function initials(name: string): string {
   return name
     .split(/\s+/)
@@ -116,7 +125,7 @@ function ChoiceSubmenu<T extends string>({ icon, label, value, choices, onChoose
         onClose={() => setAnchor(null)}
         anchorOrigin={{ vertical: 'top', horizontal: end }}
         transformOrigin={{ vertical: 'top', horizontal: start }}
-        slotProps={{ list: { dense: true, 'aria-label': label } }}
+        slotProps={{ list: { dense: true, 'aria-label': label, sx: MENU_LIST_SX } }}
       >
         {choices.map((choice) => (
           <MenuItem
@@ -257,13 +266,13 @@ export function AccountMenu({ items, run, selected = false, reload = reloadPage 
         onClose={close}
         anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
         transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-        slotProps={{ list: { dense: true, 'aria-label': menuLabel }, paper: { sx: { minWidth: '15rem' } } }}
+        slotProps={{ list: { dense: true, 'aria-label': menuLabel, sx: MENU_LIST_SX }, paper: { sx: { minWidth: '15rem' } } }}
       >
         {author.email !== undefined && author.email !== '' && (
           // A subheader, not an item: the menu's keyboard focus skips it (`muiSkipListHighlight`).
           <ListSubheader
             disableSticky
-            sx={(theme: Theme) => ({ lineHeight: 2, background: 'transparent', color: theme.vars.palette.text.metrics, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' })}
+            sx={(theme: Theme) => ({ background: 'transparent', color: theme.vars.palette.text.metrics, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' })}
           >
             {author.email}
           </ListSubheader>

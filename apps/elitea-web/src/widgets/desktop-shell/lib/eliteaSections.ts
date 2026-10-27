@@ -6,8 +6,10 @@
  * the web sidebar keeps in its footer follow them.
  *
  * The sidebar lists all but {@link ACCOUNT_MENU_ITEMS}, which the account
- * menu at its foot carries; the command palette and the page title still
- * know every item.
+ * menu at its foot carries, and keeps the things a person builds with
+ * ({@link WORKSHOP_ITEMS}) in one collapsible "Workshop" group, so the list
+ * shows the everyday places first; the command palette and the page title
+ * still know every item.
  */
 import { t } from '@/shared/i18n';
 import { navSections, visibleNavSections, type NavItemValue } from '@/widgets/sidebar';
@@ -34,6 +36,9 @@ export function eliteaItems(permissions: ReadonlySet<string>, isSelectedProjectP
 
 /** The items the account menu carries instead of the sidebar's Elitea list. */
 export const ACCOUNT_MENU_ITEMS: ReadonlySet<EliteaItemValue> = new Set(['credentials', 'catalog', 'help']);
+
+/** The items the sidebar's "Workshop" group holds: the project's agents, pipelines and what they use. */
+export const WORKSHOP_ITEMS: ReadonlySet<EliteaItemValue> = new Set(['agents', 'pipelines', 'skills', 'toolkits', 'mcps']);
 
 /** Which row a pathname belongs to (`undefined` on the folders and on settings). */
 export function selectedEliteaItem(pathname: string, items: readonly EliteaItem[]): EliteaItemValue | undefined {
