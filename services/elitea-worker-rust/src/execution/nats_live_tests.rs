@@ -156,6 +156,7 @@ impl Environment {
             tls: Some(self.identity(WORKER).tls.clone()),
             stream: stream.to_owned(),
             consumer: consumer.to_owned(),
+            governed: false,
             client_name: "rust-live-test-worker".to_owned(),
             limits: CommandBusLimits::runtime_v1(),
             fetch_batch: 8,
