@@ -13,6 +13,8 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authzcompose"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/cache"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/epoch"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/mandate"
@@ -123,9 +125,22 @@ type Config struct {
 	Pins     profile.PinReader
 	Sessions SessionOpener
 	Catalog  OperationCatalog
-	Meter    metric.Meter
-	Logger   *slog.Logger
-	Now      func() time.Time
+	// Epochs re-reads the revocation epochs of every permitted redemption
+	// before any cache lookup or secret read (#1121). Nil: no epoch check
+	// and no cache.
+	Epochs epoch.Reader
+	// Cache holds OAuth access tokens and, where the run's policy revision
+	// allows it, static secrets. Nil: nothing is cached. Needs Epochs.
+	Cache *cache.Cache
+	// Invalidations is this replica's invalidation hub: the cache listens to
+	// it, and a denial records the revocation-to-deny latency. Optional.
+	Invalidations *epoch.Hub
+	// Revisions answers whether a run's policy revision allows caching
+	// static secrets. Nil: static secrets are never cached.
+	Revisions profile.RevisionStore
+	Meter     metric.Meter
+	Logger    *slog.Logger
+	Now       func() time.Time
 }
 
 // Broker redeems governed credentials. It is built once at the composition
@@ -136,6 +151,10 @@ type Broker struct {
 	logger  *slog.Logger
 	now     func() time.Time
 	newID   func() (uuid.UUID, error)
+
+	epochs    *epochGuard
+	cache     *cache.Cache
+	revisions *revisionMemo
 }
 
 // New builds the broker.
@@ -156,11 +175,25 @@ func New(cfg Config) (*Broker, error) {
 	if (cfg.Exchanger == nil) != (cfg.Custody == nil) {
 		return nil, errors.New("credential broker: the on-behalf-of exchanger and the delegation custody come together")
 	}
+	if cfg.Cache != nil && cfg.Epochs == nil {
+		return nil, errors.New("credential broker: the credential cache needs the epoch reader")
+	}
+	if cfg.Exchanger != nil {
+		// The identity provider's circuit breaker (#1121).
+		cfg.Exchanger = newBreakerExchanger(cfg.Exchanger)
+	}
 	m, err := newMetrics(cfg.Meter)
 	if err != nil {
 		return nil, fmt.Errorf("credential broker: metrics: %w", err)
 	}
-	b := &Broker{cfg: cfg, metrics: m, logger: cfg.Logger, now: cfg.Now, newID: uuid.NewV7}
+	b := &Broker{cfg: cfg, metrics: m, logger: cfg.Logger, now: cfg.Now, newID: uuid.NewV7,
+		epochs: newEpochGuard(cfg.Epochs), cache: cfg.Cache}
+	if cfg.Revisions != nil {
+		b.revisions = &revisionMemo{store: cfg.Revisions, known: map[string]bool{}}
+	}
+	if cfg.Cache != nil {
+		cfg.Invalidations.Listen(cfg.Cache.Listener())
+	}
 	if b.logger == nil {
 		b.logger = slog.Default()
 	}
@@ -261,6 +294,14 @@ func (b *Broker) Redeem(ctx context.Context, req RedeemRequest) (result Result, 
 		return deny(CodeDenied, "obligation_unsupported", decision.DecisionID), nil
 	}
 
+	// 5b. The revocation epochs, re-read in one statement before any cache
+	// lookup or secret read (#1121).
+	current, denial := b.checkEpochs(ctx, sc, facts, decision)
+	if denial != nil {
+		denial.DecisionID = decision.DecisionID
+		return Result{Denial: denial}, nil
+	}
+
 	// 6. The run-scoped agent session, opened at the first redemption.
 	if denial := b.ensureSession(ctx, sc, req, facts); denial != nil {
 		denial.DecisionID = decision.DecisionID
@@ -268,7 +309,7 @@ func (b *Broker) Redeem(ctx context.Context, req RedeemRequest) (result Result, 
 	}
 
 	// 6-7. Material by class, filtered to the catalogue's keys.
-	material, denial := b.acquire(ctx, req, facts, decision)
+	material, denial := b.acquire(ctx, req, facts, decision, current)
 	if denial != nil {
 		denial.DecisionID = decision.DecisionID
 		return Result{Denial: denial}, nil
@@ -296,6 +337,16 @@ func (b *Broker) Redeem(ctx context.Context, req RedeemRequest) (result Result, 
 		return Result{}, fmt.Errorf("credential broker: record the redemption: %w", err)
 	}
 	return Result{Envelope: envelope}, nil
+}
+
+// Cache is the broker's credential cache, for the other credential paths
+// that put material through it (provider OAuth access tokens). Nil when no
+// cache is composed.
+func (b *Broker) Cache() cache.Store {
+	if b.cache == nil {
+		return nil
+	}
+	return b.cache
 }
 
 // verifiedContext checks the stored context against the request digest and

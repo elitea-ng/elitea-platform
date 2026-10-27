@@ -178,7 +178,11 @@ type OperationDecision struct {
 	Obligations      []Obligation
 	PolicyRevisionID string
 	EvaluatedEpochs  map[string]int64
-	Arrangement      string
+	// EvaluatedRefs are the ids of the records whose epochs EvaluatedEpochs
+	// holds, by the same record name (the grant's id under "grant"), so an
+	// enforcement point can re-check exactly those epochs later (#1121).
+	EvaluatedRefs map[string]string
+	Arrangement   string
 	// DeniedBy names the gates that did not permit, in gate order.
 	DeniedBy []string
 }
@@ -193,6 +197,8 @@ type GateResult struct {
 	Obligations []Obligation
 	// Epochs are the epochs the gate compared, by record name.
 	Epochs map[string]int64
+	// Refs are the ids of those records, by record name; optional.
+	Refs map[string]string
 }
 
 // Gate is one independent check of decision 7.
@@ -292,6 +298,7 @@ func (d *Decider) Decide(ctx context.Context, r OperationRequest) OperationDecis
 		Effect:           EffectDeny,
 		PolicyRevisionID: r.Context.PolicyRevisionID,
 		EvaluatedEpochs:  map[string]int64{},
+		EvaluatedRefs:    map[string]string{},
 		Arrangement:      ArrangementC,
 	}
 	reasons := inputReasons(r)
@@ -313,6 +320,9 @@ func (d *Decider) Decide(ctx context.Context, r OperationRequest) OperationDecis
 		}
 		for name, epoch := range result.Epochs {
 			decision.EvaluatedEpochs[name] = epoch
+		}
+		for name, ref := range result.Refs {
+			decision.EvaluatedRefs[name] = ref
 		}
 		if !result.Permit {
 			allPermit = false

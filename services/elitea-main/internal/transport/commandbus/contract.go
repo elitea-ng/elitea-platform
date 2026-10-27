@@ -100,6 +100,13 @@ const DeadLetterBucket = "ELITEA_RT_V1_DEADLETTER"
 // wake-up (no JetStream; PostgreSQL polling is the fallback).
 const ReplayWakeSubject = SubjectRoot + ".replay.wake"
 
+// SecurityInvalidationSubject is the core NATS subject of the advisory
+// governed-credential invalidation fan-out between elitea-main replicas
+// (#1121): reference-only messages (record kind, id, new epoch, change
+// time). Correctness never depends on delivery: every cache hit and every
+// redemption re-checks the epochs in PostgreSQL.
+const SecurityInvalidationSubject = SubjectRoot + ".security.invalidation"
+
 // Consumer and redelivery timing.
 const (
 	// AckWait is the consumer's redelivery timer: twice the 30s claim lease,

@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/epoch"
 	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
@@ -41,6 +42,15 @@ const (
 type ExternalAgentIdentities struct {
 	pool  *pgxpool.Pool
 	audit securityaudit.Appender
+	// notifier signals every replica after an epoch change commits
+	// (#1121); nil signals nothing.
+	notifier epoch.Notifier
+}
+
+// WithNotifier signals n after every committed epoch change.
+func (s *ExternalAgentIdentities) WithNotifier(n epoch.Notifier) *ExternalAgentIdentities {
+	s.notifier = n
+	return s
 }
 
 // NewExternalAgentIdentities builds the store. A nil audit makes every call
@@ -269,6 +279,9 @@ RETURNING `+externalIdentitySelectColumnList,
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.ExternalAgentIdentity{}, mapExternalIdentityWriteError(fmt.Errorf("commit external identity transition: %w", err))
+	}
+	if s.notifier != nil {
+		s.notifier.Notify(ctx, epoch.Change{Epoch: epoch.SecurityEpoch{Kind: epoch.KindExternalIdentity, ID: written.ID, Value: written.RevocationEpoch}})
 	}
 	return written, nil
 }

@@ -51,7 +51,7 @@ func (g *GrantGate) Evaluate(ctx context.Context, r OperationRequest) (GateResul
 	if err != nil {
 		return GateResult{}, err
 	}
-	result := GateResult{Epochs: map[string]int64{"grant": grant.Epoch}}
+	result := GateResult{Epochs: map[string]int64{"grant": grant.Epoch}, Refs: map[string]string{"grant": grant.ID}}
 	// The reader matched the key; a row that does not repeat it is refused
 	// rather than trusted.
 	if grant.TenantProjectID != r.Context.TenantProjectID || grant.AgentBindingID != r.Agent.BindingID ||
