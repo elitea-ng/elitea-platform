@@ -25,9 +25,11 @@ const (
 	// "<prefix><application id>".
 	DefaultDisplayNamePrefix = "Elitea agent "
 	defaultAgentCacheSize    = 1024
-	maxAllowedScopes         = 64
-	maxSponsorMappings       = 4096
-	maxTextLen               = 512
+	// defaultScopeSuffix marks the one scope form app-only accepts.
+	defaultScopeSuffix = "/.default"
+	maxAllowedScopes   = 64
+	maxSponsorMappings = 4096
+	maxTextLen         = 512
 )
 
 var guidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -48,9 +50,10 @@ type Config struct {
 	Authority string
 	// GraphBaseURL is the Microsoft Graph host (DefaultGraphBaseURL).
 	GraphBaseURL string
-	// AllowedResourceScopes are the only scopes AssumeApp and
-	// AssumeOnBehalfOf may ask for, for example
-	// "https://graph.microsoft.com/.default".
+	// AllowedResourceScopes are the only scopes a run may ask for. AssumeApp
+	// (the client credentials grant) uses only the "<resource>/.default"
+	// entries, one per request; AssumeOnBehalfOf may use any entry, for
+	// example "https://graph.microsoft.com/Sites.Selected".
 	AllowedResourceScopes []string
 	// SponsorGroups maps a tenant project id to the Entra group that
 	// sponsors its agent identities; DefaultSponsorGroupID covers the rest.
@@ -124,10 +127,19 @@ func (c Config) Validate() error {
 	if len(c.AllowedResourceScopes) == 0 || len(c.AllowedResourceScopes) > maxAllowedScopes {
 		return invalid("allowed_resource_scopes needs 1..%d scopes", maxAllowedScopes)
 	}
+	seen := map[string]bool{}
 	for _, scope := range c.AllowedResourceScopes {
-		if _, ok := resourceOf(scope); !ok {
+		resource, ok := resourceOf(scope)
+		if !ok {
 			return invalid("allowed resource scope %q must be <resource>/<scope>", scope)
 		}
+		if strings.Contains(resource, "/.default") || (strings.HasSuffix(scope, ".default") && !strings.HasSuffix(scope, defaultScopeSuffix)) {
+			return invalid("allowed resource scope %q: a .default scope is exactly <resource>/.default", scope)
+		}
+		if seen[scope] {
+			return invalid("allowed resource scope %q is listed twice", scope)
+		}
+		seen[scope] = true
 	}
 	if len(c.SponsorGroups) > maxSponsorMappings {
 		return invalid("at most %d sponsor group mappings", maxSponsorMappings)

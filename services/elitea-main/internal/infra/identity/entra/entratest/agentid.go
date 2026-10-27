@@ -176,6 +176,22 @@ func (s *Server) RecreateAgent(id string) (AgentIdentity, bool) {
 		AccountEnabled: old.AccountEnabled, Tags: old.Tags, Sponsors: old.Sponsors}), true
 }
 
+// SetIndexed hides id from (false) or shows it to (true) the eventually
+// consistent advanced-query index: a tags/any or $count query does not see
+// a hidden object, while a GET by id does. It simulates Graph's index lag.
+func (s *Server) SetIndexed(id string, indexed bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.unindexed == nil {
+		s.unindexed = map[string]bool{}
+	}
+	if indexed {
+		delete(s.unindexed, id)
+	} else {
+		s.unindexed[id] = true
+	}
+}
+
 // ScriptToken queues answers for the next client credentials requests.
 func (s *Server) ScriptToken(responses ...Response) {
 	s.mu.Lock()
@@ -487,13 +503,26 @@ func (s *Server) graphGet(w http.ResponseWriter, id string, deleted bool) {
 
 func (s *Server) graphPatch(w http.ResponseWriter, r *http.Request, id string) {
 	var body struct {
-		AccountEnabled *bool `json:"accountEnabled"`
+		AccountEnabled *bool     `json:"accountEnabled"`
+		Tags           *[]string `json:"tags"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.AccountEnabled == nil {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || (body.AccountEnabled == nil && body.Tags == nil) {
 		writeJSON(w, http.StatusBadRequest, graphError("Request_BadRequest"))
 		return
 	}
-	if !s.SetAccountEnabled(id, *body.AccountEnabled) {
+	s.mu.Lock()
+	a, ok := s.agents[id]
+	if ok {
+		if body.AccountEnabled != nil {
+			a.AccountEnabled = *body.AccountEnabled
+		}
+		if body.Tags != nil {
+			// Graph replaces the whole collection.
+			a.Tags = slices.Clone(*body.Tags)
+		}
+	}
+	s.mu.Unlock()
+	if !ok {
 		writeJSON(w, http.StatusNotFound, graphError("Request_ResourceNotFound"))
 		return
 	}
@@ -533,9 +562,13 @@ func (s *Server) graphList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, graphError("Request_UnsupportedQuery"))
 		return
 	}
+	advanced := r.Header.Get("ConsistencyLevel") == "eventual"
 	s.mu.Lock()
 	var all []AgentIdentity
 	for _, a := range s.agents {
+		if advanced && s.unindexed[a.ID] {
+			continue
+		}
 		if !slices.ContainsFunc(match, func(m func(AgentIdentity) bool) bool { return !m(*a) }) {
 			all = append(all, *a)
 		}

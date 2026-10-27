@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity"
 	identity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity"
@@ -77,9 +78,17 @@ type Provider struct {
 	agents    *agentCache
 	obo       *obo.AgentOBO
 
-	graphMu sync.Mutex
-	graph   issued
+	graphMu     sync.Mutex
+	graph       issued
+	graphFlight singleflight.Group
+
+	// created remembers the object this replica created per record, so a
+	// retry inside Graph's index lag finds it by id (strongly consistent).
+	createdMu sync.Mutex
+	created   map[string]string
 }
+
+const maxCreatedMemo = 1024
 
 // New validates cfg and builds the adapter. It reads no file and makes no
 // call: the first token request happens on first use.
@@ -177,15 +186,40 @@ func (p *Provider) ref(object agentObject) identity.ExternalRef {
 	return identity.ExternalRef{Provider: ProviderName, ProviderTenant: p.cfg.TenantID, Kind: RefKind, ID: object.ID}
 }
 
+// maxRecordCopies bounds the record-tag lookup: more copies than this of one
+// record means something other than a retry race is creating them.
+const maxRecordCopies = 10
+
 // Provision creates the agent identity of one record, disabled. It is
 // idempotent on the record id: an object of the blueprint that carries the
-// record's back-reference tag is returned (and disabled) instead. An
-// identity an administrator created with that tag is adopted the same way
-// (delegated creation).
+// record's back-reference tag is returned instead. An identity an
+// administrator created under the blueprint with that tag is adopted the
+// same way (delegated creation): Provision disables it and adds the
+// elitea:managed tag, so Resolve, List and the token paths treat it as
+// Elitea's from then on.
+//
+// Idempotency under Graph's consistency model: Graph offers no strongly
+// consistent alternate key Elitea can set on an agent identity
+// (uniqueName is an alternate key of applications, not of service
+// principals), and the tags/any lookup is an advanced query served from an
+// eventually consistent index. So a retry inside the index lag can create
+// a second copy. Two measures make that harmless:
+//
+//   - this replica remembers the object it created per record and checks
+//     it by id (a strongly consistent read) before the tag lookup;
+//   - a lookup that finds several copies keeps one deterministically, the
+//     lowest object id, and soft-deletes the rest. Any deterministic choice
+//     is correct here, because Provision runs only while the record holds
+//     no ref yet, and every replica picks the same winner. A copy the index
+//     had not yet shown is left for the reconcile loop, which reports it as
+//     an orphan.
 func (p *Provider) Provision(ctx context.Context, spec agentidentity.ProvisionSpec) (agentidentity.ProvisionResult, error) {
 	if _, err := uuid.Parse(spec.ExternalAgentIdentityID); err != nil || spec.TenantProjectID <= 0 || spec.ApplicationID <= 0 ||
 		spec.ProviderTenant != p.cfg.TenantID {
 		return agentidentity.ProvisionResult{}, ErrInvalidRequest
+	}
+	if spec.Mode != identity.IdentityModeDedicatedAgent {
+		return agentidentity.ProvisionResult{}, ErrModeNotSupported
 	}
 	if err := p.checkConfigKey(spec.ProviderConfigKey); err != nil {
 		return agentidentity.ProvisionResult{}, err
@@ -197,25 +231,24 @@ func (p *Provider) Provision(ctx context.Context, spec agentidentity.ProvisionSp
 	if sponsor == "" {
 		return agentidentity.ProvisionResult{}, ErrNoSponsor
 	}
-	recordTag := tagRecordPrefix + strings.ToLower(spec.ExternalAgentIdentityID)
-	existing, err := p.findAgents(ctx, 2, "tags/any(t:t eq "+odataString(recordTag)+")")
+	record := strings.ToLower(spec.ExternalAgentIdentityID)
+	recordTag := tagRecordPrefix + record
+	if id, ok := p.createdFor(record); ok {
+		object, err := p.getAgent(ctx, id)
+		switch {
+		case err == nil && object.BlueprintID == p.cfg.BlueprintAppID && object.recordTag() == recordTag:
+			return p.adopt(ctx, object)
+		case err != nil && !errors.Is(err, errGraphNotFound):
+			return agentidentity.ProvisionResult{}, err
+		}
+		p.forgetCreated(record)
+	}
+	existing, err := p.findAgents(ctx, maxRecordCopies, "tags/any(t:t eq "+odataString(recordTag)+")")
 	if err != nil {
 		return agentidentity.ProvisionResult{}, err
 	}
-	switch len(existing) {
-	case 0:
-	case 1:
-		object := existing[0]
-		if object.AccountEnabled {
-			// Until Activate, the identity can obtain no token.
-			if err := p.setAccountEnabled(ctx, object.ID, false); err != nil {
-				return agentidentity.ProvisionResult{}, err
-			}
-		}
-		p.agents.put(object.ID, object.clientID())
-		return agentidentity.ProvisionResult{Ref: p.ref(object)}, nil
-	default:
-		return agentidentity.ProvisionResult{}, fmt.Errorf("%w: more than one agent identity carries the record tag", ErrRejected)
+	if len(existing) > 0 {
+		return p.keepOne(ctx, existing)
 	}
 	count, err := p.countAgents(ctx)
 	if err != nil {
@@ -234,10 +267,72 @@ func (p *Provider) Provision(ctx context.Context, spec agentidentity.ProvisionSp
 	if !guidPattern.MatchString(object.ID) || object.BlueprintID != p.cfg.BlueprintAppID {
 		return agentidentity.ProvisionResult{}, ErrUnavailable
 	}
-	p.agents.put(object.ID, object.clientID())
+	// Created disabled, so it is not put in the token cache: the first
+	// token call after Activate reads it from Graph.
+	p.rememberCreated(record, object.ID)
 	p.logger.LogAttrs(ctx, slog.LevelInfo, "entra agent identity created", slog.String("object_id", object.ID),
 		slog.String("record", spec.ExternalAgentIdentityID))
 	return agentidentity.ProvisionResult{Ref: p.ref(object)}, nil
+}
+
+// keepOne returns the lowest-id copy of a record and soft-deletes the
+// others (see Provision). Every copy is this blueprint's: the lookup filters
+// on it, and the check below refuses anything else.
+func (p *Provider) keepOne(ctx context.Context, copies []agentObject) (agentidentity.ProvisionResult, error) {
+	for _, object := range copies {
+		if object.BlueprintID != p.cfg.BlueprintAppID || !guidPattern.MatchString(object.ID) {
+			return agentidentity.ProvisionResult{}, fmt.Errorf("%w: a record-tagged object of another blueprint", ErrRejected)
+		}
+	}
+	slices.SortFunc(copies, func(a, b agentObject) int { return strings.Compare(a.ID, b.ID) })
+	for _, duplicate := range copies[1:] {
+		p.agents.evict(duplicate.ID)
+		if err := p.deleteAgent(ctx, duplicate.ID); err != nil && !errors.Is(err, errGraphNotFound) {
+			return agentidentity.ProvisionResult{}, err
+		}
+		p.logger.LogAttrs(ctx, slog.LevelWarn, "entra agent identity duplicate removed",
+			slog.String("object_id", duplicate.ID), slog.String("kept", copies[0].ID))
+	}
+	return p.adopt(ctx, copies[0])
+}
+
+// adopt makes an existing record-tagged object of the blueprint Elitea's:
+// disabled until Activate, and tagged elitea:managed.
+func (p *Provider) adopt(ctx context.Context, object agentObject) (agentidentity.ProvisionResult, error) {
+	if object.BlueprintID != p.cfg.BlueprintAppID {
+		return agentidentity.ProvisionResult{}, fmt.Errorf("%w: the object belongs to another blueprint", ErrRejected)
+	}
+	p.agents.evict(object.ID)
+	if object.AccountEnabled || !object.managed() {
+		if err := p.adoptPatch(ctx, object); err != nil {
+			return agentidentity.ProvisionResult{}, err
+		}
+	}
+	return agentidentity.ProvisionResult{Ref: p.ref(object)}, nil
+}
+
+func (p *Provider) createdFor(record string) (string, bool) {
+	p.createdMu.Lock()
+	defer p.createdMu.Unlock()
+	id, ok := p.created[record]
+	return id, ok
+}
+
+func (p *Provider) rememberCreated(record, id string) {
+	p.createdMu.Lock()
+	defer p.createdMu.Unlock()
+	if p.created == nil || len(p.created) >= maxCreatedMemo {
+		// The memo only covers retries inside the index lag; dropping it
+		// whole when full costs at most a heal later.
+		p.created = map[string]string{}
+	}
+	p.created[record] = id
+}
+
+func (p *Provider) forgetCreated(record string) {
+	p.createdMu.Lock()
+	defer p.createdMu.Unlock()
+	delete(p.created, record)
 }
 
 func (p *Provider) Activate(ctx context.Context, ref identity.ExternalRef) error {
@@ -300,7 +395,12 @@ func (p *Provider) Resolve(ctx context.Context, ref identity.ExternalRef) (agent
 		p.agents.evict(ref.ID)
 		return agentidentity.Resolved{}, err
 	}
-	p.agents.put(object.ID, object.clientID())
+	// Only an enabled identity may sit in the token cache.
+	if object.AccountEnabled && guidPattern.MatchString(object.clientID()) {
+		p.agents.put(object.ID, object.clientID())
+	} else {
+		p.agents.evict(object.ID)
+	}
 	return agentidentity.Resolved{Ref: ref, Enabled: object.AccountEnabled}, nil
 }
 
@@ -361,8 +461,11 @@ func (p *Provider) List(ctx context.Context, spec agentidentity.ListSpec) (agent
 }
 
 // agentClientID answers the client id of an agent identity this blueprint
-// owns: from the LRU, else from Graph. A disabled identity is refused here,
-// before any token request.
+// owns: from the LRU, else from Graph. A disabled or unowned identity is
+// refused here, before any token request. The LRU holds only identities
+// last read owned and enabled (see agentCache), so a hit is safe: an
+// identity this process saw disabled is never there, and one disabled out
+// of band since is refused by Entra (AADSTS7000112), which evicts it.
 func (p *Provider) agentClientID(ctx context.Context, objectID string) (string, error) {
 	if appID, ok := p.agents.appID(objectID); ok {
 		return appID, nil
@@ -429,6 +532,10 @@ func (p *Provider) AssumeApp(ctx context.Context, spec agentidentity.AssumeSpec)
 	}
 	if err := p.checkScopes(spec); err != nil {
 		return agentidentity.SessionCredential{}, err
+	}
+	// The client credentials grant takes exactly one <resource>/.default.
+	if len(spec.Scopes) != 1 || !strings.HasSuffix(spec.Scopes[0], defaultScopeSuffix) {
+		return agentidentity.SessionCredential{}, ErrScopeNotAllowed
 	}
 	_, ctx, err := p.session(ctx, spec)
 	if err != nil {

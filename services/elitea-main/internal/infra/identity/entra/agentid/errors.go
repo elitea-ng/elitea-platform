@@ -1,11 +1,10 @@
 package agentid
 
 import (
-	"encoding/json"
 	"errors"
-	"slices"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/entraoauth"
 )
 
 // Typed errors. None carries a token, an assertion or response text.
@@ -50,47 +49,28 @@ var (
 	// ErrDelegationUnavailable: no delegation custody is configured, or the
 	// session names no usable delegation.
 	ErrDelegationUnavailable = errors.New("entra agent id: no delegated user assertion is available")
+	// ErrModeNotSupported refuses Provision for any mode but dedicated_agent.
+	ErrModeNotSupported = errors.New("entra agent id: only the dedicated_agent identity mode is provisioned")
 )
-
-// AADSTS codes read from `error_codes`.
-const (
-	aadstsAudienceMismatch    = 50013
-	aadstsAgentConsent        = 82014
-	aadstsApplicationDisabled = 7000112
-)
-
-var interactionCodes = []int{50076, 50079, 65001, 50072, 50158}
 
 func interaction(reason string, typed error) error {
 	return errors.Join(typed, &agentidentity.InteractionRequired{Reason: reason})
 }
 
-// mapOAuthError maps by `error`, `suberror` and `error_codes`, never by the
-// description.
+// mapOAuthError maps the shared classification to this package's errors.
 func mapOAuthError(body []byte) error {
-	var parsed struct {
-		Error      string `json:"error"`
-		SubError   string `json:"suberror"`
-		ErrorCodes []int  `json:"error_codes"`
-		Claims     string `json:"claims"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil || parsed.Error == "" {
-		return ErrUnavailable
-	}
-	codes := parsed.ErrorCodes
-	switch {
-	case slices.Contains(codes, aadstsApplicationDisabled):
+	switch entraoauth.Classify(body).Kind {
+	case entraoauth.KindApplicationDisabled:
 		return ErrIdentityDisabled
-	case slices.Contains(codes, aadstsAgentConsent):
+	case entraoauth.KindAgentConsent:
 		return ErrConsentNotGranted
-	case parsed.Claims != "":
+	case entraoauth.KindClaimsChallenge:
 		return interaction("claims_challenge", ErrClaimsChallenge)
-	case slices.Contains(codes, aadstsAudienceMismatch):
+	case entraoauth.KindAudienceMismatch:
 		return ErrAudienceMismatch
-	case parsed.Error == "interaction_required", parsed.Error == "consent_required", parsed.Error == "login_required",
-		slices.ContainsFunc(codes, func(c int) bool { return slices.Contains(interactionCodes, c) }):
+	case entraoauth.KindInteractionRequired:
 		return interaction("interaction_required", ErrInteractionRequired)
-	case parsed.Error == "temporarily_unavailable", parsed.Error == "server_error":
+	case entraoauth.KindUnavailable:
 		return ErrUnavailable
 	}
 	return ErrRejected

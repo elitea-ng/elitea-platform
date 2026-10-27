@@ -62,6 +62,7 @@ type Server struct {
 	tokenRequests      []TokenRequest
 	graphRequests      []GraphRequest
 	issuedT1           []string
+	unindexed          map[string]bool
 }
 
 // Authorization is one pending authorization code.
