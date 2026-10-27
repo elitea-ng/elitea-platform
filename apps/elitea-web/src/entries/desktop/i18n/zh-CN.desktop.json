@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "放大",
   "desktop.nativeMenu.zoomOut": "缩小",
   "desktop.nativeMenu.zoomReset": "实际大小",
-  "desktop.shell.workshop": "工作坊"
+  "desktop.shell.workshop": "工作坊",
+  "desktop.shell.moveFolderBody": "该文件夹将离开 {{from}} 并显示在 {{to}} 下。之后的线程将使用 {{to}} 的模型、凭据和预算；文件和以往线程仍保留在这台电脑上。",
+  "desktop.shell.moveFolderCancel": "取消",
+  "desktop.shell.moveFolderConfirm": "移动",
+  "desktop.shell.moveFolderTitle": "将“{{folder}}”移动到 {{project}}？",
+  "desktop.shell.moveToProject": "移动到项目",
+  "desktop.shell.projects": "项目"
 }

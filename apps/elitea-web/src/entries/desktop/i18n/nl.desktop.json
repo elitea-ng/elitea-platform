@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "Zoom in",
   "desktop.nativeMenu.zoomOut": "Zoom uit",
   "desktop.nativeMenu.zoomReset": "Werkelijke grootte",
-  "desktop.shell.workshop": "Werkplaats"
+  "desktop.shell.workshop": "Werkplaats",
+  "desktop.shell.moveFolderBody": "De map verlaat {{from}} en verschijnt onder {{to}}. Nieuwe threads gebruiken de modellen, inloggegevens en het budget van {{to}}; de bestanden en eerdere threads blijven op deze computer.",
+  "desktop.shell.moveFolderCancel": "Annuleren",
+  "desktop.shell.moveFolderConfirm": "Verplaatsen",
+  "desktop.shell.moveFolderTitle": "‘{{folder}}’ naar {{project}} verplaatsen?",
+  "desktop.shell.moveToProject": "Verplaatsen naar project",
+  "desktop.shell.projects": "Projecten"
 }

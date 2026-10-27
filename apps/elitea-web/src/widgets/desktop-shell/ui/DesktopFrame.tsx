@@ -94,7 +94,7 @@ function ShellNotice(): React.JSX.Element | null {
 const NOTICE_MS = 8000;
 
 export function DesktopFrame({ children, permissions, projects, selectedProjectId, onSelectProject }: DesktopFrameProps): React.JSX.Element {
-  const run = useShellActions();
+  const run = useShellActions(selectedProjectId);
   const ipc = useAppIpc();
   useHostIntegration(run, ipc);
   useNativeWindowTheme(ipc);

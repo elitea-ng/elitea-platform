@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "Zoom In",
   "desktop.nativeMenu.zoomOut": "Zoom Out",
   "desktop.nativeMenu.zoomReset": "Actual Size",
-  "desktop.shell.workshop": "Workshop"
+  "desktop.shell.workshop": "Workshop",
+  "desktop.shell.moveFolderBody": "The folder leaves {{from}} and shows under {{to}}. Its next threads use {{to}}’s models, credentials and budget; the files and past threads stay on this computer.",
+  "desktop.shell.moveFolderCancel": "Cancel",
+  "desktop.shell.moveFolderConfirm": "Move",
+  "desktop.shell.moveFolderTitle": "Move “{{folder}}” to {{project}}?",
+  "desktop.shell.moveToProject": "Move to project",
+  "desktop.shell.projects": "Projects"
 }

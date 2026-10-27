@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "Powiększ",
   "desktop.nativeMenu.zoomOut": "Pomniejsz",
   "desktop.nativeMenu.zoomReset": "Rzeczywisty rozmiar",
-  "desktop.shell.workshop": "Warsztat"
+  "desktop.shell.workshop": "Warsztat",
+  "desktop.shell.moveFolderBody": "Folder opuszcza {{from}} i pojawia się w {{to}}. Kolejne wątki użyją modeli, poświadczeń i budżetu {{to}}; pliki i wcześniejsze wątki zostają na tym komputerze.",
+  "desktop.shell.moveFolderCancel": "Anuluj",
+  "desktop.shell.moveFolderConfirm": "Przenieś",
+  "desktop.shell.moveFolderTitle": "Przenieść „{{folder}}” do {{project}}?",
+  "desktop.shell.moveToProject": "Przenieś do projektu",
+  "desktop.shell.projects": "Projekty"
 }

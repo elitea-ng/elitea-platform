@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "Збільшити",
   "desktop.nativeMenu.zoomOut": "Зменшити",
   "desktop.nativeMenu.zoomReset": "Фактичний розмір",
-  "desktop.shell.workshop": "Майстерня"
+  "desktop.shell.workshop": "Майстерня",
+  "desktop.shell.moveFolderBody": "Папка залишить {{from}} і з’явиться в {{to}}. Нові треди використовуватимуть моделі, облікові дані та бюджет {{to}}; файли й попередні треди залишаться на цьому комп’ютері.",
+  "desktop.shell.moveFolderCancel": "Скасувати",
+  "desktop.shell.moveFolderConfirm": "Перемістити",
+  "desktop.shell.moveFolderTitle": "Перемістити «{{folder}}» до {{project}}?",
+  "desktop.shell.moveToProject": "Перемістити до проєкту",
+  "desktop.shell.projects": "Проєкти"
 }

@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "بزرگ‌نمایی",
   "desktop.nativeMenu.zoomOut": "کوچک‌نمایی",
   "desktop.nativeMenu.zoomReset": "اندازه واقعی",
-  "desktop.shell.workshop": "کارگاه"
+  "desktop.shell.workshop": "کارگاه",
+  "desktop.shell.moveFolderBody": "پوشه از {{from}} خارج می‌شود و زیر {{to}} نمایش داده می‌شود. رشته‌های بعدی از مدل‌ها، اعتبارنامه‌ها و بودجهٔ {{to}} استفاده می‌کنند؛ فایل‌ها و رشته‌های قبلی روی این رایانه می‌مانند.",
+  "desktop.shell.moveFolderCancel": "لغو",
+  "desktop.shell.moveFolderConfirm": "انتقال",
+  "desktop.shell.moveFolderTitle": "«{{folder}}» به {{project}} منتقل شود؟",
+  "desktop.shell.moveToProject": "انتقال به پروژه",
+  "desktop.shell.projects": "پروژه‌ها"
 }

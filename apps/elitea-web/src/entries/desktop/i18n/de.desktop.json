@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "Vergrößern",
   "desktop.nativeMenu.zoomOut": "Verkleinern",
   "desktop.nativeMenu.zoomReset": "Originalgröße",
-  "desktop.shell.workshop": "Werkstatt"
+  "desktop.shell.workshop": "Werkstatt",
+  "desktop.shell.moveFolderBody": "Der Ordner verlässt {{from}} und erscheint unter {{to}}. Neue Threads nutzen die Modelle, Zugangsdaten und das Budget von {{to}}; Dateien und frühere Threads bleiben auf diesem Computer.",
+  "desktop.shell.moveFolderCancel": "Abbrechen",
+  "desktop.shell.moveFolderConfirm": "Verschieben",
+  "desktop.shell.moveFolderTitle": "„{{folder}}“ nach {{project}} verschieben?",
+  "desktop.shell.moveToProject": "In Projekt verschieben",
+  "desktop.shell.projects": "Projekte"
 }

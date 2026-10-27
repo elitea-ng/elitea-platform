@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "확대",
   "desktop.nativeMenu.zoomOut": "축소",
   "desktop.nativeMenu.zoomReset": "실제 크기",
-  "desktop.shell.workshop": "워크숍"
+  "desktop.shell.workshop": "워크숍",
+  "desktop.shell.moveFolderBody": "폴더가 {{from}}에서 빠지고 {{to}} 아래에 표시됩니다. 이후 스레드는 {{to}}의 모델, 자격 증명, 예산을 사용하며 파일과 이전 스레드는 이 컴퓨터에 남습니다.",
+  "desktop.shell.moveFolderCancel": "취소",
+  "desktop.shell.moveFolderConfirm": "이동",
+  "desktop.shell.moveFolderTitle": "“{{folder}}”을(를) {{project}}(으)로 이동할까요?",
+  "desktop.shell.moveToProject": "프로젝트로 이동",
+  "desktop.shell.projects": "프로젝트"
 }

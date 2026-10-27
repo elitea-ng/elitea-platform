@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "拡大",
   "desktop.nativeMenu.zoomOut": "縮小",
   "desktop.nativeMenu.zoomReset": "実際のサイズ",
-  "desktop.shell.workshop": "ワークショップ"
+  "desktop.shell.workshop": "ワークショップ",
+  "desktop.shell.moveFolderBody": "フォルダーは {{from}} から外れ、{{to}} の下に表示されます。今後のスレッドは {{to}} のモデル、認証情報、予算を使います。ファイルと過去のスレッドはこのコンピューターに残ります。",
+  "desktop.shell.moveFolderCancel": "キャンセル",
+  "desktop.shell.moveFolderConfirm": "移動",
+  "desktop.shell.moveFolderTitle": "「{{folder}}」を {{project}} に移動しますか？",
+  "desktop.shell.moveToProject": "プロジェクトへ移動",
+  "desktop.shell.projects": "プロジェクト"
 }

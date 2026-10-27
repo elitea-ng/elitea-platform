@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "Ampliar",
   "desktop.nativeMenu.zoomOut": "Reduzir",
   "desktop.nativeMenu.zoomReset": "Tamanho real",
-  "desktop.shell.workshop": "Oficina"
+  "desktop.shell.workshop": "Oficina",
+  "desktop.shell.moveFolderBody": "A pasta sai de {{from}} e aparece em {{to}}. Os próximos threads usam os modelos, credenciais e orçamento de {{to}}; os arquivos e threads anteriores ficam neste computador.",
+  "desktop.shell.moveFolderCancel": "Cancelar",
+  "desktop.shell.moveFolderConfirm": "Mover",
+  "desktop.shell.moveFolderTitle": "Mover “{{folder}}” para {{project}}?",
+  "desktop.shell.moveToProject": "Mover para projeto",
+  "desktop.shell.projects": "Projetos"
 }

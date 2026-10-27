@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "Zoom avant",
   "desktop.nativeMenu.zoomOut": "Zoom arrière",
   "desktop.nativeMenu.zoomReset": "Taille réelle",
-  "desktop.shell.workshop": "Atelier"
+  "desktop.shell.workshop": "Atelier",
+  "desktop.shell.moveFolderBody": "Le dossier quitte {{from}} et apparaît sous {{to}}. Ses prochains fils utilisent les modèles, identifiants et budget de {{to}}; les fichiers et les fils passés restent sur cet ordinateur.",
+  "desktop.shell.moveFolderCancel": "Annuler",
+  "desktop.shell.moveFolderConfirm": "Déplacer",
+  "desktop.shell.moveFolderTitle": "Déplacer « {{folder}} » vers {{project}}?",
+  "desktop.shell.moveToProject": "Déplacer vers un projet",
+  "desktop.shell.projects": "Projets"
 }

@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "Ingrandisci",
   "desktop.nativeMenu.zoomOut": "Riduci",
   "desktop.nativeMenu.zoomReset": "Dimensioni effettive",
-  "desktop.shell.workshop": "Officina"
+  "desktop.shell.workshop": "Officina",
+  "desktop.shell.moveFolderBody": "La cartella lascia {{from}} e compare sotto {{to}}. I prossimi thread useranno modelli, credenziali e budget di {{to}}; i file e i thread precedenti restano su questo computer.",
+  "desktop.shell.moveFolderCancel": "Annulla",
+  "desktop.shell.moveFolderConfirm": "Sposta",
+  "desktop.shell.moveFolderTitle": "Spostare «{{folder}}» in {{project}}?",
+  "desktop.shell.moveToProject": "Sposta nel progetto",
+  "desktop.shell.projects": "Progetti"
 }

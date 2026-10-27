@@ -7,7 +7,7 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { readThreads, recordThread, WorkspaceIpcProvider } from '@/features/workspace';
@@ -30,10 +30,15 @@ const globals = globalThis as unknown as Record<string, unknown>;
 const APP: Workspace = { id: 'w1', path: '/Users/me/code/app', name: 'app', project_id: 42, is_git: true };
 const DOCS: Workspace = { id: 'w2', path: '/Users/me/docs', name: 'docs', project_id: null, is_git: false };
 
-function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Workspace[]; nextOpen?: Workspace; handoffIpc?: FakeHandoffIpc } = {}) {
+const PROJECTS = [
+  { id: 42, name: 'Marketing', suspended: false },
+  { id: 7, name: 'Sales', suspended: false },
+];
+
+function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Workspace[]; nextOpen?: Workspace; handoffIpc?: FakeHandoffIpc; onSelectProject?: (id: string, name: string) => void } = {}) {
   const rootRoute = createRootRoute({
     component: () => (
-      <DesktopFrame permissions={new Set()} projects={[{ id: 42, name: 'Marketing', suspended: false }]} selectedProjectId="42" onSelectProject={() => undefined}>
+      <DesktopFrame permissions={new Set()} projects={PROJECTS} selectedProjectId="42" onSelectProject={options.onSelectProject ?? (() => undefined)}>
         <Outlet />
       </DesktopFrame>
     ),
@@ -77,15 +82,15 @@ afterEach(() => {
 });
 
 describe('DesktopFrame sidebar', () => {
-  it('lists the folders with their project and their threads, newest first, and opens a thread', async () => {
+  it("lists the project's folders and their threads, newest first, and opens a thread", async () => {
     recordThread('w1', { id: '77', title: 'fix the build', updatedAt: 1 });
     recordThread('w1', { id: '78', title: 'quick overview', updatedAt: 2 });
     const user = userEvent.setup();
     const { router } = mount();
 
     const folders = await screen.findAllByTestId('shell-folder');
-    // A folder with threads shows their count after its name.
-    expect(folders.map((f) => within(f).getAllByRole('button')[0]?.textContent)).toEqual(['appMarketing2', 'docsNo project']);
+    // A folder with threads shows their count after its name; only one with no project names that.
+    expect(folders.map((f) => within(f).getAllByRole('button')[0]?.textContent)).toEqual(['app2', 'docsNo project']);
     const threads = await within(folders[0] as HTMLElement).findAllByTestId('shell-thread');
     expect(threads.map((thread) => thread.textContent)).toEqual(['quick overview', 'fix the build']);
 
@@ -292,7 +297,7 @@ describe('DesktopFrame context menus', () => {
     const labels = (appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'));
     expect(labels).toEqual(['New thread', '-', 'Reveal in Finder', 'Copy Path', '-', 'Project', '-', 'Remove from sidebar']);
     const submenu = (appIpc.calls.contextMenus[0] ?? []).find((item) => 'children' in item);
-    expect(submenu !== undefined && 'children' in submenu ? submenu.children.map((c) => c.label) : []).toEqual(['✓ Marketing']);
+    expect(submenu !== undefined && 'children' in submenu ? submenu.children.map((c) => c.label) : []).toEqual(['✓ Marketing', 'Sales']);
   });
 
   it('leaves the browser alone without a host', async () => {
@@ -305,7 +310,7 @@ describe('DesktopFrame context menus', () => {
 });
 
 describe('DesktopFrame sidebar layout', () => {
-  it('heads the folders "Local work" and keeps each folder on one line, its project as quiet text and in the tooltip', async () => {
+  it('heads the folders "Local work" and keeps each folder on one line, its project in the tooltip', async () => {
     mount();
     const sidebar = await screen.findByTestId('desktop-sidebar');
     expect(within(sidebar).getByRole('navigation', { name: 'Local work' })).toBeInTheDocument();
@@ -313,7 +318,7 @@ describe('DesktopFrame sidebar layout', () => {
     const [app] = await screen.findAllByTestId('shell-folder');
     const row = within(app as HTMLElement).getAllByRole('button')[0] as HTMLElement;
     expect(row).toHaveAttribute('title', '/Users/me/code/app\nProject: Marketing');
-    expect(within(row).getByText('Marketing')).toHaveClass('shell-row-meta');
+    expect(within(row).queryByText('Marketing')).toBeNull();
     // The empty-state row shows only when there is no folder.
     expect(within(sidebar).queryByRole('button', { name: 'Open a folder to work in' })).toBeNull();
   });
@@ -333,18 +338,42 @@ describe('DesktopFrame sidebar layout', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/w3'));
   });
 
-  it('collapses the Elitea section to the page on screen, and remembers it', async () => {
+  it("has one project switcher; the folders listed are that project's and those with none", async () => {
     const user = userEvent.setup();
-    mount({ path: '/apps' });
+    const onSelectProject = vi.fn();
+    const other: Workspace = { id: 'w9', path: '/Users/me/sales', name: 'sales-deck', project_id: 7, is_git: false };
+    mount({ workspaces: [APP, DOCS, other], onSelectProject });
     const sidebar = await screen.findByTestId('desktop-sidebar');
-    const toggle = within(sidebar).getByRole('button', { name: 'Elitea' });
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    const before = within(sidebar).getAllByTestId(/^shell-elitea-/).length;
-    expect(before).toBeGreaterThan(1);
-    await user.click(toggle);
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(within(sidebar).getAllByTestId(/^shell-elitea-/).map((row) => row.dataset['testid'])).toEqual(['shell-elitea-applications']);
-    expect(localStorage.getItem('el.desktop.eliteaOpen')).toBe('false');
+    await within(sidebar).findAllByTestId('shell-folder');
+    expect(within(sidebar).queryByText('sales-deck')).toBeNull();
+    expect(within(sidebar).queryByRole('button', { name: 'Elitea' })).toBeNull();
+    const switcher = within(sidebar).getByTestId('shell-project-switcher');
+    expect(switcher).toHaveAccessibleName('Project: Marketing');
+    await user.click(switcher);
+    await user.click(await screen.findByRole('menuitem', { name: 'Sales' }));
+    expect(onSelectProject).toHaveBeenCalledWith('7', 'Sales');
+  });
+
+  it('moves a folder to another project only after a confirmation; one with no project joins at once', async () => {
+    const user = userEvent.setup();
+    mount();
+    const [app, docs] = await screen.findAllByTestId('shell-folder');
+    await user.click(within(app as HTMLElement).getByLabelText('More for app'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Sales' }));
+    const dialog = await screen.findByTestId('move-folder-dialog');
+    expect(within(dialog).getByRole('heading')).toHaveTextContent('Move “app” to Sales?');
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(await screen.findAllByTestId('shell-folder')).toHaveLength(2);
+    await user.click(within(app as HTMLElement).getByLabelText('More for app'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Sales' }));
+    await user.click(within(await screen.findByTestId('move-folder-dialog')).getByRole('button', { name: 'Move' }));
+    // Now Sales' folder: it leaves Marketing's sidebar.
+    await waitFor(() => expect(screen.getAllByTestId('shell-folder')).toHaveLength(1));
+
+    await user.click(within(docs as HTMLElement).getByLabelText('More for docs'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Marketing' }));
+    expect(screen.queryByTestId('move-folder-dialog')).toBeNull();
+    await waitFor(() => expect(within(screen.getByTestId('shell-folder')).queryByText('No project')).toBeNull());
   });
 });
 

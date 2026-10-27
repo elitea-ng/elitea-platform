@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "Ampliar",
   "desktop.nativeMenu.zoomOut": "Reducir",
   "desktop.nativeMenu.zoomReset": "Tamaño real",
-  "desktop.shell.workshop": "Taller"
+  "desktop.shell.workshop": "Taller",
+  "desktop.shell.moveFolderBody": "La carpeta sale de {{from}} y aparece en {{to}}. Sus próximos hilos usan los modelos, credenciales y presupuesto de {{to}}; los archivos y los hilos anteriores se quedan en este equipo.",
+  "desktop.shell.moveFolderCancel": "Cancelar",
+  "desktop.shell.moveFolderConfirm": "Mover",
+  "desktop.shell.moveFolderTitle": "¿Mover «{{folder}}» a {{project}}?",
+  "desktop.shell.moveToProject": "Mover a proyecto",
+  "desktop.shell.projects": "Proyectos"
 }

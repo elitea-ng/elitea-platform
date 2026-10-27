@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "تكبير",
   "desktop.nativeMenu.zoomOut": "تصغير",
   "desktop.nativeMenu.zoomReset": "الحجم الفعلي",
-  "desktop.shell.workshop": "الورشة"
+  "desktop.shell.workshop": "الورشة",
+  "desktop.shell.moveFolderBody": "سيغادر المجلد {{from}} ويظهر ضمن {{to}}. ستستخدم سلاسله التالية نماذج {{to}} وبيانات اعتماده وميزانيته؛ وتبقى الملفات والسلاسل السابقة على هذا الكمبيوتر.",
+  "desktop.shell.moveFolderCancel": "إلغاء",
+  "desktop.shell.moveFolderConfirm": "نقل",
+  "desktop.shell.moveFolderTitle": "هل تريد نقل «{{folder}}» إلى {{project}}؟",
+  "desktop.shell.moveToProject": "نقل إلى مشروع",
+  "desktop.shell.projects": "المشاريع"
 }

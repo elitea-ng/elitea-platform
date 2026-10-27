@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "הגדלה",
   "desktop.nativeMenu.zoomOut": "הקטנה",
   "desktop.nativeMenu.zoomReset": "גודל בפועל",
-  "desktop.shell.workshop": "סדנה"
+  "desktop.shell.workshop": "סדנה",
+  "desktop.shell.moveFolderBody": "התיקייה תצא מ־{{from}} ותופיע תחת {{to}}. השרשורים הבאים ישתמשו במודלים, בפרטי ההתחברות ובתקציב של {{to}}; הקבצים והשרשורים הקודמים נשארים במחשב הזה.",
+  "desktop.shell.moveFolderCancel": "ביטול",
+  "desktop.shell.moveFolderConfirm": "העברה",
+  "desktop.shell.moveFolderTitle": "להעביר את „{{folder}}” אל {{project}}?",
+  "desktop.shell.moveToProject": "העברה לפרויקט",
+  "desktop.shell.projects": "פרויקטים"
 }

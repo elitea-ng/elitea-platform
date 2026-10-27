@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "Увеличить",
   "desktop.nativeMenu.zoomOut": "Уменьшить",
   "desktop.nativeMenu.zoomReset": "Реальный размер",
-  "desktop.shell.workshop": "Мастерская"
+  "desktop.shell.workshop": "Мастерская",
+  "desktop.shell.moveFolderBody": "Папка уйдёт из {{from}} и появится в {{to}}. Новые треды будут использовать модели, учётные данные и бюджет {{to}}; файлы и прошлые треды останутся на этом компьютере.",
+  "desktop.shell.moveFolderCancel": "Отмена",
+  "desktop.shell.moveFolderConfirm": "Переместить",
+  "desktop.shell.moveFolderTitle": "Переместить «{{folder}}» в {{project}}?",
+  "desktop.shell.moveToProject": "Переместить в проект",
+  "desktop.shell.projects": "Проекты"
 }

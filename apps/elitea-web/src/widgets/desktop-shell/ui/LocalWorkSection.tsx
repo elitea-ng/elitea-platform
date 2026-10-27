@@ -1,8 +1,10 @@
 /**
- * The sidebar's "Local work" section: each opened folder (workspace) on one
- * line — its name, its bound project as quiet trailing text that gives way to
- * the row's actions on hover — expandable to the threads run in it, which
- * line up under the folder's name. The section header carries "Open folder";
+ * The sidebar's "Local work" section: the opened folders (workspaces) of the
+ * project the sidebar is on, each on one line with a folder glyph (open or
+ * closed), expandable to the threads run in it, which line up under the
+ * folder's name. A folder with no project yet shows in every project, marked
+ * "No project", until it joins one; moving a folder that has a project to
+ * another one asks first (`MoveFolderDialog.tsx`). The section header carries "Open folder";
  * with no folder yet, an "Open a folder" row stands in as the empty state.
  *
  * The cloud badges of the visible thread rows (every open folder's shown
@@ -18,9 +20,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/rea
 
 import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
 import CheckOutlinedIcon from '@mui/icons-material/CheckOutlined';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import Box from '@mui/material/Box';
 import Divider from '@mui/material/Divider';
@@ -46,6 +46,8 @@ import { useLocalNeedsYouCount, useLocalThreadUnreadTracking } from '../model/lo
 import { useContextMenu, type ContextAction } from '../model/useContextMenu';
 import { WORKSPACE_LIST_KEY } from '../model/useShellActions';
 import type { ShellLocation } from '../model/useShellLocation';
+import { FolderClosedIcon, FolderOpenIcon } from './folderIcons';
+import { MoveFolderDialog, type PendingMove } from './MoveFolderDialog';
 import { ProjectPickerSheet } from './ProjectPickerSheet';
 import { CHILD_INDENT, ShellRow, SectionCaption } from './rows';
 import { LocalThreadRow } from './LocalThreadRow';
@@ -57,6 +59,8 @@ interface SectionProps {
   location: ShellLocation;
   run: (action: ShellAction) => void;
   projects: readonly Project[];
+  /** The project the sidebar is on: its folders, and those with no project yet, are listed. */
+  projectId: string | undefined;
 }
 
 const threadsQuery = (workspaceId: string) => ({ queryKey: threadsQueryKey(workspaceId), queryFn: () => readThreads(workspaceId) });
@@ -74,7 +78,7 @@ function nestedThreads(list: readonly WorkspaceThread[]): WorkspaceThread[] {
   return list.filter((thread) => thread.earlierAttemptOf === undefined || !listed.has(thread.earlierAttemptOf)).flatMap((thread) => [thread, ...under(thread.id)]);
 }
 
-interface FolderThreadsProps extends Omit<SectionProps, 'projects'> {
+interface FolderThreadsProps extends Omit<SectionProps, 'projects' | 'projectId'> {
   workspace: Workspace;
   all: boolean;
   onToggleAll: () => void;
@@ -138,9 +142,34 @@ function useFolderMutations(workspace: Workspace) {
   return { bind, remove };
 }
 
-function FolderMenu({ workspace, projects, run }: { workspace: Workspace } & Omit<SectionProps, 'location'>): React.JSX.Element {
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+/**
+ * Joining a project: at once for a folder with none, after a confirmation for
+ * one that has a project (the dialog this returns asks).
+ */
+function useProjectChange(workspace: Workspace, projects: readonly Project[]) {
   const { bind, remove } = useFolderMutations(workspace);
+  const [pending, setPending] = useState<PendingMove | null>(null);
+  const name = (id: number | null): string => projects.find((project) => project.id === id)?.name ?? '';
+  const request = (projectId: number): void => {
+    if (workspace.project_id === projectId) return;
+    if (workspace.project_id === null) {
+      bind.mutate(projectId);
+      return;
+    }
+    setPending({ folder: workspace.name, from: name(workspace.project_id), to: name(projectId), confirm: () => bind.mutate(projectId) });
+  };
+  const dialog = <MoveFolderDialog move={pending} onClose={() => setPending(null)} />;
+  return { request, remove, dialog };
+}
+
+interface FolderMenuProps extends Omit<SectionProps, 'location' | 'projectId'> {
+  workspace: Workspace;
+  onBind: (projectId: number) => void;
+  onRemove: () => void;
+}
+
+function FolderMenu({ workspace, projects, run, onBind, onRemove }: FolderMenuProps): React.JSX.Element {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const close = (): void => setAnchor(null);
   return (
     <>
@@ -162,7 +191,7 @@ function FolderMenu({ workspace, projects, run }: { workspace: Workspace } & Omi
         <MoreHorizIcon fontSize="inherit" />
       </IconButton>
       <Menu anchorEl={anchor} open={anchor !== null} onClose={close} slotProps={{ list: { dense: true } }}>
-        <ListSubheader>{t('desktop.shell.bindProject', 'Project for this folder')}</ListSubheader>
+        <ListSubheader>{workspace.project_id === null ? t('desktop.shell.bindProject', 'Project for this folder') : t('desktop.shell.moveToProject', 'Move to project')}</ListSubheader>
         {projects
           .filter((project) => !project.suspended)
           .map((project) => (
@@ -171,7 +200,7 @@ function FolderMenu({ workspace, projects, run }: { workspace: Workspace } & Omi
               selected={workspace.project_id === project.id}
               onClick={() => {
                 close();
-                if (workspace.project_id !== project.id) bind.mutate(project.id);
+                onBind(project.id);
               }}
             >
               <Box component="span" sx={{ width: '1.25rem', display: 'inline-flex' }}>
@@ -184,7 +213,7 @@ function FolderMenu({ workspace, projects, run }: { workspace: Workspace } & Omi
         <MenuItem
           onClick={() => {
             close();
-            remove.mutate();
+            onRemove();
           }}
         >
           {t('desktop.shell.removeFolder', 'Remove from sidebar')}
@@ -194,10 +223,11 @@ function FolderMenu({ workspace, projects, run }: { workspace: Workspace } & Omi
   );
 }
 
-interface FolderRowProps extends Omit<SectionProps, 'location'> {
+interface FolderRowProps extends Omit<SectionProps, 'location' | 'projectId'> {
   workspace: Workspace;
   open: boolean;
   selected: boolean;
+  /** The folder's project's name, or "No project". */
   project: string;
   onToggle: () => void;
 }
@@ -211,7 +241,7 @@ function FolderRow({ workspace, projects, run, open, selected, project, onToggle
   const threads = useQuery({ ...threadsQuery(workspace.id), enabled: open }).data ?? [];
   const needsYou = useLocalNeedsYouCount(workspace.id, readThreadUuids(workspace.id), threads);
   const appIpc = useAppIpc();
-  const { bind, remove } = useFolderMutations(workspace);
+  const { request, remove, dialog } = useProjectChange(workspace, projects);
   const [picking, setPicking] = useState(false);
   const actions = (): ContextAction[] =>
     folderContextActions({
@@ -219,7 +249,7 @@ function FolderRow({ workspace, projects, run, open, selected, project, onToggle
       projects,
       appIpc,
       primary: { label: t('desktop.shell.newThread', 'New thread'), run: () => run({ type: 'open_workspace', workspaceId: workspace.id }) },
-      bind: (projectId) => bind.mutate(projectId),
+      bind: request,
       remove: () => remove.mutate(),
       choosePicker: () => setPicking(true),
     });
@@ -227,18 +257,20 @@ function FolderRow({ workspace, projects, run, open, selected, project, onToggle
     <>
     <ShellRow
       label={workspace.name}
-      meta={project}
+      // Every folder listed is in the sidebar's project; only one with none says so.
+      meta={workspace.project_id === null ? project : ''}
       title={`${workspace.path}\n${t('desktop.shell.folderProject', 'Project: {{name}}', { name: project })}`}
-      icon={open ? <ExpandMoreIcon /> : <ChevronRightIcon />}
+      icon={open ? <FolderOpenIcon /> : <FolderClosedIcon />}
       ariaExpanded={open}
       selected={selected}
       status={<ActivityGroupSummary needsYou={needsYou} count={threads.length > 0 ? threads.length : undefined} />}
       onClick={onToggle}
       onContextMenu={(event) => showMenu(event, actions())}
       trailingOnHover
-      trailing={<FolderMenu workspace={workspace} projects={projects} run={run} />}
+      trailing={<FolderMenu workspace={workspace} projects={projects} run={run} onBind={request} onRemove={() => remove.mutate()} />}
     />
-    <ProjectPickerSheet open={picking} projects={projects} currentId={workspace.project_id} onPick={(projectId) => bind.mutate(projectId)} onClose={() => setPicking(false)} />
+    <ProjectPickerSheet open={picking} projects={projects} currentId={workspace.project_id} onPick={request} onClose={() => setPicking(false)} />
+    {dialog}
     </>
   );
 }
@@ -249,12 +281,12 @@ function HandoffLiveEvents({ projectId }: { readonly projectId: number }): null 
   return null;
 }
 
-export function LocalWorkSection({ location, run, projects }: SectionProps): React.JSX.Element {
+export function LocalWorkSection({ location, run, projects, projectId }: SectionProps): React.JSX.Element {
   const ipc = useWorkspaceIpc();
   const list = useQuery({ queryKey: WORKSPACE_LIST_KEY, queryFn: () => ipc?.list() ?? Promise.resolve([]), enabled: ipc !== undefined });
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [expandedAll, setExpandedAll] = useState<ReadonlySet<string>>(new Set());
-  const workspaces = list.data ?? [];
+  const workspaces = (list.data ?? []).filter((workspace) => workspace.project_id === null || String(workspace.project_id) === projectId);
   const toggleIn = (set: (update: (current: ReadonlySet<string>) => ReadonlySet<string>) => void, id: string): void =>
     set((current) => {
       const next = new Set(current);

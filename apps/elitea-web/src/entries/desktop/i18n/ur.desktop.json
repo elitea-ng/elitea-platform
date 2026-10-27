@@ -1039,5 +1039,11 @@
   "desktop.nativeMenu.zoomIn": "بڑا کریں",
   "desktop.nativeMenu.zoomOut": "چھوٹا کریں",
   "desktop.nativeMenu.zoomReset": "اصل سائز",
-  "desktop.shell.workshop": "ورکشاپ"
+  "desktop.shell.workshop": "ورکشاپ",
+  "desktop.shell.moveFolderBody": "فولڈر {{from}} سے نکل کر {{to}} کے تحت دکھائی دے گا۔ اگلے تھریڈز {{to}} کے ماڈلز، اسناد اور بجٹ استعمال کریں گے؛ فائلیں اور پچھلے تھریڈز اسی کمپیوٹر پر رہیں گے۔",
+  "desktop.shell.moveFolderCancel": "منسوخ کریں",
+  "desktop.shell.moveFolderConfirm": "منتقل کریں",
+  "desktop.shell.moveFolderTitle": "کیا «{{folder}}» کو {{project}} میں منتقل کریں؟",
+  "desktop.shell.moveToProject": "پروجیکٹ میں منتقل کریں",
+  "desktop.shell.projects": "پروجیکٹس"
 }
