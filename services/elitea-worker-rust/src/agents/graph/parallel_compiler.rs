@@ -332,7 +332,7 @@ pub(crate) fn refuse_child_parallel(
     let Some(definitions) = runtimes.composition_definitions() else {
         return Ok(());
     };
-    for (path, definition) in definitions.iter() {
+    for (path, definition) in definitions {
         if let Some(parallel) = definition.first_parallel_node() {
             return Err(PipelineConfigurationError::FanoutChildUnsupported {
                 node: format!("{path}/{parallel}"),

@@ -301,6 +301,49 @@ fn claim(
     )
 }
 
+/// A reclaim as production runs it with model-checkpoint recovery on: inspect
+/// the root, authorize the evidence, assemble the checkpoint, and release the
+/// Runner only for the authorized frontier.
+async fn recovered(
+    assembler: &PipelineNativeAgentAssembler,
+    request: &super::super::request::AgentExecutionRequest,
+    execution: &str,
+    attempt: u8,
+) -> Result<AssembledNativeAgentInvocation<PipelineAgentCompletion>, String> {
+    let evidence = crate::agents::runtime::NativeAgentAssembler::inspect_checkpoint(
+        assembler,
+        request,
+        &AuthorizedNativeCommandBinding::fixture_for_execution(execution),
+        test_session_authority_for_reclaim(execution, GENERATION, attempt),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .map_err(|error| format!("inspect: {error}"))?;
+    let (authorizer, control) = crate::protocol::control::test_checkpoint_authorizer(
+        execution,
+        GENERATION,
+        evidence.digest(),
+    );
+    let authorization = authorizer
+        .authorize(&control, evidence)
+        .await
+        .map_err(|_| "authorize".to_owned())?;
+    let pending = assembler
+        .assemble_checkpoint(AuthorizedNativeAssembly::from_authorized(
+            request,
+            test_runtime_context_authority(),
+            test_session_authority_for_reclaim(execution, GENERATION, attempt),
+            Arc::new(TestStateWriterLease::current()),
+            AuthorizedNativeCommandBinding::fixture_for_execution(execution),
+        ))
+        .await
+        .map_err(|error| format!("assemble the checkpoint: {error}"))?;
+    let (_, _, _, _, permit) = authorization.into_lifecycle_parts();
+    pending
+        .authorize_lifecycle(permit)
+        .map_err(|error| format!("authorize the lifecycle: {error}"))
+}
+
 /// Run the reclaimed pipeline to its end through the browser projector: the
 /// `agent_fanout_member` statuses it emitted on completion, the failure's
 /// code otherwise.
@@ -936,6 +979,91 @@ async fn postgres_a_wake_resumes_the_answered_pipeline_branch_and_parks_the_rest
     db.pool.close().await;
 }
 
+/// Browser finding 2026-10-27: a wake whose process is lost before its first
+/// root save is reclaimed through the production checkpoint recovery (inspect,
+/// authorize, assemble the checkpoint) under its own execution. Its root still
+/// holds the park an earlier execution wrote; it runs again as the wake (I),
+/// never ending as an internal failure with the answer left undelivered.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_wake_lost_before_its_first_root_save_recovers_as_the_wake() {
+    const WAKE_EXECUTION: &str = "execution-fanout-wake";
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let connector = || {
+        Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::new(AtomicUsize::new(0)),
+            read_only: false,
+        })
+    };
+    let (first, _) = assembler(
+        &db.pool,
+        (0..3)
+            .map(|_| TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()))
+            .collect(),
+        connector(),
+        asking_pipeline(),
+    );
+    let request = request_for("continue", "pipeline");
+    let invocation = first
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the fan-out: {error}"));
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .expect("the activation parks");
+    let third = cards[2]["interrupt_key"]
+        .as_str()
+        .expect("the third card's key")
+        .to_owned();
+    ledger.decide(&third, "answer", Some("red"));
+
+    // The wake's first claim was lost before it saved its root: its reclaim
+    // inspects the root, which still holds the park of the first execution.
+    let (woken, captured) = assembler(
+        &db.pool,
+        vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+            "the saddle is red",
+        ))],
+        connector(),
+        asking_pipeline(),
+    );
+    let woken = woken.with_fanout_decisions_for_tests(ledger.client(2));
+    let wake = wake_request("continue");
+    let invocation = recovered(&woken, &wake, WAKE_EXECUTION, 2)
+        .await
+        .unwrap_or_else(|error| panic!("the lost wake recovers from its park: {error}"));
+    let (members, cards) = run_collecting(invocation)
+        .await
+        .expect("the recovered wake resumes the answered child and parks again");
+    assert_eq!(model_requests(&captured), 1, "only the answered child runs");
+    assert!(
+        members
+            .iter()
+            .any(|member| member["fanout_v1"]["member"] == "third" && member["status"] == "end"),
+        "{members:?}"
+    );
+    assert!(
+        cards
+            .iter()
+            .filter(|card| card["interrupt_key"] != third.as_str())
+            .count()
+            >= 2,
+        "{cards:?}"
+    );
+    db.pool.close().await;
+}
+
 /// R: `second` dies in its model call and resumes from its model checkpoint.
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_fanout_child_caught_mid_model_resumes_from_its_checkpoint() {
@@ -1022,10 +1150,10 @@ async fn postgres_fanout_effect_child() {
                 }),
                 effectful_agent(),
             );
-            let invocation = assembler
-                .assemble(claim(&request, 2))
+            // The production reclaim: model-checkpoint recovery (profile ON).
+            let invocation = recovered(&assembler, &request, EXECUTION, 2)
                 .await
-                .expect("recover: the replacement Worker assembles the reclaim");
+                .expect("recover: the replacement Worker recovers the reclaim");
             let members = run_to_end(invocation)
                 .await
                 .expect("recover: the resumed child completes the pipeline");
@@ -1097,16 +1225,10 @@ async fn postgres_fanout_effect_child() {
                 }),
                 effectful_agent(),
             );
-            let invocation = assembler
-                .assemble(claim(&request, 2))
+            let invocation = recovered(&assembler, &request, EXECUTION, 2)
                 .await
                 .unwrap_or_else(|error| {
-                    panic!(
-                        "recover: the replacement Worker assembles the reclaim: {error} {:?}",
-                        error.cause().map(
-                            elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code
-                        )
-                    )
+                    panic!("recover: the replacement Worker recovers the reclaim: {error}")
                 });
             let outcome = run_to_end(invocation).await;
             assert_eq!(

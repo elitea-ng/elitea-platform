@@ -1545,7 +1545,8 @@ impl PipelineStateServices {
             .verify_pending_receipt(&activation, receipt)
             .await
             .map_err(|_| invalid_configuration())?;
-        let evidence = self.inspect_checkpoint(plan, definition).await?;
+        // A node recovery resumes this execution's own node attempt only.
+        let (evidence, _) = self.inspect_checkpoint(plan, definition, false).await?;
         let projector = definition
             .node_result_projector(&receipt.node_id, &plan.execution_id, plan.generation)
             .map_err(|_| invalid_configuration())?;
@@ -1595,16 +1596,25 @@ impl PipelineStateServices {
         &self,
         plan: &OrdinaryNativeAgentPlan,
         definition: &PipelineDefinition,
-    ) -> Result<ValidatedModelCheckpoint, NativeAgentAssemblyError> {
+        wake: bool,
+    ) -> Result<(ValidatedModelCheckpoint, RecoveryFrontier), NativeAgentAssemblyError> {
         let checkpoint = self
             .checkpointer
             .load(plan.session_id.as_ref())
             .await
             .map_err(|_| dependency_unavailable())?
             .ok_or_else(invalid_configuration)?;
+        let writer = checkpoint.metadata.get("elitea.pipeline.execution.v1");
+        let frontier = if writer == Some(&serde_json::json!([plan.execution_id, plan.generation])) {
+            RecoveryFrontier::Own
+        } else if wake && writer.is_some() && !checkpoint.pending_nodes.is_empty() {
+            // A wake lost before its first root save: the latest root checkpoint
+            // is still the park an earlier execution wrote, which it re-enters.
+            RecoveryFrontier::WakePark
+        } else {
+            return Err(invalid_configuration());
+        };
         if checkpoint.thread_id != plan.session_id.as_str()
-            || checkpoint.metadata.get("elitea.pipeline.execution.v1")
-                != Some(&serde_json::json!([plan.execution_id, plan.generation]))
             || !definition.recovery_frontier_supported(&checkpoint.pending_nodes)
             || checkpoint.cleared_interrupt.is_some()
         {
@@ -1617,15 +1627,29 @@ impl PipelineStateServices {
             serde_json::to_vec(&("elitea.pipeline.recovery.v1", plan.definition_digest, value))
                 .map_err(|_| invalid_configuration())?;
         let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
-        Ok(ValidatedModelCheckpoint::from_graph(
-            plan.execution_id.clone(),
-            plan.generation,
-            digest
-                .as_ref()
-                .try_into()
-                .map_err(|_| invalid_configuration())?,
+        Ok((
+            ValidatedModelCheckpoint::from_graph(
+                plan.execution_id.clone(),
+                plan.generation,
+                digest
+                    .as_ref()
+                    .try_into()
+                    .map_err(|_| invalid_configuration())?,
+            ),
+            frontier,
         ))
     }
+}
+
+/// Where a pipeline's model-checkpoint recovery resumes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RecoveryFrontier {
+    /// This execution's own latest root checkpoint.
+    Own,
+    /// A fan-out wake whose process was lost before its first root save: it
+    /// runs again as the wake from the park it was admitted against (class I:
+    /// the decision ledger and the children's receipts deduplicate it).
+    WakePark,
 }
 
 /// One bound provider invocation that remains paired with its completion.

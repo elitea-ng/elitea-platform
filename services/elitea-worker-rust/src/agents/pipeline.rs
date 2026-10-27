@@ -1159,7 +1159,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             request.payload.toolkit_guardrails.as_ref(),
             &self.tool_policy,
         )?;
-        let (profile, plan, _, _) = super::runtime::admit_pipeline_plan(
+        let (profile, plan, _, start) = super::runtime::admit_pipeline_plan(
             request,
             command,
             &request.payload.input_attachments,
@@ -1168,8 +1168,13 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
         self.state
             .open(session, lease, &plan, profile.definition())
             .await?
-            .inspect_checkpoint(&plan, profile.definition())
+            .inspect_checkpoint(
+                &plan,
+                profile.definition(),
+                matches!(start, super::runtime::PipelineNativeStart::FanoutWake(_)),
+            )
             .await
+            .map(|(evidence, _)| evidence)
     }
 
     async fn assemble_checkpoint(
@@ -1296,6 +1301,7 @@ impl PipelineNativeAgentAssembler {
                     &composition.checkpoint_paths,
                 )
                 .await?;
+            let mut wake_rerun = false;
             let evidence = if let Some(authority) = node_recovery {
                 let visit = state
                     .inspect_node_recovery(&plan, profile.definition(), authority.receipt())
@@ -1310,15 +1316,22 @@ impl PipelineNativeAgentAssembler {
                 }
                 Some(visit.into_checkpoint())
             } else if recovery {
-                let evidence = state
-                    .inspect_checkpoint(&plan, profile.definition())
+                let (evidence, frontier) = state
+                    .inspect_checkpoint(
+                        &plan,
+                        profile.definition(),
+                        matches!(start, super::runtime::PipelineNativeStart::FanoutWake(_)),
+                    )
                     .await?;
-                state.model_scopes = state.model_scopes.with_pending_model_recovery();
+                wake_rerun = frontier == super::session::RecoveryFrontier::WakePark;
+                if !wake_rerun {
+                    state.model_scopes = state.model_scopes.with_pending_model_recovery();
+                }
                 Some(evidence)
             } else {
                 None
             };
-            let start = if recovery || node_recovery.is_some() {
+            let start = if (recovery && !wake_rerun) || node_recovery.is_some() {
                 super::runtime::PipelineNativeStart::Checkpoint
             } else {
                 start
