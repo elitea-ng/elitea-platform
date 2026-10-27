@@ -22,6 +22,11 @@ import { sessionAuthContext, useSessionStore } from './session-store';
  */
 const SESSION_RECHECK_INTERVAL_MS = 60_000;
 
+/** Desktop boot probe backoff: 1 s, 2 s, 4 s, 8 s, then every 15 s. */
+function sessionRetryDelay(attempt: number): number {
+  return Math.min(15_000, 1000 * 2 ** attempt);
+}
+
 /**
  * Applies the signed-in user's server-stored theme, so the web app and the
  * desktop app agree (`./ThemePreferenceSync`). A lazy chunk: it and its API
@@ -170,7 +175,10 @@ export function App() {
   }, [fetchSession]);
 
   useEffect(() => {
-    void fetchSession().then(() => {
+    let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const boot = (attempt: number): void => void fetchSession().then(() => {
+      if (cancelled) return;
       // Re-run all active beforeLoad guards now that the session is known.
       void router.invalidate();
 
@@ -195,6 +203,16 @@ export function App() {
       const { user, probeStatus } = useSessionStore.getState();
       if (user !== undefined) return;
       if (isPublicRoutePath(window.location.pathname)) return;
+
+      // Desktop (ADR-0029): no user here means the probe FAILED — the app is
+      // only mounted while the host holds a session, and a refused token signs
+      // out to the connect screen, which unmounts this. A network that is not
+      // up yet at launch or after wake, or a refresh the server could not
+      // answer, used to leave `/` on its pending screen for good. Ask again.
+      if (import.meta.env.MODE === 'desktop') {
+        retry = setTimeout(() => boot(attempt + 1), sessionRetryDelay(attempt));
+        return;
+      }
 
       /*
        * A probe that never ANSWERED is not a probe that said "no session".
@@ -227,15 +245,14 @@ export function App() {
        */
       if (probeStatus === undefined) return;
 
-      // Desktop (ADR-0029): never navigate the privileged webview to a login URL.
-      // A native client has no cookie plane; its transport signs out and the
-      // shell returns to the connect screen. Statically false in every other
-      // build mode, so the branch is removed from them.
-      if (import.meta.env.MODE === 'desktop') return;
-
       const returnTo = window.location.pathname + window.location.search;
       window.location.assign(buildLoginUrl(authPlaneFromProbeStatus(probeStatus), returnTo));
     });
+    boot(0);
+    return () => {
+      cancelled = true;
+      clearTimeout(retry);
+    };
   }, [fetchSession, router]);
 
   if (config.status === 'missing') {
