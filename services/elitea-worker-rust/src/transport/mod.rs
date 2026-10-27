@@ -4,6 +4,9 @@ mod anthropic_facade_tests;
 pub(crate) mod artifact_objects;
 pub mod command_bus;
 pub mod control_grpc;
+pub(crate) mod credential_redeemer;
+#[cfg(test)]
+mod credential_redeemer_tests;
 pub(crate) mod embeddings_facade;
 pub(crate) mod extractor_client;
 pub(crate) mod gateway_call;
