@@ -9,6 +9,7 @@ import { useMemo, useState } from 'react';
 import { useWorkspaceIpc } from '@/features/workspace';
 import { RulesPanel } from '@/features/workspace-rules';
 import { tauriRulesIpc, type RulesIpc } from '@/shared/desktop/rulesIpc';
+import { openedFolders } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
 export default function RulesPage({ ipc }: { ipc?: RulesIpc }): React.JSX.Element {
@@ -16,7 +17,7 @@ export default function RulesPage({ ipc }: { ipc?: RulesIpc }): React.JSX.Elemen
   const workspaceIpc = useWorkspaceIpc();
   const list = useQuery({ queryKey: ['workspace', 'list'], queryFn: () => workspaceIpc?.list() ?? Promise.resolve([]), enabled: workspaceIpc !== undefined });
   const [picked, setPicked] = useState<string | null>(null);
-  const workspaces = list.data ?? [];
+  const workspaces = openedFolders(list.data ?? []);
   const workspaceId = picked ?? workspaces[0]?.id ?? null;
   return (
     <Stack spacing={2} sx={{ p: 3, maxWidth: 860 }}>

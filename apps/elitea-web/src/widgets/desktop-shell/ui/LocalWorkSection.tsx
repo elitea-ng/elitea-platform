@@ -12,7 +12,9 @@
  * `handoff_status_many` read for the whole section.
  *
  * An open git folder also lists its parallel tasks (task worktrees) under its
- * threads; that panel is loaded on first use.
+ * threads, each drawn as a thread (`WorktreeTaskRow`); a task worktree is never
+ * a folder of its own here. "New thread in a worktree" (the folder's menus)
+ * opens a new thread with "Work in › New worktree" chosen.
  */
 import { Suspense, useState } from 'react';
 
@@ -33,9 +35,9 @@ import Tooltip from '@mui/material/Tooltip';
 import type { Project } from '@/entities/project';
 import { readThreadUuids, useHandoffIpc, useHandoffLiveEvents, useHandoffStatusMany } from '@/features/workspace-handoff';
 import { readThreads, threadsQueryKey, useWorkspaceIpc } from '@/features/workspace';
-import { WorktreesPanel } from '@/features/workspace-worktrees';
+import { preferWorktree, WorktreesPanel } from '@/features/workspace-worktrees';
 import type { HandoffStatus } from '@/shared/desktop/handoffIpc';
-import type { Workspace } from '@/shared/desktop/workspaceIpc';
+import { openedFolders, type Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { ActivityGroupSummary } from '@/shared/ui/ConversationActivity';
 
@@ -51,6 +53,7 @@ import { MoveFolderDialog, type PendingMove } from './MoveFolderDialog';
 import { ProjectPickerSheet } from './ProjectPickerSheet';
 import { CHILD_INDENT, ShellRow, SectionCaption } from './rows';
 import { LocalThreadRow } from './LocalThreadRow';
+import { WorktreeTaskRow } from './WorktreeTaskRow';
 import { modKey } from './shortcutLabel';
 
 const THREADS_SHOWN = 8;
@@ -132,6 +135,12 @@ function FolderThreads({ workspace, location, run, all, onToggleAll, statuses }:
   );
 }
 
+/** A new thread of the folder that will work in a new task worktree. */
+function newWorktreeThread(workspace: Workspace, run: SectionProps['run']): void {
+  preferWorktree(workspace.id);
+  run({ type: 'open_workspace', workspaceId: workspace.id });
+}
+
 /** Binding a folder to a project and removing it from the sidebar: the ⋯ menu's and the context menu's shared actions. */
 function useFolderMutations(workspace: Workspace) {
   const ipc = useWorkspaceIpc();
@@ -191,6 +200,17 @@ function FolderMenu({ workspace, projects, run, onBind, onRemove }: FolderMenuPr
         <MoreHorizIcon fontSize="inherit" />
       </IconButton>
       <Menu anchorEl={anchor} open={anchor !== null} onClose={close} slotProps={{ list: { dense: true } }}>
+        {workspace.is_git && (
+          <MenuItem
+            onClick={() => {
+              close();
+              newWorktreeThread(workspace, run);
+            }}
+          >
+            {t('desktop.shell.newWorktreeThread', 'New thread in a worktree')}
+          </MenuItem>
+        )}
+        {workspace.is_git && <Divider />}
         <ListSubheader>{workspace.project_id === null ? t('desktop.shell.bindProject', 'Project for this folder') : t('desktop.shell.moveToProject', 'Move to project')}</ListSubheader>
         {projects
           .filter((project) => !project.suspended)
@@ -249,6 +269,7 @@ function FolderRow({ workspace, projects, run, open, selected, project, onToggle
       projects,
       appIpc,
       primary: { label: t('desktop.shell.newThread', 'New thread'), run: () => run({ type: 'open_workspace', workspaceId: workspace.id }) },
+      ...(workspace.is_git ? { worktree: () => newWorktreeThread(workspace, run) } : {}),
       bind: request,
       remove: () => remove.mutate(),
       choosePicker: () => setPicking(true),
@@ -286,7 +307,7 @@ export function LocalWorkSection({ location, run, projects, projectId }: Section
   const list = useQuery({ queryKey: WORKSPACE_LIST_KEY, queryFn: () => ipc?.list() ?? Promise.resolve([]), enabled: ipc !== undefined });
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [expandedAll, setExpandedAll] = useState<ReadonlySet<string>>(new Set());
-  const workspaces = (list.data ?? []).filter((workspace) => workspace.project_id === null || String(workspace.project_id) === projectId);
+  const workspaces = openedFolders(list.data ?? []).filter((workspace) => workspace.project_id === null || String(workspace.project_id) === projectId);
   const toggleIn = (set: (update: (current: ReadonlySet<string>) => ReadonlySet<string>) => void, id: string): void =>
     set((current) => {
       const next = new Set(current);
@@ -359,7 +380,7 @@ export function LocalWorkSection({ location, run, projects, projectId }: Section
               )}
               {open && workspace.is_git && (
                 <Suspense fallback={null}>
-                  <WorktreesPanel workspaceId={workspace.id} workspaceName={workspace.name} />
+                  <WorktreesPanel workspaceId={workspace.id} workspaceName={workspace.name} renderEntry={(parts) => <WorktreeTaskRow {...parts} location={location} run={run} />} />
                 </Suspense>
               )}
             </li>

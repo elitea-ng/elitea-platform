@@ -155,7 +155,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           </Box>
         </Box>
         <Box sx={{ ...COLUMN, flexShrink: 0, paddingTop: 1, paddingBottom: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <ThreadComposer ipc={ipc} workspaceId={workspace.id} projectId={projectId} conversationId={conversationId} session={session} turn={turn} handoff={handoff} cloud={cloud} skills={skills} />
+          <ThreadComposer ipc={ipc} workspaceId={workspace.id} projectId={projectId} conversationId={conversationId} session={session} turn={turn} handoff={handoff} cloud={cloud} skills={skills} canBranch={workspace.is_git && workspace.parent_id === undefined} />
         </Box>
       </Box>
       <SessionInspector

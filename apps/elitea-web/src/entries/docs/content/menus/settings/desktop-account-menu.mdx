@@ -45,6 +45,7 @@ In a Local work thread the row under the text holds, from the left:
 - The mode: **Act** (edits with approvals), **Plan** (plans, changes nothing) or **Bypass** (no approvals; the app warns you the first time).
 - The agent and its version, and the model.
 - **⋯** with **Step limit**: how many steps a turn may take.
+- In a new thread of a git folder, **Work in**: **This folder**, or **New worktree** (see [Work in a worktree](#work-in-a-worktree)).
 - Where the thread runs (**Local** or in the cloud), the language-server status, and a ring showing how much of the model's context the thread uses. Select the ring to open the **Context** tab.
 - **Send**, which becomes **Stop** while a turn runs.
 
@@ -76,6 +77,20 @@ The app's menu bar (File, Edit, View…) and the menu-bar icon's menu follow the
 Your choice applies to this computer only. Signing out clears it, so the next person to sign in on a shared computer gets their system's language.
 
 Strings that have no translation yet are shown in English. Names of products and technical terms, such as MCP, DeepWiki or GitHub, are not translated. The translations are new, so if a label reads wrong, report it with the bug button.
+
+## Work in a worktree
+
+A worktree is a separate copy of a git folder on its own branch. The agent works there while you keep using the folder, or while another thread works in it, so several tasks run side by side without touching each other's files.
+
+To start one, open a new thread in a git folder and set **Work in** to **New worktree**, or choose **New thread in a worktree** from the folder's **⋯** or right-click menu. Write your message and send it: the app makes the worktree on a new `elitea/…` branch from the folder's current commit, opens the worktree's thread and sends the message there.
+
+A worktree shows under its folder in the sidebar, as one of the folder's threads with a branch icon, the thread's title, and how many commits it is ahead and how many files are not committed. Hover over the name to see the branch and where the worktree is. Hover actions:
+
+- **Diff** shows what the task changed.
+- **Merge back** previews the merge into the folder, then applies it as uncommitted changes. You can undo it.
+- **Remove** deletes the worktree; the app asks first when it has uncommitted work. Its branch stays when it has commits.
+
+A worktree is never listed as a folder of its own, on the **Local work** page or in the command palette.
 
 ## When the app cannot reach your deployment
 

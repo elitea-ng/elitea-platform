@@ -21,6 +21,8 @@
  * sets the same).
  * `/retry` sends the last message again and `/steps` shows or sets the
  * folder's step limit (`useRetryAndSteps`).
+ * A new thread of a git folder chooses where it works (`WorkInChip`, `useWorkIn`): the folder, or a new task worktree
+ * that its first send makes and moves to.
  * And the model chip (`ModelChip`, `useTurnModel`): the model the next turn
  * runs on, unless the agent pins it or the folder's settings keep it
  * (`/model` opens it, `/model <name>` sets a listed one; an unknown name or
@@ -48,7 +50,7 @@ import { useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { BypassControls } from './BypassControls';
 import { contextBreakdown, threadMeter } from './contextBreakdown';
-import { AgentChip, RunLocationChip } from './ComposerControls';
+import { AgentChip, RunLocationChip, WorkInChip } from './ComposerControls';
 import { HandoffBanner } from './HandoffControls';
 import { RunInCloudNotice } from './RunInCloudNotice';
 import { firstError, SessionNotices } from './sessionParts';
@@ -63,6 +65,7 @@ import type { SessionCommands } from './useSessionCommands';
 import { useComposerModes } from './useComposerModes';
 import { useSteering, type Steering } from './useSteering';
 import { useTurnModel, type TurnModelControl } from './useTurnModel';
+import { useWorkIn } from './useWorkIn';
 import StepLimitMenu, { prefetchStepLimit } from './StepLimitMenu';
 import { skillPicks, WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
 
@@ -80,6 +83,8 @@ export interface ThreadComposerProps {
   handoff: ThreadHandoff;
   cloud: CloudChat;
   skills: readonly ComposerSkill[];
+  /** The folder is its repository's top (not a task worktree): a new thread may work in a new worktree. */
+  canBranch: boolean;
 }
 
 /** What differs when the thread's messages go to the cloud copy. */
@@ -168,6 +173,9 @@ function contextPercentOf(cloudMode: boolean, turn: WorkspaceTurn, history: Thre
   return meter === undefined ? undefined : contextBreakdown(meter).percent;
 }
 
+/** "Work in" is a new local thread's choice, in a folder that is its repository's top. */
+const offersWorkIn = (canBranch: boolean, local: boolean, conversationId: string): boolean => canBranch && local && conversationId === '';
+
 const openContextTab = (): void => useDesktopLayout.getState().showInspector('context');
 
 /** The footer's language-server icon and the context ring (both lazy); the ring once a model call reported usage. */
@@ -205,7 +213,7 @@ function useSlashSources(ipc: WorkspaceIpc, workspaceId: string, projectId: numb
   return { customCommands, offered, onFocus };
 }
 
-export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, session, turn, handoff, cloud, skills }: ThreadComposerProps): React.JSX.Element {
+export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, session, turn, handoff, cloud, skills, canBranch }: ThreadComposerProps): React.JSX.Element {
   const navigate = useNavigate();
   const { commands } = session;
   const cloudMode = handoff.status?.executor === 'cloud';
@@ -237,6 +245,14 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   useDoubleEscape(bound.busy, bound.onStop);
   const lastRecorded = useMemo(() => recordedPrompt(session.history, customCommands, offered), [session.history, customCommands, offered]);
   const controls = useRetryAndSteps(workspaceId, commands, session.run, { send: bound.onSend, busy: bound.busy, canSend: bound.canSend }, lastRecorded);
+  const workIn = useWorkIn({
+    workspaceId,
+    offered: offersWorkIn(canBranch, local, conversationId),
+    canSend: bound.canSend,
+    send: controls.remembering(bound.onSend),
+    onError: commands.showText,
+    open: (id) => void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: id } }),
+  });
   const openInChat = conversationId === '' ? undefined : () => void navigate({ to: '/chat/$conversationId', params: { conversationId } });
   const recorded = useMemo(() => recordedUsages(session.history), [session.history]);
   const usages = cloudMode ? NO_USAGE : turnUsages(turn, recorded);
@@ -258,7 +274,12 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         {...modes.switchProps}
         agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} disabledHint={agentHint} />}
         {...modelBinding(model, !local, commands.modelRef)}
-        runLocation={<RunLocationChip handoff={handoff} onOpenInChat={openInChat} />}
+        runLocation={
+          <>
+            {workIn.offered && <WorkInChip value={workIn.value} onChange={workIn.choose} disabled={bound.busy} />}
+            <RunLocationChip handoff={handoff} onOpenInChat={openInChat} />
+          </>
+        }
         contextMeter={<ComposerMeters usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} contextPercent={contextPercentOf(cloudMode, turn, session.history)} />}
         more={moreRows(workspaceId, !cloudMode, commands.showText)}
         onPlanModeChange={commands.setPlanMode}
@@ -268,7 +289,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         onStepsCommand={controls.onStepsCommand}
         onFocus={onFocus}
         {...bound}
-        onSend={controls.remembering(bound.onSend)}
+        onSend={workIn.send}
       />
     </>
   );

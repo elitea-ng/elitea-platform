@@ -14,7 +14,7 @@ import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import { readThreads, useWorkspaceIpc } from '@/features/workspace';
-import type { Workspace } from '@/shared/desktop/workspaceIpc';
+import { openedFolders, type Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
 import type { EliteaItem } from '../lib/eliteaSections';
@@ -65,7 +65,7 @@ function paletteEntries(workspaces: readonly Workspace[], eliteaItems: readonly 
     },
     { id: 'settings', group: actions, label: t('desktop.palette.settings', 'Settings'), hint: `${mod},`, action: { type: 'settings' } },
   );
-  for (const workspace of workspaces) {
+  for (const workspace of openedFolders(workspaces)) {
     entries.push({ id: `folder:${workspace.id}`, group: folders, label: workspace.name, hint: workspace.path, action: { type: 'open_workspace', workspaceId: workspace.id } });
   }
   for (const workspace of workspaces) {

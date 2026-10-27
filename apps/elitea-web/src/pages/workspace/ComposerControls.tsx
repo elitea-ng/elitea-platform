@@ -8,16 +8,19 @@ import { useState, type Ref } from 'react';
 
 import CheckOutlinedIcon from '@mui/icons-material/CheckOutlined';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import AltRouteOutlinedIcon from '@mui/icons-material/AltRouteOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined';
+import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import LaptopMacOutlinedIcon from '@mui/icons-material/LaptopMacOutlined';
 import Box from '@mui/material/Box';
 import Tooltip from '@mui/material/Tooltip';
 
+import type { WorkIn } from '@/features/workspace-worktrees';
 import type { HandoffExecutor } from '@/shared/desktop/handoffIpc';
 import { t } from '@/shared/i18n';
 import { ComposerPicker } from '@/shared/ui/native-composer';
-import { MenuDivider, MenuHeader, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
+import { MenuDivider, MenuHeader, MenuNote, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
 
 import type { AgentSelection } from './useAgentSelection';
 import type { ThreadHandoff } from './useThreadHandoff';
@@ -131,6 +134,47 @@ export function RunLocationChip({ handoff, onOpenInChat }: { handoff: ThreadHand
       disabled={!(handoff.canSend || handoff.offLaptop)}
     >
       {(close) => locationRows(handoff, close, onOpenInChat)}
+    </ComposerPicker>
+  );
+}
+
+const WORK_IN_CHOICES: readonly WorkIn[] = ['folder', 'worktree'];
+
+/**
+ * "📁 Folder ⌄" on a new thread of a git folder: work in the folder itself,
+ * or in a new task worktree (its own branch from the folder's HEAD, so turns
+ * there and in the folder run side by side). The first send makes the worktree.
+ */
+export function WorkInChip({ value, onChange, disabled }: { value: WorkIn; onChange: (next: WorkIn) => void; disabled?: boolean }): React.JSX.Element {
+  const folder = t('workspace.workIn.folder', 'This folder');
+  const worktree = t('workspace.workIn.worktree', 'New worktree');
+  return (
+    <ComposerPicker
+      label={t('workspace.workIn.label', 'Work in')}
+      value={value === 'worktree' ? worktree : folder}
+      icon={value === 'worktree' ? <AltRouteOutlinedIcon /> : <FolderOutlinedIcon />}
+      testId="work-in-chip"
+      disabled={disabled ?? false}
+    >
+      {(close) => [
+        <MenuHeader key="header">{t('workspace.workIn.label', 'Work in')}</MenuHeader>,
+        ...WORK_IN_CHOICES.map((choice) => (
+          <MenuRow
+            key={choice}
+            selected={value === choice}
+            data-testid={`work-in-${choice}`}
+            onClick={() => {
+              close();
+              onChange(choice);
+            }}
+          >
+            <MenuRowIcon>{choice === 'worktree' ? <AltRouteOutlinedIcon /> : <FolderOutlinedIcon />}</MenuRowIcon>
+            <MenuRowText>{choice === 'worktree' ? worktree : folder}</MenuRowText>
+            <MenuRowIcon>{value === choice && <CheckOutlinedIcon />}</MenuRowIcon>
+          </MenuRow>
+        )),
+        <MenuNote key="note">{t('workspace.workIn.note', 'A worktree is a separate copy on its own branch: the agent works there while you keep using the folder. Merge it back from the sidebar.')}</MenuNote>,
+      ]}
     </ComposerPicker>
   );
 }
