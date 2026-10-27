@@ -2,7 +2,8 @@
  * The desktop's left sidebar, workspace-first: search (the command palette),
  * "Local work" — each opened folder, expandable to the threads run in it
  * (`LocalWorkSection.tsx`) — then a compact, collapsible "Elitea" list that
- * opens the web features in the main area, and Settings at the bottom.
+ * opens the web features in the main area, and the account menu at the
+ * bottom (`AccountMenu.tsx`), which also carries Credentials, Catalog and help.
  *
  * Each folder carries its project binding (its menu re-binds it), so there is
  * no global project switcher over the folders; the project the Elitea pages
@@ -21,14 +22,10 @@ import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import ChatBubbleOutlineOutlinedIcon from '@mui/icons-material/ChatBubbleOutlineOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import HelpOutlineOutlinedIcon from '@mui/icons-material/HelpOutlineOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
-import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import SearchIcon from '@mui/icons-material/Search';
-import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
-import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
 import ViewSidebarOutlinedIcon from '@mui/icons-material/ViewSidebarOutlined';
 import Box from '@mui/material/Box';
 import ButtonBase from '@mui/material/ButtonBase';
@@ -44,11 +41,12 @@ import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { computeIsSelectedProjectPublic } from '@/widgets/sidebar';
 
-import { eliteaItems, selectedEliteaItem, type EliteaItemValue } from '../lib/eliteaSections';
+import { ACCOUNT_MENU_ITEMS, eliteaItems, selectedEliteaItem, type EliteaItemValue } from '../lib/eliteaSections';
 import type { ShellAction } from '../lib/shellActions';
 import { SIDEBAR_TINT_OPACITY } from '../lib/sidebarTint';
 import { useDesktopLayout } from '../model/desktopLayout.store';
 import { useChatsSectionOpen, useEliteaSectionOpen } from '../model/useEliteaSectionOpen';
+import { AccountMenu } from './AccountMenu';
 import { ChatsSection } from './ChatsSection';
 import type { ShellLocation } from '../model/useShellLocation';
 import { LocalWorkSection } from './LocalWorkSection';
@@ -56,18 +54,15 @@ import { ShellRow, SectionCaption } from './rows';
 import { modKey } from './shortcutLabel';
 import { TitleBarSpacer } from './TitleBarSpacer';
 
-const ITEM_ICONS: Record<EliteaItemValue, React.JSX.Element> = {
+const ITEM_ICONS: Partial<Record<EliteaItemValue, React.JSX.Element>> = {
   chat: <ChatBubbleOutlineOutlinedIcon />,
   agents: <SmartToyOutlinedIcon />,
   pipelines: <AccountTreeOutlinedIcon />,
   skills: <AutoAwesomeOutlinedIcon />,
   toolkits: <BuildOutlinedIcon />,
   mcps: <HubOutlinedIcon />,
-  credentials: <KeyOutlinedIcon />,
   applications: <AppsOutlinedIcon />,
   artifacts: <Inventory2OutlinedIcon />,
-  catalog: <StorefrontOutlinedIcon />,
-  help: <HelpOutlineOutlinedIcon />,
 };
 
 export interface DesktopSidebarProps {
@@ -192,7 +187,8 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
     () => eliteaItems(permissions, computeIsSelectedProjectPublic(selectedProjectId)),
     [permissions, selectedProjectId],
   );
-  const selected = selectedEliteaItem(location.pathname, items);
+  const sidebarItems = items.filter((item) => !ACCOUNT_MENU_ITEMS.has(item.value));
+  const selected = selectedEliteaItem(location.pathname, sidebarItems);
   const vibrancy = useDesktopLayout((state) => state.platform.vibrancy);
   const [eliteaOpen, toggleElitea, expandElitea] = useEliteaSectionOpen();
   const [chatsOpen, toggleChats, expandChats] = useChatsSectionOpen();
@@ -278,7 +274,7 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
             {t('desktop.shell.elitea', 'Elitea')}
           </SectionCaption>
           <Box component="ul" sx={{ margin: 0, padding: 0, listStyle: 'none' }}>
-            {(eliteaOpen ? items : items.filter((item) => item.value === selected)).map((item) => (
+            {(eliteaOpen ? sidebarItems : sidebarItems.filter((item) => item.value === selected)).map((item) => (
               <li key={item.value}>
                 <ShellRow
                   testId={`shell-elitea-${item.value}`}
@@ -299,12 +295,7 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
         </Box>
       </Box>
       <Box sx={(theme: Theme) => ({ paddingX: 1, paddingY: 0.5, borderTop: `1px solid ${theme.vars.palette.divider}` })}>
-        <ShellRow
-          icon={<SettingsOutlinedIcon />}
-          label={t('desktop.shell.settings', 'Settings')}
-          selected={location.pathname.startsWith('/settings')}
-          onClick={() => run({ type: 'settings' })}
-        />
+        <AccountMenu items={items.filter((item) => ACCOUNT_MENU_ITEMS.has(item.value))} run={run} />
       </Box>
     </Box>
   );

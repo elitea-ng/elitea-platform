@@ -32,11 +32,13 @@ import { handoffInfoKey, useHandoffLiveEvents } from '@/features/workspace-hando
 import { usePermissionList } from '@/shared/api/generated/auth/auth';
 import type { Permission } from '@/shared/api/generated/model';
 import { eraseWorkspaceHandoff, getWorkspaceHandoff, requestWorkspaceReclaim, type WorkspaceHandoffInfo } from '@/shared/api/workspaceHandoffApi';
-import { i18n, t } from '@/shared/i18n';
+import { addCatalogues, t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 
 import { changedCount, useCloudChanges } from './cloudChanges';
 import cloudCatalogue from './i18n/en.chatCloud.json';
+import cloudCatalogueEs from './i18n/es.chatCloud.json';
+import cloudCatalogueFrCa from './i18n/fr-CA.chatCloud.json';
 
 // The Files changed dialog loads when it is opened.
 const CloudFilesChanged = lazy(() => import('./CloudFilesChanged'));
@@ -46,7 +48,7 @@ const CloudPullRequestCredential = lazy(() => import('@/features/forge-credentia
 // The notice's strings ride with this (lazy) chat chunk, not the web app's
 // initial catalogue: only a handed-off Local work thread renders them. Deep
 // merge, no overwrite (scripts/i18n-backfill.mjs, ROUTE_CATALOGUES).
-i18n.addResourceBundle('en', 'translation', cloudCatalogue, true, false);
+addCatalogues({ en: cloudCatalogue, 'fr-CA': cloudCatalogueFrCa, es: cloudCatalogueEs });
 
 export interface CloudExecutorNoticeProps {
   readonly projectId: string;

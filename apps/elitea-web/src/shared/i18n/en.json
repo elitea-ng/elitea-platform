@@ -4998,5 +4998,15 @@
   "chatMessages.actionView.pullRequestNumber": "Open pull request #{{number}}",
   "chatMessages.actionView.branch": "Open branch {{branch}}",
   "chatMessages.actionView.mergeRequest": "Open the merge request",
-  "chatMessages.actionView.mergeRequestNumber": "Open merge request !{{number}}"
+  "chatMessages.actionView.mergeRequestNumber": "Open merge request !{{number}}",
+  "widgets.sidebar.nav.agents": "Agents",
+  "widgets.sidebar.nav.applications": "Applications",
+  "widgets.sidebar.nav.artifacts": "Artifacts",
+  "widgets.sidebar.nav.chat": "Chats",
+  "widgets.sidebar.nav.credentials": "Credentials",
+  "widgets.sidebar.nav.mcps": "MCPs",
+  "widgets.sidebar.nav.pipelines": "Pipelines",
+  "widgets.sidebar.nav.skills": "Skills",
+  "widgets.sidebar.nav.toolkits": "Toolkits & Indexes",
+  "widgets.sidebar.nav.workspaces": "Workspaces"
 }

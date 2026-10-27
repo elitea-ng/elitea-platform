@@ -45,6 +45,7 @@ function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Wo
       createRoute({ getParentRoute: () => rootRoute, path: '/workspaces/$workspaceId', component: page('thread') }),
       createRoute({ getParentRoute: () => rootRoute, path: '/settings', component: page('settings') }),
       createRoute({ getParentRoute: () => rootRoute, path: '/elitea-catalog', component: page('catalog') }),
+      createRoute({ getParentRoute: () => rootRoute, path: '/apps', component: page('apps') }),
     ]),
     history: createMemoryHistory({ initialEntries: [options.path ?? '/workspaces'] }),
   });
@@ -170,10 +171,17 @@ describe('DesktopFrame sidebar', () => {
     const user = userEvent.setup();
     const { router } = mount();
     const sidebar = await screen.findByTestId('desktop-sidebar');
-    await user.click(within(within(sidebar).getByTestId('shell-elitea-catalog')).getByRole('button'));
+    await user.click(within(within(sidebar).getByTestId('shell-elitea-applications')).getByRole('button'));
+    expect(await screen.findByTestId('apps')).toBeInTheDocument();
+    expect(screen.getByTestId('page-title')).toHaveTextContent('Applications');
+    // Catalog and Settings live in the account menu at the sidebar's foot.
+    await user.click(within(sidebar).getByTestId('shell-account'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Catalog' }));
     expect(await screen.findByTestId('catalog')).toBeInTheDocument();
     expect(screen.getByTestId('page-title')).toHaveTextContent('Catalog');
-    await user.click(within(sidebar).getByRole('button', { name: 'Settings' }));
+    expect(within(sidebar).queryByTestId('shell-elitea-catalog')).not.toBeInTheDocument();
+    await user.click(within(sidebar).getByTestId('shell-account'));
+    await user.click(await screen.findByRole('menuitem', { name: /^Settings/ }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
     expect(screen.getByTestId('page-title')).toHaveTextContent('Settings');
     // The sidebar is the way to everything: the title row carries no "back to Local work" button.
@@ -294,7 +302,7 @@ describe('DesktopFrame sidebar layout', () => {
 
   it('collapses the Elitea section to the page on screen, and remembers it', async () => {
     const user = userEvent.setup();
-    mount({ path: '/elitea-catalog' });
+    mount({ path: '/apps' });
     const sidebar = await screen.findByTestId('desktop-sidebar');
     const toggle = within(sidebar).getByRole('button', { name: 'Elitea' });
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
@@ -302,7 +310,7 @@ describe('DesktopFrame sidebar layout', () => {
     expect(before).toBeGreaterThan(1);
     await user.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(within(sidebar).getAllByTestId(/^shell-elitea-/).map((row) => row.dataset['testid'])).toEqual(['shell-elitea-catalog']);
+    expect(within(sidebar).getAllByTestId(/^shell-elitea-/).map((row) => row.dataset['testid'])).toEqual(['shell-elitea-applications']);
     expect(localStorage.getItem('el.desktop.eliteaOpen')).toBe('false');
   });
 });

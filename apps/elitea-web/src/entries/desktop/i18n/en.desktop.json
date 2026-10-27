@@ -977,5 +977,16 @@
   "workspace.createAgent.scopePlaceholder": "The whole folder (AGENTS.md at the root)",
   "workspace.createAgent.title": "Create agent",
   "workspace.createAgent.write": "Ask the agent to write it",
-  "desktop.palette.createAgent": "Create agent…"
+  "desktop.palette.createAgent": "Create agent…",
+  "desktop.account.appearance": "Appearance",
+  "desktop.account.getHelp": "Get help",
+  "desktop.account.language": "Language",
+  "desktop.account.menu": "Account menu",
+  "desktop.account.reportBug": "Report a bug",
+  "desktop.account.signOut": "Sign out",
+  "desktop.account.troubleshoot": "Troubleshoot",
+  "desktop.account.usage": "Usage",
+  "desktop.account.whatsNew": "What’s new",
+  "desktop.shell.catalog": "Catalog",
+  "desktop.shell.helpCenter": "Help Center"
 }
