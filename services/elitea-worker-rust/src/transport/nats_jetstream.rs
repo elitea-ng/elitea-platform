@@ -25,6 +25,12 @@
 //! is confirmed by a flush on the same connection epoch. Every connection
 //! event is logged.
 //!
+//! A worker that serves the governed execution security context (ADR-0039,
+//! #1115) binds the stream's governed durable beside the legacy one, on the
+//! same connection: [`NatsCommandBus::governed_lane`] is the second intake
+//! lane, and retirement, heartbeats and naks answer either durable's ack
+//! subjects. Without it the governed durable is never touched.
+//!
 //! The mTLS client identity and the private CA are read from their files on
 //! every TLS handshake (a reconnect included), so a rotated certificate is
 //! picked up without a restart.
@@ -32,7 +38,7 @@
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_nats::jetstream::consumer::{AckPolicy, DeliverPolicy, PullConsumer};
@@ -52,7 +58,8 @@ use super::command_bus::{
     AckReplyInfo, CommandBusLimits, CommandRetirementClient, CommandRetirementClientError,
     CommandRetirementRequest, DEAD_LETTER_BUCKET, DeadLetterRecord, DecodedDelivery,
     MAX_REQUEST_BATCH, MAX_REQUEST_EXPIRES, RUNTIME_API_PREFIX, WORKER_INBOX_PREFIX,
-    decode_delivery, filter_subject, valid_route_pair,
+    decode_delivery, filter_subject, governed_consumer_for_stream, governed_filter_subject,
+    valid_route_pair,
 };
 use crate::security::{MAX_CA_BYTES, MAX_CERTIFICATE_BYTES, MAX_PRIVATE_KEY_BYTES};
 
@@ -80,6 +87,9 @@ pub struct NatsJetStreamConfig {
     pub tls: Option<NatsTlsPaths>,
     pub stream: String,
     pub consumer: String,
+    /// Also bind the stream's governed durable (`ELITEA_WORKER_GOVERNED_CONTEXT`).
+    /// False never touches it.
+    pub governed: bool,
     /// The NATS connection name (observability only).
     pub client_name: String,
     pub limits: CommandBusLimits,
@@ -95,6 +105,8 @@ struct ValidatedConfig {
     stream: String,
     consumer: String,
     filter_subject: String,
+    /// The governed durable and its filter, when bound.
+    governed: Option<(String, String)>,
     client_name: String,
     limits: CommandBusLimits,
     fetch_batch: usize,
@@ -128,6 +140,17 @@ impl NatsJetStreamConfig {
         let filter_subject = filter_subject(&self.stream).ok_or_else(|| {
             NatsJetStreamError::configuration("the NATS stream is not a contract stream")
         })?;
+        let governed = if self.governed {
+            let consumer = governed_consumer_for_stream(&self.stream).ok_or_else(|| {
+                NatsJetStreamError::configuration("the NATS stream is not a contract stream")
+            })?;
+            let filter = governed_filter_subject(&self.stream).ok_or_else(|| {
+                NatsJetStreamError::configuration("the NATS stream is not a contract stream")
+            })?;
+            Some((consumer.to_owned(), filter))
+        } else {
+            None
+        };
         if self.client_name.is_empty()
             || self.client_name.len() > MAX_CLIENT_NAME_BYTES
             || !self
@@ -158,6 +181,7 @@ impl NatsJetStreamConfig {
             stream: self.stream.clone(),
             consumer: self.consumer.clone(),
             filter_subject,
+            governed,
             client_name: self.client_name.clone(),
             limits,
             fetch_batch: self.fetch_batch,
@@ -371,10 +395,19 @@ impl ConnectionObserver {
 pub struct NatsCommandBus {
     client: Client,
     consumer: PullConsumer,
+    /// The governed durable, only when the configuration names it.
+    governed: Option<PullConsumer>,
     dead_letters: kv::Store,
     config: ValidatedConfig,
     observer: Arc<ConnectionObserver>,
     closed: AtomicBool,
+    /// Intake lanes that have not closed yet: the connection drains when the
+    /// last one closes, so one lane's shutdown never cuts the other's
+    /// retirement short.
+    open_lanes: AtomicUsize,
+    /// The legacy lane's own close, so a repeated close never closes the
+    /// governed lane's share.
+    legacy_closed: AtomicBool,
 }
 
 impl NatsCommandBus {
@@ -459,6 +492,32 @@ impl NatsCommandBus {
             config.fetch_batch,
             config.fetch_expires,
         )?;
+        let governed = match &config.governed {
+            None => None,
+            Some((durable, filter)) => {
+                let governed: PullConsumer = command_bus
+                    .get_consumer_from_stream(durable, &config.stream)
+                    .await
+                    .map_err(|_| {
+                        NatsJetStreamError::consumer_missing(
+                            "the NATS governed durable consumer is absent",
+                        )
+                    })?;
+                verify_consumer(
+                    &governed.cached_info().config,
+                    durable,
+                    filter,
+                    config.fetch_batch,
+                    config.fetch_expires,
+                )?;
+                tracing::info!(
+                    event = "nats_governed_command_consumer_bound",
+                    nats_stream = %config.stream,
+                    nats_consumer = %durable,
+                );
+                Some(governed)
+            }
+        };
         let dead_letters = context
             .get_key_value(DEAD_LETTER_BUCKET)
             .await
@@ -474,11 +533,37 @@ impl NatsCommandBus {
         Ok(Self {
             client,
             consumer,
+            governed,
             dead_letters,
             config,
             observer,
             closed: AtomicBool::new(false),
+            open_lanes: AtomicUsize::new(1),
+            legacy_closed: AtomicBool::new(false),
         })
+    }
+
+    /// The governed durable's intake lane, when this bus bound it. Each call
+    /// opens one more lane the connection waits for before it drains.
+    #[must_use]
+    pub fn governed_lane(self: &Arc<Self>) -> Option<NatsGovernedLane> {
+        self.governed.as_ref()?;
+        self.open_lanes.fetch_add(1, Ordering::AcqRel);
+        Some(NatsGovernedLane {
+            bus: Arc::clone(self),
+            closed: AtomicBool::new(false),
+        })
+    }
+
+    /// Whether `consumer` is a durable this bus bound.
+    fn bound_consumer(&self, consumer: &str) -> bool {
+        consumer == self.config.consumer
+            || (self.governed.is_some()
+                && self
+                    .config
+                    .governed
+                    .as_ref()
+                    .is_some_and(|(durable, _)| durable == consumer))
     }
 
     fn ensure_open(&self) -> Result<(), NatsJetStreamError> {
@@ -494,7 +579,7 @@ impl NatsCommandBus {
         let info = AckReplyInfo::parse(reply).map_err(|_| {
             NatsJetStreamError::protocol("the delivery acknowledgement subject is malformed")
         })?;
-        if info.stream != self.config.stream || info.consumer != self.config.consumer {
+        if info.stream != self.config.stream || !self.bound_consumer(&info.consumer) {
             return Err(NatsJetStreamError::protocol(
                 "the delivery belongs to another stream or consumer",
             ));
@@ -507,6 +592,7 @@ impl NatsCommandBus {
     /// holds `up_to`.
     async fn pull_into(
         &self,
+        consumer: &PullConsumer,
         deliveries: &mut Vec<DecodedDelivery>,
         up_to: usize,
         expires: Option<Duration>,
@@ -519,14 +605,14 @@ impl NatsCommandBus {
         let request = async {
             match expires {
                 Some(expires) => {
-                    self.consumer
+                    consumer
                         .batch()
                         .max_messages(wanted)
                         .expires(expires)
                         .messages()
                         .await
                 }
-                None => self.consumer.fetch().max_messages(wanted).messages().await,
+                None => consumer.fetch().max_messages(wanted).messages().await,
             }
         };
         let mut batch = tokio::time::timeout(self.config.request_timeout, request)
@@ -586,6 +672,47 @@ impl NatsCommandBus {
         Ok(())
     }
 
+    /// One bounded fetch from `consumer`, one of this bus's bound durables.
+    async fn fetch_from(
+        &self,
+        consumer: &PullConsumer,
+        max: usize,
+        expires: Duration,
+    ) -> Result<Vec<DecodedDelivery>, NatsJetStreamError> {
+        self.ensure_open()?;
+        if !(1..=self.config.fetch_batch).contains(&max)
+            || !(MIN_FETCH_EXPIRES..=self.config.fetch_expires).contains(&expires)
+        {
+            return Err(NatsJetStreamError::configuration(
+                "the NATS pull exceeds its configured bound",
+            ));
+        }
+        // Two pulls, each COMPLETE on the server before it is abandoned here.
+        //
+        // A batch pull for `max` messages does not end until `max` arrived or
+        // the server answers 408 at `expires`, so a single command used to
+        // wait up to `expires` (5s deployed) in this function before anything
+        // could start it. Dropping that pull early instead would leave the
+        // server delivering the rest of the batch to an inbox nobody reads —
+        // each such command then waits out AckWait. So: a long poll for ONE
+        // message, which the server closes as soon as it delivers it, then a
+        // no-wait pull for at most `max - 1` more, which the server closes at
+        // once with whatever is already available.
+        let mut deliveries = Vec::with_capacity(max);
+        self.pull_into(consumer, &mut deliveries, 1, Some(expires))
+            .await?;
+        if !deliveries.is_empty() && max > 1 {
+            // A failure here keeps what the first pull already owns.
+            if let Err(error) = self.pull_into(consumer, &mut deliveries, max, None).await {
+                tracing::warn!(
+                    event = "nats_pull_remainder_unavailable",
+                    error_code = error.code(),
+                );
+            }
+        }
+        Ok(deliveries)
+    }
+
     async fn request_ack(
         &self,
         reply: &str,
@@ -625,37 +752,7 @@ impl CommandBusConnection for NatsCommandBus {
         max: usize,
         expires: Duration,
     ) -> Result<Vec<DecodedDelivery>, NatsJetStreamError> {
-        self.ensure_open()?;
-        if !(1..=self.config.fetch_batch).contains(&max)
-            || !(MIN_FETCH_EXPIRES..=self.config.fetch_expires).contains(&expires)
-        {
-            return Err(NatsJetStreamError::configuration(
-                "the NATS pull exceeds its configured bound",
-            ));
-        }
-        // Two pulls, each COMPLETE on the server before it is abandoned here.
-        //
-        // A batch pull for `max` messages does not end until `max` arrived or
-        // the server answers 408 at `expires`, so a single command used to
-        // wait up to `expires` (5s deployed) in this function before anything
-        // could start it. Dropping that pull early instead would leave the
-        // server delivering the rest of the batch to an inbox nobody reads —
-        // each such command then waits out AckWait. So: a long poll for ONE
-        // message, which the server closes as soon as it delivers it, then a
-        // no-wait pull for at most `max - 1` more, which the server closes at
-        // once with whatever is already available.
-        let mut deliveries = Vec::with_capacity(max);
-        self.pull_into(&mut deliveries, 1, Some(expires)).await?;
-        if !deliveries.is_empty() && max > 1 {
-            // A failure here keeps what the first pull already owns.
-            if let Err(error) = self.pull_into(&mut deliveries, max, None).await {
-                tracing::warn!(
-                    event = "nats_pull_remainder_unavailable",
-                    error_code = error.code(),
-                );
-            }
-        }
-        Ok(deliveries)
+        self.fetch_from(&self.consumer, max, expires).await
     }
 
     async fn in_progress(&self, replies: &[String]) -> Result<usize, NatsJetStreamError> {
@@ -719,6 +816,26 @@ impl CommandBusConnection for NatsCommandBus {
     }
 
     async fn close(&self) -> Result<(), NatsJetStreamError> {
+        if self.legacy_closed.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        self.close_lane().await
+    }
+}
+
+impl NatsCommandBus {
+    /// Close one intake lane; the last one drains the connection.
+    async fn close_lane(&self) -> Result<(), NatsJetStreamError> {
+        let remaining = self
+            .open_lanes
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |lanes| {
+                Some(lanes.saturating_sub(1))
+            })
+            .unwrap_or(0)
+            .saturating_sub(1);
+        if remaining > 0 {
+            return Ok(());
+        }
         if self.closed.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
@@ -738,7 +855,7 @@ impl CommandRetirementClient for NatsCommandBus {
         &self,
         request: CommandRetirementRequest,
     ) -> Result<(), CommandRetirementClientError> {
-        if request.stream() != self.config.stream || request.consumer() != self.config.consumer {
+        if request.stream() != self.config.stream || !self.bound_consumer(request.consumer()) {
             return Err(CommandRetirementClientError::Protocol);
         }
         self.request_ack(
@@ -758,6 +875,72 @@ impl CommandRetirementClient for NatsCommandBus {
             | NatsJetStreamErrorKind::Protocol
             | NatsJetStreamErrorKind::ResourceExhausted => CommandRetirementClientError::Protocol,
         })
+    }
+}
+
+/// The governed durable's intake lane over its bus's connection: it pulls the
+/// governed durable and shares every other operation with the bus, whose ack
+/// checks admit either bound durable.
+pub struct NatsGovernedLane {
+    bus: Arc<NatsCommandBus>,
+    closed: AtomicBool,
+}
+
+#[async_trait]
+impl CommandBusConnection for NatsGovernedLane {
+    fn fetch_batch(&self) -> usize {
+        self.bus.fetch_batch()
+    }
+
+    async fn fetch(
+        &self,
+        max: usize,
+        expires: Duration,
+    ) -> Result<Vec<DecodedDelivery>, NatsJetStreamError> {
+        let Some(governed) = self.bus.governed.as_ref() else {
+            return Err(NatsJetStreamError::closed());
+        };
+        self.bus.fetch_from(governed, max, expires).await
+    }
+
+    async fn in_progress(&self, replies: &[String]) -> Result<usize, NatsJetStreamError> {
+        self.bus.in_progress(replies).await
+    }
+
+    async fn nak(&self, reply: &str, delay: Duration) -> Result<(), NatsJetStreamError> {
+        self.bus.nak(reply, delay).await
+    }
+
+    async fn term(&self, reply: &str) -> Result<(), NatsJetStreamError> {
+        self.bus.term(reply).await
+    }
+
+    async fn record_dead_letter(
+        &self,
+        record: &DeadLetterRecord,
+    ) -> Result<(), NatsJetStreamError> {
+        self.bus.record_dead_letter(record).await
+    }
+
+    fn worker_name(&self) -> &str {
+        self.bus.worker_name()
+    }
+
+    async fn close(&self) -> Result<(), NatsJetStreamError> {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        self.bus.close_lane().await
+    }
+}
+
+#[async_trait]
+impl CommandRetirementClient for NatsGovernedLane {
+    async fn retire_delivery(
+        &self,
+        request: CommandRetirementRequest,
+    ) -> Result<(), CommandRetirementClientError> {
+        self.bus.retire_delivery(request).await
     }
 }
 
@@ -1107,6 +1290,7 @@ mod tests {
             }),
             stream: "ELITEA_RT_V1_AGENT".to_owned(),
             consumer: "elitea-agent-worker-v1".to_owned(),
+            governed: false,
             client_name: "worker-1".to_owned(),
             limits: CommandBusLimits::runtime_v1(),
             fetch_batch: 4,
@@ -1209,6 +1393,52 @@ mod tests {
         let mut relative = config();
         relative.tls.as_mut().expect("tls").ca_path = PathBuf::from("ca.crt");
         assert!(relative.validate().is_err());
+    }
+
+    #[test]
+    fn the_governed_durable_is_bound_only_when_configured() {
+        let legacy = config().validate().expect("legacy");
+        assert!(legacy.governed.is_none());
+        let mut governed = config();
+        governed.governed = true;
+        let governed = governed.validate().expect("governed");
+        assert_eq!(governed.consumer, "elitea-agent-worker-v1");
+        assert_eq!(
+            governed.governed,
+            Some((
+                "elitea-agent-worker-governed-v1".to_owned(),
+                "elitea.rt.v1.agent.g.*".to_owned()
+            ))
+        );
+        // The governed durable is bound beside the legacy one, never in its
+        // place.
+        let mut replaced = config();
+        replaced.consumer = "elitea-agent-worker-governed-v1".to_owned();
+        assert!(replaced.validate().is_err());
+        // Its bind holds it to the same contract shape on the `.g.` filter.
+        let mut durable = contract_consumer();
+        durable.durable_name = Some("elitea-agent-worker-governed-v1".to_owned());
+        durable.filter_subject = "elitea.rt.v1.agent.g.*".to_owned();
+        assert!(
+            verify_consumer(
+                &durable,
+                "elitea-agent-worker-governed-v1",
+                "elitea.rt.v1.agent.g.*",
+                4,
+                Duration::from_secs(1),
+            )
+            .is_ok()
+        );
+        assert!(
+            verify_consumer(
+                &durable,
+                "elitea-agent-worker-governed-v1",
+                "elitea.rt.v1.agent.d.*",
+                4,
+                Duration::from_secs(1),
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -77,6 +77,9 @@ func (r *AgentExecutionJobsRepository) LoadPendingAgentExecution(ctx context.Con
 	if err := dispatch.Validate(); err != nil {
 		return agentexecutionapp.AgentExecutionDispatch{}, fmt.Errorf("invalid stored agent execution dispatch: %w", err)
 	}
+	if dispatch.SecurityContext, err = loadSecurityContextReference(ctx, poolRows(r.pool), r.policy.CredentialProfile, dispatch.ExecutionID); err != nil {
+		return agentexecutionapp.AgentExecutionDispatch{}, err
+	}
 	return dispatch, nil
 }
 

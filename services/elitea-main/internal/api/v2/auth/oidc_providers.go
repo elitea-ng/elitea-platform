@@ -104,6 +104,10 @@ type oidcRuntime struct {
 	// operator debugging a login needs to know whether the deployment used the
 	// row they just saved or the environment it fell back to.
 	origin string
+
+	// entra is the Entra mode of this provider (oidc_entra.go). Nil unless
+	// credential governance is on and the provider is marked `entra`.
+	entra *entraRuntime
 }
 
 // WithProviderStore attaches the authored provider store and the vault.
@@ -203,15 +207,21 @@ func (h *OIDCHandler) buildRuntime(
 		clientSecret = secret
 	}
 
-	discovered, err := oidc.NewProvider(ctx, document.Issuer)
-	if err != nil {
-		return nil, fmt.Errorf("OIDC discovery failed for %s: %w", document.Issuer, err)
-	}
-
 	scopes := document.Scopes
 	if len(scopes) == 0 {
 		// Validate guarantees `openid`; this covers a row written before it.
 		scopes = []string{oidc.ScopeOpenID, "profile", "email"}
+	}
+
+	// Entra mode needs governance on (h.entraCustody); off, the marker is
+	// ignored and the provider is built exactly as any other.
+	if h.entraCustody != nil && document.Entra {
+		return h.buildEntraRuntime(ctx, provider, clientSecret, scopes)
+	}
+
+	discovered, err := oidc.NewProvider(ctx, document.Issuer)
+	if err != nil {
+		return nil, fmt.Errorf("OIDC discovery failed for %s: %w", document.Issuer, err)
 	}
 
 	return &oidcRuntime{

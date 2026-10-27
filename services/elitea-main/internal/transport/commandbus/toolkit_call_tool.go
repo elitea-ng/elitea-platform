@@ -212,6 +212,7 @@ func toolkitCallToolWorkerCommand(
 		Traceparent:        dispatch.Traceparent,
 		Tracestate:         dispatch.Tracestate,
 		LimitsRevision:     dispatch.LimitsRevision,
+		SecurityContextRef: dispatch.SecurityContext.ReferenceProto(),
 		CapabilityCommand: &runtimev1.WorkerCommandV1_ToolkitCallTool{
 			ToolkitCallTool: &runtimev1.ToolkitCallToolCommandV1{
 				ToolkitType:            dispatch.ToolkitType,

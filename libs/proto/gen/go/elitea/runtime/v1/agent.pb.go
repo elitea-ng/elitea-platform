@@ -29,6 +29,10 @@ const (
 	AgentExecutionTerminalStateV1_AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_HITL     AgentExecutionTerminalStateV1 = 2
 	AgentExecutionTerminalStateV1_AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_MCP_AUTH AgentExecutionTerminalStateV1 = 3
 	AgentExecutionTerminalStateV1_AGENT_EXECUTION_TERMINAL_STATE_V1_PARKED_CHILDREN AgentExecutionTerminalStateV1 = 4
+	// A governed credential use needs the user to act (consent, MFA or a CAE
+	// claims challenge; ADR-0039, #1117). Resumes on the authorization
+	// continuation. Never emitted while the governance flag is off.
+	AgentExecutionTerminalStateV1_AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_CREDENTIAL_AUTHORIZATION AgentExecutionTerminalStateV1 = 5
 )
 
 // Enum value maps for AgentExecutionTerminalStateV1.
@@ -39,13 +43,15 @@ var (
 		2: "AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_HITL",
 		3: "AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_MCP_AUTH",
 		4: "AGENT_EXECUTION_TERMINAL_STATE_V1_PARKED_CHILDREN",
+		5: "AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_CREDENTIAL_AUTHORIZATION",
 	}
 	AgentExecutionTerminalStateV1_value = map[string]int32{
-		"AGENT_EXECUTION_TERMINAL_STATE_V1_UNSPECIFIED":     0,
-		"AGENT_EXECUTION_TERMINAL_STATE_V1_COMPLETED":       1,
-		"AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_HITL":     2,
-		"AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_MCP_AUTH": 3,
-		"AGENT_EXECUTION_TERMINAL_STATE_V1_PARKED_CHILDREN": 4,
+		"AGENT_EXECUTION_TERMINAL_STATE_V1_UNSPECIFIED":                     0,
+		"AGENT_EXECUTION_TERMINAL_STATE_V1_COMPLETED":                       1,
+		"AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_HITL":                     2,
+		"AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_MCP_AUTH":                 3,
+		"AGENT_EXECUTION_TERMINAL_STATE_V1_PARKED_CHILDREN":                 4,
+		"AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_CREDENTIAL_AUTHORIZATION": 5,
 	}
 )
 
@@ -1192,13 +1198,14 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x16request_content_digest\x18\x05 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x14requestContentDigest\x12W\n" +
 	"\x0eterminal_state\x18\x06 \x01(\x0e20.elitea.runtime.v1.AgentExecutionTerminalStateV1R\rterminalState\x12]\n" +
 	"\x0fresult_artifact\x18\a \x01(\v24.elitea.runtime.v1.AgentExecutionArtifactReferenceV1R\x0eresultArtifact\x12e\n" +
-	"\x13attachment_contents\x18\x10 \x03(\v24.elitea.runtime.v1.AgentExecutionAttachmentContentV1R\x12attachmentContentsJ\x04\b\b\x10\x10J\x04\b\x11\x10 *\xa4\x02\n" +
+	"\x13attachment_contents\x18\x10 \x03(\v24.elitea.runtime.v1.AgentExecutionAttachmentContentV1R\x12attachmentContentsJ\x04\b\b\x10\x10J\x04\b\x11\x10 *\xeb\x02\n" +
 	"\x1dAgentExecutionTerminalStateV1\x121\n" +
 	"-AGENT_EXECUTION_TERMINAL_STATE_V1_UNSPECIFIED\x10\x00\x12/\n" +
 	"+AGENT_EXECUTION_TERMINAL_STATE_V1_COMPLETED\x10\x01\x121\n" +
 	"-AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_HITL\x10\x02\x125\n" +
 	"1AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_MCP_AUTH\x10\x03\x125\n" +
-	"1AGENT_EXECUTION_TERMINAL_STATE_V1_PARKED_CHILDREN\x10\x04BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"1AGENT_EXECUTION_TERMINAL_STATE_V1_PARKED_CHILDREN\x10\x04\x12E\n" +
+	"AAGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_CREDENTIAL_AUTHORIZATION\x10\x05BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_agent_proto_rawDescOnce sync.Once

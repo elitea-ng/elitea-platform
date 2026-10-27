@@ -217,7 +217,8 @@ impl ProductionTransportBundle {
 
         let workspace_store_channel = control.clone();
         let control = AgentControlClient::from_channel(control, profiles.control)
-            .map_err(|error| map_agent_control_error(&error))?;
+            .map_err(|error| map_agent_control_error(&error))?
+            .with_governed_security_context(deployment.governed_security_context);
         let control = Arc::new(control);
         let input = Arc::new(input);
         let runtime_context = Arc::new(runtime_context);
@@ -659,6 +660,7 @@ pub(crate) fn nats_transport_config(
         tls,
         stream: deployment.nats_stream.clone(),
         consumer: deployment.nats_consumer.clone(),
+        governed: deployment.governed_security_context,
         client_name: deployment.consumer_id.clone(),
         limits: CommandBusLimits {
             max_message_bytes: limits.max_transport_message_bytes(),
@@ -796,6 +798,7 @@ mod tests {
             toolkit_model_call_cap: None,
             agent_model_checkpoint_recovery: false,
             agent_node_recovery: false,
+            governed_security_context: false,
             agent_checkpoint_connection_path: Some(PathBuf::from("/runtime/agentstate")),
             limits: RuntimeLimits {
                 nats_fetch_batch: 8,
@@ -833,6 +836,13 @@ mod tests {
         assert_eq!(config.url, "tls://nats.internal:4222");
         assert_eq!(config.stream, "ELITEA_RT_V1_AGENT");
         assert_eq!(config.consumer, "elitea-agent-worker-v1");
+        // Off by default: the governed durable is never touched.
+        assert!(!config.governed);
+        let mut governed = deployment();
+        governed.governed_security_context = true;
+        let governed = nats_transport_config(&governed).expect("governed profile");
+        assert!(governed.governed);
+        assert_eq!(governed.consumer, "elitea-agent-worker-v1");
         assert_eq!(config.client_name, "worker-1-consumer");
         assert_eq!(config.fetch_batch, 8);
         assert_eq!(config.fetch_expires, Duration::from_secs(1));

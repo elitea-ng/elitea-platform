@@ -299,3 +299,27 @@ func hasIntersection(required, userPerms map[string]struct{}) bool {
 	}
 	return false
 }
+
+// hasAll reports whether userPerms holds EVERY permission in required. An
+// empty required set is false: a check that requires nothing must not pass.
+//
+// It is the AND counterpart of hasIntersection, for the governed credential
+// decision (ADR-0039 decision 7, internal/authzcompose). hasIntersection and
+// the route gates that call it keep their any-overlap semantics.
+func hasAll(required, userPerms map[string]struct{}) bool {
+	if len(required) == 0 {
+		return false
+	}
+	for k := range required {
+		if _, ok := userPerms[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// HoldsAllPermissions reports whether held contains every name in required
+// (hasAll). Empty required is false.
+func HoldsAllPermissions(required, held []string) bool {
+	return hasAll(permissionSet(required), permissionSet(held))
+}

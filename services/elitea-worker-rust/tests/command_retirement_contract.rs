@@ -20,7 +20,7 @@ use elitea_worker_rust::protocol::elitea::runtime::v1::{
 use elitea_worker_rust::transport::command_bus::{
     CommandBusError, CommandBusLimits, CommandDelivery, CommandRetirementClient,
     CommandRetirementClientError, CommandRetirementConfig, CommandRetirementRequest,
-    CommandRetirer, delivery_subject,
+    CommandRetirer, delivery_subject, governed_delivery_subject,
 };
 use elitea_worker_rust::transport::{ControlGrpcConfig, ControlRpc};
 use prost::Message;
@@ -472,6 +472,69 @@ async fn the_retirer_binds_only_a_contract_route() {
     assert!(matches!(
         index_retirer
             .retire_agent_command(delivery("signed_command"), &verified, authority)
+            .await,
+        Err(CommandBusError::InvalidInput(_))
+    ));
+    assert!(state.requests.lock().expect("requests").is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_streams_governed_durable_is_retired_through_the_same_binding() {
+    const GOVERNED_REPLY: &str =
+        "$JS.ACK.ELITEA_RT_V1_AGENT.elitea-agent-worker-governed-v1.2.41.40.1700000000000000000.0";
+    let governed_subject = governed_delivery_subject(STREAM, "outbox-1").expect("governed subject");
+    let governed = || {
+        CommandDelivery::decode(
+            &governed_subject,
+            GOVERNED_REPLY,
+            bytes("signed_command"),
+            limits(),
+        )
+        .expect("governed delivery")
+    };
+    // A governed subject on the legacy durable, and a legacy subject on the
+    // governed durable, are refused at decode.
+    assert!(
+        CommandDelivery::decode(&governed_subject, REPLY, bytes("signed_command"), limits())
+            .is_err()
+    );
+    assert!(
+        CommandDelivery::decode(
+            &subject_for("outbox-1"),
+            GOVERNED_REPLY,
+            bytes("signed_command"),
+            limits()
+        )
+        .is_err()
+    );
+
+    let verified = verified("signed_command");
+    let (retirer, client) = retirer(Ok(()));
+    retirer
+        .retire_agent_command(governed(), &verified, terminal_authority(&verified).await)
+        .await
+        .expect("governed double ack");
+    let requests = client.requests.lock().expect("retirement requests").clone();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].consumer, "elitea-agent-worker-governed-v1");
+    assert_eq!(requests[0].subject, governed_subject);
+
+    // Another stream's retirer refuses it before the transport is asked.
+    let state = Arc::new(FakeRetirementState {
+        response: Mutex::new(Ok(())),
+        requests: Mutex::new(Vec::new()),
+    });
+    let index_retirer = CommandRetirer::new(
+        FakeRetirementClient(Arc::clone(&state)),
+        CommandRetirementConfig {
+            stream: "ELITEA_RT_V1_INDEX".to_owned(),
+            consumer: "elitea-index-worker-v1".to_owned(),
+        },
+    )
+    .expect("index retirer");
+    assert!(matches!(
+        index_retirer
+            .retire_agent_command(governed(), &verified, terminal_authority(&verified).await)
             .await,
         Err(CommandBusError::InvalidInput(_))
     ));

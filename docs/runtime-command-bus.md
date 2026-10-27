@@ -172,6 +172,66 @@ operator's `nats kv del` writes a delete marker, which echoes it for at most
 that hour). `nats kv ls` is the current list. `EliteaRuntimeCommandStreamNearlyFull` fires before a
 stream starts backpressuring dispatch.
 
+## Governed commands (ADR-0039, #1115)
+
+A governed admission carries an execution security context: Main stores the
+deterministic `ExecutionSecurityContextV1` bytes beside the execution and
+names them on the signed command as `WorkerCommandV1.security_context_ref`
+(field 65: content id `elitea.security-context/<execution_id>`, the SHA-256
+of the bytes, the schema revision). A legacy command never carries field 65,
+so its bytes are unchanged.
+
+A governed command rides the same stream on its own subject lane, pulled by
+its own durable:
+
+```
+elitea.rt.v1.<route>.g.<sha256(delivery_id)>
+```
+
+| Stream | Governed subjects | Governed durable |
+| --- | --- | --- |
+| `ELITEA_RT_V1_VALIDATE` | `elitea.rt.v1.validate.g.*` | `elitea-configuration-worker-governed-v1` |
+| `ELITEA_RT_V1_AGENT` | `elitea.rt.v1.agent.g.*` | `elitea-agent-worker-governed-v1` |
+| `ELITEA_RT_V1_INDEX` | `elitea.rt.v1.index.g.*` | `elitea-index-worker-governed-v1` |
+
+The governed durable has the legacy durable's settings (table above) with the
+`.g.*` filter; the bootstrap creates it and the `elitea-worker` identity gets
+the same INFO / MSG.NEXT / ACK grants on it. The legacy durables (`.d.*`)
+never see a governed command, so a worker that did not opt in can never pull
+one.
+
+A worker opts in with `ELITEA_WORKER_GOVERNED_CONTEXT=true` (the Rust worker;
+default off, which is the legacy worker byte for byte). An opted-in worker:
+
+* binds the stream's governed durable beside the legacy one, on the same
+  connection, and runs a second intake over it. Both are verified against the
+  contract at boot; an absent governed durable refuses startup like an absent
+  legacy one;
+* sets `ClaimCommandRequestV1.governed_security_context_v1` on every fresh
+  claim;
+* after the claim and `BeginExecution`, before reading any input, fetches the
+  context with `RuntimeContentService.GetInput` (content id
+  `elitea.security-context/<execution_id>`, immutable version
+  `sha256:<hex digest>`) under the live claim, and verifies it: the content
+  id is this execution's, at most 16 KiB, SHA-256 equal to the signed
+  reference, a strict decode refusing an unknown field anywhere, schema
+  revision `elitea.runtime.security-context.v1`, profile
+  `elitea.credential-profile.governed.v1`. A failed check fails the execution
+  closed (`AUTHORIZATION_FAILED`, never retryable).
+
+Before it claims, a worker checks that the lane and the command agree: a
+command with field 65 on a worker that did not opt in is an unsupported
+command (dead-letter, 24h park); a field-65 command on a `.d.` subject, or a
+command without it on a `.g.` subject, is a subject mismatch (dead-letter,
+`Term`).
+
+Main enforces the same pairing at claim:
+
+| Claim | Answer |
+| --- | --- |
+| a field-65 command without `governed_security_context_v1` | `GOVERNED_WORKER_REQUIRED`, non-retryable (the worker maps it to an unsupported capability) |
+| a command without field 65 whose execution is pinned governed | `GOVERNED_CONTEXT_MISSING`, non-retryable (an authorization failure) |
+
 ## Limits (owner decision Q6)
 
 `libs/proto/elitea/runtime/v1/limits.proto` fields 4 and 5 are
@@ -255,6 +315,12 @@ command-bus fields replace every `redis_*` field; unknown fields are refused.
 | `limits.nats_fetch_expires_millis` | how long one pull waits, 100..30000 |
 | `limits.nats_in_progress_interval_millis` | the `+WPI` period, 1000..15000 (at most a quarter of AckWait) |
 | `limits.nats_retry_delay_millis` | the retry-later nak delay, 1000..300000 |
+
+The Rust worker reads one more setting from its environment, not from the
+document: `ELITEA_WORKER_GOVERNED_CONTEXT` (`true`/`false`, also `1`/`0`,
+`yes`/`no`, `on`/`off`; unset or blank is false; anything else refuses
+startup) opts it into governed commands (above). A `governed_security_context`
+field in the document is refused like any unknown field.
 
 The inbox prefix is `_INBOX_elitea-worker` (the permission table allows that
 one only). The poison delay (24h) and the dead-letter bucket name are

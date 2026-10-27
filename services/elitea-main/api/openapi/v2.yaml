@@ -2129,6 +2129,96 @@ components:
         total_cost:
           type: number
 
+    CredentialUseGrant:
+      type: object
+      description: >
+        ADR-0039 credential use grant: one agent binding, toolkit, credential
+        reference and target, with the capabilities, operation scopes,
+        resource scopes and obligations it allows. References only: no field
+        holds a secret value or a token.
+      required: [id, tenant_project_id, agent_binding_id, toolkit_id,
+        credential_reference_id, target_binding_id, capabilities,
+        operation_scopes, resource_scopes, obligations, state, epoch,
+        expires_at, proposed_by, approved_by, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        tenant_project_id: { type: integer, format: int64 }
+        agent_binding_id: { type: string, format: uuid }
+        toolkit_id: { type: integer, format: int64 }
+        credential_reference_id: { type: string, format: uuid }
+        target_binding_id: { type: string, format: uuid }
+        capabilities:
+          type: array
+          description: Each one of use, reveal, manage, probe, approve. One never implies another.
+          items: { type: string }
+        operation_scopes:
+          type: array
+          description: Canonical operation ids, provider.resource.verb.
+          items: { type: string }
+        resource_scopes:
+          type: array
+          description: Resource refs; empty means the grant does not narrow resources.
+          items: { type: string }
+        obligations:
+          type: array
+          description: Each one of audit.sync, require.approval.
+          items: { type: string }
+        state:
+          type: string
+          description: One of proposed, active, suspended, revoked.
+        epoch:
+          type: integer
+          format: int64
+          description: Increases by exactly one on every transition.
+        expires_at: { type: string, format: date-time, nullable: true }
+        proposed_by: { type: string }
+        approved_by: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CredentialUseGrantCreate:
+      type: object
+      additionalProperties: false
+      required: [agent_binding_id, toolkit_id, credential_reference_id, target_binding_id,
+        capabilities, operation_scopes]
+      properties:
+        agent_binding_id: { type: string, format: uuid }
+        toolkit_id: { type: integer, format: int64, minimum: 1 }
+        credential_reference_id: { type: string, format: uuid }
+        target_binding_id:
+          type: string
+          format: uuid
+          description: Must be the target the credential reference is bound to.
+        capabilities:
+          type: array
+          minItems: 1
+          maxItems: 5
+          description: Distinct values of use, reveal, manage, probe, approve.
+          items: { type: string }
+        operation_scopes:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items: { type: string }
+        resource_scopes:
+          type: array
+          maxItems: 64
+          items: { type: string }
+        obligations:
+          type: array
+          maxItems: 16
+          items: { type: string }
+        expires_at: { type: string, format: date-time }
+
+    CredentialUseGrantListResponse:
+      type: object
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/CredentialUseGrant'
+
     ConversationExportMessage:
       type: object
       required: [id, role, content, created_at]
@@ -6372,6 +6462,93 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Mandate'
+
+    ExternalAgentIdentity:
+      type: object
+      description: >
+        ADR-0039 external agent identity: one logical agent's identity in an
+        external identity provider. References only: no field holds a token,
+        assertion, secret or key.
+      required: [id, tenant_project_id, application_id, mode, provider, provider_tenant,
+        kind, external_id, generation, provider_config_key, agent_user_ref, owner_ref,
+        state, revocation_epoch, created_by, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        tenant_project_id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        mode:
+          type: string
+          description: One of dedicated_agent, runtime_domain_binding, elitea_native.
+        provider:
+          type: string
+          description: The provider adapter name, for example entra.
+        provider_tenant:
+          type: string
+          description: The provider tenant (Entra tenant id, realm or account).
+        kind:
+          type: string
+          nullable: true
+          description: The provider object kind; null until provisioned.
+        external_id:
+          type: string
+          nullable: true
+          description: The immutable provider object id; null until provisioned.
+        generation:
+          type: integer
+          format: int64
+          description: Increases when the provider object is recreated or rotated.
+        provider_config_key:
+          type: string
+          description: Operator configuration key, for example an Entra blueprint. Never a credential.
+        agent_user_ref: { type: string, nullable: true }
+        owner_ref: { type: string }
+        state:
+          type: string
+          description: >
+            One of provisioning, pending_activation, active, suspended,
+            retiring, retired, replaced.
+        revocation_epoch:
+          type: integer
+          format: int64
+          description: Increases by exactly one on every transition.
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ExternalAgentIdentityCreate:
+      type: object
+      additionalProperties: false
+      required: [tenant_project_id, application_id, mode, provider, provider_tenant]
+      properties:
+        tenant_project_id: { type: integer, format: int64, minimum: 1 }
+        application_id: { type: integer, format: int64, minimum: 1 }
+        mode:
+          type: string
+          description: One of dedicated_agent, runtime_domain_binding, elitea_native.
+        provider:
+          type: string
+          maxLength: 32
+          description: A lower-case provider adapter name.
+        provider_tenant:
+          type: string
+          minLength: 1
+          maxLength: 128
+        provider_config_key:
+          type: string
+          maxLength: 128
+          description: Operator configuration key; never a credential.
+        owner_ref:
+          type: string
+          maxLength: 128
+
+    ExternalAgentIdentityListResponse:
+      type: object
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExternalAgentIdentity'
 
     OkResponse:
       type: object
@@ -16998,6 +17175,340 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
 
+  /admin/external_agent_identities:
+    get:
+      operationId: listExternalAgentIdentities
+      summary: List external agent identities
+      description: >
+        ADR-0039 external agent identities, newest first: one per logical
+        agent, application and provider tenant, shared by every version of
+        the agent. Gated on `models.agent_identity.external.manage` in
+        administration mode. Mounted only when the enterprise credential
+        governance flag is on; otherwise the path answers like any unknown
+        route.
+      tags: [admin]
+      parameters:
+        - name: tenant_project_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: application_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: state
+          in: query
+          required: false
+          description: >
+            One of provisioning, pending_activation, active, suspended,
+            retiring, retired, replaced.
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: One page of external agent identities
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAgentIdentityListResponse' }
+        '400':
+          description: A malformed filter
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    post:
+      operationId: createExternalAgentIdentity
+      summary: Create an external agent identity record
+      description: >
+        Writes a record in `provisioning`. No identity provider is called;
+        `:provision` creates the provider object. A second live record for
+        the same tenant project, application, provider and provider tenant
+        (modes dedicated_agent and elitea_native) is refused with 409. A mode
+        the active policy revision does not allow is refused with 403. Gated
+        on `models.agent_identity.external.manage`.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExternalAgentIdentityCreate' }
+      responses:
+        '201':
+          description: The new record
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAgentIdentity' }
+        '400':
+          description: A malformed request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or the mode is not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: A live external agent identity already exists for this agent and provider tenant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: The active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/external_agent_identities/{id}:provision:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The external agent identity id (uuid).
+        schema: { type: string }
+    post:
+      operationId: provisionExternalAgentIdentity
+      summary: Create the provider object of an external agent identity
+      description: >
+        Gated on `models.agent_identity.external.manage` in administration mode. Mounted only when the enterprise credential governance flag
+        is on. Every transition increases `revocation_epoch` by exactly one
+        and runs under a row lock. Provisioning never activates: the record moves to `pending_activation`, or stays in `provisioning` while an asynchronous provider finishes.
+      tags: [admin]
+      responses:
+        '200':
+          description: The external agent identity after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAgentIdentity' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or the identity mode is not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such external agent identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The current state does not allow provisioning
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '502':
+          description: The identity provider call failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: No provider adapter is configured, or the active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/external_agent_identities/{id}:activate:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The external agent identity id (uuid).
+        schema: { type: string }
+    post:
+      operationId: activateExternalAgentIdentity
+      summary: Activate an external agent identity
+      description: >
+        Gated on `models.agent_identity.external.manage` and `models.agent_identity.bindings.approve` in administration mode. Mounted only when the enterprise credential governance flag
+        is on. Every transition increases `revocation_epoch` by exactly one
+        and runs under a row lock. Needs an active binding that references the identity and a policy revision that allows its mode.
+      tags: [admin]
+      responses:
+        '200':
+          description: The external agent identity after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAgentIdentity' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or the identity mode is not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such external agent identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The current state does not allow activation, or no approved binding references the identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '502':
+          description: The identity provider call failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: No provider adapter is configured, or the active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/external_agent_identities/{id}:suspend:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The external agent identity id (uuid).
+        schema: { type: string }
+    post:
+      operationId: suspendExternalAgentIdentity
+      summary: Suspend an external agent identity
+      description: >
+        Gated on `models.agent_identity.external.manage` in administration mode. Mounted only when the enterprise credential governance flag
+        is on. Every transition increases `revocation_epoch` by exactly one
+        and runs under a row lock. The record is suspended before the provider is told, so a 502 or 503 still leaves it suspended. New sessions and credentials for its agent are denied.
+      tags: [admin]
+      responses:
+        '200':
+          description: The external agent identity after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAgentIdentity' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or the identity mode is not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such external agent identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The current state does not allow suspension
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '502':
+          description: The identity provider call failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: No provider adapter is configured, or the active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/external_agent_identities/{id}:resume:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The external agent identity id (uuid).
+        schema: { type: string }
+    post:
+      operationId: resumeExternalAgentIdentity
+      summary: Resume a suspended external agent identity
+      description: >
+        Gated on `models.agent_identity.external.manage` in administration mode. Mounted only when the enterprise credential governance flag
+        is on. Every transition increases `revocation_epoch` by exactly one
+        and runs under a row lock. Sessions opened before the suspension stay denied: their epoch is stale.
+      tags: [admin]
+      responses:
+        '200':
+          description: The external agent identity after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAgentIdentity' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or the identity mode is not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such external agent identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The current state does not allow resumption
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '502':
+          description: The identity provider call failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: No provider adapter is configured, or the active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/external_agent_identities/{id}:retire:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The external agent identity id (uuid).
+        schema: { type: string }
+    post:
+      operationId: retireExternalAgentIdentity
+      summary: Retire an external agent identity
+      description: >
+        Gated on `models.agent_identity.external.manage` in administration mode. Mounted only when the enterprise credential governance flag
+        is on. Every transition increases `revocation_epoch` by exactly one
+        and runs under a row lock. The record moves to `retiring`, the provider object is revoked, and the record moves to `retired`. After a 502 or 503 it stays `retiring`; calling retire again retries the revocation.
+      tags: [admin]
+      responses:
+        '200':
+          description: The external agent identity after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAgentIdentity' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or the identity mode is not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such external agent identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The identity is already retired or replaced
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '502':
+          description: The identity provider call failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: No provider adapter is configured, or the active policy revision could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+
   /admin/branding/administration:
     # ADR-0024 decision 5: the typed editor of the brand pack's DATABASE
     # layer. The same rows the generic Configuration page's `branding`
@@ -27127,6 +27638,203 @@ paths:
         '500': { $ref: '#/components/responses/500' }
 
   # APPLICATIONS — project context
+  /projects/{project_id}/credential_grants:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listCredentialUseGrants
+      summary: List a project's credential use grants
+      description: >
+        ADR-0039 credential use grants of the project, newest first. Gated on
+        `models.credentials.governed.manage` or
+        `models.credentials.governed.approve`, resolved in the project; no
+        role holds either by default. Mounted only when the enterprise
+        credential governance flag is on; otherwise the path answers like any
+        unknown route.
+      tags: [admin]
+      parameters:
+        - name: agent_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: state
+          in: query
+          required: false
+          description: One of proposed, active, suspended, revoked.
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: One page of grants
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialUseGrantListResponse' }
+        '400':
+          description: A malformed filter
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    post:
+      operationId: proposeCredentialUseGrant
+      summary: Propose a credential use grant
+      description: >
+        Writes a `proposed` grant in the project. It authorises nothing until
+        another user approves it: the caller is recorded as the proposer and
+        may not approve it. Gated on `models.credentials.governed.manage`.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CredentialUseGrantCreate' }
+      responses:
+        '201':
+          description: The proposed grant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialUseGrant' }
+        '400':
+          description: A malformed proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: >
+            A non-revoked grant already exists for this agent, toolkit,
+            credential and target, or the agent binding, credential reference
+            or target is not usable in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /projects/{project_id}/credential_grants/{id}:approve:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: id
+        in: path
+        required: true
+        description: The grant id (uuid).
+        schema: { type: string }
+    post:
+      operationId: approveCredentialUseGrant
+      summary: Approve, or reactivate, a credential use grant
+      description: >
+        Gated on `models.credentials.governed.approve` in the project. Mounted only when the enterprise
+        credential governance flag is on. Every transition increases `epoch`
+        by exactly one and runs under a row lock. The approver must not be the proposer (403).
+      tags: [admin]
+      responses:
+        '200':
+          description: The grant after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialUseGrant' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or is the grant's proposer
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such grant in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The current state does not allow this action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /projects/{project_id}/credential_grants/{id}:suspend:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: id
+        in: path
+        required: true
+        description: The grant id (uuid).
+        schema: { type: string }
+    post:
+      operationId: suspendCredentialUseGrant
+      summary: Suspend an active credential use grant
+      description: >
+        Gated on `models.credentials.governed.manage` in the project. Mounted only when the enterprise
+        credential governance flag is on. Every transition increases `epoch`
+        by exactly one and runs under a row lock.
+      tags: [admin]
+      responses:
+        '200':
+          description: The grant after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialUseGrant' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such grant in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The current state does not allow this action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /projects/{project_id}/credential_grants/{id}:revoke:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: id
+        in: path
+        required: true
+        description: The grant id (uuid).
+        schema: { type: string }
+    post:
+      operationId: revokeCredentialUseGrant
+      summary: Revoke a credential use grant
+      description: >
+        Gated on `models.credentials.governed.manage` in the project. Mounted only when the enterprise
+        credential governance flag is on. Every transition increases `epoch`
+        by exactly one and runs under a row lock. Revoked is final.
+      tags: [admin]
+      responses:
+        '200':
+          description: The grant after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialUseGrant' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such grant in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The current state does not allow this action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
   /elitea_core/project_context/prompt_lib/{project_id}/project-context:
     parameters:
       - $ref: '#/components/parameters/ProjectId'

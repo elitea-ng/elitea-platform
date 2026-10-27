@@ -789,7 +789,30 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// outbox (#1114): per-partition hash-chain heads, the transactional
 	// outbox and the append-only elitea_identity.security_audit_events. No
 	// data, no permission.
-	require.EqualValues(t, 183, Head(shared))
+	//
+	// 184: shared/0184_credential_grants.sql, the credential grant model
+	// (#1116): elitea_identity.target_bindings, credential_references,
+	// agent_toolkit_bindings and credential_use_grants, with the approver !=
+	// proposer CHECK and a unique index on non-revoked grants per (agent
+	// binding, toolkit, credential reference, target). No data; the five
+	// models.credentials.governed.* permissions are granted to no role.
+	//
+	// 185: shared/0185_entra_delegation_custody.sql, the encrypted assertion
+	// columns on elitea_identity.delegations, elitea_identity.signin_assertions
+	// and elitea_identity.credential_authorization_requirements (#1117). No
+	// data, no permission.
+	//
+	// 186: shared/0186_external_agent_identities.sql, the
+	// elitea_identity.external_agent_identities and agent_sessions tables,
+	// the bindings' foreign key to their external identity, and the
+	// models.agent_identity.external.manage grant to administration-mode
+	// super_admin and admin (#1151).
+	//
+	// 187: shared/0187_execution_security_contexts.sql, the immutable
+	// ExecutionSecurityContextV1 bytes and digest of each governed execution
+	// (#1115), written in its admission transaction and served to the
+	// governed worker under its claim. No data, no permission.
+	require.EqualValues(t, 187, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

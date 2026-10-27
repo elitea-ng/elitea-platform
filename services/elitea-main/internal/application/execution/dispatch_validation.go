@@ -9,6 +9,7 @@ import (
 
 	configurationdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/configurations"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 )
 
 var (
@@ -46,6 +47,10 @@ type ValidationDispatch struct {
 	Traceparent           string
 	Tracestate            string
 	Command               configurationdomain.ValidationCommand
+
+	// SecurityContext is set for a governed execution only (#1115); zero
+	// leaves WorkerCommandV1.security_context_ref unset.
+	SecurityContext securitycontext.Reference
 }
 
 func (d ValidationDispatch) Validate() error {

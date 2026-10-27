@@ -65,7 +65,13 @@ import type {
   BulkInviteRequest,
   BulkInviteSummary,
   CancelBackgroundJobParams,
+  CredentialUseGrant,
+  CredentialUseGrantCreate,
+  CredentialUseGrantListResponse,
   ErrorResponse,
+  ExternalAgentIdentity,
+  ExternalAgentIdentityCreate,
+  ExternalAgentIdentityListResponse,
   GetUserProjectPermissionsParams,
   GlobalUserInviteRequest,
   GlobalUserInviteResult,
@@ -75,6 +81,8 @@ import type {
   ListAgentIdentityBindingsParams,
   ListBackgroundJobsParams,
   ListBrandingPackageVersions200,
+  ListCredentialUseGrantsParams,
+  ListExternalAgentIdentitiesParams,
   ListMandatesParams,
   ListNativeDevicesAdministrationParams,
   Mandate,
@@ -7082,6 +7090,1642 @@ export function useRevokeMandate<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type listExternalAgentIdentitiesResponse200 = {
+  data: ExternalAgentIdentityListResponse;
+  status: 200;
+};
+
+export type listExternalAgentIdentitiesResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listExternalAgentIdentitiesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listExternalAgentIdentitiesResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listExternalAgentIdentitiesResponseSuccess =
+  listExternalAgentIdentitiesResponse200 & {
+    headers: Headers;
+  };
+export type listExternalAgentIdentitiesResponseError = (
+  | listExternalAgentIdentitiesResponse400
+  | listExternalAgentIdentitiesResponse401
+  | listExternalAgentIdentitiesResponse403
+) & {
+  headers: Headers;
+};
+
+export type listExternalAgentIdentitiesResponse =
+  | listExternalAgentIdentitiesResponseSuccess
+  | listExternalAgentIdentitiesResponseError;
+
+export const getListExternalAgentIdentitiesUrl = (
+  params?: ListExternalAgentIdentitiesParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/external_agent_identities?${stringifiedParams}`
+    : `/admin/external_agent_identities`;
+};
+
+/**
+ * ADR-0039 external agent identities, newest first: one per logical agent, application and provider tenant, shared by every version of the agent. Gated on `models.agent_identity.external.manage` in administration mode. Mounted only when the enterprise credential governance flag is on; otherwise the path answers like any unknown route.
+ * @summary List external agent identities
+ */
+export const listExternalAgentIdentities = async (
+  params?: ListExternalAgentIdentitiesParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listExternalAgentIdentitiesResponse> => {
+  return eliteaFetch<listExternalAgentIdentitiesResponse>(
+    getListExternalAgentIdentitiesUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListExternalAgentIdentitiesQueryKey = (
+  params?: ListExternalAgentIdentitiesParams,
+) => {
+  return [
+    `/admin/external_agent_identities`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListExternalAgentIdentitiesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listExternalAgentIdentities>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListExternalAgentIdentitiesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExternalAgentIdentities>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListExternalAgentIdentitiesQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listExternalAgentIdentities>>
+  > = ({ signal }) =>
+    listExternalAgentIdentities(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listExternalAgentIdentities>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListExternalAgentIdentitiesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listExternalAgentIdentities>>
+>;
+export type ListExternalAgentIdentitiesQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useListExternalAgentIdentities<
+  TData = Awaited<ReturnType<typeof listExternalAgentIdentities>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params: undefined | ListExternalAgentIdentitiesParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExternalAgentIdentities>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listExternalAgentIdentities>>,
+          TError,
+          Awaited<ReturnType<typeof listExternalAgentIdentities>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListExternalAgentIdentities<
+  TData = Awaited<ReturnType<typeof listExternalAgentIdentities>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListExternalAgentIdentitiesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExternalAgentIdentities>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listExternalAgentIdentities>>,
+          TError,
+          Awaited<ReturnType<typeof listExternalAgentIdentities>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListExternalAgentIdentities<
+  TData = Awaited<ReturnType<typeof listExternalAgentIdentities>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListExternalAgentIdentitiesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExternalAgentIdentities>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List external agent identities
+ */
+
+export function useListExternalAgentIdentities<
+  TData = Awaited<ReturnType<typeof listExternalAgentIdentities>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  params?: ListExternalAgentIdentitiesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExternalAgentIdentities>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListExternalAgentIdentitiesQueryOptions(
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createExternalAgentIdentityResponse201 = {
+  data: ExternalAgentIdentity;
+  status: 201;
+};
+
+export type createExternalAgentIdentityResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type createExternalAgentIdentityResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createExternalAgentIdentityResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type createExternalAgentIdentityResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type createExternalAgentIdentityResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type createExternalAgentIdentityResponseSuccess =
+  createExternalAgentIdentityResponse201 & {
+    headers: Headers;
+  };
+export type createExternalAgentIdentityResponseError = (
+  | createExternalAgentIdentityResponse400
+  | createExternalAgentIdentityResponse401
+  | createExternalAgentIdentityResponse403
+  | createExternalAgentIdentityResponse409
+  | createExternalAgentIdentityResponse503
+) & {
+  headers: Headers;
+};
+
+export type createExternalAgentIdentityResponse =
+  | createExternalAgentIdentityResponseSuccess
+  | createExternalAgentIdentityResponseError;
+
+export const getCreateExternalAgentIdentityUrl = () => {
+  return `/admin/external_agent_identities`;
+};
+
+/**
+ * Writes a record in `provisioning`. No identity provider is called; `:provision` creates the provider object. A second live record for the same tenant project, application, provider and provider tenant (modes dedicated_agent and elitea_native) is refused with 409. A mode the active policy revision does not allow is refused with 403. Gated on `models.agent_identity.external.manage`.
+ * @summary Create an external agent identity record
+ */
+export const createExternalAgentIdentity = async (
+  externalAgentIdentityCreate: ExternalAgentIdentityCreate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createExternalAgentIdentityResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createExternalAgentIdentityResponse>(
+    getCreateExternalAgentIdentityUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(externalAgentIdentityCreate),
+    },
+  );
+};
+
+export const getCreateExternalAgentIdentityQueryKey = (
+  externalAgentIdentityCreate?: ExternalAgentIdentityCreate,
+) => {
+  return [
+    "POST",
+    `/admin/external_agent_identities`,
+    externalAgentIdentityCreate,
+  ] as const;
+};
+
+export const getCreateExternalAgentIdentityQueryOptions = <
+  TData = Awaited<ReturnType<typeof createExternalAgentIdentity>>,
+  TError = ErrorResponse | N401Response,
+>(
+  externalAgentIdentityCreate: ExternalAgentIdentityCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateExternalAgentIdentityQueryKey(externalAgentIdentityCreate);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createExternalAgentIdentity>>
+  > = ({ signal }) =>
+    createExternalAgentIdentity(externalAgentIdentityCreate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof createExternalAgentIdentity>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateExternalAgentIdentityQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createExternalAgentIdentity>>
+>;
+export type CreateExternalAgentIdentityQueryError =
+  ErrorResponse | N401Response;
+
+export function useCreateExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof createExternalAgentIdentity>>,
+  TError = ErrorResponse | N401Response,
+>(
+  externalAgentIdentityCreate: ExternalAgentIdentityCreate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createExternalAgentIdentity>>,
+          TError,
+          Awaited<ReturnType<typeof createExternalAgentIdentity>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof createExternalAgentIdentity>>,
+  TError = ErrorResponse | N401Response,
+>(
+  externalAgentIdentityCreate: ExternalAgentIdentityCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createExternalAgentIdentity>>,
+          TError,
+          Awaited<ReturnType<typeof createExternalAgentIdentity>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof createExternalAgentIdentity>>,
+  TError = ErrorResponse | N401Response,
+>(
+  externalAgentIdentityCreate: ExternalAgentIdentityCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Create an external agent identity record
+ */
+
+export function useCreateExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof createExternalAgentIdentity>>,
+  TError = ErrorResponse | N401Response,
+>(
+  externalAgentIdentityCreate: ExternalAgentIdentityCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateExternalAgentIdentityQueryOptions(
+    externalAgentIdentityCreate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type provisionExternalAgentIdentityResponse200 = {
+  data: ExternalAgentIdentity;
+  status: 200;
+};
+
+export type provisionExternalAgentIdentityResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type provisionExternalAgentIdentityResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type provisionExternalAgentIdentityResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type provisionExternalAgentIdentityResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type provisionExternalAgentIdentityResponse502 = {
+  data: ErrorResponse;
+  status: 502;
+};
+
+export type provisionExternalAgentIdentityResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type provisionExternalAgentIdentityResponseSuccess =
+  provisionExternalAgentIdentityResponse200 & {
+    headers: Headers;
+  };
+export type provisionExternalAgentIdentityResponseError = (
+  | provisionExternalAgentIdentityResponse401
+  | provisionExternalAgentIdentityResponse403
+  | provisionExternalAgentIdentityResponse404
+  | provisionExternalAgentIdentityResponse409
+  | provisionExternalAgentIdentityResponse502
+  | provisionExternalAgentIdentityResponse503
+) & {
+  headers: Headers;
+};
+
+export type provisionExternalAgentIdentityResponse =
+  | provisionExternalAgentIdentityResponseSuccess
+  | provisionExternalAgentIdentityResponseError;
+
+export const getProvisionExternalAgentIdentityUrl = (id: string) => {
+  return `/admin/external_agent_identities/${id}:provision`;
+};
+
+/**
+ * Gated on `models.agent_identity.external.manage` in administration mode. Mounted only when the enterprise credential governance flag is on. Every transition increases `revocation_epoch` by exactly one and runs under a row lock. Provisioning never activates: the record moves to `pending_activation`, or stays in `provisioning` while an asynchronous provider finishes.
+ * @summary Create the provider object of an external agent identity
+ */
+export const provisionExternalAgentIdentity = async (
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<provisionExternalAgentIdentityResponse> => {
+  return eliteaFetch<provisionExternalAgentIdentityResponse>(
+    getProvisionExternalAgentIdentityUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getProvisionExternalAgentIdentityQueryKey = (id: string) => {
+  return ["POST", `/admin/external_agent_identities/${id}:provision`] as const;
+};
+
+export const getProvisionExternalAgentIdentityQueryOptions = <
+  TData = Awaited<ReturnType<typeof provisionExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof provisionExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getProvisionExternalAgentIdentityQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof provisionExternalAgentIdentity>>
+  > = ({ signal }) =>
+    provisionExternalAgentIdentity(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof provisionExternalAgentIdentity>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ProvisionExternalAgentIdentityQueryResult = NonNullable<
+  Awaited<ReturnType<typeof provisionExternalAgentIdentity>>
+>;
+export type ProvisionExternalAgentIdentityQueryError =
+  N401Response | ErrorResponse;
+
+export function useProvisionExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof provisionExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof provisionExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof provisionExternalAgentIdentity>>,
+          TError,
+          Awaited<ReturnType<typeof provisionExternalAgentIdentity>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useProvisionExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof provisionExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof provisionExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof provisionExternalAgentIdentity>>,
+          TError,
+          Awaited<ReturnType<typeof provisionExternalAgentIdentity>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useProvisionExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof provisionExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof provisionExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Create the provider object of an external agent identity
+ */
+
+export function useProvisionExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof provisionExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof provisionExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getProvisionExternalAgentIdentityQueryOptions(
+    id,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type activateExternalAgentIdentityResponse200 = {
+  data: ExternalAgentIdentity;
+  status: 200;
+};
+
+export type activateExternalAgentIdentityResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type activateExternalAgentIdentityResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type activateExternalAgentIdentityResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type activateExternalAgentIdentityResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type activateExternalAgentIdentityResponse502 = {
+  data: ErrorResponse;
+  status: 502;
+};
+
+export type activateExternalAgentIdentityResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type activateExternalAgentIdentityResponseSuccess =
+  activateExternalAgentIdentityResponse200 & {
+    headers: Headers;
+  };
+export type activateExternalAgentIdentityResponseError = (
+  | activateExternalAgentIdentityResponse401
+  | activateExternalAgentIdentityResponse403
+  | activateExternalAgentIdentityResponse404
+  | activateExternalAgentIdentityResponse409
+  | activateExternalAgentIdentityResponse502
+  | activateExternalAgentIdentityResponse503
+) & {
+  headers: Headers;
+};
+
+export type activateExternalAgentIdentityResponse =
+  | activateExternalAgentIdentityResponseSuccess
+  | activateExternalAgentIdentityResponseError;
+
+export const getActivateExternalAgentIdentityUrl = (id: string) => {
+  return `/admin/external_agent_identities/${id}:activate`;
+};
+
+/**
+ * Gated on `models.agent_identity.external.manage` and `models.agent_identity.bindings.approve` in administration mode. Mounted only when the enterprise credential governance flag is on. Every transition increases `revocation_epoch` by exactly one and runs under a row lock. Needs an active binding that references the identity and a policy revision that allows its mode.
+ * @summary Activate an external agent identity
+ */
+export const activateExternalAgentIdentity = async (
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<activateExternalAgentIdentityResponse> => {
+  return eliteaFetch<activateExternalAgentIdentityResponse>(
+    getActivateExternalAgentIdentityUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getActivateExternalAgentIdentityQueryKey = (id: string) => {
+  return ["POST", `/admin/external_agent_identities/${id}:activate`] as const;
+};
+
+export const getActivateExternalAgentIdentityQueryOptions = <
+  TData = Awaited<ReturnType<typeof activateExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof activateExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getActivateExternalAgentIdentityQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof activateExternalAgentIdentity>>
+  > = ({ signal }) =>
+    activateExternalAgentIdentity(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof activateExternalAgentIdentity>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ActivateExternalAgentIdentityQueryResult = NonNullable<
+  Awaited<ReturnType<typeof activateExternalAgentIdentity>>
+>;
+export type ActivateExternalAgentIdentityQueryError =
+  N401Response | ErrorResponse;
+
+export function useActivateExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof activateExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof activateExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof activateExternalAgentIdentity>>,
+          TError,
+          Awaited<ReturnType<typeof activateExternalAgentIdentity>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useActivateExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof activateExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof activateExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof activateExternalAgentIdentity>>,
+          TError,
+          Awaited<ReturnType<typeof activateExternalAgentIdentity>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useActivateExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof activateExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof activateExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Activate an external agent identity
+ */
+
+export function useActivateExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof activateExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof activateExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getActivateExternalAgentIdentityQueryOptions(
+    id,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type suspendExternalAgentIdentityResponse200 = {
+  data: ExternalAgentIdentity;
+  status: 200;
+};
+
+export type suspendExternalAgentIdentityResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type suspendExternalAgentIdentityResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type suspendExternalAgentIdentityResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type suspendExternalAgentIdentityResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type suspendExternalAgentIdentityResponse502 = {
+  data: ErrorResponse;
+  status: 502;
+};
+
+export type suspendExternalAgentIdentityResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type suspendExternalAgentIdentityResponseSuccess =
+  suspendExternalAgentIdentityResponse200 & {
+    headers: Headers;
+  };
+export type suspendExternalAgentIdentityResponseError = (
+  | suspendExternalAgentIdentityResponse401
+  | suspendExternalAgentIdentityResponse403
+  | suspendExternalAgentIdentityResponse404
+  | suspendExternalAgentIdentityResponse409
+  | suspendExternalAgentIdentityResponse502
+  | suspendExternalAgentIdentityResponse503
+) & {
+  headers: Headers;
+};
+
+export type suspendExternalAgentIdentityResponse =
+  | suspendExternalAgentIdentityResponseSuccess
+  | suspendExternalAgentIdentityResponseError;
+
+export const getSuspendExternalAgentIdentityUrl = (id: string) => {
+  return `/admin/external_agent_identities/${id}:suspend`;
+};
+
+/**
+ * Gated on `models.agent_identity.external.manage` in administration mode. Mounted only when the enterprise credential governance flag is on. Every transition increases `revocation_epoch` by exactly one and runs under a row lock. The record is suspended before the provider is told, so a 502 or 503 still leaves it suspended. New sessions and credentials for its agent are denied.
+ * @summary Suspend an external agent identity
+ */
+export const suspendExternalAgentIdentity = async (
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<suspendExternalAgentIdentityResponse> => {
+  return eliteaFetch<suspendExternalAgentIdentityResponse>(
+    getSuspendExternalAgentIdentityUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getSuspendExternalAgentIdentityQueryKey = (id: string) => {
+  return ["POST", `/admin/external_agent_identities/${id}:suspend`] as const;
+};
+
+export const getSuspendExternalAgentIdentityQueryOptions = <
+  TData = Awaited<ReturnType<typeof suspendExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof suspendExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getSuspendExternalAgentIdentityQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof suspendExternalAgentIdentity>>
+  > = ({ signal }) =>
+    suspendExternalAgentIdentity(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof suspendExternalAgentIdentity>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SuspendExternalAgentIdentityQueryResult = NonNullable<
+  Awaited<ReturnType<typeof suspendExternalAgentIdentity>>
+>;
+export type SuspendExternalAgentIdentityQueryError =
+  N401Response | ErrorResponse;
+
+export function useSuspendExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof suspendExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof suspendExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof suspendExternalAgentIdentity>>,
+          TError,
+          Awaited<ReturnType<typeof suspendExternalAgentIdentity>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSuspendExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof suspendExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof suspendExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof suspendExternalAgentIdentity>>,
+          TError,
+          Awaited<ReturnType<typeof suspendExternalAgentIdentity>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSuspendExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof suspendExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof suspendExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Suspend an external agent identity
+ */
+
+export function useSuspendExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof suspendExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof suspendExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSuspendExternalAgentIdentityQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type resumeExternalAgentIdentityResponse200 = {
+  data: ExternalAgentIdentity;
+  status: 200;
+};
+
+export type resumeExternalAgentIdentityResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type resumeExternalAgentIdentityResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type resumeExternalAgentIdentityResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type resumeExternalAgentIdentityResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type resumeExternalAgentIdentityResponse502 = {
+  data: ErrorResponse;
+  status: 502;
+};
+
+export type resumeExternalAgentIdentityResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type resumeExternalAgentIdentityResponseSuccess =
+  resumeExternalAgentIdentityResponse200 & {
+    headers: Headers;
+  };
+export type resumeExternalAgentIdentityResponseError = (
+  | resumeExternalAgentIdentityResponse401
+  | resumeExternalAgentIdentityResponse403
+  | resumeExternalAgentIdentityResponse404
+  | resumeExternalAgentIdentityResponse409
+  | resumeExternalAgentIdentityResponse502
+  | resumeExternalAgentIdentityResponse503
+) & {
+  headers: Headers;
+};
+
+export type resumeExternalAgentIdentityResponse =
+  | resumeExternalAgentIdentityResponseSuccess
+  | resumeExternalAgentIdentityResponseError;
+
+export const getResumeExternalAgentIdentityUrl = (id: string) => {
+  return `/admin/external_agent_identities/${id}:resume`;
+};
+
+/**
+ * Gated on `models.agent_identity.external.manage` in administration mode. Mounted only when the enterprise credential governance flag is on. Every transition increases `revocation_epoch` by exactly one and runs under a row lock. Sessions opened before the suspension stay denied: their epoch is stale.
+ * @summary Resume a suspended external agent identity
+ */
+export const resumeExternalAgentIdentity = async (
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<resumeExternalAgentIdentityResponse> => {
+  return eliteaFetch<resumeExternalAgentIdentityResponse>(
+    getResumeExternalAgentIdentityUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getResumeExternalAgentIdentityQueryKey = (id: string) => {
+  return ["POST", `/admin/external_agent_identities/${id}:resume`] as const;
+};
+
+export const getResumeExternalAgentIdentityQueryOptions = <
+  TData = Awaited<ReturnType<typeof resumeExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getResumeExternalAgentIdentityQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof resumeExternalAgentIdentity>>
+  > = ({ signal }) =>
+    resumeExternalAgentIdentity(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof resumeExternalAgentIdentity>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ResumeExternalAgentIdentityQueryResult = NonNullable<
+  Awaited<ReturnType<typeof resumeExternalAgentIdentity>>
+>;
+export type ResumeExternalAgentIdentityQueryError =
+  N401Response | ErrorResponse;
+
+export function useResumeExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof resumeExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof resumeExternalAgentIdentity>>,
+          TError,
+          Awaited<ReturnType<typeof resumeExternalAgentIdentity>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useResumeExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof resumeExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof resumeExternalAgentIdentity>>,
+          TError,
+          Awaited<ReturnType<typeof resumeExternalAgentIdentity>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useResumeExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof resumeExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Resume a suspended external agent identity
+ */
+
+export function useResumeExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof resumeExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resumeExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getResumeExternalAgentIdentityQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type retireExternalAgentIdentityResponse200 = {
+  data: ExternalAgentIdentity;
+  status: 200;
+};
+
+export type retireExternalAgentIdentityResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type retireExternalAgentIdentityResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type retireExternalAgentIdentityResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type retireExternalAgentIdentityResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type retireExternalAgentIdentityResponse502 = {
+  data: ErrorResponse;
+  status: 502;
+};
+
+export type retireExternalAgentIdentityResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type retireExternalAgentIdentityResponseSuccess =
+  retireExternalAgentIdentityResponse200 & {
+    headers: Headers;
+  };
+export type retireExternalAgentIdentityResponseError = (
+  | retireExternalAgentIdentityResponse401
+  | retireExternalAgentIdentityResponse403
+  | retireExternalAgentIdentityResponse404
+  | retireExternalAgentIdentityResponse409
+  | retireExternalAgentIdentityResponse502
+  | retireExternalAgentIdentityResponse503
+) & {
+  headers: Headers;
+};
+
+export type retireExternalAgentIdentityResponse =
+  | retireExternalAgentIdentityResponseSuccess
+  | retireExternalAgentIdentityResponseError;
+
+export const getRetireExternalAgentIdentityUrl = (id: string) => {
+  return `/admin/external_agent_identities/${id}:retire`;
+};
+
+/**
+ * Gated on `models.agent_identity.external.manage` in administration mode. Mounted only when the enterprise credential governance flag is on. Every transition increases `revocation_epoch` by exactly one and runs under a row lock. The record moves to `retiring`, the provider object is revoked, and the record moves to `retired`. After a 502 or 503 it stays `retiring`; calling retire again retries the revocation.
+ * @summary Retire an external agent identity
+ */
+export const retireExternalAgentIdentity = async (
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<retireExternalAgentIdentityResponse> => {
+  return eliteaFetch<retireExternalAgentIdentityResponse>(
+    getRetireExternalAgentIdentityUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getRetireExternalAgentIdentityQueryKey = (id: string) => {
+  return ["POST", `/admin/external_agent_identities/${id}:retire`] as const;
+};
+
+export const getRetireExternalAgentIdentityQueryOptions = <
+  TData = Awaited<ReturnType<typeof retireExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof retireExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getRetireExternalAgentIdentityQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof retireExternalAgentIdentity>>
+  > = ({ signal }) =>
+    retireExternalAgentIdentity(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof retireExternalAgentIdentity>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RetireExternalAgentIdentityQueryResult = NonNullable<
+  Awaited<ReturnType<typeof retireExternalAgentIdentity>>
+>;
+export type RetireExternalAgentIdentityQueryError =
+  N401Response | ErrorResponse;
+
+export function useRetireExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof retireExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof retireExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof retireExternalAgentIdentity>>,
+          TError,
+          Awaited<ReturnType<typeof retireExternalAgentIdentity>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRetireExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof retireExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof retireExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof retireExternalAgentIdentity>>,
+          TError,
+          Awaited<ReturnType<typeof retireExternalAgentIdentity>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRetireExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof retireExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof retireExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Retire an external agent identity
+ */
+
+export function useRetireExternalAgentIdentity<
+  TData = Awaited<ReturnType<typeof retireExternalAgentIdentity>>,
+  TError = N401Response | ErrorResponse,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof retireExternalAgentIdentity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRetireExternalAgentIdentityQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type getBrandingSettingsResponse200 = {
   data: BrandingSettings;
   status: 200;
@@ -11543,6 +13187,1232 @@ export function useListAdminPublishedAgents<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getListAdminPublishedAgentsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listCredentialUseGrantsResponse200 = {
+  data: CredentialUseGrantListResponse;
+  status: 200;
+};
+
+export type listCredentialUseGrantsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listCredentialUseGrantsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listCredentialUseGrantsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listCredentialUseGrantsResponseSuccess =
+  listCredentialUseGrantsResponse200 & {
+    headers: Headers;
+  };
+export type listCredentialUseGrantsResponseError = (
+  | listCredentialUseGrantsResponse400
+  | listCredentialUseGrantsResponse401
+  | listCredentialUseGrantsResponse403
+) & {
+  headers: Headers;
+};
+
+export type listCredentialUseGrantsResponse =
+  listCredentialUseGrantsResponseSuccess | listCredentialUseGrantsResponseError;
+
+export const getListCredentialUseGrantsUrl = (
+  projectId: string,
+  params?: ListCredentialUseGrantsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/projects/${projectId}/credential_grants?${stringifiedParams}`
+    : `/projects/${projectId}/credential_grants`;
+};
+
+/**
+ * ADR-0039 credential use grants of the project, newest first. Gated on `models.credentials.governed.manage` or `models.credentials.governed.approve`, resolved in the project; no role holds either by default. Mounted only when the enterprise credential governance flag is on; otherwise the path answers like any unknown route.
+ * @summary List a project's credential use grants
+ */
+export const listCredentialUseGrants = async (
+  projectId: string,
+  params?: ListCredentialUseGrantsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listCredentialUseGrantsResponse> => {
+  return eliteaFetch<listCredentialUseGrantsResponse>(
+    getListCredentialUseGrantsUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListCredentialUseGrantsQueryKey = (
+  projectId: string,
+  params?: ListCredentialUseGrantsParams,
+) => {
+  return [
+    `/projects/${projectId}/credential_grants`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListCredentialUseGrantsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listCredentialUseGrants>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListCredentialUseGrantsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCredentialUseGrants>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListCredentialUseGrantsQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listCredentialUseGrants>>
+  > = ({ signal }) =>
+    listCredentialUseGrants(projectId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listCredentialUseGrants>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListCredentialUseGrantsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listCredentialUseGrants>>
+>;
+export type ListCredentialUseGrantsQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useListCredentialUseGrants<
+  TData = Awaited<ReturnType<typeof listCredentialUseGrants>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  params: undefined | ListCredentialUseGrantsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCredentialUseGrants>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listCredentialUseGrants>>,
+          TError,
+          Awaited<ReturnType<typeof listCredentialUseGrants>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListCredentialUseGrants<
+  TData = Awaited<ReturnType<typeof listCredentialUseGrants>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListCredentialUseGrantsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCredentialUseGrants>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listCredentialUseGrants>>,
+          TError,
+          Awaited<ReturnType<typeof listCredentialUseGrants>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListCredentialUseGrants<
+  TData = Awaited<ReturnType<typeof listCredentialUseGrants>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListCredentialUseGrantsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCredentialUseGrants>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List a project's credential use grants
+ */
+
+export function useListCredentialUseGrants<
+  TData = Awaited<ReturnType<typeof listCredentialUseGrants>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListCredentialUseGrantsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listCredentialUseGrants>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListCredentialUseGrantsQueryOptions(
+    projectId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type proposeCredentialUseGrantResponse201 = {
+  data: CredentialUseGrant;
+  status: 201;
+};
+
+export type proposeCredentialUseGrantResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type proposeCredentialUseGrantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type proposeCredentialUseGrantResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type proposeCredentialUseGrantResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type proposeCredentialUseGrantResponseSuccess =
+  proposeCredentialUseGrantResponse201 & {
+    headers: Headers;
+  };
+export type proposeCredentialUseGrantResponseError = (
+  | proposeCredentialUseGrantResponse400
+  | proposeCredentialUseGrantResponse401
+  | proposeCredentialUseGrantResponse403
+  | proposeCredentialUseGrantResponse409
+) & {
+  headers: Headers;
+};
+
+export type proposeCredentialUseGrantResponse =
+  | proposeCredentialUseGrantResponseSuccess
+  | proposeCredentialUseGrantResponseError;
+
+export const getProposeCredentialUseGrantUrl = (projectId: string) => {
+  return `/projects/${projectId}/credential_grants`;
+};
+
+/**
+ * Writes a `proposed` grant in the project. It authorises nothing until another user approves it: the caller is recorded as the proposer and may not approve it. Gated on `models.credentials.governed.manage`.
+ * @summary Propose a credential use grant
+ */
+export const proposeCredentialUseGrant = async (
+  projectId: string,
+  credentialUseGrantCreate: CredentialUseGrantCreate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<proposeCredentialUseGrantResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<proposeCredentialUseGrantResponse>(
+    getProposeCredentialUseGrantUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(credentialUseGrantCreate),
+    },
+  );
+};
+
+export const getProposeCredentialUseGrantQueryKey = (
+  projectId: string,
+  credentialUseGrantCreate?: CredentialUseGrantCreate,
+) => {
+  return [
+    "POST",
+    `/projects/${projectId}/credential_grants`,
+    credentialUseGrantCreate,
+  ] as const;
+};
+
+export const getProposeCredentialUseGrantQueryOptions = <
+  TData = Awaited<ReturnType<typeof proposeCredentialUseGrant>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  credentialUseGrantCreate: CredentialUseGrantCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getProposeCredentialUseGrantQueryKey(projectId, credentialUseGrantCreate);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof proposeCredentialUseGrant>>
+  > = ({ signal }) =>
+    proposeCredentialUseGrant(projectId, credentialUseGrantCreate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof proposeCredentialUseGrant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ProposeCredentialUseGrantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof proposeCredentialUseGrant>>
+>;
+export type ProposeCredentialUseGrantQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useProposeCredentialUseGrant<
+  TData = Awaited<ReturnType<typeof proposeCredentialUseGrant>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  credentialUseGrantCreate: CredentialUseGrantCreate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof proposeCredentialUseGrant>>,
+          TError,
+          Awaited<ReturnType<typeof proposeCredentialUseGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useProposeCredentialUseGrant<
+  TData = Awaited<ReturnType<typeof proposeCredentialUseGrant>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  credentialUseGrantCreate: CredentialUseGrantCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof proposeCredentialUseGrant>>,
+          TError,
+          Awaited<ReturnType<typeof proposeCredentialUseGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useProposeCredentialUseGrant<
+  TData = Awaited<ReturnType<typeof proposeCredentialUseGrant>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  credentialUseGrantCreate: CredentialUseGrantCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Propose a credential use grant
+ */
+
+export function useProposeCredentialUseGrant<
+  TData = Awaited<ReturnType<typeof proposeCredentialUseGrant>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  credentialUseGrantCreate: CredentialUseGrantCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getProposeCredentialUseGrantQueryOptions(
+    projectId,
+    credentialUseGrantCreate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type approveCredentialUseGrantResponse200 = {
+  data: CredentialUseGrant;
+  status: 200;
+};
+
+export type approveCredentialUseGrantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type approveCredentialUseGrantResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type approveCredentialUseGrantResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type approveCredentialUseGrantResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type approveCredentialUseGrantResponseSuccess =
+  approveCredentialUseGrantResponse200 & {
+    headers: Headers;
+  };
+export type approveCredentialUseGrantResponseError = (
+  | approveCredentialUseGrantResponse401
+  | approveCredentialUseGrantResponse403
+  | approveCredentialUseGrantResponse404
+  | approveCredentialUseGrantResponse409
+) & {
+  headers: Headers;
+};
+
+export type approveCredentialUseGrantResponse =
+  | approveCredentialUseGrantResponseSuccess
+  | approveCredentialUseGrantResponseError;
+
+export const getApproveCredentialUseGrantUrl = (
+  projectId: string,
+  id: string,
+) => {
+  return `/projects/${projectId}/credential_grants/${id}:approve`;
+};
+
+/**
+ * Gated on `models.credentials.governed.approve` in the project. Mounted only when the enterprise credential governance flag is on. Every transition increases `epoch` by exactly one and runs under a row lock. The approver must not be the proposer (403).
+ * @summary Approve, or reactivate, a credential use grant
+ */
+export const approveCredentialUseGrant = async (
+  projectId: string,
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<approveCredentialUseGrantResponse> => {
+  return eliteaFetch<approveCredentialUseGrantResponse>(
+    getApproveCredentialUseGrantUrl(projectId, id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getApproveCredentialUseGrantQueryKey = (
+  projectId: string,
+  id: string,
+) => {
+  return [
+    "POST",
+    `/projects/${projectId}/credential_grants/${id}:approve`,
+  ] as const;
+};
+
+export const getApproveCredentialUseGrantQueryOptions = <
+  TData = Awaited<ReturnType<typeof approveCredentialUseGrant>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getApproveCredentialUseGrantQueryKey(projectId, id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof approveCredentialUseGrant>>
+  > = ({ signal }) =>
+    approveCredentialUseGrant(projectId, id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      id !== null &&
+      id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof approveCredentialUseGrant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ApproveCredentialUseGrantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof approveCredentialUseGrant>>
+>;
+export type ApproveCredentialUseGrantQueryError = N401Response | ErrorResponse;
+
+export function useApproveCredentialUseGrant<
+  TData = Awaited<ReturnType<typeof approveCredentialUseGrant>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof approveCredentialUseGrant>>,
+          TError,
+          Awaited<ReturnType<typeof approveCredentialUseGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApproveCredentialUseGrant<
+  TData = Awaited<ReturnType<typeof approveCredentialUseGrant>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof approveCredentialUseGrant>>,
+          TError,
+          Awaited<ReturnType<typeof approveCredentialUseGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApproveCredentialUseGrant<
+  TData = Awaited<ReturnType<typeof approveCredentialUseGrant>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Approve, or reactivate, a credential use grant
+ */
+
+export function useApproveCredentialUseGrant<
+  TData = Awaited<ReturnType<typeof approveCredentialUseGrant>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getApproveCredentialUseGrantQueryOptions(
+    projectId,
+    id,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type suspendCredentialUseGrantResponse200 = {
+  data: CredentialUseGrant;
+  status: 200;
+};
+
+export type suspendCredentialUseGrantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type suspendCredentialUseGrantResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type suspendCredentialUseGrantResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type suspendCredentialUseGrantResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type suspendCredentialUseGrantResponseSuccess =
+  suspendCredentialUseGrantResponse200 & {
+    headers: Headers;
+  };
+export type suspendCredentialUseGrantResponseError = (
+  | suspendCredentialUseGrantResponse401
+  | suspendCredentialUseGrantResponse403
+  | suspendCredentialUseGrantResponse404
+  | suspendCredentialUseGrantResponse409
+) & {
+  headers: Headers;
+};
+
+export type suspendCredentialUseGrantResponse =
+  | suspendCredentialUseGrantResponseSuccess
+  | suspendCredentialUseGrantResponseError;
+
+export const getSuspendCredentialUseGrantUrl = (
+  projectId: string,
+  id: string,
+) => {
+  return `/projects/${projectId}/credential_grants/${id}:suspend`;
+};
+
+/**
+ * Gated on `models.credentials.governed.manage` in the project. Mounted only when the enterprise credential governance flag is on. Every transition increases `epoch` by exactly one and runs under a row lock.
+ * @summary Suspend an active credential use grant
+ */
+export const suspendCredentialUseGrant = async (
+  projectId: string,
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<suspendCredentialUseGrantResponse> => {
+  return eliteaFetch<suspendCredentialUseGrantResponse>(
+    getSuspendCredentialUseGrantUrl(projectId, id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getSuspendCredentialUseGrantQueryKey = (
+  projectId: string,
+  id: string,
+) => {
+  return [
+    "POST",
+    `/projects/${projectId}/credential_grants/${id}:suspend`,
+  ] as const;
+};
+
+export const getSuspendCredentialUseGrantQueryOptions = <
+  TData = Awaited<ReturnType<typeof suspendCredentialUseGrant>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof suspendCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSuspendCredentialUseGrantQueryKey(projectId, id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof suspendCredentialUseGrant>>
+  > = ({ signal }) =>
+    suspendCredentialUseGrant(projectId, id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      id !== null &&
+      id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof suspendCredentialUseGrant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SuspendCredentialUseGrantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof suspendCredentialUseGrant>>
+>;
+export type SuspendCredentialUseGrantQueryError = N401Response | ErrorResponse;
+
+export function useSuspendCredentialUseGrant<
+  TData = Awaited<ReturnType<typeof suspendCredentialUseGrant>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof suspendCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof suspendCredentialUseGrant>>,
+          TError,
+          Awaited<ReturnType<typeof suspendCredentialUseGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSuspendCredentialUseGrant<
+  TData = Awaited<ReturnType<typeof suspendCredentialUseGrant>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof suspendCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof suspendCredentialUseGrant>>,
+          TError,
+          Awaited<ReturnType<typeof suspendCredentialUseGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSuspendCredentialUseGrant<
+  TData = Awaited<ReturnType<typeof suspendCredentialUseGrant>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof suspendCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Suspend an active credential use grant
+ */
+
+export function useSuspendCredentialUseGrant<
+  TData = Awaited<ReturnType<typeof suspendCredentialUseGrant>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof suspendCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSuspendCredentialUseGrantQueryOptions(
+    projectId,
+    id,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type revokeCredentialUseGrantResponse200 = {
+  data: CredentialUseGrant;
+  status: 200;
+};
+
+export type revokeCredentialUseGrantResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type revokeCredentialUseGrantResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type revokeCredentialUseGrantResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type revokeCredentialUseGrantResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type revokeCredentialUseGrantResponseSuccess =
+  revokeCredentialUseGrantResponse200 & {
+    headers: Headers;
+  };
+export type revokeCredentialUseGrantResponseError = (
+  | revokeCredentialUseGrantResponse401
+  | revokeCredentialUseGrantResponse403
+  | revokeCredentialUseGrantResponse404
+  | revokeCredentialUseGrantResponse409
+) & {
+  headers: Headers;
+};
+
+export type revokeCredentialUseGrantResponse =
+  | revokeCredentialUseGrantResponseSuccess
+  | revokeCredentialUseGrantResponseError;
+
+export const getRevokeCredentialUseGrantUrl = (
+  projectId: string,
+  id: string,
+) => {
+  return `/projects/${projectId}/credential_grants/${id}:revoke`;
+};
+
+/**
+ * Gated on `models.credentials.governed.manage` in the project. Mounted only when the enterprise credential governance flag is on. Every transition increases `epoch` by exactly one and runs under a row lock. Revoked is final.
+ * @summary Revoke a credential use grant
+ */
+export const revokeCredentialUseGrant = async (
+  projectId: string,
+  id: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<revokeCredentialUseGrantResponse> => {
+  return eliteaFetch<revokeCredentialUseGrantResponse>(
+    getRevokeCredentialUseGrantUrl(projectId, id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getRevokeCredentialUseGrantQueryKey = (
+  projectId: string,
+  id: string,
+) => {
+  return [
+    "POST",
+    `/projects/${projectId}/credential_grants/${id}:revoke`,
+  ] as const;
+};
+
+export const getRevokeCredentialUseGrantQueryOptions = <
+  TData = Awaited<ReturnType<typeof revokeCredentialUseGrant>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRevokeCredentialUseGrantQueryKey(projectId, id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof revokeCredentialUseGrant>>
+  > = ({ signal }) =>
+    revokeCredentialUseGrant(projectId, id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      id !== null &&
+      id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof revokeCredentialUseGrant>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RevokeCredentialUseGrantQueryResult = NonNullable<
+  Awaited<ReturnType<typeof revokeCredentialUseGrant>>
+>;
+export type RevokeCredentialUseGrantQueryError = N401Response | ErrorResponse;
+
+export function useRevokeCredentialUseGrant<
+  TData = Awaited<ReturnType<typeof revokeCredentialUseGrant>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeCredentialUseGrant>>,
+          TError,
+          Awaited<ReturnType<typeof revokeCredentialUseGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeCredentialUseGrant<
+  TData = Awaited<ReturnType<typeof revokeCredentialUseGrant>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof revokeCredentialUseGrant>>,
+          TError,
+          Awaited<ReturnType<typeof revokeCredentialUseGrant>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRevokeCredentialUseGrant<
+  TData = Awaited<ReturnType<typeof revokeCredentialUseGrant>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Revoke a credential use grant
+ */
+
+export function useRevokeCredentialUseGrant<
+  TData = Awaited<ReturnType<typeof revokeCredentialUseGrant>>,
+  TError = N401Response | ErrorResponse,
+>(
+  projectId: string,
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof revokeCredentialUseGrant>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRevokeCredentialUseGrantQueryOptions(
+    projectId,
+    id,
+    options,
+  );
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

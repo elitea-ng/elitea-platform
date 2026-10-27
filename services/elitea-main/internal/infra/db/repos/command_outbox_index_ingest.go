@@ -524,6 +524,9 @@ WHERE o.outbox_id = $1
 	if err := dispatch.Validate(); err != nil {
 		return indexingapp.IndexIngestDispatch{}, fmt.Errorf("invalid stored index ingest dispatch: %w", err)
 	}
+	if dispatch.SecurityContext, err = loadSecurityContextReference(ctx, sharedRows(r.store), r.credentialProfile, dispatch.ExecutionID); err != nil {
+		return indexingapp.IndexIngestDispatch{}, err
+	}
 	return dispatch, nil
 }
 

@@ -8,6 +8,7 @@ import (
 
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	toolkit "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 )
 
 // ToolkitCallToolEnvelopePreparer signs a reference command without publishing it.
@@ -16,7 +17,7 @@ type ToolkitCallToolEnvelopePreparer interface {
 	PrepareToolkitCallTool(context.Context, toolkit.Dispatch) (executionapp.PreparedCommandEnvelope, error)
 }
 
-func (r *ToolkitCallToolJobsRepository) prepareAdmissionEnvelope(ctx context.Context, admission toolkit.Admission, deadline time.Time) (executionapp.PreparedCommandEnvelope, error) {
+func (r *ToolkitCallToolJobsRepository) prepareAdmissionEnvelope(ctx context.Context, admission toolkit.Admission, deadline time.Time, securityContext securitycontext.Reference) (executionapp.PreparedCommandEnvelope, error) {
 	record, binding := admission.Record, admission.Binding
 	dispatch := toolkit.Dispatch{
 		OutboxID: record.Outbox.ID, CommandID: record.Job.CommandID, ExecutionID: record.Job.ID,
@@ -31,6 +32,7 @@ func (r *ToolkitCallToolJobsRepository) prepareAdmissionEnvelope(ctx context.Con
 		LimitsRevision: r.policy.LimitsRevision, ToolkitType: binding.ToolkitType, ToolName: binding.ToolName,
 		ToolkitID: strconv.FormatInt(binding.ToolkitID, 10), ToolkitVersion: binding.ToolkitVersion,
 		SettingsEntryID: binding.SettingsEntryID, ArgumentsEntryID: binding.ArgumentsEntryID,
+		SecurityContext: securityContext,
 	}
 	if err := dispatch.Validate(); err != nil {
 		return executionapp.PreparedCommandEnvelope{}, err

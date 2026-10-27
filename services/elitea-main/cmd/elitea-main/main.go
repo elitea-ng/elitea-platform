@@ -323,10 +323,19 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err := startSecurityAuditRelay(ctx, credentialAdmission, credentialRevision, pool, logger); err != nil {
 		return err
 	}
-	agentIdentityAdminHandler, err := agentIdentityAdmin(credentialAdmission, credentialRevision, pool)
+	// agentIdentity.Broker is for admission (#1115) and the credential
+	// broker (#1118); nothing calls it yet.
+	agentIdentity, err := agentIdentityAdmin(credentialAdmission, credentialRevision, pool)
 	if err != nil {
 		return err
 	}
+	// The operation decider is held here until its first caller, the
+	// credential broker (#1118), is wired; with the flag off it is nil.
+	credentialDecider, credentialGrantsAdminHandler, err := credentialGrantGovernance(credentialAdmission, pool, credentialGovernanceStore)
+	if err != nil {
+		return err
+	}
+	_ = credentialDecider
 
 	if os.Getenv(v2secrets.MasterKeyEnvVar) != "" {
 		if err := refuseUnwrappedVaultKeys(ctx, pool); err != nil {
@@ -785,6 +794,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		); err != nil {
 			return err
 		}
+	}
+
+	// Governed Entra custody and exchangers (#1117). Nil with the flag off
+	// or without an Entra provider; then neither plane changes.
+	entraGoverned, err := entraGovernanceAtBoot(ctx, credentialAdmission, pool, identityProviderStore,
+		func() ([]byte, error) { return v2secrets.MasterKeyFromEnv(os.Getenv) }, logger)
+	if err != nil {
+		return err
+	}
+	if entraGoverned != nil {
+		oidcOIDCHandler = oidcOIDCHandler.WithEntraGovernance(entraGoverned.Delegations)
+		oidcSessionHandler = oidcSessionHandler.WithEntraGovernance(entraGoverned.Delegations)
 	}
 
 	// A deployment where nobody can sign in through a browser is legal (an
@@ -2682,7 +2703,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 
 	r := api.NewRouter(api.RouterConfig{
-		AgentIdentityAdmin:            agentIdentityAdminHandler,
+		AgentIdentityAdmin:            agentIdentity.Admin,
+		CredentialGrantsAdmin:         credentialGrantsAdminHandler,
+		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
 		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,
 		OnToolkitCleanupJournal:       startToolkitReconciler,

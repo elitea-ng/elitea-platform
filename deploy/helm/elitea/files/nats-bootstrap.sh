@@ -33,7 +33,12 @@
 #     stream ELITEA_RT_V1_VALIDATE   } one WorkQueue stream per route, subjects
 #     stream ELITEA_RT_V1_AGENT      } elitea.rt.v1.<route>.d.<sha256(delivery_id)>,
 #     stream ELITEA_RT_V1_INDEX      } each with its durable pull consumer
-#                                      elitea-{configuration,agent,index}-worker-v1
+#                                      elitea-{configuration,agent,index}-worker-v1;
+#                                      and the governed subjects
+#                                      elitea.rt.v1.<route>.g.<sha256> with their
+#                                      durables elitea-<...>-worker-governed-v1
+#                                      (ADR-0039, #1115: only a worker that
+#                                      verifies the security context binds them)
 #   account WORKER (the command bus consumer; it reaches RUNTIME's durables
 #                   through service imports only)
 #     KV     ELITEA_RT_V1_DEADLETTER poison commands the workers recorded (7d)
@@ -430,6 +435,7 @@ rt_stream() {
   fi
   ensure_stream "$name" file \
     --subjects "elitea.rt.v1.${route}.d.*" \
+    --subjects "elitea.rt.v1.${route}.g.*" \
     --replicas "${REPLICAS}" \
     --retention work \
     --discard new \
@@ -459,7 +465,7 @@ rt_stream() {
 # reconcile edits the rest; ensure_pull_consumer passes the same flags to
 # both, which is why the command bus has its own.
 ensure_rt_consumer() {
-  stream="$1"; durable="$2"; route="$3"
+  stream="$1"; durable="$2"; filter="$3"
   if $NATS consumer info "$stream" "$durable" >/dev/null 2>&1; then
     log "consumer ${stream}/${durable} exists — reconciling its configuration"
     $NATS consumer edit "$stream" "$durable" \
@@ -473,7 +479,7 @@ ensure_rt_consumer() {
     log "creating consumer ${stream}/${durable}"
     $NATS consumer add "$stream" "$durable" \
       --pull \
-      --filter "elitea.rt.v1.${route}.d.*" \
+      --filter "${filter}" \
       --deliver all \
       --ack explicit \
       --replay instant \
@@ -490,13 +496,19 @@ ensure_rt_consumer() {
 }
 
 bootstrap_runtime() {
-  expect 6
+  expect 9
   rt_stream ELITEA_RT_V1_VALIDATE validate "${RT_VALIDATE_MAX_MSGS}" "${RT_VALIDATE_MAX_AGE}"
   rt_stream ELITEA_RT_V1_AGENT agent "${RT_AGENT_MAX_MSGS}" "${RT_AGENT_MAX_AGE}"
   rt_stream ELITEA_RT_V1_INDEX index "${RT_INDEX_MAX_MSGS}" "${RT_INDEX_MAX_AGE}"
-  ensure_rt_consumer ELITEA_RT_V1_VALIDATE elitea-configuration-worker-v1 validate
-  ensure_rt_consumer ELITEA_RT_V1_AGENT elitea-agent-worker-v1 agent
-  ensure_rt_consumer ELITEA_RT_V1_INDEX elitea-index-worker-v1 index
+  ensure_rt_consumer ELITEA_RT_V1_VALIDATE elitea-configuration-worker-v1 "elitea.rt.v1.validate.d.*"
+  ensure_rt_consumer ELITEA_RT_V1_AGENT elitea-agent-worker-v1 "elitea.rt.v1.agent.d.*"
+  ensure_rt_consumer ELITEA_RT_V1_INDEX elitea-index-worker-v1 "elitea.rt.v1.index.d.*"
+  # The governed durables (#1115). A legacy worker never binds them, so a
+  # governed command waits for a governed worker instead of reaching one
+  # that cannot verify its security context.
+  ensure_rt_consumer ELITEA_RT_V1_VALIDATE elitea-configuration-worker-governed-v1 "elitea.rt.v1.validate.g.*"
+  ensure_rt_consumer ELITEA_RT_V1_AGENT elitea-agent-worker-governed-v1 "elitea.rt.v1.agent.g.*"
+  ensure_rt_consumer ELITEA_RT_V1_INDEX elitea-index-worker-governed-v1 "elitea.rt.v1.index.g.*"
 
   assert_asset stream ELITEA_RT_V1_VALIDATE
   assert_asset stream ELITEA_RT_V1_AGENT
@@ -504,6 +516,9 @@ bootstrap_runtime() {
   assert_asset consumer ELITEA_RT_V1_VALIDATE elitea-configuration-worker-v1
   assert_asset consumer ELITEA_RT_V1_AGENT elitea-agent-worker-v1
   assert_asset consumer ELITEA_RT_V1_INDEX elitea-index-worker-v1
+  assert_asset consumer ELITEA_RT_V1_VALIDATE elitea-configuration-worker-governed-v1
+  assert_asset consumer ELITEA_RT_V1_AGENT elitea-agent-worker-governed-v1
+  assert_asset consumer ELITEA_RT_V1_INDEX elitea-index-worker-governed-v1
 }
 
 # ── account WORKER ──────────────────────────────────────────────────────────

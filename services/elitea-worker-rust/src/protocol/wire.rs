@@ -54,6 +54,50 @@ mod merge_contract_tests {
     }
 
     #[test]
+    fn the_security_context_reference_is_a_length_delimited_command_field() {
+        // Field 65, wire type 2: tag 0x8a 0x04.
+        let scanned = scan_message(&[0x8a, 0x04, 0x00], Schema::WorkerCommand).unwrap();
+        assert!(scanned.contains(65));
+        // A varint 65 is the wrong wire type.
+        assert!(matches!(
+            scan_message(&[0x88, 0x04, 0x00], Schema::WorkerCommand),
+            Err(super::ProtocolError::InvalidInput(_))
+        ));
+        // Field 66 is still unknown.
+        assert!(matches!(
+            scan_message(&[0x92, 0x04, 0x00], Schema::WorkerCommand),
+            Err(super::ProtocolError::IncompatibleVersion(_))
+        ));
+        // The reference holds 1-3; an unknown nested field 4 is refused.
+        assert!(
+            scan_message(
+                &[0x0a, 0x00, 0x12, 0x00, 0x1a, 0x00],
+                Schema::SecurityContextReference
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            scan_message(&[0x22, 0x00], Schema::SecurityContextReference),
+            Err(super::ProtocolError::IncompatibleVersion(_))
+        ));
+    }
+
+    #[test]
+    fn the_actor_chain_is_the_only_repeated_context_field() {
+        let chain = scan_message(&[0x7a, 0x00, 0x7a, 0x00], Schema::SecurityContext).unwrap();
+        assert_eq!(chain.repeated_field(15).len(), 2);
+        assert!(matches!(
+            scan_message(&[0x0a, 0x00, 0x0a, 0x00], Schema::SecurityContext),
+            Err(super::ProtocolError::InvalidInput(_))
+        ));
+        // Field 18 is reserved, so unknown to this revision.
+        assert!(matches!(
+            scan_message(&[0x92, 0x01, 0x00], Schema::SecurityContext),
+            Err(super::ProtocolError::IncompatibleVersion(_))
+        ));
+    }
+
+    #[test]
     fn mixed_toolkit_commands_are_rejected_before_decode() {
         for raw in [
             [0xa2, 0x02, 0x00, 0x82, 0x04, 0x00],
@@ -90,16 +134,25 @@ pub(crate) enum Schema {
     IndexIngestInputBinding,
     ToolkitExecuteReadInput,
     NodeEvent,
+    /// `WorkerCommandV1.security_context_ref` (field 65, ADR-0039 #1115).
+    SecurityContextReference,
+    /// `ExecutionSecurityContextV1`, the governed context Main serves.
+    SecurityContext,
+    CallerContext,
+    ActorLink,
 }
 
 #[derive(Clone, Copy)]
 struct FieldRule {
     wire_type: u8,
     oneof: Option<u8>,
+    /// A repeated field may occur more than once; every occurrence is kept.
+    repeated: bool,
 }
 
 pub(crate) struct ScannedFields<'a> {
     values: BTreeMap<u32, (u8, &'a [u8])>,
+    repeated: BTreeMap<u32, Vec<&'a [u8]>>,
 }
 
 impl<'a> ScannedFields<'a> {
@@ -120,13 +173,19 @@ impl<'a> ScannedFields<'a> {
     }
 
     pub(crate) fn contains(&self, field_number: u32) -> bool {
-        self.values.contains_key(&field_number)
+        self.values.contains_key(&field_number) || self.repeated.contains_key(&field_number)
+    }
+
+    /// Every occurrence of a repeated length-delimited field, in wire order.
+    pub(crate) fn repeated_field(&self, field_number: u32) -> &[&'a [u8]] {
+        self.repeated.get(&field_number).map_or(&[], Vec::as_slice)
     }
 }
 
 pub(crate) fn scan_message(raw: &[u8], schema: Schema) -> Result<ScannedFields<'_>, ProtocolError> {
     let mut position = 0;
     let mut values = BTreeMap::new();
+    let mut repeated: BTreeMap<u32, Vec<&[u8]>> = BTreeMap::new();
     let mut seen_oneofs = BTreeSet::new();
     while position < raw.len() {
         let tag = read_varint(raw, &mut position)?;
@@ -146,6 +205,10 @@ pub(crate) fn scan_message(raw: &[u8], schema: Schema) -> Result<ScannedFields<'
                 "a protobuf field has the wrong wire type",
             ));
         }
+        if rule.repeated {
+            repeated.entry(field_number).or_default().push(payload);
+            continue;
+        }
         if values.contains_key(&field_number) {
             return Err(ProtocolError::InvalidInput(
                 "a singular protobuf field is duplicated",
@@ -160,7 +223,7 @@ pub(crate) fn scan_message(raw: &[u8], schema: Schema) -> Result<ScannedFields<'
         }
         values.insert(field_number, (wire_type, payload));
     }
-    Ok(ScannedFields { values })
+    Ok(ScannedFields { values, repeated })
 }
 
 fn read_payload<'a>(
@@ -249,12 +312,14 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
             _ => None,
         },
         Schema::WorkerCommand => match field {
-            1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 => Some(length()),
+            // 65 is the governed security context reference (#1115).
+            1..=3 | 5 | 8..=14 | 16..=20 | 23..=25 | 65 => Some(length()),
             4 | 6..=7 | 21..=22 => Some(varint()),
             // Preserve the complete language-neutral capability oneof.
             32..=36 | 64 => Some(FieldRule {
                 wire_type: 2,
                 oneof: Some(1),
+                repeated: false,
             }),
             _ => None,
         },
@@ -304,6 +369,29 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
             1..=13 => Some(length()),
             _ => None,
         },
+        Schema::SecurityContextReference
+        | Schema::SecurityContext
+        | Schema::CallerContext
+        | Schema::ActorLink => security_context_rule(schema, field),
+    }
+}
+
+/// The governed security context's messages (ADR-0039, #1115).
+const fn security_context_rule(schema: Schema, field: u32) -> Option<FieldRule> {
+    match (schema, field) {
+        // content_entry_id 1, digest 2 (DigestV1), schema_revision 3.
+        // ExecutionSecurityContextV1: the epochs, the tenant and the issue
+        // time are varints; the actor chain 15 is the only repeated field.
+        (Schema::SecurityContextReference, 1..=3)
+        | (Schema::CallerContext | Schema::ActorLink, 1..=2)
+        | (Schema::SecurityContext, 1..=4 | 6 | 7 | 9 | 11 | 13 | 14 | 17) => Some(length()),
+        (Schema::SecurityContext, 5 | 8 | 10 | 12 | 16) => Some(varint()),
+        (Schema::SecurityContext, 15) => Some(FieldRule {
+            wire_type: 2,
+            oneof: None,
+            repeated: true,
+        }),
+        _ => None,
     }
 }
 
@@ -311,6 +399,7 @@ const fn length() -> FieldRule {
     FieldRule {
         wire_type: 2,
         oneof: None,
+        repeated: false,
     }
 }
 
@@ -318,6 +407,7 @@ const fn varint() -> FieldRule {
     FieldRule {
         wire_type: 0,
         oneof: None,
+        repeated: false,
     }
 }
 

@@ -10,6 +10,7 @@ import (
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 )
 
 var ErrInvalidToolkitExecuteReadDispatch = errors.New("invalid direct toolkit execution dispatch")
@@ -42,6 +43,10 @@ type ToolkitExecuteReadDispatch struct {
 	Traceparent           string
 	Tracestate            string
 	RequestEntryID        string
+
+	// SecurityContext is set for a governed execution only (#1115); zero
+	// leaves WorkerCommandV1.security_context_ref unset.
+	SecurityContext securitycontext.Reference
 }
 
 func (d ToolkitExecuteReadDispatch) Validate() error {

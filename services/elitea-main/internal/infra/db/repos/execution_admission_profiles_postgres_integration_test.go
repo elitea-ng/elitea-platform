@@ -9,7 +9,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 )
 
 const integrationPolicy = `{"schema":"elitea.credential-policy.v1","allowed_identity_modes":["dedicated_agent"],"vault_required_credential_classes":[],"max_mandate_ttl_seconds":3600,"audit_backlog_alert_threshold":100}`
@@ -148,7 +151,10 @@ func TestPostgresGovernedToolRunAdmissionPins(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	legacyRepository, err := NewToolkitCallToolJobsRepository(pool, toolRunDispatchPolicy())
+	raw := []byte("durable admission envelope")
+	envelope := executionapp.PreparedCommandEnvelope{Bytes: raw, Digest: runtimedomain.SHA256(raw), SignatureProfile: 1, KeyID: "admission-key"}
+	legacyPreparer := &admissionToolkitPreparer{envelope: envelope}
+	legacyRepository, err := NewToolkitCallToolJobsRepository(pool, toolRunDispatchPolicy(), legacyPreparer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +166,8 @@ func TestPostgresGovernedToolRunAdmissionPins(t *testing.T) {
 	revision := putIntegrationRevision(t, ctx, store, "it-tool")
 	policy := toolRunDispatchPolicy()
 	policy.CredentialProfile = profile.GovernedAdmission(revision)
-	governedRepository, err := NewToolkitCallToolJobsRepository(pool, policy)
+	governedPreparer := &admissionToolkitPreparer{envelope: envelope}
+	governedRepository, err := NewToolkitCallToolJobsRepository(pool, policy, governedPreparer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,4 +176,28 @@ func TestPostgresGovernedToolRunAdmissionPins(t *testing.T) {
 		t.Fatalf("governed admission: %+v err=%v", admitted.Outcome, err)
 	}
 	assertPostgresCount(t, ctx, pool, 1, `SELECT count(*) FROM elitea_runtime.execution_admission_profiles WHERE profile = 'elitea.credential-profile.governed.v1' AND policy_revision_id = 'it-tool'`)
+
+	// #1115: the same transaction stored the security context, and the
+	// command prepared in it carries its reference (field 65); the legacy
+	// run's carries none.
+	assertPostgresCount(t, ctx, pool, 1, `SELECT count(*) FROM elitea_runtime.execution_security_contexts`)
+	var executionID string
+	var contextBytes, storedDigest []byte
+	if err := pool.QueryRow(ctx, `SELECT execution_id, context_bytes, digest FROM elitea_runtime.execution_security_contexts`).Scan(&executionID, &contextBytes, &storedDigest); err != nil {
+		t.Fatal(err)
+	}
+	if legacyPreparer.dispatch.SecurityContext != (securitycontext.Reference{}) {
+		t.Fatal("the legacy run's command carries field 65")
+	}
+	ref := governedPreparer.dispatch.SecurityContext
+	if ref.ContentID != securitycontext.ContentIDPrefix+executionID || string(ref.Digest[:]) != string(storedDigest) {
+		t.Fatalf("field 65 = %+v", ref)
+	}
+	decoded, err := securitycontext.Verify(contextBytes, ref)
+	if err != nil || decoded.GetPolicyRevisionId() != "it-tool" || decoded.GetProfile() != securitycontext.GovernedProfile {
+		t.Fatalf("stored context: %+v err=%v", decoded, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.execution_security_contexts SET schema_revision = schema_revision`); err == nil {
+		t.Fatal("a stored security context was updated")
+	}
 }

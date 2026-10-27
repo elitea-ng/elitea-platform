@@ -36,6 +36,7 @@ import (
 	v2configs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	v2contextmgr "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	v2discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/discovery"
@@ -85,6 +86,7 @@ import (
 	platformauth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/buildinfo"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/events"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
@@ -688,6 +690,15 @@ type RouterConfig struct {
 	// the credential governance flag on; nil mounts none of
 	// its routes, so they answer like any unknown path.
 	AgentIdentityAdmin *v2agentidentity.Handler
+	// CredentialGrantsAdmin serves the credential use grant admin API
+	// (ADR-0039, issue 1116). The composition root sets it only with the
+	// credential governance flag on; nil mounts none of its routes, so they
+	// answer like any unknown path.
+	CredentialGrantsAdmin *v2credentialgrants.Handler
+	// ExternalAgentIdentityAdmin serves the external agent identity admin
+	// API (ADR-0039, issue 1151). Set, like AgentIdentityAdmin, only with the
+	// credential governance flag on; nil mounts none of its routes.
+	ExternalAgentIdentityAdmin *v2agentidentity.ExternalHandler
 }
 
 type RuntimeRoutes struct {
@@ -2126,6 +2137,32 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				projectOptions = append(projectOptions, v2projects.WithProvisioner(projectProvisioner),
 					v2projects.WithDeleteBudget(cfg.ProjectDeleteBudget))
 			}
+			// Credential use grants (ADR-0039, issue 1116). Mounted only with
+			// the governance flag on. Each route resolves the caller's
+			// permissions in the {projectID} project (default mode), so a
+			// non-member is refused before the handler and the path project
+			// is the grant's tenant. No role holds the five
+			// models.credentials.governed.* permissions by default. Listing
+			// needs manage OR approve; approval (which also reactivates a
+			// suspended grant) needs approve; propose, suspend and revoke need
+			// manage. Registered before the /projects mount: a param route
+			// wins over the mount's catch-all, and other /projects paths fall
+			// through to it.
+			if cfg.CredentialGrantsAdmin != nil {
+				grants := cfg.CredentialGrantsAdmin
+				grantsManage := apimw.RequireResolvedPermissions(
+					permissionResolver, platformauth.PermissionModeDefault, credentialgrant.PermissionManage)
+				grantsApprove := apimw.RequireResolvedPermissions(
+					permissionResolver, platformauth.PermissionModeDefault, credentialgrant.PermissionApprove)
+				grantsRead := apimw.RequireResolvedPermissions(
+					permissionResolver, platformauth.PermissionModeDefault,
+					credentialgrant.PermissionManage, credentialgrant.PermissionApprove)
+				r.With(grantsRead).Get("/projects/{projectID}/credential_grants", grants.List)
+				r.With(grantsManage).Post("/projects/{projectID}/credential_grants", grants.Propose)
+				r.With(grantsApprove).Post("/projects/{projectID}/credential_grants/{id}:approve", grants.Approve)
+				r.With(grantsManage).Post("/projects/{projectID}/credential_grants/{id}:suspend", grants.Suspend)
+				r.With(grantsManage).Post("/projects/{projectID}/credential_grants/{id}:revoke", grants.Revoke)
+			}
 			r.Mount("/projects", v2projects.NewHandler(cfg.Pool, projectOptions...).Routes())
 
 			// === Admin endpoints ===
@@ -2685,6 +2722,24 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(mandatesApprove).Post("/mandates/{id}:approve", agentIdentities.ApproveMandate)
 					r.With(mandatesManage).Post("/mandates/{id}:suspend", agentIdentities.SuspendMandate)
 					r.With(mandatesManage).Post("/mandates/{id}:revoke", agentIdentities.RevokeMandate)
+				}
+
+				// External agent identities (ADR-0039, issue 1151). Mounted
+				// only with the governance flag on. Shared 0186 grants
+				// `models.agent_identity.external.manage`; every route needs it,
+				// and activation also needs the binding approval permission of
+				// shared 0181, because it makes approved bindings usable.
+				if cfg.ExternalAgentIdentityAdmin != nil {
+					externalIdentities := cfg.ExternalAgentIdentityAdmin
+					externalManage := central(v2agentidentity.PermissionExternalManage)
+					externalApprove := central(v2agentidentity.PermissionBindingsApprove)
+					r.With(externalManage).Get("/external_agent_identities", externalIdentities.ListExternalIdentities)
+					r.With(externalManage).Post("/external_agent_identities", externalIdentities.CreateExternalIdentity)
+					r.With(externalManage).Post("/external_agent_identities/{id}:provision", externalIdentities.ProvisionExternalIdentity)
+					r.With(externalManage, externalApprove).Post("/external_agent_identities/{id}:activate", externalIdentities.ActivateExternalIdentity)
+					r.With(externalManage).Post("/external_agent_identities/{id}:suspend", externalIdentities.SuspendExternalIdentity)
+					r.With(externalManage).Post("/external_agent_identities/{id}:resume", externalIdentities.ResumeExternalIdentity)
+					r.With(externalManage).Post("/external_agent_identities/{id}:retire", externalIdentities.RetireExternalIdentity)
 				}
 
 				// Regular app admin endpoints (with projectID)

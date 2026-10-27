@@ -126,7 +126,8 @@ func (k allowlistKey) String() string {
 // silence the test, without meaning it, reintroduces exactly the invisibility
 // this file guards against.
 //
-// THE ALLOWLIST IS EMPTY, AND THAT IS THE POINT.
+// THE ALLOWLIST WAS EMPTY, AND THAT WAS THE POINT. The only entries are the
+// governed credential permissions of #1116, ungranted by requirement.
 //
 // #372 added this gate and could not fix what it found: that issue asks for the
 // gate only, and forbids a change to a route gate or to a migration. The first
@@ -148,7 +149,15 @@ func (k allowlistKey) String() string {
 // route that answers 403 to every caller. The usual fix is a NEW migration in
 // migrations/shared. Remove the entry in the same change as the grant. The
 // stale-entry check below fails if you forget.
-var allowlistedGates = map[allowlistKey]string{}
+var allowlistedGates = map[allowlistKey]string{
+	// #1116 (ADR-0039 decision 8): the governed credential grant admin API is
+	// gated on two of the five models.credentials.governed.* permissions,
+	// which the issue requires no existing role to receive. The routes mount
+	// only with credential governance on, and an operator of such a
+	// deployment grants the permissions from the Roles matrix (the admin catalogue declares them, so they are grantable).
+	{mode: "default", permission: "models.credentials.governed.manage"}:  "#1116: governed grants, granted per deployment; no default role",
+	{mode: "default", permission: "models.credentials.governed.approve"}: "#1116: governed grants, granted per deployment; no default role",
+}
 
 // gate is one call site that gates a route on a permission.
 type gate struct {
