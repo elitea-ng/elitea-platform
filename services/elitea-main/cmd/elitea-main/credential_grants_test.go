@@ -69,11 +69,15 @@ func TestCredentialBrokerRefusesMissingDependenciesWithTheFlagOn(t *testing.T) {
 	}
 }
 
-// The catalogue seam is fail-closed until the adapter descriptors land.
-func TestCredentialOperationCatalogIsFailClosed(t *testing.T) {
+// The catalogue seam serves the built-in adapter descriptors: their
+// operations and material keys only, nothing else.
+func TestCredentialOperationCatalogIsTheBuiltinDescriptors(t *testing.T) {
 	catalog := credentialOperationCatalog()
-	if catalog.Known("jira.issue.read") || len(catalog.MaterialKeys("jira", "static_secret")) != 0 {
-		t.Fatal("the default operation catalogue knows an operation")
+	if !catalog.Known("jira.issue.read") || catalog.Class("jira.issue.read") != "read" {
+		t.Fatal("the catalogue does not know a built-in operation")
+	}
+	if catalog.Known("jira.admin.everything") || len(catalog.MaterialKeys("qtest", "oauth_delegated")) != 0 {
+		t.Fatal("the catalogue knows an undeclared operation or class")
 	}
 }
 

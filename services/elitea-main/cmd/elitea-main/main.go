@@ -329,6 +329,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
+	credentialProbeHandler, err := credentialProbeAdmin(credentialAdmission, pool)
+	if err != nil {
+		return err
+	}
 
 	if os.Getenv(v2secrets.MasterKeyEnvVar) != "" {
 		if err := refuseUnwrappedVaultKeys(ctx, pool); err != nil {
@@ -2719,6 +2723,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	r := api.NewRouter(api.RouterConfig{
 		AgentIdentityAdmin:            agentIdentity.Admin,
 		CredentialGrantsAdmin:         credentialGrantsAdminHandler,
+		CredentialProbe:               credentialProbeHandler,
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
 		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,

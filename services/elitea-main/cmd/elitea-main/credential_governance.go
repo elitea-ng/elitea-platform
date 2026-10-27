@@ -38,6 +38,7 @@ import (
 	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authzcompose"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialadapters"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity/governance"
@@ -339,13 +340,17 @@ func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevi
 }
 
 // credentialOperationCatalog is THE seam where the composition passes the
-// operation catalogue (#1120): the provider adapter descriptors' operations,
-// classes and material keys. Both the decider's scope gate and the
-// credential broker read this one value. Until the descriptors land it is
-// the fail-closed empty catalogue: every decision denies with
-// OPERATION_UNKNOWN and the broker releases nothing.
+// operation catalogue: the provider adapter descriptors' operations, classes
+// and material keys (#1120). Both the decider's scope gate and the credential
+// broker read this one value. It is pure data: building it reads nothing.
 func credentialOperationCatalog() credentialbroker.OperationCatalog {
-	return credentialbroker.EmptyCatalog{}
+	registry, err := credentialadapters.NewBuiltinRegistry()
+	if err != nil {
+		// The built-in descriptors are fixed at compile time and a test
+		// builds them, so this is a programming error, not a deployment one.
+		panic(fmt.Sprintf("built-in credential adapter descriptors: %v", err))
+	}
+	return registry
 }
 
 // credentialGrantGovernance builds the AND-composed operation decider and
