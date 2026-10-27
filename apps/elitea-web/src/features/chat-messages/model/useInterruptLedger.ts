@@ -26,7 +26,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
-import { useEventSource } from '@/shared/api/sse';
+import { useSharedEventSource } from '@/shared/api/sse';
 import { getConfig } from '@/shared/config';
 
 import { listLedgerInterrupts } from '../api/interruptLedgerApi';
@@ -39,6 +39,12 @@ export const LEDGER_RESOLVED_EVENT = 'agent_hitl_resolved';
 export const LEDGER_WAKE_EVENT = 'agent_fanout_wake_admitted';
 /** The project SSE stream, under `vite_server_url` (Main `router.go` `/events/prompt_lib/{projectID}`). */
 const PROJECT_EVENTS_PATH = '/events/prompt_lib';
+/**
+ * This hook's channel on the shared project stream, per conversation: the
+ * ledgers of one conversation do the same work, so a frame runs once there;
+ * another conversation's ledger gets every frame too.
+ */
+const LEDGER_CHANNEL = 'interrupt_ledger';
 
 type SetChatHistory = (update: (previous: readonly ChatMessage[]) => readonly ChatMessage[]) => void;
 
@@ -126,7 +132,10 @@ export function useInterruptLedger({
   const project = idOf(projectId);
   const streamUrl = workingKey && project && serverUrl ? `${serverUrl}${PROJECT_EVENTS_PATH}/${encodeURIComponent(project)}` : null;
 
-  useEventSource(streamUrl, {
+  // The tab's one project stream, shared with the conversation list and the
+  // handoff badges: a connection of its own would cost one more of the
+  // browser's per-host and the server's per-principal stream slots per tab.
+  useSharedEventSource(streamUrl, `${LEDGER_CHANNEL}:${conversationUuid ?? ''}`, {
     [LEDGER_RESOLVED_EVENT]: (event: MessageEvent) => {
       const data = parse(event.data);
       const response = data && ours(data);

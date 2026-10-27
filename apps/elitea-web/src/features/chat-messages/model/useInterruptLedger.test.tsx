@@ -10,6 +10,7 @@ import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { useSharedEventSource } from '@/shared/api/sse';
 import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/api/sse/testing';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { server } from '@/test/setup';
@@ -78,6 +79,16 @@ describe('useInterruptLedger', () => {
     harness(withCard());
     await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
     expect(registry.getSources()[0]?.url).toBe('/api/v2/events/prompt_lib/7');
+  });
+
+  it('rides the tab\'s one project stream: two ledgers and the conversation list share a connection', async () => {
+    installList();
+    harness(withCard());
+    harness(withCard());
+    const list = renderHook(() => useSharedEventSource('/api/v2/events/prompt_lib/7', 'conversation_activity', { conversation_activity: () => undefined }));
+    await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+    list.unmount();
+    expect(registry.getOpen()).toHaveLength(1);
   });
 
   it('drops the card another tab resolved, by conversation and response, and never reads a value', async () => {
