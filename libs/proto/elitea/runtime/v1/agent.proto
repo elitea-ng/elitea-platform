@@ -154,6 +154,10 @@ enum AgentExecutionTerminalStateV1 {
   AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_HITL = 2;
   AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_MCP_AUTH = 3;
   AGENT_EXECUTION_TERMINAL_STATE_V1_PARKED_CHILDREN = 4;
+  // A governed credential use needs the user to act (consent, MFA or a CAE
+  // claims challenge; ADR-0039, #1117). Resumes on the authorization
+  // continuation. Never emitted while the governance flag is off.
+  AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_CREDENTIAL_AUTHORIZATION = 5;
 }
 
 message AgentExecutionArtifactReferenceV1 {

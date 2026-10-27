@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package elitea.runtime.v1;
+
+import "elitea/runtime/v1/common.proto";
+
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+
+// ExecutionSecurityContextV1 is the typed security context of one governed
+// execution (ADR-0039 decision 6, issue #1115). Main builds it at admission
+// from the run's profile pin, its AgentIdentityBinding and its mandate or
+// delegation, and stores it as an immutable input bundle content entry. The
+// worker fetches it under claim and verifies its digest.
+//
+// It holds references, epochs and digests only. No field may hold a token, a
+// secret, an assertion, an email, a display name or a provider response: a
+// test in libs/proto refuses a field whose name says otherwise.
+message ExecutionSecurityContextV1 {
+  // "elitea.runtime.security-context.v1".
+  string schema_revision = 1;
+  // "elitea.credential-profile.governed.v1".
+  string profile = 2;
+  string policy_revision_id = 3;
+  DigestV1 policy_digest = 4;
+  int64 tenant_project_id = 5;
+  // The Elitea user id as a string; empty for an autonomous run.
+  string subject_principal_ref = 6;
+  string agent_binding_id = 7;
+  int64 agent_binding_epoch = 8;
+  // Empty when the run has no mandate.
+  string mandate_id = 9;
+  int64 mandate_epoch = 10;
+  // Empty when the run has no delegation.
+  string delegation_id = 11;
+  int64 delegation_epoch = 12;
+  CallerContextV1 caller = 13;
+  DigestV1 definition_digest = 14;
+  // RFC 8693 actor chain, outermost last. At most 8 links.
+  repeated ActorLinkV1 actor_chain = 15;
+  int64 issued_at_unix_millis = 16;
+  // The opaque run-scoped agent session reference (#1151). Never a
+  // credential: only the credential broker can turn it into one.
+  string agent_session_ref = 17;
+  reserved 18 to 31;
+}
+
+// CallerContextV1 names how the subject reached Elitea.
+message CallerContextV1 {
+  // An auth.AuthenticationSource value.
+  string authentication_source = 1;
+  // The native client id or API client id.
+  string calling_application_id = 2;
+  reserved 3 to 15;
+}
+
+// ActorLinkV1 is one link of an RFC 8693 actor chain.
+message ActorLinkV1 {
+  string kind = 1;
+  string ref = 2;
+  reserved 3 to 7;
+}
+
+// ExecutionSecurityContextReferenceV1 is the bounded bus reference to the
+// context entry. The digest is sha256 over the context's deterministic
+// marshal bytes.
+message ExecutionSecurityContextReferenceV1 {
+  string content_entry_id = 1;
+  DigestV1 digest = 2;
+  string schema_revision = 3;
+  reserved 4 to 15;
+}

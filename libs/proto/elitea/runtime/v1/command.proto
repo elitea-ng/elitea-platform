@@ -5,6 +5,7 @@ package elitea.runtime.v1;
 import "elitea/runtime/v1/agent.proto";
 import "elitea/runtime/v1/indexing.proto";
 import "elitea/runtime/v1/input.proto";
+import "elitea/runtime/v1/security_context.proto";
 import "elitea/runtime/v1/toolkit.proto";
 import "elitea/runtime/v1/validation.proto";
 
@@ -65,6 +66,13 @@ message WorkerCommandV1 {
     ToolkitCallToolCommandV1 toolkit_call_tool = 36;
     ToolkitExecuteReadCommandV1 toolkit_execute_read = 64;
   }
+
+  // Set only on a governed command (ADR-0039, #1115). A command with this
+  // field is published on the governed subject and claimed only by a worker
+  // that sets ClaimCommandRequestV1.governed_security_context_v1. Never set
+  // while the credential governance flag is off, so legacy bytes are
+  // unchanged.
+  ExecutionSecurityContextReferenceV1 security_context_ref = 65;
 
   reserved 15, 26 to 31;
   reserved "grant_template_id";

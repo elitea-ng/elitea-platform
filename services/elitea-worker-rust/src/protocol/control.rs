@@ -2577,6 +2577,9 @@ fn build_claim_request(
     Ok(ClaimCommandRequestV1 {
         agent_model_checkpoint_recovery: false,
         node_recovery: false,
+        // This worker does not implement the governed security context yet
+        // (ADR-0039, #1115), so it never claims a governed command.
+        governed_security_context_v1: false,
         workload_session_id: workload_session_id.to_owned(),
         producer_id: producer_id.to_owned(),
         signed_command: Some(verified.signed().clone()),
@@ -3807,6 +3810,15 @@ fn runtime_rejection(error: &RuntimeErrorV1) -> ControlSemanticError {
         }
         Some(RuntimeErrorCodeV1::IncompatibleVersion) => {
             RuntimeControlRejectionKind::IncompatibleVersion
+        }
+        // A governed command reached a worker that did not opt in: this
+        // worker cannot run it, like a capability it does not serve.
+        Some(RuntimeErrorCodeV1::GovernedWorkerRequired) => {
+            RuntimeControlRejectionKind::UnsupportedCapability
+        }
+        // The run is governed but its command lost the context: fail closed.
+        Some(RuntimeErrorCodeV1::GovernedContextMissing) => {
+            RuntimeControlRejectionKind::AuthorizationFailed
         }
         Some(RuntimeErrorCodeV1::InvalidInput | RuntimeErrorCodeV1::ProtocolViolation) => {
             RuntimeControlRejectionKind::InvalidInput
