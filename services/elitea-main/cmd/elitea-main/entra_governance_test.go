@@ -38,7 +38,7 @@ func forbiddenMasterKey(t *testing.T) func() ([]byte, error) {
 func TestEntraGovernanceIsNotBuiltWithTheFlagOff(t *testing.T) {
 	source := &entraProviderSource{t: t, forbid: true}
 	got, err := entraGovernanceAtBoot(context.Background(), profile.LegacyAdmission(false), nil, source,
-		forbiddenMasterKey(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
+		forbiddenMasterKey(t), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil || got != nil || source.calls != 0 {
 		t.Fatalf("got=%v err=%v calls=%d", got, err, source.calls)
 	}
@@ -54,13 +54,13 @@ func TestEntraGovernanceNeedsAnEntraProvider(t *testing.T) {
 		"non-entra": {t: t, provider: identityproviders.Provider{Key: "okta", OIDC: &identityproviders.OIDCDocument{}}},
 		"saml":      {t: t, provider: identityproviders.Provider{Key: "saml"}},
 	} {
-		got, err := entraGovernanceAtBoot(context.Background(), governed, nil, source, forbiddenMasterKey(t), logger)
+		got, err := entraGovernanceAtBoot(context.Background(), governed, nil, source, forbiddenMasterKey(t), nil, logger)
 		if err != nil || got != nil {
 			t.Fatalf("%s: got=%v err=%v", name, got, err)
 		}
 	}
 	_, err := entraGovernanceAtBoot(context.Background(), governed, nil,
-		&entraProviderSource{t: t, err: errors.New("database down")}, forbiddenMasterKey(t), logger)
+		&entraProviderSource{t: t, err: errors.New("database down")}, forbiddenMasterKey(t), nil, logger)
 	if err == nil {
 		t.Fatal("an unreadable provider table must refuse a governed boot")
 	}

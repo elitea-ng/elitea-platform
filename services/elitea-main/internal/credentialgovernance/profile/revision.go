@@ -65,6 +65,10 @@ type PolicyDocument struct {
 	// for that provider until a pass succeeds (#1154, gate D5). Optional: 0
 	// or absent is DefaultReconcileOutageThreshold.
 	ReconcileOutageThreshold int64 `json:"reconcile_outage_threshold,omitempty"`
+	// Cache bounds the governed credential cache (#1121). Absent: the
+	// defaults of DefaultCachePolicy, which are test values only (gate D5).
+	// Optional, so a document without it keeps its canonical bytes.
+	Cache *CachePolicy `json:"cache,omitempty"`
 }
 
 // Reconcile defaults and bounds (#1154).
@@ -92,6 +96,74 @@ func (d PolicyDocument) ReconcileOutageFailures() int {
 		return DefaultReconcileOutageThreshold
 	}
 	return int(d.ReconcileOutageThreshold)
+}
+
+// CachePolicy holds the governed credential cache parameters (gate D5).
+// Every field is optional; zero takes the default.
+type CachePolicy struct {
+	// MaxEntries bounds the entries one replica holds.
+	MaxEntries int64 `json:"max_entries,omitempty"`
+	// MaxBytes bounds the material bytes one replica holds.
+	MaxBytes int64 `json:"max_bytes,omitempty"`
+	// SkewSeconds is subtracted from an entry's not_after: an entry is never
+	// served within the skew of its expiry.
+	SkewSeconds int64 `json:"skew_seconds,omitempty"`
+	// CacheStaticSecrets lets the broker cache static secrets. Default off:
+	// a static secret is read from its store on every redemption.
+	CacheStaticSecrets bool `json:"cache_static_secrets,omitempty"`
+}
+
+// Cache parameter defaults and bounds. The defaults are test values, not a
+// customer commitment (gate D5).
+const (
+	DefaultCacheMaxEntries   = 1024
+	DefaultCacheMaxBytes     = 4 << 20
+	DefaultCacheSkew         = 30 * time.Second
+	maxCacheEntriesBound     = 1 << 20
+	maxCacheBytesBound       = 1 << 30
+	maxCacheSkewSecondsBound = 3600
+)
+
+// CacheSettings is a CachePolicy with its defaults applied.
+type CacheSettings struct {
+	MaxEntries         int
+	MaxBytes           int64
+	Skew               time.Duration
+	CacheStaticSecrets bool
+}
+
+// CacheSettings answers the document's cache parameters, defaults applied.
+func (d PolicyDocument) CacheSettings() CacheSettings {
+	out := CacheSettings{MaxEntries: DefaultCacheMaxEntries, MaxBytes: DefaultCacheMaxBytes, Skew: DefaultCacheSkew}
+	if d.Cache == nil {
+		return out
+	}
+	if d.Cache.MaxEntries > 0 {
+		out.MaxEntries = int(d.Cache.MaxEntries)
+	}
+	if d.Cache.MaxBytes > 0 {
+		out.MaxBytes = d.Cache.MaxBytes
+	}
+	if d.Cache.SkewSeconds > 0 {
+		out.Skew = time.Duration(d.Cache.SkewSeconds) * time.Second
+	}
+	out.CacheStaticSecrets = d.Cache.CacheStaticSecrets
+	return out
+}
+
+func (c *CachePolicy) validate() error {
+	if c == nil {
+		return nil
+	}
+	switch {
+	case c.MaxEntries < 0 || c.MaxEntries > maxCacheEntriesBound:
+		return fmt.Errorf("%w: cache.max_entries must be in 0..%d", ErrInvalidPolicy, maxCacheEntriesBound)
+	case c.MaxBytes < 0 || c.MaxBytes > maxCacheBytesBound:
+		return fmt.Errorf("%w: cache.max_bytes must be in 0..%d", ErrInvalidPolicy, maxCacheBytesBound)
+	case c.SkewSeconds < 0 || c.SkewSeconds > maxCacheSkewSecondsBound:
+		return fmt.Errorf("%w: cache.skew_seconds must be in 0..%d", ErrInvalidPolicy, maxCacheSkewSecondsBound)
+	}
+	return nil
 }
 
 // MaxMandateTTL is MaxMandateTTLSeconds as a duration.
@@ -144,7 +216,7 @@ func (d PolicyDocument) Validate() error {
 	if d.ReconcileOutageThreshold < 0 || d.ReconcileOutageThreshold > maxReconcileOutageThreshold {
 		return fmt.Errorf("%w: reconcile_outage_threshold must be absent or in 1..%d", ErrInvalidPolicy, maxReconcileOutageThreshold)
 	}
-	return nil
+	return d.Cache.validate()
 }
 
 func hasDuplicates[T comparable](values []T) bool {

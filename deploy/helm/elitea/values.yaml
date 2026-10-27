@@ -1153,6 +1153,9 @@ nats:
                     - "elitea.rt.v1.index.d.*"
                     - "elitea.rt.v1.index.g.*"
                     - "elitea.rt.v1.replay.wake"
+                    # The governed-credential invalidation fan-out between
+                    # main replicas (#1121): reference-only, advisory.
+                    - "elitea.rt.v1.security.invalidation"
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_VALIDATE"
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_AGENT"
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_INDEX"
@@ -1185,6 +1188,7 @@ nats:
                   allow:
                     - "_INBOX_elitea-main-runtime.>"
                     - "elitea.rt.v1.replay.wake"
+                    - "elitea.rt.v1.security.invalidation"
 
             # elitea-nats-bootstrap-runtime: creates and reconciles RUNTIME's
             # three command streams and their per-route durable pull

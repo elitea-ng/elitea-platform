@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/authzcompose"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/cache"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/epoch"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/delegationstore"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/entra/obo"
@@ -22,7 +24,8 @@ type acquired struct{ envelope *Envelope }
 // acquire reads or exchanges the material of a permitted use and keeps only
 // the catalogue's keys. Every failure is a typed denial; nothing is logged
 // but codes.
-func (b *Broker) acquire(ctx context.Context, req RedeemRequest, facts requestFacts, decision authzcompose.OperationDecision) (acquired, *Denial) {
+func (b *Broker) acquire(ctx context.Context, req RedeemRequest, facts requestFacts, decision authzcompose.OperationDecision,
+	current []epoch.SecurityEpoch) (acquired, *Denial) {
 	reference := facts.reference
 	keys := b.cfg.Catalog.MaterialKeys(reference.ProviderType, reference.Class)
 	if len(keys) == 0 {
@@ -30,20 +33,41 @@ func (b *Broker) acquire(ctx context.Context, req RedeemRequest, facts requestFa
 	}
 	now := b.now()
 	notAfter := now.Add(MaxEnvelopeTTL)
+	// A cached entry is reachable only after the epoch check of this
+	// redemption passed, and only at the epochs it read.
+	cacheable := b.cache != nil && len(current) > 0
 	switch reference.Class {
 	case credentialgrant.ClassStaticSecret:
+		cacheable = cacheable && b.revisions.staticAllowed(ctx, facts.request.Context.PolicyRevisionID)
+		var key cache.PartitionKey
+		if cacheable {
+			key = b.partitionKey(req, facts, keys)
+			if entry, ok := b.cache.Get(key, current, now); ok {
+				return acquired{envelope: fromCache(entry, KindStatic, now)}, nil
+			}
+		}
 		material, denial := b.readStatic(ctx, req, reference, decision, keys)
 		if denial != nil {
 			return acquired{}, denial
 		}
+		if cacheable {
+			b.cache.Put(key, cache.Entry{Kind: string(KindStatic), Material: material, NotAfter: now.Add(staticEntryTTL), Epochs: current})
+		}
 		return acquired{envelope: &Envelope{Kind: KindStatic, Material: material, NotAfter: notAfter}}, nil
 	case credentialgrant.ClassOAuthDelegated:
+		if len(keys) != 1 {
+			return acquired{}, &Denial{Code: CodeDenied, reason: "material_shape"}
+		}
+		var key cache.PartitionKey
+		if cacheable {
+			key = b.partitionKey(req, facts, b.oauthScopes(facts))
+			if entry, ok := b.cache.Get(key, current, now); ok {
+				return acquired{envelope: fromCache(entry, KindOAuthAccess, now)}, nil
+			}
+		}
 		token, denial := b.exchange(ctx, req, facts)
 		if denial != nil {
 			return acquired{}, denial
-		}
-		if len(keys) != 1 {
-			return acquired{}, &Denial{Code: CodeDenied, reason: "material_shape"}
 		}
 		if !token.ExpiresAt.IsZero() && token.ExpiresAt.Before(notAfter) {
 			notAfter = token.ExpiresAt
@@ -53,6 +77,11 @@ func (b *Broker) acquire(ctx context.Context, req RedeemRequest, facts requestFa
 		}
 		// A Go string cannot be zeroed; the copy below can.
 		material := map[string][]byte{keys[0]: []byte(token.Token)}
+		if cacheable && !token.ExpiresAt.IsZero() {
+			// Cached until the token's own expiry; served until that minus
+			// the skew.
+			b.cache.Put(key, cache.Entry{Kind: string(KindOAuthAccess), Material: material, NotAfter: token.ExpiresAt, Epochs: current})
+		}
 		return acquired{envelope: &Envelope{Kind: KindOAuthAccess, Material: material, NotAfter: notAfter}}, nil
 	}
 	return acquired{}, &Denial{Code: CodeClassNotSupported, reason: "class_not_supported"}
@@ -146,8 +175,7 @@ func (b *Broker) exchange(ctx context.Context, req RedeemRequest, facts requestF
 		return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "no_delegation"}
 	}
 	delegationID := facts.delegation.ID
-	resource, adapterScopes := b.cfg.Catalog.OAuthResource(facts.reference.ProviderType, facts.reference.Class)
-	scopes := exchangeScopes(facts.target, resource, adapterScopes)
+	scopes := b.oauthScopes(facts)
 	if len(scopes) == 0 {
 		return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "target_has_no_audience"}
 	}
@@ -166,6 +194,8 @@ func (b *Broker) exchange(ctx context.Context, req RedeemRequest, facts requestF
 	})
 	var challenge *obo.ErrClaimsChallenge
 	switch {
+	case breakerOpen(err):
+		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "oauth_circuit_open"}
 	case err == nil:
 		if token.Token == "" {
 			return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "oauth_empty_token"}
@@ -179,6 +209,12 @@ func (b *Broker) exchange(ctx context.Context, req RedeemRequest, facts requestF
 		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "oauth_unavailable"}
 	}
 	return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "oauth_rejected"}
+}
+
+// oauthScopes is the exchange's scope list for the redemption's target.
+func (b *Broker) oauthScopes(facts requestFacts) []string {
+	resource, adapterScopes := b.cfg.Catalog.OAuthResource(facts.reference.ProviderType, facts.reference.Class)
+	return exchangeScopes(facts.target, resource, adapterScopes)
 }
 
 // exchangeScopes is the Entra v2 scope list of an exchange. The resource is

@@ -23,6 +23,40 @@ newest entry is first.
   uses the existing `models.agent_identity.external.manage` permission.
 * New metric: `agentidentity_reconcile_errors_total{provider}`.
 
+### Revocation epochs, credential cache and invalidation (#1121)
+
+**Affects:** nobody has to act while
+`ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED` stays `false`: no epoch
+check, no cache and no NATS subscription exist, and no migration is added.
+With the flag on, the chart's NATS permission table needs the new subject;
+upgrade the chart with the release.
+
+**What changed.**
+
+* A governed run's revocation epochs (binding, mandate, delegation, and at
+  redemption also the grant, the credential reference and the external
+  identity) are re-read in one statement at `ClaimCommand`, `RenewLease` and
+  `RedeemCredential`. A stale claim is refused (`AUTHORIZATION_FAILED`), a
+  stale renewal answers desired state `CANCELLED` and cancels the run, a stale
+  redemption is denied `DENIED`. Legacy runs keep today's behaviour.
+* Each Main replica caches Entra on-behalf-of access tokens, and static
+  secrets only when the run's policy revision sets
+  `cache.cache_static_secrets`. The optional `cache` block of the policy
+  document (`max_entries`, `max_bytes`, `skew_seconds`,
+  `cache_static_secrets`) bounds it; a revision without it keeps its digest.
+* Committed epoch changes are published on the core NATS subject
+  `elitea.rt.v1.security.invalidation`. The chart grants publish and
+  subscribe on it to `elitea-main-runtime`. A deployment that keeps its own
+  NATS permission file must add the subject to that identity's publish and
+  subscribe lists; without it, invalidation falls back to the per-redemption
+  epoch re-read (correct, but a replica keeps a dead entry until it is next
+  looked up).
+* PostgreSQL or Entra unavailable denies new redemptions
+  (`BACKEND_UNAVAILABLE`); each has a circuit breaker.
+
+The operator guide (`/docs/deployment/credential-governance`, "Revocation and
+caching") lists the metrics.
+
 ## elitea-main: governed credential broker (off by default)
 
 **Affects:** nobody has to act while

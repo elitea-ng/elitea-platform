@@ -59,6 +59,9 @@ type requestFacts struct {
 	mandate    *mandate.Mandate
 	delegation *mandate.Delegation
 	actorChain []string
+	// externalIdentityID is the binding's external agent identity; empty
+	// when it has none or the binding was not read.
+	externalIdentityID string
 }
 
 // buildRequest builds the operation request from the stored context and the
@@ -113,6 +116,7 @@ func (b *Broker) buildRequest(ctx context.Context, sc *securitycontextView, req 
 			return requestFacts{}, err
 		default:
 			agent.ApplicationID, agent.ApplicationVersionID = binding.ApplicationID, binding.ApplicationVersionID
+			facts.externalIdentityID = binding.ExternalAgentIdentityID
 		}
 		toolkit, err := b.cfg.Toolkits.AgentToolkitBinding(ctx, sc.agentBindingID, inv.ToolkitID)
 		switch {

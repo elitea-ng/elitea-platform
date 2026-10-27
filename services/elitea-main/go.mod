@@ -34,6 +34,7 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/russellhaering/gosaml2 v0.12.0
 	github.com/russellhaering/goxmldsig v1.6.1
+	github.com/sony/gobreaker/v2 v2.4.0
 	github.com/stretchr/testify v1.12.1
 	github.com/tetratelabs/wazero v1.12.0
 	go.opentelemetry.io/otel v1.46.0

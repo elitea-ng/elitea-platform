@@ -378,21 +378,27 @@ func TestCommandBusIdentitiesDoTheirOwnHalfOnly(t *testing.T) {
 		{"--js-api-prefix", natsconn.WorkerRuntimeJSAPIPrefix, "stream", "info", "ELITEA_RT_V1_AGENT"},
 		{"kv", "put", "ELITEA_CANVAS_PRESENCE", "x", "y"},
 		{"pub", "elitea.rt.v1.replay.wake", "x"},
+		{"pub", "elitea.rt.v1.security.invalidation", "x"},
 	} {
 		if out, err := worker(args...).CombinedOutput(); err == nil && args[0] != "pub" {
 			t.Errorf("the worker ran `nats %s`:\n%s", strings.Join(args, " "), out)
 		}
 	}
 	s.RequireViolation(t, natsconn.IdentityWorker, "Publish", "elitea.rt.v1.replay.wake")
+	s.RequireViolation(t, natsconn.IdentityWorker, "Publish", "elitea.rt.v1.security.invalidation")
 
 	// The execution-replay wake-up is the producer's own: elitea-main's
 	// replicas publish and subscribe it, inside RUNTIME.
 	if out, err := main("pub", "elitea.rt.v1.replay.wake", "x").CombinedOutput(); err != nil {
 		t.Errorf("the producer could not publish the replay wake-up: %v\n%s", err, out)
 	}
+	// So is the governed-credential invalidation fan-out (#1121).
+	if out, err := main("pub", "elitea.rt.v1.security.invalidation", "x").CombinedOutput(); err != nil {
+		t.Errorf("the producer could not publish the security invalidation: %v\n%s", err, out)
+	}
 	for _, v := range s.Violations(natsconn.IdentityMainRuntime) {
-		if v.Subject == "elitea.rt.v1.replay.wake" {
-			t.Errorf("the producer was refused the replay wake-up: %+v", v)
+		if v.Subject == "elitea.rt.v1.replay.wake" || v.Subject == "elitea.rt.v1.security.invalidation" {
+			t.Errorf("the producer was refused its own advisory subject: %+v", v)
 		}
 	}
 

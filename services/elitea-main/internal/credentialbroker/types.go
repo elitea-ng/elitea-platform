@@ -15,7 +15,10 @@
 //  5. appends the decision to the security audit outbox in the SAME
 //     transaction as the invocation row; an append failure is a deny with no
 //     material;
-//  6. on a permit, opens (first redemption) or reuses the run-scoped agent
+//  6. on a permit, re-reads every revocation epoch the use depends on in
+//     one statement (#1121): a stale one denies authority_revoked, an
+//     unavailable database BACKEND_UNAVAILABLE, before any cache lookup or
+//     secret read; then opens (first redemption) or reuses the run-scoped agent
 //     session, then acquires the material by credential class: a static
 //     secret is read from its SecretStore at the reference's generation, an
 //     oauth_delegated credential is exchanged on behalf of the user; every
