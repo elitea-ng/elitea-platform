@@ -25,5 +25,5 @@ export { I18nProvider } from './I18nProvider';
 export { i18n } from './i18n';
 
 /** The shipped languages and switching between them (`./locales.ts`). */
-export { LOCALES, addCatalogues, applyLocale, currentLocale, registerCatalogueLoader, saveLocale, storedLocale } from './locales';
-export type { Catalogue, Locale, TranslatedLocale } from './locales';
+export { LOCALES, applyLocale, currentLocale, detectLocale, isRtl, saveLocale, startLocale } from './locales';
+export type { Locale } from './locales';

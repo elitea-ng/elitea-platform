@@ -38,7 +38,7 @@ import ListItemText from '@mui/material/ListItemText';
 import ListSubheader from '@mui/material/ListSubheader';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
-import { useColorScheme, type Theme } from '@mui/material/styles';
+import { useColorScheme, useTheme, type Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
@@ -89,9 +89,12 @@ interface ChoiceSubmenuProps<T extends string> {
   readonly testId: string;
 }
 
-/** A menu row that opens its choices beside it (click or →), the current one checked. */
+/** A menu row that opens its choices beside it (click, or the arrow toward the end side), the current one checked. */
 function ChoiceSubmenu<T extends string>({ icon, label, value, choices, onChoose, testId }: ChoiceSubmenuProps<T>): React.JSX.Element {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  // Popover positions are physical: in a right-to-left window the end side is the left.
+  const end = useTheme().direction === 'rtl' ? 'left' : 'right';
+  const start = end === 'left' ? 'right' : 'left';
   return (
     <>
       <MenuItem
@@ -100,7 +103,7 @@ function ChoiceSubmenu<T extends string>({ icon, label, value, choices, onChoose
         aria-expanded={anchor !== null}
         onClick={(event) => setAnchor(event.currentTarget)}
         onKeyDown={(event) => {
-          if (event.key === 'ArrowRight') setAnchor(event.currentTarget);
+          if (event.key === (end === 'left' ? 'ArrowLeft' : 'ArrowRight')) setAnchor(event.currentTarget);
         }}
       >
         <ListItemIcon>{icon}</ListItemIcon>
@@ -111,8 +114,8 @@ function ChoiceSubmenu<T extends string>({ icon, label, value, choices, onChoose
         anchorEl={anchor}
         open={anchor !== null}
         onClose={() => setAnchor(null)}
-        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
-        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+        anchorOrigin={{ vertical: 'top', horizontal: end }}
+        transformOrigin={{ vertical: 'top', horizontal: start }}
         slotProps={{ list: { dense: true, 'aria-label': label } }}
       >
         {choices.map((choice) => (

@@ -89,6 +89,7 @@ fn main() {
             "index_remote_models",
             "index_remove",
             "app_platform",
+            "app_menu_labels_set",
             "context_menu_show",
             "activity_cloud_run",
             "http_fetch",

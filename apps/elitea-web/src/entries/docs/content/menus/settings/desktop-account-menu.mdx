@@ -15,7 +15,7 @@ In the Elitea desktop app, the foot of the left sidebar shows who you are signed
 | **Credentials** | Opens the Credentials page. It appears only if you can see credentials. |
 | **Catalog** | Opens the Elitea Catalog. |
 | **Appearance** | Choose **System**, **Light** or **Dark**. The choice is saved to your account, so the web app follows it too. |
-| **Language** | Choose **English**, **Français (Canada)** or **Español**. The window reloads in the new language: your session, folders and threads stay, but a message you have not sent yet is lost. |
+| **Language** | Choose the app's language (see [Language](#language)). The window reloads in the new language: your session, folders and threads stay, but a message you have not sent yet is lost. |
 | **Get help** | Opens the Help Center ([Help and support](/menus/help-and-support)). |
 | **What's new** | Opens the release notes of the version you are running, on GitHub, in your browser. The version number is shown beside it. A nightly build opens the releases list at its entry. |
 | **Troubleshoot** | Opens Settings › Troubleshoot, where you can run the app's diagnostics. |
@@ -25,9 +25,30 @@ Credentials, Catalog and the Help Center used to be rows in the sidebar's **Elit
 
 ## Language
 
-The language applies to this computer only. Signing out resets it to English, so the next person to sign in on a shared computer starts in English.
+The desktop app is available in:
 
-Strings that have no translation yet are shown in English. Names of products and technical terms, such as MCP, DeepWiki or GitHub, are not translated.
+| Language | | Language | |
+|---|---|---|---|
+| English | `en` | Русский | `ru` |
+| Deutsch | `de` | Українська | `uk` |
+| Español | `es` | 日本語 | `ja` |
+| Français | `fr` | 한국어 | `ko` |
+| Français (Canada) | `fr-CA` | 简体中文 | `zh-CN` |
+| Italiano | `it` | 繁體中文 | `zh-TW` |
+| Nederlands | `nl` | العربية | `ar` |
+| Polski | `pl` | עברית | `he` |
+| Português (Brasil) | `pt-BR` | فارسی | `fa` |
+| | | اردو | `ur` |
+
+Until you choose one, the app follows your operating system's preferred languages and picks the closest one it has. For example, Canadian French opens in Français (Canada), Belgian French in Français, and Hong Kong Chinese in 繁體中文. If none of your system's languages is available, the app opens in English.
+
+Arabic, Hebrew, Persian and Urdu are written right to left. In those languages the whole window is mirrored: the sidebar is on the right, and arrows and disclosure chevrons point the other way. File names, paths, code and product names keep their own direction.
+
+The app's menu bar (File, Edit, View…) and the menu-bar icon's menu follow the same language.
+
+Your choice applies to this computer only. Signing out clears it, so the next person to sign in on a shared computer gets their system's language.
+
+Strings that have no translation yet are shown in English. Names of products and technical terms, such as MCP, DeepWiki or GitHub, are not translated. The translations are new, so if a label reads wrong, report it with the bug button.
 
 ## Report a bug
 

@@ -19,17 +19,15 @@ import Typography from '@mui/material/Typography';
 import { memo, useCallback } from 'react';
 
 import type { ProjectCloudExecutorSwitch } from '@/shared/api/generated/model';
-import { addCatalogues, t } from '@/shared/i18n';
+import { i18n, t } from '@/shared/i18n';
 import { RadioButtonGroup } from '@/shared/ui/RadioButtonGroup';
 
 import catalogue from '../i18n/en.cloudExecutorSwitch.json';
-import catalogueEs from '../i18n/es.cloudExecutorSwitch.json';
-import catalogueFrCa from '../i18n/fr-CA.cloudExecutorSwitch.json';
 
 // These strings ride with the chunk of the page that renders the switch, not
 // the initial catalogue (bundle budget; scripts/i18n-backfill.mjs,
 // ROUTE_CATALOGUES). Deep merge, no overwrite.
-addCatalogues({ en: catalogue, 'fr-CA': catalogueFrCa, es: catalogueEs });
+i18n.addResourceBundle('en', 'translation', catalogue, true, false);
 
 /** `default` follows the platform's project default; `on` / `off` are the project's own value. */
 type CloudExecutorSwitchChoice = 'default' | 'on' | 'off';

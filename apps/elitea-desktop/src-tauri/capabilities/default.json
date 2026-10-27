@@ -89,6 +89,7 @@
     "allow-index-remote-models",
     "allow-index-remove",
     "allow-app-platform",
+    "allow-app-menu-labels-set",
     "allow-context-menu-show",
     "allow-activity-cloud-run",
     "allow-http-fetch",

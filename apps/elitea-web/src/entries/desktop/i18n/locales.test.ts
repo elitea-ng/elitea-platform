@@ -1,40 +1,32 @@
 /**
- * The translated catalogues against their English sources. A translation
- * may lack a key (it falls back to English), but it may not carry a key
- * English no longer has, and every `{{placeholder}}` and `<0>` tag must
- * survive translation byte for byte — a lost placeholder renders a blank,
- * a translated one renders literally.
+ * Every translated catalogue against its English source, found the way the
+ * loader finds them (`shared/i18n/locales.ts`). A translation may lack a key
+ * (it falls back to English), but it may not carry a key English no longer
+ * has, and every `{{placeholder}}` and `<0>` tag must survive translation
+ * byte for byte — a lost placeholder renders a blank, a translated one
+ * renders literally. Plus language detection and switching.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { applyLocale, i18n, t } from '@/shared/i18n';
+import { applyLocale, detectLocale, i18n, LOCALES, t } from '@/shared/i18n';
 
-import enChatCloud from '../../../pages/chat/i18n/en.chatCloud.json';
-import esChatCloud from '../../../pages/chat/i18n/es.chatCloud.json';
-import frChatCloud from '../../../pages/chat/i18n/fr-CA.chatCloud.json';
-import enCloudSwitch from '../../../features/cloud-executor-switch/i18n/en.cloudExecutorSwitch.json';
-import esCloudSwitch from '../../../features/cloud-executor-switch/i18n/es.cloudExecutorSwitch.json';
-import frCloudSwitch from '../../../features/cloud-executor-switch/i18n/fr-CA.cloudExecutorSwitch.json';
-import enForge from '../../../features/forge-credential/i18n/en.forgeCredential.json';
-import esForge from '../../../features/forge-credential/i18n/es.forgeCredential.json';
-import frForge from '../../../features/forge-credential/i18n/fr-CA.forgeCredential.json';
-import enShared from '../../../shared/i18n/en.json';
-import esShared from '../../../shared/i18n/es.json';
-import frShared from '../../../shared/i18n/fr-CA.json';
-import enDesktop from './en.desktop.json';
-import esDesktop from './es.desktop.json';
-import frDesktop from './fr-CA.desktop.json';
 import { registerDesktopCatalogue } from './registerDesktopCatalogue';
 
 type Catalogue = Record<string, string>;
 
-const PAIRS: readonly [string, Catalogue, Catalogue, Catalogue][] = [
-  ['en.json', enShared, frShared, esShared],
-  ['en.desktop.json', enDesktop, frDesktop, esDesktop],
-  ['en.chatCloud.json', enChatCloud, frChatCloud, esChatCloud],
-  ['en.cloudExecutorSwitch.json', enCloudSwitch, frCloudSwitch, esCloudSwitch],
-  ['en.forgeCredential.json', enForge, frForge, esForge],
-];
+const FILES = import.meta.glob<Catalogue>('../../../**/i18n/*.json', { import: 'default', eager: true });
+
+function split(path: string): { dir: string; locale: string; rest: string } {
+  const dir = path.slice(0, path.lastIndexOf('/'));
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  const dot = name.indexOf('.');
+  return { dir, locale: name.slice(0, dot), rest: name.slice(dot) };
+}
+
+const TRANSLATIONS = Object.keys(FILES)
+  .map((path) => ({ path, ...split(path) }))
+  .filter(({ locale }) => locale !== 'en')
+  .map(({ path, dir, locale, rest }) => [path, locale, `${dir}/en${rest}`] as const);
 
 function tokens(value: string): string {
   return [...value.matchAll(/\{\{\s*[^}]+?\s*\}\}|<\/?[0-9a-zA-Z]+\s*\/?>/g)]
@@ -43,14 +35,43 @@ function tokens(value: string): string {
     .join('|');
 }
 
-describe.each(PAIRS)('%s translations', (_name, en, frCa, es) => {
-  it.each([
-    ['fr-CA', frCa],
-    ['es', es],
-  ] as const)('%s carries no stale key and keeps every placeholder', (_locale, translated) => {
+describe('translated catalogues', () => {
+  it('exist only for shipped languages, beside an English one', () => {
+    const shipped = new Set<string>(LOCALES.map(({ code }) => code));
+    expect(TRANSLATIONS.length).toBeGreaterThan(0);
+    for (const [path, locale, source] of TRANSLATIONS) {
+      expect(shipped.has(locale), path).toBe(true);
+      expect(FILES[source], path).toBeDefined();
+    }
+  });
+
+  it.each(TRANSLATIONS)('%s carries no stale key and keeps every placeholder', (path, _locale, source) => {
+    const en = FILES[source] ?? {};
+    const translated = FILES[path] ?? {};
     expect(Object.keys(translated).filter((key) => !Object.hasOwn(en, key))).toEqual([]);
     const broken = Object.entries(translated).filter(([key, value]) => typeof value !== 'string' || tokens(value) !== tokens(en[key] ?? ''));
     expect(broken.map(([key]) => key)).toEqual([]);
+  });
+});
+
+describe('detectLocale', () => {
+  it.each([
+    [['fr-CA'], 'fr-CA'],
+    [['fr-BE'], 'fr'],
+    [['fr'], 'fr'],
+    [['de-AT', 'en'], 'de'],
+    [['pt-PT'], 'pt-BR'],
+    [['zh-HK'], 'zh-TW'],
+    [['zh-TW'], 'zh-TW'],
+    [['zh-SG'], 'zh-CN'],
+    [['zh'], 'zh-CN'],
+    [['es-MX'], 'es'],
+    [['sw-KE', 'he-IL'], 'he'],
+    [['sw-KE'], 'en'],
+    [['not a tag', 'ja-JP'], 'ja'],
+    [[], 'en'],
+  ] as const)('%j → %s', (languages, expected) => {
+    expect(detectLocale(languages)).toBe(expected);
   });
 });
 
@@ -64,9 +85,17 @@ describe('applyLocale', () => {
     await applyLocale('fr-CA');
     expect(i18n.language).toBe('fr-CA');
     expect(document.documentElement.lang).toBe('fr-CA');
-    expect(t('desktop.account.signOut', 'Sign out')).toBe(frDesktop['desktop.account.signOut']);
-    expect(t('widgets.sidebar.nav.agents', 'Agents')).toBe(frShared['widgets.sidebar.nav.agents']);
+    expect(document.documentElement.dir).toBe('ltr');
+    expect(t('desktop.account.signOut', 'Sign out')).not.toBe('Sign out');
+    expect(t('widgets.sidebar.nav.agents', 'Agents')).not.toBe('');
     i18n.addResourceBundle('en', 'translation', { 'test.onlyInEnglish': 'Only in English' }, true, false);
     expect(t('test.onlyInEnglish', 'fallback')).toBe('Only in English');
+  });
+
+  it('turns the document right-to-left for a right-to-left language, and back', async () => {
+    await applyLocale('ar');
+    expect(document.documentElement.dir).toBe('rtl');
+    await applyLocale('en');
+    expect(document.documentElement.dir).toBe('ltr');
   });
 });

@@ -25,6 +25,7 @@ mod history;
 mod hooks;
 mod hooks_commands;
 mod index;
+mod labels;
 mod local_commands;
 mod logging;
 mod loopback;
@@ -520,6 +521,7 @@ pub fn run() {
             models::index_remote_models,
             index::index_remove,
             platform::app_platform,
+            labels::app_menu_labels_set,
             context_menu::context_menu_show,
             activity::activity_cloud_run,
             net::http_fetch,

@@ -30,16 +30,14 @@ import { listConfigurations } from '@/shared/api/generated/configurations/config
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import type { SocialAuthorProfile, WorkspaceForgeCredential } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
-import { addCatalogues, t } from '@/shared/i18n';
+import { i18n, t } from '@/shared/i18n';
 
 import catalogue from '../i18n/en.forgeCredential.json';
-import catalogueEs from '../i18n/es.forgeCredential.json';
-import catalogueFrCa from '../i18n/fr-CA.forgeCredential.json';
 
 // These strings ride with the chunk that renders the picker (the chat page's
 // notice, the desktop's cloud-thread banner), not the initial catalogue
 // (scripts/i18n-backfill.mjs, ROUTE_CATALOGUES). Deep merge, no overwrite.
-addCatalogues({ en: catalogue, 'fr-CA': catalogueFrCa, es: catalogueEs });
+i18n.addResourceBundle('en', 'translation', catalogue, true, false);
 
 /** One choice: the reference, and where it lives. */
 export interface CredentialChoice extends WorkspaceForgeCredential {
