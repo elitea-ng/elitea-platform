@@ -1045,5 +1045,6 @@
   "desktop.shell.moveFolderConfirm": "انتقال",
   "desktop.shell.moveFolderTitle": "«{{folder}}» به {{project}} منتقل شود؟",
   "desktop.shell.moveToProject": "انتقال به پروژه",
-  "desktop.shell.projects": "پروژه‌ها"
+  "desktop.shell.projects": "پروژه‌ها",
+  "desktop.shell.project": "پروژه"
 }

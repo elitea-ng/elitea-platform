@@ -1045,5 +1045,6 @@
   "desktop.shell.moveFolderConfirm": "Move",
   "desktop.shell.moveFolderTitle": "Move “{{folder}}” to {{project}}?",
   "desktop.shell.moveToProject": "Move to project",
-  "desktop.shell.projects": "Projects"
+  "desktop.shell.projects": "Projects",
+  "desktop.shell.project": "Project"
 }

@@ -189,7 +189,8 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
           </Tooltip>
         }
       />
-      <Box sx={{ paddingX: 1, paddingBottom: 0.5 }}>
+      {/* One rhythm down the sidebar: each block is a caption (12px above, 2px below) and its rows; no block adds a gap of its own. */}
+      <Box sx={{ paddingX: 1 }}>
         <ButtonBase
           onClick={() => run({ type: 'command_palette' })}
           sx={(theme: Theme) => ({
@@ -213,7 +214,8 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
           </Typography>
         </ButtonBase>
       </Box>
-      <Box sx={{ paddingX: 1, paddingBottom: 0.5 }}>
+      <Box component="section" aria-label={t('desktop.shell.project', 'Project')} sx={{ paddingX: 1 }}>
+        <SectionCaption>{t('desktop.shell.project', 'Project')}</SectionCaption>
         <ProjectSwitcher projects={props.projects} selectedProjectId={selectedProjectId} onSelectProject={props.onSelectProject} />
       </Box>
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingX: 1 }}>
@@ -229,7 +231,7 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
               )}
             </>
           )}
-          <Box component="ul" sx={{ margin: 0, padding: 0, paddingTop: 1, listStyle: 'none' }}>
+          <Box component="ul" sx={{ margin: 0, padding: 0, paddingTop: 1.5, listStyle: 'none' }}>
             {topItems
               .filter((item) => item.value !== 'chat')
               .map((item) => (
