@@ -31,6 +31,7 @@ import {
   type FanoutProgressEntry,
 } from './fanoutFrames';
 import { firstAnswerableInterrupt, type NormalizedHitlInterrupt } from './hitlInterrupts';
+import { rememberResolvedKey } from './interruptLedger';
 import { findTarget, nowIso, replaceAt, type ChatStreamContext } from './chatStreamShared';
 import type { ToolAction } from './chatStreamToolAction';
 
@@ -163,6 +164,8 @@ export function reduceFanoutFrame(
     case FanoutFrameType.InterruptPending: {
       const card = readInterruptCard(metadata?.['interrupt_card_v1']);
       if (!current || !card) return history;
+      // A restore re-announces open cards before it applies its decisions.
+      if (current.resolvedLedgerKeys?.includes(card.interrupt_key)) return history;
       return replaceAt(history, index, { ...withCards(mergeLedgerCard(cardsOf(current), cardToInterrupt(card))), isLoading: false });
     }
     case FanoutFrameType.HitlResolved: {
@@ -170,7 +173,8 @@ export function reduceFanoutFrame(
       if (!current || !resolved) return history;
       const cards = cardsOf(current);
       const next = dropLedgerCard(cards, resolved.interrupt_key);
-      return next === cards ? history : replaceAt(history, index, withCards(next));
+      const resolvedLedgerKeys = rememberResolvedKey(current.resolvedLedgerKeys, resolved.interrupt_key);
+      return replaceAt(history, index, next === cards ? { resolvedLedgerKeys } : { ...withCards(next), resolvedLedgerKeys });
     }
     case FanoutFrameType.FanoutMember: {
       const status = readMemberStatus(metadata?.['fanout_member_status_v1']);

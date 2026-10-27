@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { fanoutFixture } from '../__tests__/fanoutFixtures';
 import { cardToInterrupt, readInterruptCard } from './fanoutFrames';
-import { applyInterruptList, buildDecisionRequest, dropLedgerCardFromMessage, holdsLedgerWork, newDecisionRequestId, readInterruptList } from './interruptLedger';
+import { applyInterruptList, buildDecisionRequest, dropLedgerCardFromMessage, holdsLedgerWork, newDecisionRequestId, readInterruptList, rememberResolvedKey } from './interruptLedger';
 import type { ChatMessage } from './convertMessagesToChatHistory';
 import type { NormalizedHitlInterrupt } from './hitlInterrupts';
 
@@ -88,5 +88,14 @@ describe('applyInterruptList (fanout-interrupt-list)', () => {
     expect(holdsLedgerWork(after!)).toBe(true);
     expect(holdsLedgerWork(message([]))).toBe(false);
     expect(holdsLedgerWork(message([], { fanoutParked: true }))).toBe(true);
+  });
+
+  it('remembers a dropped key, newest last and bounded, so a re-announced card stays hidden', () => {
+    const key = listed[0]!.interrupt_key!;
+    const [after] = dropLedgerCardFromMessage([message(listed)], RESPONSE, key);
+    expect(after?.resolvedLedgerKeys).toEqual([key]);
+    expect(rememberResolvedKey([key, 'b'], key)).toEqual(['b', key]);
+    const many = Array.from({ length: 70 }, (_, index) => String(index));
+    expect(many.reduce<readonly string[]>((keys, next) => rememberResolvedKey(keys, next), [])).toHaveLength(64);
   });
 });

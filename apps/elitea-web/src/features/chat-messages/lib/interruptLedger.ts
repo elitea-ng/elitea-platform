@@ -94,6 +94,15 @@ export function applyInterruptList(
   return next;
 }
 
+/** The most resolved keys a message remembers (contract v1.1: 16 open cards per activation). */
+const MAX_RESOLVED_LEDGER_KEYS = 64;
+
+/** `keys` with `interruptKey` remembered, newest last, bounded. */
+export function rememberResolvedKey(keys: readonly string[] | undefined, interruptKey: string): readonly string[] {
+  const kept = (keys ?? []).filter((key) => key !== interruptKey);
+  return [...kept, interruptKey].slice(-MAX_RESOLVED_LEDGER_KEYS);
+}
+
 /** Drop one ledger card from one message (409 = consumed, or a resolution from another tab). */
 export function dropLedgerCardFromMessage(
   history: readonly ChatMessage[],
@@ -105,9 +114,12 @@ export function dropLedgerCardFromMessage(
   if (!message) return history;
   const existing = (message.hitlInterrupts ?? []) as readonly NormalizedHitlInterrupt[];
   const cards = existing.filter((card) => !(isLedgerInterrupt(card) && card.interrupt_key === interruptKey));
-  if (cards.length === existing.length) return history;
   const next = [...history];
-  next[index] = { ...message, hitlInterrupts: cards, hitlInterrupt: firstAnswerableInterrupt(cards) };
+  next[index] = {
+    ...message,
+    resolvedLedgerKeys: rememberResolvedKey(message.resolvedLedgerKeys, interruptKey),
+    ...(cards.length === existing.length ? {} : { hitlInterrupts: cards, hitlInterrupt: firstAnswerableInterrupt(cards) }),
+  };
   return next;
 }
 

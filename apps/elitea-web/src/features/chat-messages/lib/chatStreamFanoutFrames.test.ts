@@ -110,7 +110,14 @@ describe('agent_hitl_resolved', () => {
     const history = apply(seed(), pending(card));
     expect(cards(apply(history, resolved(fanoutFixture('fanout-interrupt-resolved-v1.cancelled'))))).toHaveLength(0);
     const other = { ...fanoutFixture('fanout-interrupt-resolved-v1'), interrupt_key: 'b'.repeat(64) };
-    expect(apply(history, resolved(other))).toBe(history);
+    expect(cards(apply(history, resolved(other)))).toEqual(cards(history));
+  });
+
+  it('never shows a resolved card again when a restoring fan-out re-announces it', () => {
+    const answered = apply(seed(), pending(card), resolved(fanoutFixture('fanout-interrupt-resolved-v1')));
+    expect(cards(answered)).toHaveLength(0);
+    expect(cards(apply(answered, pending(card)))).toHaveLength(0);
+    expect(cards(apply(answered, pending(mapCard))).map((entry) => entry.interrupt_id)).toEqual([mapCard.interrupt_id]);
   });
 });
 
