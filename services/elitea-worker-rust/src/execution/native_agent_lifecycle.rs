@@ -1000,6 +1000,8 @@ where
 }
 
 const MAX_PENDING_PAUSE_CARDS: usize = 16;
+/// The park terminal's metadata key (contract fanout-interrupt-decisions v1.1).
+const FANOUT_PARKED_KEY: &str = "fanout_parked_v1";
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum AgentPauseAggregationError {
@@ -1032,6 +1034,10 @@ pub(super) struct AgentPauseAccumulator {
     hitl_interrupts: Vec<Value>,
     authorization_event: Option<NodeEventV1>,
     authorization_requests: Vec<Value>,
+    /// A fixed Parallel's park terminal (`fanout_parked_v1`): its cards went
+    /// out one by one through the ledger, so it is the run's sole pause and
+    /// never combines with a legacy card (one pause authority).
+    fanout_parked: Option<NodeEventV1>,
 }
 
 impl AgentPauseAccumulator {
@@ -1054,6 +1060,21 @@ impl AgentPauseAccumulator {
 
     fn observe_hitl(&mut self, event: &NodeEventV1) -> Result<(), AgentPauseAggregationError> {
         let metadata = pause_metadata(event)?;
+        if metadata.contains_key(FANOUT_PARKED_KEY) {
+            if self.fanout_parked.is_some()
+                || self.hitl_event.is_some()
+                || self.authorization_event.is_some()
+                || metadata.contains_key("hitl_interrupts")
+                || metadata.contains_key("hitl_interrupt")
+            {
+                return Err(AgentPauseAggregationError::InvalidState);
+            }
+            self.fanout_parked = Some(event.clone());
+            return Ok(());
+        }
+        if self.fanout_parked.is_some() {
+            return Err(AgentPauseAggregationError::InvalidState);
+        }
         let interrupts = metadata
             .get("hitl_interrupts")
             .and_then(Value::as_array)
@@ -1087,6 +1108,9 @@ impl AgentPauseAccumulator {
         if request.remove("authorization_requests").is_some() {
             return Err(AgentPauseAggregationError::InvalidState);
         }
+        if self.fanout_parked.is_some() {
+            return Err(AgentPauseAggregationError::InvalidState);
+        }
         let identity =
             authorization_identity(&request).ok_or(AgentPauseAggregationError::InvalidState)?;
         if self.authorization_requests.iter().any(|pending| {
@@ -1113,6 +1137,13 @@ impl AgentPauseAccumulator {
     }
 
     pub(super) fn finish(&mut self) -> Result<AggregatedAgentPause, AgentPauseAggregationError> {
+        if let Some(event) = self.fanout_parked.take() {
+            // Exactly as projected: Main reads `fanout_parked_v1` strictly.
+            return Ok(AggregatedAgentPause {
+                event,
+                selection: FreshAgentTerminalSelection::PausedHitl,
+            });
+        }
         match (
             self.hitl_interrupts.is_empty(),
             self.authorization_requests.is_empty(),
