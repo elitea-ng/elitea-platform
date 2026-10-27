@@ -67,6 +67,12 @@ describe('AccountMenu', () => {
     expect(run).toHaveBeenCalledWith({ type: 'go', to: '/elitea-catalog' });
   });
 
+  it('names an account that has only an email by its email', async () => {
+    server.use(http.get('*/social/author', () => HttpResponse.json({ id: 4, name: null, email: 'sso@example.com' })));
+    mount();
+    await waitFor(() => expect(screen.getByTestId('shell-account')).toHaveTextContent('sso@example.com'));
+  });
+
   it('saves a new language and reloads to apply it', async () => {
     const user = userEvent.setup();
     const { reload } = mount();

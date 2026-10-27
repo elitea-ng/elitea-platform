@@ -43,11 +43,14 @@ export function bugReportUrl({ version, userAgent, locale }: BugReportContext): 
 
 /**
  * The running release's notes. Released builds are stamped with the release
- * version (`publish.yml`, `desktop` job), whose tag is `v<version>`; a local
- * build keeps the committed `0.x` placeholder, which names no release, so it
- * gets the list of releases.
+ * version (`publish.yml`, `desktop` job), whose tag is `v<version>`. A stable
+ * release links to its tag. A pre-release (nightly, dev) links to the
+ * releases list at its entry's anchor: `publish.yml`'s `prune` job deletes old
+ * pre-releases, and a pruned one then still lands on the list, not a 404. A
+ * local build keeps the committed `0.x` placeholder, which names no release.
  */
 export function whatsNewUrl(version: string | undefined): string {
-  if (version === undefined || !/^[1-9]\d*\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) return `${REPOSITORY}/releases`;
-  return `${REPOSITORY}/releases/tag/v${version}`;
+  const match = version === undefined ? null : /^[1-9]\d*\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.exec(version);
+  if (match === null) return `${REPOSITORY}/releases`;
+  return match[1] === undefined ? `${REPOSITORY}/releases/tag/v${version}` : `${REPOSITORY}/releases#release-v${version}`;
 }

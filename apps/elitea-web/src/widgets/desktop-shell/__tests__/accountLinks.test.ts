@@ -22,9 +22,12 @@ describe('bugReportUrl', () => {
 });
 
 describe('whatsNewUrl', () => {
-  it('opens the running release by its tag', () => {
-    expect(whatsNewUrl('7.3.0-nightly.20261027.509')).toBe('https://github.com/elitea-ng/elitea-platform/releases/tag/v7.3.0-nightly.20261027.509');
+  it('opens a stable release by its tag', () => {
     expect(whatsNewUrl('7.2.0')).toBe('https://github.com/elitea-ng/elitea-platform/releases/tag/v7.2.0');
+  });
+
+  it('opens a pre-release at its anchor on the list, which survives the prune', () => {
+    expect(whatsNewUrl('7.3.0-nightly.20261027.509')).toBe('https://github.com/elitea-ng/elitea-platform/releases#release-v7.3.0-nightly.20261027.509');
   });
 
   it('lists the releases for a local build or no version', () => {

@@ -35,6 +35,7 @@ import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
+import ListSubheader from '@mui/material/ListSubheader';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import { useColorScheme, type Theme } from '@mui/material/styles';
@@ -141,6 +142,8 @@ export interface AccountMenuProps {
   /** The Elitea items this person can open that live in this menu (`ACCOUNT_MENU_ITEMS`). */
   readonly items: readonly EliteaItem[];
   readonly run: (action: ShellAction) => void;
+  /** The page on screen is one the menu leads to. */
+  readonly selected?: boolean;
   /** Applies a new language (tests pass a spy). */
   readonly reload?: () => void;
 }
@@ -150,12 +153,15 @@ interface AccountButtonProps {
   readonly tenant: string | undefined;
   readonly label: string;
   readonly expanded: boolean;
+  /** On a page the menu leads to (Settings, Credentials, …): the sidebar's "you are here". */
+  readonly selected: boolean;
   readonly onOpen: (anchor: HTMLElement) => void;
 }
 
 /** "avatar · name · tenant ⌄": the person, the deployment they are connected to, and the menu's disclosure. */
-function AccountButton({ author, tenant, label, expanded, onOpen }: AccountButtonProps): React.JSX.Element {
-  const name = author.name ?? '';
+function AccountButton({ author, tenant, label, expanded, selected, onOpen }: AccountButtonProps): React.JSX.Element {
+  // An SSO account may carry only an email.
+  const name = author.name || author.email || '';
   return (
     <ButtonBase
       data-testid="shell-account"
@@ -172,6 +178,7 @@ function AccountButton({ author, tenant, label, expanded, onOpen }: AccountButto
         paddingY: 0.75,
         borderRadius: theme.vars.shape.radiusSm,
         color: theme.vars.palette.text.secondary,
+        background: selected ? theme.vars.palette.background.button.drawerMenu.selected : 'transparent',
         '&:hover': { background: theme.vars.palette.background.button.drawerMenu.hover },
       })}
     >
@@ -199,7 +206,7 @@ function reloadPage(): void {
   window.location.reload();
 }
 
-export function AccountMenu({ items, run, reload = reloadPage }: AccountMenuProps): React.JSX.Element {
+export function AccountMenu({ items, run, selected = false, reload = reloadPage }: AccountMenuProps): React.JSX.Element {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const { data } = useGetCurrentAuthor();
   const author = (data?.data ?? {}) as CurrentAuthor;
@@ -235,7 +242,7 @@ export function AccountMenu({ items, run, reload = reloadPage }: AccountMenuProp
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-      <AccountButton author={author} tenant={tenant} label={menuLabel} expanded={anchor !== null} onOpen={setAnchor} />
+      <AccountButton author={author} tenant={tenant} label={menuLabel} expanded={anchor !== null} selected={selected} onOpen={setAnchor} />
       <Tooltip title={bugLabel}>
         <IconButton size="small" aria-label={bugLabel} data-testid="shell-report-bug" onClick={reportBug}>
           <BugReportOutlinedIcon fontSize="inherit" />
@@ -250,14 +257,13 @@ export function AccountMenu({ items, run, reload = reloadPage }: AccountMenuProp
         slotProps={{ list: { dense: true, 'aria-label': menuLabel }, paper: { sx: { minWidth: '15rem' } } }}
       >
         {author.email !== undefined && author.email !== '' && (
-          <Typography
-            variant="bodySmall"
-            component="li"
-            noWrap
-            sx={(theme: Theme) => ({ paddingX: 2, paddingY: 0.75, color: theme.vars.palette.text.metrics, listStyle: 'none' })}
+          // A subheader, not an item: the menu's keyboard focus skips it (`muiSkipListHighlight`).
+          <ListSubheader
+            disableSticky
+            sx={(theme: Theme) => ({ lineHeight: 2, background: 'transparent', color: theme.vars.palette.text.metrics, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' })}
           >
             {author.email}
-          </Typography>
+          </ListSubheader>
         )}
         <MenuItem onClick={() => go('/settings')}>
           <ListItemIcon>

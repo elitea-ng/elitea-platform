@@ -1,9 +1,12 @@
 /**
  * The languages the app ships, and switching between them.
  *
- * `en` is bundled (`./i18n.ts`). Every other language is a lazily loaded
- * catalogue per `en` catalogue (`fr-CA.json` beside `en.json`, …), so a
- * person who never leaves English downloads none of them. A key a translation
+ * `en` is bundled (`./i18n.ts`). The other languages of the two large
+ * catalogues (shared, desktop) load lazily (`fr-CA.json` beside `en.json`, …),
+ * so a person who never leaves English downloads none of them. The small
+ * route catalogues register every language with their chunk
+ * (`addCatalogues`), a few KB, so a lazily loaded module never renders
+ * English in a translated window. A key a translation
  * lacks resolves to its English value (`fallbackLng`), never to the bare key.
  *
  * The choice is a per-device preference (`el.lang`, `shared/lib/storage.ts`).

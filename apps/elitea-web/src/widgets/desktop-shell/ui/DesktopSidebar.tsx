@@ -295,7 +295,11 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
         </Box>
       </Box>
       <Box sx={(theme: Theme) => ({ paddingX: 1, paddingY: 0.5, borderTop: `1px solid ${theme.vars.palette.divider}` })}>
-        <AccountMenu items={items.filter((item) => ACCOUNT_MENU_ITEMS.has(item.value))} run={run} />
+        <AccountMenu
+          items={items.filter((item) => ACCOUNT_MENU_ITEMS.has(item.value))}
+          run={run}
+          selected={location.pathname.startsWith('/settings') || ACCOUNT_MENU_ITEMS.has(selectedEliteaItem(location.pathname, items) ?? 'chat')}
+        />
       </Box>
     </Box>
   );
