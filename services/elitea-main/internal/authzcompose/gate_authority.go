@@ -67,7 +67,7 @@ func (g *AuthorityGate) Evaluate(ctx context.Context, r OperationRequest) (GateR
 }
 
 func (g *AuthorityGate) mandate(ctx context.Context, r OperationRequest) (GateResult, error) {
-	m, err := g.mandates.Get(ctx, r.Authority.ID)
+	m, err := snapshotMandate(ctx, g.mandates, r.Authority.ID)
 	if errors.Is(err, mandate.ErrMandateNotFound) {
 		return GateResult{Reasons: []ReasonCode{ReasonAuthorityNotActive}}, nil
 	}

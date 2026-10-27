@@ -295,6 +295,7 @@ func (d *Decider) Decide(ctx context.Context, r OperationRequest) OperationDecis
 	}
 	allPermit := true
 	gateError := false
+	ctx = withDecisionSnapshot(ctx)
 	for _, gate := range d.gates {
 		result, err := evaluate(ctx, gate, r)
 		if err != nil {

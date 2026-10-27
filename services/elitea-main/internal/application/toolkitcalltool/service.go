@@ -491,6 +491,7 @@ func (s *RunService) runTool(ctx context.Context, request RunRequest, exactRevis
 			SettingsEntryID:        admitted.Binding.SettingsEntryID,
 			ArgumentsEntryID:       admitted.Binding.ArgumentsEntryID,
 			AttributionExecutionID: request.AttributionExecutionID,
+			SecurityContext:        admitted.Outcome.SecurityContext,
 		}); err != nil {
 			return RunOutcome{}, fmt.Errorf("dispatch tool run: %w", err)
 		}

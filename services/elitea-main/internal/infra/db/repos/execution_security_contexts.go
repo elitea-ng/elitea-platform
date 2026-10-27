@@ -123,8 +123,9 @@ INSERT INTO elitea_runtime.execution_security_contexts (
 	return reference, nil
 }
 
-// bindActiveAgentIdentity names the agent version's active binding in the
-// context. Exactly one active binding binds the run. None, or more than one
+// bindActiveAgentIdentity names the agent version's usable binding in the
+// context: active, with an active external agent identity
+// (agentidentity.UsableBinding). Exactly one usable binding binds the run. None, or more than one
 // (two definition digests of one version), leaves the binding empty: the
 // context records that no binding was proven, and the decision (#1116)
 // denies every governed credential use of the run.
@@ -136,10 +137,13 @@ func bindActiveAgentIdentity(ctx context.Context, rows rowFunc, built *securityc
 		matches int
 	)
 	err := rows(ctx, `
-SELECT id::text, revocation_epoch, definition_digest, count(*) OVER ()
-FROM elitea_identity.agent_identity_bindings
-WHERE tenant_project_id = $1 AND application_version_id = $2 AND state = 'active'
-ORDER BY id
+SELECT b.id::text, b.revocation_epoch, b.definition_digest, count(*) OVER ()
+FROM elitea_identity.agent_identity_bindings AS b
+JOIN elitea_identity.external_agent_identities AS e
+  ON e.id = b.external_agent_identity_id AND e.tenant_project_id = b.tenant_project_id
+WHERE b.tenant_project_id = $1 AND b.application_version_id = $2 AND b.state = 'active'
+  AND e.state = 'active'
+ORDER BY b.id
 LIMIT 1`, facts.tenantProjectID, facts.applicationVersionID).Scan(&id, &epoch, &digest, &matches)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil

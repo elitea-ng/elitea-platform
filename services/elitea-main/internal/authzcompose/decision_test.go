@@ -33,6 +33,23 @@ func requireDeny(t *testing.T, d OperationDecision, gate string, reason ReasonCo
 	}
 }
 
+// One decision reads its grant once: every gate judges the same row, and a
+// decision costs one grant read however many gates look at it.
+func TestDecideReadsTheGrantOncePerDecision(t *testing.T) {
+	w := newWorld()
+	decider := w.decider(t)
+	if d := decider.Decide(context.Background(), permitRequest()); !d.Permitted() {
+		t.Fatalf("decision = %s %v", d.Effect, d.Reasons)
+	}
+	if w.grants.reads != 1 {
+		t.Fatalf("grant reads = %d, want 1", w.grants.reads)
+	}
+	decider.Decide(context.Background(), permitRequest())
+	if w.grants.reads != 2 {
+		t.Fatalf("a second decision reused the first one's grant: reads = %d", w.grants.reads)
+	}
+}
+
 func TestDecideAllGatesPermitIsAPermit(t *testing.T) {
 	w := newWorld()
 	d := w.decider(t).Decide(context.Background(), permitRequest())

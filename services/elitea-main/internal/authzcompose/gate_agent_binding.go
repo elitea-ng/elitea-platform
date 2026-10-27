@@ -8,9 +8,11 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 )
 
-// BindingGetter is the part of agentidentity.BindingReader this gate reads.
+// BindingGetter reads a binding as usable for a governed decision: a binding
+// whose external agent identity is not active reads as suspended
+// (repos.AgentIdentityBindings.GetUsable).
 type BindingGetter interface {
-	Get(ctx context.Context, id string) (agentidentity.AgentIdentityBinding, error)
+	GetUsable(ctx context.Context, id string) (agentidentity.AgentIdentityBinding, error)
 }
 
 // AgentBindingGate is check 3: the AgentIdentityBinding is active, in the
@@ -39,7 +41,7 @@ func (g *AgentBindingGate) Evaluate(ctx context.Context, r OperationRequest) (Ga
 	if r.Agent.BindingID == "" {
 		return GateResult{Reasons: []ReasonCode{ReasonAgentMissing}}, nil
 	}
-	binding, err := g.bindings.Get(ctx, r.Agent.BindingID)
+	binding, err := g.bindings.GetUsable(ctx, r.Agent.BindingID)
 	if errors.Is(err, agentidentity.ErrBindingNotFound) {
 		return GateResult{Reasons: []ReasonCode{ReasonBindingNotActive}}, nil
 	}

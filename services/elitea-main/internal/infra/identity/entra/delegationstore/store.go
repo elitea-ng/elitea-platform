@@ -39,6 +39,10 @@ var (
 	// ErrDelegationNotUsable is a revoked, suspended, expired or wiped
 	// delegation.
 	ErrDelegationNotUsable = errors.New("delegationstore: delegation not usable")
+
+	// ErrBindingNotActive refuses a delegation for an agent binding that is
+	// not active in the delegation's tenant project.
+	ErrBindingNotActive = errors.New("delegationstore: agent binding is not active in the tenant project")
 )
 
 // Store is the PostgreSQL custody store.
@@ -162,12 +166,26 @@ func (s *Store) Delegate(ctx context.Context, r DelegateRequest) (Delegation, er
 	}
 	var delegation Delegation
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		// The binding must be live in this tenant project, held for the
+		// transaction so a concurrent revocation orders after this row.
+		var bindingActive bool
+		err := tx.QueryRow(ctx, `
+SELECT state = 'active'
+FROM elitea_identity.agent_identity_bindings
+WHERE id = $1::uuid AND tenant_project_id = $2
+FOR SHARE`, r.AgentBindingID, r.TenantProjectID).Scan(&bindingActive)
+		if errors.Is(err, pgx.ErrNoRows) || (err == nil && !bindingActive) {
+			return ErrBindingNotActive
+		}
+		if err != nil {
+			return fmt.Errorf("delegationstore: read the agent binding: %w", err)
+		}
 		var (
 			assertionID, issuer, tid, oid string
 			ciphertext                    []byte
 			expires, consented            time.Time
 		)
-		err := tx.QueryRow(ctx, `
+		err = tx.QueryRow(ctx, `
 SELECT id::text, issuer, tenant_id, subject_object_id, assertion_ciphertext, assertion_expires_at, created_at
 FROM elitea_identity.signin_assertions
 WHERE browser_session_digest = $1 AND user_id = $2 AND audience = $3

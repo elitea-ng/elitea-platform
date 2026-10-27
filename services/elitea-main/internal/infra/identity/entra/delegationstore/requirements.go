@@ -121,7 +121,37 @@ func (s *Store) ResolveRequirement(ctx context.Context, reference string, tenant
 			return err
 		}
 		if r.Resolved {
+			// The same answer again is a retry of a resume whose
+			// continuation failed after this commit: hand back the
+			// resolution so the run can still continue. Another delegation
+			// is a second answer, refused.
+			if r.ResolvedDelegationID == delegationID {
+				resolved = r
+				return nil
+			}
 			return ErrRequirementResolved
+		}
+		// The answer must be a live re-consent of the same user for the same
+		// agent binding and project as the delegation that paused the run.
+		var matches bool
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM elitea_identity.delegations AS answer
+    JOIN elitea_identity.delegations AS paused ON paused.id = $2::uuid
+    WHERE answer.id = $1::uuid
+      AND answer.state = 'active'
+      AND answer.expires_at > clock_timestamp()
+      AND answer.tenant_project_id = paused.tenant_project_id
+      AND answer.agent_binding_id = paused.agent_binding_id
+      AND answer.tenant_id = paused.tenant_id
+      AND answer.subject_object_id = paused.subject_object_id
+      AND answer.tenant_project_id = $3
+)`, delegationID, r.DelegationID, r.TenantProjectID).Scan(&matches); err != nil {
+			return fmt.Errorf("delegationstore: check the resolving delegation: %w", err)
+		}
+		if !matches {
+			return ErrInvalid
 		}
 		if _, err := tx.Exec(ctx, `
 UPDATE elitea_identity.credential_authorization_requirements

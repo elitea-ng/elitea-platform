@@ -224,9 +224,11 @@ spec:
             # governed command on the `.g.` subject lane only, which only the
             # governed durables pull. The worker binds them, claims with the
             # governed opt-in and verifies each command's security context
-            # exactly when Main governs, so the two cannot disagree.
+            # when Main governs. worker.governedContext overrides it, so the
+            # worker can keep serving governed continuations after the flag
+            # is turned off, until the pinned runs drain.
             - name: ELITEA_WORKER_GOVERNED_CONTEXT
-              value: {{ get (.Values.main.env | default dict) "ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED" | default "false" | toString | quote }}
+              value: {{ .Values.worker.governedContext | default (get (.Values.main.env | default dict) "ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED") | default "false" | toString | quote }}
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
           volumeMounts:

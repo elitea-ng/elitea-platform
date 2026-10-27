@@ -257,10 +257,25 @@ func (s *ExternalIdentityService) Resume(ctx context.Context, id, actor string) 
 	if err != nil {
 		return identity.ExternalAgentIdentity{}, err
 	}
+	// Resume returns the record to active, so it needs an approved binding
+	// exactly as Activate does: before the provider call, and again inside
+	// the write's transaction.
+	count, err := s.store.ActiveBindingCount(ctx, current.TenantProjectID, current.ID)
+	if err != nil {
+		return identity.ExternalAgentIdentity{}, err
+	}
+	if count == 0 {
+		return identity.ExternalAgentIdentity{}, identity.ErrNoApprovedBinding
+	}
 	if err := p.Resume(ctx, current.Ref); err != nil {
 		return identity.ExternalAgentIdentity{}, fmt.Errorf("%w: resume", ErrProviderCall)
 	}
-	return s.guarded(ctx, current, identity.ExternalActionResume, actor, identity.ExternalRef{}, "", nil)
+	return s.guarded(ctx, current, identity.ExternalActionResume, actor, identity.ExternalRef{}, "", func(activeBindings int) error {
+		if activeBindings == 0 {
+			return identity.ErrNoApprovedBinding
+		}
+		return nil
+	})
 }
 
 // Retire moves the record to retiring, revokes the provider object and

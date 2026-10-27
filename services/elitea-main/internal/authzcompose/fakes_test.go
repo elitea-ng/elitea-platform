@@ -72,7 +72,7 @@ type fakeBindings struct {
 	err     error
 }
 
-func (f *fakeBindings) Get(_ context.Context, id string) (agentidentity.AgentIdentityBinding, error) {
+func (f *fakeBindings) GetUsable(_ context.Context, id string) (agentidentity.AgentIdentityBinding, error) {
 	if f.err != nil {
 		return agentidentity.AgentIdentityBinding{}, f.err
 	}
@@ -100,9 +100,11 @@ func (f *fakeToolkits) AgentToolkitBinding(_ context.Context, bindingID string, 
 type fakeGrants struct {
 	grants []credentialgrant.CredentialUseGrant
 	err    error
+	reads  int
 }
 
 func (f *fakeGrants) GrantForKey(_ context.Context, key credentialgrant.GrantKey) (credentialgrant.CredentialUseGrant, error) {
+	f.reads++
 	if f.err != nil {
 		return credentialgrant.CredentialUseGrant{}, f.err
 	}

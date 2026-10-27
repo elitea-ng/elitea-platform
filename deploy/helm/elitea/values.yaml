@@ -6546,6 +6546,12 @@ worker:
   # than falling back to a default.
   logLevel: info
   traceLevel: info
+  # ELITEA_WORKER_GOVERNED_CONTEXT (ADR-0039 #1115). Empty follows
+  # main.env.ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED. Set "true" to keep
+  # the worker on the governed lane after the flag is turned off, until the
+  # runs already pinned governed have drained (Main still publishes their
+  # continuations on the governed subjects). "false" forces it off.
+  governedContext: ""
 
   # Scale-out is now CORRECT, and this stays at 1 because correct is not the
   # same as needed.

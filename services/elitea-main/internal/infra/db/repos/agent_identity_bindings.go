@@ -173,6 +173,34 @@ SELECT `+agentIdentityBindingSelectColumnList+`
 FROM elitea_identity.agent_identity_bindings WHERE id = $1::uuid`, id))
 }
 
+// GetUsable reads one binding as a governed decision must see it: a
+// binding whose external identity is missing or not active answers with
+// State BindingSuspended, as in ActiveForDefinition. Get stays the stored
+// state, which the lifecycle transitions need.
+func (s *AgentIdentityBindings) GetUsable(ctx context.Context, id string) (agentidentity.AgentIdentityBinding, error) {
+	if err := s.ready(); err != nil {
+		return agentidentity.AgentIdentityBinding{}, err
+	}
+	if !agentIdentityIsUUID(id) {
+		return agentidentity.AgentIdentityBinding{}, agentidentity.ErrBindingNotFound
+	}
+	var externalState string
+	row := s.pool.QueryRow(ctx, `
+SELECT `+agentIdentityBindingSelectColumnList+`,
+       COALESCE((SELECT e.state FROM elitea_identity.external_agent_identities AS e
+                 WHERE e.id = b.external_agent_identity_id AND e.tenant_project_id = b.tenant_project_id), '')
+FROM elitea_identity.agent_identity_bindings AS b
+WHERE id = $1::uuid`, id)
+	b, err := scanAgentIdentityBinding(scanTail{row: row, tail: &externalState})
+	if err != nil {
+		return agentidentity.AgentIdentityBinding{}, err
+	}
+	if !agentidentity.UsableBinding(b, agentidentity.ExternalIdentityState(externalState)) {
+		b.State = agentidentity.BindingSuspended
+	}
+	return b, nil
+}
+
 // ActiveForDefinition reads the active binding of one agent version. A
 // binding whose external identity is missing or not active answers with
 // State BindingSuspended (agentidentity.BindingReader, #1151).

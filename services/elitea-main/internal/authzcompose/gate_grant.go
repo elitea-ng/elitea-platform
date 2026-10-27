@@ -44,7 +44,7 @@ func grantKey(r OperationRequest) credentialgrant.GrantKey {
 
 // Evaluate implements Gate.
 func (g *GrantGate) Evaluate(ctx context.Context, r OperationRequest) (GateResult, error) {
-	grant, err := g.grants.GrantForKey(ctx, grantKey(r))
+	grant, err := snapshotGrant(ctx, g.grants, grantKey(r))
 	if errors.Is(err, credentialgrant.ErrGrantNotFound) {
 		return GateResult{Reasons: []ReasonCode{ReasonGrantMissing}}, nil
 	}

@@ -293,11 +293,12 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 	}
 	committed = true
 	return executionapp.AdmissionOutcome{
-		ExecutionID: admission.Record.Job.ID,
-		CommandID:   admission.Record.Job.CommandID,
-		Created:     true,
-		AdmittedAt:  timing.AdmittedAt,
-		Deadline:    timing.Deadline,
+		ExecutionID:     admission.Record.Job.ID,
+		CommandID:       admission.Record.Job.CommandID,
+		Created:         true,
+		AdmittedAt:      timing.AdmittedAt,
+		Deadline:        timing.Deadline,
+		SecurityContext: securityContext,
 	}, nil
 }
 

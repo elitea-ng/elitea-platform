@@ -43,7 +43,7 @@ func (g *ScopeGate) Evaluate(ctx context.Context, r OperationRequest) (GateResul
 	if !op.WellFormed() || !g.registry.Known(op) {
 		return GateResult{Reasons: []ReasonCode{ReasonOperationUnknown}}, nil
 	}
-	grant, err := g.grants.GrantForKey(ctx, grantKey(r))
+	grant, err := snapshotGrant(ctx, g.grants, grantKey(r))
 	if errors.Is(err, credentialgrant.ErrGrantNotFound) {
 		return GateResult{Reasons: []ReasonCode{ReasonGrantMissing}}, nil
 	}
@@ -59,7 +59,7 @@ func (g *ScopeGate) Evaluate(ctx context.Context, r OperationRequest) (GateResul
 	}
 	switch r.Authority.Kind {
 	case AuthorityMandate:
-		m, err := g.mandates.Get(ctx, r.Authority.ID)
+		m, err := snapshotMandate(ctx, g.mandates, r.Authority.ID)
 		if errors.Is(err, mandate.ErrMandateNotFound) {
 			reasons = append(reasons, ReasonAuthorityNotActive)
 			break

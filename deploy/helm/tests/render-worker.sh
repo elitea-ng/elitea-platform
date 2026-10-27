@@ -129,6 +129,21 @@ env = {e["name"]: e.get("value") for e in c["env"]}
 assert env["ELITEA_WORKER_GOVERNED_CONTEXT"] == "true", env
 PY
 
+echo "== worker.governedContext keeps the governed lane while pinned runs drain =="
+"$HELM" template t "$CHART" "${RENDER[@]}" \
+  --set-string worker.governedContext=true \
+  >"$TMP/drain.yaml" 2>"$TMP/drain.err" || true
+python3 - "$TMP/drain.yaml" <<'PY' && ok "flag off, governedContext=true: the worker stays on the governed lane" || bad "drain worker env: $(tail -1 "$TMP/drain.err")"
+import sys, yaml
+
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+dep = next(d for d in docs
+           if d["kind"] == "Deployment" and d["metadata"]["name"] == "elitea-worker")
+c = next(x for x in dep["spec"]["template"]["spec"]["containers"] if x["name"] == "worker")
+env = {e["name"]: e.get("value") for e in c["env"]}
+assert env["ELITEA_WORKER_GOVERNED_CONTEXT"] == "true", env
+PY
+
 echo "== runtime.json is complete =="
 python3 - "$TMP/rust.yaml" <<'PY' && ok "runtime.json carries exactly the required fields" || bad "runtime.json fields"
 import json, sys, yaml

@@ -110,8 +110,8 @@ VALUES ($1, $2, $3, $4::jsonb, 'integration-test')`, custodyRevision, digest[:],
 		_, err := pool.Exec(ctx, `
 INSERT INTO elitea_identity.agent_identity_bindings
     (id, tenant_project_id, application_id, application_version_id, definition_digest, mode,
-     policy_revision_id, proposed_by, last_transition_by)
-VALUES ($1::uuid, 7, 3, $2, $3, 'dedicated_agent', $4, '100', '100')`,
+     policy_revision_id, proposed_by, approved_by, last_transition_by, state)
+VALUES ($1::uuid, 7, 3, $2, $3, 'dedicated_agent', $4, '100', '200', '200', 'active')`,
 			id, index+1, bytes.Repeat([]byte{byte(index + 1)}, 32), custodyRevision)
 		require.NoError(t, err)
 	}
@@ -348,14 +348,40 @@ SELECT count(*) FROM elitea_identity.signin_assertions WHERE assertion_ciphertex
 	require.Equal(t, 1, live)
 }
 
+// A delegation is minted only for a binding that is active in its tenant
+// project: another tenant's binding, or a suspended one, is refused.
+func TestDelegateNeedsAnActiveBindingInTheTenantProject(t *testing.T) {
+	pool := newCustodyPool(t)
+	store := newTestStore(t, pool)
+	ctx := context.Background()
+	_, err := store.RetainSignIn(ctx, signInFor("session-1"))
+	require.NoError(t, err)
+	other := delegateFor("session-1")
+	other.TenantProjectID = 8
+	_, err = store.Delegate(ctx, other)
+	require.ErrorIs(t, err, ErrBindingNotActive)
+	_, err = pool.Exec(ctx, `UPDATE elitea_identity.agent_identity_bindings SET state = 'suspended' WHERE id = $1::uuid`, custodyBinding)
+	require.NoError(t, err)
+	_, err = store.Delegate(ctx, delegateFor("session-1"))
+	require.ErrorIs(t, err, ErrBindingNotActive)
+}
+
 func TestAuthorizationRequirementRoundTrip(t *testing.T) {
 	pool := newCustodyPool(t)
 	store := newTestStore(t, pool)
 	ctx := context.Background()
+	for _, session := range []string{"session-1", "session-2"} {
+		_, err := store.RetainSignIn(ctx, signInFor(session))
+		require.NoError(t, err)
+	}
+	paused, err := store.Delegate(ctx, delegateFor("session-1"))
+	require.NoError(t, err)
+	answer, err := store.Delegate(ctx, delegateFor("session-2"))
+	require.NoError(t, err)
 	requirement := Requirement{
 		TenantProjectID: 7, ActorUserID: 42,
 		ConversationUUID: "0192f5e2-7c3a-7b1e-8a9d-0000000000c1", ResponseMessageID: "0192f5e2-7c3a-7b1e-8a9d-0000000000c2",
-		ExecutionID: "exec-1", ExecutionGeneration: "3", DelegationID: "0192f5e2-7c3a-7b1e-8a9d-0000000000d1",
+		ExecutionID: "exec-1", ExecutionGeneration: "3", DelegationID: paused.ID,
 		Scopes: []string{"https://graph.microsoft.com/Sites.Selected"}, Reason: ReasonClaimsChallenge,
 		Claims: `{"access_token":{"acrs":{"essential":true,"value":"c1"}}}`,
 	}
@@ -366,9 +392,21 @@ func TestAuthorizationRequirementRoundTrip(t *testing.T) {
 	_, err = store.RequirementFor(ctx, recorded.Reference, 7, 43)
 	require.ErrorIs(t, err, ErrRequirementNotFound, "another user cannot read it")
 
-	resolved, err := store.ResolveRequirement(ctx, recorded.Reference, 7, 42, "0192f5e2-7c3a-7b1e-8a9d-0000000000d2")
+	// A delegation that does not exist, or no longer authorizes, is no answer.
+	_, err = store.ResolveRequirement(ctx, recorded.Reference, 7, 42, "0192f5e2-7c3a-7b1e-8a9d-0000000000d9")
+	require.ErrorIs(t, err, ErrInvalid)
+	_, err = store.RevokeSession(ctx, "session-1")
+	require.NoError(t, err)
+	_, err = store.ResolveRequirement(ctx, recorded.Reference, 7, 42, paused.ID)
+	require.ErrorIs(t, err, ErrInvalid, "a revoked delegation does not resolve the pause")
+
+	resolved, err := store.ResolveRequirement(ctx, recorded.Reference, 7, 42, answer.ID)
 	require.NoError(t, err)
 	require.True(t, resolved.Resolved)
-	_, err = store.ResolveRequirement(ctx, recorded.Reference, 7, 42, "0192f5e2-7c3a-7b1e-8a9d-0000000000d2")
-	require.True(t, errors.Is(err, ErrRequirementResolved))
+	// A retry of the same answer (its continuation failed) resolves again.
+	again, err := store.ResolveRequirement(ctx, recorded.Reference, 7, 42, answer.ID)
+	require.NoError(t, err)
+	require.Equal(t, answer.ID, again.ResolvedDelegationID)
+	_, err = store.ResolveRequirement(ctx, recorded.Reference, 7, 42, paused.ID)
+	require.True(t, errors.Is(err, ErrRequirementResolved), "a second, different answer is refused")
 }

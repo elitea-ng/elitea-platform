@@ -86,6 +86,29 @@ func TestProvisioningNeverActivatesAndActivationNeedsAnApprovedBinding(t *testin
 	}
 }
 
+// Resume returns an identity to active, so it needs an approved binding
+// as Activate does: suspended, its bindings revoked, it stays suspended.
+func TestResumeNeedsAnApprovedBindingLikeActivation(t *testing.T) {
+	f := newExternalFixture(t, allowAllRevision())
+	ctx := context.Background()
+	created, _ := f.service.Create(ctx, externalRequest(), "100")
+	_, _ = f.service.Provision(ctx, created.ID, "100")
+	f.bindActive(created.ID)
+	if _, err := f.service.Activate(ctx, created.ID, "200"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Suspend(ctx, created.ID, "200"); err != nil {
+		t.Fatal(err)
+	}
+	delete(f.store.bindings, bindingA)
+	if _, err := f.service.Resume(ctx, created.ID, "200"); !errors.Is(err, identity.ErrNoApprovedBinding) {
+		t.Fatalf("Resume without a binding = %v", err)
+	}
+	if slices.Contains(f.provider.Calls(), "Resume") {
+		t.Fatal("a refused resume reached the provider")
+	}
+}
+
 func TestExternalIdentityLifeCycleBumpsTheEpochOnEveryTransition(t *testing.T) {
 	f := newExternalFixture(t, allowAllRevision())
 	ctx := context.Background()
