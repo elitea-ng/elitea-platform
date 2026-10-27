@@ -21,6 +21,7 @@ import { composer, describeWorkspaceError, replayView, TurnTranscript, type Work
 import type { CustomCommand, StoredTurn, Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
+import { conversationBubbleSx } from '@/shared/ui/conversation-column';
 import { copyText, modKey, selectInspectorShown, useContextMenu, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { CompactNotices } from './CompactNotices';
@@ -148,14 +149,7 @@ export function YourPrompt({ text, fork, images }: { text: string; fork?: ForkIt
     <Box
       data-testid="your-prompt"
       onContextMenu={(event) => copyMenu(text, event, fork)}
-      sx={(theme: Theme) => ({
-        alignSelf: 'flex-end',
-        maxWidth: '85%',
-        paddingX: 1.5,
-        paddingY: 1,
-        borderRadius: theme.vars.shape.radiusMd,
-        background: theme.vars.palette.background.userInputBackground,
-      })}
+      sx={(theme: Theme) => ({ ...conversationBubbleSx(true, '80%')(theme), alignSelf: 'flex-end' })}
     >
       {images !== undefined && images.length > 0 && (
         <Box sx={{ marginBottom: 1 }}>
@@ -270,7 +264,7 @@ function ServerTurn({ message, onFork }: { message: ServerMessage; onFork: OnFor
   if (message.role === 'user') return <YourPrompt text={message.content} fork={fork} />;
   return (
     // The chat's own renderer; raw HTML from the model is dropped, not rendered.
-    <Box onContextMenu={(event) => copyMenu(message.content, event, fork)}>
+    <Box onContextMenu={(event) => copyMenu(message.content, event, fork)} sx={conversationBubbleSx(false)}>
       <Markdown renderHtml={false} data-testid="history-answer">
         {message.content}
       </Markdown>

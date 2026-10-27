@@ -25,6 +25,7 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
+import { conversationBubbleSx } from '@/shared/ui/conversation-column';
 
 import { lanesOf } from '../model/subAgentEvents';
 import { isTerminalPhase, type TranscriptItem, type TurnView } from '../model/turnReducer';
@@ -266,7 +267,7 @@ export function TurnTranscript({ view, busy, onCancel, onRetryCommit, onTextCont
       {view.items.map((item) =>
         item.type === 'text' ? (
           // The chat's own renderer; raw HTML from the model is dropped, not rendered.
-          <Box key={item.key} onContextMenu={onTextContextMenu === undefined ? undefined : (event: MouseEvent) => onTextContextMenu(item.text, event)}>
+          <Box key={item.key} sx={conversationBubbleSx(false)} onContextMenu={onTextContextMenu === undefined ? undefined : (event: MouseEvent) => onTextContextMenu(item.text, event)}>
             <Markdown renderHtml={false} data-testid="turn-text">
               {item.text}
             </Markdown>

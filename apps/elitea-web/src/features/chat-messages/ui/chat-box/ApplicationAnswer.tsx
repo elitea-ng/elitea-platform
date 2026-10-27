@@ -58,6 +58,7 @@ import { readAnswerItems } from './AnswerMessageItems';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { Markdown } from '@/shared/ui/Markdown';
 import { TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
+import { conversationBubbleSx } from '@/shared/ui/conversation-column';
 
 import type { SubAgentGroupable } from '../../lib/subAgentGrouping';
 
@@ -282,11 +283,9 @@ export function ApplicationAnswer({
         <Box
           data-testid={isLastMessage ? 'skill-test-last-response' : 'chat-answer-content'}
           sx={(theme) => ({
-            // Plain text on the page, full width: no card, shadow or padding
-            // (it used to be the baseline's elevated `answerBlock` card).
-            width: '100%',
-            boxSizing: 'border-box',
-            color: theme.vars.palette.text.secondary,
+            // A left-hand bubble in the neutral fill (`conversationBubbleSx`):
+            // hugs a short reply, takes the column for a long one.
+            ...conversationBubbleSx(false)(theme),
             position: 'relative',
             marginTop: nonSwarmChildActions.length > 0 || !!exception ? 0.5 : 0,
           })}

@@ -21,6 +21,7 @@ import { UserMessageActions } from './UserMessageActions';
 import { TEXT_MESSAGE_ITEM_TYPE, findAttachmentItems, findQuestionItem, getItemTextContent } from './UserMessage.items';
 
 import { t } from '@/shared/i18n';
+import { conversationBubbleSx } from '@/shared/ui/conversation-column';
 
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
 
@@ -47,18 +48,8 @@ function userMessageContainerSx(isOwn: boolean) {
  * for anyone else's. No shadow, no border.
  */
 function userMessageBodySx(isOwn: boolean) {
-  return (theme: Theme) => ({
-    width: 'fit-content',
-    maxWidth: '80%',
-    boxSizing: 'border-box',
-    background: isOwn
-      ? theme.vars.palette.background.select.selected.default
-      : theme.vars.palette.background.userInputBackground,
-    color: theme.vars.palette.text.secondary,
-    borderRadius: theme.vars.shape.radiusLg,
-    padding: '0.625rem 1rem',
-    position: 'relative',
-  } as const);
+  const bubble = conversationBubbleSx(isOwn, '80%');
+  return (theme: Theme) => ({ ...bubble(theme), position: 'relative' } as const);
 }
 
 /** baseline `styles.textContent`. */
