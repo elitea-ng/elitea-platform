@@ -376,6 +376,10 @@ pub(crate) struct PipelineNativeAgentAssembler {
     /// Test-only: compose fixed Parallel with scoped Agent participants.
     #[cfg(test)]
     fixed_parallel_for_tests: bool,
+    /// Test-only: the decision source the test binding fetches from.
+    #[cfg(test)]
+    fanout_decisions_for_tests:
+        Option<Arc<dyn elitea_agent_runtime::graph::fanout::runner::DecisionSource>>,
     /// The web families' runtime (#1238).
     web_runtime: Option<Arc<crate::transport::metering::WebRuntime>>,
     /// Test seam: the continuation a fresh start takes, so a conversation an older worker
@@ -392,9 +396,11 @@ impl PipelineNativeAgentAssembler {
     }
 
     #[cfg(test)]
-    const fn fanout_composition(&self) -> super::session::FanoutComposition {
+    fn fanout_composition(&self) -> super::session::FanoutComposition {
         if self.fixed_parallel_for_tests {
-            super::session::FanoutComposition::BoundForTests
+            super::session::FanoutComposition::BoundForTests(
+                self.fanout_decisions_for_tests.clone(),
+            )
         } else {
             super::session::FanoutComposition::Bound
         }
@@ -406,6 +412,17 @@ impl PipelineNativeAgentAssembler {
     #[must_use]
     pub(crate) fn with_fixed_parallel_for_tests(mut self) -> Self {
         self.fixed_parallel_for_tests = true;
+        self
+    }
+
+    /// Test-only: the test binding fetches decisions from `source`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_fanout_decisions_for_tests(
+        mut self,
+        source: Arc<dyn elitea_agent_runtime::graph::fanout::runner::DecisionSource>,
+    ) -> Self {
+        self.fanout_decisions_for_tests = Some(source);
         self
     }
 
@@ -470,6 +487,8 @@ impl PipelineNativeAgentAssembler {
             #[cfg(test)]
             fixed_parallel_for_tests: false,
             #[cfg(test)]
+            fanout_decisions_for_tests: None,
+            #[cfg(test)]
             fresh_start_continuation: ApplicationContinuation::Scoped,
         }
     }
@@ -496,6 +515,8 @@ impl PipelineNativeAgentAssembler {
             web_runtime: None,
             #[cfg(test)]
             fixed_parallel_for_tests: false,
+            #[cfg(test)]
+            fanout_decisions_for_tests: None,
             #[cfg(test)]
             fresh_start_continuation: ApplicationContinuation::Scoped,
         }

@@ -1121,7 +1121,7 @@ fn a_pipeline_wake_is_admitted_with_its_empty_input_and_only_its_marker() {
         request.payload.user_input = UserInput::Text(String::new());
         request.payload.meta.insert(
             crate::agents::graph::fanout_wake::FANOUT_WAKE_META_KEY.to_owned(),
-            json!({"schema": "elitea.fanout_wake.v1",
+            json!({"schema": "elitea.pipeline.fanout-wake.v1",
                 "response_message_id": "10000000-0000-4000-8000-000000000043",
                 "decision_revision": 2}),
         );

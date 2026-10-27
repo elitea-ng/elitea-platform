@@ -590,9 +590,15 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         let definition = self.definition(branch)?;
         // The child participant's own authored pause catalog proves a static
         // pause; it is resolved from frozen saved versions, not from state.
+        // By node, as the branch's own run resolves it: a fixed Parallel's
+        // participants are scoped per owned node, not by alias.
         let participant = self
             .resolver
-            .resolve(definition.selection(), Arc::clone(&pause.checkpointer))
+            .resolve_node(
+                definition.id(),
+                definition.selection(),
+                Arc::clone(&pause.checkpointer),
+            )
             .map_err(|_| {
                 GraphError::InvalidGraph(
                     "the fixed Parallel Agent participant is unavailable".to_owned(),
