@@ -789,7 +789,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// outbox (#1114): per-partition hash-chain heads, the transactional
 	// outbox and the append-only elitea_identity.security_audit_events. No
 	// data, no permission.
-	require.EqualValues(t, 183, Head(shared))
+	//
+	// 185: shared/0185_entra_delegation_custody.sql, the encrypted assertion
+	// columns on elitea_identity.delegations, elitea_identity.signin_assertions
+	// and elitea_identity.credential_authorization_requirements (#1117). No
+	// data, no permission.
+	require.EqualValues(t, 185, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
