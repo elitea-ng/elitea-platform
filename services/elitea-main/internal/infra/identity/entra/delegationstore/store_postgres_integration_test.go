@@ -187,7 +187,11 @@ func TestSignInAssertionBecomesALoadableDelegation(t *testing.T) {
 	for _, request := range []DelegateRequest{
 		delegateFor("session-2"),
 		func() DelegateRequest { r := delegateFor("session-1"); r.UserID = 43; return r }(),
-		func() DelegateRequest { r := delegateFor("session-1"); r.Audience = "api://blueprint/access_agent"; return r }(),
+		func() DelegateRequest {
+			r := delegateFor("session-1")
+			r.Audience = "api://blueprint/access_agent"
+			return r
+		}(),
 	} {
 		_, err := store.Delegate(ctx, request)
 		require.ErrorIs(t, err, ErrNoSignInAssertion)

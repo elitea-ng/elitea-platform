@@ -76,6 +76,10 @@ type Server struct {
 	// see toolkit_call_tool.go for why.
 	toolRuns  ToolkitCallToolIngestor
 	discovery ToolkitAvailableToolsIngestor
+	// credentialAuthorization admits terminal state
+	// PAUSED_CREDENTIAL_AUTHORIZATION (WithCredentialAuthorizationPause).
+	// False refuses it, as before the state existed.
+	credentialAuthorization bool
 }
 
 func NewServer(config ServerConfig, authorizer WorkloadAuthorizer, ingestor ValidationIngestor, failures RuntimeFailureIngestor) (*Server, error) {
@@ -465,7 +469,7 @@ func (s *Server) agentExecutionFrame(message *runtimev1.ExecutionOutputFrameV1, 
 	if err != nil || !matchesDigest(message.GetPayloadDigest(), encodedResult) {
 		return outputapp.AgentExecutionFrame{}, outputapp.ErrInvalidAgentExecutionOutput
 	}
-	result, err := agentExecutionResultDomain(payload)
+	result, err := agentExecutionResultDomainFor(payload, s.credentialAuthorization)
 	if err != nil {
 		return outputapp.AgentExecutionFrame{}, err
 	}
@@ -817,6 +821,13 @@ func indexIngestDocumentsDomain(summary *runtimev1.IndexIngestSummaryV1) ([]outp
 }
 
 func agentExecutionResultDomain(result *runtimev1.AgentExecutionResultV1) (outputapp.AgentExecutionResult, error) {
+	return agentExecutionResultDomainFor(result, false)
+}
+
+// agentExecutionResultDomainFor maps a result. credentialAuthorization admits
+// PAUSED_CREDENTIAL_AUTHORIZATION (governed runs, #1117) as a paused
+// authorization; without it the state is refused like any unknown state.
+func agentExecutionResultDomainFor(result *runtimev1.AgentExecutionResultV1, credentialAuthorization bool) (outputapp.AgentExecutionResult, error) {
 	if result == nil {
 		return outputapp.AgentExecutionResult{}, outputapp.ErrInvalidAgentExecutionOutput
 	}
@@ -827,6 +838,11 @@ func agentExecutionResultDomain(result *runtimev1.AgentExecutionResultV1) (outpu
 	case runtimev1.AgentExecutionTerminalStateV1_AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_HITL:
 		terminalState = outputapp.AgentExecutionTerminalPausedHITL
 	case runtimev1.AgentExecutionTerminalStateV1_AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_MCP_AUTH:
+		terminalState = outputapp.AgentExecutionTerminalPausedAuthorization
+	case runtimev1.AgentExecutionTerminalStateV1_AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_CREDENTIAL_AUTHORIZATION:
+		if !credentialAuthorization {
+			return outputapp.AgentExecutionResult{}, outputapp.ErrInvalidAgentExecutionOutput
+		}
 		terminalState = outputapp.AgentExecutionTerminalPausedAuthorization
 	default:
 		return outputapp.AgentExecutionResult{}, outputapp.ErrInvalidAgentExecutionOutput

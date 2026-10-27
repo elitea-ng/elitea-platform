@@ -133,8 +133,8 @@ type OIDCDocument struct {
 	AdoptSCIMUsers bool `json:"adopt_scim_users"`
 
 	// Entra marks a Microsoft Entra ID application (ADR-0039 decision 4).
-	// It takes effect only with ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED
-	// on; with the flag off it is stored and ignored. In Entra mode the
+	// It takes effect only with the credential governance flag on; with the
+	// flag off it is stored and ignored. In Entra mode the
 	// sign-in accepts only the v2 issuer of an EntraTenants tenant, requires
 	// `tid` and `oid`, requests EntraAPIScope and the cp1 capability, and
 	// retains the middle-tier access token as a delegation assertion.

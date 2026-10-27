@@ -787,6 +787,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 	}
 
+	// Governed Entra custody and exchangers (#1117). Nil with the flag off
+	// or without an Entra provider; then neither plane changes.
+	entraGoverned, err := entraGovernanceAtBoot(ctx, credentialAdmission, pool, identityProviderStore,
+		func() ([]byte, error) { return v2secrets.MasterKeyFromEnv(os.Getenv) }, logger)
+	if err != nil {
+		return err
+	}
+	if entraGoverned != nil {
+		oidcOIDCHandler = oidcOIDCHandler.WithEntraGovernance(entraGoverned.Delegations)
+		oidcSessionHandler = oidcSessionHandler.WithEntraGovernance(entraGoverned.Delegations)
+	}
+
 	// A deployment where nobody can sign in through a browser is legal (an
 	// API-only install), but it is never what a first install meant.
 	if oidcSessionHandler == nil && (formGraph == nil || !formGraph.FormSignInEnabled()) {

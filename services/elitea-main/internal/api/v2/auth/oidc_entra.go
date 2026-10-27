@@ -3,8 +3,8 @@ package auth
 // Entra mode of the OIDC plane (ADR-0039 decision 4, issue #1117).
 //
 // It exists only when the composition root attached custody with
-// WithEntraGovernance, which it does only with
-// ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED on. Without it the `entra`
+// WithEntraGovernance, which it does only with the credential governance
+// flag on. Without it the `entra`
 // marker on a stored provider is ignored and every sign-in is byte-for-byte
 // the path in oidc.go.
 //

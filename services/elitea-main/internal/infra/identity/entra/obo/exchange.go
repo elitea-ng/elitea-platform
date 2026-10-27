@@ -208,14 +208,13 @@ func (e endpoint) post(ctx context.Context, tid string, form url.Values, correla
 	if readErr != nil || len(body) > maxTokenResponseBytes {
 		return AccessToken{}, ErrUnavailable
 	}
-	switch {
-	case response.StatusCode == http.StatusOK:
+	switch response.StatusCode {
+	case http.StatusOK:
 		if !jsonContentType(response.Header) {
 			return AccessToken{}, ErrUnavailable
 		}
 		return e.issuedToken(body)
-	case response.StatusCode == http.StatusBadRequest || response.StatusCode == http.StatusUnauthorized ||
-		response.StatusCode == http.StatusForbidden:
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
 		if !jsonContentType(response.Header) {
 			return AccessToken{}, ErrUnavailable
 		}
