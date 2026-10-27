@@ -21,6 +21,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/egresslib/runtoken"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/agentidentity/eliteanative"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/egresstoken"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
@@ -147,17 +148,20 @@ func eliteaNativeAgentIdentityAtBoot(
 // process holds, so the ring can refuse to share one: the runtime signing
 // key (worker commands and code-sandbox owner grants), the code owner TLS
 // identity and the egress token key. It answers their key ids and material
-// fingerprints, and their files by path. A configured key that cannot be
-// read refuses boot: the ring's independence could not be checked.
+// fingerprints, and their files by path. Each key is read exactly as its
+// owning component reads it, for the fingerprint only: a reader stricter
+// than the owner's would refuse a mount the owner accepts. A configured key
+// that cannot be read refuses boot: the ring's independence could not be
+// checked.
 func foreignSigningKeys(lookup func(string) (string, bool)) ([]eliteanative.ForeignKey, map[string]string, error) {
 	var keys []eliteanative.ForeignKey
 	files := map[string]string{}
-	add := func(purpose, kid, path string) error {
+	add := func(purpose, kid, path string, fingerprint func(string) ([32]byte, error)) error {
 		path = strings.TrimSpace(path)
 		key := eliteanative.ForeignKey{Purpose: purpose, KeyID: strings.TrimSpace(kid)}
 		if path != "" {
 			files[path] = purpose
-			fp, err := foreignFingerprint(path)
+			fp, err := fingerprint(path)
 			if err != nil {
 				return fmt.Errorf("agent assertion key ring: the %s key cannot be read to check the ring is dedicated: %w", purpose, err)
 			}
@@ -170,7 +174,9 @@ func foreignSigningKeys(lookup func(string) (string, bool)) ([]eliteanative.Fore
 	}
 	kid, _ := lookup("ELITEA_RUNTIME_SIGNING_KEY_ID")
 	file, _ := lookup("ELITEA_RUNTIME_SIGNING_KEY_FILE")
-	if err := add("command-signing and code-sandbox grant", kid, file); err != nil {
+	// internal/runtimecomposition reads it with securefile, from the copy
+	// the runtime-material init container installs.
+	if err := add("command-signing and code-sandbox grant", kid, file, secureFileFingerprint); err != nil {
 		return nil, nil, err
 	}
 	if raw, _ := lookup("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG"); strings.TrimSpace(raw) != "" {
@@ -178,21 +184,35 @@ func foreignSigningKeys(lookup func(string) (string, bool)) ([]eliteanative.Fore
 			PrivateKeyPath string `json:"private_key_path"`
 		}
 		if err := json.Unmarshal([]byte(raw), &owner); err == nil {
-			if err := add("code owner TLS", "", owner.PrivateKeyPath); err != nil {
+			// Read with securefile from the same installed runtime material.
+			if err := add("code owner TLS", "", owner.PrivateKeyPath, secureFileFingerprint); err != nil {
 				return nil, nil, err
 			}
 		}
 	}
 	egress, _ := lookup(egresstoken.EnvSigningKeyFile)
-	if err := add("egress token", "", egress); err != nil {
+	// The egress minter reads it with runtoken.LoadPrivateKeyFile from a
+	// whole-directory Secret volume (defaultMode 0444, kubelet symlinks).
+	if err := add("egress token", "", egress, egressFingerprint); err != nil {
 		return nil, nil, err
 	}
 	return keys, files, nil
 }
 
-// foreignFingerprint reads a private key file (PKCS #8, SEC 1 or PKCS #1)
-// and answers its public key's fingerprint. The private material is cleared.
-func foreignFingerprint(path string) ([32]byte, error) {
+// egressFingerprint reads the egress token key as the egress minter does.
+func egressFingerprint(path string) ([32]byte, error) {
+	key, err := runtoken.LoadPrivateKeyFile(path)
+	if err != nil {
+		return [32]byte{}, errors.New("the key file is not readable as an egress token key")
+	}
+	defer clear(key)
+	return eliteanative.Fingerprint(key.Public())
+}
+
+// secureFileFingerprint reads a private key file (PKCS #8, SEC 1 or PKCS #1)
+// with securefile, as the runtime composition does, and answers its public
+// key's fingerprint. The private material is cleared.
+func secureFileFingerprint(path string) ([32]byte, error) {
 	raw, err := securefile.Read(path, maxForeignKeyFileBytes, securefile.PrivateMaterial)
 	if err != nil {
 		return [32]byte{}, errors.New("the key file is not readable")

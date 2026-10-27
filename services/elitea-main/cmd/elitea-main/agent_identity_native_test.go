@@ -152,3 +152,68 @@ func TestEliteaNativeRefusesBootWhenItReusesAnotherPurposesKey(t *testing.T) {
 		t.Fatal("an unreadable command signing key booted")
 	}
 }
+
+// secretVolume writes one key as the kubelet does for a Secret volume with
+// defaultMode 0444: <dir>/<name> -> ..data/<name>, ..data -> ..<timestamp>/.
+func secretVolume(t *testing.T, name string, key any) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamp := filepath.Join(dir, "..2026_10_27_12_00_00.1")
+	if err := os.Mkdir(stamp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := writeAgentTestKey(t, stamp, name, key)
+	if err := os.Chmod(path, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Base(stamp), filepath.Join(dir, "..data")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..data", name), filepath.Join(dir, name)); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, name)
+}
+
+// The chart mounts the egress token key and the agent assertion keys as
+// whole-directory Secret volumes (defaultMode 0444, kubelet symlinks). Boot
+// reads both: the egress key as the egress minter does, the ring's keys with
+// ReadMountedKey.
+func TestEliteaNativeBootsWithTheChartsSecretVolumes(t *testing.T) {
+	revision := agentAssertionRevision(agentidentity.IdentityModeEliteaNative)
+	agentKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, egressKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentFile := secretVolume(t, "es.pem", agentKey)
+	env := map[string]string{
+		"DEPLOYMENT_URL": "https://elitea.example.com",
+		eliteanative.EnvConfig: fmt.Sprintf(`{"keys":[{"kid":"agent-es-1","alg":"ES256","file":%q}],
+			"relying_parties":[{"id":"aws","audience":"sts.amazonaws.com","claims_profile":"aws"}]}`, agentFile),
+		"ELITEA_EGRESS_TOKEN_SIGNING_KEY_FILE": secretVolume(t, "signing.pem", egressKey),
+	}
+	boot := func() (eliteaNativeAgentIdentity, error) {
+		return eliteaNativeAgentIdentityAtBoot(context.Background(), profile.GovernedAdmission(revision), revision, lookupOf(env), nil, 1, nil)
+	}
+	if got, err := boot(); err != nil || got.Provider == nil {
+		t.Fatalf("boot over Secret volumes: %+v, %v", got, err)
+	}
+	// The egress key is still checked: the ring's own file named as the
+	// egress key is refused (it is not an Ed25519 key, so the egress
+	// reader refuses it first), and an unreadable egress key refuses boot.
+	env["ELITEA_EGRESS_TOKEN_SIGNING_KEY_FILE"] = agentFile
+	if _, err := boot(); err == nil {
+		t.Fatal("the ring's key file as the egress token key booted")
+	}
+	env["ELITEA_EGRESS_TOKEN_SIGNING_KEY_FILE"] = filepath.Join(filepath.Dir(agentFile), "absent.pem")
+	if _, err := boot(); err == nil {
+		t.Fatal("an unreadable egress token key booted")
+	}
+}

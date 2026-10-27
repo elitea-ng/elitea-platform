@@ -63,6 +63,18 @@ func TestParseConfigRefusesWhatTheIssueForbids(t *testing.T) {
 			t.Errorf("%s: err = %v", name, err)
 		}
 	}
+	// The overlap must be strictly longer than the JWKS cache max-age: a
+	// relying party that cached the set just before publication must have
+	// refreshed before the new key signs.
+	for overlap, ok := range map[time.Duration]bool{
+		eliteanative.CacheMaxAge - time.Second: false, eliteanative.CacheMaxAge: false,
+		eliteanative.CacheMaxAge + time.Second: true,
+	} {
+		doc := replace(`"keys"`, `"rotation_overlap": "`+overlap.String()+`", "keys"`)
+		if _, err := eliteanative.ParseConfig([]byte(doc), ""); (err == nil) != ok {
+			t.Errorf("rotation_overlap %s: err = %v, want accepted = %v", overlap, err, ok)
+		}
+	}
 	// A rotation: a second key with not_before is accepted.
 	rotation := replace(`"file": "/etc/elitea/agent-assertion/es.pem"}`,
 		`"file": "/etc/elitea/agent-assertion/es.pem"}, {"kid": "es-2", "alg": "ES256", "file": "/k/es2.pem", "not_before": "2026-11-01T00:00:00Z"}`)

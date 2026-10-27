@@ -86,7 +86,7 @@ func NewKeyRing(keys []RingKey, overlap, retention time.Duration, foreign []Fore
 	if len(keys) == 0 || len(keys) > maxKeys {
 		return nil, invalid("1..%d keys are required", maxKeys)
 	}
-	if overlap < minRotationOverlap || overlap > maxRotationOverlap || retention <= 0 {
+	if !validOverlap(overlap) || retention <= 0 {
 		return nil, invalid("rotation overlap and retention are out of bounds")
 	}
 	ring := &KeyRing{retention: retention}
