@@ -70,6 +70,9 @@ pub(crate) const BRANCH_BLOCKED_CODE: &str = "graph.parallel.branch_blocked";
 pub(crate) const BRANCH_MAY_HAVE_STARTED_CODE: &str = "graph.fanout.may_have_started";
 /// A member's Agent asked for a decision: not supported yet (FU-246).
 const BRANCH_AGENT_PAUSE_CODE: &str = crate::agents::application_tools::FANOUT_AGENT_PAUSE_CODE;
+/// A branch whose saved pipeline holds a tool with external effects, which a
+/// branch cannot run yet (FU-248): typed and readable, never "failed".
+const BRANCH_TOOL_UNAVAILABLE_CODE: &str = "graph.fanout.child_tool_unavailable";
 /// Earlier checkpoints of one child examined for an already answered pause.
 const MAX_ANSWERED_PAUSE_SCAN: usize = 64;
 
@@ -1974,6 +1977,10 @@ fn branch_failure(code: &str) -> ChildFailure {
                 "The branch was interrupted while it may have been changing data. \
                  It was not run again; check the target system."
             }
+            BRANCH_TOOL_UNAVAILABLE_CODE => {
+                "The branch's pipeline uses a tool that changes data directly, which a \
+                 parallel branch cannot run yet. It did not run."
+            }
             _ => "The branch failed.",
         },
     )
@@ -2196,6 +2203,9 @@ fn graph_error_code(error: &GraphError) -> &'static str {
         if names(BRANCH_AGENT_PAUSE_CODE) {
             return BRANCH_AGENT_PAUSE_CODE;
         }
+        if names(super::direct_tool::EFFECT_WRITER_UNAVAILABLE_CODE) {
+            return BRANCH_TOOL_UNAVAILABLE_CODE;
+        }
     }
     match error {
         GraphError::InvalidGraph(_) => "graph.invalid",
@@ -2251,6 +2261,7 @@ fn valid_failure_code(code: &str) -> bool {
             | "graph.other"
             | BRANCH_MAY_HAVE_STARTED_CODE
             | BRANCH_AGENT_PAUSE_CODE
+            | BRANCH_TOOL_UNAVAILABLE_CODE
     )
 }
 

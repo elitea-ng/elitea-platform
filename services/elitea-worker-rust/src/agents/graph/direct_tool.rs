@@ -432,7 +432,7 @@ impl DirectToolNode {
         if !tool.is_read_only() && self.recovery.is_none() {
             return Err(DirectNodeFailure::policy(
                 "tool_binding",
-                "A tool with external effects requires its current fenced node writer.",
+                EFFECT_WRITER_UNAVAILABLE,
             ));
         }
         let tool_context = pipeline_tool_context(context, self.name(), tool.name());
@@ -840,9 +840,20 @@ impl Node for DirectToolNode {
                             message: "The pipeline failure channel closed.".to_owned(),
                         })?;
                 }
+                let writer_unavailable = matches!(
+                    failure.cause,
+                    DirectNodeFailureCause::Policy(EFFECT_WRITER_UNAVAILABLE)
+                );
                 Err(GraphError::NodeExecutionFailed {
                     node: self.name().to_owned(),
-                    message: format!("{}: {}", failure.stage, failure.cause),
+                    message: if writer_unavailable {
+                        format!(
+                            "{EFFECT_WRITER_UNAVAILABLE_CODE}: {}: {}",
+                            failure.stage, failure.cause
+                        )
+                    } else {
+                        format!("{}: {}", failure.stage, failure.cause)
+                    },
                 })
             }
         }
@@ -1646,6 +1657,13 @@ fn ensure_bounded_value(value: &Value) -> Result<(), DirectToolExecutionError> {
     }
     Ok(())
 }
+
+/// A tool with external effects found no fenced node writer (a saved child
+/// pipeline has none yet, FU-248). It leads the node's failure message so a
+/// fixed Parallel names it on the failed branch.
+pub(crate) const EFFECT_WRITER_UNAVAILABLE_CODE: &str = "pipeline.effect_writer_unavailable";
+const EFFECT_WRITER_UNAVAILABLE: &str =
+    "A tool with external effects requires its current fenced node writer.";
 
 /// Static diagnostic context. Never retains tool arguments, results, or provider messages.
 struct DirectNodeFailure {

@@ -805,6 +805,17 @@ async fn postgres_a_member_whose_tool_cannot_run_fails_its_branch_not_the_run() 
                 statuses,
                 ["first:succeeded", "second:failed", "third:succeeded"]
             );
+            // Typed and readable (FU-248), never the generic "failed".
+            assert_eq!(
+                entries[1]["error"]["code"],
+                "graph.fanout.child_tool_unavailable"
+            );
+            assert!(
+                entries[1]["error"]["message_safe"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("cannot run yet")),
+                "{entries:?}"
+            );
         } else {
             let error = outcome.expect_err("stop: the failed branch fails the node");
             assert!(
