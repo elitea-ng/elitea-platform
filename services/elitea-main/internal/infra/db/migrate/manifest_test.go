@@ -819,6 +819,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// governed process. The material is never stored. No data, no
 	// permission.
 	//
+	// 190: shared/0190_provider_oauth_grants.sql, provider delegated OAuth
+	// custody (elitea_identity.provider_oauth_grants), the consent states and
+	// elitea_runtime.credential_refresh_leases (#1121). Written only by a
+	// governed process. No token in plaintext. No data, no permission.
+	//
 	// 191: shared/0191_agent_identity_reconcile.sql, the reconcile loop's
 	// elitea_identity.agent_identity_provider_health (pass lease and outage
 	// state per provider) and external_identity_drift_findings (#1154). No

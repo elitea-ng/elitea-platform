@@ -151,6 +151,14 @@ func validate(d AdapterDescriptor) error {
 			return fail("class %q states no qualification", class)
 		}
 	}
+	switch {
+	case d.Accepts(credentialgrant.ClassOAuthDelegated) && !d.OAuthAuthority.Valid():
+		return fail("the oauth_delegated class states no OAuth authority (entra_obo or provider)")
+	case !d.Accepts(credentialgrant.ClassOAuthDelegated) && d.OAuthAuthority != "":
+		return fail("an OAuth authority without the oauth_delegated class")
+	case d.OAuthAuthority == credentialgrant.OAuthAuthorityEntraOBO && d.Audience == "":
+		return fail("an Entra on-behalf-of class needs the resource audience")
+	}
 	for _, class := range d.RotationRequired {
 		if !d.Accepts(class) {
 			return fail("rotation requirement for undeclared class %q", class)
@@ -232,6 +240,19 @@ func (r *Registry) OAuthResource(providerType string, class credentialgrant.Cred
 		return "", nil
 	}
 	return d.Audience, slices.Clone(d.Scopes[class])
+}
+
+// OAuthAuthority is who issued the consent of providerType's class:
+// empty for an unknown provider or a class that is not oauth_delegated.
+func (r *Registry) OAuthAuthority(providerType string, class credentialgrant.CredentialClass) credentialgrant.OAuthAuthority {
+	if r == nil || class != credentialgrant.ClassOAuthDelegated {
+		return ""
+	}
+	d, ok := r.providers[providerType]
+	if !ok || !d.Accepts(class) {
+		return ""
+	}
+	return d.OAuthAuthority
 }
 
 // Descriptor returns a copy of providerType's descriptor.

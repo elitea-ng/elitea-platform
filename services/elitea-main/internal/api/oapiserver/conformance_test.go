@@ -34,6 +34,7 @@ import (
 	v2applicationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	v2credentialconsent "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialconsent"
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
 	v2credentialprobe "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialprobe"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
@@ -256,6 +257,9 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// ADR-0039 (#1120): the credential probe, mounted on the same
 		// condition. Same zero handler.
 		CredentialProbe: &v2credentialprobe.Handler{},
+		// ADR-0039 (#1121): the provider OAuth consent start and callback,
+		// mounted on the same condition. Same zero handler.
+		CredentialConsent: &v2credentialconsent.Handler{},
 		// Client contract 1.3: cancelChatExecution, registered only when the
 		// cancel route is composed (production_router.go).
 		CurrentAgentCancel: http.NotFoundHandler(),

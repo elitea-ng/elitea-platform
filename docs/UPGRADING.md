@@ -57,6 +57,37 @@ upgrade the chart with the release.
 The operator guide (`/docs/deployment/credential-governance`, "Revocation and
 caching") lists the metrics.
 
+### Provider OAuth consent and single-flight refresh (off by default)
+
+**Affects:** nobody has to act while
+`ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED` stays `false`, or while no
+`ELITEA_PROVIDER_OAUTH_<P>_CLIENT_ID` is set. One additive shared migration
+(0190) creates three empty tables: `elitea_identity.provider_oauth_grants`,
+`elitea_identity.provider_oauth_consent_states` and
+`elitea_runtime.credential_refresh_leases`.
+
+**What changed.**
+
+* Jira, Confluence and Aha! `oauth_delegated` credentials use the user's own
+  provider OAuth grant (Atlassian 3LO, Aha! OAuth2), not Entra. SharePoint
+  still uses the Entra on-behalf-of exchange (#1121).
+* With the flag on and a provider configured, two routes are mounted:
+  `POST /api/v2/credential_consent/{provider}:start` and
+  `GET /api/v2/credential_consent/{provider}:callback`. Start needs
+  `models.credentials.governed.use` in the project. No default role holds it.
+* A refresh runs one time across all replicas, with a fenced lease in
+  PostgreSQL. A rotated refresh token is written with the new access token.
+
+**What to do to use it.**
+
+* Register an OAuth application per provider. Set its callback URL to
+  `https://<host>/api/v2/credential_consent/<provider>:callback`.
+* Set `ELITEA_PROVIDER_OAUTH_<P>_CLIENT_ID`, `_CLIENT_SECRET` (from a
+  Secret) and `_REDIRECT_URI`. For Aha!, also set `_AUTHORIZE_URL` and
+  `_TOKEN_URL`. See `/docs/deployment/credential-governance`.
+* Keep `SECRETS_MASTER_KEY` set. With a provider configured and no key,
+  elitea-main refuses to start.
+
 ## elitea-main: governed credential broker (off by default)
 
 **Affects:** nobody has to act while

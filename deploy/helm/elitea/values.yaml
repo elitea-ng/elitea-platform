@@ -3010,6 +3010,31 @@ main:
     ELITEA_SECRETSTORE_VAULT_TOKEN_FILE: ""
     ELITEA_SECRETSTORE_VAULT_NAMESPACE: ""        # Vault Enterprise only
     ELITEA_SECRETSTORE_VAULT_READINESS_SCOPE: ""
+    # Provider OAuth consent (#1121): one OAuth application per provider
+    # (JIRA, CONFLUENCE, AHA). Read ONLY with the flag above on. An empty
+    # CLIENT_ID leaves the provider unconfigured. REDIRECT_URI is exact:
+    # https://<host>/api/v2/credential_consent/<provider>:callback. Atlassian
+    # endpoints and scopes have defaults; Aha! needs its account's
+    # AUTHORIZE_URL and TOKEN_URL. CLIENT_SECRET is in `secrets:` below.
+    # Read in internal/provideroauth/config.go.
+    ELITEA_PROVIDER_OAUTH_JIRA_CLIENT_ID: ""
+    ELITEA_PROVIDER_OAUTH_JIRA_REDIRECT_URI: ""
+    ELITEA_PROVIDER_OAUTH_JIRA_AUTHORIZE_URL: ""
+    ELITEA_PROVIDER_OAUTH_JIRA_TOKEN_URL: ""
+    ELITEA_PROVIDER_OAUTH_JIRA_SCOPES: ""
+    ELITEA_PROVIDER_OAUTH_JIRA_TIMEOUT: ""
+    ELITEA_PROVIDER_OAUTH_CONFLUENCE_CLIENT_ID: ""
+    ELITEA_PROVIDER_OAUTH_CONFLUENCE_REDIRECT_URI: ""
+    ELITEA_PROVIDER_OAUTH_CONFLUENCE_AUTHORIZE_URL: ""
+    ELITEA_PROVIDER_OAUTH_CONFLUENCE_TOKEN_URL: ""
+    ELITEA_PROVIDER_OAUTH_CONFLUENCE_SCOPES: ""
+    ELITEA_PROVIDER_OAUTH_CONFLUENCE_TIMEOUT: ""
+    ELITEA_PROVIDER_OAUTH_AHA_CLIENT_ID: ""
+    ELITEA_PROVIDER_OAUTH_AHA_REDIRECT_URI: ""
+    ELITEA_PROVIDER_OAUTH_AHA_AUTHORIZE_URL: ""
+    ELITEA_PROVIDER_OAUTH_AHA_TOKEN_URL: ""
+    ELITEA_PROVIDER_OAUTH_AHA_SCOPES: ""
+    ELITEA_PROVIDER_OAUTH_AHA_TIMEOUT: ""
 
     # --- Outbound e-mail (ADR-0024 WP7; gap G7) ---------------------------------
     # These are the BOOTSTRAP DEFAULTS, not the whole configuration. Since gap
@@ -3513,6 +3538,20 @@ main:
     # Outbound e-mail relay password (ADR-0024 WP7). Optional: a deployment
     # without SMTP never reads it; one with SMTP_USERNAME set refuses to start
     # without it (username and password must be set together).
+    # Provider OAuth client secrets (#1121). Optional: a provider without a
+    # CLIENT_ID never reads its secret.
+    ELITEA_PROVIDER_OAUTH_JIRA_CLIENT_SECRET:
+      secretName: elitea-provider-oauth-secrets
+      key: jira-client-secret
+      optional: true
+    ELITEA_PROVIDER_OAUTH_CONFLUENCE_CLIENT_SECRET:
+      secretName: elitea-provider-oauth-secrets
+      key: confluence-client-secret
+      optional: true
+    ELITEA_PROVIDER_OAUTH_AHA_CLIENT_SECRET:
+      secretName: elitea-provider-oauth-secrets
+      key: aha-client-secret
+      optional: true
     SMTP_PASSWORD:
       secretName: elitea-main-mail-secrets
       key: smtp-password

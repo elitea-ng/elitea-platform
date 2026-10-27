@@ -500,6 +500,7 @@ func credentialBrokerAtBoot(
 	pins profile.PinReader,
 	sessions *agentidentitycore.Broker,
 	entra *entraGovernance,
+	providerTokens credentialbroker.ProviderTokenSource,
 	catalog credentialbroker.OperationCatalog,
 	revision profile.PolicyRevision,
 	invalidations *epoch.Hub,
@@ -556,6 +557,9 @@ func credentialBrokerAtBoot(
 		Sessions:     sessions,
 		Catalog:      catalog,
 		Logger:       logger,
+		// Jira, Confluence and Aha! oauth_delegated uses (#1121); nil when
+		// no provider OAuth application is configured.
+		ProviderTokens: providerTokens,
 	}
 	// Revocation epochs, the credential cache and its invalidation (#1121).
 	// The cache's bounds are the active revision's; whether a run may reuse

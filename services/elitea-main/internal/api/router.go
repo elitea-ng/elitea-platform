@@ -36,6 +36,7 @@ import (
 	v2configs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	v2contextmgr "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	v2credentialconsent "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialconsent"
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
 	v2credentialprobe "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialprobe"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
@@ -703,6 +704,10 @@ type RouterConfig struct {
 	// CredentialProbe serves the credential probe (ADR-0039, issue 1120).
 	// Set only with the credential governance flag on; nil mounts no route.
 	CredentialProbe *v2credentialprobe.Handler
+	// CredentialConsent serves the provider OAuth consent flow (ADR-0039,
+	// issue 1121). Set only with the credential governance flag on and at
+	// least one provider OAuth application configured; nil mounts no route.
+	CredentialConsent *v2credentialconsent.Handler
 }
 
 type RuntimeRoutes struct {
@@ -2176,6 +2181,22 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(probeGate).Post("/projects/{projectID}/credential_references/{id}:probe", cfg.CredentialProbe.Probe)
 			}
 			r.Mount("/projects", v2projects.NewHandler(cfg.Pool, projectOptions...).Routes())
+
+			// Provider OAuth consent (ADR-0039 decision 3, issue 1121). Start
+			// needs models.credentials.governed.use in the body's project_id;
+			// the callback resolves the same permission in the project the
+			// state is bound to before it exchanges the code. The callback is
+			// a browser redirect, so it authenticates with the session.
+			if cfg.CredentialConsent != nil {
+				consent := cfg.CredentialConsent
+				consentGate := apimw.RequireResolvedPermissionsForProject(
+					permissionResolver, platformauth.PermissionModeDefault,
+					v2credentialconsent.StartProject, credentialgrant.PermissionUse)
+				r.With(v2credentialconsent.DecodeStart, consentGate).
+					Post("/credential_consent/{provider}:start", consent.Start)
+				r.Get("/credential_consent/{provider}:callback",
+					consent.Callback(permissionResolver, platformauth.PermissionModeDefault))
+			}
 
 			// === Admin endpoints ===
 			//

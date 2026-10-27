@@ -53,6 +53,8 @@ import type {
   BrandingPackageReport,
   BrandingSettings,
   BulkInviteSummary,
+  CredentialConsentResult,
+  CredentialConsentStart,
   CredentialProbeResult,
   CredentialUseGrant,
   CredentialUseGrantListResponse,
@@ -2114,6 +2116,22 @@ export const getProbeCredentialReferenceResponseMock =
     checked_at: "2026-10-27T12:00:00Z",
   });
 
+export const getStartCredentialConsentResponseMock =
+  (): CredentialConsentStart => ({
+    authorization_url:
+      "https://auth.atlassian.com/authorize?audience=api.atlassian.com&client_id=abc&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Felitea.example.com%2Fapi%2Fv2%2Fcredential_consent%2Fjira%3Acallback&response_type=code&scope=read%3Ajira-work+offline_access&state=7mJ2Wq",
+    expires_at: "2026-10-27T12:10:00Z",
+  });
+
+export const getCompleteCredentialConsentResponseMock =
+  (): CredentialConsentResult => ({
+    status: "connected",
+    provider: "jira",
+    project_id: 7,
+    agent_binding_id: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f11",
+    target_binding_id: "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f22",
+  });
+
 export const getGetSystemInfoResponseMock = (
   overrideResponse: Partial<Extract<SystemInfo, object>> = {},
 ): SystemInfo => ({
@@ -3779,6 +3797,58 @@ export const getProbeCredentialReferenceMockHandler = (
   );
 };
 
+export const getStartCredentialConsentMockHandler = (
+  overrideResponse?:
+    | CredentialConsentStart
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CredentialConsentStart> | CredentialConsentStart),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/credential_consent/:provider\\:start",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getStartCredentialConsentResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCompleteCredentialConsentMockHandler = (
+  overrideResponse?:
+    | CredentialConsentResult
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<CredentialConsentResult> | CredentialConsentResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/credential_consent/:provider\\:callback",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCompleteCredentialConsentResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetSystemInfoMockHandler = (
   overrideResponse?:
     | SystemInfo
@@ -3868,5 +3938,7 @@ export const getAdminMock = () => [
   getSuspendCredentialUseGrantMockHandler(),
   getRevokeCredentialUseGrantMockHandler(),
   getProbeCredentialReferenceMockHandler(),
+  getStartCredentialConsentMockHandler(),
+  getCompleteCredentialConsentMockHandler(),
   getGetSystemInfoMockHandler(),
 ];

@@ -21,6 +21,7 @@ func Confluence() AdapterDescriptor {
 			staticSecret:   {"token", "username"},
 			oauthDelegated: {"access_token"},
 		},
+		OAuthAuthority: credentialgrant.OAuthAuthorityProvider,
 		Qualification: map[credentialgrant.CredentialClass]string{
 			staticSecret:   QualificationFixture,
 			oauthDelegated: QualificationFixture,

@@ -821,8 +821,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
+	// Provider delegated OAuth (#1121): consent routes and the token source
+	// the broker reads for Jira, Confluence and Aha! oauth_delegated uses.
+	// Nil with the flag off or with no provider OAuth application.
+	providerOAuthGoverned, err := providerOAuthAtBoot(credentialAdmission, os.LookupEnv, pool,
+		func() ([]byte, error) { return v2secrets.MasterKeyFromEnv(os.Getenv) }, logger)
+	if err != nil {
+		return err
+	}
 	credentialBroker, err := credentialBrokerAtBoot(credentialAdmission, os.LookupEnv, pool, credentialDecider,
-		credentialGovernanceStore, agentIdentity.Broker, entraGoverned, credentialCatalog, credentialRevision,
+		credentialGovernanceStore, agentIdentity.Broker, entraGoverned, providerOAuthGoverned.Tokens, credentialCatalog, credentialRevision,
 		securityInvalidations, logger)
 	if err != nil {
 		return err
@@ -2733,6 +2741,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		AgentIdentityAdmin:            agentIdentity.Admin,
 		CredentialGrantsAdmin:         credentialGrantsAdminHandler,
 		CredentialProbe:               credentialProbeHandler,
+		CredentialConsent:             providerOAuthGoverned.Consent,
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
 		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,

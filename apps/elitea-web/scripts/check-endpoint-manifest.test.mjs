@@ -809,9 +809,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // governed credential probe. No web code calls it yet, so the manifest
 // count is unchanged.
 // 380 -> 381 (issue 1154, ADR-0039): listExternalAgentIdentityDriftFindings,
-// the agent identity reconcile loop's open drift findings. No web code calls
-// it yet, so the manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 381;
+// the agent identity reconcile loop's open drift findings.
+// 381 -> 383 (issue 1121, ADR-0039): startCredentialConsent and
+// completeCredentialConsent, the provider OAuth consent flow. No web code
+// calls any of the three yet, so the manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 383;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
