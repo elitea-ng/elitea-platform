@@ -11,6 +11,15 @@
 // under provider type "mcp" and refreshes single-flight like every other
 // provider grant (#1121).
 //
+// Every request (metadata, registration, code exchange, refresh) goes
+// through the MCP authorization egress guard (ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST),
+// the one the eliteacore MCP OAuth proxies use: the guard validates each URL
+// before it is fetched and dials only an address it has just checked. The
+// metadata walk is internal/mcpoauth's, shared with those proxies. A
+// tenant-chosen MCP server therefore cannot make Main fetch from, or POST a
+// code to, a private or loopback authorization server the operator did not
+// allow.
+//
 // Every authorization request, code exchange and refresh carries the RFC
 // 8707 `resource` parameter: the target's canonical resource URI. A Client
 // ID Metadata Document is preferred; dynamic client registration is used
@@ -41,6 +50,8 @@ import (
 
 	mcpadapter "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialadapters/mcp"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/provideroauth"
 )
 
@@ -52,7 +63,9 @@ const (
 	maxMetadataBytes = 64 << 10
 	maxTokenBytes    = 16 << 10
 	maxScopes        = 32
-	custodyVersion   = 1
+	// maxAuthorizationServers bounds the RFC 9728 list; Begin uses the first.
+	maxAuthorizationServers = 16
+	custodyVersion          = 1
 )
 
 var (
@@ -78,8 +91,12 @@ type Config struct {
 	// AllowDynamicRegistration permits RFC 7591 registration with a server
 	// that has no CIMD support. Default false.
 	AllowDynamicRegistration bool
-	// HTTPClient reaches resource and authorization servers. Nil is a TLS
-	// client with no redirects. Its Timeout is replaced by Timeout.
+	// Guard is the MCP authorization egress guard. Required.
+	Guard *egress.Guard
+	// HTTPClient supplies the TLS trust of the client that reaches resource
+	// and authorization servers; nil is the system roots. Its dialer, proxy
+	// and redirect policy are always the guard's and none, and its Timeout
+	// is replaced by Timeout.
 	HTTPClient *http.Client
 	// Timeout bounds one request. Default 10s, at most
 	// provideroauth.MaxTimeout.
@@ -91,6 +108,7 @@ type Config struct {
 type Service struct {
 	cfg  Config
 	http *http.Client
+	meta mcpoauth.Fetcher
 	now  func() time.Time
 }
 
@@ -116,18 +134,36 @@ func New(cfg Config) (*Service, error) {
 	if cfg.Timeout < 0 || cfg.Timeout > provideroauth.MaxTimeout {
 		return nil, fmt.Errorf("governed MCP: the timeout must be at most %s", provideroauth.MaxTimeout)
 	}
-	client := cfg.HTTPClient
-	if client == nil {
-		client = &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()}
-	} else {
-		copied := *client
-		client = &copied
+	if cfg.Guard == nil {
+		return nil, errors.New("governed MCP: the MCP authorization egress guard is required")
 	}
+	client := guardedClient(cfg.Guard, cfg.HTTPClient)
 	client.Timeout = cfg.Timeout
-	// Metadata, registration and token endpoints never redirect; following
-	// one would send a code or a secret somewhere else.
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Service{cfg: cfg, http: client, now: time.Now}, nil
+	return &Service{
+		cfg: cfg, http: client, now: time.Now,
+		meta: mcpoauth.Fetcher{
+			Do: client.Do, Validate: cfg.Guard.Validate,
+			Flags: []string{"client_id_metadata_document_supported"},
+		},
+	}, nil
+}
+
+// guardedClient is the guard's transport with base's TLS trust: the dialer
+// is the guard's, there is no proxy (the guard would check the proxy's
+// address instead), and no redirect is followed, since metadata,
+// registration and token endpoints never redirect and following one would
+// send a code or a secret somewhere else.
+func guardedClient(guard *egress.Guard, base *http.Client) *http.Client {
+	transport := guard.Transport()
+	if base != nil {
+		if configured, ok := base.Transport.(*http.Transport); ok && configured.TLSClientConfig != nil {
+			transport.TLSClientConfig = configured.TLSClientConfig.Clone()
+		}
+	}
+	return &http.Client{
+		Transport:     transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
 
 // Provider is "mcp".
@@ -176,11 +212,7 @@ func (s *Service) Begin(ctx context.Context, target credentialgrant.TargetBindin
 	if err != nil {
 		return nil, "", err
 	}
-	resourceMeta, err := s.protectedResource(ctx, resource)
-	if err != nil {
-		return nil, "", err
-	}
-	as, err := s.authorizationServer(ctx, resourceMeta.AuthorizationServers[0])
+	resourceMeta, as, err := s.discover(ctx, resource)
 	if err != nil {
 		return nil, "", err
 	}
@@ -357,80 +389,53 @@ func expiresIn(raw json.RawMessage) (int64, bool) {
 	return seconds, true
 }
 
-// resourceMetadata is the RFC 9728 document.
+// resourceMetadata is the part of the RFC 9728 document Begin uses.
 type resourceMetadata struct {
-	Resource             string   `json:"resource"`
-	AuthorizationServers []string `json:"authorization_servers"`
-	ScopesSupported      []string `json:"scopes_supported"`
+	AuthorizationServers []string
+	ScopesSupported      []string
 }
 
-// serverMetadata is the RFC 8414 / OpenID document, with the MCP CIMD flag.
+// serverMetadata is the part of the RFC 8414 / OpenID document Begin uses,
+// with the MCP CIMD flag.
 type serverMetadata struct {
-	Issuer                            string   `json:"issuer"`
-	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
-	TokenEndpoint                     string   `json:"token_endpoint"`
-	RegistrationEndpoint              string   `json:"registration_endpoint"`
-	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
-	ClientIDMetadataDocumentSupported bool     `json:"client_id_metadata_document_supported"`
+	Issuer                            string
+	AuthorizationEndpoint             string
+	TokenEndpoint                     string
+	RegistrationEndpoint              string
+	ClientIDMetadataDocumentSupported bool
 }
 
-// protectedResource reads the RFC 9728 metadata of resource: the path
-// inserted well-known URI first, then the host root. The document must name
-// the same resource.
-func (s *Service) protectedResource(ctx context.Context, resource string) (resourceMetadata, error) {
-	u, _ := url.Parse(resource)
-	candidates := []string{wellKnown(u, "oauth-protected-resource", true)}
-	if strings.Trim(u.Path, "/") != "" {
-		candidates = append(candidates, wellKnown(u, "oauth-protected-resource", false))
-	}
-	for _, candidate := range candidates {
-		var meta resourceMetadata
-		if !s.getJSON(ctx, candidate, &meta) {
-			continue
-		}
-		canonical, err := mcpadapter.CanonicalResource(meta.Resource)
-		if err != nil || canonical != resource || len(meta.AuthorizationServers) == 0 || !validURL(meta.AuthorizationServers[0]) {
-			return resourceMetadata{}, ErrMetadata
-		}
-		return meta, nil
-	}
-	return resourceMetadata{}, ErrMetadata
-}
-
-// authorizationServer reads RFC 8414 metadata, then OpenID discovery. The
-// issuer must be the one asked for, endpoints https, and S256 supported.
-func (s *Service) authorizationServer(ctx context.Context, issuer string) (serverMetadata, error) {
-	u, err := httpsURL(issuer)
+// discover walks resource's metadata with internal/mcpoauth's walk, through
+// the guard. The RFC 9728 document must name the same canonical resource,
+// and its first authorization server must answer with https endpoints and
+// S256.
+func (s *Service) discover(ctx context.Context, resource string) (resourceMetadata, serverMetadata, error) {
+	endpoint, err := httpsURL(resource)
 	if err != nil {
-		return serverMetadata{}, ErrMetadata
+		return resourceMetadata{}, serverMetadata{}, ErrMetadata
 	}
-	candidates := []string{
-		wellKnown(u, "oauth-authorization-server", true),
-		strings.TrimSuffix(issuer, "/") + "/.well-known/openid-configuration",
+	found, err := s.meta.Discover(ctx, endpoint, "", maxAuthorizationServers, false, nil)
+	if err != nil || len(found.Issuers) == 0 {
+		return resourceMetadata{}, serverMetadata{}, ErrMetadata
 	}
-	for _, candidate := range candidates {
-		var meta serverMetadata
-		if !s.getJSON(ctx, candidate, &meta) {
-			continue
-		}
-		if strings.TrimSuffix(meta.Issuer, "/") != strings.TrimSuffix(issuer, "/") || !validURL(meta.AuthorizationEndpoint) ||
-			!validURL(meta.TokenEndpoint) || (meta.RegistrationEndpoint != "" && !validURL(meta.RegistrationEndpoint)) ||
-			!slices.Contains(meta.CodeChallengeMethodsSupported, "S256") {
-			return serverMetadata{}, ErrMetadata
-		}
-		return meta, nil
+	named, _ := found.Resource["resource"].(string)
+	if canonical, err := mcpadapter.CanonicalResource(named); err != nil || canonical != resource || !validURL(found.Servers[0]) {
+		return resourceMetadata{}, serverMetadata{}, ErrMetadata
 	}
-	return serverMetadata{}, ErrMetadata
-}
-
-// wellKnown is the well-known URI of u: path inserted (RFC 8414 §3.1,
-// RFC 9728 §3.1) or at the host root.
-func wellKnown(u *url.URL, name string, insertPath bool) string {
-	path := ""
-	if insertPath {
-		path = strings.TrimSuffix(u.EscapedPath(), "/")
+	scopes, _ := mcpoauth.BoundedMetadataList(found.Resource["scopes_supported"])
+	issuer := found.Issuers[0]
+	text := func(key string) string { value, _ := issuer[key].(string); return value }
+	as := serverMetadata{
+		Issuer: text("issuer"), AuthorizationEndpoint: text("authorization_endpoint"),
+		TokenEndpoint: text("token_endpoint"), RegistrationEndpoint: text("registration_endpoint"),
 	}
-	return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String() + "/.well-known/" + name + path
+	as.ClientIDMetadataDocumentSupported, _ = issuer["client_id_metadata_document_supported"].(bool)
+	methods, _ := issuer["code_challenge_methods_supported"].([]string)
+	if !validURL(as.AuthorizationEndpoint) || !validURL(as.TokenEndpoint) ||
+		(as.RegistrationEndpoint != "" && !validURL(as.RegistrationEndpoint)) || !slices.Contains(methods, "S256") {
+		return resourceMetadata{}, serverMetadata{}, ErrMetadata
+	}
+	return resourceMetadata{AuthorizationServers: found.Servers, ScopesSupported: scopes}, as, nil
 }
 
 // register is RFC 7591 registration of a client for the authorization code
@@ -461,13 +466,12 @@ func (s *Service) register(ctx context.Context, endpoint, scope string) (string,
 	return registered.ClientID, registered.ClientSecret, nil
 }
 
-func (s *Service) getJSON(ctx context.Context, target string, into any) bool {
-	raw, status, err := s.do(ctx, http.MethodGet, target, "", nil)
-	return err == nil && status == http.StatusOK && json.Unmarshal(raw, into) == nil
-}
-
 func (s *Service) do(ctx context.Context, method, target, contentType string, body []byte) ([]byte, int, error) {
 	if _, err := httpsURL(target); err != nil {
+		return nil, 0, err
+	}
+	// The refusal before any connection; the guarded dialer checks again.
+	if err := s.cfg.Guard.Validate(ctx, target); err != nil {
 		return nil, 0, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.cfg.Timeout)

@@ -5,11 +5,13 @@
 //	GET  /api/v2/credential_consent/{provider}:callback
 //
 // Start answers the provider authorization URL for one (tenant project,
-// agent binding, target binding). The state, the PKCE verifier and the
-// exact redirect URI stay server side (internal/provideroauth). The
-// provider redirects the user's browser to the callback, which consumes the
-// state once, exchanges the code and seals the grant with a security audit
-// event.
+// agent binding, target binding), named by the two ids or by the
+// authorization_reference of an AUTHORIZATION_REQUIRED pause (#1123),
+// which opens only for the caller in that project. The state, the PKCE
+// verifier and the exact redirect URI stay server side
+// (internal/provideroauth). The provider redirects the user's browser to
+// the callback, which consumes the state once, exchanges the code and
+// seals the grant with a security audit event.
 //
 // router.go mounts the routes only when RouterConfig.CredentialConsent is
 // set, which the composition root does only with credential governance on.
@@ -46,27 +48,51 @@ type Flow interface {
 	RecordRefusal(ctx context.Context, userID int64, provider, reason string) error
 }
 
+// AuthorizationReferences opens the authorization_reference of an
+// AUTHORIZATION_REQUIRED pause (*governedmcp.References, issue #1123) for
+// the authenticated user in the tenant project the body names. Any error
+// is a reference that is not the caller's to use.
+type AuthorizationReferences interface {
+	Open(reference string, tenantProjectID, userID int64) (provideroauth.AuthorizationRequirement, error)
+}
+
 // Handler serves the consent routes.
 type Handler struct {
-	flow   Flow
-	logger *slog.Logger
+	flow       Flow
+	references AuthorizationReferences
+	logger     *slog.Logger
+}
+
+// Option configures a Handler.
+type Option func(*Handler)
+
+// WithAuthorizationReferences lets Start take an authorization_reference
+// in place of the two binding ids. Without it a reference is refused.
+func WithAuthorizationReferences(references AuthorizationReferences) Option {
+	return func(h *Handler) { h.references = references }
 }
 
 // New builds the handler.
-func New(flow Flow, logger *slog.Logger) (*Handler, error) {
+func New(flow Flow, logger *slog.Logger, opts ...Option) (*Handler, error) {
 	if flow == nil {
 		return nil, errors.New("credential consent: a consent flow is required")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{flow: flow, logger: logger}, nil
+	h := &Handler{flow: flow, logger: logger}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h, nil
 }
 
 type startBody struct {
 	ProjectID       int64  `json:"project_id"`
 	AgentBindingID  string `json:"agent_binding_id"`
 	TargetBindingID string `json:"target_binding_id"`
+	// AuthorizationReference replaces the two binding ids (#1123).
+	AuthorizationReference string `json:"authorization_reference"`
 }
 
 type startKey struct{}
@@ -129,10 +155,17 @@ func (h *Handler) Start(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "the caller has no resolved user id")
 		return
 	}
-	result, err := h.flow.Start(r.Context(), provideroauth.StartRequest{
+	start := provideroauth.StartRequest{
 		UserID: userID, Provider: provider(r, ":start"), TenantProjectID: body.ProjectID,
 		AgentBindingID: body.AgentBindingID, TargetBindingID: body.TargetBindingID,
-	})
+	}
+	if body.AuthorizationReference != "" {
+		if !h.resolveReference(body, &start) {
+			writeError(w, http.StatusBadRequest, "the authorization reference is not valid for this request")
+			return
+		}
+	}
+	result, err := h.flow.Start(r.Context(), start)
 	switch {
 	case err == nil:
 	case errors.Is(err, provideroauth.ErrInvalid):
@@ -155,6 +188,24 @@ func (h *Handler) Start(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, startView{
 		AuthorizationURL: result.AuthorizationURL, ExpiresAt: result.ExpiresAt.UTC().Format(time.RFC3339Nano),
 	})
+}
+
+// resolveReference fills start's bindings from the authorization reference
+// of an AUTHORIZATION_REQUIRED pause, so the paused turn's user consents to
+// exactly the grant the broker asked for. The reference must open for the
+// caller in the body's project and name the path's provider, and the body
+// must not also name bindings: a reference never widens to another target.
+func (h *Handler) resolveReference(body startBody, start *provideroauth.StartRequest) bool {
+	if h.references == nil || body.AgentBindingID != "" || body.TargetBindingID != "" {
+		return false
+	}
+	requirement, err := h.references.Open(body.AuthorizationReference, body.ProjectID, start.UserID)
+	if err != nil || requirement.Key.Provider != start.Provider || requirement.Key.TenantProjectID != body.ProjectID ||
+		requirement.Key.SubjectUserID != start.UserID {
+		return false
+	}
+	start.AgentBindingID, start.TargetBindingID = requirement.Key.AgentBindingID, requirement.Key.TargetBindingID
+	return true
 }
 
 type callbackView struct {

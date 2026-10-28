@@ -14,7 +14,6 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialbroker/refresh"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/governedmcp"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/provideroauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
@@ -41,19 +40,20 @@ func providerOAuthAtBoot(
 	masterKey func() ([]byte, error),
 	logger *slog.Logger,
 ) (providerOAuth, error) {
-	return providerOAuthWithMCPAtBoot(admission, lookup, pool, masterKey, nil, logger)
+	return providerOAuthWithMCPAtBoot(admission, lookup, pool, masterKey, governedMCP{}, logger)
 }
 
 // providerOAuthWithMCPAtBoot is providerOAuthAtBoot with the governed MCP
 // OAuth service (#1123) as one more provider: its grants, consent and
-// refresh are the same custody, under provider type "mcp". Nil mcp is
-// providerOAuthAtBoot.
+// refresh are the same custody, under provider type "mcp", and the consent
+// start opens the authorization_reference of an MCP AUTHORIZATION_REQUIRED
+// pause. An empty governed is providerOAuthAtBoot.
 func providerOAuthWithMCPAtBoot(
 	admission profile.Admission,
 	lookup func(string) (string, bool),
 	pool *pgxpool.Pool,
 	masterKey func() ([]byte, error),
-	mcp *governedmcp.Service,
+	governed governedMCP,
 	logger *slog.Logger,
 ) (providerOAuth, error) {
 	if !admission.Governed() {
@@ -63,6 +63,7 @@ func providerOAuthWithMCPAtBoot(
 	if err != nil {
 		return providerOAuth{}, err
 	}
+	mcp := governed.Outbound
 	if len(configs) == 0 && mcp == nil {
 		return providerOAuth{}, nil
 	}
@@ -123,7 +124,11 @@ func providerOAuthWithMCPAtBoot(
 	if err != nil {
 		return providerOAuth{}, err
 	}
-	handler, err := v2credentialconsent.New(consent, logger)
+	var options []v2credentialconsent.Option
+	if governed.References != nil {
+		options = append(options, v2credentialconsent.WithAuthorizationReferences(governed.References))
+	}
+	handler, err := v2credentialconsent.New(consent, logger, options...)
 	if err != nil {
 		return providerOAuth{}, err
 	}

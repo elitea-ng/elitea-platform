@@ -2250,8 +2250,13 @@ components:
       type: object
       description: >
         ADR-0039 provider OAuth consent start (issue 1121). Names the tenant
-        project, the agent binding and the target binding the grant is for.
-      required: [project_id, agent_binding_id, target_binding_id]
+        project and either the agent binding and the target binding the
+        grant is for, or the authorization_reference of an
+        AUTHORIZATION_REQUIRED pause (issue 1123), which resolves server
+        side to both. A reference opens only for the user and the project it
+        was issued to and for the provider in the path; sending it with
+        either binding id is refused.
+      required: [project_id]
       additionalProperties: false
       properties:
         project_id:
@@ -2261,6 +2266,13 @@ components:
           description: The tenant project. The caller needs models.credentials.governed.use there.
         agent_binding_id: { type: string, format: uuid }
         target_binding_id: { type: string, format: uuid }
+        authorization_reference:
+          type: string
+          maxLength: 2048
+          description: >
+            The opaque reference of an AUTHORIZATION_REQUIRED denial for a
+            remote MCP server (`mar_` prefix), in place of the two binding
+            ids.
       example:
         project_id: 7
         agent_binding_id: 0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f11
@@ -28484,7 +28496,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/CredentialConsentStart' }
         '400':
-          description: The body is malformed
+          description: The body is malformed, or the authorization reference is not valid for the caller, the project or the provider
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

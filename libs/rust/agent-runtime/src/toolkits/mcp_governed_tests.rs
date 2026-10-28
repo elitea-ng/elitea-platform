@@ -3,13 +3,12 @@
 //! server its envelope names.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
-use adk_tool::BasicToolset;
 use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::delegated_authorization_requirement;
 use super::governed::adapters::mcp::{MCP_TOOL_CALL, MCP_TOOLS_LIST};
@@ -21,7 +20,8 @@ use super::governed::{
 use super::governed_tests::{RecordingRedeemer, Respond, context, envelope, policy};
 use super::materialize::LeftOutReason;
 use super::mcp::{
-    McpConnector, McpMaterializationError, RemoteMcpConfig, materialize_governed_mcp_toolsets,
+    McpConnector, McpMaterializationError, McpSession, McpToolCaller, RemoteMcpConfig,
+    materialize_governed_mcp_toolsets,
 };
 use super::snapshot::FrozenToolSnapshot;
 
@@ -29,12 +29,23 @@ const SERVER_A: &str = "https://a.mcp.example.test/mcp";
 const SERVER_B: &str = "https://b.mcp.example.test/v1/mcp";
 
 /// Two mock MCP servers behind one connector. Each records every session
-/// it is dialled with and the bearer that session carried, and serves one
-/// `lookup` tool that records its calls.
+/// it is dialled with and the bearer that session carried, every
+/// `tools/list`, and serves one `lookup` tool that records its calls.
 #[derive(Default)]
 struct MockServers {
     sessions: Mutex<Vec<(String, Option<String>)>>,
     calls: Mutex<Vec<String>>,
+    listings: Mutex<Vec<String>>,
+    /// Calls made by name, with no listing: (server, bearer, tool).
+    by_name_calls: Mutex<Vec<(String, Option<String>, String)>>,
+    /// Servers whose `tools/list` fails, as a 401 for a narrow scope does.
+    refuse_listing: Mutex<Vec<String>>,
+    /// The sessions call tools by name, as the production connector's do.
+    by_name: AtomicBool,
+    /// `lookup` promotes its argument to a request header.
+    header_schema: AtomicBool,
+    /// Listings wait here, to prove they overlap.
+    barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
 }
 
 impl MockServers {
@@ -44,6 +55,14 @@ impl MockServers {
 
     fn calls(&self) -> Vec<String> {
         self.calls.lock().expect("calls").clone()
+    }
+
+    fn listings(&self) -> Vec<String> {
+        self.listings.lock().expect("listings").clone()
+    }
+
+    fn by_name_calls(&self) -> Vec<(String, Option<String>, String)> {
+        self.by_name_calls.lock().expect("calls").clone()
     }
 }
 
@@ -55,16 +74,108 @@ impl McpConnector for Connector {
         &self,
         config: &RemoteMcpConfig,
     ) -> Result<Arc<dyn Toolset>, McpMaterializationError> {
+        self.connect_session(config)
+            .await
+            .map(|session| session.toolset)
+    }
+
+    async fn connect_session(
+        &self,
+        config: &RemoteMcpConfig,
+    ) -> Result<McpSession, McpMaterializationError> {
         let endpoint = config.endpoint().to_owned();
-        self.0.sessions.lock().expect("sessions").push((
-            endpoint.clone(),
-            config.access_token_for_test().map(str::to_owned),
-        ));
+        let token = config.access_token_for_test().map(str::to_owned);
+        self.0
+            .sessions
+            .lock()
+            .expect("sessions")
+            .push((endpoint.clone(), token.clone()));
         let tool: Arc<dyn Tool> = Arc::new(Lookup {
             servers: Arc::clone(&self.0),
-            endpoint,
+            endpoint: endpoint.clone(),
         });
-        Ok(Arc::new(BasicToolset::new("mock_mcp", vec![tool])))
+        let caller = self.0.by_name.load(Ordering::SeqCst).then(|| {
+            Arc::new(ByName {
+                servers: Arc::clone(&self.0),
+                endpoint: endpoint.clone(),
+                token,
+            }) as Arc<dyn McpToolCaller>
+        });
+        Ok(McpSession {
+            toolset: Arc::new(Listed {
+                servers: Arc::clone(&self.0),
+                endpoint,
+                tool,
+            }),
+            reuses_listings: false,
+            caller,
+        })
+    }
+}
+
+/// One session's `tools/list`.
+struct Listed {
+    servers: Arc<MockServers>,
+    endpoint: String,
+    tool: Arc<dyn Tool>,
+}
+
+#[async_trait]
+impl Toolset for Listed {
+    fn name(&self) -> &'static str {
+        "mock_mcp"
+    }
+
+    async fn tools(&self, _ctx: Arc<dyn ReadonlyContext>) -> adk_core::Result<Vec<Arc<dyn Tool>>> {
+        self.servers
+            .listings
+            .lock()
+            .expect("listings")
+            .push(self.endpoint.clone());
+        let barrier = self.servers.barrier.lock().expect("barrier").clone();
+        if let Some(barrier) = barrier {
+            barrier.wait().await;
+        }
+        if self
+            .servers
+            .refuse_listing
+            .lock()
+            .expect("refused")
+            .contains(&self.endpoint)
+        {
+            return Err(adk_core::AdkError::tool(
+                "401 Unauthorized: insufficient_scope",
+            ));
+        }
+        Ok(vec![Arc::clone(&self.tool)])
+    }
+}
+
+/// `tools/call` by name on one session.
+struct ByName {
+    servers: Arc<MockServers>,
+    endpoint: String,
+    token: Option<String>,
+}
+
+#[async_trait]
+impl McpToolCaller for ByName {
+    async fn call_tool(
+        &self,
+        name: &str,
+        _arguments: Map<String, Value>,
+    ) -> adk_core::Result<Value> {
+        self.servers.by_name_calls.lock().expect("calls").push((
+            self.endpoint.clone(),
+            self.token.clone(),
+            name.to_owned(),
+        ));
+        self.servers
+            .calls
+            .lock()
+            .expect("calls")
+            .push(self.endpoint.clone());
+        Ok(json!({"server": self.endpoint}))
     }
 }
 
@@ -84,6 +195,11 @@ impl Tool for Lookup {
     }
 
     fn parameters_schema(&self) -> Option<Value> {
+        if self.servers.header_schema.load(Ordering::SeqCst) {
+            return Some(json!({"type": "object", "properties": {
+                "query": {"type": "string", "x-mcp-header": "Release-Query"}
+            }}));
+        }
         Some(json!({"type": "object", "properties": {"query": {"type": "string"}}}))
     }
 
@@ -150,12 +266,23 @@ async fn build(
     Arc<MockServers>,
     Arc<RecordingRedeemer>,
 ) {
+    build_on(Arc::new(MockServers::default()), tools, respond).await
+}
+
+async fn build_on(
+    servers: Arc<MockServers>,
+    tools: Vec<Value>,
+    respond: Box<Respond>,
+) -> (
+    super::mcp::GovernedMcpToolsets,
+    Arc<MockServers>,
+    Arc<RecordingRedeemer>,
+) {
     let version = json!({"tools": tools});
     let policy = policy();
     let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
         .expect("snapshot")
         .apply_policy(policy.as_ref());
-    let servers = Arc::new(MockServers::default());
     let connector: Arc<dyn McpConnector> = Arc::new(Connector(Arc::clone(&servers)));
     let (client, redeemer) = governed(respond);
     let built = materialize_governed_mcp_toolsets(&snapshot, &connector, &policy, &client)
@@ -481,6 +608,102 @@ async fn a_denied_listing_leaves_the_connection_out() {
     assert_eq!(built.toolsets.len(), 0);
     assert_eq!(built.left_out.len(), 1);
     assert_eq!(servers.sessions().len(), 0);
+}
+
+/// Review of #1123: a server whose `tools/list` fails (here a 401 for a
+/// narrow scope) leaves only that connection out, named in the run notice;
+/// the other server's tools are built and the run goes on.
+#[tokio::test]
+async fn a_failed_listing_leaves_only_that_connection_out() {
+    let servers = Arc::new(MockServers::default());
+    servers
+        .refuse_listing
+        .lock()
+        .expect("refused")
+        .push(SERVER_B.to_owned());
+    let (built, servers, _) = build_on(
+        servers,
+        vec![
+            mcp_tool(Some(41), "alpha", SERVER_A, &json!({})),
+            mcp_tool(Some(42), "beta", SERVER_B, &json!({})),
+        ],
+        per_server(),
+    )
+    .await;
+    assert_eq!(built.toolsets.len(), 1);
+    let left: Vec<_> = built
+        .left_out
+        .iter()
+        .map(super::materialize::LeftOutToolkit::toolkit_name)
+        .collect();
+    assert_eq!(left, ["beta"]);
+    assert_eq!(
+        super::mcp::governed_declared_names_for_test(&built.toolsets[0]).await,
+        ["lookup"]
+    );
+    assert_eq!(servers.listings(), [SERVER_A, SERVER_B]);
+}
+
+/// Review of #1123: a call is made by name from the declaration stored at
+/// build time, with no `tools/list` on the call's session; the listings of
+/// the build run concurrently (both wait on one barrier, which a
+/// one-at-a-time build would never pass).
+#[tokio::test]
+async fn a_call_uses_the_stored_declaration_and_listings_overlap() {
+    let servers = Arc::new(MockServers::default());
+    servers.by_name.store(true, Ordering::SeqCst);
+    *servers.barrier.lock().expect("barrier") = Some(Arc::new(tokio::sync::Barrier::new(2)));
+    let (built, servers, _) = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        build_on(
+            servers,
+            vec![
+                mcp_tool(Some(41), "alpha", SERVER_A, &json!({})),
+                mcp_tool(Some(42), "beta", SERVER_B, &json!({})),
+            ],
+            per_server(),
+        ),
+    )
+    .await
+    .expect("the two listings ran concurrently");
+    assert_eq!(built.toolsets.len(), 2);
+    *servers.barrier.lock().expect("barrier") = None;
+    let listed = servers.listings().len();
+
+    let result = lookup(&built.toolsets[1])
+        .await
+        .execute(context(), json!({"query": "1.2"}))
+        .await
+        .expect("governed call");
+    assert_eq!(result, json!({"server": SERVER_B}));
+    assert_eq!(servers.listings().len(), listed, "the call listed again");
+    assert_eq!(
+        servers.by_name_calls(),
+        [(
+            SERVER_B.to_owned(),
+            Some("token-for-b".to_owned()),
+            "lookup".to_owned()
+        )]
+    );
+
+    // A tool that promotes an argument to a header lists on its session,
+    // because the transport learns the promotion only from that listing.
+    let servers = Arc::new(MockServers::default());
+    servers.by_name.store(true, Ordering::SeqCst);
+    servers.header_schema.store(true, Ordering::SeqCst);
+    let (built, servers, _) = build_on(
+        servers,
+        vec![mcp_tool(Some(41), "alpha", SERVER_A, &json!({}))],
+        per_server(),
+    )
+    .await;
+    lookup(&built.toolsets[0])
+        .await
+        .execute(context(), json!({"query": "1.2"}))
+        .await
+        .expect("governed call");
+    assert_eq!(servers.listings(), [SERVER_A, SERVER_A]);
+    assert_eq!(servers.by_name_calls().len(), 0);
 }
 
 /// The MCP adapter's two operations are the shared catalogue's `mcp`

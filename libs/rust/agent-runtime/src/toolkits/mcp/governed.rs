@@ -8,15 +8,23 @@
 //!
 //! - building the toolkit redeems `mcp.tools.list` ONCE (empty resource),
 //!   lists the server's tools over a session that carries only that token,
-//!   keeps the tools' declarations and drops the session and the token;
+//!   keeps the tools' declarations and drops the session and the token. The
+//!   connections are listed concurrently, at most
+//!   [`MAX_CONCURRENT_LISTINGS`] at a time. A listing the server refuses or
+//!   cannot answer (a 401 for a narrow scope, a timeout, a malformed list)
+//!   leaves that one connection out, named in the run notice; it does not
+//!   end the run;
 //! - each tool call redeems `mcp.tool.call` on `mcp:tool/<name>`, opens a
 //!   FRESH session with only `Authorization: Bearer <token>` to that one
-//!   server, calls the tool and drops the session and the token with the
-//!   call's frame.
+//!   server, calls the tool by name from its stored declaration and drops
+//!   the session and the token with the call's frame.
 //!
-//! A fresh session per call costs one MCP `initialize` and one `tools/list`
-//! more per call than the legacy path. That is accepted for now: no session,
-//! client or token outlives the one invocation its envelope was minted for.
+//! A fresh session per call costs one MCP `initialize` more per call than
+//! the legacy path. That is accepted for now: no session, client or token
+//! outlives the one invocation its envelope was minted for. A tool whose
+//! schema promotes an argument to a request header (`x-mcp-header`) is the
+//! exception: the transport learns that from a `tools/list` on the same
+//! session, so its call lists first.
 //!
 //! Only a saved direct `mcp` toolkit is governable: a connection with no
 //! toolkit id Main can bind a grant to, a prebuilt or internal server, or a
@@ -30,14 +38,16 @@ use std::time::Duration;
 
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
+use futures::stream::{self, StreamExt as _};
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
 use super::{
     BoundedMcpTool, MAX_MCP_SERVERS, McpAuthorizationRequiredTool, McpConnector,
-    McpMaterializationError, McpMaterializationErrorCode, RemoteMcpConfig, contains_tool_name,
-    dependency_unavailable, discover_tools, invalid_configuration, materialized_toolset_error,
-    resource_exhausted, select_tools, selection_description,
+    McpMaterializationError, McpMaterializationErrorCode, McpSession, McpToolCaller,
+    RemoteMcpConfig, contains_tool_name, dependency_unavailable, discover_tools,
+    invalid_configuration, materialized_toolset_error, resource_exhausted, select_tools,
+    selection_description,
 };
 use crate::toolkits::delegated_auth::{
     DelegatedAuthorizationCatalog, DelegatedAuthorizationRequirement, delegated_authorization_error,
@@ -57,6 +67,13 @@ use crate::toolkits::snapshot::{AdmittedToolSnapshot, FrozenToolKind, FrozenTool
 /// The tool call id of the listing redemption: a build has no model tool
 /// call, and Main requires a non-empty printable one.
 const LISTING_TOOL_CALL_ID: &str = "elitea.mcp.tools.list";
+
+/// How many governed listings one build runs at a time.
+pub(crate) const MAX_CONCURRENT_LISTINGS: usize = 4;
+
+/// The reason code of a connection whose listing its server refused or
+/// could not answer.
+const LISTING_FAILED: &str = "governed.mcp_listing_failed";
 
 /// The governed MCP half of an agent's toolsets.
 #[derive(Default)]
@@ -88,6 +105,7 @@ pub async fn materialize_governed_mcp_toolsets(
         return Err(resource_exhausted());
     }
     let mut out = GovernedMcpToolsets::default();
+    let mut admitted = Vec::with_capacity(references.len());
     for reference in references {
         let Some(server) = GovernedServer::admit(reference)? else {
             tracing::warn!(
@@ -103,8 +121,22 @@ pub async fn materialize_governed_mcp_toolsets(
             ));
             continue;
         };
-        let server = Arc::new(server);
-        match list(&server, connector.as_ref(), governed).await? {
+        admitted.push((reference, Arc::new(server)));
+    }
+    // Each listing redeems and dials its own server; they run together,
+    // bounded, and come back in the snapshot's order.
+    // The futures are built first: a stream that maps through a borrowing
+    // closure is not `Send` for every lifetime the worker's spawn needs.
+    let pending = admitted
+        .iter()
+        .map(|(_, server)| list(server, connector.as_ref(), governed))
+        .collect::<Vec<_>>();
+    let listings = stream::iter(pending)
+        .buffered(MAX_CONCURRENT_LISTINGS)
+        .collect::<Vec<_>>()
+        .await;
+    for ((reference, server), listing) in admitted.into_iter().zip(listings) {
+        match listing? {
             Listing::Tools(tools) => {
                 let tools = tools
                     .into_iter()
@@ -122,10 +154,10 @@ pub async fn materialize_governed_mcp_toolsets(
             Listing::Authorization(requirement) => {
                 authorization_placeholders(reference, &server, policy, requirement, &mut out)?;
             }
-            Listing::Refused(error) => {
+            Listing::Refused(reason_code) => {
                 tracing::warn!(
                     event = "agent_toolkit_refused",
-                    reason_code = error.code(),
+                    reason_code,
                     toolkit_type = reference.tool_type(),
                     toolkit_id = reference.tool_id(),
                     "a governed MCP listing was refused; the connection was left out"
@@ -236,12 +268,18 @@ impl GovernedServer {
 enum Listing {
     Tools(Vec<ToolDeclaration>),
     Authorization(DelegatedAuthorizationRequirement),
-    Refused(GovernedError),
+    /// Left out for this reason code; the rest of the run goes on.
+    Refused(&'static str),
 }
 
 /// Redeem `mcp.tools.list`, list the server's tools over a session carrying
 /// only that token, and keep their declarations. The session, its tools
 /// and the token drop before this returns.
+///
+/// Only an error of the worker or of Main's broker as a whole (no operation,
+/// no invocation id, the redeem RPC unavailable, a client the worker cannot
+/// build) ends the run. Anything this one server answers or fails to answer
+/// is [`Listing::Refused`].
 async fn list(
     server: &GovernedServer,
     connector: &dyn McpConnector,
@@ -260,31 +298,49 @@ async fn list(
         Err(GovernedError::RedeemUnavailable {
             retryable: true, ..
         }) => return Err(dependency_unavailable()),
-        Err(error) => return Ok(Listing::Refused(error)),
+        Err(error) => return Ok(Listing::Refused(error.code())),
     };
-    let token = access_token(&envelope).map_err(|_| invalid_configuration())?;
+    let token = match access_token(&envelope) {
+        Ok(token) => token,
+        Err(error) => return Ok(Listing::Refused(error.code())),
+    };
     drop(envelope);
     let config = server.session_config(token);
     let session = match connector.connect_session(&config).await {
         Ok(session) => session,
-        // The server refused the redeemed token: never fall back to the
-        // browser flow on a governed run.
-        Err(error) if error.code() == McpMaterializationErrorCode::AuthorizationRequired => {
-            return Ok(Listing::Refused(GovernedError::CredentialDenied(
-                "MCP_SERVER_REJECTED".to_owned(),
-            )));
+        // The worker could not build the client: not this server's answer.
+        Err(error) if error.code() == McpMaterializationErrorCode::InvalidConfiguration => {
+            return Err(error);
         }
-        Err(error) => return Err(error),
+        // The server refused the redeemed token (never a fallback to the
+        // browser flow on a governed run) or did not answer.
+        Err(error) => {
+            return Ok(Listing::Refused(
+                if error.code() == McpMaterializationErrorCode::AuthorizationRequired {
+                    "governed.mcp_token_rejected"
+                } else {
+                    LISTING_FAILED
+                },
+            ));
+        }
     };
-    let (tools, _) = discover_tools(&config, &session).await?;
+    let listed = declarations(server, &config, &session).await;
+    drop(session);
+    Ok(listed.map_or(Listing::Refused(LISTING_FAILED), Listing::Tools))
+}
+
+/// The selected tools' declarations from one `tools/list`.
+async fn declarations(
+    server: &GovernedServer,
+    config: &RemoteMcpConfig,
+    session: &McpSession,
+) -> Result<Vec<ToolDeclaration>, McpMaterializationError> {
+    let (tools, _) = discover_tools(config, session).await?;
     let tools = select_tools(tools, config.selected_tools(), config.excluded_tools())?;
-    let declarations = tools
+    tools
         .iter()
         .map(|tool| ToolDeclaration::of(tool.as_ref(), server.name()))
-        .collect::<Result<Vec<_>, _>>()?;
-    drop(tools);
-    drop(session);
-    Ok(Listing::Tools(declarations))
+        .collect()
 }
 
 /// The envelope's access token, copied into zeroizing memory.
@@ -356,9 +412,15 @@ fn authorization_placeholders(
 
 /// What the model sees of one listed tool. It holds no session, no client
 /// and no token: it is copied from the listing and outlives it.
+#[derive(Clone)]
 struct ToolDeclaration {
     name: Box<str>,
-    description: Box<str>,
+    /// What the model reads: the server's description with the selection
+    /// guidance.
+    selection: Box<str>,
+    /// The server's own description, for the per-call tool the bounding
+    /// wrapper describes again.
+    server_description: Box<str>,
     parameters_schema: Option<Value>,
     response_schema: Option<Value>,
     long_running: bool,
@@ -370,7 +432,8 @@ impl ToolDeclaration {
     fn of(tool: &dyn Tool, toolkit_name: &str) -> Result<Self, McpMaterializationError> {
         Ok(Self {
             name: tool.name().into(),
-            description: selection_description(tool, toolkit_name)?.into_boxed_str(),
+            selection: selection_description(tool, toolkit_name)?.into_boxed_str(),
+            server_description: tool.description().into(),
             parameters_schema: tool.parameters_schema(),
             response_schema: tool.response_schema(),
             long_running: tool.is_long_running(),
@@ -378,6 +441,20 @@ impl ToolDeclaration {
             concurrency_safe: tool.is_concurrency_safe(),
         })
     }
+}
+
+/// A top-level argument is promoted to a request header (`x-mcp-header`),
+/// which the transport learns only from a `tools/list` on the calling
+/// session.
+fn promotes_headers(schema: Option<&Value>) -> bool {
+    schema
+        .and_then(|schema| schema.get("properties"))
+        .and_then(Value::as_object)
+        .is_some_and(|properties| {
+            properties
+                .values()
+                .any(|property| property.get("x-mcp-header").is_some())
+        })
 }
 
 /// One governed MCP tool: every call redeems, checks and dials afresh.
@@ -427,13 +504,26 @@ impl GovernedMcpTool {
             .connect_session(&config)
             .await
             .map_err(|error| session_error(error.code()))?;
-        let (tools, _) = discover_tools(&config, &session)
-            .await
-            .map_err(|error| session_error(error.code()))?;
-        let tool = tools
-            .into_iter()
-            .find(|tool| tool.name() == name)
-            .ok_or_else(|| GovernedError::ToolNotServed.into_adk_error())?;
+        // 4. The call by name from the stored declaration: no `tools/list`,
+        //    unless the tool promotes an argument to a header or the
+        //    connection cannot call by name.
+        let tool: Arc<dyn Tool> = match session.caller.clone() {
+            Some(caller) if !promotes_headers(self.declaration.parameters_schema.as_ref()) => {
+                Arc::new(DeclaredMcpTool {
+                    declaration: self.declaration.clone(),
+                    caller,
+                })
+            }
+            _ => {
+                let (tools, _) = discover_tools(&config, &session)
+                    .await
+                    .map_err(|error| session_error(error.code()))?;
+                tools
+                    .into_iter()
+                    .find(|tool| tool.name() == name)
+                    .ok_or_else(|| GovernedError::ToolNotServed.into_adk_error())?
+            }
+        };
         let bounded = BoundedMcpTool::new(
             tool,
             self.server.name(),
@@ -446,6 +536,54 @@ impl GovernedMcpTool {
         drop(session);
         drop(config);
         result
+    }
+}
+
+/// A stored declaration bound to one call's session: `tools/call` by name.
+struct DeclaredMcpTool {
+    declaration: ToolDeclaration,
+    caller: Arc<dyn McpToolCaller>,
+}
+
+#[async_trait]
+impl Tool for DeclaredMcpTool {
+    fn name(&self) -> &str {
+        &self.declaration.name
+    }
+
+    fn description(&self) -> &str {
+        &self.declaration.server_description
+    }
+
+    fn is_long_running(&self) -> bool {
+        self.declaration.long_running
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        self.declaration.parameters_schema.clone()
+    }
+
+    fn response_schema(&self) -> Option<Value> {
+        self.declaration.response_schema.clone()
+    }
+
+    fn is_read_only(&self) -> bool {
+        self.declaration.read_only
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        self.declaration.concurrency_safe
+    }
+
+    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
+        let arguments = match args {
+            Value::Object(arguments) => arguments,
+            Value::Null => Map::new(),
+            _ => return Err(AdkError::tool("Tool arguments must be an object")),
+        };
+        self.caller
+            .call_tool(&self.declaration.name, arguments)
+            .await
     }
 }
 
@@ -475,11 +613,11 @@ impl Tool for GovernedMcpTool {
     }
 
     fn description(&self) -> &str {
-        &self.declaration.description
+        &self.declaration.selection
     }
 
     fn enhanced_description(&self) -> String {
-        self.declaration.description.to_string()
+        self.declaration.selection.to_string()
     }
 
     fn is_long_running(&self) -> bool {

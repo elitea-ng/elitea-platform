@@ -13,6 +13,7 @@ import (
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/governedmcp"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 )
 
 type noInboundUsers struct{}
@@ -43,6 +44,7 @@ func governedMCPRouter(t *testing.T, governed bool) http.Handler {
 		cfg.GovernedMCPOutbound, err = governedmcp.New(governedmcp.Config{
 			RedirectURI:       "https://elitea.example.com/api/v2/credential_consent/mcp:callback",
 			ClientMetadataURL: "https://elitea.example.com" + governedmcp.ClientMetadataPath,
+			Guard:             egress.New(nil),
 		})
 		if err != nil {
 			t.Fatal(err)
