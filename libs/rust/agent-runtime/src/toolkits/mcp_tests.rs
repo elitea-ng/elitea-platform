@@ -969,7 +969,6 @@ impl McpConnector for CachingConnector {
                 tools: self.tools.clone(),
             }),
             reuses_listings: true,
-            caller: None,
         })
     }
 }

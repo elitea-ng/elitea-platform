@@ -16,15 +16,14 @@
 //!   end the run;
 //! - each tool call redeems `mcp.tool.call` on `mcp:tool/<name>`, opens a
 //!   FRESH session with only `Authorization: Bearer <token>` to that one
-//!   server, calls the tool by name from its stored declaration and drops
+//!   server, lists the tools on that session and calls the tool through
+//!   ADK's own MCP tool (task polling and input rounds included), and drops
 //!   the session and the token with the call's frame.
 //!
-//! A fresh session per call costs one MCP `initialize` more per call than
-//! the legacy path. That is accepted for now: no session, client or token
-//! outlives the one invocation its envelope was minted for. A tool whose
-//! schema promotes an argument to a request header (`x-mcp-header`) is the
-//! exception: the transport learns that from a `tools/list` on the same
-//! session, so its call lists first.
+//! A fresh session per call costs one MCP `initialize` and one `tools/list`
+//! more per call than the legacy path. That is accepted for now: no session,
+//! client or token outlives the one invocation its envelope was minted for,
+//! and the call runs on the one execution path every MCP tool uses.
 //!
 //! Only a saved direct `mcp` toolkit is governable: a connection with no
 //! toolkit id Main can bind a grant to, a prebuilt or internal server, or a
@@ -44,10 +43,9 @@ use zeroize::Zeroizing;
 
 use super::{
     BoundedMcpTool, MAX_MCP_SERVERS, McpAuthorizationRequiredTool, McpConnector,
-    McpMaterializationError, McpMaterializationErrorCode, McpSession, McpToolCaller,
-    RemoteMcpConfig, contains_tool_name, dependency_unavailable, discover_tools,
-    invalid_configuration, materialized_toolset_error, resource_exhausted, select_tools,
-    selection_description,
+    McpMaterializationError, McpMaterializationErrorCode, McpSession, RemoteMcpConfig,
+    contains_tool_name, dependency_unavailable, discover_tools, invalid_configuration,
+    materialized_toolset_error, resource_exhausted, select_tools, selection_description,
 };
 use crate::toolkits::delegated_auth::{
     DelegatedAuthorizationCatalog, DelegatedAuthorizationRequirement, delegated_authorization_error,
@@ -412,15 +410,9 @@ fn authorization_placeholders(
 
 /// What the model sees of one listed tool. It holds no session, no client
 /// and no token: it is copied from the listing and outlives it.
-#[derive(Clone)]
 struct ToolDeclaration {
     name: Box<str>,
-    /// What the model reads: the server's description with the selection
-    /// guidance.
-    selection: Box<str>,
-    /// The server's own description, for the per-call tool the bounding
-    /// wrapper describes again.
-    server_description: Box<str>,
+    description: Box<str>,
     parameters_schema: Option<Value>,
     response_schema: Option<Value>,
     long_running: bool,
@@ -432,8 +424,7 @@ impl ToolDeclaration {
     fn of(tool: &dyn Tool, toolkit_name: &str) -> Result<Self, McpMaterializationError> {
         Ok(Self {
             name: tool.name().into(),
-            selection: selection_description(tool, toolkit_name)?.into_boxed_str(),
-            server_description: tool.description().into(),
+            description: selection_description(tool, toolkit_name)?.into_boxed_str(),
             parameters_schema: tool.parameters_schema(),
             response_schema: tool.response_schema(),
             long_running: tool.is_long_running(),
@@ -441,20 +432,6 @@ impl ToolDeclaration {
             concurrency_safe: tool.is_concurrency_safe(),
         })
     }
-}
-
-/// A top-level argument is promoted to a request header (`x-mcp-header`),
-/// which the transport learns only from a `tools/list` on the calling
-/// session.
-fn promotes_headers(schema: Option<&Value>) -> bool {
-    schema
-        .and_then(|schema| schema.get("properties"))
-        .and_then(Value::as_object)
-        .is_some_and(|properties| {
-            properties
-                .values()
-                .any(|property| property.get("x-mcp-header").is_some())
-        })
 }
 
 /// One governed MCP tool: every call redeems, checks and dials afresh.
@@ -497,33 +474,21 @@ impl GovernedMcpTool {
         drop(envelope);
         // 3. A fresh session to the frozen endpoint, the token its only
         //    credential; the tool, the session and the token drop with this
-        //    frame.
+        //    frame. The call goes through ADK's own MCP tool from a listing
+        //    on this session: one execution path for every MCP tool.
         let config = self.server.session_config(token);
         let session = self
             .connector
             .connect_session(&config)
             .await
             .map_err(|error| session_error(error.code()))?;
-        // 4. The call by name from the stored declaration: no `tools/list`,
-        //    unless the tool promotes an argument to a header or the
-        //    connection cannot call by name.
-        let tool: Arc<dyn Tool> = match session.caller.clone() {
-            Some(caller) if !promotes_headers(self.declaration.parameters_schema.as_ref()) => {
-                Arc::new(DeclaredMcpTool {
-                    declaration: self.declaration.clone(),
-                    caller,
-                })
-            }
-            _ => {
-                let (tools, _) = discover_tools(&config, &session)
-                    .await
-                    .map_err(|error| session_error(error.code()))?;
-                tools
-                    .into_iter()
-                    .find(|tool| tool.name() == name)
-                    .ok_or_else(|| GovernedError::ToolNotServed.into_adk_error())?
-            }
-        };
+        let (tools, _) = discover_tools(&config, &session)
+            .await
+            .map_err(|error| session_error(error.code()))?;
+        let tool = tools
+            .into_iter()
+            .find(|tool| tool.name() == name)
+            .ok_or_else(|| GovernedError::ToolNotServed.into_adk_error())?;
         let bounded = BoundedMcpTool::new(
             tool,
             self.server.name(),
@@ -536,54 +501,6 @@ impl GovernedMcpTool {
         drop(session);
         drop(config);
         result
-    }
-}
-
-/// A stored declaration bound to one call's session: `tools/call` by name.
-struct DeclaredMcpTool {
-    declaration: ToolDeclaration,
-    caller: Arc<dyn McpToolCaller>,
-}
-
-#[async_trait]
-impl Tool for DeclaredMcpTool {
-    fn name(&self) -> &str {
-        &self.declaration.name
-    }
-
-    fn description(&self) -> &str {
-        &self.declaration.server_description
-    }
-
-    fn is_long_running(&self) -> bool {
-        self.declaration.long_running
-    }
-
-    fn parameters_schema(&self) -> Option<Value> {
-        self.declaration.parameters_schema.clone()
-    }
-
-    fn response_schema(&self) -> Option<Value> {
-        self.declaration.response_schema.clone()
-    }
-
-    fn is_read_only(&self) -> bool {
-        self.declaration.read_only
-    }
-
-    fn is_concurrency_safe(&self) -> bool {
-        self.declaration.concurrency_safe
-    }
-
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
-        let arguments = match args {
-            Value::Object(arguments) => arguments,
-            Value::Null => Map::new(),
-            _ => return Err(AdkError::tool("Tool arguments must be an object")),
-        };
-        self.caller
-            .call_tool(&self.declaration.name, arguments)
-            .await
     }
 }
 
@@ -613,11 +530,11 @@ impl Tool for GovernedMcpTool {
     }
 
     fn description(&self) -> &str {
-        &self.declaration.selection
+        &self.declaration.description
     }
 
     fn enhanced_description(&self) -> String {
-        self.declaration.selection.to_string()
+        self.declaration.description.to_string()
     }
 
     fn is_long_running(&self) -> bool {

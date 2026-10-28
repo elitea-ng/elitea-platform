@@ -492,7 +492,6 @@ pub trait McpConnector: Send + Sync {
         Ok(McpSession {
             toolset: self.connect(config).await?,
             reuses_listings: false,
-            caller: None,
         })
     }
 }
@@ -503,29 +502,6 @@ pub struct McpSession {
     /// Whether this connection may serve a cached listing: its toolset must
     /// list lazily on the session when a cached tool is first called.
     pub(crate) reuses_listings: bool,
-    /// Calls a tool by name on this session without listing first, when the
-    /// connection can. The governed path (#1123) calls through it from the
-    /// declaration it listed at build time.
-    pub(crate) caller: Option<Arc<dyn McpToolCaller>>,
-}
-
-/// `tools/call` by name on an established session, with no `tools/list`
-/// first.
-#[async_trait]
-pub(crate) trait McpToolCaller: Send + Sync {
-    async fn call_tool(&self, name: &str, arguments: Map<String, Value>)
-    -> adk_core::Result<Value>;
-}
-
-#[async_trait]
-impl McpToolCaller for McpToolset {
-    async fn call_tool(
-        &self,
-        name: &str,
-        arguments: Map<String, Value>,
-    ) -> adk_core::Result<Value> {
-        self.call_tool_value(name, arguments).await
-    }
 }
 
 /// `true` when the headers carry a non-blank `Authorization` value.
@@ -578,7 +554,6 @@ impl AdkHttpMcpConnector {
                 scope,
             )),
             reuses_listings: false,
-            caller: None,
         })
     }
 }
@@ -620,11 +595,9 @@ impl McpConnector for AdkHttpMcpConnector {
             }
             Err(_) | Ok(Err(_)) => return Err(dependency_unavailable()),
         };
-        let toolset = Arc::new(McpToolset::new(running));
         Ok(McpSession {
-            toolset: Arc::clone(&toolset) as Arc<dyn Toolset>,
+            toolset: Arc::new(McpToolset::new(running)),
             reuses_listings: true,
-            caller: Some(toolset),
         })
     }
 }
