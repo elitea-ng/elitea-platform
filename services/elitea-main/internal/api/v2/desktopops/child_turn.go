@@ -24,7 +24,6 @@ import (
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/localturn"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
@@ -398,9 +397,8 @@ func writeChildAuthorizationError(ctx context.Context, writer http.ResponseWrite
 }
 
 func writeChildStartError(ctx context.Context, writer http.ResponseWriter, err error) {
-	if suspended, ok := safety.AsSuspended(err); ok {
+	if writeSafetyRefusal(writer, err) {
 		// The kill switch (ADR-0041 decision 1) covers the nested agent.
-		desktopwire.WriteError(writer, http.StatusConflict, safety.ErrorCode, suspended.Message())
 		return
 	}
 	switch {

@@ -84,6 +84,7 @@ import (
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -214,6 +215,9 @@ func (h *Handler) runReadToolkitToolWithObserver(ctx context.Context, projectID,
 			"admission_stage", toolkitexecutionapp.CurrentReadToolAdmissionStageOf(err),
 			"error_code", currentReadToolAdmissionErrorCode(err),
 		)
+		if refused, ok := suspendedResult(tool.Name, err); ok {
+			return refused
+		}
 		switch {
 		case errors.Is(err, toolkitexecutionapp.ErrCurrentReadToolkitNotVisible),
 			errors.Is(err, toolkitexecutionapp.ErrCurrentReadToolNotSelected):
@@ -301,6 +305,9 @@ func (h *Handler) runAgentToolWithObserver(ctx context.Context, schema string, p
 			"error_code", currentAgentStartErrorCode(err),
 			"err", err,
 		)
+		if refused, ok := suspendedResult(tool.Name, err); ok {
+			return refused
+		}
 		if errors.Is(err, agentexecutionapp.ErrInvalidCurrentAgentStart) ||
 			errors.Is(err, agentexecutionapp.ErrUnsupportedCurrentAgentStart) {
 			// The agent exists and is listed, but this deployment's runtime
@@ -477,6 +484,24 @@ func (s turnState) result(tool Tool, executionID string) map[string]any {
 // while this says the request was fine and the tool did not deliver. It is also
 // what puts the sentence in front of the model driving the client rather than
 // only in the client's console.
+// suspendedResult is the tool result of a run the kill switch refused at
+// admission (ADR-0041 decision 1): an execution_suspended refusal names the
+// scope, never the operator's reason; an unreadable suspension state says
+// so. ok is false for every other error. The refusal is a result, not a
+// JSON-RPC error, for the reason authorizeRun gives: the model driving the
+// client is the one that has to read why nothing ran.
+func suspendedResult(toolName string, err error) (map[string]any, bool) {
+	if suspended, found := safety.AsSuspended(err); found {
+		return errorResult(fmt.Sprintf("'%s' was not run: %s (%s, scope %s). Nothing was executed.",
+			toolName, strings.TrimSuffix(suspended.Message(), "."), safety.ErrorCode, suspended.Scope)), true
+	}
+	if errors.Is(err, safety.ErrStateUnavailable) {
+		return errorResult(fmt.Sprintf("'%s' was not run: the platform cannot confirm that execution is "+
+			"allowed right now (suspension_state_unavailable). Try again shortly; nothing was executed.", toolName)), true
+	}
+	return nil, false
+}
+
 func errorResult(text string) map[string]any {
 	return map[string]any{
 		"isError": true,
