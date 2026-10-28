@@ -20,16 +20,20 @@ test.beforeEach(async ({ page }) => {
 
 /** `shared/brand/constants.ts:27` — the attribute MUI's colour scheme selector resolves to. */
 const SCHEME_ATTRIBUTE = 'data-el-scheme';
-/** `shared/brand/constants.ts:9` — `cssVarPrefix: 'el'`, so every token is `--el-…`. */
-const PRIMARY_VAR = '--el-palette-primary-main';
+/**
+ * `shared/brand/constants.ts:9` — `cssVarPrefix: 'el'`, so every token is `--el-…`.
+ * The page background, not `primary.main`: brand guide v3 keeps one Indigo
+ * primary in both schemes, so only a scheme-owned token proves the switch.
+ */
+const SCHEME_VAR = '--el-palette-background-default';
 
 const readScheme = (page: import('@playwright/test').Page): Promise<string | null> =>
   page.evaluate((attr) => document.documentElement.getAttribute(attr), SCHEME_ATTRIBUTE);
 
-const readPrimary = (page: import('@playwright/test').Page): Promise<string> =>
+const readSchemeBackground = (page: import('@playwright/test').Page): Promise<string> =>
   page.evaluate(
     (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim(),
-    PRIMARY_VAR,
+    SCHEME_VAR,
   );
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -59,8 +63,8 @@ test('J29: theme switch persists across reload', async ({ page }) => {
   expect(await readScheme(page)).toBe('dark');
   await expect(dark).toHaveAttribute('aria-pressed', 'true');
   await expect(light).toHaveAttribute('aria-pressed', 'false');
-  const darkPrimary = await readPrimary(page);
-  expect(darkPrimary, 'the dark scheme must publish a primary colour token').not.toBe('');
+  const darkBackground = await readSchemeBackground(page);
+  expect(darkBackground, 'the dark scheme must publish a background colour token').not.toBe('');
 
   // ── switch to light ───────────────────────────────────────────────────────
   await light.click();
@@ -74,9 +78,9 @@ test('J29: theme switch persists across reload', async ({ page }) => {
   await expect(dark).toHaveAttribute('aria-pressed', 'false');
   // 3. ...and a real, computed palette value changed. A stub that only wrote
   //    the attribute without a light colour-scheme block would not.
-  const lightPrimary = await readPrimary(page);
-  expect(lightPrimary).not.toBe('');
-  expect(lightPrimary).not.toBe(darkPrimary);
+  const lightBackground = await readSchemeBackground(page);
+  expect(lightBackground).not.toBe('');
+  expect(lightBackground).not.toBe(darkBackground);
 
   // ── reload: the choice must persist ───────────────────────────────────────
   await page.reload();
@@ -84,7 +88,7 @@ test('J29: theme switch persists across reload', async ({ page }) => {
     timeout: 20_000,
   });
   expect(await readScheme(page)).toBe('light');
-  expect(await readPrimary(page)).toBe(lightPrimary);
+  expect(await readSchemeBackground(page)).toBe(lightBackground);
   await expect(page.getByRole('button', { name: 'Light', exact: true })).toHaveAttribute(
     'aria-pressed',
     'true',
@@ -95,7 +99,7 @@ test('J29: theme switch persists across reload', async ({ page }) => {
   await expect
     .poll(() => readScheme(page), { timeout: 10_000 })
     .toBe('dark');
-  expect(await readPrimary(page)).toBe(darkPrimary);
+  expect(await readSchemeBackground(page)).toBe(darkBackground);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -305,14 +309,15 @@ test('J30 (assets): brand pack swaps the logo <img>, the favicon and injects @fo
   await checkA11y(page);
 });
 
-test('J30 (default): with no served pack the compiled logo, favicon and font stack stay in place', async ({
+test('J30 (default): with no served pack the compiled logo, favicon and brand faces stay in place', async ({
   page,
 }) => {
   skipOnLiveTarget('the deployment serves its own brand pack, and this case needs the stack that serves none');
   // The other half of JRNY-030's acceptance — "the default pack reproduces
   // the baseline appearance". This stack serves no pack (asserted in J30),
-  // so nothing WP3 added may fire: the mark is the compiled SVG, the favicon
-  // is index.html's static one, and no @font-face style exists.
+  // so nothing WP3 added may fire: the mark is the compiled SVG and the favicon
+  // is index.html's static one. The @font-face style DOES exist: the compiled
+  // default pack itself declares the self-hosted brand faces (brand guide v3).
   await page.goto(BASE_URL + '/app/');
   await page.waitForURL('**/chat**', { timeout: 15_000 });
   await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 20_000 });
@@ -328,7 +333,18 @@ test('J30 (default): with no served pack the compiled logo, favicon and font sta
   expect(deep.status()).toBe(200);
   expect(deep.headers()['content-type'] ?? '').toContain('image/svg+xml');
 
-  expect(await page.evaluate(() => document.querySelector('style[data-el-fonts]'))).toBeNull();
+  const fontCss = await page.evaluate(() => document.querySelector('style[data-el-fonts]')?.textContent ?? '');
+  for (const [family, file] of [
+    ['Manrope', 'manrope'],
+    ['Sora', 'sora'],
+    ['JetBrains Mono', 'jetbrains-mono'],
+  ] as const) {
+    expect(fontCss).toContain(`font-family:"${family}"`);
+    expect(fontCss).toContain(`url("./brand/fonts/${file}.woff2") format("woff2")`);
+  }
+  // The relative face URL resolves from a deep path too (same alias as the favicon).
+  const deepFont = await page.request.get(BASE_URL + '/app/chat/deep/brand/fonts/manrope.woff2');
+  expect(deepFont.status()).toBe(200);
 
   // First paint: the static script stamped the scheme before the bundle ran.
   expect(await readScheme(page)).toBe('dark');

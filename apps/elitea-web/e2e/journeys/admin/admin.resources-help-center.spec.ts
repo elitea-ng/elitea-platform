@@ -217,7 +217,7 @@ adminTest(
         await expect(page.getByText('Release Notes', { exact: true })).toHaveCount(0, { timeout: 20_000 });
         // The control, so a `visibleCards` regression that hid every card
         // does not pass this test by accident.
-        await expect(page.getByText('Video Library', { exact: true })).toBeVisible();
+        await expect(page.getByText('Video library', { exact: true })).toBeVisible();
 
         // ── re-enable, and both halves reverse ──────────────────────────
         const reenabled = await putResources(request, { resources_release_notes_enabled: true });
