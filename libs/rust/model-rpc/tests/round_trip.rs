@@ -176,9 +176,10 @@ async fn refusals_read_as_the_http_answer() {
 
 #[tokio::test]
 async fn an_unreachable_service_is_a_hop_failure() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let origin = format!("http://{}", listener.local_addr().expect("address"));
-    drop(listener);
+    // A privileged port nothing listens on: the connection is refused at once.
+    // Not a freed ephemeral port: dropping a listener handed its port back, and a
+    // parallel test's server could take it and answer 200.
+    let origin = "http://127.0.0.1:1".to_owned();
     let channel = Endpoint::from_shared(origin)
         .expect("endpoint")
         .connect_lazy();
