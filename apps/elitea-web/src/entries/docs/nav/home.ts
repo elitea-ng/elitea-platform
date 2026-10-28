@@ -77,6 +77,7 @@ export const homeTab: NavTab = {
         { kind: 'page', slug: 'support/troubleshooting', title: 'Troubleshooting' },
         { kind: 'page', slug: 'reference/toolkit-catalogue', title: 'Toolkit catalogue' },
         { kind: 'page', slug: 'reference/pipeline-node-reference', title: 'Pipeline node reference' },
+        { kind: 'page', slug: 'reference/audit-event-schema', title: 'Audit event schema' },
       ],
     },
   ],
