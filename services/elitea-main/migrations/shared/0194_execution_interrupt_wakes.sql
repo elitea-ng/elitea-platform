@@ -1,4 +1,4 @@
--- 0192_execution_interrupt_wakes.sql — park and wake for per-interrupt decisions.
+-- 0194_execution_interrupt_wakes.sql — park and wake for per-interrupt decisions.
 --
 -- WHY (libs/proto/contracts/fanout-interrupt-decisions-v1.md v1.1 §8, §8.1).
 -- A fan-out execution parks when nothing can run and at least one card is

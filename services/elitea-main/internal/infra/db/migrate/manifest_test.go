@@ -829,18 +829,18 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// state per provider) and external_identity_drift_findings (#1154). No
 	// data, no permission.
 	//
-	// 192: shared/0192_execution_interrupt_wakes.sql, park and wake for the
+	// 193: shared/0193_credential_reference_lifecycle.sql, the stager,
+	// activator and migration source of credential references (#1124).
+	// Nullable columns only; 0192 is claimed by another branch. No data, no
+	// permission.
+	//
+	// 194: shared/0194_execution_interrupt_wakes.sql, park and wake for the
 	// per-interrupt decision ledger (fanout-interrupt-decisions v1.1 §8): the
 	// park columns on execution_interrupt_responses and
 	// elitea_runtime.execution_interrupt_wakes with the partial unique index
 	// "one active continuation per response", and the open-card index a new
 	// turn supersedes through. No data, no permission.
-	//
-	// 193: shared/0193_credential_reference_lifecycle.sql, the stager,
-	// activator and migration source of credential references (#1124).
-	// Nullable columns only; 0192 is claimed by another branch. No data, no
-	// permission.
-	require.EqualValues(t, 193, Head(shared))
+	require.EqualValues(t, 194, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
