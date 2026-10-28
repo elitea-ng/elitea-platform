@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
@@ -39,9 +40,19 @@ func poolRows(pool *pgxpool.Pool) rowFunc {
 type securityContextFacts struct {
 	tenantProjectID      int64
 	actorID              string
+	applicationID        int64
 	applicationVersionID int64
 	admittedAt           time.Time
+	// governed is the agent run's governed credential freeze (#1119); nil
+	// when admission resolved none.
+	governed *agentexecutionapp.GovernedCredentialFreeze
 }
+
+// ErrGovernedBindingChanged refuses an admission whose transaction binds a
+// different agent binding than the one its governed credentials were
+// resolved for (#1119): a binding was approved, suspended or replaced in
+// between. A retry resolves again.
+var ErrGovernedBindingChanged = errors.New("the agent binding changed while governed credentials were resolved")
 
 // recordFacts reads the facts every admission record carries.
 func recordFacts(record executiondomain.Admission, admittedAt time.Time, applicationVersionID int64) securityContextFacts {
@@ -113,6 +124,21 @@ WHERE execution_id = $1 AND profile = 'elitea.credential-profile.governed.v1'`, 
 			return securitycontext.Reference{}, err
 		}
 	}
+	if facts.applicationID > 0 && facts.applicationVersionID > 0 {
+		built.ApplicationID, built.ApplicationVersionID = facts.applicationID, facts.applicationVersionID
+	}
+	if governed := facts.governed; governed != nil {
+		if governed.AgentBindingID != built.AgentBindingID || governed.ApplicationVersionID != facts.applicationVersionID {
+			return securitycontext.Reference{}, ErrGovernedBindingChanged
+		}
+		for _, ref := range governed.References {
+			built.CredentialReferences = append(built.CredentialReferences, securitycontext.CredentialReference{
+				ToolkitID: ref.ToolkitID, CredentialReferenceID: ref.CredentialReferenceID,
+				TargetBindingID: ref.TargetBindingID, Generation: ref.Generation,
+				ToolkitDigest: runtimedomain.Digest(ref.ToolkitDigest),
+			})
+		}
+	}
 	encoded, reference, err := built.Marshal(executionID)
 	if err != nil {
 		return securitycontext.Reference{}, err
@@ -135,6 +161,30 @@ INSERT INTO elitea_runtime.execution_security_contexts (
 // context records that no binding was proven, and the decision (#1116)
 // denies every governed credential use of the run.
 func bindActiveAgentIdentity(ctx context.Context, rows rowFunc, built *securitycontext.Context, facts securityContextFacts) error {
+	id, epoch, digest, found, err := usableBindingForVersion(ctx, rows, facts.tenantProjectID, facts.applicationVersionID)
+	if err != nil || !found {
+		return err
+	}
+	built.AgentBindingID, built.AgentBindingEpoch = id, epoch
+	built.DefinitionDigest = digest
+	return nil
+}
+
+// UsableBindingForVersion answers the usable binding the admission
+// transaction binds for an application version
+// (agentexecution.GovernedAgentBindings, #1119).
+func (s *AgentIdentityBindings) UsableBindingForVersion(ctx context.Context, tenantProjectID, applicationVersionID int64) (string, bool, error) {
+	if s == nil || s.pool == nil {
+		return "", false, errors.New("agent identity bindings: no database pool")
+	}
+	id, _, _, found, err := usableBindingForVersion(ctx, poolRows(s.pool), tenantProjectID, applicationVersionID)
+	return id, found, err
+}
+
+// usableBindingForVersion is bindActiveAgentIdentity's rule: the one usable
+// binding of the version. None, more than one, or a malformed digest is
+// found=false.
+func usableBindingForVersion(ctx context.Context, rows rowFunc, tenantProjectID, applicationVersionID int64) (string, int64, runtimedomain.Digest, bool, error) {
 	var (
 		id      string
 		epoch   int64
@@ -149,19 +199,17 @@ JOIN elitea_identity.external_agent_identities AS e
 WHERE b.tenant_project_id = $1 AND b.application_version_id = $2 AND b.state = 'active'
   AND e.state = 'active'
 ORDER BY b.id
-LIMIT 1`, facts.tenantProjectID, facts.applicationVersionID).Scan(&id, &epoch, &digest, &matches)
+LIMIT 1`, tenantProjectID, applicationVersionID).Scan(&id, &epoch, &digest, &matches)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
+		return "", 0, runtimedomain.Digest{}, false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("read active agent identity binding: %w", err)
+		return "", 0, runtimedomain.Digest{}, false, fmt.Errorf("read active agent identity binding: %w", err)
 	}
 	if matches != 1 || len(digest) != len(runtimedomain.Digest{}) {
-		return nil
+		return "", 0, runtimedomain.Digest{}, false, nil
 	}
-	built.AgentBindingID, built.AgentBindingEpoch = id, epoch
-	built.DefinitionDigest = runtimedomain.Digest(digestArray(digest))
-	return nil
+	return id, epoch, runtimedomain.Digest(digestArray(digest)), true, nil
 }
 
 func storedSecurityContext(ctx context.Context, rows rowFunc, executionID string) (securitycontext.Reference, bool, error) {

@@ -618,7 +618,16 @@ func (handler *currentApplicationStartHandler) Continue(writer http.ResponseWrit
 
 func writeStartError(writer http.ResponseWriter, err error) {
 	var capacity *executionapp.AdmissionCapacityError
+	var governed *agentexecutionapp.GovernedCredentialAdmissionError
 	switch {
+	case errors.As(err, &governed):
+		// A governed run resolves toolkit credentials by exact reference and
+		// grant only (#1119); the code names the rule, never the credential.
+		writeJSON(writer, http.StatusForbidden, map[string]string{
+			"error":   "governed_credential_refused",
+			"code":    governed.Code,
+			"message": "A toolkit of this agent has no governed credential this run may use.",
+		})
 	case errors.Is(err, agentexecutionapp.ErrInvalidCurrentAgentStart),
 		errors.Is(err, agentexecutionapp.ErrInvalidAgentAdmission):
 		writeError(writer, http.StatusBadRequest, "Invalid agent execution request")

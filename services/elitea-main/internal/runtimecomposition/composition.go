@@ -689,6 +689,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct nested application version reader: %w", nestedErr)
 		}
 		agentAdmissions.WithNestedMemoryToolkits(admissionNestedVersions)
+		// Governed runs freeze each toolkit's exact credential reference
+		// (#1119); nil with credential governance off.
+		governedCredentials, governedErr := governedAgentCredentials(dependencies.CredentialProfile, dependencies.AdmissionPool)
+		if governedErr != nil {
+			return nil, fmt.Errorf("construct governed agent credentials: %w", governedErr)
+		}
+		agentAdmissions.WithGovernedCredentials(governedCredentials)
 		agentTargets, targetErr := newCurrentAgentStartRepository(
 			dependencies.AdmissionPool,
 			catalogueProjectID,

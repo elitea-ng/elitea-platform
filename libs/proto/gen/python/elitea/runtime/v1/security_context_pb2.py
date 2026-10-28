@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from elitea.runtime.v1 import common_pb2 as elitea_dot_runtime_dot_v1_dot_common__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n(elitea/runtime/v1/security_context.proto\x12\x11\x65litea.runtime.v1\x1a\x1e\x65litea/runtime/v1/common.proto\"\xc4\x04\n\x1a\x45xecutionSecurityContextV1\x12\x17\n\x0fschema_revision\x18\x01 \x01(\t\x12\x0f\n\x07profile\x18\x02 \x01(\t\x12\x1a\n\x12policy_revision_id\x18\x03 \x01(\t\x12\x32\n\rpolicy_digest\x18\x04 \x01(\x0b\x32\x1b.elitea.runtime.v1.DigestV1\x12\x19\n\x11tenant_project_id\x18\x05 \x01(\x03\x12\x1d\n\x15subject_principal_ref\x18\x06 \x01(\t\x12\x18\n\x10\x61gent_binding_id\x18\x07 \x01(\t\x12\x1b\n\x13\x61gent_binding_epoch\x18\x08 \x01(\x03\x12\x12\n\nmandate_id\x18\t \x01(\t\x12\x15\n\rmandate_epoch\x18\n \x01(\x03\x12\x15\n\rdelegation_id\x18\x0b \x01(\t\x12\x18\n\x10\x64\x65legation_epoch\x18\x0c \x01(\x03\x12\x32\n\x06\x63\x61ller\x18\r \x01(\x0b\x32\".elitea.runtime.v1.CallerContextV1\x12\x36\n\x11\x64\x65\x66inition_digest\x18\x0e \x01(\x0b\x32\x1b.elitea.runtime.v1.DigestV1\x12\x33\n\x0b\x61\x63tor_chain\x18\x0f \x03(\x0b\x32\x1e.elitea.runtime.v1.ActorLinkV1\x12\x1d\n\x15issued_at_unix_millis\x18\x10 \x01(\x03\x12\x19\n\x11\x61gent_session_ref\x18\x11 \x01(\tJ\x04\x08\x12\x10 \"V\n\x0f\x43\x61llerContextV1\x12\x1d\n\x15\x61uthentication_source\x18\x01 \x01(\t\x12\x1e\n\x16\x63\x61lling_application_id\x18\x02 \x01(\tJ\x04\x08\x03\x10\x10\".\n\x0b\x41\x63torLinkV1\x12\x0c\n\x04kind\x18\x01 \x01(\t\x12\x0b\n\x03ref\x18\x02 \x01(\tJ\x04\x08\x03\x10\x08\"\x8b\x01\n#ExecutionSecurityContextReferenceV1\x12\x18\n\x10\x63ontent_entry_id\x18\x01 \x01(\t\x12+\n\x06\x64igest\x18\x02 \x01(\x0b\x32\x1b.elitea.runtime.v1.DigestV1\x12\x17\n\x0fschema_revision\x18\x03 \x01(\tJ\x04\x08\x04\x10\x10\x42TZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n(elitea/runtime/v1/security_context.proto\x12\x11\x65litea.runtime.v1\x1a\x1e\x65litea/runtime/v1/common.proto\"\xcd\x05\n\x1a\x45xecutionSecurityContextV1\x12\x17\n\x0fschema_revision\x18\x01 \x01(\t\x12\x0f\n\x07profile\x18\x02 \x01(\t\x12\x1a\n\x12policy_revision_id\x18\x03 \x01(\t\x12\x32\n\rpolicy_digest\x18\x04 \x01(\x0b\x32\x1b.elitea.runtime.v1.DigestV1\x12\x19\n\x11tenant_project_id\x18\x05 \x01(\x03\x12\x1d\n\x15subject_principal_ref\x18\x06 \x01(\t\x12\x18\n\x10\x61gent_binding_id\x18\x07 \x01(\t\x12\x1b\n\x13\x61gent_binding_epoch\x18\x08 \x01(\x03\x12\x12\n\nmandate_id\x18\t \x01(\t\x12\x15\n\rmandate_epoch\x18\n \x01(\x03\x12\x15\n\rdelegation_id\x18\x0b \x01(\t\x12\x18\n\x10\x64\x65legation_epoch\x18\x0c \x01(\x03\x12\x32\n\x06\x63\x61ller\x18\r \x01(\x0b\x32\".elitea.runtime.v1.CallerContextV1\x12\x36\n\x11\x64\x65\x66inition_digest\x18\x0e \x01(\x0b\x32\x1b.elitea.runtime.v1.DigestV1\x12\x33\n\x0b\x61\x63tor_chain\x18\x0f \x03(\x0b\x32\x1e.elitea.runtime.v1.ActorLinkV1\x12\x1d\n\x15issued_at_unix_millis\x18\x10 \x01(\x03\x12\x19\n\x11\x61gent_session_ref\x18\x11 \x01(\t\x12\x16\n\x0e\x61pplication_id\x18  \x01(\x03\x12\x1e\n\x16\x61pplication_version_id\x18! \x01(\x03\x12O\n\x15\x63redential_references\x18\" \x03(\x0b\x32\x30.elitea.runtime.v1.GovernedCredentialReferenceV1J\x04\x08\x12\x10 \"\xbe\x01\n\x1dGovernedCredentialReferenceV1\x12\x12\n\ntoolkit_id\x18\x01 \x01(\x03\x12\x1f\n\x17\x63redential_reference_id\x18\x02 \x01(\t\x12\x19\n\x11target_binding_id\x18\x03 \x01(\t\x12\x12\n\ngeneration\x18\x04 \x01(\x03\x12\x33\n\x0etoolkit_digest\x18\x05 \x01(\x0b\x32\x1b.elitea.runtime.v1.DigestV1J\x04\x08\x06\x10\x10\"V\n\x0f\x43\x61llerContextV1\x12\x1d\n\x15\x61uthentication_source\x18\x01 \x01(\t\x12\x1e\n\x16\x63\x61lling_application_id\x18\x02 \x01(\tJ\x04\x08\x03\x10\x10\".\n\x0b\x41\x63torLinkV1\x12\x0c\n\x04kind\x18\x01 \x01(\t\x12\x0b\n\x03ref\x18\x02 \x01(\tJ\x04\x08\x03\x10\x08\"\x8b\x01\n#ExecutionSecurityContextReferenceV1\x12\x18\n\x10\x63ontent_entry_id\x18\x01 \x01(\t\x12+\n\x06\x64igest\x18\x02 \x01(\x0b\x32\x1b.elitea.runtime.v1.DigestV1\x12\x17\n\x0fschema_revision\x18\x03 \x01(\tJ\x04\x08\x04\x10\x10\x42TZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -34,11 +34,13 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'ZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1'
   _globals['_EXECUTIONSECURITYCONTEXTV1']._serialized_start=96
-  _globals['_EXECUTIONSECURITYCONTEXTV1']._serialized_end=676
-  _globals['_CALLERCONTEXTV1']._serialized_start=678
-  _globals['_CALLERCONTEXTV1']._serialized_end=764
-  _globals['_ACTORLINKV1']._serialized_start=766
-  _globals['_ACTORLINKV1']._serialized_end=812
-  _globals['_EXECUTIONSECURITYCONTEXTREFERENCEV1']._serialized_start=815
-  _globals['_EXECUTIONSECURITYCONTEXTREFERENCEV1']._serialized_end=954
+  _globals['_EXECUTIONSECURITYCONTEXTV1']._serialized_end=813
+  _globals['_GOVERNEDCREDENTIALREFERENCEV1']._serialized_start=816
+  _globals['_GOVERNEDCREDENTIALREFERENCEV1']._serialized_end=1006
+  _globals['_CALLERCONTEXTV1']._serialized_start=1008
+  _globals['_CALLERCONTEXTV1']._serialized_end=1094
+  _globals['_ACTORLINKV1']._serialized_start=1096
+  _globals['_ACTORLINKV1']._serialized_end=1142
+  _globals['_EXECUTIONSECURITYCONTEXTREFERENCEV1']._serialized_start=1145
+  _globals['_EXECUTIONSECURITYCONTEXTREFERENCEV1']._serialized_end=1284
 # @@protoc_insertion_point(module_scope)

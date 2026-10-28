@@ -254,9 +254,21 @@ func (b *Broker) Redeem(ctx context.Context, req RedeemRequest) (result Result, 
 		return deny(CodeContextMismatch, "context_mismatch", ""), nil
 	}
 
-	// 2b. A worker whose toolkit settings name no credential reference
-	// sends none: the run's one usable grant for the toolkit and operation
-	// names it. None, or more than one, denies.
+	// 2b. The reference must be the one admission froze for the toolkit
+	// (#1119). A toolkit admission froze nothing for denies; a worker that
+	// sends none gets the frozen one. A toolkit frozen at its digest alone
+	// (its stored settings name no configuration reference) takes the run's
+	// one usable grant for the toolkit and operation; None, or more than one,
+	// denies, and so does any reference the worker names for it.
+	frozen, ok := sc.frozen[req.Invocation.ToolkitID]
+	switch {
+	case !ok:
+		return deny(CodeDenied, "credential_reference_not_frozen", ""), nil
+	case req.Invocation.CredentialReferenceID != "" && req.Invocation.CredentialReferenceID != frozen.CredentialReferenceID:
+		return deny(CodeDenied, "credential_reference_not_frozen", ""), nil
+	case frozen.CredentialReferenceID != "":
+		req.Invocation.CredentialReferenceID = frozen.CredentialReferenceID
+	}
 	if req.Invocation.CredentialReferenceID == "" {
 		if sc.agentBindingID == "" {
 			return deny(CodeDenied, "credential_reference_unresolved", ""), nil

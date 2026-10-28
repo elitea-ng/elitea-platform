@@ -50,6 +50,10 @@ type Admission struct {
 	CurrentAdhocTurn      *CurrentAdhocTurn
 	CurrentRegenerateTurn *CurrentRegenerateTurn
 	CurrentContinueTurn   *CurrentContinueTurn
+	// GovernedCredentials is the governed-credential-references freeze of a
+	// bound agent's run (#1119); nil otherwise. The admission transaction
+	// writes it into the run's security context.
+	GovernedCredentials *GovernedCredentialFreeze
 }
 
 type AtomicAdmissionStore interface {
@@ -63,6 +67,8 @@ type AdmissionService struct {
 	newID   executionapp.IDGenerator
 	// nested reads sub-agents' frozen toolkits (WithNestedMemoryToolkits).
 	nested NestedApplicationTools
+	// governed freezes governed credential references (WithGovernedCredentials).
+	governed *GovernedCredentials
 }
 
 func NewAdmissionService(
@@ -91,6 +97,16 @@ func (s *AdmissionService) Submit(
 		request.IdempotencyKey == "" || len(request.IdempotencyKey) > 200 ||
 		!agentCapability(request.CapabilityID) || !request.TriggerOrigin.Valid() {
 		return executionapp.AdmissionOutcome{}, ErrInvalidAgentAdmission
+	}
+	var governed *GovernedCredentialFreeze
+	if s.governed != nil {
+		// Before the bundle is built: the frozen references are part of the
+		// request entry, so the bundle digest covers them (#1119).
+		input, freeze, err := s.governed.Freeze(ctx, request)
+		if err != nil {
+			return executionapp.AdmissionOutcome{}, err
+		}
+		request.Input, governed = input, freeze
 	}
 	bundle, binding, err := s.factory.Build(
 		ctx, request.Input, request.ClientStreamID, request.ClientMessageID,
@@ -195,6 +211,7 @@ func (s *AdmissionService) Submit(
 		CurrentAdhocTurn:      request.CurrentAdhocTurn.Clone(),
 		CurrentRegenerateTurn: request.CurrentRegenerateTurn.Clone(),
 		CurrentContinueTurn:   request.CurrentContinueTurn.Clone(),
+		GovernedCredentials:   governed,
 	})
 	if err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("admit agent execution: %w", err)

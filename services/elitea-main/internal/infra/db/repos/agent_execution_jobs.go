@@ -653,8 +653,10 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 	); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert agent command outbox: %w", err)
 	}
+	facts := recordFacts(admission.Record, timing.AdmittedAt, agentApplicationVersionID(admission))
+	facts.applicationID, facts.governed = agentApplicationID(admission), admission.GovernedCredentials
 	if _, err := admitExecutionProfile(ctx, tx, pgxRows(tx), r.policy.CredentialProfile, agentAdmissionPin(admission),
-		recordFacts(admission.Record, timing.AdmittedAt, agentApplicationVersionID(admission))); err != nil {
+		facts); err != nil {
 		return executionapp.AdmissionOutcome{}, err
 	}
 	// Mark the reserved slot materialized in the same commit as the job.
@@ -1428,6 +1430,19 @@ func agentApplicationVersionID(admission agentexecutionapp.Admission) int64 {
 		return admission.CurrentRegenerateTurn.ApplicationVersionID
 	case admission.CurrentContinueTurn != nil:
 		return admission.CurrentContinueTurn.ApplicationVersionID
+	}
+	return 0
+}
+
+// agentApplicationID is agentApplicationVersionID's application.
+func agentApplicationID(admission agentexecutionapp.Admission) int64 {
+	switch {
+	case admission.CurrentTurn != nil:
+		return admission.CurrentTurn.ApplicationID
+	case admission.CurrentRegenerateTurn != nil:
+		return admission.CurrentRegenerateTurn.ApplicationID
+	case admission.CurrentContinueTurn != nil:
+		return admission.CurrentContinueTurn.ApplicationID
 	}
 	return 0
 }

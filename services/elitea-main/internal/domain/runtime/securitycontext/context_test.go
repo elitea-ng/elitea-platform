@@ -33,6 +33,42 @@ func validContext() Context {
 	}
 }
 
+// governedContext is validContext with the admitted application version and
+// the frozen credential references (#1119); toolkit 9 is frozen at its
+// digest alone.
+func governedContext() Context {
+	c := validContext()
+	c.ApplicationID, c.ApplicationVersionID = 11, 12
+	c.CredentialReferences = []CredentialReference{
+		{ToolkitID: 5, CredentialReferenceID: "0192f0aa-0000-7000-8000-0000000000c1", TargetBindingID: "0192f0aa-0000-7000-8000-0000000000d1", Generation: 2, ToolkitDigest: runtimedomain.SHA256([]byte("toolkit-5"))},
+		{ToolkitID: 9, ToolkitDigest: runtimedomain.SHA256([]byte("toolkit-9"))},
+	}
+	return c
+}
+
+func TestCredentialReferencesRoundTrip(t *testing.T) {
+	encoded, ref, err := governedContext().Marshal("execution-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := Verify(encoded, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.GetApplicationId() != 11 || decoded.GetApplicationVersionId() != 12 {
+		t.Fatalf("application = %d/%d", decoded.GetApplicationId(), decoded.GetApplicationVersionId())
+	}
+	for _, want := range governedContext().CredentialReferences {
+		got, ok := CredentialReferenceFor(decoded, want.ToolkitID)
+		if !ok || got != want {
+			t.Fatalf("toolkit %d = %+v %v", want.ToolkitID, got, ok)
+		}
+	}
+	if _, ok := CredentialReferenceFor(decoded, 6); ok {
+		t.Fatal("a toolkit with no frozen reference must answer none")
+	}
+}
+
 func TestMarshalIsDeterministicAndVerifies(t *testing.T) {
 	first, ref, err := validContext().Marshal("execution-1")
 	if err != nil {
@@ -84,10 +120,20 @@ func TestValidateRefuses(t *testing.T) {
 			}
 		},
 		"empty actor link": func(c *Context) { c.ActorChain = []ActorLink{{Kind: "user"}} },
+		"version without application": func(c *Context) { c.ApplicationID = 0 },
+		"references out of order": func(c *Context) {
+			c.CredentialReferences[0], c.CredentialReferences[1] = c.CredentialReferences[1], c.CredentialReferences[0]
+		},
+		"reference without a digest": func(c *Context) { c.CredentialReferences[0].ToolkitDigest = runtimedomain.Digest{} },
+		"reference without a target": func(c *Context) { c.CredentialReferences[0].TargetBindingID = "" },
+		"target without a reference": func(c *Context) { c.CredentialReferences[1].TargetBindingID = "0192f0aa-0000-7000-8000-0000000000d2" },
+		"references without a binding": func(c *Context) {
+			c.AgentBindingID, c.AgentBindingEpoch, c.DefinitionDigest = "", 0, runtimedomain.Digest{}
+		},
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
-			c := validContext()
+			c := governedContext()
 			mutate(&c)
 			if _, _, err := c.Marshal("execution-1"); !errors.Is(err, ErrInvalidContext) {
 				t.Fatalf("err = %v, want ErrInvalidContext", err)
@@ -114,7 +160,7 @@ func TestVerifyRefusesTamperedAndUnknownBytes(t *testing.T) {
 	if _, err := Verify(tampered, ref); !errors.Is(err, ErrDigestMismatch) {
 		t.Fatalf("tampered: %v", err)
 	}
-	unknown := protowire.AppendTag(append([]byte(nil), encoded...), 18, protowire.BytesType)
+	unknown := protowire.AppendTag(append([]byte(nil), encoded...), 21, protowire.BytesType)
 	unknown = protowire.AppendString(unknown, "x")
 	if _, err := Verify(unknown, Reference{Digest: runtimedomain.SHA256(unknown)}); !errors.Is(err, ErrInvalidContext) {
 		t.Fatalf("unknown field: %v", err)
@@ -147,6 +193,7 @@ func TestContextFieldsNeverNameASecret(t *testing.T) {
 		(&runtimev1.CallerContextV1{}).ProtoReflect().Descriptor(),
 		(&runtimev1.ActorLinkV1{}).ProtoReflect().Descriptor(),
 		(&runtimev1.ExecutionSecurityContextReferenceV1{}).ProtoReflect().Descriptor(),
+		(&runtimev1.GovernedCredentialReferenceV1{}).ProtoReflect().Descriptor(),
 	}
 	for _, message := range messages {
 		fields := message.Fields()
@@ -185,12 +232,17 @@ func buildCorpus(t *testing.T) corpus {
 	}
 	tampered := append([]byte(nil), encoded...)
 	tampered[len(tampered)-1] ^= 0x01
+	governed, governedRef, err := governedContext().Marshal("execution-1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	unknown := protowire.AppendTag(append([]byte(nil), encoded...), 18, protowire.BytesType)
 	unknown = protowire.AppendString(unknown, "x")
 	unknownDigest := runtimedomain.SHA256(unknown)
 	return corpus{SchemaRevision: SchemaRevisionV1, Vectors: []vector{
 		{Name: "valid governed context", ContentID: ref.ContentID, ContextHex: hex.EncodeToString(encoded), DigestHex: hex.EncodeToString(ref.Digest[:]), Expect: "accept", BindingEpoch: 3, PolicyVersion: "2026-10-r1"},
 		{Name: "bytes do not match the reference digest", ContentID: ref.ContentID, ContextHex: hex.EncodeToString(tampered), DigestHex: hex.EncodeToString(ref.Digest[:]), Expect: "digest_mismatch"},
+		{Name: "valid governed context with frozen credential references", ContentID: governedRef.ContentID, ContextHex: hex.EncodeToString(governed), DigestHex: hex.EncodeToString(governedRef.Digest[:]), Expect: "accept", BindingEpoch: 3, PolicyVersion: "2026-10-r1"},
 		{Name: "unknown field 18", ContentID: ref.ContentID, ContextHex: hex.EncodeToString(unknown), DigestHex: hex.EncodeToString(unknownDigest[:]), Expect: "invalid"},
 	}}
 }

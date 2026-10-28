@@ -12,6 +12,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentidentity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/mandate"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 )
 
 // securitycontextView is the verified stored context, as plain fields.
@@ -30,6 +31,12 @@ type securitycontextView struct {
 	callingApplication string
 	definitionDigest   [32]byte
 	actorChain         []string
+	// applicationID and applicationVersionID are the version admission ran
+	// (#1119); frozen holds the governed-credential-references entry by
+	// toolkit id.
+	applicationID        int64
+	applicationVersionID int64
+	frozen               map[int64]securitycontext.CredentialReference
 }
 
 func viewOf(m *runtimev1.ExecutionSecurityContextV1) *securitycontextView {
@@ -39,6 +46,13 @@ func viewOf(m *runtimev1.ExecutionSecurityContextV1) *securitycontextView {
 		agentBindingEpoch: m.GetAgentBindingEpoch(), mandateID: m.GetMandateId(), mandateEpoch: m.GetMandateEpoch(),
 		delegationID: m.GetDelegationId(), delegationEpoch: m.GetDelegationEpoch(),
 		authSource: m.GetCaller().GetAuthenticationSource(), callingApplication: m.GetCaller().GetCallingApplicationId(),
+		applicationID: m.GetApplicationId(), applicationVersionID: m.GetApplicationVersionId(),
+		frozen: map[int64]securitycontext.CredentialReference{},
+	}
+	for _, ref := range m.GetCredentialReferences() {
+		if frozen, ok := securitycontext.CredentialReferenceFor(m, ref.GetToolkitId()); ok {
+			v.frozen[frozen.ToolkitID] = frozen
+		}
 	}
 	copy(v.policyDigest[:], m.GetPolicyDigest().GetValue())
 	copy(v.definitionDigest[:], m.GetDefinitionDigest().GetValue())
@@ -107,28 +121,25 @@ func (b *Broker) buildRequest(ctx context.Context, sc *securitycontextView, req 
 	agent := authzcompose.AgentRef{
 		BindingID: sc.agentBindingID, Epoch: sc.agentBindingEpoch, DefinitionDigest: sc.definitionDigest,
 	}
-	var toolkitDigest [32]byte
+	// The application and version are the ones admission ran, from the
+	// stored context, and the toolkit digest is the one admission froze
+	// (#1119): the agent binding gate compares the binding and its toolkit
+	// binding with them, so a binding moved to another version, or a toolkit
+	// re-bound at another digest, after admission denies. A toolkit admission
+	// froze nothing for keeps the zero digest, which no binding has. The
+	// definition digest is the context's copy of the binding's; no canonical
+	// digest of the executed version exists to compare it with (#1118, note
+	// (d)).
+	agent.ApplicationID, agent.ApplicationVersionID = sc.applicationID, sc.applicationVersionID
+	toolkitDigest := sc.frozen[inv.ToolkitID].ToolkitDigest
 	if sc.agentBindingID != "" {
-		// The application and version are the binding's: admission chose the
-		// binding of the version the run executes. The definition digest is
-		// the context's copy of the binding's; no canonical digest of the
-		// executed version exists to compare it with (#1118, note (d)).
 		binding, err := b.cfg.Bindings.GetUsable(ctx, sc.agentBindingID)
 		switch {
 		case errors.Is(err, agentidentity.ErrBindingNotFound):
 		case err != nil:
 			return requestFacts{}, err
 		default:
-			agent.ApplicationID, agent.ApplicationVersionID = binding.ApplicationID, binding.ApplicationVersionID
 			facts.externalIdentityID = binding.ExternalAgentIdentityID
-		}
-		toolkit, err := b.cfg.Toolkits.AgentToolkitBinding(ctx, sc.agentBindingID, inv.ToolkitID)
-		switch {
-		case errors.Is(err, credentialgrant.ErrToolkitNotBound):
-		case err != nil:
-			return requestFacts{}, err
-		default:
-			toolkitDigest = toolkit.ToolkitDigest
 		}
 	}
 

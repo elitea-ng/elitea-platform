@@ -51,7 +51,7 @@ fn reference_proto(content: &str, digest: Vec<u8>) -> ExecutionSecurityContextRe
 #[test]
 fn the_shared_corpus_verifies_like_main() {
     let vectors = vectors();
-    assert_eq!(vectors.len(), 3);
+    assert_eq!(vectors.len(), 4);
     for vector in vectors {
         let entry_id = vector["content_id"].as_str().expect("content id");
         let execution_id = entry_id

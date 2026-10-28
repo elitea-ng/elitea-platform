@@ -141,6 +141,11 @@ func (s *CurrentExpansionService) Expand(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// A governed run resolves credentials by exact reference only
+	// (GovernedResolver, #1119); the title lookup below never runs for it.
+	if IsGovernedRun(ctx) {
+		return nil, ErrLegacyResolverInGovernedRun
+	}
 
 	walker := currentExpansionWalker{
 		service: s,
