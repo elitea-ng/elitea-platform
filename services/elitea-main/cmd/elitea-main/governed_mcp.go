@@ -11,8 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	v2mcp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/mcp"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialadapters"
-	mcpadapter "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialadapters/mcp"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/governedmcp"
 	identityoidc "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/oidc"
@@ -47,13 +45,6 @@ func (g governedMCP) authorizations() provideroauth.AuthorizationReferences {
 		return nil
 	}
 	return g.References
-}
-
-// governedMCPDescriptors are the adapter descriptors governed MCP adds to
-// the operation catalogue. The catalogue is pure data, built whatever the
-// flag; only a governed run's broker and decider read it.
-func governedMCPDescriptors() []credentialadapters.AdapterDescriptor {
-	return []credentialadapters.AdapterDescriptor{mcpadapter.Descriptor()}
 }
 
 // governedMCPAtBoot builds governed MCP. Flag off: nothing is read or

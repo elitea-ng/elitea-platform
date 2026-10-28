@@ -438,8 +438,7 @@ func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevi
 // and material keys (#1120). Both the decider's scope gate and the credential
 // broker read this one value. It is pure data: building it reads nothing.
 func credentialOperationCatalog() credentialbroker.OperationCatalog {
-	// The remote MCP server adapter (#1123) joins the built-in five.
-	registry, err := credentialadapters.NewRegistry(append(credentialadapters.Builtin(), governedMCPDescriptors()...)...)
+	registry, err := credentialadapters.NewBuiltinRegistry()
 	if err != nil {
 		// The built-in descriptors are fixed at compile time and a test
 		// builds them, so this is a programming error, not a deployment one.

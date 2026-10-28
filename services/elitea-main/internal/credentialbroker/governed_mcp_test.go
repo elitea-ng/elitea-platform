@@ -120,13 +120,13 @@ func mcpWorld(t *testing.T, a, b *mockMCP) (*world, *targetTokens) {
 
 func mcpRequest(t *testing.T, w *world, tool string) RedeemRequest {
 	req := w.request(t)
-	req.Invocation.OperationID, req.Invocation.ResourceRef = string(mcpadapter.OperationToolCall), tool
+	req.Invocation.OperationID, req.Invocation.ResourceRef = string(mcpadapter.OperationToolCall), "mcp:tool/"+tool
 	return req
 }
 
 func mcpRegistry(t *testing.T) *credentialadapters.Registry {
 	t.Helper()
-	registry, err := credentialadapters.NewRegistry(append(credentialadapters.Builtin(), mcpadapter.Descriptor())...)
+	registry, err := credentialadapters.NewBuiltinRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}

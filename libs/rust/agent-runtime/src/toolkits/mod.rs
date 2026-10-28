@@ -131,6 +131,8 @@ mod keycloak_tests;
 #[cfg(test)]
 mod kubernetes_tests;
 #[cfg(test)]
+mod mcp_governed_tests;
+#[cfg(test)]
 mod mcp_tests;
 #[cfg(test)]
 mod memory_tests;
@@ -258,9 +260,9 @@ pub use materialize::{
     tool_needs_file_store, toolkit_needs_file_store,
 };
 pub use mcp::{
-    AdkHttpMcpConnector, INTERNAL_TOOLS_ORIGIN, McpConnector, McpMaterializationError,
-    McpMaterializationErrorCode, RETIRED_SSE_MESSAGE,
-    materialize_mcp_toolsets_with_tokens_and_authorization,
+    AdkHttpMcpConnector, GovernedMcpToolsets, INTERNAL_TOOLS_ORIGIN, McpConnector,
+    McpMaterializationError, McpMaterializationErrorCode, RETIRED_SSE_MESSAGE,
+    materialize_governed_mcp_toolsets, materialize_mcp_toolsets_with_tokens_and_authorization,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use mcp::{RemoteMcpConfig, mcp_authorization_required_fixture};

@@ -10,12 +10,15 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 )
 
-// The adapter registers beside the built-in five with no edit to them, and
-// the registry answers the facts the broker and the decider read.
-func TestTheMCPAdapterRegistersBesideTheBuiltins(t *testing.T) {
-	registry, err := credentialadapters.NewRegistry(append(credentialadapters.Builtin(), mcp.Descriptor())...)
+// The adapter is a built-in provider, and the registry answers the facts
+// the broker and the decider read: listing is a read, a call is a write.
+func TestTheMCPAdapterIsABuiltinProvider(t *testing.T) {
+	registry, err := credentialadapters.NewBuiltinRegistry()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !registry.Known(mcp.OperationToolsList) || registry.Class(mcp.OperationToolsList) != credentialadapters.OperationRead {
+		t.Fatalf("mcp.tools.list known=%v class=%q", registry.Known(mcp.OperationToolsList), registry.Class(mcp.OperationToolsList))
 	}
 	if !registry.Known(mcp.OperationToolCall) || registry.Class(mcp.OperationToolCall) != credentialadapters.OperationWrite {
 		t.Fatalf("mcp.tool.call known=%v class=%q", registry.Known(mcp.OperationToolCall), registry.Class(mcp.OperationToolCall))
