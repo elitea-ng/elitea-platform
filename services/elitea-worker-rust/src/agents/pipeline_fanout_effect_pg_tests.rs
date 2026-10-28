@@ -25,6 +25,9 @@
 //! The D2 narrowing (T-2A §8) on the same harness: when `second` dies in its
 //! model call it resumes from its own model checkpoint (R), and when it dies
 //! in a read-only tool that tool runs again (I); both complete all three.
+//!
+//! The same three cases run with inline LLM branches (T-2A D1): each branch is
+//! an `llm` node offered the same MCP tool, with its own model checkpoint.
 
 use super::restart_pg_tests::{CHECKPOINT_MIGRATION, connect, model_requests, run_phase};
 use super::*;
@@ -39,6 +42,8 @@ const ON_ERROR_ENV: &str = "ELITEA_FANOUT_EFFECT_PG_ON_ERROR";
 const PHASE_ENV: &str = "ELITEA_FANOUT_EFFECT_PG_PHASE";
 /// `effect` (effectful tool in flight), `read_only` (I) or `mid_model` (R).
 const MODE_ENV: &str = "ELITEA_FANOUT_EFFECT_PG_MODE";
+/// `agent` (saved Agent branches) or `llm` (inline LLM branches).
+const KIND_ENV: &str = "ELITEA_FANOUT_EFFECT_PG_KIND";
 const EXECUTION: &str = "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e";
 const GENERATION: u64 = 3;
 /// The tool saw its own boundary in `PostgreSQL`, then the process died.
@@ -63,6 +68,22 @@ fn pipeline_yaml(on_error: &str) -> String {
 
 fn request(on_error: &str) -> super::super::request::AgentExecutionRequest {
     request_for(on_error, "agent")
+}
+
+/// The same three branches as inline LLM nodes offered the same MCP tool.
+fn inline_request(on_error: &str) -> super::super::request::AgentExecutionRequest {
+    let mut request = llm_mcp_pipeline_request(
+        "release intelligence",
+        &["lookup_release"],
+        &["lookup_release"],
+    );
+    let yaml = pipeline_yaml(on_error).replace(
+        "    type: agent\n    tool: release-agent\n",
+        "    type: llm\n    tool_names:\n      release intelligence: [\"lookup_release\"]\n",
+    );
+    assert!(!yaml.contains("type: agent"), "{yaml}");
+    request.payload.application["version_details"]["instructions"] = json!(yaml);
+    request
 }
 
 /// Every branch selects one saved participant of `agent_type`.
@@ -357,7 +378,16 @@ async fn run_to_end(
 async fn run_collecting(
     invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
 ) -> Result<(Vec<Value>, Vec<Value>), String> {
-    run_keyed(invocation)
+    run_deciding(invocation, &|_| {}).await
+}
+
+/// As [`run_collecting`], calling `decide` with each card as its frame
+/// arrives, while the run goes on (a user deciding live).
+async fn run_deciding(
+    invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
+    decide: &dyn Fn(&Value),
+) -> Result<(Vec<Value>, Vec<Value>), String> {
+    run_keyed_deciding(invocation, decide)
         .await
         .map(|(members, cards, _)| (members, cards))
 }
@@ -365,7 +395,15 @@ async fn run_collecting(
 /// As [`run_collecting`], also returning each frame's `parent_agent_call_id`
 /// with its first tier's ordinal, in frame order (frames without one skipped).
 async fn run_keyed(
+    invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
+) -> Result<(Vec<Value>, Vec<Value>, Vec<(String, Value)>), String> {
+    run_keyed_deciding(invocation, &|_| {}).await
+}
+
+/// As [`run_keyed`], calling `decide` with each card as its frame arrives.
+async fn run_keyed_deciding(
     mut invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
+    decide: &dyn Fn(&Value),
 ) -> Result<(Vec<Value>, Vec<Value>, Vec<(String, Value)>), String> {
     invocation
         .project_start(timestamp(1))
@@ -411,6 +449,7 @@ async fn run_keyed(
                     if frame.r#type == "agent_interrupt_pending" {
                         let metadata: Value = serde_json::from_slice(&frame.response_metadata)
                             .expect("card frame metadata");
+                        decide(&metadata["interrupt_card_v1"]);
                         cards.push(metadata["interrupt_card_v1"].clone());
                     }
                     if frame.r#type == "agent_fanout_member" {
@@ -445,6 +484,10 @@ async fn joined(pool: &sqlx::PgPool) -> Option<Vec<Value>> {
 }
 
 async fn scenario(url: &str, mode: &str, on_error: &str) {
+    scenario_for(url, "agent", mode, on_error).await;
+}
+
+async fn scenario_for(url: &str, kind: &str, mode: &str, on_error: &str) {
     let db = IsolatedPostgres::create(url).await;
     install_schema(&db.pool).await;
     sqlx::raw_sql(CHECKPOINT_MIGRATION)
@@ -458,6 +501,7 @@ async fn scenario(url: &str, mode: &str, on_error: &str) {
             .env(DATABASE_ENV, &db.database_name)
             .env(ON_ERROR_ENV, on_error)
             .env(MODE_ENV, mode)
+            .env(KIND_ENV, kind)
             .env(PHASE_ENV, phase);
         let output = run_phase(phase, command);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -634,6 +678,138 @@ async fn postgres_production_parallel_without_the_decision_ledger_is_refused_typ
         Some("graph.fanout.decisions_unavailable")
     );
     assert_eq!(model_requests(&captured), 0);
+    db.pool.close().await;
+}
+
+/// Inline LLM branches (T-2A D1) over the root's MCP toolkit, which is
+/// sensitive for `lookup_release`: `ask` asks the user, `guard` and `deny`
+/// each call the tool.
+fn inline_llm_request(on_error: &str) -> super::super::request::AgentExecutionRequest {
+    let mut request = llm_mcp_pipeline_request(
+        "release intelligence",
+        &["lookup_release"],
+        &["lookup_release"],
+    );
+    request.payload.internal_tools = vec![ASK_USER_TOOL_NAME.to_owned()];
+    let branch = |id: &str, tools: &str| {
+        format!(
+            "  - id: {id}\n    type: llm\n    input_mapping:\n      task: {{type: fixed, value: 'Work on {id}'}}\n    output: [{id}_out]\n{tools}"
+        )
+    };
+    let yaml = format!(
+        "state:\n  ask_out: str\n  guard_out: str\n  deny_out: str\n  joined: list\n  messages: list\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{{id: first, node: ask}}, {{id: second, node: guard}}, {{id: third, node: deny}}]\n    max_concurrency: 1\n    wait: all\n    on_error: {on_error}\n    output: [joined]\n    transition: END\n{}{}{}",
+        branch("ask", "    tool_names:\n      ask_user: [\"ask_user\"]\n"),
+        branch(
+            "guard",
+            "    tool_names:\n      release intelligence: [\"lookup_release\"]\n"
+        ),
+        branch(
+            "deny",
+            "    tool_names:\n      release intelligence: [\"lookup_release\"]\n"
+        ),
+    );
+    request.payload.application["version_details"]["instructions"] = json!(yaml);
+    request
+}
+
+/// T-2A D1: inline LLM branches each pause with their own card (an
+/// `ask_user` question and two sensitive-tool approvals), are answered,
+/// approved and rejected live while the run goes on, resume and join; only
+/// the approved tool runs, once, and nothing raises a legacy pause.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let (platform, model_facade, captured) = saved_runtime(
+        vec![
+            TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
+            TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
+            TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
+            TestModelGatewayOutcome::Response(pipeline_text_response("resumed done")),
+            TestModelGatewayOutcome::Response(pipeline_text_response("resumed done")),
+            TestModelGatewayOutcome::Response(pipeline_text_response("resumed done")),
+        ],
+        effectful_agent(),
+    );
+    let assembler = PipelineNativeAgentAssembler::postgres(
+        db.pool.clone(),
+        SessionLimits::default(),
+        CheckpointLimits::default(),
+        sensitive_pipeline_mcp_policy(),
+        platform,
+        model_facade,
+    )
+    .with_mcp_connector(Arc::new(PipelineMcpConnector {
+        connections: Arc::new(AtomicUsize::new(0)),
+        tool_calls: Arc::clone(&tool_calls),
+        read_only: false,
+    }))
+    .with_fixed_parallel_for_tests()
+    .with_fanout_decisions_for_tests(ledger.client(1));
+    let request = inline_llm_request("continue");
+    let invocation = assembler
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "assemble inline LLM branches: {error} {:?}",
+                error
+                    .cause()
+                    .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code)
+            )
+        });
+    let (members, cards) = run_deciding(invocation, &|card| {
+        let key = card["interrupt_key"].as_str().expect("card key");
+        match (card["fanout_v1"]["member"].as_str(), card["kind"].as_str()) {
+            (Some("first"), Some("ask_user")) => ledger.decide(key, "answer", Some("Staging")),
+            (Some("second"), Some("tool_guard")) => ledger.decide(key, "approve", None),
+            (Some("third"), Some("tool_guard")) => ledger.decide(key, "reject", None),
+            other => panic!("unexpected card {other:?}"),
+        }
+    })
+    .await
+    .expect("the answered and approved branches resume and the pipeline completes");
+    let kinds = cards
+        .iter()
+        .map(|card| {
+            format!(
+                "{}:{}",
+                card["fanout_v1"]["member"].as_str().unwrap_or_default(),
+                card["kind"].as_str().unwrap_or_default()
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        ["first:ask_user", "second:tool_guard", "third:tool_guard"]
+    );
+    for card in &cards {
+        // The member tier of an LLM branch is named by its node (§3.3).
+        let tier = &card["parent_agent_path"][0];
+        assert!(["ask", "guard", "deny"].contains(&tier["name"].as_str().unwrap_or_default()));
+    }
+    assert_eq!(
+        tool_calls.load(Ordering::Acquire),
+        1,
+        "only the approved tool runs, once"
+    );
+    assert_eq!(model_requests(&captured), 6);
+    assert!(members.iter().any(|member| member["status"] == "paused"));
+    let entries = joined(&db.pool).await.expect("joined entries");
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    for entry in &entries {
+        assert_eq!(entry["status"], "succeeded", "{entries:?}");
+    }
     db.pool.close().await;
 }
 
@@ -1194,6 +1370,39 @@ async fn postgres_fanout_child_read_only_tool_in_flight_runs_again() {
     scenario(&url, "read_only", "stop").await;
 }
 
+/// T-2A D1, the D2 classes for an inline LLM branch: mid-model R.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_inline_llm_branch_caught_mid_model_resumes_from_its_checkpoint() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    scenario_for(&url, "llm", "mid_model", "stop").await;
+}
+
+/// Inline LLM branch, read-only tool in flight: I.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_inline_llm_branch_read_only_tool_in_flight_runs_again() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    scenario_for(&url, "llm", "read_only", "stop").await;
+}
+
+/// Inline LLM branch, effectful tool in flight without a receipt: the
+/// branch fails `graph.fanout.may_have_started` and the tool never runs
+/// again; On Error decides the node.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_inline_llm_branch_effect_in_flight_may_have_started() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    scenario_for(&url, "llm", "effect", "continue").await;
+    scenario_for(&url, "llm", "effect", "stop").await;
+}
+
 #[tokio::test(flavor = "current_thread")]
 #[allow(clippy::too_many_lines)] // One child process per phase: crash, then recover with its assertions.
 async fn postgres_fanout_effect_child() {
@@ -1209,7 +1418,10 @@ async fn postgres_fanout_effect_child() {
     let on_error = std::env::var(ON_ERROR_ENV).expect("on_error");
     let mode = std::env::var(MODE_ENV).expect("mode");
     let pool = connect(&database).await;
-    let request = request(&on_error);
+    let request = match std::env::var(KIND_ENV).expect("kind").as_str() {
+        "llm" => inline_request(&on_error),
+        _ => request(&on_error),
+    };
     match std::env::var(PHASE_ENV).expect("phase").as_str() {
         "crash" => {
             let second = if mode == "mid_model" {

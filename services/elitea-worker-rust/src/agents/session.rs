@@ -1284,6 +1284,7 @@ impl NativePipelineStateBackend {
     ) -> Result<PipelineStateServices, NativeAgentAssemblyError> {
         let paths = pipeline_definition
             .application_node_ids()
+            .chain(pipeline_definition.parallel_llm_branch_ids())
             .map(str::to_owned)
             .collect::<Vec<_>>();
         self.open_with_application_paths(

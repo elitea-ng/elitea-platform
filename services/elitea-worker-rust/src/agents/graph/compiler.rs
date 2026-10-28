@@ -1188,6 +1188,17 @@ impl PipelineDefinition {
         })
     }
 
+    /// The inline LLM nodes a fixed Parallel owns as branches: each runs in
+    /// its own branch checkpoint family, like an Agent branch.
+    pub(crate) fn parallel_llm_branch_ids(&self) -> impl Iterator<Item = &str> {
+        self.nodes.iter().filter_map(|node| match node {
+            PipelineNodeDefinition::Llm(node) if self.parallel_owned_nodes.contains(node.id()) => {
+                Some(node.id())
+            }
+            _ => None,
+        })
+    }
+
     /// Exact saved-application participants selected by Agent nodes.
     pub(crate) fn application_selections(
         &self,

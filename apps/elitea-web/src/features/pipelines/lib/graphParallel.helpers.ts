@@ -25,14 +25,14 @@ function strictBranchReference(value: unknown, ownerId: string): string | undefi
     || typeof branch['node'] !== 'string' || !isValidGraphId(branch['node']) || branch['node'] === ownerId) return undefined;
   return branch['node'];
 }
-/** Return an Agent only when this exact branch is its sole fixed owner. Do not repair invalid ownership. */
+/** Return the owned Agent or LLM node only when this exact branch is its sole fixed owner. Do not repair invalid ownership. */
 export function parallelOwnedAgent(document: YamlPipelineDocument, ownerId: string, ordinal: number): YamlPipelineNode | undefined {
   const owner = uniqueDeclaredNode(document, ownerId, 'parallel');
   if (!owner) return undefined;
   const reference = strictBranchReference(extensionValues(owner['branches'])[ordinal], ownerId);
   if (!reference || parallelAgentReferenceCounts(document).get(reference) !== 1
     || document.nodes?.some((node) => node.type === 'map' && node['worker'] === reference)) return undefined;
-  return uniqueDeclaredNode(document, reference, 'agent');
+  return uniqueDeclaredNode(document, reference, 'agent') ?? uniqueDeclaredNode(document, reference, 'llm');
 }
 
 /** Change one explicit field and retain unknown branch data for compiler refusal. */

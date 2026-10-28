@@ -838,6 +838,7 @@ impl PipelineNativeAgentAssembler {
         };
         let llm_factory = context.zip(model_facade).map(|(context, model_facade)| {
             Arc::new(NativePipelineLlmAgentFactory {
+                fanout_branch: false,
                 profile: profile.shell().clone(),
                 context,
                 model_facade,
@@ -1309,8 +1310,12 @@ impl PipelineNativeAgentAssembler {
                 .await?
             } else {
                 AdmittedPipelineComposition {
+                    // Inline LLM Parallel branches still own checkpoint families.
+                    checkpoint_paths: composition::composition_paths(
+                        profile.definition(),
+                        &BTreeMap::new(),
+                    )?,
                     children: BTreeMap::new(),
-                    checkpoint_paths: Vec::new(),
                 }
             };
             tracing::Span::current().record("stage", "state");
@@ -1431,7 +1436,10 @@ impl PipelineNativeAgentAssembler {
     }
 }
 
+#[derive(Clone)]
 struct NativePipelineLlmAgentFactory {
+    /// An inline fixed Parallel LLM branch (`for_fanout_branch`).
+    fanout_branch: bool,
     profile: OrdinaryNoToolProfile,
     context: Arc<ClaimScopedEliteaContext>,
     model_facade: Arc<ModelFacade>,
@@ -1729,9 +1737,16 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
             ContextManagementPlan::Disabled => None,
             ContextManagementPlan::Summarize(plan) => Some(plan),
         };
-        let checkpoint = self
-            .model_scopes
-            .for_node(scope.identity())
+        // D2 (T-2A §8): an inline Parallel branch re-run (no decision replay)
+        // resumes its own model step and replays a read-only batch; a tool
+        // past its boundary is refused typed.
+        let scopes = self.model_scopes.for_node(scope.identity());
+        let scopes = if self.fanout_branch && replay.is_none() {
+            scopes.with_pending_model_recovery().with_read_only_replay()
+        } else {
+            scopes
+        };
+        let checkpoint = scopes
             .checkpoint(
                 plan,
                 model.request_budget(),
@@ -1791,6 +1806,8 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
             // that failed authorization into a model-visible tool error.
             return Err(LlmExecutionError::Unavailable);
         }
+        let guarded = guards.keys().cloned().collect();
+        let selected_toolsets = checkpoint.record_read_only(selected_toolsets, &guarded);
         let mut builder = LlmAgentBuilder::new(definition.id())
             .description("Elitea stored-pipeline LLM node")
             .model(checkpoint.clone().delegation_model(model))
@@ -1832,7 +1849,15 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
     }
 
     fn event_sender(&self) -> Option<PipelineNodeEventSender> {
-        Some(self.node_events.clone())
+        // An inline Parallel branch reports through its member frames and its
+        // join entry; nothing of it ends the run.
+        (!self.fanout_branch).then(|| self.node_events.clone())
+    }
+
+    fn for_fanout_branch(&self) -> Option<Arc<dyn PipelineLlmAgentFactory>> {
+        let mut factory = self.clone();
+        factory.fanout_branch = true;
+        Some(Arc::new(factory))
     }
 }
 
@@ -2373,6 +2398,7 @@ async fn bind_saved_pipeline_runtimes(
     let guarded_interrupt_kinds = guarded_interrupt_kinds(profile, &delegated_authorization);
     let llm_factory = profile.definition().has_llm_nodes().then(|| {
         Arc::new(NativePipelineLlmAgentFactory {
+            fanout_branch: false,
             profile: profile.shell().clone(),
             context: Arc::clone(&runtime.context),
             model_facade: Arc::clone(&runtime.model_facade),

@@ -58,6 +58,9 @@ const LLM_TOOL_REPLAY_SCHEMA: &str = "elitea.graph.llm-tool-replay.v1";
 const LLM_INPUT_DIGEST_DOMAIN: &[u8] = b"elitea.graph.llm.input.v1\0";
 const LLM_REPLAY_STATE_DIGEST_DOMAIN: &[u8] = b"elitea.graph.llm.replay-state.v1\0";
 pub(crate) const LLM_TOOL_RESUME_STATE_KEY: &str = "__elitea_llm_tool_resume_v1";
+/// A fixed Parallel LLM branch's input mapping, evaluated once against the
+/// parent state when the branch is frozen (the branch never re-reads it).
+pub(crate) const PARALLEL_LLM_INPUTS_STATE_KEY: &str = "__elitea_parallel_llm_inputs_v1";
 static LLM_INVOCATION_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 #[derive(Clone, Deserialize)]
@@ -357,6 +360,40 @@ impl LlmNodeDefinition {
     }
 
     fn map_execution_input(&self, state: &State) -> Result<LlmExecutionInput, LlmExecutionError> {
+        Self::execution_input(&self.mapped_values(state)?)
+    }
+
+    /// Freeze a fixed Parallel LLM branch: its mapped inputs, evaluated now
+    /// against the parent state, and the declared input keys it reads.
+    pub(super) fn freeze_parallel_input(&self, parent: &State) -> Result<State, GraphError> {
+        super::parallel::validate_input_state(parent)?;
+        let failure = || node_failure(self.id());
+        let mapped = self.mapped_values(parent).map_err(|_| failure())?;
+        Self::execution_input(&mapped).map_err(|_| failure())?;
+        let frozen = serde_json::to_value(&mapped).map_err(|_| failure())?;
+        super::parallel::ensure_bounded_json(&frozen, MAX_LLM_REPLAY_BYTES, "input")
+            .map_err(|_| failure())?;
+        let mut state = self
+            .input
+            .iter()
+            .filter_map(|key| parent.get(key).map(|value| (key.clone(), value.clone())))
+            .collect::<State>();
+        state.insert(PARALLEL_LLM_INPUTS_STATE_KEY.to_owned(), frozen);
+        Ok(state)
+    }
+
+    /// The execution input a fixed Parallel LLM branch was frozen with.
+    fn frozen_execution_input(state: &State) -> Result<LlmExecutionInput, LlmExecutionError> {
+        let mapped = state
+            .get(PARALLEL_LLM_INPUTS_STATE_KEY)
+            .cloned()
+            .and_then(|value| serde_json::from_value::<BTreeMap<String, Value>>(value).ok())
+            .filter(|mapped| mapped.len() <= MAX_MAPPING_ENTRIES)
+            .ok_or(LlmExecutionError::InvalidInputMapping)?;
+        Self::execution_input(&mapped)
+    }
+
+    fn mapped_values(&self, state: &State) -> Result<BTreeMap<String, Value>, LlmExecutionError> {
         let mut mapped = BTreeMap::new();
         for (key, mapping) in &self.input_mapping {
             let value = match mapping {
@@ -369,9 +406,14 @@ impl LlmNodeDefinition {
                     Value::String(render_fstring(template, state)?)
                 }
             };
-            mapped.insert(key.as_str(), value);
+            mapped.insert(key.clone(), value);
         }
+        Ok(mapped)
+    }
 
+    fn execution_input(
+        mapped: &BTreeMap<String, Value>,
+    ) -> Result<LlmExecutionInput, LlmExecutionError> {
         if let Some(messages) = mapped.get("messages") {
             let mut contents = parse_messages(messages)?;
             let task = contents
@@ -935,6 +977,16 @@ fn valid_sha256_label(value: &str) -> bool {
         && value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// A refused restore of a tool past its boundary stays typed; any other model
+/// failure is the runtime's.
+fn model_error(error: &adk_rust::AdkError) -> LlmExecutionError {
+    if error.code == crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE {
+        LlmExecutionError::MayHaveStarted
+    } else {
+        LlmExecutionError::Unavailable
+    }
+}
+
 /// Stable model activation within one graph thread and parent application call.
 pub(crate) struct PipelineModelScope(String);
 
@@ -972,6 +1024,14 @@ pub(crate) trait PipelineLlmAgentFactory: Send + Sync {
     ) -> Result<PipelineLlmAgentBinding, LlmExecutionError>;
 
     fn event_sender(&self) -> Option<PipelineNodeEventSender> {
+        None
+    }
+
+    /// This factory for an inline fixed Parallel LLM branch (D2): a re-run
+    /// restores the node's own model checkpoint and replays a read-only
+    /// batch; its events and failures stay inside the branch. `None`: the
+    /// factory cannot serve a fan-out branch.
+    fn for_fanout_branch(&self) -> Option<Arc<dyn PipelineLlmAgentFactory>> {
         None
     }
 }
@@ -1018,6 +1078,8 @@ pub(super) struct LlmNode {
     definition: LlmNodeDefinition,
     state_types: BTreeMap<String, String>,
     factory: Arc<dyn PipelineLlmAgentFactory>,
+    /// A fixed Parallel branch: the input mapping was frozen with the branch.
+    parallel_inputs: bool,
 }
 
 impl LlmNode {
@@ -1030,7 +1092,14 @@ impl LlmNode {
             definition,
             state_types,
             factory,
+            parallel_inputs: false,
         }
+    }
+
+    /// Read the input mapping frozen with a fixed Parallel branch.
+    pub(super) fn with_parallel_inputs(mut self) -> Self {
+        self.parallel_inputs = true;
+        self
     }
 }
 
@@ -1060,10 +1129,12 @@ impl Node for LlmNode {
         );
         let result = async {
             tracing::Span::current().record("stage", "input_mapping");
-            let input = self
-                .definition
-                .map_execution_input(&context.state)
-                .map_err(|_| node_failure(self.name()))?;
+            let input = if self.parallel_inputs {
+                LlmNodeDefinition::frozen_execution_input(&context.state)
+            } else {
+                self.definition.map_execution_input(&context.state)
+            }
+            .map_err(|_| node_failure(self.name()))?;
             let input_digest = input
                 .digest_label()
                 .map_err(|_| node_failure(self.name()))?;
@@ -1085,8 +1156,10 @@ impl Node for LlmNode {
                 context,
             )
             .await
-            .map_err(|_| node_failure(self.name()))?
-            {
+            .map_err(|error| match error {
+                LlmExecutionError::MayHaveStarted => may_have_started(self.name()),
+                _ => node_failure(self.name()),
+            })? {
                 PipelineLlmRunOutcome::Completed(text) => {
                     tracing::Span::current().record("stage", "state_projection");
                     let updates = self
@@ -1373,7 +1446,7 @@ async fn run_model_agent(
                     .await
                     .map_err(|_| LlmExecutionError::Unavailable)?;
             }
-            return Err(LlmExecutionError::Unavailable);
+            return Err(model_error(&error));
         }
     };
     tokio::pin!(stream);
@@ -1390,7 +1463,7 @@ async fn run_model_agent(
                         .await
                         .map_err(|_| LlmExecutionError::Unavailable)?;
                 }
-                return Err(LlmExecutionError::Unavailable);
+                return Err(model_error(&error));
             }
         };
         if let Some(request) = event.actions.tool_confirmation.clone() {
@@ -1469,6 +1542,19 @@ async fn run_model_agent(
     last_model_text(&events)
         .map(PipelineLlmRunOutcome::Completed)
         .ok_or(LlmExecutionError::Unavailable)
+}
+
+/// A tool of this node crossed its boundary in an earlier run without a
+/// receipt: it is not repeated (the scoped call's registered refusal code).
+fn may_have_started(node: &str) -> GraphError {
+    GraphError::NodeExecutionFailed {
+        node: node.to_owned(),
+        message: format!(
+            "{}: an earlier run started a tool of this node that may have changed data; it is \
+             not repeated",
+            crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE
+        ),
+    }
 }
 
 fn node_failure(node: &str) -> GraphError {
@@ -2440,6 +2526,9 @@ pub(crate) enum LlmExecutionError {
     ResourceExhausted,
     #[error("the LLM runtime is unavailable")]
     Unavailable,
+    /// A tool crossed its boundary in an earlier run without a receipt.
+    #[error("an earlier run may have started a tool of this node")]
+    MayHaveStarted,
 }
 
 #[cfg(test)]
