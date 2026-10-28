@@ -230,6 +230,14 @@ SELECT 'project-' || (90100 + u.id), d.data
 FROM auth_core__user u JOIN centry.secrets_data d ON d.id = 'project-1'
 WHERE u.email = 'e2e-gov-member@autotest.local'
 ON CONFLICT (id) DO NOTHING;
+-- The tenant schemas, as the E2E seeder builds them (apps/elitea-web/scripts/
+-- e2e-stack.sh): elitea-migrate -all-tenants refuses a create-successful
+-- project with no schema, and a bare CREATE SCHEMA is not enough because the
+-- tenant history alters tables the baseline creates. Idempotent.
+SELECT create_tenant_schema('p_' || p.id::text)
+FROM centry.project p
+WHERE p.id = current_setting('gov.project')::int
+   OR p.id IN (SELECT 90100 + u.id FROM auth_core__user u WHERE u.email = 'e2e-gov-member@autotest.local');
 SQL
   echo "→ Applying tenant migrations for the governed projects…"
   stack compose run --rm --no-deps elitea-migrate -all-tenants
