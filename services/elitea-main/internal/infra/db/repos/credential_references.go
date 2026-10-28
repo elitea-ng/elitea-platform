@@ -26,7 +26,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +48,8 @@ var (
 	ErrCredentialReferenceSelfActive = errors.New("credential reference: the activator must differ from the operator who staged it")
 	ErrCredentialReferenceNoStager   = errors.New("credential reference: the reference records no stager, so the two-person rule cannot be checked")
 	ErrCredentialReferenceRetired    = errors.New("credential reference: the reference is retired")
+	ErrCredentialReferenceIncomplete = errors.New("credential reference: the reference's secret copy has not completed; rerun migrate-references --copy-to vault")
+	ErrCredentialReferenceActor      = errors.New("credential references: the actor is not an auth_core user id")
 	ErrCredentialReferenceTenant     = errors.New("credential reference: the reference belongs to another project")
 	ErrCredentialReferenceProvider   = errors.New("credential reference: the toolkit type is not the reference's provider")
 	ErrToolkitNotFound               = errors.New("toolkit: no such toolkit in this project")
@@ -151,7 +152,7 @@ func (s *CredentialReferences) writeReady() error {
 
 const credentialReferenceColumns = `r.id::text, r.tenant_project_id, r.class, r.backend, r.locator, r.provider_type,
        r.target_binding_id::text, r.generation, r.state, t.target_identity,
-       COALESCE(r.staged_by, ''), COALESCE(r.activated_by, ''), COALESCE(r.last_transition_by, ''),
+       COALESCE(r.staged_by::text, ''), COALESCE(r.activated_by::text, ''), COALESCE(r.last_transition_by::text, ''),
        COALESCE(r.migrated_from, ''), r.created_at, r.updated_at`
 
 const credentialReferenceFrom = `elitea_identity.credential_references AS r
@@ -227,9 +228,9 @@ func (s *CredentialReferences) Transition(ctx context.Context, id string, action
 	if err := s.writeReady(); err != nil {
 		return CredentialReferenceRecord{}, err
 	}
-	actor = strings.TrimSpace(actor)
-	if actor == "" {
-		return CredentialReferenceRecord{}, errors.New("credential references: the actor is unknown")
+	actorID, actor, err := CanonicalUserID(actor)
+	if err != nil {
+		return CredentialReferenceRecord{}, err
 	}
 	if !agentIdentityIsUUID(id) {
 		return CredentialReferenceRecord{}, credentialgrant.ErrReferenceNotFound
@@ -245,7 +246,14 @@ func (s *CredentialReferences) Transition(ctx context.Context, id string, action
 		return CredentialReferenceRecord{}, err
 	}
 	var next credentialgrant.ReferenceState
-	activatedBy := current.ActivatedBy
+	var activatedBy *int64
+	if current.ActivatedBy != "" {
+		previous, _, err := CanonicalUserID(current.ActivatedBy)
+		if err != nil {
+			return CredentialReferenceRecord{}, err
+		}
+		activatedBy = &previous
+	}
 	switch action {
 	case CredentialReferenceActivate:
 		if current.State != credentialgrant.ReferenceStaged {
@@ -254,10 +262,17 @@ func (s *CredentialReferences) Transition(ctx context.Context, id string, action
 		if current.StagedBy == "" {
 			return CredentialReferenceRecord{}, ErrCredentialReferenceNoStager
 		}
+		// Both sides are canonical decimal ids (bigint columns, CanonicalUserID).
 		if current.StagedBy == actor {
 			return CredentialReferenceRecord{}, ErrCredentialReferenceSelfActive
 		}
-		next, activatedBy = credentialgrant.ReferenceActive, actor
+		if current.Class == credentialgrant.ClassStaticSecret && current.Generation == 0 {
+			// A --copy-to vault reference is staged at generation 0 and
+			// gets its version once the copy is written; until then there
+			// is no version for the broker to read.
+			return CredentialReferenceRecord{}, ErrCredentialReferenceIncomplete
+		}
+		next, activatedBy = credentialgrant.ReferenceActive, &actorID
 	case CredentialReferenceRetire:
 		if current.State == credentialgrant.ReferenceRetired {
 			return CredentialReferenceRecord{}, ErrCredentialReferenceTransition
@@ -270,7 +285,7 @@ func (s *CredentialReferences) Transition(ctx context.Context, id string, action
 UPDATE elitea_identity.credential_references
 SET state = $2, activated_by = $3, last_transition_by = $4, updated_at = $5
 WHERE id = $1::uuid AND state = $6`,
-		id, string(next), agentIdentityNullableText(activatedBy), actor, s.now().UTC(), string(current.State))
+		id, string(next), activatedBy, actorID, s.now().UTC(), string(current.State))
 	if err != nil {
 		return CredentialReferenceRecord{}, mapCredentialReferenceWriteError(err)
 	}
@@ -299,6 +314,21 @@ WHERE id = $1::uuid AND state = $6`,
 	return written, nil
 }
 
+// CanonicalUserID parses an auth_core user id (a positive decimal int64)
+// and renders it canonically, so "007" and "7" are the same person to the
+// two-person rule. Anything else is ErrCredentialReferenceActor.
+func CanonicalUserID(value string) (int64, string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, "+") {
+		return 0, "", ErrCredentialReferenceActor
+	}
+	id, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, "", ErrCredentialReferenceActor
+	}
+	return id, strconv.FormatInt(id, 10), nil
+}
+
 func mapCredentialReferenceWriteError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23514" && pgErr.ConstraintName == "credential_references_activator_not_stager" {
@@ -323,37 +353,19 @@ func credentialReferenceEvent(rec CredentialReferenceRecord, action, actor strin
 }
 
 // toolkitReferenceField finds the one configuration reference of stored
-// toolkit settings: a top-level object holding `elitea_title` and
-// `private` (configurations.ToolkitCredentialRefs reads the same shape).
-func toolkitReferenceField(settings map[string]any) (string, map[string]any, error) {
-	names := make([]string, 0, len(settings))
-	for name := range settings {
-		names = append(names, name)
+// toolkit settings. The shape is configurations.ToolkitCredentialRefs's, the
+// one the governed resolver reads, so attach and resolve cannot disagree on
+// the field; only the field's name is added here.
+func toolkitReferenceField(settings map[string]any) (string, configurationapp.ToolkitCredentialRef, error) {
+	fields := configurationapp.ToolkitCredentialRefFields(settings)
+	refs := configurationapp.ToolkitCredentialRefs(settings)
+	switch {
+	case len(refs) == 0:
+		return "", configurationapp.ToolkitCredentialRef{}, ErrToolkitNoConfigurationRef
+	case len(refs) > 1:
+		return "", configurationapp.ToolkitCredentialRef{}, ErrToolkitConfigurationAmbiguous
 	}
-	sort.Strings(names)
-	var (
-		field  string
-		object map[string]any
-	)
-	for _, name := range names {
-		candidate, ok := settings[name].(map[string]any)
-		if !ok {
-			continue
-		}
-		_, hasTitle := candidate["elitea_title"]
-		_, hasPrivate := candidate["private"]
-		if !hasTitle || !hasPrivate {
-			continue
-		}
-		if field != "" {
-			return "", nil, ErrToolkitConfigurationAmbiguous
-		}
-		field, object = name, candidate
-	}
-	if field == "" {
-		return "", nil, ErrToolkitNoConfigurationRef
-	}
-	return field, object, nil
+	return fields[0], refs[0], nil
 }
 
 // lockedToolkit reads a tenant toolkit row FOR UPDATE inside tx and decodes
@@ -439,14 +451,15 @@ func (s *CredentialReferences) writeAttachment(ctx context.Context, referenceID 
 	if toolkitType != ref.ProviderType {
 		return ToolkitAttachmentResult{}, ErrCredentialReferenceProvider
 	}
-	field, object, err := toolkitReferenceField(settings)
+	field, configRef, err := toolkitReferenceField(settings)
 	if err != nil {
 		return ToolkitAttachmentResult{}, err
 	}
-	if private, _ := object["private"].(bool); private && attach {
+	if configRef.Private && attach {
 		return ToolkitAttachmentResult{}, ErrToolkitPrivateConfiguration
 	}
-	existing, _ := object[configurationapp.CredentialReferenceIDField].(string)
+	object, _ := settings[field].(map[string]any)
+	existing := configRef.CredentialReferenceID
 	if existing != "" && existing != referenceID {
 		return ToolkitAttachmentResult{}, ErrToolkitAttachedElsewhere
 	}
@@ -601,10 +614,8 @@ type StagedReference struct {
 	Locator         string
 	Generation      int64
 	MigratedFrom    string
-	StagedBy        string
-	// ID, when set, is the id to stage under (a --copy-to vault write needs
-	// the id before the reference exists). Empty mints one.
-	ID string
+	// StagedBy is the operator's auth_core user id (CanonicalUserID).
+	StagedBy string
 }
 
 // StageResult says what StageReference found or wrote.
@@ -629,13 +640,19 @@ WHERE tenant_project_id = $1 AND provider_type = $2 AND target_identity = $3 AND
 	return id, err
 }
 
-// FindMigrated reads the reference a migration source staged.
+// liveMigratedFrom selects the one reference of a migration source that is
+// not retired: the partial unique index of 0193 covers exactly these rows,
+// so a retired reference never blocks staging its replacement.
+const liveMigratedFrom = `r.tenant_project_id = $1 AND r.migrated_from = $2 AND r.state <> 'retired'`
+
+// FindMigrated reads the live (not retired) reference a migration source
+// staged.
 func (s *CredentialReferences) FindMigrated(ctx context.Context, tenantProjectID int64, migratedFrom string) (CredentialReferenceRecord, bool, error) {
 	if err := s.readReady(); err != nil {
 		return CredentialReferenceRecord{}, false, err
 	}
 	rec, err := scanCredentialReference(s.pool.QueryRow(ctx, `SELECT `+credentialReferenceColumns+` FROM `+credentialReferenceFrom+`
-WHERE r.tenant_project_id = $1 AND r.migrated_from = $2`, tenantProjectID, migratedFrom))
+WHERE `+liveMigratedFrom, tenantProjectID, migratedFrom))
 	if errors.Is(err, credentialgrant.ErrReferenceNotFound) {
 		return CredentialReferenceRecord{}, false, nil
 	}
@@ -643,54 +660,55 @@ WHERE r.tenant_project_id = $1 AND r.migrated_from = $2`, tenantProjectID, migra
 }
 
 // StageReference upserts the target binding and inserts the reference in
-// `staged`, with its audit event, in one transaction. A reference already
-// staged from the same source is returned unchanged (Created false).
+// `staged`, with its audit event, in one transaction. A live reference
+// already staged from the same source is returned unchanged (Created false);
+// a retired one is not, so a rerun after a retire stages its replacement.
 func (s *CredentialReferences) StageReference(ctx context.Context, staged StagedReference, newID func() string) (StageResult, error) {
 	if err := s.writeReady(); err != nil {
 		return StageResult{}, err
 	}
-	if staged.TenantProjectID <= 0 || staged.MigratedFrom == "" || strings.TrimSpace(staged.StagedBy) == "" || !staged.Class.Valid() {
+	if staged.TenantProjectID <= 0 || staged.MigratedFrom == "" || !staged.Class.Valid() {
 		return StageResult{}, errors.New("credential references: a staged reference needs a tenant, a class, a source and a stager")
+	}
+	stagerID, stager, err := CanonicalUserID(staged.StagedBy)
+	if err != nil {
+		return StageResult{}, err
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return StageResult{}, fmt.Errorf("begin staging: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// DO UPDATE (a no-op write of a key column), not DO NOTHING: under
+	// concurrency DO NOTHING returns no row and a SELECT in the same
+	// statement cannot see the row another transaction just committed, so
+	// the upsert came back empty. DO UPDATE waits for that row and returns
+	// its id.
 	var targetID string
 	err = tx.QueryRow(ctx, `
-WITH inserted AS (
-    INSERT INTO elitea_identity.target_bindings (id, tenant_project_id, provider_type, target_identity, audience)
-    VALUES ($1::uuid, $2, $3, $4, '')
-    ON CONFLICT (tenant_project_id, provider_type, target_identity, audience) DO NOTHING
-    RETURNING id::text
-)
-SELECT id FROM inserted
-UNION ALL
-SELECT id::text FROM elitea_identity.target_bindings
-WHERE tenant_project_id = $2 AND provider_type = $3 AND target_identity = $4 AND audience = ''
-LIMIT 1`, newID(), staged.TenantProjectID, staged.ProviderType, staged.TargetIdentity).Scan(&targetID)
+INSERT INTO elitea_identity.target_bindings (id, tenant_project_id, provider_type, target_identity, audience)
+VALUES ($1::uuid, $2, $3, $4, '')
+ON CONFLICT (tenant_project_id, provider_type, target_identity, audience)
+DO UPDATE SET target_identity = EXCLUDED.target_identity
+RETURNING id::text`, newID(), staged.TenantProjectID, staged.ProviderType, staged.TargetIdentity).Scan(&targetID)
 	if err != nil {
 		return StageResult{}, fmt.Errorf("stage the target binding: %w", err)
 	}
-	id := staged.ID
-	if id == "" {
-		id = newID()
-	}
+	id := newID()
 	tag, err := tx.Exec(ctx, `
 INSERT INTO elitea_identity.credential_references
     (id, tenant_project_id, class, backend, locator, provider_type, target_binding_id, generation, state,
      staged_by, last_transition_by, migrated_from)
 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7::uuid, $8, 'staged', $9, $9, $10)
-ON CONFLICT (tenant_project_id, migrated_from) WHERE migrated_from IS NOT NULL DO NOTHING`,
+ON CONFLICT (tenant_project_id, migrated_from) WHERE migrated_from IS NOT NULL AND state <> 'retired' DO NOTHING`,
 		id, staged.TenantProjectID, string(staged.Class), staged.Backend, staged.Locator, staged.ProviderType,
-		targetID, staged.Generation, staged.StagedBy, staged.MigratedFrom)
+		targetID, staged.Generation, stagerID, staged.MigratedFrom)
 	if err != nil {
 		return StageResult{}, fmt.Errorf("stage the credential reference: %w", err)
 	}
 	created := tag.RowsAffected() == 1
 	rec, err := scanCredentialReference(tx.QueryRow(ctx, `SELECT `+credentialReferenceColumns+` FROM `+credentialReferenceFrom+`
-WHERE r.tenant_project_id = $1 AND r.migrated_from = $2`, staged.TenantProjectID, staged.MigratedFrom))
+WHERE `+liveMigratedFrom, staged.TenantProjectID, staged.MigratedFrom))
 	if err != nil {
 		return StageResult{}, err
 	}
@@ -698,7 +716,7 @@ WHERE r.tenant_project_id = $1 AND r.migrated_from = $2`, staged.TenantProjectID
 		// Nothing was written; nothing to audit.
 		return StageResult{Record: rec}, nil
 	}
-	event := credentialReferenceEvent(rec.withoutTime(), "credential_reference.stage", staged.StagedBy,
+	event := credentialReferenceEvent(rec.withoutTime(), "credential_reference.stage", stager,
 		"state.staged", "class."+string(rec.Class))
 	if err := s.audit.Append(ctx, tx, event); err != nil {
 		return StageResult{}, fmt.Errorf("audit staging: %w", err)
@@ -707,6 +725,58 @@ WHERE r.tenant_project_id = $1 AND r.migrated_from = $2`, staged.TenantProjectID
 		return StageResult{}, fmt.Errorf("commit staging: %w", err)
 	}
 	return StageResult{Record: rec, Created: true}, nil
+}
+
+// SetCopiedGeneration records the Vault version a --copy-to vault write
+// created on the staged reference that was staged for it at generation 0,
+// with its audit event. A reference already at that generation succeeds
+// unchanged (a concurrent run finished first); any other state or
+// generation is ErrCredentialReferenceTransition.
+func (s *CredentialReferences) SetCopiedGeneration(ctx context.Context, id string, generation int64, actor string) (CredentialReferenceRecord, error) {
+	if err := s.writeReady(); err != nil {
+		return CredentialReferenceRecord{}, err
+	}
+	_, actor, err := CanonicalUserID(actor)
+	if err != nil {
+		return CredentialReferenceRecord{}, err
+	}
+	if !agentIdentityIsUUID(id) || generation <= 0 {
+		return CredentialReferenceRecord{}, credentialgrant.ErrReferenceNotFound
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return CredentialReferenceRecord{}, fmt.Errorf("begin generation write: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	current, err := scanCredentialReference(tx.QueryRow(ctx,
+		`SELECT `+credentialReferenceColumns+` FROM `+credentialReferenceFrom+` WHERE r.id = $1::uuid FOR UPDATE OF r`, id))
+	if err != nil {
+		return CredentialReferenceRecord{}, err
+	}
+	if current.Generation == generation && current.State == credentialgrant.ReferenceStaged {
+		return current, nil
+	}
+	if current.Generation != 0 || current.State != credentialgrant.ReferenceStaged || current.Backend != "vault" {
+		return CredentialReferenceRecord{}, ErrCredentialReferenceTransition
+	}
+	if _, err := tx.Exec(ctx, `UPDATE elitea_identity.credential_references SET generation = $2, updated_at = $3
+WHERE id = $1::uuid`, id, generation, s.now().UTC()); err != nil {
+		return CredentialReferenceRecord{}, fmt.Errorf("write the copied generation: %w", err)
+	}
+	written, err := scanCredentialReference(tx.QueryRow(ctx,
+		`SELECT `+credentialReferenceColumns+` FROM `+credentialReferenceFrom+` WHERE r.id = $1::uuid`, id))
+	if err != nil {
+		return CredentialReferenceRecord{}, err
+	}
+	event := credentialReferenceEvent(written, "credential_reference.copy_committed", actor,
+		"generation."+strconv.FormatInt(generation, 10))
+	if err := s.audit.Append(ctx, tx, event); err != nil {
+		return CredentialReferenceRecord{}, fmt.Errorf("audit the copied generation: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return CredentialReferenceRecord{}, fmt.Errorf("commit the copied generation: %w", err)
+	}
+	return written, nil
 }
 
 // RecordSecretCopy appends the audit decision that names a --copy-to vault
