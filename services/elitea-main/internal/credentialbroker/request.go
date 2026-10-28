@@ -49,8 +49,14 @@ func viewOf(m *runtimev1.ExecutionSecurityContextV1) *securitycontextView {
 		applicationID: m.GetApplicationId(), applicationVersionID: m.GetApplicationVersionId(),
 		frozen: map[int64]securitycontext.CredentialReference{},
 	}
+	// One pass; the first entry of a toolkit wins, as CredentialReferenceFor.
+	seen := make(map[int64]bool, len(m.GetCredentialReferences()))
 	for _, ref := range m.GetCredentialReferences() {
-		if frozen, ok := securitycontext.CredentialReferenceFor(m, ref.GetToolkitId()); ok {
+		if seen[ref.GetToolkitId()] {
+			continue
+		}
+		seen[ref.GetToolkitId()] = true
+		if frozen, ok := securitycontext.CredentialReferenceOf(ref); ok {
 			v.frozen[frozen.ToolkitID] = frozen
 		}
 	}

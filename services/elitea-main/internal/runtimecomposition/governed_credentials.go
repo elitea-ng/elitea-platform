@@ -35,7 +35,7 @@ func governedAgentCredentials(admission profile.Admission, pool *pgxpool.Pool) (
 		return nil, err
 	}
 	return agentexecutionapp.NewGovernedCredentials(resolver, repos.NewAgentIdentityBindings(pool, nil),
-		governedToolkitSource{repository: toolkits})
+		governedToolkitSource{repository: toolkits}, repos.NewAgentAdmissionReplays(pool))
 }
 
 // governedToolkitSource reads a toolkit's stored row from the run's project.

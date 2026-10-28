@@ -98,7 +98,7 @@ VALUES ($1::uuid, 7, $2::uuid, 21, $3::uuid, $4::uuid, ARRAY['use'], ARRAY['jira
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials, err := agentexecutionapp.NewGovernedCredentials(resolver, NewAgentIdentityBindings(pool, nil), stored)
+	credentials, err := agentexecutionapp.NewGovernedCredentials(resolver, NewAgentIdentityBindings(pool, nil), stored, NewAgentAdmissionReplays(pool))
 	if err != nil {
 		t.Fatal(err)
 	}
