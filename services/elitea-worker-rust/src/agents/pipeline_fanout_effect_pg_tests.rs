@@ -723,6 +723,7 @@ fn inline_llm_request(on_error: &str) -> super::super::request::AgentExecutionRe
 /// approved and rejected live while the run goes on, resume and join; only
 /// the approved tool runs, once, and nothing raises a legacy pause.
 #[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)] // One run: each card kind is raised, decided live and asserted in order.
 async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live() {
     let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
