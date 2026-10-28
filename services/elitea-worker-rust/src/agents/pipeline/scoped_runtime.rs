@@ -378,8 +378,8 @@ impl PipelineApplicationNodeRuntime {
         GraphError::NodeExecutionFailed {
             node: "application_scope".to_owned(),
             message: format!(
-                "{}: the agent of node '{}' asked for a decision, which a parallel branch cannot \
-                 take yet",
+                "{}: the agent of node '{}' asked for a decision a parallel branch cannot take \
+                 yet (a sign-in, or a pause inside a nested agent)",
                 crate::agents::application_tools::FANOUT_AGENT_PAUSE_CODE,
                 self.node_name
             ),
@@ -407,7 +407,7 @@ impl PipelineApplicationNodeRuntime {
         } else if pause {
             (
                 crate::agents::application_tools::FANOUT_AGENT_PAUSE_CODE,
-                "The agent asked for a decision, which a parallel branch cannot take yet.",
+                "The agent asked for a decision a parallel branch cannot take yet (a sign-in, or a pause inside a nested agent).",
             )
         } else {
             ("graph.node_execution_failed", "The task failed.")
@@ -726,7 +726,7 @@ enum ChildFailure {
     Scope(GraphError),
     /// The nested Agent refused its decided call before running it.
     ReplayUnsupported,
-    /// A fixed Parallel member's Agent asked for a decision (FU-246).
+    /// A fixed Parallel member's Agent asked for a decision no card can take.
     FanoutPause,
     /// The approved call may have started (`RECOVERY_REFUSED_UPSTREAM_CODE`),
     /// or its dispatch record could not be written (`DISPATCH_UNRECORDED_CODE`).

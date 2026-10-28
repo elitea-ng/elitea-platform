@@ -5626,8 +5626,9 @@ pub(super) fn application_event_channel_error() -> AdkError {
     )
 }
 
-/// The code a fixed Parallel member's Agent ends with when it asks for a
-/// decision (FU-246).
+/// The code a fixed Parallel member ends with when its Agent asks for a
+/// decision no ledger card can take: a delegated sign-in (FU-250), or a pause
+/// deeper inside the member's Agent (FU-246 covers the member's own Agent).
 pub(crate) const FANOUT_AGENT_PAUSE_CODE: &str = "graph.fanout.agent_pause_unsupported";
 
 /// FU-246: a fixed Parallel member's Agent that asks for a decision pauses
