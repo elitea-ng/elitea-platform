@@ -26,6 +26,13 @@ package main
 //     secrets are single-version). With no secret, the class is
 //     oauth_delegated when the provider accepts it (the consent flow supplies
 //     the material). A plaintext secret is skipped (secret_not_sealed).
+//   - jira, confluence basic auth (#1481): with no token, a sealed api_key
+//     and a non-empty username (plain or sealed) are the account's API token
+//     and email. The reference then points at ONE composite secret holding
+//     the key map {"token", "username"}, written by --apply: in pgvault at
+//     governed_<configuration uuid hex>, or at the --copy-to vault path. A
+//     token (a PAT, Bearer) wins over api_key, as it does for a legacy run,
+//     and stays a token-only reference to the existing secret.
 //   - sharepoint: the same configuration rule; the target is site_url and the
 //     class is always oauth_delegated (Entra on-behalf-of). Its client secret
 //     is never referenced.
@@ -48,11 +55,13 @@ package main
 // or ledger, and settle returns before any store write. --apply writes `staged` references and their target
 // bindings only, with a security audit event each. It never activates,
 // grants, attaches or edits a toolkit: those are the admin API's, by people.
-// No secret value moves unless --copy-to vault is given; then the pgvault
-// value is written to Vault/OpenBao KV v2 with check-and-set version 0
-// through the staged-write ledger (#1113), and the pgvault secret stays,
-// because legacy runs still read it. The reference is staged first at
-// generation 0 and takes the written version once the copy lands.
+// No secret value moves unless --copy-to vault is given or the reference is
+// a composite basic-auth key map; then the value is written with
+// check-and-set version 0 through the staged-write ledger (#1113) to
+// Vault/OpenBao KV v2 or to a NEW pgvault name, and the pgvault secrets the
+// configuration names stay, because legacy runs still read them. The
+// reference is staged first at generation 0 and takes the written version
+// once the write lands.
 
 import (
 	"bytes"
@@ -122,9 +131,21 @@ type migrateItem struct {
 	Generation            int64  `json:"generation"`
 	SecretLocation        string `json:"secret_location"`
 	State                 string `json:"state"`
-	action                migrateAction
-	migratedFrom          string
-	secretName            string
+	// Material is the key set the secret holds for a static secret:
+	// "token", or "token+username" for a composite basic-auth key map.
+	Material     string `json:"material,omitempty"`
+	action       migrateAction
+	migratedFrom string
+	secretName   string
+	// username is the basic-auth account of a composite reference: plain
+	// text, or usernameSecret names the sealed pgvault secret holding it.
+	username       string
+	usernameSecret string
+}
+
+// keyMap reports a composite basic-auth reference.
+func (item migrateItem) keyMap() bool {
+	return item.username != "" || item.usernameSecret != ""
 }
 
 // migrateProvider is the configuration rule of one toolkit type.
@@ -132,27 +153,36 @@ type migrateProvider struct {
 	targetField  string
 	secretFields []string
 	oauthOnly    bool
+	// basicSecretField with a non-empty usernameField is basic auth: the
+	// secret is the account's API token and the username its account
+	// (#1481). It is used only when no earlier secret field is set.
+	basicSecretField string
+	usernameField    string
 }
 
 var migrateProviders = map[string]migrateProvider{
-	"jira":       {targetField: "base_url", secretFields: []string{"token", "api_key"}},
-	"confluence": {targetField: "base_url", secretFields: []string{"token", "api_key"}},
+	"jira": {targetField: "base_url", secretFields: []string{"token", "api_key"},
+		basicSecretField: "api_key", usernameField: "username"},
+	"confluence": {targetField: "base_url", secretFields: []string{"token", "api_key"},
+		basicSecretField: "api_key", usernameField: "username"},
 	"qtest":      {targetField: "base_url", secretFields: []string{"qtest_api_token"}},
 	"aha":        {targetField: "base_url", secretFields: []string{"api_key"}},
 	"sharepoint": {targetField: "site_url", oauthOnly: true},
 }
 
-// migrateSecrets is what --copy-to vault reads from and writes to.
+// migrateSecrets is what --copy-to vault, and a composite key map, read
+// from and write to. vault is nil when --copy-to vault is not given.
 type migrateSecrets struct {
 	source secretstore.SecretStore // pgvault
 	vault  secretstore.SecretStore
 	mount  string
 }
 
-// migrateDeps are the seams a test replaces.
+// migrateDeps are the seams a test replaces. secrets builds the vault
+// destination only when needVault is set.
 type migrateDeps struct {
 	connect func(ctx context.Context, dsn string) (*pgxpool.Pool, error)
-	secrets func(lookup func(string) (string, bool), pool *pgxpool.Pool) (migrateSecrets, error)
+	secrets func(lookup func(string) (string, bool), pool *pgxpool.Pool, needVault bool) (migrateSecrets, error)
 	newID   func() string
 }
 
@@ -175,8 +205,9 @@ func connectMigratePool(ctx context.Context, dsn string) (*pgxpool.Pool, error) 
 }
 
 // migrateSecretsFromEnv builds the pgvault source and the Vault/OpenBao
-// destination the same way the credential broker does.
-func migrateSecretsFromEnv(lookup func(string) (string, bool), pool *pgxpool.Pool) (migrateSecrets, error) {
+// destination the same way the credential broker does. Without needVault
+// it builds the pgvault store alone (a composite key map in pgvault).
+func migrateSecretsFromEnv(lookup func(string) (string, bool), pool *pgxpool.Pool, needVault bool) (migrateSecrets, error) {
 	masterKey, err := encodedVaultMasterKeyFromEnv(lookup)
 	if err != nil {
 		return migrateSecrets{}, err
@@ -186,7 +217,7 @@ func migrateSecretsFromEnv(lookup func(string) (string, bool), pool *pgxpool.Poo
 		// whose project vault keys are stored unwrapped.
 		getenv := func(name string) string { value, _ := lookup(name); return value }
 		if _, err := requireVaultMasterKey(getenv); err != nil {
-			return migrateSecrets{}, fmt.Errorf("--copy-to vault reads the pgvault secret: %w", err)
+			return migrateSecrets{}, fmt.Errorf("reading the pgvault secret: %w", err)
 		}
 	}
 	reader, err := storage.NewPostgresSecretVaultLoader(pool, masterKey)
@@ -200,6 +231,9 @@ func migrateSecretsFromEnv(lookup func(string) (string, bool), pool *pgxpool.Poo
 	source, err := pgvault.New(pool, reader, writer)
 	if err != nil {
 		return migrateSecrets{}, err
+	}
+	if !needVault {
+		return migrateSecrets{source: source}, nil
 	}
 	external, _, err := backends.VaultFromEnv(lookup)
 	if err != nil {
@@ -268,10 +302,12 @@ func runMigrateReferences(ctx context.Context, args []string, lookup func(string
 		}
 		opts.operator = canonical
 	}
-	if opts.copyToVault && opts.policyRevision == "" {
+	if opts.apply && opts.policyRevision == "" {
+		// A composite key map is written under the configured revision too;
+		// without one, only that write stops (writeMaterial).
 		opts.policyRevision, _ = lookup(profile.EnvPolicyRevision)
 		opts.policyRevision = strings.TrimSpace(opts.policyRevision)
-		if opts.policyRevision == "" {
+		if opts.copyToVault && opts.policyRevision == "" {
 			_, _ = fmt.Fprintf(stderr, "--copy-to vault needs --policy-revision or %s\n", profile.EnvPolicyRevision)
 			return 2
 		}
@@ -304,7 +340,7 @@ func runMigrateReferences(ctx context.Context, args []string, lookup func(string
 	}
 	var secrets migrateSecrets
 	if opts.apply && opts.copyToVault {
-		if secrets, err = deps.secrets(lookup, pool); err != nil {
+		if secrets, err = deps.secrets(lookup, pool, true); err != nil {
 			_, _ = fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -321,11 +357,16 @@ func runMigrateReferences(ctx context.Context, args []string, lookup func(string
 	}
 	m := &referenceMigration{pool: pool, store: repos.NewCredentialReferences(pool, audit), registry: registry,
 		opts: opts, secrets: secrets, newID: deps.newID}
-	if opts.apply && opts.copyToVault {
+	if opts.apply {
 		if m.ledger, err = secretstore.NewLedger(pool); err != nil {
 			_, _ = fmt.Fprintln(stderr, err)
 			return 1
 		}
+	}
+	if opts.apply && !opts.copyToVault {
+		// The pgvault store is opened only when a composite key map is
+		// written, so an --apply with none needs no master key.
+		m.openSecrets = func() (migrateSecrets, error) { return deps.secrets(lookup, pool, false) }
 	}
 	items, err := m.run(ctx)
 	printMigrateItems(stdout, items, opts)
@@ -354,8 +395,11 @@ type referenceMigration struct {
 	registry *credentialadapters.Registry
 	opts     migrateOptions
 	secrets  migrateSecrets
-	ledger   *secretstore.Ledger
-	newID    func() string
+	// openSecrets opens secrets on first need (an --apply without
+	// --copy-to vault that writes a composite key map to pgvault).
+	openSecrets func() (migrateSecrets, error)
+	ledger      *secretstore.Ledger
+	newID       func() string
 	// migrated memoises FindMigrated per project and source for one run:
 	// toolkits sharing a configuration read it once.
 	migrated map[string]repos.CredentialReferenceRecord
@@ -572,6 +616,19 @@ func (m *referenceMigration) planToolkit(project int64, configurations map[strin
 				return skip(item, "secret_not_sealed")
 			}
 			class, item.secretName = credentialgrant.ClassStaticSecret, name
+			if field == provider.basicSecretField && provider.usernameField != "" {
+				// Basic auth (#1481): the account travels with the token.
+				username, _ := data[provider.usernameField].(string)
+				if username = strings.TrimSpace(username); username != "" {
+					if sealedName, sealed := sealedSecretName(username); sealed {
+						item.usernameSecret = sealedName
+					} else if strings.Contains(username, "{{secret.") {
+						return skip(item, "secret_not_sealed")
+					} else {
+						item.username = username
+					}
+				}
+			}
 			break
 		}
 	}
@@ -580,11 +637,20 @@ func (m *referenceMigration) planToolkit(project int64, configurations map[strin
 	}
 	item.Class = string(class)
 	if class == credentialgrant.ClassStaticSecret {
-		if m.opts.copyToVault {
+		item.Material = "token"
+		switch {
+		case m.opts.copyToVault:
 			item.Backend = secretstore.BackendVault
 			item.Locator = migrateVaultPath(project, item.ConfigurationUUID)
-		} else {
+		case item.keyMap():
+			// A new pgvault name holds the key map; it is written at
+			// --apply, so the reference starts at generation 0.
+			item.Locator = migrateKeyMapName(item.ConfigurationUUID)
+		default:
 			item.Locator, item.Generation = item.secretName, 1
+		}
+		if item.keyMap() {
+			item.Material = "token+username"
 		}
 	} else {
 		item.Locator = migrateReferencesOAuthLocator
@@ -626,6 +692,44 @@ func migrateVaultPath(project int64, configurationUUID string) string {
 	return "elitea/projects/" + strconv.FormatInt(project, 10) + "/credentials/" + configurationUUID
 }
 
+// migrateKeyMapName is the pgvault name of a configuration's composite
+// basic-auth secret: fixed per configuration (a rerun finds what it wrote)
+// and inside the vault's name rule.
+func migrateKeyMapName(configurationUUID string) string {
+	return "governed_" + strings.ReplaceAll(configurationUUID, "-", "")
+}
+
+// appendJSONString appends src as a JSON string. It copies bytes, never
+// through a Go string, so the caller can clear every copy of the secret.
+func appendJSONString(dst, src []byte) []byte {
+	const hex = "0123456789abcdef"
+	dst = append(dst, '"')
+	for _, c := range src {
+		switch {
+		case c == '"' || c == '\\':
+			dst = append(dst, '\\', c)
+		case c < 0x20:
+			dst = append(dst, '\\', 'u', '0', '0', hex[c>>4], hex[c&0xf])
+		default:
+			dst = append(dst, c)
+		}
+	}
+	return append(dst, '"')
+}
+
+// keyMapValue is the composite secret {"token":…,"username":…}: the key map
+// the credential broker shapes into the catalogue's static_secret keys.
+func keyMapValue(token, username []byte) []byte {
+	// The worst-case escape is six bytes per byte: sized once, the buffer
+	// never reallocates and leaves no uncleared copy behind.
+	out := make([]byte, 0, 6*(len(token)+len(username))+32)
+	out = append(out, `{"token":`...)
+	out = appendJSONString(out, token)
+	out = append(out, `,"username":`...)
+	out = appendJSONString(out, username)
+	return append(out, '}')
+}
+
 // findMigrated is FindMigrated, memoised for the run. A miss is remembered
 // as the zero record.
 func (m *referenceMigration) findMigrated(ctx context.Context, project int64, migratedFrom string) (repos.CredentialReferenceRecord, bool, error) {
@@ -652,21 +756,25 @@ func migratedKey(project int64, migratedFrom string) string {
 	return strconv.FormatInt(project, 10) + "/" + migratedFrom
 }
 
-// copyPending is a --copy-to vault reference staged at generation 0 whose
-// copy has not completed (a crash between the staging and the write).
+// copyPending is a static reference staged at generation 0 whose secret
+// write has not completed (a crash between the staging and the write): a
+// --copy-to vault copy, or a composite key map in pgvault. A token-only
+// pgvault reference is staged at generation 1 and is never pending.
 func copyPending(rec repos.CredentialReferenceRecord) bool {
-	return rec.Backend == secretstore.BackendVault && rec.Class == credentialgrant.ClassStaticSecret &&
+	return (rec.Backend == secretstore.BackendVault || rec.Backend == secretstore.BackendPGVault) &&
+		rec.Class == credentialgrant.ClassStaticSecret &&
 		rec.Generation == 0 && rec.State == credentialgrant.ReferenceStaged
 }
 
 // settle looks the unit up and, with --apply, stages it.
 //
-// A --copy-to vault reference is staged FIRST, at generation 0, so the
-// audit decision that authorises the pgvault read, the ledger row and the
-// Vault write all name the id of a reference that exists. The copy then
-// records the version it wrote as the reference's generation (activation
-// refuses a static secret at generation 0). A rerun that finds a reference
-// still at generation 0 completes its copy under that same id.
+// A reference whose secret this run writes (--copy-to vault, or a composite
+// key map) is staged FIRST, at generation 0, so the audit decision that
+// authorises the pgvault read, the ledger row and the write all name the id
+// of a reference that exists. The write then records the version it wrote
+// as the reference's generation (activation refuses a static secret at
+// generation 0). A rerun that finds a reference still at generation 0
+// completes its write under that same id.
 func (m *referenceMigration) settle(ctx context.Context, item *migrateItem) error {
 	existing, found, err := m.findMigrated(ctx, item.ProjectID, item.migratedFrom)
 	if err != nil {
@@ -691,7 +799,7 @@ func (m *referenceMigration) settle(ctx context.Context, item *migrateItem) erro
 			Class: credentialgrant.CredentialClass(item.Class), Backend: item.Backend, Locator: item.Locator,
 			Generation: item.Generation, MigratedFrom: item.migratedFrom, StagedBy: m.opts.operator,
 		}
-		if item.Backend == secretstore.BackendVault {
+		if item.Backend == secretstore.BackendVault || item.keyMap() {
 			staged.Generation = 0
 		}
 		result, err := m.store.StageReference(ctx, staged, m.newID)
@@ -701,7 +809,7 @@ func (m *referenceMigration) settle(ctx context.Context, item *migrateItem) erro
 		rec, created = result.Record, result.Created
 	}
 	if copyPending(rec) {
-		version, err := m.copyToVault(ctx, *item, rec.ID)
+		version, err := m.writeMaterial(ctx, *item, rec)
 		if err != nil {
 			return err
 		}
@@ -719,53 +827,94 @@ func (m *referenceMigration) settle(ctx context.Context, item *migrateItem) erro
 	return nil
 }
 
-// copyToVault copies one pgvault secret to Vault/OpenBao for the staged
-// reference referenceID. The audit decision that authorises the read is
-// appended first; its id is the read's StoreContext.DecisionID. The write is
-// check-and-set 0 through the ledger. The path is fixed per configuration,
-// so a rerun after a failure finds the secret it wrote: on a check-and-set
-// conflict the path's CURRENT version is read, and it is used only when its
-// bytes equal the pgvault value. Anything else stops the run.
-func (m *referenceMigration) copyToVault(ctx context.Context, item migrateItem, referenceID string) (int64, error) {
-	if m.secrets.source == nil || m.secrets.vault == nil || m.ledger == nil {
-		return 0, errors.New("--copy-to vault: the secret stores are not configured")
+// writeMaterial writes the secret of the staged reference rec: the pgvault
+// token copied to Vault/OpenBao (--copy-to vault), or, for basic auth, the
+// composite key map {"token","username"} to Vault or to a new pgvault name
+// (#1481). The audit decision that authorises the reads is appended first;
+// its id is the reads' StoreContext.DecisionID. The write is check-and-set 0
+// through the ledger. The destination is fixed per configuration, so a
+// rerun after a failure finds the secret it wrote: on a check-and-set
+// conflict the destination's CURRENT version is read, and it is used only
+// when its bytes equal the value. Anything else stops the run.
+func (m *referenceMigration) writeMaterial(ctx context.Context, item migrateItem, rec repos.CredentialReferenceRecord) (int64, error) {
+	if m.secrets.source == nil && m.openSecrets != nil {
+		secrets, err := m.openSecrets()
+		if err != nil {
+			return 0, err
+		}
+		m.secrets, m.openSecrets = secrets, nil
+	}
+	var store secretstore.SecretStore
+	destination := secretstore.SecretRef{Backend: rec.Backend, Path: rec.Locator}
+	switch rec.Backend {
+	case secretstore.BackendVault:
+		store, destination.Mount = m.secrets.vault, m.secrets.mount
+	case secretstore.BackendPGVault:
+		store = m.secrets.source
+	}
+	if m.secrets.source == nil || store == nil || m.ledger == nil {
+		return 0, errors.New("migrate-references: the secret stores are not configured")
+	}
+	if m.opts.policyRevision == "" {
+		return 0, fmt.Errorf("writing a secret needs --policy-revision or %s", profile.EnvPolicyRevision)
 	}
 	decisionID := m.newID()
-	if err := m.store.RecordSecretCopy(ctx, item.ProjectID, referenceID, decisionID, m.opts.operator); err != nil {
+	if err := m.store.RecordSecretCopy(ctx, item.ProjectID, rec.ID, decisionID, m.opts.operator, rec.Backend); err != nil {
 		return 0, err
 	}
 	sc := secretstore.StoreContext{
-		TenantProjectID: item.ProjectID, CredentialRefID: referenceID, DecisionID: decisionID,
+		TenantProjectID: item.ProjectID, CredentialRefID: rec.ID, DecisionID: decisionID,
 		WorkloadScope: migrateReferencesCopyScope, PolicyRevisionID: m.opts.policyRevision,
 	}
-	source, err := m.secrets.source.Read(ctx, sc,
-		secretstore.SecretRef{Backend: secretstore.BackendPGVault, Path: item.secretName}, 1)
-	if err != nil {
-		return 0, fmt.Errorf("read the pgvault secret: %w", err)
+	readPGVault := func(name string) (secretstore.SecretVersion, error) {
+		secret, err := m.secrets.source.Read(ctx, sc, secretstore.SecretRef{Backend: secretstore.BackendPGVault, Path: name}, 1)
+		if err != nil {
+			return secretstore.SecretVersion{}, fmt.Errorf("read the pgvault secret: %w", err)
+		}
+		return secret, nil
 	}
-	defer source.Value.Destroy()
-	destination := secretstore.SecretRef{Backend: secretstore.BackendVault, Mount: m.secrets.mount, Path: item.Locator}
-	version, err := m.ledger.StagedWrite(ctx, m.secrets.vault, sc, destination, source.Value, 0)
+	token, err := readPGVault(item.secretName)
+	if err != nil {
+		return 0, err
+	}
+	defer token.Value.Destroy()
+	value := token.Value
+	if item.keyMap() {
+		username := []byte(item.username)
+		if item.usernameSecret != "" {
+			sealed, err := readPGVault(item.usernameSecret)
+			if err != nil {
+				return 0, err
+			}
+			defer sealed.Value.Destroy()
+			username = sealed.Value.UnsafeBytes()
+		}
+		raw := keyMapValue(token.Value.UnsafeBytes(), username)
+		value = secretstore.NewRuntimeSecret(raw)
+		clear(raw)
+		defer value.Destroy()
+	}
+	version, err := m.ledger.StagedWrite(ctx, store, sc, destination, value, 0)
 	if errors.Is(err, secretstore.ErrVersionConflict) {
-		meta, metaErr := m.secrets.vault.Metadata(ctx, sc, destination)
+		meta, metaErr := store.Metadata(ctx, sc, destination)
 		if metaErr != nil {
-			return 0, fmt.Errorf("the Vault path already holds a secret whose version could not be read: %w", metaErr)
+			return 0, fmt.Errorf("the %s destination already holds a secret whose version could not be read: %w", rec.Backend, metaErr)
 		}
 		if meta.CurrentVersion <= 0 {
-			return 0, errors.New("the Vault path already holds a secret with no current version; nothing was overwritten")
+			return 0, fmt.Errorf("the %s destination already holds a secret with no current version; nothing was overwritten", rec.Backend)
 		}
-		written, readErr := m.secrets.vault.Read(ctx, sc, destination, meta.CurrentVersion)
+		written, readErr := store.Read(ctx, sc, destination, meta.CurrentVersion)
 		if readErr != nil {
-			return 0, fmt.Errorf("the Vault path already holds a secret that could not be read back: %w", readErr)
+			return 0, fmt.Errorf("the %s destination already holds a secret that could not be read back: %w", rec.Backend, readErr)
 		}
 		defer written.Value.Destroy()
-		if !bytes.Equal(written.Value.UnsafeBytes(), source.Value.UnsafeBytes()) {
-			return 0, errors.New("the Vault path already holds a different secret; nothing was overwritten")
+		if !bytes.Equal(written.Value.UnsafeBytes(), value.UnsafeBytes()) {
+			return 0, fmt.Errorf("the %s destination already holds a different secret; nothing was overwritten", rec.Backend)
 		}
 		return meta.CurrentVersion, nil
 	}
 	if err != nil {
-		return 0, fmt.Errorf("write the Vault secret: %w", err)
+		return 0, fmt.Errorf("write the %s secret: %w", rec.Backend, err)
 	}
 	return version, nil
 }
@@ -790,6 +939,10 @@ func (item *migrateItem) location(mount string) string {
 			version = strconv.FormatInt(item.Generation, 10)
 		}
 		return "vault:" + mount + "/" + item.Locator + "@" + version
+	}
+	if item.Generation <= 0 {
+		// A composite key map this run has not written yet.
+		return "pgvault:" + item.Locator + "@<new>"
 	}
 	return "pgvault:" + item.Locator + "@" + strconv.FormatInt(item.Generation, 10)
 }

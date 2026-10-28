@@ -6,6 +6,17 @@ newest entry is first.
 
 ## Governance follow-ups
 
+* **`migrate-references`: Jira Cloud and Confluence Cloud basic auth
+  (#1481).** A configuration with no `token`, a sealed `api_key` and a
+  `username` is now staged as one composite secret holding
+  `{"token", "username"}`: `--apply` writes it to the built-in vault as
+  `governed_<configuration uuid hex>` (or to the `--copy-to vault` path)
+  through the secret write ledger, and the broker releases both keys. That
+  write needs `SECRETS_MASTER_KEY` and a policy revision
+  (`--policy-revision` or the configured one). A basic-auth reference
+  staged by an earlier release is token-only and its governed calls fail:
+  retire it and run `--apply` again to stage the replacement. Token-only
+  references (PATs) are unchanged.
 * **elitea-main: a refused governed resume settles its paused turn
   (#1485).** When a grant, reference or binding is revoked while a governed
   run waits on an approval, the resume is still refused with `403

@@ -727,8 +727,9 @@ WHERE `+liveMigratedFrom, staged.TenantProjectID, staged.MigratedFrom))
 	return StageResult{Record: rec, Created: true}, nil
 }
 
-// SetCopiedGeneration records the Vault version a --copy-to vault write
-// created on the staged reference that was staged for it at generation 0,
+// SetCopiedGeneration records the version a migration write created (a
+// --copy-to vault copy, or a composite key map's pgvault version 1) on the
+// staged reference that was staged for it at generation 0,
 // with its audit event. A reference already at that generation succeeds
 // unchanged (a concurrent run finished first); any other state or
 // generation is ErrCredentialReferenceTransition.
@@ -756,7 +757,10 @@ func (s *CredentialReferences) SetCopiedGeneration(ctx context.Context, id strin
 	if current.Generation == generation && current.State == credentialgrant.ReferenceStaged {
 		return current, nil
 	}
-	if current.Generation != 0 || current.State != credentialgrant.ReferenceStaged || current.Backend != "vault" {
+	// A pgvault secret has one version: a composite key map written to a
+	// new pgvault name (#1481) is version 1.
+	writable := current.Backend == "vault" || (current.Backend == "pgvault" && generation == 1)
+	if current.Generation != 0 || current.State != credentialgrant.ReferenceStaged || !writable {
 		return CredentialReferenceRecord{}, ErrCredentialReferenceTransition
 	}
 	if _, err := tx.Exec(ctx, `UPDATE elitea_identity.credential_references SET generation = $2, updated_at = $3
@@ -779,17 +783,23 @@ WHERE id = $1::uuid`, id, generation, s.now().UTC()); err != nil {
 	return written, nil
 }
 
-// RecordSecretCopy appends the audit decision that names a --copy-to vault
-// secret read (decisionID is the StoreContext.DecisionID of the read).
-func (s *CredentialReferences) RecordSecretCopy(ctx context.Context, tenantProjectID int64, referenceID, decisionID, actor string) error {
+// RecordSecretCopy appends the audit decision that names a migration's
+// secret read (decisionID is the StoreContext.DecisionID of the read):
+// `credential_reference.copy_to_vault` for a --copy-to vault copy, and
+// `credential_reference.copy_to_pgvault` for a composite key map written to
+// a new pgvault name (#1481).
+func (s *CredentialReferences) RecordSecretCopy(ctx context.Context, tenantProjectID int64, referenceID, decisionID, actor, backend string) error {
 	if err := s.writeReady(); err != nil {
 		return err
+	}
+	if backend != "vault" && backend != "pgvault" {
+		return fmt.Errorf("credential references: no secret copy to backend %q", backend)
 	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		return s.audit.Append(ctx, tx, securityaudit.SecurityEvent{
 			Type:            securityaudit.TypeDecision,
 			TenantProjectID: tenantProjectID,
-			Action:          "credential_reference.copy_to_vault",
+			Action:          "credential_reference.copy_to_" + backend,
 			Effect:          securityaudit.EffectAllow,
 			Reasons:         []string{"operator.migrate_references"},
 			PrincipalRef:    auditUserRef(actor),

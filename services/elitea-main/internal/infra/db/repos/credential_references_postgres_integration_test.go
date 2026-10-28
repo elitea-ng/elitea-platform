@@ -344,6 +344,27 @@ func TestCredentialReferenceVaultCopyGenerationGatesActivation(t *testing.T) {
 	require.EqualValues(t, 3, active.Generation)
 }
 
+// A composite basic-auth key map in pgvault (#1481) is staged at generation
+// 0 too, and takes version 1, the only version a pgvault secret has.
+func TestCredentialReferencePGVaultKeyMapTakesVersionOne(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	store := NewCredentialReferences(pool, agentIdentityAudit(t))
+	staged, err := store.StageReference(ctx, StagedReference{
+		TenantProjectID: 7, ProviderType: "jira", TargetIdentity: "https://cloud.atlassian.net",
+		Class: credentialgrant.ClassStaticSecret, Backend: "pgvault", Locator: "governed_99999999999949998999999999999999",
+		MigratedFrom: "configuration:99999999-9999-4999-8999-999999999999:pgvault", StagedBy: "100",
+	}, newRefTestID)
+	require.NoError(t, err)
+	_, err = store.SetCopiedGeneration(ctx, staged.Record.ID, 2, "100")
+	require.ErrorIs(t, err, ErrCredentialReferenceTransition, "pgvault holds version 1 only")
+	copied, err := store.SetCopiedGeneration(ctx, staged.Record.ID, 1, "100")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, copied.Generation)
+	require.NoError(t, store.RecordSecretCopy(ctx, 7, staged.Record.ID, newRefTestID(), "100", "pgvault"))
+	require.Error(t, store.RecordSecretCopy(ctx, 7, staged.Record.ID, newRefTestID(), "100", "s3"))
+}
+
 // Concurrent stagings of one target identity all succeed and share one
 // target binding. With `ON CONFLICT DO NOTHING ... UNION ALL SELECT` the
 // loser's statement could see neither its own insert nor the winner's row.
