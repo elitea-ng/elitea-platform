@@ -417,17 +417,21 @@ func gov010(ctx context.Context, t *testing.T, w *world) {
 	if after := count(); after-before != probes {
 		t.Fatalf("%d concurrent probes appended %d audit events", probes, after-before)
 	}
-	for _, source := range []string{"outbox", "events"} {
-		// The outbox drains to the durable store asynchronously.
-		verifyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		eventually(verifyCtx, t, 5*time.Second, "security-audit verify --source "+source, func() bool {
-			_, _, err := w.cfg.mainCLI(verifyCtx, "security-audit", "verify", "--tenant", w.p(), "--source", source)
-			return err == nil
-		})
-		cancel()
+	// The outbox drains to the durable store asynchronously. Wait for the
+	// probes to land first: verify passes on an empty store, so waiting on
+	// verify alone raced the drain and counted zero.
+	durable := func() int64 {
+		return w.cfg.psqlInt(ctx, t, `SELECT count(*) FROM elitea_identity.security_audit_events
+ WHERE event_type = 'ai.elitea.security.v1.probe' AND partition_key = :'p';`, map[string]string{"p": w.p()})
 	}
-	if n := w.cfg.psqlInt(ctx, t, `SELECT count(*) FROM elitea_identity.security_audit_events
- WHERE event_type = 'ai.elitea.security.v1.probe' AND partition_key = :'p';`, map[string]string{"p": w.p()}); n < probes {
-		t.Fatalf("the durable store holds %d probe events, want at least %d", n, probes)
+	drainCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	eventually(drainCtx, t, 2*time.Second, fmt.Sprintf("at least %d probe events in the durable store", probes), func() bool {
+		return durable() >= probes
+	})
+	cancel()
+	for _, source := range []string{"outbox", "events"} {
+		if _, stderr, err := w.cfg.mainCLI(ctx, "security-audit", "verify", "--tenant", w.p(), "--source", source); err != nil {
+			t.Fatalf("security-audit verify --source %s: %v\n%s", source, err, stderr)
+		}
 	}
 }
