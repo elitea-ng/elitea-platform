@@ -125,7 +125,7 @@ zeroize = "1.9.0"
 # `get_report_by_id` and `create_excel_report` read Carrier's zip result
 # archives and `get_report_by_id` writes the errors-log zip. The same
 # version and features `elitea-office-core` pins, already in the lock.
-zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
+zip = { version = "=9.0.5", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 elitea-connectors = { path = "../connectors", default-features = false, features = ["providers", "reqwest-012", "test-support"] }
