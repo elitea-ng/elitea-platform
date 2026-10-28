@@ -14,7 +14,7 @@ func TestAgentClaimAuthorityIsSharedAndModeBound(t *testing.T) {
 		"c.recovery_mode = ANY($6::text[])", "j.desired_state = ANY($7::text[])", "c.released_at IS NULL",
 		"c.lease_expires_at > clock_timestamp()", "ws.revoked_at IS NULL", "command.deadline > clock_timestamp()",
 		"command.authority_granted_at IS NOT NULL", "NOT EXISTS (SELECT 1 FROM elitea_runtime.output_inbox terminal",
-		"FOR UPDATE OF j, c, ws, command",
+		"FOR UPDATE OF j, c FOR SHARE OF ws, command",
 	} {
 		if !strings.Contains(agentClaimAuthoritySQL, predicate) {
 			t.Errorf("shared claim authority lost %q", predicate)

@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
 )
@@ -194,5 +196,54 @@ FROM p_1.chat_message_group WHERE uuid = $1::uuid`, response).Scan(&parkedLeft, 
 	}
 	if _, err := h.decide(interruptOwner, response, pending, "after-failed-wake", "answer", "yes"); !errors.Is(err, domain.ErrAlreadyResolved) {
 		t.Fatalf("a decision after a failed wake = %v", err)
+	}
+}
+
+// TestClaimAuthorityLetsFetchesOnOneSessionRunSideBySide (REVIEW-1470 #6):
+// two fan-outs on one Worker session take the live-claim authority at the
+// same time without waiting for each other, and revoking that session still
+// waits for them (the revocation race stays closed).
+func TestClaimAuthorityLetsFetchesOnOneSessionRunSideBySide(t *testing.T) {
+	h := newInterruptHarness(t)
+	first, second := h.newResponse(), h.newResponse()
+	firstFence, secondFence := h.bindLiveClaim(first), h.bindLiveClaim(second)
+	session := "session-" + h.executions[first]
+	h.exec(`UPDATE elitea_runtime.execution_claims SET workload_session_id = $2 WHERE claim_id = $1`, secondFence.ClaimID, session)
+	lock := func(tx pgx.Tx, fence domain.ClaimFence) error {
+		_, err := lockAgentClaim(t.Context(), pgxExecutor{queryer: tx}, interruptClaimMode, fence.ClaimID, fence.ExecutionID,
+			fence.Generation, fence.WorkloadIdentity, fence.FenceToken)
+		return err
+	}
+	holder, err := h.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(t.Context()) }()
+	if err := lock(holder, firstFence); err != nil {
+		t.Fatal(err)
+	}
+	other, err := h.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = other.Rollback(t.Context()) }()
+	if _, err := other.Exec(t.Context(), `SET LOCAL lock_timeout = '500ms'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := lock(other, secondFence); err != nil {
+		t.Fatalf("a second fan-out on the same session waited for the first: %v", err)
+	}
+	_ = other.Rollback(t.Context())
+	revoke, err := h.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = revoke.Rollback(t.Context()) }()
+	if _, err := revoke.Exec(t.Context(), `SET LOCAL lock_timeout = '200ms'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := revoke.Exec(t.Context(), `UPDATE elitea_runtime.workload_sessions SET revoked_at = clock_timestamp()
+WHERE workload_session_id = $1`, session); err == nil || !strings.Contains(err.Error(), "lock timeout") {
+		t.Fatalf("a revocation did not wait for the held claim authority: %v", err)
 	}
 }

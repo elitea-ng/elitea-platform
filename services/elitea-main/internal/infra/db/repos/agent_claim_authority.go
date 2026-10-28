@@ -61,14 +61,16 @@ WHERE c.claim_id = $1 AND c.execution_id = $2 AND c.generation = $3 AND c.worklo
  AND command.retired_at IS NULL AND command.authority_granted_at IS NOT NULL AND command.deadline > clock_timestamp()
  AND NOT EXISTS (SELECT 1 FROM elitea_runtime.output_inbox terminal
                  WHERE terminal.execution_id = j.execution_id AND terminal.generation = j.generation)
-FOR UPDATE OF j, c, ws, command`
+FOR UPDATE OF j, c FOR SHARE OF ws, command`
 
 // errAgentClaimRefused is returned when no live claim matches; callers map
 // it to their own typed refusal.
 var errAgentClaimRefused = errors.New("agent claim is not the live claim")
 
-// lockAgentClaim takes the job, claim, session and command locks of the live
-// claim. The first lookup takes the locks; a READ COMMITTED statement that
+// lockAgentClaim takes the job and claim row locks and share locks on the
+// session and command rows of the live claim. Share locks let the fetch ticks
+// of every fan-out on one Worker session run side by side, while revocation
+// and retirement (row updates) still wait for them and are re-checked below. The first lookup takes the locks; a READ COMMITTED statement that
 // waited for them does not re-read its joined rows, so the second lookup
 // re-evaluates the lease, session, deadline and terminal predicates with the
 // database clock while the locks are held.
