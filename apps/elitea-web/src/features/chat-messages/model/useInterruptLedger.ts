@@ -149,6 +149,18 @@ export function useInterruptLedger({
   const project = idOf(projectId);
   const streamUrl = workingKey && project && serverUrl ? `${serverUrl}${PROJECT_EVENTS_PATH}/${encodeURIComponent(project)}` : null;
 
+  // A stream that dropped (Main restart, broker loss) may have missed a
+  // resolved or wake frame: every re-open re-reads each working message once.
+  // The first open needs none: what was working on mount is reconciled above.
+  const openedRef = useRef<string | null>(null);
+  const onOpen = useCallback((): void => {
+    if (openedRef.current !== streamUrl) {
+      openedRef.current = streamUrl;
+      return;
+    }
+    for (const messageId of workingRef.current) void reconcileLedgerMessage(projectId, messageId, setChatHistory);
+  }, [streamUrl, projectId, setChatHistory]);
+
   // The tab's one project stream, shared with the conversation list and the
   // handoff badges: a connection of its own would cost one more of the
   // browser's per-host and the server's per-principal stream slots per tab.
@@ -167,5 +179,5 @@ export function useInterruptLedger({
       if (!response || !executionId) return;
       attachRef.current({ responseMessageId: response, executionId });
     },
-  });
+  }, { onOpen });
 }

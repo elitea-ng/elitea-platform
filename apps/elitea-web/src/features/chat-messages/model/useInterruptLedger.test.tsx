@@ -128,6 +128,20 @@ describe('useInterruptLedger', () => {
     expect(attachWake).toHaveBeenCalledWith({ responseMessageId: RESPONSE, executionId: 'e'.repeat(32) });
   });
 
+  it('re-reads each working message once when the project stream re-opens, never on its first open (REVIEW-1470 #10)', async () => {
+    const { calls } = installList();
+    const reloaded: readonly ChatMessage[] = [{ id: RESPONSE, role: 'assistant', name: 'Pipeline', content: '', createdAt: '2026-10-19T00:00:00Z', fanoutParked: true }];
+    const { read } = harness(reloaded);
+    await waitFor(() => expect(cardsOf(read())).toHaveLength(2));
+    await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+    act(() => { registry.emit('open'); });
+    expect(calls).toEqual([`7/${RESPONSE}`]);
+    act(() => { registry.emit('open'); });
+    await waitFor(() => expect(calls).toHaveLength(2));
+    act(() => { registry.emit('open'); });
+    await waitFor(() => expect(calls).toHaveLength(3));
+  });
+
   it('reconciles a reloaded parked response from the list once, and again when the tab becomes visible', async () => {
     const { calls } = installList();
     const reloaded: readonly ChatMessage[] = [{ id: RESPONSE, role: 'assistant', name: 'Pipeline', content: '', createdAt: '2026-10-19T00:00:00Z', fanoutParked: true }];

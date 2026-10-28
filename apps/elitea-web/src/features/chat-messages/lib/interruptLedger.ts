@@ -56,7 +56,10 @@ export function newDecisionRequestId(random: (bytes: Uint8Array<ArrayBuffer>) =>
 
 type Raw = Readonly<Record<string, unknown>>;
 
-/** The cards of a `fanout-interrupt-list` body, or `undefined` when it is not one. */
+/**
+ * The cards of a `fanout-interrupt-list` body, or `undefined` when it is not one. One malformed entry refuses the
+ * whole list (the "could not be read" path): skipping it could leave a parked run with no answerable card.
+ */
 export function readInterruptList(body: unknown): readonly NormalizedHitlInterrupt[] | undefined {
   const entries = (body as Raw | null)?.['interrupts'];
   if (!Array.isArray(entries) || entries.length > 16) return undefined;
@@ -66,7 +69,7 @@ export function readInterruptList(body: unknown): readonly NormalizedHitlInterru
     const card = readInterruptCard(raw?.['card']);
     const state = raw?.['state'];
     const revision = raw?.['revision'];
-    if (!card || (state !== 'PENDING' && state !== 'DECIDED') || typeof revision !== 'number' || !Number.isInteger(revision) || revision < 1) continue;
+    if (!card || (state !== 'PENDING' && state !== 'DECIDED') || typeof revision !== 'number' || !Number.isInteger(revision) || revision < 1) return undefined;
     cards.push(cardToInterrupt(card, { state, revision }));
   }
   return cards;

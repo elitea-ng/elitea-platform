@@ -76,9 +76,11 @@ describe('applyInterruptList (fanout-interrupt-list)', () => {
     expect(((after?.hitlInterrupts ?? []) as readonly NormalizedHitlInterrupt[])[1]).toMatchObject({ hidden: true, queued: true });
   });
 
-  it('refuses a list over the 16-card open cap and skips an invalid nested card', () => {
+  it('refuses a list over the 16-card open cap, and a whole list with one invalid entry (never a silent skip)', () => {
     expect(readInterruptList(fanoutFixture('fanout-interrupt-list-v1.invalid.seventeen-open'))).toBeUndefined();
-    expect(readInterruptList(fanoutFixture('fanout-interrupt-list-v1.invalid.invalid-nested-card'))?.map((card) => card.interrupt_id)).toEqual(['hitl:sensitive:0001']);
+    expect(readInterruptList(fanoutFixture('fanout-interrupt-list-v1.invalid.invalid-nested-card'))).toBeUndefined();
+    const body = fanoutFixture<{ interrupts: Record<string, unknown>[] }>('fanout-interrupt-list-v1');
+    expect(readInterruptList({ ...body, interrupts: [...body.interrupts, { ...body.interrupts[0], state: 'CONSUMED' }] })).toBeUndefined();
   });
 
   it('drops one card by key and knows when a message still holds ledger work', () => {
