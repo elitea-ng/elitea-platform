@@ -38,7 +38,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -49,7 +48,6 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
-	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 /* ── harness ───────────────────────────────────────────────────────────── */
@@ -989,7 +987,9 @@ func newConfigPool(t *testing.T) *pgxpool.Pool {
 	if _, err := pool.Exec(ctx, string(initial)); err != nil {
 		t.Fatalf("apply 001_initial.sql: %v", err)
 	}
-	applySuspensionTable(ctx, t, pool)
+	if err := dbtest.InstallSuspensionTable(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
 	// The naive-clock probe the dbtest template installs, after the last
 	// schema statement: a writer that stores the session-local clock in a
 	// `timestamp` WITHOUT time zone column fails instead of passing unread.
@@ -997,23 +997,4 @@ func newConfigPool(t *testing.T) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	return pool
-}
-
-// applySuspensionTable adds the table LoadGuardrails reads besides
-// platform_config (shared 0194). 001_initial has no elitea_runtime schema, so
-// only the part of 0194 that creates the table and its indexes applies here;
-// the rest alters agent_execution_jobs, which this database does not hold.
-func applySuspensionTable(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-	body, err := platformmigrations.Files.ReadFile("shared/0194_execution_suspensions.sql")
-	if err != nil {
-		t.Fatalf("read 0194: %v", err)
-	}
-	table, _, found := strings.Cut(string(body), "ALTER TABLE elitea_runtime.agent_execution_jobs")
-	if !found {
-		t.Fatal("0194 no longer alters agent_execution_jobs; update this fixture")
-	}
-	if _, err := pool.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS elitea_runtime;\n"+table); err != nil {
-		t.Fatalf("apply 0194 suspension table: %v", err)
-	}
 }

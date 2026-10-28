@@ -58,7 +58,7 @@ With neither set, export is off, no relay starts and nothing dials out. The full
 ### What it does not do
 
 - It does not make the stored events immutable, and it does not retain them for you. Keeping them is your SIEM's job; the shared-responsibility split is in the enterprise controls section.
-- Existing audit trail history is not replayed by default. Export starts at the newest row when you turn it on. Set `ELITEA_AUDIT_EXPORT_AUDIT_EVENTS_FROM` to `beginning` before the first start to send the whole table.
+- Existing audit trail history is not replayed by default. Export starts at the newest row when you turn it on; a row still being written at that exact moment may count as history. Set `ELITEA_AUDIT_EXPORT_AUDIT_EVENTS_FROM` to `beginning` before the first start to send the whole table.
 - Audit trail rows are not chained yet, so the `chain` object is present only on security audit events.
 
 ### Watch it

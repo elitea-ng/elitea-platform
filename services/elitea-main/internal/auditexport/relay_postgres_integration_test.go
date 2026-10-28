@@ -213,12 +213,25 @@ func drainUntil(t *testing.T, relay *AuditEventsRelay, want int) int {
 
 func TestAuditEventsRelayStartsAtNewestRowAndDeliversNewOnes(t *testing.T) {
 	pool := newExportPool(t)
+	// A transaction open elsewhere, with an xid, holds the snapshot xmin
+	// below the history rows. A start position taken from xmin alone would
+	// then replay them; CI hit exactly this through other packages' tests.
+	older, err := pool.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := older.Exec(context.Background(), `SELECT pg_current_xact_id()`); err != nil {
+		t.Fatal(err)
+	}
 	insertAudit(t, pool, 5, time.Hour) // history before export was enabled
 	sink := &flakySink{}
 	relay := newRelay(t, pool, sink, nil)
 
 	if n, err := relay.Drain(context.Background()); err != nil || n != 0 {
 		t.Fatalf("history must not be replayed by default: n=%d err=%v", n, err)
+	}
+	if err := older.Rollback(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	fresh := insertAudit(t, pool, 7, 0)
 	if n := drainUntil(t, relay, 7); n != 7 {

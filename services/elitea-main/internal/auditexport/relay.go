@@ -216,13 +216,31 @@ func (r *AuditEventsRelay) holdLock(ctx context.Context) (bool, error) {
 // position is a place in the export order: export_txid, then id.
 type position struct{ txid, id int64 }
 
+// ensureCursorsSQL gives a new sink its start position. Without
+// FromBeginning that is the newest row this statement can see, or the
+// snapshot's xmin when that is later. xmin alone is not enough: any
+// transaction open elsewhere in the cluster holds it below rows that are
+// already committed, and those rows would then be replayed as new. A row
+// still in flight at this instant whose transaction is older than the newest
+// visible row counts as history and is not exported.
 const ensureCursorsSQL = `
+WITH bound AS (
+    SELECT pg_snapshot_xmin(pg_current_snapshot())::text::bigint AS xmin
+), newest AS (
+    SELECT export_txid, id FROM centry.audit_events
+     WHERE export_txid <> 0
+     ORDER BY export_txid DESC, id DESC
+     LIMIT 1
+), start AS (
+    SELECT CASE WHEN n.export_txid >= b.xmin THEN n.export_txid ELSE b.xmin END AS txid,
+           CASE WHEN n.export_txid >= b.xmin THEN n.id ELSE 0 END AS id
+      FROM bound AS b LEFT JOIN newest AS n ON true
+)
 INSERT INTO elitea_runtime.audit_export_cursors (stream, sink, last_txid, last_id)
 SELECT $1::text, s,
-       CASE WHEN $3::boolean THEN 0::bigint
-            ELSE pg_snapshot_xmin(pg_current_snapshot())::text::bigint END,
-       0
-  FROM unnest($2::text[]) AS s
+       CASE WHEN $3::boolean THEN 0::bigint ELSE start.txid END,
+       CASE WHEN $3::boolean THEN 0::bigint ELSE start.id END
+  FROM unnest($2::text[]) AS s CROSS JOIN start
 ON CONFLICT (stream, sink) DO NOTHING`
 
 // pruneCursorsSQL drops the positions of sinks no longer configured, so a
