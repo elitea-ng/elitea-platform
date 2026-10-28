@@ -77,11 +77,17 @@ fn inline_request(on_error: &str) -> super::super::request::AgentExecutionReques
         &["lookup_release"],
         &["lookup_release"],
     );
-    let yaml = pipeline_yaml(on_error).replace(
-        "    type: agent\n    tool: release-agent\n",
-        "    type: llm\n    tool_names:\n      release intelligence: [\"lookup_release\"]\n",
-    );
+    let yaml = pipeline_yaml(on_error)
+        .replace(
+            "    type: agent\n    tool: release-agent\n",
+            "    type: llm\n    tool_names:\n      release intelligence: [\"lookup_release\"]\n",
+        )
+        .replace(
+            "    input_mapping:\n      task:",
+            "    input_mapping:\n      system: {type: fixed, value: 'INLINE-BRANCH-SYSTEM'}\n      task:",
+        );
     assert!(!yaml.contains("type: agent"), "{yaml}");
+    assert!(yaml.contains("INLINE-BRANCH-SYSTEM"), "{yaml}");
     request.payload.application["version_details"]["instructions"] = json!(yaml);
     request
 }
@@ -693,7 +699,7 @@ fn inline_llm_request(on_error: &str) -> super::super::request::AgentExecutionRe
     request.payload.internal_tools = vec![ASK_USER_TOOL_NAME.to_owned()];
     let branch = |id: &str, tools: &str| {
         format!(
-            "  - id: {id}\n    type: llm\n    input_mapping:\n      task: {{type: fixed, value: 'Work on {id}'}}\n    output: [{id}_out]\n{tools}"
+            "  - id: {id}\n    type: llm\n    input_mapping:\n      system: {{type: fixed, value: 'INLINE-BRANCH-SYSTEM {id}'}}\n      task: {{type: fixed, value: 'Work on {id}'}}\n    output: [{id}_out]\n{tools}"
         )
     };
     let yaml = format!(
@@ -804,6 +810,36 @@ async fn postgres_inline_llm_branches_pause_with_their_own_cards_and_resume_live
         "only the approved tool runs, once"
     );
     assert_eq!(model_requests(&captured), 6);
+    // Browser finding 2026-10-28: an inline branch's model request carries its
+    // own system instruction and offers its own bound tool.
+    for request in captured.lock().expect("captured model requests").iter() {
+        let body: Value = serde_json::from_slice(&request.body).expect("model request JSON");
+        let rendered = body.to_string();
+        let branch = ["ask", "guard", "deny"]
+            .into_iter()
+            .find(|branch| rendered.contains(&format!("Work on {branch}")))
+            .unwrap_or_else(|| panic!("an unknown branch request: {rendered}"));
+        assert_eq!(
+            body["messages"][0]["content"],
+            format!("INLINE-BRANCH-SYSTEM {branch}"),
+            "{rendered}"
+        );
+        let tool = if branch == "ask" {
+            "ask_user"
+        } else {
+            "lookup_release"
+        };
+        assert!(
+            body["tools"]
+                .as_array()
+                .is_some_and(
+                    |tools| tools.iter().any(|offered| offered["function"]["name"]
+                        .as_str()
+                        .is_some_and(|name| name.contains(tool)))
+                ),
+            "{branch} is not offered {tool}: {rendered}"
+        );
+    }
     assert!(members.iter().any(|member| member["status"] == "paused"));
     let entries = joined(&db.pool).await.expect("joined entries");
     assert_eq!(entries.len(), 3, "{entries:?}");
