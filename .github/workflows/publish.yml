@@ -23,7 +23,9 @@ name: Release & Publish
 # A pre-release builds, scans, signs and publishes the same images, charts and
 # signed macOS app (the `desktop` job) a release does, under its own version only — the manifest step never gives a
 # version with a `-` the moving tags. The `prune` job keeps the newest
-# PRERELEASE_KEEP of each pre-release channel and deletes the rest.
+# PRERELEASE_KEEP of each pre-release channel and deletes the rest; after a
+# stable release it deletes every pre-release cut before it. Stable releases
+# are deleted only by hand, by an admin: release-retention.yml.
 on:
   workflow_dispatch:
     inputs:
@@ -51,7 +53,7 @@ env:
   # download is a hard dependency of every release.
   YQ_VERSION: v4.44.6
   # Pre-releases kept per channel (nightly, dev) by the `prune` job.
-  PRERELEASE_KEEP: "14"
+  PRERELEASE_KEEP: "3"
 
 permissions:
   contents: write
@@ -1242,17 +1244,21 @@ jobs:
 
   # ── Job 7: Prune — keep the newest PRERELEASE_KEEP pre-releases per channel ──
   #
-  # Runs after a pre-release published, so the one just cut is counted among
-  # the kept. Deletes each older pre-release with its tag, its images (the
-  # manifest and both platform tags) and its charts; the desktop app goes with
-  # the GitHub release it is attached to:
+  # Runs after a release of any channel published, so the one just cut is
+  # counted among the kept. After a pre-release, deletes each older pre-release
+  # of its channel beyond PRERELEASE_KEEP; after a stable release, every
+  # pre-release cut before it. Each goes with its tag, its images (the manifest,
+  # both platform tags and the signature) and its charts; the desktop app goes
+  # with the GitHub release it is attached to. Never a stable release:
   # scripts/ci/prune-prereleases.mjs, unit-tested in no-binaries.yml.
   prune:
     name: Prune old pre-releases
     needs: [release, chart]
-    if: needs.release.outputs.new_release_published == 'true' && needs.release.outputs.channel != 'release'
+    if: needs.release.outputs.new_release_published == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Rate-limit waits can be long; the prune stops itself at its deadline
+    # below, and the next release's prune carries on.
+    timeout-minutes: 90
     permissions:
       contents: write
       packages: write
@@ -1266,6 +1272,7 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           CHANNEL: ${{ needs.release.outputs.channel }}
+          TAG: ${{ needs.release.outputs.new_release_git_tag }}
           ORG: ${{ github.repository_owner }}
         with:
           script: |
@@ -1277,6 +1284,8 @@ jobs:
               org: process.env.ORG,
               channel: process.env.CHANNEL,
               keep: Number(process.env.PRERELEASE_KEEP),
+              tag: process.env.TAG,
+              deadline: Date.now() + 75 * 60 * 1000,
             });
             if (code !== 0) core.setFailed(`scripts/ci/prune-prereleases.mjs exited ${code}`);
 

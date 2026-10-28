@@ -42,12 +42,23 @@
  * SAME user. `setExceptionMerged`/`clearExceptionMerged` below always
  * read-merge-write the FULL current map (never blind-overwrite) and confirm
  * their own bucket landed before returning, retrying the whole cycle if a
- * concurrent writer's own read-merge-write raced ahead of this one — safe
- * under `fullyParallel` with no `serial` mode and no shared bucket.
+ * concurrent writer's own read-merge-write raced ahead of this one.
+ *
+ * That is not enough on its own: a sibling that READ before this test's write
+ * can still PUT after it was confirmed and delete it, and an enforcement
+ * check then passes for the wrong reason. So each test also holds the
+ * `member-bucket-exceptions` named lock (`fixtures/mutex.ts`) for its whole
+ * life, shared with `artifacts.bucket-access.spec.ts`, the other writer of
+ * this user's map.
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
+import { acquireNamedLock } from '../../fixtures/mutex';
+
+/** The cross-worker lock over e2e-member's bucket-exception map (`fixtures/mutex.ts`). */
+const MEMBER_EXCEPTIONS_LOCK = 'member-bucket-exceptions';
+
 
 const FILE_BODY = 'p13 bucket permission fixture';
 const MEMBER_EMAIL = 'e2e-member@autotest.local';
@@ -159,6 +170,24 @@ async function setExceptionMerged(
 }
 
 test.describe('bucket permission exceptions: edit/remove/enforcement (ELITEA-2479/2481/2482/2483/2484/2485/2486/2487)', () => {
+  // Every test here writes e2e-member's exception map, and a PUT REPLACES that
+  // whole map: a sibling's read-merge-write that read before this test's write
+  // deletes this test's entry after it was confirmed, and the enforcement
+  // check then passes for the wrong reason (200 instead of 403, CI run
+  // 40688617060). artifacts.p13-bucket-permissions.spec.ts and
+  // artifacts.bucket-access.spec.ts take the same lock for each test's life.
+  let releaseExceptions: (() => Promise<void>) | undefined;
+  test.beforeEach(async () => {
+    // Queueing behind siblings counts against the test's budget; stay above
+    // the mutex's own 240 s outer bound, as the other lock holders do.
+    test.setTimeout(280_000);
+    releaseExceptions = await acquireNamedLock(MEMBER_EXCEPTIONS_LOCK);
+  });
+  test.afterEach(async () => {
+    await releaseExceptions?.();
+    releaseExceptions = undefined;
+  });
+
   /* onetest: ELITEA-2479 — editing an existing exception changes its stored permission. The real
    * control is an inline per-row Select (no pencil icon, no separate Edit modal): changing it fires
    * the same write J20i already proved lands, this test just proves it also lands for an EXISTING row. */
