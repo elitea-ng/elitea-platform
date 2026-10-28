@@ -29,7 +29,7 @@ func TestRepinIsANewProposalOfTheSameBinding(t *testing.T) {
 
 func TestRepinRefusals(t *testing.T) {
 	now := time.Now()
-	base := AgentIdentityBinding{State: BindingSuspended, DefinitionDigest: [32]byte{1}}
+	base := AgentIdentityBinding{State: BindingActive, DefinitionDigest: [32]byte{1}}
 	if _, err := base.Repin([32]byte{1}, "1", now); !errors.Is(err, ErrDefinitionDigestCurrent) {
 		t.Fatalf("same digest: %v", err)
 	}
@@ -39,9 +39,11 @@ func TestRepinRefusals(t *testing.T) {
 	if _, err := base.Repin([32]byte{2}, " ", now); !errors.Is(err, ErrInvalidBinding) {
 		t.Fatalf("no actor: %v", err)
 	}
-	revoked := base
-	revoked.State = BindingRevoked
-	if _, err := revoked.Repin([32]byte{2}, "1", now); !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("revoked: %v", err)
+	for _, state := range []BindingState{BindingSuspended, BindingRevoked} {
+		refused := base
+		refused.State = state
+		if _, err := refused.Repin([32]byte{2}, "1", now); !errors.Is(err, ErrInvalidTransition) {
+			t.Fatalf("%s: %v", state, err)
+		}
 	}
 }

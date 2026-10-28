@@ -29,6 +29,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -558,13 +559,27 @@ func governedSecretStores(lookup func(string) (string, bool), pool *pgxpool.Pool
 	return stores, nil
 }
 
+// secretStoresAtBoot yields the governed SecretStore set. One value is
+// built per process (onceSecretStores) and shared by the broker and the
+// credential reference admin API, so both read through the same clients
+// (one Vault/OpenBao client and token renewal, not two). Nothing is built
+// until a flag-on composition asks for it.
+type secretStoresAtBoot func() (map[string]secretstore.SecretStore, error)
+
+// onceSecretStores builds governedSecretStores at most once.
+func onceSecretStores(lookup func(string) (string, bool), pool *pgxpool.Pool) secretStoresAtBoot {
+	return sync.OnceValues(func() (map[string]secretstore.SecretStore, error) {
+		return governedSecretStores(lookup, pool)
+	})
+}
+
 // credentialBrokerAtBoot builds the governed credential broker (#1118). Nil
 // with the flag off: RedeemCredential then answers Unimplemented and no
 // statement runs. With the flag on every dependency is required, and a
 // construction error refuses boot.
 func credentialBrokerAtBoot(
 	admission profile.Admission,
-	lookup func(string) (string, bool),
+	secretStores secretStoresAtBoot,
 	pool *pgxpool.Pool,
 	decider *authzcompose.Decider,
 	pins profile.PinReader,
@@ -587,7 +602,7 @@ func credentialBrokerAtBoot(
 	if err != nil {
 		return nil, fmt.Errorf("construct credential broker security audit appender: %w", err)
 	}
-	stores, err := governedSecretStores(lookup, pool)
+	stores, err := secretStores()
 	if err != nil {
 		return nil, fmt.Errorf("credential broker %w", err)
 	}

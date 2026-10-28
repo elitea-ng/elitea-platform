@@ -20,7 +20,7 @@ import (
 // a retire signals the replicas' invalidation hub. Creating a reference from
 // scratch (#1482) checks its locator against the same secret stores the
 // broker reads, metadata only, under the active policy revision.
-func credentialReferencesAdmin(admission profile.Admission, revision profile.PolicyRevision, lookup func(string) (string, bool), pool *pgxpool.Pool, invalidations *epoch.Hub) (*v2credentialreferences.Handler, error) {
+func credentialReferencesAdmin(admission profile.Admission, revision profile.PolicyRevision, secretStores secretStoresAtBoot, pool *pgxpool.Pool, invalidations *epoch.Hub) (*v2credentialreferences.Handler, error) {
 	if !admission.Governed() {
 		return nil, nil
 	}
@@ -39,7 +39,7 @@ func credentialReferencesAdmin(admission profile.Admission, revision profile.Pol
 	if err != nil {
 		return nil, err
 	}
-	stores, err := governedSecretStores(lookup, pool)
+	stores, err := secretStores()
 	if err != nil {
 		return nil, fmt.Errorf("credential reference admin %w", err)
 	}

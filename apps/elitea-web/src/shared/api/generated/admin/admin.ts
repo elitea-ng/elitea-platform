@@ -6170,7 +6170,7 @@ export const getRepinAgentIdentityBindingUrl = (id: string) => {
 };
 
 /**
- * Moves a proposed, active or suspended binding to the canonical definition digest of its version, computed under the binding's row lock (#1462). It is a new proposal of the same binding: the state becomes `proposed`, the caller becomes the proposer, the approval is cleared and `revocation_epoch` increases by one, so a different user must `:approve` it before it binds a run again. The binding keeps its id, so its toolkit pins, credential grants and mandates still name it. Gated on `models.agent_identity.bindings.manage` in administration mode. Mounted only when the enterprise credential governance flag is on. The request has no body.
+ * Moves a proposed or active binding to the canonical definition digest of its version, computed under the binding's row lock (#1462). It is a new proposal of the same binding: the state becomes `proposed`, the caller becomes the proposer, the approval is cleared and `revocation_epoch` increases by one, so a different user must `:approve` it before it binds a run again. The binding keeps its id, so its toolkit pins, credential grants and mandates still name it. A suspended binding is refused (409): its suspension is lifted only by `:approve`, then it can be re-pinned. Gated on `models.agent_identity.bindings.manage` in administration mode. Mounted only when the enterprise credential governance flag is on. The request has no body.
  * @summary Re-pin a binding to its version's computed definition digest
  */
 export const repinAgentIdentityBinding = async (

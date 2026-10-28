@@ -696,8 +696,10 @@ func migrateVaultPath(project int64, configurationUUID string) string {
 // basic-auth secret: fixed per configuration (a rerun finds what it wrote)
 // and inside the vault's name rule.
 func migrateKeyMapName(configurationUUID string) string {
-	return "governed_" + strings.ReplaceAll(configurationUUID, "-", "")
+	return migrateKeyMapPrefix + strings.ReplaceAll(configurationUUID, "-", "")
 }
+
+const migrateKeyMapPrefix = "governed_"
 
 // appendJSONString appends src as a JSON string. It copies bytes, never
 // through a Go string, so the caller can clear every copy of the secret.
@@ -784,6 +786,12 @@ func (m *referenceMigration) settle(ctx context.Context, item *migrateItem) erro
 		item.fill(existing)
 		item.action = migrateExists
 		return nil
+	}
+	if found && existing.Backend == secretstore.BackendPGVault && !item.keyMap() {
+		// A pending pgvault reference is a composite key map; the
+		// configuration has since lost its username, and the raw token is
+		// never written under a key-map name.
+		return fmt.Errorf("reference %s was staged for a token and username, and the configuration now has no username: retire it and rerun", existing.ID)
 	}
 	// The dry run's last statement: everything below writes.
 	if !m.opts.apply {
@@ -924,6 +932,16 @@ func (item *migrateItem) fill(rec repos.CredentialReferenceRecord) {
 	item.Backend, item.Locator, item.Generation = rec.Backend, rec.Locator, rec.Generation
 	item.Class, item.State, item.TargetIdentity = string(rec.Class), string(rec.State), rec.TargetIdentity
 	item.SecretLocation = item.location("")
+	// A pgvault reference's material is told by its name: only a key map
+	// lives under governed_<uuid>. One staged token-only before #1481 stays
+	// so; the output says what it holds, not what a new staging would.
+	if rec.Class == credentialgrant.ClassStaticSecret && rec.Backend == secretstore.BackendPGVault &&
+		!strings.HasPrefix(rec.Locator, migrateKeyMapPrefix) {
+		if item.keyMap() && item.Reason == "" {
+			item.Reason = "token_only_reference: retire and rerun to stage the username"
+		}
+		item.Material = "token"
+	}
 }
 
 func (item *migrateItem) location(mount string) string {

@@ -18,7 +18,9 @@
 //     refuses it.
 //   - CLAIM-BOUND. It names the run's claim (claim id, execution, generation
 //     and fence) and is accepted only while that claim is unreleased and its
-//     lease unexpired, read from PostgreSQL on every request. It therefore
+//     lease unexpired, read from PostgreSQL (a live answer is reused for
+//     LiveCacheTTL, CachedLeases, so a turn's burst of calls costs one
+//     read, and a released claim's token stops within it). It therefore
 //     expires with the lease, and a renewed lease keeps it valid: renewal
 //     extends lease_expires_at and keeps the claim id and fence token, so the
 //     one token the worker redeemed at assembly carries a long turn through.

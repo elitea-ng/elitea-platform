@@ -16,16 +16,19 @@ var ErrDefinitionDigestCurrent = errors.New("agent identity binding: the binding
 // definition, was edited. It is a new proposal of the same binding, so the
 // two-person rule applies again:
 //
-//	proposed|active|suspended --repin--> proposed
+//	proposed|active --repin--> proposed
 //
 // The actor becomes the proposer and the approval is cleared, so a
 // different user must approve it before it binds a run again. The binding
 // keeps its id, so its toolkit bindings, grants and mandates still name it;
 // none is usable while it is proposed. The epoch increases by one, which
 // makes a run admitted under the old pin stale.
+//
+// A suspended binding is refused: a suspension is lifted only by its own
+// :approve, never as a side effect of a re-pin. Approve it, then re-pin.
 func (b AgentIdentityBinding) Repin(digest [32]byte, actor string, now time.Time) (AgentIdentityBinding, error) {
 	switch b.State {
-	case BindingProposed, BindingActive, BindingSuspended:
+	case BindingProposed, BindingActive:
 	default:
 		return AgentIdentityBinding{}, ErrInvalidTransition
 	}

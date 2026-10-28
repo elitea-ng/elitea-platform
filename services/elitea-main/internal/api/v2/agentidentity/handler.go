@@ -362,8 +362,8 @@ func (h *Handler) RevokeBinding(w http.ResponseWriter, r *http.Request) {
 // under the binding's row lock. The binding returns to proposed with the
 // caller as proposer, so a different user must :approve it again (the
 // two-person rule of a new proposal). 409 when the binding already pins the
-// computed digest or the version cannot be read; 503 without a digest
-// reader.
+// computed digest, is suspended or revoked, or the version cannot be read;
+// 503 without a digest reader.
 func (h *Handler) RepinBinding(w http.ResponseWriter, r *http.Request) {
 	who, ok := actor(w, r)
 	if !ok {

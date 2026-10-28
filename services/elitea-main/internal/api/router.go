@@ -1534,6 +1534,24 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	if cfg.SAMLHandler == nil {
 		cfg.SAMLHandler = cfg.Auth.SAMLHandler
 	}
+	// The one authentication configuration every user-facing mount of this
+	// router uses. Each Auth below is built from it, never from its own
+	// literal: a literal that missed SessionSecret or SessionStore was the
+	// 401 re-auth loop class. A route group that also admits a governed
+	// run's run token adds only its RunTokens scope (withRunTokens).
+	baseAuth := apimw.AuthConfig{
+		Validator:                  cfg.AuthValidator,
+		PrincipalValidator:         cfg.PrincipalValidator,
+		FormSessions:               cfg.Auth.FormSessions,
+		SessionSecret:              cfg.SessionSecret,
+		SessionStore:               cfg.Auth.SessionStore,
+		RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
+	}
+	withRunTokens := func(scope *apimw.RunTokenScope) apimw.AuthConfig {
+		config := baseAuth
+		config.RunTokens = scope
+		return config
+	}
 
 	// The project-create pipeline, built ONCE and shared by every mount that
 	// needs it: the projects route, the support assistant, and the two readers
@@ -1744,18 +1762,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			nativeAddresses = cfg.SCIMClientAddresses
 		}
 		nativeHandler = nativeapi.New(nativeapi.Config{
-			Registry:     cfg.NativeClients,
-			Store:        cfg.NativeStore,
-			PublicOrigin: cfg.PublicOrigin,
-			Pages:        browserauth.NewNativePages(brandingResolver),
-			Authenticate: apimw.Auth(apimw.AuthConfig{
-				Validator:                  cfg.AuthValidator,
-				PrincipalValidator:         cfg.PrincipalValidator,
-				FormSessions:               cfg.Auth.FormSessions,
-				SessionSecret:              cfg.SessionSecret,
-				SessionStore:               cfg.Auth.SessionStore,
-				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
-			}),
+			Registry:      cfg.NativeClients,
+			Store:         cfg.NativeStore,
+			PublicOrigin:  cfg.PublicOrigin,
+			Pages:         browserauth.NewNativePages(brandingResolver),
+			Authenticate:  apimw.Auth(baseAuth),
 			Addresses:     nativeAddresses,
 			Audit:         auditRecorder,
 			SecureCookies: cfg.NativeSecureCookies,
@@ -1966,14 +1977,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// the same object store, the same attachment metadata tables, the same
 	// AddAttachments code, not a second implementation of any of them.
 	var convHandler *v2convs.Handler
-	authenticate := apimw.Auth(apimw.AuthConfig{
-		Validator:                  cfg.AuthValidator,
-		PrincipalValidator:         cfg.PrincipalValidator,
-		FormSessions:               cfg.Auth.FormSessions,
-		SessionSecret:              cfg.SessionSecret,
-		SessionStore:               cfg.Auth.SessionStore,
-		RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
-	})
+	authenticate := apimw.Auth(baseAuth)
 	// The API group's post-authentication gates, built ONCE and applied to
 	// every /api/v2 surface that authenticates a user: the group below, the
 	// artifact routes, and the root-mounted reviewed routes
@@ -2014,15 +2018,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		Gates:        apiGates,
 		// The worker's five artifact routes also admit a governed run's
 		// run token, in the project the route names only (#1461).
-		RunTokenAuthenticate: apimw.Auth(apimw.AuthConfig{
-			Validator:                  cfg.AuthValidator,
-			PrincipalValidator:         cfg.PrincipalValidator,
-			FormSessions:               cfg.Auth.FormSessions,
-			SessionSecret:              cfg.SessionSecret,
-			SessionStore:               cfg.Auth.SessionStore,
-			RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
-			RunTokens:                  runTokenScope(cfg.RunTokens, runtoken.AudienceArtifacts, artifactRouteProject),
-		}),
+		RunTokenAuthenticate: apimw.Auth(withRunTokens(runTokenScope(cfg.RunTokens, runtoken.AudienceArtifacts, artifactRouteProject))),
 	})
 	// Construct these collaborators before either route family is mounted.
 	// The REST toolkit surface, the internal MCP toolkit builder and the MCP
@@ -2184,14 +2180,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		// same position — in front of their own Auth — so every /api/v2
 		// answer carries the directive whichever composition served it.
 		r.Use(apimw.NoStore)
-		r.Use(apimw.Auth(apimw.AuthConfig{
-			Validator:                  cfg.AuthValidator,
-			PrincipalValidator:         cfg.PrincipalValidator,
-			FormSessions:               cfg.Auth.FormSessions,
-			SessionSecret:              cfg.SessionSecret,
-			SessionStore:               cfg.Auth.SessionStore,
-			RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
-		}))
+		r.Use(apimw.Auth(baseAuth))
 
 		// Maintenance, then the minimum client version, directly after
 		// authentication: apiGates (built above, where the ordering is
@@ -5231,16 +5220,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// to catch.
 	mountLLM := func(proxy http.Handler, resolver apimw.PersonalProjectResolver) {
 		r.Group(func(r chi.Router) {
-			r.Use(apimw.Auth(apimw.AuthConfig{
-				Validator:                  cfg.AuthValidator,
-				PrincipalValidator:         cfg.PrincipalValidator,
-				FormSessions:               cfg.Auth.FormSessions,
-				SessionSecret:              cfg.SessionSecret,
-				SessionStore:               cfg.Auth.SessionStore,
-				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
-				// A governed run's run token reaches the model gateway here.
-				RunTokens: runTokenScope(cfg.RunTokens, runtoken.AudienceModelGateway, nil),
-			}))
+			// A governed run's run token reaches the model gateway here.
+			r.Use(apimw.Auth(withRunTokens(runTokenScope(cfg.RunTokens, runtoken.AudienceModelGateway, nil))))
 			// The session cookie authenticates /llm, and the browser voice
 			// client POSTs audio here with it. A cookie-authenticated write
 			// must prove it came from this origin (CSRF from a same-site

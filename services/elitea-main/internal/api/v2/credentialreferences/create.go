@@ -163,10 +163,11 @@ func (h *Handler) validateCreate(body createBody) (repos.StagedReference, string
 			return repos.StagedReference{}, "locator is required, at most 512 bytes"
 		case body.Generation < 0:
 			return repos.StagedReference{}, "generation must not be negative"
-		case body.Backend == secretstore.BackendVault && !strings.HasPrefix(body.Locator, vaultPrefix(body.ProjectID)):
+		case body.Backend == secretstore.BackendVault && !vaultLocatorUnder(body.Locator, vaultPrefix(body.ProjectID)):
 			// The tenant boundary: a Vault path of another project is
-			// never referenced from this one.
-			return repos.StagedReference{}, "a vault locator must be under " + vaultPrefix(body.ProjectID)
+			// never referenced from this one, including by climbing out of
+			// the prefix with a ".." segment.
+			return repos.StagedReference{}, "a vault locator must be a plain path under " + vaultPrefix(body.ProjectID)
 		}
 	case credentialgrant.ClassOAuthDelegated:
 		// The material is the consent grant; nothing is stored to check.
@@ -185,6 +186,21 @@ func (h *Handler) validateCreate(body createBody) (repos.StagedReference, string
 // migrate-references copies into and the documented role policies cover.
 func vaultPrefix(projectID int64) string {
 	return "elitea/projects/" + strconv.FormatInt(projectID, 10) + "/credentials/"
+}
+
+// vaultLocatorUnder reports whether locator is a path below prefix with no
+// empty, "." or ".." segment, so a prefix match cannot be climbed out of.
+func vaultLocatorUnder(locator, prefix string) bool {
+	rest, ok := strings.CutPrefix(locator, prefix)
+	if !ok || rest == "" {
+		return false
+	}
+	for _, segment := range strings.Split(rest, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func containsVersion(versions []int64, version int64) bool {

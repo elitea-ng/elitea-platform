@@ -47,7 +47,7 @@ func runTokensAtBoot(admission profile.Admission, formGraph *authcomposition.For
 	if err != nil {
 		return runTokenComposition{}, fmt.Errorf("compose run tokens: %w", err)
 	}
-	validator, err := runtoken.NewValidator(signer, leases)
+	validator, err := runtoken.NewValidator(signer, runtoken.NewCachedLeases(leases))
 	if err != nil {
 		return runTokenComposition{}, fmt.Errorf("compose run tokens: %w", err)
 	}

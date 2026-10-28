@@ -2,9 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialadapters"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore"
 )
 
 // The composite basic-auth secret is a JSON object of exactly the two
@@ -81,5 +85,27 @@ func TestPlanToolkitStagesBasicAuthAsAKeyMap(t *testing.T) {
 				t.Fatalf("item = %+v (username %q, sealed %q)", item, item.username, item.usernameSecret)
 			}
 		})
+	}
+}
+
+// A rerun reports the material an existing reference holds: a pgvault
+// reference staged token-only before #1481 is not shown as a key map, and
+// the operator is told how to add the username.
+func TestFillReportsTheExistingReferencesMaterial(t *testing.T) {
+	item := migrateItem{username: "ops@example.com", Material: "token+username"}
+	item.fill(repos.CredentialReferenceRecord{CredentialReference: credentialgrant.CredentialReference{
+		ID: "ref-1", Class: credentialgrant.ClassStaticSecret, Backend: secretstore.BackendPGVault,
+		Locator: "jira_token", Generation: 1,
+	}})
+	if item.Material != "token" || !strings.HasPrefix(item.Reason, "token_only_reference") {
+		t.Fatalf("token-only reference = material %q reason %q", item.Material, item.Reason)
+	}
+	item = migrateItem{username: "ops@example.com", Material: "token+username"}
+	item.fill(repos.CredentialReferenceRecord{CredentialReference: credentialgrant.CredentialReference{
+		ID: "ref-2", Class: credentialgrant.ClassStaticSecret, Backend: secretstore.BackendPGVault,
+		Locator: migrateKeyMapName("0b7f6a2e-9c1d-4f3a-8e2b-5d6c7a8b9c0d"), Generation: 1,
+	}})
+	if item.Material != "token+username" || item.Reason != "" {
+		t.Fatalf("key-map reference = material %q reason %q", item.Material, item.Reason)
 	}
 }
