@@ -14,7 +14,9 @@ package repos
 //
 // The insert and the cancel commit in one transaction, so a suspension that
 // exists has cancelled what it covered at that instant. A run admitted after
-// the commit meets the admission gate instead.
+// the commit meets the admission gate instead, and the admission fence
+// (safety/fence.go, fenceSuspendedAdmission below) closes the window
+// between the two: no admission commits unseen by both.
 
 import (
 	"context"
@@ -28,6 +30,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 )
 
 // ExecutionSuspensionRepository implements safety.Store.
@@ -84,8 +87,66 @@ WHERE a.execution_id = j.execution_id AND a.generation = j.generation
 	return "", nil, false
 }
 
+// admissionFenceLockSQL takes the admission fence (safety/fence.go) shared:
+// every admission transaction, as its first statement.
+const admissionFenceLockSQL = `SELECT pg_advisory_xact_lock_shared(hashtextextended($1::text, 0))`
+
+// suspensionFenceLockSQL takes it exclusive: CreateSuspension, before it
+// inserts and cancels.
+const suspensionFenceLockSQL = `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`
+
+// coveringSuspensionsSQL is the in-transaction re-read: the active
+// suspensions that may cover a subject (a superset; safety.CheckSnapshot
+// applies the exact rule). The active rows are the partial index of 0194.
+const coveringSuspensionsSQL = `SELECT ` + suspensionColumns + `
+FROM elitea_runtime.execution_suspensions
+WHERE resumed_at IS NULL
+  AND (scope = 'platform'
+       OR (scope = 'project' AND project_id = $1::bigint)
+       OR (scope = 'agent' AND project_id = $1::bigint AND scope_key = $2::text)
+       OR (scope = 'toolkit_type' AND scope_key = $3::text))`
+
+// fenceSuspendedAdmission is the admission half of the fence. It does nothing
+// for an admission no gate marked (safety.AdmissionSubject); otherwise it
+// takes the shared lock and refuses a subject an active suspension covers.
+// It must be the first statement of the admission transaction, so the
+// transaction holds no other lock while it waits for a suspension's commit.
+func fenceSuspendedAdmission(ctx context.Context, tx sqlExecutor) error {
+	subject, ok := safety.AdmissionSubject(ctx)
+	if !ok {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, admissionFenceLockSQL, safety.AdmissionFenceLockName); err != nil {
+		return fmt.Errorf("%w: admission fence: %v", safety.ErrStateUnavailable, err)
+	}
+	toolkitKey := ""
+	if subject.ToolkitType != "" {
+		toolkitKey = guardrails.CanonicalKey(subject.ToolkitType)
+	}
+	rows, err := tx.Query(ctx, coveringSuspensionsSQL,
+		subject.ProjectID, strconv.FormatInt(subject.ApplicationID, 10), toolkitKey)
+	if err != nil {
+		return fmt.Errorf("%w: read the covering suspensions: %v", safety.ErrStateUnavailable, err)
+	}
+	defer rows.Close()
+	var active []safety.Suspension
+	for rows.Next() {
+		found, err := scanSuspension(rows)
+		if err != nil {
+			return fmt.Errorf("%w: scan suspension: %v", safety.ErrStateUnavailable, err)
+		}
+		active = append(active, found)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("%w: read the covering suspensions: %v", safety.ErrStateUnavailable, err)
+	}
+	return safety.CheckSnapshot(active, subject)
+}
+
 // CreateSuspension inserts the row and cancels the covered runs in one
-// transaction.
+// transaction, behind the exclusive admission fence (safety/fence.go): a
+// run being admitted right now either commits before this transaction's
+// cancel reads the jobs, or re-reads the suspension after it commits.
 func (r *ExecutionSuspensionRepository) CreateSuspension(
 	ctx context.Context, s safety.NewSuspension,
 ) (safety.Suspension, error) {
@@ -94,6 +155,9 @@ func (r *ExecutionSuspensionRepository) CreateSuspension(
 		return safety.Suspension{}, fmt.Errorf("begin suspension: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, suspensionFenceLockSQL, safety.AdmissionFenceLockName); err != nil {
+		return safety.Suspension{}, fmt.Errorf("take the admission fence: %w", err)
+	}
 
 	var projectID *int32
 	if s.Target.Scope == safety.ScopeProject || s.Target.Scope == safety.ScopeAgent {

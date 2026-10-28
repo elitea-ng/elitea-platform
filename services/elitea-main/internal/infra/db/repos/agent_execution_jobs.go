@@ -440,6 +440,11 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 			_ = tx.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
+	// The kill switch's fence (safety/fence.go), first so this transaction
+	// holds nothing while a suspension commits.
+	if err := fenceSuspendedAdmission(ctx, pgxExecutor{queryer: tx}); err != nil {
+		return executionapp.AdmissionOutcome{}, err
+	}
 	txQueries := sqlcgen.New(tx)
 	currentProjectID := int64(0)
 	if admission.CurrentTurn != nil {

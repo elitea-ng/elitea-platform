@@ -500,3 +500,44 @@ func TestSelfTestSkipsUnderMaintenanceAndReportsAFailure(t *testing.T) {
 		t.Fatal("a failed pass must still resume its synthetic suspension")
 	}
 }
+
+// An invalidation after a failed refresh is not swallowed by the back-off:
+// it may be the suspension this replica must see, so the next read reloads
+// even inside the second the back-off would otherwise hold.
+func TestGateInvalidationAfterFailedRefreshForcesReload(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, gate, _, _ := newFixture(t)
+	if err := gate.Check(ctx, Subject{ProjectID: 5}); err != nil {
+		t.Fatal(err)
+	}
+	store.loadErr = errors.New("db blip")
+	gate.Invalidate()
+	_ = gate.Check(ctx, Subject{ProjectID: 5}) // fails, backs off
+	loads := store.loads
+
+	// Inside the back-off, the database recovers and a suspension lands.
+	store.loadErr = nil
+	store.rows = append(store.rows, Suspension{ID: 99, Target: Target{Scope: ScopeProject, ProjectID: 5}})
+	gate.Invalidate()
+	if !errors.Is(gate.Check(ctx, Subject{ProjectID: 5}), ErrExecutionSuspended) {
+		t.Fatal("an invalidation during the back-off must force a reload")
+	}
+	if store.loads != loads+1 {
+		t.Fatalf("loads = %d, want %d", store.loads, loads+1)
+	}
+}
+
+// The admission subject travels on the context from the decorator to the
+// store's transaction; an unmarked context carries none.
+func TestAdmissionSubjectRoundTrips(t *testing.T) {
+	t.Parallel()
+	if _, ok := AdmissionSubject(context.Background()); ok {
+		t.Fatal("an unmarked context carries a subject")
+	}
+	want := Subject{ProjectID: 3, ApplicationID: 4, ToolkitType: "github"}
+	got, ok := AdmissionSubject(WithAdmissionSubject(context.Background(), want))
+	if !ok || got != want {
+		t.Fatalf("subject = %+v %t", got, ok)
+	}
+}

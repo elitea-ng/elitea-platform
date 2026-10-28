@@ -82,8 +82,10 @@ type Gate struct {
 	loaded    bool
 	loadedGen uint64
 	validTill time.Time
-	// retryAfter holds a refresh back after a failed one.
+	// retryAfter holds a refresh back after a failed one, for as long as no
+	// invalidation arrived since (failedGen is the generation it failed at).
 	retryAfter time.Time
+	failedGen  uint64
 
 	loadMu sync.Mutex
 
@@ -171,7 +173,7 @@ func (g *Gate) Active(ctx context.Context) ([]Suspension, error) {
 			return nil, fmt.Errorf("%w: %v", ErrStateUnavailable, err)
 		}
 		g.logger.WarnContext(ctx, "safety: suspension refresh failed; keeping the last snapshot", "err", err)
-		g.retryAfter = now.Add(failedRefreshRetry)
+		g.retryAfter, g.failedGen = now.Add(failedRefreshRetry), generation
 		return g.snapshot, nil
 	}
 	g.snapshot, g.loaded, g.loadedGen = loaded, true, generation
@@ -186,12 +188,15 @@ func (g *Gate) cached() ([]Suspension, bool) {
 		return nil, false
 	}
 	now := g.now()
-	if now.Before(g.retryAfter) {
-		// A refresh failed less than a second ago: keep serving the last
-		// snapshot instead of hammering the database.
+	generation := g.generation.Load()
+	if now.Before(g.retryAfter) && generation == g.failedGen {
+		// A refresh failed less than a second ago and nothing changed since:
+		// keep serving the last snapshot instead of hammering the database.
+		// An invalidation after the failure always forces the next read to
+		// reload: it may be the suspension this replica must see.
 		return g.snapshot, true
 	}
-	return g.snapshot, g.loadedGen == g.generation.Load() && now.Before(g.validTill)
+	return g.snapshot, g.loadedGen == generation && now.Before(g.validTill)
 }
 
 // Invalidate marks this replica's snapshot stale.

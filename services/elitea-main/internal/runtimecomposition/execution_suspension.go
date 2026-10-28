@@ -27,6 +27,12 @@ import (
 // admitted before the suspension is refused too: the switch wins over
 // idempotent replay.
 //
+// The cached check is the cheap first filter. A subject it lets through is
+// fenced inside the store's own admission transaction (safety/fence.go): the
+// store takes the shared admission lock and re-reads the suspensions that
+// cover it, so a suspension written while the snapshot was stale still
+// refuses the run, or, if the run committed first, cancels it.
+//
 // Not decorated: toolkit discovery (a catalogue read of a toolkit's tool
 // list, no agent and no tool call) and configuration validation.
 
@@ -52,6 +58,15 @@ func agentAdmissionApplicationID(admission agentexecutionapp.Admission) int64 {
 	return 0
 }
 
+// fence runs the gate's cached check and, when it passes, marks ctx for the
+// store's in-transaction re-check.
+func fence(ctx context.Context, gate *safety.Gate, subject safety.Subject) (context.Context, error) {
+	if err := gate.Check(ctx, subject); err != nil {
+		return ctx, err
+	}
+	return safety.WithAdmissionSubject(ctx, subject), nil
+}
+
 type suspensionAgentAdmissionStore struct {
 	next agentexecutionapp.AtomicAdmissionStore
 	gate *safety.Gate
@@ -60,10 +75,11 @@ type suspensionAgentAdmissionStore struct {
 func (s suspensionAgentAdmissionStore) AdmitAgentExecution(
 	ctx context.Context, admission agentexecutionapp.Admission,
 ) (executionapp.AdmissionOutcome, error) {
-	if err := s.gate.Check(ctx, safety.Subject{
+	ctx, err := fence(ctx, s.gate, safety.Subject{
 		ProjectID:     projectOf(admission.Record.Job.ResourceProjectID),
 		ApplicationID: agentAdmissionApplicationID(admission),
-	}); err != nil {
+	})
+	if err != nil {
 		return executionapp.AdmissionOutcome{}, err
 	}
 	return s.next.AdmitAgentExecution(ctx, admission)
@@ -77,7 +93,8 @@ type suspensionIndexAdmissionStore struct {
 func (s suspensionIndexAdmissionStore) AdmitIndexIngest(
 	ctx context.Context, admission indexingapp.Admission,
 ) (indexingapp.AdmissionOutcome, error) {
-	if err := s.gate.Check(ctx, safety.Subject{ProjectID: projectOf(admission.Record.Job.ResourceProjectID)}); err != nil {
+	ctx, err := fence(ctx, s.gate, safety.Subject{ProjectID: projectOf(admission.Record.Job.ResourceProjectID)})
+	if err != nil {
 		return indexingapp.AdmissionOutcome{}, err
 	}
 	return s.next.AdmitIndexIngest(ctx, admission)
@@ -94,7 +111,8 @@ type suspensionToolkitExecuteStore struct {
 func (s suspensionToolkitExecuteStore) AdmitToolkitExecuteRead(
 	ctx context.Context, admission toolkitexecutionapp.Admission,
 ) (executionapp.AdmissionOutcome, error) {
-	if err := s.gate.Check(ctx, safety.Subject{ProjectID: projectOf(admission.Record.Job.ResourceProjectID)}); err != nil {
+	ctx, err := fence(ctx, s.gate, safety.Subject{ProjectID: projectOf(admission.Record.Job.ResourceProjectID)})
+	if err != nil {
 		return executionapp.AdmissionOutcome{}, err
 	}
 	return s.next.AdmitToolkitExecuteRead(ctx, admission)
@@ -108,10 +126,11 @@ type suspensionToolkitCallToolStore struct {
 func (s suspensionToolkitCallToolStore) AdmitToolkitCallTool(
 	ctx context.Context, admission toolkitcalltoolapp.Admission,
 ) (executionapp.AdmissionOutcome, error) {
-	if err := s.gate.Check(ctx, safety.Subject{
+	ctx, err := fence(ctx, s.gate, safety.Subject{
 		ProjectID:   projectOf(admission.Record.Job.ResourceProjectID),
 		ToolkitType: admission.Binding.ToolkitType,
-	}); err != nil {
+	})
+	if err != nil {
 		return executionapp.AdmissionOutcome{}, err
 	}
 	return s.next.AdmitToolkitCallTool(ctx, admission)

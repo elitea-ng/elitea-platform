@@ -19,25 +19,40 @@ func (f fixedSuspensions) LoadActiveSuspensions(context.Context) ([]safety.Suspe
 	return f, nil
 }
 
-type countingStores struct{ agent, index, execute, callTool int }
+type countingStores struct {
+	agent, index, execute, callTool int
+	// subjects are the fence subjects each admitted call carried on its
+	// context, for the store's in-transaction re-check.
+	subjects []safety.Subject
+}
 
-func (c *countingStores) AdmitAgentExecution(context.Context, agentexecutionapp.Admission) (executionapp.AdmissionOutcome, error) {
+func (c *countingStores) record(ctx context.Context) {
+	if subject, ok := safety.AdmissionSubject(ctx); ok {
+		c.subjects = append(c.subjects, subject)
+	}
+}
+
+func (c *countingStores) AdmitAgentExecution(ctx context.Context, _ agentexecutionapp.Admission) (executionapp.AdmissionOutcome, error) {
 	c.agent++
+	c.record(ctx)
 	return executionapp.AdmissionOutcome{}, nil
 }
 
-func (c *countingStores) AdmitIndexIngest(context.Context, indexingapp.Admission) (indexingapp.AdmissionOutcome, error) {
+func (c *countingStores) AdmitIndexIngest(ctx context.Context, _ indexingapp.Admission) (indexingapp.AdmissionOutcome, error) {
 	c.index++
+	c.record(ctx)
 	return indexingapp.AdmissionOutcome{}, nil
 }
 
-func (c *countingStores) AdmitToolkitExecuteRead(context.Context, toolkitexecutionapp.Admission) (executionapp.AdmissionOutcome, error) {
+func (c *countingStores) AdmitToolkitExecuteRead(ctx context.Context, _ toolkitexecutionapp.Admission) (executionapp.AdmissionOutcome, error) {
 	c.execute++
+	c.record(ctx)
 	return executionapp.AdmissionOutcome{}, nil
 }
 
-func (c *countingStores) AdmitToolkitCallTool(context.Context, toolkitcalltoolapp.Admission) (executionapp.AdmissionOutcome, error) {
+func (c *countingStores) AdmitToolkitCallTool(ctx context.Context, _ toolkitcalltoolapp.Admission) (executionapp.AdmissionOutcome, error) {
 	c.callTool++
+	c.record(ctx)
 	return executionapp.AdmissionOutcome{}, nil
 }
 
@@ -113,6 +128,21 @@ func TestSuspensionGuardsRefuseCoveredRunsBeforeTheStore(t *testing.T) {
 
 	if stores.agent != 1 || stores.index != 1 || stores.execute != 0 || stores.callTool != 1 {
 		t.Fatalf("store calls = %+v: a refused run must write nothing", *stores)
+	}
+	// Every admitted call carries its subject to the store, which re-checks
+	// it inside the admission transaction (safety/fence.go).
+	want := []safety.Subject{
+		{ProjectID: 7, ApplicationID: 4},
+		{ProjectID: 7},
+		{ProjectID: 1, ToolkitType: "jira"},
+	}
+	if len(stores.subjects) != len(want) {
+		t.Fatalf("fenced subjects = %+v, want %+v", stores.subjects, want)
+	}
+	for i := range want {
+		if stores.subjects[i] != want[i] {
+			t.Fatalf("fenced subjects = %+v, want %+v", stores.subjects, want)
+		}
 	}
 }
 
