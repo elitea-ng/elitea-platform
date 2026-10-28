@@ -957,6 +957,33 @@ async fn delegated_auth_applies_only_at_the_park_boundary() {
     assert_eq!(harness.children.received(0)[1], vec!["ik-0-1-auth"]);
 }
 
+/// A fetch at its bound (16 decisions) is applied; one decision more is a
+/// typed ledger fault, never a silent truncation (REVIEW-1470 #7).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_fetch_at_its_bound_applies_and_one_more_is_a_typed_ledger_fault() {
+    for (count, faulted) in [
+        (MAX_FETCH_DECISIONS, false),
+        (MAX_FETCH_DECISIONS + 1, true),
+    ] {
+        let mut harness = Harness::new(three_asking());
+        harness
+            .runner(3, OnError::Continue)
+            .run()
+            .await
+            .expect("run");
+        for index in 0..count {
+            harness.ledger.decide(&format!("foreign-{index}"));
+        }
+        harness.replace_process();
+        let woken = harness.runner(3, OnError::Continue).run().await;
+        assert_eq!(
+            woken.err(),
+            faulted.then_some(FanoutRunError::LedgerFault),
+            "{count} decisions"
+        );
+    }
+}
+
 /// Every typed fan-out code follows the dotted `graph.fanout.*` grammar the
 /// join-entry schema and Main expect (`^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$`).
 #[test]
@@ -980,6 +1007,8 @@ fn every_fanout_code_is_in_the_dotted_graph_fanout_grammar() {
         FanoutRunError::TooManyOpenInterrupts.to_string(),
         FanoutRunError::InvalidConfiguration.to_string(),
         FanoutRunError::CorruptChild.to_string(),
+        FanoutRunError::FrameUndelivered.to_string(),
+        FanoutRunError::LedgerFault.to_string(),
         DecisionError::Unavailable.to_string(),
         DecisionError::LeaseLost.to_string(),
     ];

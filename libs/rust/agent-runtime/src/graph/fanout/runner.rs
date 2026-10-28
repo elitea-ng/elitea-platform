@@ -269,6 +269,11 @@ pub enum FanoutRunError {
     CorruptChild,
     #[error("graph.fanout.frame_undelivered")]
     FrameUndelivered,
+    /// The ledger broke its contract: a fetch longer than its bound. The
+    /// transport refuses such a batch, so reaching the runner is an
+    /// invariant breach, never a silent truncation.
+    #[error("graph.fanout.ledger_fault")]
+    LedgerFault,
 }
 
 enum Slot {
@@ -602,7 +607,9 @@ impl FanoutRunner {
         };
         state.revision_seen = state.revision_seen.max(batch.decision_revision);
         let mut decisions = batch.decisions;
-        decisions.truncate(MAX_FETCH_DECISIONS);
+        if decisions.len() > MAX_FETCH_DECISIONS {
+            return Err(FanoutRunError::LedgerFault);
+        }
         if !restore {
             decisions.retain(|decision| !is_park_boundary_action(&decision.action));
         }

@@ -1923,6 +1923,10 @@ fn runner_error(error: FanoutRunError, fault: Option<GraphError>) -> GraphError 
             "graph.parallel.frame_undelivered",
             "a parallel card or member frame could not be delivered",
         ),
+        FanoutRunError::LedgerFault => parallel_error(
+            "graph.parallel.ledger_fault",
+            "the decision ledger returned more decisions than its bound",
+        ),
     }
 }
 
