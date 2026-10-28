@@ -10,6 +10,9 @@ const VALID: &str =
 const ZERO_REVISION: &str = include_str!(
     "../../../../../libs/jsonschema/runtime/v1/fixtures/fanout-wake-v1.invalid.zero-revision.json"
 );
+const MISSING_PARKED_EXECUTION: &str = include_str!(
+    "../../../../../libs/jsonschema/runtime/v1/fixtures/fanout-wake-v1.invalid.missing-parked-execution.json"
+);
 const DECISIONS_IN_CONTINUATION: &str = include_str!(
     "../../../../../libs/jsonschema/runtime/v1/fixtures/fanout-wake-v1.invalid.decisions-in-continuation.json"
 );
@@ -57,7 +60,11 @@ fn no_marker_is_no_wake() {
 
 #[test]
 fn each_invalid_contract_fixture_is_refused_typed() {
-    for raw in [ZERO_REVISION, DECISIONS_IN_CONTINUATION] {
+    for raw in [
+        ZERO_REVISION,
+        MISSING_PARKED_EXECUTION,
+        DECISIONS_IN_CONTINUATION,
+    ] {
         let payload = wake_payload(fixture(raw));
         assert_eq!(
             FanoutWake::from_payload(&payload),
