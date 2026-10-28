@@ -8,3 +8,7 @@ paths:
       # release. no-binaries.yml fails once the pin moves past 1.7.12 while
       # this entry remains. The path scope keeps every other workflow linted.
       - 'unexpected key "(command|entrypoint)" for "services" section'
+  # Same as ci-go.yml: the NATS service container takes `command`.
+  .github/workflows/ci-governed-scale.yml:
+    ignore:
+      - 'unexpected key "(command|entrypoint)" for "services" section'

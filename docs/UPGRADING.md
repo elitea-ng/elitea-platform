@@ -4,6 +4,61 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## P6b
+
+* **Policy revision field `asserted_user_identity_modes` (optional).**
+  It lists the identity modes whose agent sessions may carry a user that
+  Elitea asserts from an approved `delegated_background` mandate. Each
+  must also be in `allowed_identity_modes`. Absent means none, which is
+  how every earlier revision behaves, so a user-attended governed run
+  still needs a verified delegation. List `elitea_native` to let a
+  mandate stand in for one. The field is `omitempty`, so stored revisions
+  keep their digests.
+* **elitea-worker (every run, governed or not): a chat turn's final event no
+  longer carries toolkit settings.** The worker copied each toolkit's
+  resolved settings, credentials included, into
+  `response_metadata.application_details.version_details.tools[].settings`
+  on the final `full_message`. That reached the browser and was kept in
+  `elitea_runtime.execution_replay_events` and `execution_replay_state`. The
+  field is dropped now; tool names and ids stay. Rows written before the
+  upgrade still hold it, so rotate any toolkit credential that a user who
+  must not see it could have streamed, and leave the replay tables to their
+  usual pruning.
+* `migrate-references --copy-to vault` accepts a deployment without
+  `SECRETS_MASTER_KEY` only when `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true`,
+  the same rule elitea-main applies at start-up.
+* **elitea-main: credential reference lifecycle (#1124, off by default).**
+  One additive shared migration (0193) adds nullable `staged_by`,
+  `activated_by` and `last_transition_by` (user ids, bigint) and
+  `migrated_from` columns to `elitea_identity.credential_references`, a
+  CHECK that the activator is not the stager, and a unique index on
+  `(tenant_project_id, migrated_from)` over the references that are not
+  retired. Nobody has to act while
+  `ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED` stays `false`.
+* A reference that existed before 0193 has no recorded stager, so it can
+  never be activated. Stage a new one.
+* New admin routes, mounted only with the flag on and gated on
+  `models.agent_identity.bindings.manage` / `.approve` (no new
+  permission): `GET /api/v2/admin/credential_references?project_id=N`,
+  `GET .../{id}`, `POST .../{id}:activate` (two-person), `:retire`,
+  `:attach`, `:detach`, and `PUT` / `DELETE
+  /api/v2/admin/agent_identities/{id}/toolkits/{toolkit_id}`. Attaching
+  changes the toolkit's digest, so pin the toolkit again after every
+  attach or detach.
+* **New subcommand:** `elitea-main credential-governance
+  migrate-references` proposes one credential reference and target
+  binding for each configuration a governed agent needs. It is a dry run
+  by default and writes nothing. `--apply --operator <user id>` stages
+  references (state `staged` only). The operator must be an existing user. `--copy-to vault` copies static
+  secrets to Vault/OpenBao with check-and-set through the secret write
+  ledger, and needs a `<prefix>-credential-migration` role. `--json`
+  prints one line per toolkit. A rerun stages nothing new, except a
+  replacement for a reference that was retired.
+* **Rollback:** an earlier release's migration runner refuses a database
+  that holds 0193. Roll back by turning the flag off, not by downgrading.
+  The embedded docs page "Credential governance runbook" has the
+  procedure.
+
 ## Release retention
 
 * **Only the newest releases stay in GHCR.** The new **Release Retention**

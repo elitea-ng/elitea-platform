@@ -405,9 +405,9 @@ func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevi
 	}
 	broker, err := agentidentitycore.NewBroker(agentidentitycore.BrokerConfig{
 		Registry: registry,
-		// Asserted user evidence is never accepted (gate D4): no revision
-		// field enables it yet.
-		Policy:     agentidentitycore.DenyAssertedUser{ModePolicy: revision.Document},
+		// Asserted user evidence is accepted only for the modes the revision
+		// lists in asserted_user_identity_modes (gate D4); absent, none.
+		Policy:     revision.Document,
 		Bindings:   bindings,
 		Identities: identities,
 		Sessions:   sessions,

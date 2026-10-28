@@ -127,6 +127,15 @@ func main() {
 		os.Exit(code)
 	}
 
+	// The credential reference migration helper (#1124,
+	// credential_governance_migrate.go): it runs and exits.
+	if len(os.Args) > 1 && os.Args[1] == credentialGovernanceCommand {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := runCredentialGovernance(ctx, os.Args[2:], os.LookupEnv, os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
+
 	// The credential policy operator command (credential_governance.go).
 	if len(os.Args) > 1 && os.Args[1] == credentialPolicyCommand {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -330,6 +339,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return err
 	}
 	credentialProbeHandler, err := credentialProbeAdmin(credentialAdmission, pool)
+	if err != nil {
+		return err
+	}
+	credentialReferencesHandler, err := credentialReferencesAdmin(credentialAdmission, pool, securityInvalidations)
 	if err != nil {
 		return err
 	}
@@ -2779,6 +2792,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CredentialConsent:             providerOAuthGoverned.Consent,
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
 		MandateAttachments:            governedTriggers.Attachments,
+		CredentialReferencesAdmin:     credentialReferencesHandler,
 		AgentAssertionWellKnown:       eliteaNative.WellKnown,
 		GovernedMCPInbound:            governedMCPComposed.Inbound,
 		GovernedMCPOutbound:           governedMCPComposed.Outbound,

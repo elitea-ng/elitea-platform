@@ -76,6 +76,14 @@ type PolicyDocument struct {
 	// the decision is recorded in a revision. omitempty keeps the canonical
 	// bytes of a revision written before the field existed.
 	UnattendedMandateKinds []string `json:"unattended_mandate_kinds,omitempty"`
+	// AssertedUserIdentityModes lists the identity modes whose sessions may
+	// carry a user Elitea states on the basis of an approved
+	// delegated_background mandate, rather than a verified delegation (gate
+	// D4). Each must also be in AllowedIdentityModes. Absent or empty: none,
+	// so a user-attended governed run needs a verified delegation. omitempty
+	// keeps the canonical bytes of a revision written before the field
+	// existed.
+	AssertedUserIdentityModes []agentidentity.IdentityMode `json:"asserted_user_identity_modes,omitempty"`
 }
 
 // Reconcile defaults and bounds (#1154).
@@ -197,6 +205,12 @@ func (d PolicyDocument) AllowsUnattendedMandateKind(kind string) bool {
 	return slices.Contains(d.UnattendedMandateKinds, kind)
 }
 
+// AllowsAssertedUser reports whether a session of mode may carry asserted
+// user evidence. With it PolicyDocument is the broker's SessionPolicy.
+func (d PolicyDocument) AllowsAssertedUser(mode agentidentity.IdentityMode) bool {
+	return slices.Contains(d.AssertedUserIdentityModes, mode) && d.AllowsIdentityMode(mode)
+}
+
 // RequiresVault reports whether credentialClass must live in Vault/OpenBao.
 func (d PolicyDocument) RequiresVault(credentialClass string) bool {
 	return slices.Contains(d.VaultRequiredCredentialClasses, credentialClass)
@@ -215,6 +229,14 @@ func (d PolicyDocument) Validate() error {
 			return fmt.Errorf("%w: unknown identity mode %q", ErrInvalidPolicy, mode)
 		}
 	}
+	if len(d.AssertedUserIdentityModes) > maxPolicyListItems {
+		return fmt.Errorf("%w: a list exceeds %d items", ErrInvalidPolicy, maxPolicyListItems)
+	}
+	for _, mode := range d.AssertedUserIdentityModes {
+		if !d.AllowsIdentityMode(mode) {
+			return fmt.Errorf("%w: asserted user identity mode %q is not an allowed identity mode", ErrInvalidPolicy, mode)
+		}
+	}
 	if len(d.UnattendedMandateKinds) > maxPolicyListItems {
 		return fmt.Errorf("%w: a list exceeds %d items", ErrInvalidPolicy, maxPolicyListItems)
 	}
@@ -224,7 +246,7 @@ func (d PolicyDocument) Validate() error {
 		}
 	}
 	if hasDuplicates(d.AllowedIdentityModes) || hasDuplicates(d.VaultRequiredCredentialClasses) ||
-		hasDuplicates(d.UnattendedMandateKinds) {
+		hasDuplicates(d.UnattendedMandateKinds) || hasDuplicates(d.AssertedUserIdentityModes) {
 		return fmt.Errorf("%w: a list repeats a value", ErrInvalidPolicy)
 	}
 	for _, class := range d.VaultRequiredCredentialClasses {

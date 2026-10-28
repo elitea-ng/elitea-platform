@@ -94,12 +94,35 @@ type ToolkitCredentialRef struct {
 // `private`, in key order. A field holding anything else is not a
 // reference.
 func ToolkitCredentialRefs(settings map[string]any) []ToolkitCredentialRef {
+	fields := ToolkitCredentialRefFields(settings)
+	if len(fields) == 0 {
+		return nil
+	}
+	refs := make([]ToolkitCredentialRef, 0, len(fields))
+	for _, name := range fields {
+		object := settings[name].(map[string]any)
+		ref := ToolkitCredentialRef{}
+		ref.Title, _ = object["elitea_title"].(string)
+		ref.Private, _ = object["private"].(bool)
+		if id, ok := object[CredentialReferenceIDField].(string); ok {
+			ref.CredentialReferenceID = id
+		}
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
+// ToolkitCredentialRefFields names the settings fields ToolkitCredentialRefs
+// reads, in the same order: the one definition of the shape, so a writer of
+// a configuration reference (the admin attach) and the governed resolver can
+// never disagree on which field it is.
+func ToolkitCredentialRefFields(settings map[string]any) []string {
 	names := make([]string, 0, len(settings))
 	for name := range settings {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	var refs []ToolkitCredentialRef
+	var fields []string
 	for _, name := range names {
 		object, ok := settings[name].(map[string]any)
 		if !ok {
@@ -110,15 +133,9 @@ func ToolkitCredentialRefs(settings map[string]any) []ToolkitCredentialRef {
 		if !hasTitle || !hasPrivate {
 			continue
 		}
-		ref := ToolkitCredentialRef{}
-		ref.Title, _ = object["elitea_title"].(string)
-		ref.Private, _ = object["private"].(bool)
-		if id, ok := object[CredentialReferenceIDField].(string); ok {
-			ref.CredentialReferenceID = id
-		}
-		refs = append(refs, ref)
+		fields = append(fields, name)
 	}
-	return refs
+	return fields
 }
 
 // GovernedResolution is a toolkit's resolved credential reference.

@@ -21,7 +21,7 @@
  *   * the suspend write survives a full page reload, which a handler that
  *     answers 200 and writes nothing (#130, #180) cannot pass.
  */
-import { test as adminTest, expect } from '@playwright/test';
+import { test as adminTest, expect, type Locator } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
@@ -173,6 +173,22 @@ adminTest('J31d: suspending a project reaches the server and survives a full rel
   ).toBeVisible({ timeout: 15_000 });
 });
 
+/**
+ * Ticks a DataGrid row's checkbox and proves it stayed ticked. A grid
+ * re-render landing between the click and Playwright's state read swallows
+ * the click, and a bare `check()` throws "Clicking the checkbox did not
+ * change its state" (webkit, under load; settings.users.spec.ts measured the
+ * same race). `check()` is a no-op on a ticked box, so the retry cannot
+ * over-select, and `toBeChecked` makes it a verified end state.
+ */
+async function checkRow(row: Locator) {
+  const checkbox = row.getByRole('checkbox');
+  await expect(async () => {
+    await checkbox.check({ timeout: 5_000 });
+    await expect(checkbox).toBeChecked({ timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
+}
+
 adminTest('J31e: delete cannot fire without the typed confirmation', async ({ page }) => {
   await page.goto(BASE_URL + '/admin/app/projects', { waitUntil: 'domcontentloaded' });
   await expect(page.getByText(SEEDED_TEAM_ACTIVE)).toBeVisible({ timeout: 20_000 });
@@ -192,7 +208,7 @@ adminTest('J31e: delete cannot fire without the typed confirmation', async ({ pa
   await expect(deleteButton).toBeDisabled();
 
   const row = page.getByRole('row').filter({ hasText: SEEDED_TEAM_ACTIVE });
-  await row.getByRole('checkbox').check();
+  await checkRow(row);
   await expect(deleteButton).toBeEnabled();
 
   // THE PROPERTY THIS JOURNEY EXISTS FOR. Opening the dialog must not be enough
@@ -339,7 +355,7 @@ adminTest('J31g: creating a project puts it in the list, and deleting it takes i
   await expect(provisioned.getByText('Active', { exact: true })).toBeVisible();
 
   /* ── delete ─────────────────────────────────────────────────────────── */
-  await provisioned.getByRole('checkbox').check();
+  await checkRow(provisioned);
   const deleteButton = page.getByRole('button', { name: 'Delete projects' });
   await expect(deleteButton).toBeEnabled();
   await deleteButton.click();

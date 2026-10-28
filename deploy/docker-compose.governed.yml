@@ -1,0 +1,222 @@
+# Governed-profile conformance overlay (ADR-0039 P6b, issue #1124) for
+# docker-compose.standalone-full.yml. TEST ONLY: no production chart or
+# compose file references it, and every key, token and certificate below is
+# minted for this stack and authenticates nothing outside it.
+#
+#   deploy/scripts/governed-conformance.sh run      # whole lifecycle
+#   deploy/scripts/governed-conformance.sh up       # stack only, flag on
+#
+# or by hand, after `standalone-stack.sh certs`:
+#
+#   STANDALONE_OVERLAY=deploy/docker-compose.governed.yml \
+#     ELITEA_GOVERNED_FLAG=false deploy/scripts/standalone-stack.sh up
+#
+# The overlay is the only place the governance flag is turned on. Two
+# variables drive it, so the conformance script can walk the stack through the
+# flag-off, flag-on, old-worker and rollback phases with `up -d` alone:
+#
+#   ELITEA_GOVERNED_FLAG    Main's governance flag (default true)
+#   ELITEA_GOVERNED_WORKER  the worker's governed context (default: the flag)
+#
+# A first boot with the flag ON needs the policy revision below stored first
+# (`elitea-main credential-policy put`); Main refuses to start without it. The
+# script stores it with the flag off, then turns the flag on.
+#
+# What it adds:
+#
+#   governed-mocks     the external providers (deploy/governed-mocks, Go):
+#                      Jira-like and SharePoint/Graph-like targets, an Entra
+#                      token endpoint (OIDC, OBO, client credentials) and the
+#                      inbound MCP token issuer. One TLS listener, routed by
+#                      Host; the providers' host names are its network aliases.
+#   governed-material  one-shot: the run-time material (OpenBao's TLS chain,
+#                      the workload JWT key and token, the agent assertion key)
+#   openbao            OpenBao, dev mode (in memory) behind a TLS listener
+#   openbao-init       one-shot: KV v2 `kv` with cas_required, JWT auth `jwt`,
+#                      one role per workload scope
+#   governed-nats-tap  `nats sub '>'` for the secret canary scan: every core
+#                      and JetStream publish of the run, payload bytes only
+#
+# and it extends elitea-main (flag, revision, Vault, agent assertions, inbound
+# governed MCP, the mocks' CA), the worker (governed context, a sensitive Jira
+# tool for the HITL cases), mcp-mock-trust (the mocks' CA in the bundle) and
+# llm-mock (a longer slow reply for the lease-renewal case).
+services:
+  governed-mocks:
+    image: ghcr.io/elitea-ng/elitea-governed-mocks:standalone
+    build:
+      context: ./governed-mocks
+      dockerfile: Containerfile
+    networks:
+      default:
+        aliases:
+          - jira.governed.test
+          - sharepoint.governed.test
+          - graph.microsoft.com
+          - login.microsoftonline.com
+          - entra.governed.test
+    environment:
+      GOVERNED_ENTRA_DEFAULT_USER: "e2e-chat@autotest.local"
+    # The providers answer on 443 (their URLs carry no port) as the distroless
+    # nonroot user, which needs the low ports opened to it.
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    # The admin listener only (journal, inbound token minting), loopback-bound.
+    ports:
+      - "127.0.0.1:${GOVERNED_MOCKS_ADMIN_PORT:-18480}:8080"
+    healthcheck:
+      test: ["CMD", "/opt/governed-mocks/governed-mocks", "healthcheck"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 2s
+    restart: unless-stopped
+
+  governed-material:
+    image: ghcr.io/elitea-ng/elitea-governed-mocks:standalone
+    # Root, as worker-spool-init: a fresh named volume is root-owned 0755.
+    # The files it writes are 0444, which Main (65532) and OpenBao read.
+    user: "0:0"
+    command: ["mint-material", "-out", "/material"]
+    volumes:
+      - governed_material:/material
+    depends_on:
+      governed-mocks:
+        condition: service_healthy
+    restart: "no"
+
+  openbao:
+    image: quay.io/openbao/openbao:2.4.1
+    # bao itself, as in docker-compose.secretstore.yml. Dev mode keeps the
+    # store in memory and unsealed; its own listener stays on loopback and the
+    # TLS listener below (a chain whose SAN is `openbao`) is the one Main dials.
+    entrypoint: ["bao"]
+    command:
+      - server
+      - -dev
+      - -dev-root-token-id=${GOVERNED_OPENBAO_ROOT_TOKEN:-elitea-governed-root}
+      - -dev-listen-address=127.0.0.1:8201
+      - -config=/config/listener.hcl
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      - ./governed/openbao-listener.hcl:/config/listener.hcl:ro
+      - governed_material:/material:ro
+    depends_on:
+      governed-material:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "bao", "status", "-address=https://127.0.0.1:8200", "-ca-cert=/material/openbao-tls/ca.crt"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+    restart: unless-stopped
+
+  openbao-init:
+    image: quay.io/openbao/openbao:2.4.1
+    entrypoint: ["sh", "/opt/openbao-init.sh"]
+    environment:
+      BAO_ADDR: "https://openbao:8200"
+      BAO_CACERT: "/material/openbao-tls/ca.crt"
+      BAO_TOKEN: "${GOVERNED_OPENBAO_ROOT_TOKEN:-elitea-governed-root}"
+      GOVERNED_VAULT_KV_MOUNT: "kv"
+      GOVERNED_VAULT_AUTH_MOUNT: "jwt"
+      GOVERNED_VAULT_ROLE_PREFIX: "elitea"
+      # Main's readiness check, the credential broker, the migrate-references
+      # copy (`--copy-to vault`) and the agent assertion key ring.
+      GOVERNED_VAULT_SCOPES: "readiness credential-broker credential-migration agent-assertion"
+      GOVERNED_VAULT_ISSUER: "elitea-governed-conformance"
+      GOVERNED_VAULT_SUBJECT: "system:serviceaccount:elitea:elitea-main"
+      GOVERNED_VAULT_AUDIENCE: "elitea-secretstore"
+      GOVERNED_VAULT_PUBLIC_KEY: "/material/vault-jwt-public.pem"
+    volumes:
+      - ./governed/openbao-init.sh:/opt/openbao-init.sh:ro
+      - governed_material:/material:ro
+    depends_on:
+      openbao:
+        condition: service_healthy
+    restart: "no"
+
+  governed-nats-tap:
+    image: docker.io/natsio/nats-box:0.19.7
+    entrypoint: ["sh", "-c"]
+    command:
+      - exec nats --server nats://nats:4222 sub '>' --raw >> /evidence/nats-tap.bin
+    volumes:
+      - governed_evidence:/evidence
+    depends_on:
+      nats-bootstrap:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  mcp-mock-trust:
+    # The base bundle plus the governed mocks' CA, so the worker trusts the
+    # Jira and Graph doubles and Main trusts the Entra and issuer doubles.
+    command:
+      - cat /etc/ssl/certs/ca-certificates.crt /opt/mock-mcp/tls/ca.crt /runtime/runtime-ca.crt /governed/ca.crt
+        > /trust/mcp-mock-ca-bundle.pem
+        && chmod 0644 /trust/mcp-mock-ca-bundle.pem
+        && python3 /opt/mock-mcp/verify-trust.py /trust/mcp-mock-ca-bundle.pem
+    volumes:
+      - governed_material:/governed:ro
+    depends_on:
+      governed-material:
+        condition: service_completed_successfully
+
+  llm-mock:
+    environment:
+      # 480 x 250 ms: a slow turn stays RUNNING for two minutes, so the
+      # lease-renewal revocation case (GOV-006) can revoke inside it.
+      MOCK_LLM_SLOW_CHUNKS: "480"
+
+  elitea-main:
+    environment:
+      ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED: "${ELITEA_GOVERNED_FLAG:-true}"
+      ELITEA_CREDENTIAL_GOVERNANCE_POLICY_REVISION: "${GOVERNED_POLICY_REVISION:-gov-conformance-r1}"
+      # https, because inbound governed MCP builds the resource URI from it
+      # (it cannot follow Host). The suite still speaks plain HTTP to the
+      # published port; nothing here redirects to the https origin.
+      DEPLOYMENT_URL: "https://localhost:${STANDALONE_PORT:-8084}"
+      # Go reads SSL_CERT_FILE: the base bundle plus the mocks' CA, for the
+      # Entra metadata and the inbound issuer's JWKS.
+      SSL_CERT_FILE: "/run/elitea-mcp-trust/mcp-mock-ca-bundle.pem"
+      ELITEA_SECRETSTORE_VAULT_ADDR: "https://openbao:8200"
+      ELITEA_SECRETSTORE_VAULT_CA_FILE: "/run/elitea-governed/openbao-tls/ca.crt"
+      ELITEA_SECRETSTORE_VAULT_AUTH_METHOD: "jwt"
+      ELITEA_SECRETSTORE_VAULT_AUTH_MOUNT: "jwt"
+      ELITEA_SECRETSTORE_VAULT_ROLE_PREFIX: "elitea"
+      ELITEA_SECRETSTORE_VAULT_KV_MOUNT: "kv"
+      ELITEA_SECRETSTORE_VAULT_TOKEN_FILE: "/run/elitea-governed/vault-token.jwt"
+      ELITEA_SECRETSTORE_VAULT_READINESS_SCOPE: "readiness"
+      # The Elitea-native identity mode: Main signs a short-lived assertion
+      # per credential use. The key is this stack's own (governed-material).
+      ELITEA_AGENT_ASSERTION_CONFIG: >-
+        {"origin":"https://elitea.governed.test","keys":[{"kid":"gov-conformance-es256","alg":"ES256","file":"/run/elitea-governed/agent-es256.pem"}],"relying_parties":[{"id":"governed-conformance","audience":"https://governed-conformance.test","claims_profile":"mcp"}]}
+      # Inbound governed MCP (GOV-009): tokens from the mocks' issuer, for the
+      # project MCP endpoint's exact URL only.
+      ELITEA_GOVERNED_MCP_INBOUND_ISSUER: "https://entra.governed.test/mcp-issuer"
+      ELITEA_GOVERNED_MCP_INBOUND_JWKS_URL: "https://entra.governed.test/mcp-issuer/jwks"
+      ELITEA_GOVERNED_MCP_INBOUND_SCOPES: "mcp.invoke"
+    volumes:
+      - governed_material:/run/elitea-governed:ro
+      - standalone_mcp_mock_trust:/run/elitea-mcp-trust:ro
+      - ./governed/credential-policy.json:/etc/elitea/governed/credential-policy.json:ro
+    depends_on:
+      openbao-init:
+        condition: service_completed_successfully
+      mcp-mock-trust:
+        condition: service_completed_successfully
+      governed-mocks:
+        condition: service_healthy
+
+  elitea-worker:
+    environment:
+      ELITEA_WORKER_GOVERNED_CONTEXT: "${ELITEA_GOVERNED_WORKER:-${ELITEA_GOVERNED_FLAG:-true}}"
+    depends_on:
+      governed-mocks:
+        condition: service_healthy
+
+volumes:
+  governed_material:
+  governed_evidence:

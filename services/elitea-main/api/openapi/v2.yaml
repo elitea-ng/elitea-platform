@@ -6618,6 +6618,98 @@ components:
           items:
             $ref: '#/components/schemas/Mandate'
 
+    CredentialReference:
+      type: object
+      description: >
+        ADR-0039 credential reference: where a governed credential lives.
+        Backend and a backend-relative locator only; no field holds a value.
+      required: [id, tenant_project_id, class, backend, locator, provider_type,
+        target_binding_id, target_identity, generation, state, staged_by,
+        activated_by, last_transition_by, migrated_from, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        tenant_project_id: { type: integer, format: int64 }
+        class:
+          type: string
+          description: One of static_secret, oauth_delegated, oauth_service, dynamic_lease.
+        backend:
+          type: string
+          description: pgvault (the built-in encrypted vault) or vault (Vault/OpenBao KV v2).
+        locator: { type: string }
+        provider_type: { type: string }
+        target_binding_id: { type: string, format: uuid }
+        target_identity:
+          type: string
+          description: The canonical target the credential is bound to.
+        generation:
+          type: integer
+          format: int64
+          description: The secret version the credential broker reads.
+        state:
+          type: string
+          description: One of staged, active, retiring, retired.
+        staged_by: { type: string, nullable: true }
+        activated_by: { type: string, nullable: true }
+        last_transition_by: { type: string, nullable: true }
+        migrated_from:
+          type: string
+          nullable: true
+          description: The migrate-references source key, when the migration helper staged it.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CredentialReferenceListResponse:
+      type: object
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/CredentialReference'
+
+    CredentialReferenceToolkitRequest:
+      type: object
+      additionalProperties: false
+      required: [project_id, toolkit_id]
+      properties:
+        project_id: { type: integer, format: int64, minimum: 1 }
+        toolkit_id: { type: integer, format: int64, minimum: 1 }
+
+    CredentialReferenceAttachment:
+      type: object
+      required: [project_id, toolkit_id, field, credential_reference_id, toolkit_digest]
+      properties:
+        project_id: { type: integer, format: int64 }
+        toolkit_id: { type: integer, format: int64 }
+        field:
+          type: string
+          description: The settings field that holds the configuration reference.
+        credential_reference_id:
+          type: string
+          nullable: true
+          description: The attached reference; null after a detach.
+        toolkit_digest:
+          type: string
+          description: The toolkit's digest after the write (SHA-256, hex).
+
+    AgentToolkitPinRequest:
+      type: object
+      additionalProperties: false
+      required: [project_id]
+      properties:
+        project_id: { type: integer, format: int64, minimum: 1 }
+
+    AgentToolkitPin:
+      type: object
+      required: [agent_binding_id, tenant_project_id, toolkit_id, toolkit_digest]
+      properties:
+        agent_binding_id: { type: string, format: uuid }
+        tenant_project_id: { type: integer, format: int64 }
+        toolkit_id: { type: integer, format: int64 }
+        toolkit_digest:
+          type: string
+          description: The pinned toolkit digest (SHA-256, hex).
+
     ExternalAgentIdentity:
       type: object
       description: >
@@ -17674,6 +17766,341 @@ paths:
         '403': { $ref: '#/components/responses/403' }
         '404':
           description: No such target in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/credential_references:
+    get:
+      operationId: listCredentialReferences
+      summary: List a project's credential references
+      description: >
+        ADR-0039 credential references of one tenant project, newest first.
+        A reference names where a governed credential lives (backend and a
+        backend-relative locator), never a value. Gated on
+        `models.agent_identity.bindings.manage` or
+        `models.agent_identity.bindings.approve`. Mounted only when the
+        enterprise credential governance flag is on.
+      tags: [admin]
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: state
+          in: query
+          required: false
+          description: One of staged, active, retiring, retired.
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: One page of credential references
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReferenceListResponse' }
+        '400':
+          description: A missing project_id or a malformed filter
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /admin/credential_references/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The credential reference id (uuid).
+        schema: { type: string }
+    get:
+      operationId: getCredentialReference
+      summary: Read a credential reference
+      description: >
+        Gated on `models.agent_identity.bindings.manage` or
+        `models.agent_identity.bindings.approve`. Mounted only when the
+        enterprise credential governance flag is on.
+      tags: [admin]
+      responses:
+        '200':
+          description: The credential reference
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReference' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such credential reference
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/credential_references/{id}:activate:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The credential reference id (uuid).
+        schema: { type: string }
+    post:
+      operationId: activateCredentialReference
+      summary: Activate a staged credential reference
+      description: >
+        Moves a `staged` reference to `active`. Two-person rule: the caller
+        must not be the operator who staged it (`staged_by`); a reference
+        that records no stager cannot be activated. The body is empty or
+        `{}`. Gated on `models.agent_identity.bindings.approve`. Appends a
+        security audit decision in the same transaction. Mounted only when
+        the enterprise credential governance flag is on.
+      tags: [admin]
+      responses:
+        '200':
+          description: The reference after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReference' }
+        '400':
+          description: A body that is not empty or `{}`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The caller lacks the permission, or staged the reference
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such credential reference
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The reference is not staged, or records no stager
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/credential_references/{id}:retire:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The credential reference id (uuid).
+        schema: { type: string }
+    post:
+      operationId: retireCredentialReference
+      summary: Retire a credential reference
+      description: >
+        Moves any reference that is not already retired to `retired`. A
+        governed run that froze the reference is denied at its next
+        credential redemption (`authority_revoked`), because the revocation
+        epoch check treats a reference outside `active` and `retiring` as
+        revoked. `generation` (the secret version) does not change. The
+        body is empty or `{}`. Gated on
+        `models.agent_identity.bindings.manage`. Mounted only when the
+        enterprise credential governance flag is on.
+      tags: [admin]
+      responses:
+        '200':
+          description: The reference after the transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReference' }
+        '400':
+          description: A body that is not empty or `{}`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such credential reference
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The reference is already retired
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/credential_references/{id}:attach:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The credential reference id (uuid).
+        schema: { type: string }
+    post:
+      operationId: attachCredentialReference
+      summary: Attach a credential reference to a toolkit
+      description: >
+        Writes `credential_reference_id` into the one non-private
+        configuration reference of the toolkit's stored settings. This edits
+        the toolkit, so its digest changes: pin the agent toolkit binding
+        again afterwards. The toolkit type must be the reference's provider
+        type and the toolkit must be in the reference's project. An MCP
+        toolkit has no configuration reference and is governed by its digest
+        and a grant alone, so it answers 409. Gated on
+        `models.agent_identity.bindings.manage`. Mounted only when the
+        enterprise credential governance flag is on.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CredentialReferenceToolkitRequest' }
+      responses:
+        '200':
+          description: The toolkit after the attach
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReferenceAttachment' }
+        '400':
+          description: A malformed body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such credential reference or toolkit
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The reference is retired or in another project, the toolkit type is not its provider, or the toolkit has no single non-private configuration reference or already names another credential reference
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/credential_references/{id}:detach:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The credential reference id (uuid).
+        schema: { type: string }
+    post:
+      operationId: detachCredentialReference
+      summary: Detach a credential reference from a toolkit
+      description: >
+        Removes `credential_reference_id` from the toolkit's configuration
+        reference. A governed run of the toolkit is then refused
+        `credential_reference_required`. Gated on
+        `models.agent_identity.bindings.manage`. Mounted only when the
+        enterprise credential governance flag is on.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CredentialReferenceToolkitRequest' }
+      responses:
+        '200':
+          description: The toolkit after the detach
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReferenceAttachment' }
+        '400':
+          description: A malformed body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such credential reference or toolkit
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: The reference is in another project, the toolkit type is not its provider, or the toolkit names another credential reference
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/agent_identities/{id}/toolkits/{toolkit_id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The agent identity binding id (uuid).
+        schema: { type: string }
+      - name: toolkit_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    put:
+      operationId: pinAgentToolkit
+      summary: Bind a toolkit to an agent binding at its current digest
+      description: >
+        Writes, or re-pins, the agent toolkit binding at the toolkit's
+        current stored digest (the digest governed admission computes). A
+        later edit of the toolkit, including a credential reference attach,
+        changes the digest and needs a new pin. The agent binding must be in
+        the project and not revoked. Gated on
+        `models.agent_identity.bindings.manage`. Mounted only when the
+        enterprise credential governance flag is on.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentToolkitPinRequest' }
+      responses:
+        '200':
+          description: The written toolkit binding
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentToolkitPin' }
+        '400':
+          description: A malformed body or toolkit id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such toolkit in the project, or no usable agent binding there
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    delete:
+      operationId: unpinAgentToolkit
+      summary: Remove an agent toolkit binding
+      description: >
+        A governed run of the agent binding then no longer governs the
+        toolkit. The project is named by the `project_id` query parameter
+        or a body. Gated on `models.agent_identity.bindings.manage`. Mounted
+        only when the enterprise credential governance flag is on.
+      tags: [admin]
+      parameters:
+        - name: project_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '204':
+          description: The toolkit binding was removed
+        '400':
+          description: A malformed toolkit id or a missing project_id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such toolkit binding
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
