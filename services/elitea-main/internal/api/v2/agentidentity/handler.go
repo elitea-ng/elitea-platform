@@ -3,7 +3,7 @@
 //
 //	GET  /api/v2/admin/agent_identities
 //	POST /api/v2/admin/agent_identities
-//	POST /api/v2/admin/agent_identities/{id}:approve|:suspend|:revoke
+//	POST /api/v2/admin/agent_identities/{id}:approve|:suspend|:revoke|:repin
 //	GET  /api/v2/admin/mandates
 //	POST /api/v2/admin/mandates
 //	POST /api/v2/admin/mandates/{id}:approve|:suspend|:revoke
@@ -49,6 +49,8 @@ type Service interface {
 	ProposeBinding(ctx context.Context, proposal agentidentity.Proposal, proposedBy string) (agentidentity.AgentIdentityBinding, error)
 	ListBindings(ctx context.Context, filter agentidentity.ListFilter) ([]agentidentity.AgentIdentityBinding, error)
 	TransitionBinding(ctx context.Context, id string, action agentidentity.Action, actor string) (agentidentity.AgentIdentityBinding, error)
+	RepinBinding(ctx context.Context, id, actor string,
+		digestOf func(context.Context, agentidentity.AgentIdentityBinding) ([32]byte, error)) (agentidentity.AgentIdentityBinding, error)
 	IssueMandate(ctx context.Context, req mandate.Request, issuedBy string) (mandate.Mandate, error)
 	ListMandates(ctx context.Context, filter mandate.ListFilter) ([]mandate.Mandate, error)
 	TransitionMandate(ctx context.Context, id string, action mandate.Action, actor string) (mandate.Mandate, error)
@@ -56,10 +58,29 @@ type Service interface {
 
 var _ Service = (*governance.Service)(nil)
 
+// DefinitionDigests computes the canonical definition digest of an agent
+// version (#1462): repos.AgentDefinitionDigests, the digest admission
+// compares with the binding's. found is false when the tenant project holds
+// no such version.
+type DefinitionDigests interface {
+	DefinitionDigest(ctx context.Context, tenantProjectID, applicationID, applicationVersionID int64) (digest [32]byte, found bool, err error)
+}
+
 // Handler serves the routes.
 type Handler struct {
-	service Service
-	now     func() time.Time
+	service     Service
+	now         func() time.Time
+	definitions DefinitionDigests
+}
+
+// WithDefinitionDigests makes every binding view carry the computed digest
+// of its agent version (#1462), so an operator can pin or re-pin a binding
+// to the definition the runs execute.
+func (h *Handler) WithDefinitionDigests(definitions DefinitionDigests) *Handler {
+	if h != nil {
+		h.definitions = definitions
+	}
+	return h
 }
 
 // New builds the handler. A nil service is refused.
@@ -94,6 +115,7 @@ func writeDomainError(w http.ResponseWriter, err error) {
 	case errors.Is(err, agentidentity.ErrBindingNotFound), errors.Is(err, mandate.ErrMandateNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, agentidentity.ErrInvalidTransition), errors.Is(err, agentidentity.ErrDuplicateBinding),
+		errors.Is(err, agentidentity.ErrDefinitionDigestCurrent), errors.Is(err, agentidentity.ErrDefinitionUnreadable),
 		errors.Is(err, agentidentity.ErrExternalIdentityNotActive), errors.Is(err, mandate.ErrInvalidTransition),
 		errors.Is(err, mandate.ErrBindingNotUsable), errors.Is(err, mandate.ErrDelegationNotUsable):
 		writeError(w, http.StatusConflict, err.Error())
@@ -188,6 +210,10 @@ type bindingView struct {
 	ApprovedBy              *string `json:"approved_by"`
 	CreatedAt               string  `json:"created_at"`
 	UpdatedAt               string  `json:"updated_at"`
+	// ComputedDefinitionDigest is the canonical digest of the version as it
+	// is stored now (#1462); null when it cannot be computed. Admission
+	// binds the binding only when it equals DefinitionDigest.
+	ComputedDefinitionDigest *string `json:"computed_definition_digest"`
 }
 
 func optional(value string) *string {
@@ -206,6 +232,37 @@ func viewBinding(b agentidentity.AgentIdentityBinding) bindingView {
 		PolicyRevisionID: b.PolicyRevisionID, ProposedBy: b.ProposedBy, ApprovedBy: optional(b.ApprovedBy),
 		CreatedAt: b.CreatedAt.UTC().Format(time.RFC3339Nano), UpdatedAt: b.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
+}
+
+// computedDigests fills ComputedDefinitionDigest, reading each version once.
+// A version that cannot be read leaves it null: the view is for an
+// operator, and admission computes its own.
+func (h *Handler) computedDigests(ctx context.Context, views []bindingView) {
+	if h.definitions == nil {
+		return
+	}
+	type version struct{ tenant, application, version int64 }
+	seen := map[version]*string{}
+	for i := range views {
+		key := version{views[i].TenantProjectID, views[i].ApplicationID, views[i].ApplicationVersionID}
+		value, ok := seen[key]
+		if !ok {
+			digest, found, err := h.definitions.DefinitionDigest(ctx, key.tenant, key.application, key.version)
+			if err == nil && found {
+				encoded := hex.EncodeToString(digest[:])
+				value = &encoded
+			}
+			seen[key] = value
+		}
+		views[i].ComputedDefinitionDigest = value
+	}
+}
+
+// writeBinding writes one binding view with its computed digest.
+func (h *Handler) writeBinding(w http.ResponseWriter, r *http.Request, status int, b agentidentity.AgentIdentityBinding) {
+	views := []bindingView{viewBinding(b)}
+	h.computedDigests(r.Context(), views)
+	writeJSON(w, status, views[0])
 }
 
 // ListBindings serves GET /admin/agent_identities.
@@ -227,6 +284,7 @@ func (h *Handler) ListBindings(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		views = append(views, viewBinding(row))
 	}
+	h.computedDigests(r.Context(), views)
 	writeJSON(w, http.StatusOK, map[string]any{"rows": views})
 }
 
@@ -266,7 +324,7 @@ func (h *Handler) CreateBinding(w http.ResponseWriter, r *http.Request) {
 		writeDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, viewBinding(created))
+	h.writeBinding(w, r, http.StatusCreated, created)
 }
 
 func (h *Handler) transitionBinding(action agentidentity.Action) http.HandlerFunc {
@@ -280,7 +338,7 @@ func (h *Handler) transitionBinding(action agentidentity.Action) http.HandlerFun
 			writeDomainError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, viewBinding(next))
+		h.writeBinding(w, r, http.StatusOK, next)
 	}
 }
 
@@ -297,6 +355,41 @@ func (h *Handler) SuspendBinding(w http.ResponseWriter, r *http.Request) {
 // RevokeBinding serves POST /admin/agent_identities/{id}:revoke.
 func (h *Handler) RevokeBinding(w http.ResponseWriter, r *http.Request) {
 	h.transitionBinding(agentidentity.ActionRevoke)(w, r)
+}
+
+// RepinBinding serves POST /admin/agent_identities/{id}:repin (#1462): it
+// moves the binding to the computed definition digest of its version, read
+// under the binding's row lock. The binding returns to proposed with the
+// caller as proposer, so a different user must :approve it again (the
+// two-person rule of a new proposal). 409 when the binding already pins the
+// computed digest, is suspended or revoked, or the version cannot be read;
+// 503 without a digest reader.
+func (h *Handler) RepinBinding(w http.ResponseWriter, r *http.Request) {
+	who, ok := actor(w, r)
+	if !ok {
+		return
+	}
+	if h.definitions == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent identity admin: definition digests are not configured")
+		return
+	}
+	definitions := h.definitions
+	digestOf := func(ctx context.Context, b agentidentity.AgentIdentityBinding) ([32]byte, error) {
+		digest, found, err := definitions.DefinitionDigest(ctx, b.TenantProjectID, b.ApplicationID, b.ApplicationVersionID)
+		if err != nil {
+			return [32]byte{}, err
+		}
+		if !found {
+			return [32]byte{}, agentidentity.ErrDefinitionUnreadable
+		}
+		return digest, nil
+	}
+	next, err := h.service.RepinBinding(r.Context(), pathID(r, "repin"), who, digestOf)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	h.writeBinding(w, r, http.StatusOK, next)
 }
 
 // ---- mandates ----

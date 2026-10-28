@@ -26,6 +26,10 @@ func (unusedAgentIdentityService) ListBindings(context.Context, agentidentity.Li
 func (unusedAgentIdentityService) TransitionBinding(context.Context, string, agentidentity.Action, string) (agentidentity.AgentIdentityBinding, error) {
 	panic("unreachable")
 }
+func (unusedAgentIdentityService) RepinBinding(context.Context, string, string,
+	func(context.Context, agentidentity.AgentIdentityBinding) ([32]byte, error)) (agentidentity.AgentIdentityBinding, error) {
+	panic("unreachable")
+}
 func (unusedAgentIdentityService) IssueMandate(context.Context, mandate.Request, string) (mandate.Mandate, error) {
 	panic("unreachable")
 }
@@ -42,6 +46,7 @@ var agentIdentityRoutes = []string{
 	"POST /api/v2/admin/agent_identities/{id}:approve",
 	"POST /api/v2/admin/agent_identities/{id}:suspend",
 	"POST /api/v2/admin/agent_identities/{id}:revoke",
+	"POST /api/v2/admin/agent_identities/{id}:repin",
 	"GET /api/v2/admin/mandates",
 	"POST /api/v2/admin/mandates",
 	"POST /api/v2/admin/mandates/{id}:approve",

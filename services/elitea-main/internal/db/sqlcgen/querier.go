@@ -546,6 +546,11 @@ type Querier interface {
 	MarkToolkitExecuteReadDispatched(ctx context.Context, arg MarkToolkitExecuteReadDispatchedParams) (int64, error)
 	MarkToolkitExecuteReadPublished(ctx context.Context, arg MarkToolkitExecuteReadPublishedParams) (int64, error)
 	ProjectCurrentAgentStop(ctx context.Context, arg ProjectCurrentAgentStopParams) (ProjectCurrentAgentStopRow, error)
+	// A governed continuation that admission refused (#1485) settles its paused
+	// answer as an error: the pause keys go, as for a stop, and `is_error` with
+	// the safe reason replaces them. Unlike a stop it never deletes the turn: the
+	// question was answered up to the pause, and the reason is the answer.
+	ProjectGovernedContinuationRefusal(ctx context.Context, arg ProjectGovernedContinuationRefusalParams) (int32, error)
 	PruneMCPOAuthClients(ctx context.Context) error
 	QuarantineExpiredTerminalIndexMetaInitializations(ctx context.Context, quarantineLimit int32) (int64, error)
 	QuarantineIndexMetaInitialization(ctx context.Context, arg QuarantineIndexMetaInitializationParams) (string, error)

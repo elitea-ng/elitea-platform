@@ -6420,7 +6420,7 @@ components:
       required: [id, tenant_project_id, application_id, application_version_id,
         definition_digest, mode, external_agent_identity_id, workload_identity,
         state, revocation_epoch, policy_revision_id, proposed_by, approved_by,
-        created_at, updated_at]
+        created_at, updated_at, computed_definition_digest]
       properties:
         id: { type: string, format: uuid }
         tenant_project_id: { type: integer, format: int64 }
@@ -6428,7 +6428,21 @@ components:
         application_version_id: { type: integer, format: int64 }
         definition_digest:
           type: string
-          description: Frozen definition digest, sha256 as 64 lowercase hex characters.
+          description: >
+            The pinned definition digest, sha256 as 64 lowercase hex
+            characters. Admission binds this binding to a run only while it
+            equals the canonical digest of the version's stored definition
+            (computed_definition_digest); on a mismatch the run gets no agent
+            identity and the security audit records definition_digest_mismatch.
+        computed_definition_digest:
+          type: string
+          nullable: true
+          description: >
+            The canonical digest of the version's definition as it is stored
+            now, computed the way admission computes it (#1462). Null when the
+            version cannot be read in the tenant project. Editing the agent,
+            or a toolkit its definition embeds (including a credential
+            reference attach), changes it; `:repin` pins it.
         mode:
           type: string
           description: One of dedicated_agent, runtime_domain_binding, elitea_native.
@@ -6657,6 +6671,55 @@ components:
           description: The migrate-references source key, when the migration helper staged it.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    CredentialReferenceCreate:
+      type: object
+      additionalProperties: false
+      description: >
+        A credential reference created from scratch (issue 1482). The
+        target is canonicalised by the provider adapter; the target binding
+        of that canonical identity is reused or created. A static_secret
+        locator is checked against the secret store with a metadata read
+        only: the value is never read or returned. An oauth_delegated
+        reference takes no backend, locator or generation.
+      required: [project_id, provider_type, target_identity, class]
+      properties:
+        project_id: { type: integer, format: int64, minimum: 1 }
+        provider_type:
+          type: string
+          description: A governed provider, for example jira, confluence, qtest, aha, sharepoint or mcp.
+        target_identity:
+          type: string
+          maxLength: 512
+          description: The target, for example the provider base URL. Stored in its canonical form.
+        class:
+          type: string
+          description: static_secret or oauth_delegated, as the provider accepts.
+        backend:
+          type: string
+          description: >
+            pgvault or vault; required for static_secret. A vault locator
+            must be under elitea/projects/<project_id>/credentials/.
+        locator:
+          type: string
+          maxLength: 512
+          description: >
+            Backend-relative path of the secret (a pgvault secret name or a
+            Vault KV v2 path); required for static_secret. Never a value.
+        generation:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            The secret version the broker reads. Omitted or 0: the store's
+            current version. A named version must be readable.
+      example:
+        project_id: 7
+        provider_type: jira
+        target_identity: https://acme.atlassian.net
+        class: static_secret
+        backend: vault
+        locator: elitea/projects/7/credentials/jira-prod
 
     CredentialReferenceListResponse:
       type: object
@@ -17255,6 +17318,82 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  /admin/agent_identities/{id}:repin:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The binding id (uuid).
+        schema: { type: string }
+    post:
+      operationId: repinAgentIdentityBinding
+      summary: Re-pin a binding to its version's computed definition digest
+      description: >
+        Moves a proposed or active binding to the canonical
+        definition digest of its version, computed under the binding's row
+        lock (#1462). It is a new proposal of the same binding: the state
+        becomes `proposed`, the caller becomes the proposer, the approval is
+        cleared and `revocation_epoch` increases by one, so a different user
+        must `:approve` it before it binds a run again. The binding keeps its
+        id, so its toolkit pins, credential grants and mandates still name
+        it. A suspended binding is refused (409): its suspension is lifted
+        only by `:approve`, then it can be re-pinned. Gated on
+        `models.agent_identity.bindings.manage` in
+        administration mode. Mounted only when the enterprise credential
+        governance flag is on. The request has no body.
+      tags: [admin]
+      responses:
+        '200':
+          description: The re-pinned binding, proposed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentIdentityBinding' }
+              example:
+                id: 0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f11
+                tenant_project_id: 7
+                application_id: 3
+                application_version_id: 4
+                definition_digest: 9f2c4e6a8b0d1f3e5a7c9b1d3f5e7a9c0b2d4f6e8a1c3e5b7d9f0a2c4e6b8d0f
+                computed_definition_digest: 9f2c4e6a8b0d1f3e5a7c9b1d3f5e7a9c0b2d4f6e8a1c3e5b7d9f0a2c4e6b8d0f
+                mode: elitea_native
+                external_agent_identity_id: 0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0e21
+                workload_identity: ''
+                state: proposed
+                revocation_epoch: 3
+                policy_revision_id: rev-2026-10
+                proposed_by: '200'
+                approved_by: null
+                created_at: '2026-10-26T12:00:00Z'
+                updated_at: '2026-10-28T09:30:00Z'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            The caller lacks the permission, or the identity mode is not
+            allowed by the active policy revision
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No such binding
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: >
+            The binding is revoked, already pins the computed digest,
+            another live binding of the version pins it, or the version
+            cannot be read in the tenant project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: >
+            The active policy revision could not be read, or no definition
+            digest reader is configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
   /admin/mandates:
     get:
       operationId: listMandates
@@ -17813,6 +17952,74 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+    post:
+      operationId: createCredentialReference
+      summary: Create a staged credential reference
+      description: >
+        Creates a credential reference from scratch (issue 1482), for a
+        governed integration with no toolkit configuration for
+        `migrate-references` to start from. The reference is written
+        `staged` with the caller as `staged_by`, through the same staging
+        path as the migration, and a security audit decision is appended in
+        the same transaction. Activation is the two-person `:activate`. A
+        static_secret locator is checked against the secret store with a
+        metadata read only (never the value), and the generation is pinned
+        to the store's current version when none is named. Gated on
+        `models.agent_identity.bindings.manage`. Mounted only when the
+        enterprise credential governance flag is on.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CredentialReferenceCreate' }
+      responses:
+        '201':
+          description: The staged reference
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialReference' }
+              example:
+                id: 0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f21
+                tenant_project_id: 7
+                class: static_secret
+                backend: vault
+                locator: elitea/projects/7/credentials/jira-prod
+                provider_type: jira
+                target_binding_id: 0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f22
+                target_identity: https://acme.atlassian.net
+                generation: 3
+                state: staged
+                staged_by: '100'
+                activated_by: null
+                last_transition_by: '100'
+                migrated_from: null
+                created_at: '2026-10-28T12:00:00Z'
+                updated_at: '2026-10-28T12:00:00Z'
+        '400':
+          description: >
+            A malformed body, a provider that is not governed, a target the
+            provider does not accept, a class the provider does not accept,
+            or a Vault locator outside the project's tree
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { error: class is not a credential class the provider accepts }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: >
+            The locator names no readable secret version, or the backend is
+            not configured on this deployment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { error: 'credential reference: the locator names no readable secret version in the secret store' }
+        '503':
+          description: The secret store could not check the locator
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /admin/credential_references/{id}:
     parameters:

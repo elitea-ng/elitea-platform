@@ -220,7 +220,10 @@ WHERE m.id::text = $1 AND m.tenant_project_id = $2 AND m.state = 'active'
 		subjectID != authority.SubjectUserID,
 		len(digest) != len(runtimedomain.Digest{}),
 		facts.applicationVersionID > 0 && versionID != facts.applicationVersionID,
-		delegationID != "" && delegationEpoch == nil:
+		delegationID != "" && delegationEpoch == nil,
+		// The mandate's binding pins another definition than the one the
+		// run executes (#1462).
+		definitionMismatch(facts, runtimedomain.Digest(digestArray(digest))):
 		return ErrRunAuthorityNotUsable
 	}
 	built.SubjectPrincipalRef, built.ActorChain = "", nil
@@ -246,25 +249,44 @@ WHERE m.id::text = $1 AND m.tenant_project_id = $2 AND m.state = 'active'
 // (two definition digests of one version), leaves the binding empty: the
 // context records that no binding was proven, and the decision (#1116)
 // denies every governed credential use of the run.
+//
+// With a governed freeze that checked the definition (#1462), a binding
+// whose digest is not the computed digest of the version the run executes
+// is not bound either: the run has no agent identity, and every governed
+// credential use is denied. Freeze recorded the mismatch in the security
+// audit; the comparison is repeated here because the binding is read again
+// in this transaction.
 func bindActiveAgentIdentity(ctx context.Context, rows rowFunc, built *securitycontext.Context, facts securityContextFacts) error {
 	id, epoch, digest, found, err := usableBindingForVersion(ctx, rows, facts.tenantProjectID, facts.applicationVersionID)
 	if err != nil || !found {
 		return err
+	}
+	if definitionMismatch(facts, digest) {
+		return nil
 	}
 	built.AgentBindingID, built.AgentBindingEpoch = id, epoch
 	built.DefinitionDigest = digest
 	return nil
 }
 
+// definitionMismatch reports whether the admission's governed freeze
+// computed the run's definition digest (#1462) and the binding pins
+// another. A freeze that did not check (no binding when it ran) or no freeze
+// at all compares nothing, as before.
+func definitionMismatch(facts securityContextFacts, bound runtimedomain.Digest) bool {
+	governed := facts.governed
+	return governed != nil && governed.DefinitionChecked && [32]byte(bound) != governed.DefinitionDigest
+}
+
 // UsableBindingForVersion answers the usable binding the admission
-// transaction binds for an application version
-// (agentexecution.GovernedAgentBindings, #1119).
-func (s *AgentIdentityBindings) UsableBindingForVersion(ctx context.Context, tenantProjectID, applicationVersionID int64) (string, bool, error) {
+// transaction binds for an application version, with its definition digest
+// (agentexecution.GovernedAgentBindings, #1119, #1462).
+func (s *AgentIdentityBindings) UsableBindingForVersion(ctx context.Context, tenantProjectID, applicationVersionID int64) (string, [32]byte, bool, error) {
 	if s == nil || s.pool == nil {
-		return "", false, errors.New("agent identity bindings: no database pool")
+		return "", [32]byte{}, false, errors.New("agent identity bindings: no database pool")
 	}
-	id, _, _, found, err := usableBindingForVersion(ctx, poolRows(s.pool), tenantProjectID, applicationVersionID)
-	return id, found, err
+	id, _, digest, found, err := usableBindingForVersion(ctx, poolRows(s.pool), tenantProjectID, applicationVersionID)
+	return id, [32]byte(digest), found, err
 }
 
 // usableBindingForVersion is bindActiveAgentIdentity's rule: the one usable
