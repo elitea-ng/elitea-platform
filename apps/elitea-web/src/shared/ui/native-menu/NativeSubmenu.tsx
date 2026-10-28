@@ -24,6 +24,8 @@ import { MenuRow, MenuRowHint, MenuRowIcon, MenuRowText } from './nativeMenu';
 const OPEN_DELAY_MS = 120;
 /** How long the submenu waits for the pointer to arrive after it left the row. */
 const CLOSE_DELAY_MS = 260;
+/** Popper's overflow boundary: the whole window (`document.documentElement` clips nothing a fixed popper draws). */
+const WINDOW = { boundary: typeof document === 'undefined' ? undefined : document.documentElement, rootBoundary: 'viewport' } as const;
 
 export interface NativeSubmenuProps {
   readonly label: string;
@@ -115,8 +117,10 @@ export function NativeSubmenu({ label, icon, hint, testId, disabled, children, m
         popperOptions={{ strategy: 'fixed' }}
         modifiers={[
           { name: 'offset', options: { offset: [-4, 4] } },
-          { name: 'flip', options: { fallbackPlacements: [rtl ? 'right-start' : 'left-start'] } },
-          { name: 'preventOverflow', options: { padding: 8, altAxis: true } },
+          // Bounded by the window, not the default clipping parents: the parent menu's own scrolling paper is one,
+          // and kept inside it the submenu was pushed back on top of the menu it belongs to.
+          { name: 'flip', options: { fallbackPlacements: [rtl ? 'right-start' : 'left-start'], padding: 8, ...WINDOW } },
+          { name: 'preventOverflow', options: { padding: 8, altAxis: true, ...WINDOW } },
         ]}
         sx={{ zIndex: (theme: Theme) => theme.zIndex.modal + 1 }}
       >
