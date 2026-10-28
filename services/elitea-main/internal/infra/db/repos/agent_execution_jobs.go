@@ -586,6 +586,16 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 	); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert agent execution binding: %w", err)
 	}
+	// The run's agent, so an agent suspension (shared 0194, the kill switch)
+	// can find and cancel it. An ad hoc chat has none and keeps NULL.
+	if applicationID := agentApplicationID(admission); applicationID > 0 {
+		if _, err := tx.Exec(ctx, `
+UPDATE elitea_runtime.agent_execution_jobs SET application_id = $3
+WHERE execution_id = $1 AND generation = $2`,
+			admission.Record.Job.ID, int64(admission.Record.Job.Generation), applicationID); err != nil {
+			return executionapp.AdmissionOutcome{}, fmt.Errorf("record the run's agent: %w", err)
+		}
+	}
 	if admission.CurrentTurn != nil {
 		if err := insertCurrentApplicationTurn(
 			ctx,

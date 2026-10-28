@@ -822,7 +822,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // and pin/unpinAgentToolkit, the credential reference lifecycle and agent
 // toolkit binding admin API. Admin routes are not in the manifest, so its
 // count is unchanged.
-const GENERATED_OPERATION_COUNT = 397;
+// 397 -> 403 (issue 1493, ADR-0041): list/create/resumeExecutionSuspension
+// and list/create/resumeProjectExecutionSuspension, the kill switch of the
+// admin console and of the agent page.
+const GENERATED_OPERATION_COUNT = 403;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1050,8 +1053,12 @@ const GENERATED_OPERATION_COUNT = 397;
  * workspaceHandoff.setPullRequestCredential, and
  * configurations.listForPullRequests (the GitHub or GitLab configurations it is
  * chosen from), the cloud notice of the web chat (pages/chat). Generated.
+ *
+ * 288 -> 291 (issue 1493, ADR-0041 decision 1):
+ * settings.list/create/resumeProjectExecutionSuspension, the Stop agent
+ * action of the agent page (features/kill-switch). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 288;
+const MANIFEST_ENTRY_COUNT = 291;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

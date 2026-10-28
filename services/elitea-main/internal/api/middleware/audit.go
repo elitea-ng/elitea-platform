@@ -147,6 +147,9 @@ var auditedSurfaces = []string{
 	"/api/v2/elitea_core/user_budget/",
 	// Service descriptor registration — what the platform will call out to.
 	"/api/v2/elitea_core/register_descriptor/",
+	// The project admin's kill switch (ADR-0041 decision 1): suspend and
+	// resume of an agent or the project. The admin routes are under /admin/.
+	"/api/v2/elitea_core/execution_suspensions/",
 }
 
 // AuditedSurfaces returns a copy of the prefix list, so a router-level test can

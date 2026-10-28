@@ -29,6 +29,7 @@ import PolicyOutlinedIcon from '@mui/icons-material/PolicyOutlined';
 import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
 import SecurityOutlinedIcon from '@mui/icons-material/SecurityOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import StopCircleOutlinedIcon from '@mui/icons-material/StopCircleOutlined';
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
 import VpnKeyOutlinedIcon from '@mui/icons-material/VpnKeyOutlined';
 
@@ -263,6 +264,16 @@ export function navGroups(): readonly AdminNavGroup[] {
           // (legacy/plugins/admin/module.py:392-421). Shared migration 0060
           // grants it, so this item cannot disappear for want of a grant.
           anyPermission: ['runtime.plugins'],
+        },
+        {
+          id: 'kill-switch',
+          path: '/kill-switch',
+          label: t('pages.admin.nav.killSwitch', 'Kill switch'),
+          icon: StopCircleOutlinedIcon,
+          // The permission every suspension route is gated on server-side
+          // (`central("safety.suspend")`); shared migration 0194 grants it to
+          // the administration `admin` and `super_admin` roles.
+          anyPermission: ['safety.suspend'],
         },
         {
           id: 'schedules',

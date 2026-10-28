@@ -1156,6 +1156,9 @@ nats:
                     # The governed-credential invalidation fan-out between
                     # main replicas (#1121): reference-only, advisory.
                     - "elitea.rt.v1.security.invalidation"
+                    # The kill switch's suspension fan-out between main
+                    # replicas (#1493): ids only, advisory.
+                    - "elitea.rt.v1.safety.suspension"
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_VALIDATE"
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_AGENT"
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_INDEX"
@@ -1189,6 +1192,7 @@ nats:
                     - "_INBOX_elitea-main-runtime.>"
                     - "elitea.rt.v1.replay.wake"
                     - "elitea.rt.v1.security.invalidation"
+                    - "elitea.rt.v1.safety.suspension"
 
             # elitea-nats-bootstrap-runtime: creates and reconciles RUNTIME's
             # three command streams and their per-route durable pull

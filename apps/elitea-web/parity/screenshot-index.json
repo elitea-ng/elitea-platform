@@ -759,6 +759,16 @@
     },
     {
       "file": null,
+      "route": "/admin/app/kill-switch",
+      "targetComponent": "src/pages/admin/KillSwitch.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "The kill switch (ADR-0041 decision 1): the active execution suspensions with Resume, and Suspend for an agent, a project, a toolkit type or the platform (the platform stop behind the typed word STOP). The E2E stack seeds no suspension, so the reference is the empty table.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-kill-switch-visual-linux.png"
+    },
+    {
+      "file": null,
       "route": "/admin/app/tasks",
       "targetComponent": "src/pages/admin/Tasks.tsx",
       "theme": "dark",

@@ -259,6 +259,16 @@ const ADMIN_ROUTES: readonly AdminVisualRoute[] = [
     landmark: (page) => page.getByTestId('admin-tasks-count'),
   },
   {
+    // @covers /admin/app/kill-switch
+    name: 'admin-kill-switch',
+    path: '/admin/app/kill-switch',
+    // The suspensions table, which is mounted on the empty screen too (its
+    // empty row says every run is admitted). The E2E stack seeds no
+    // suspension and the daily self-test resumes its own, so the reference is
+    // the empty state. A populated screen would need `Suspended` masked.
+    landmark: (page) => page.getByTestId('kill-switch-table'),
+  },
+  {
     // @covers /admin/app/app-requests
     name: 'admin-app-requests',
     path: '/admin/app/app-requests',

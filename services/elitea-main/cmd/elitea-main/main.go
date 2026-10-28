@@ -370,6 +370,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 	}()
 
+	// The kill switch (ADR-0041 decision 1, #1493): one admission gate per
+	// replica, shared by the runtime admission stores and the suspend and
+	// resume routes, and its scheduled self-test.
+	executionSuspensions, err := newKillSwitch(pool, logger)
+	if err != nil {
+		return err
+	}
+	if err := startKillSwitchSelfTest(ctx, pool, executionSuspensions, auditRecorder, logger); err != nil {
+		return err
+	}
+
 	// The domain-events Publisher — #876's second half. Every producer that
 	// wires it (pipeline run admission, agent version publish/unpublish,
 	// conversation create, artifact upload, moderation decision) reaches it
@@ -2063,6 +2074,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			CredentialProfile:                credentialAdmission,
 			CredentialBroker:                 runtimeCredentialBroker,
 			SecurityInvalidations:            securityInvalidations,
+			ExecutionSuspensions:             executionSuspensions.gate,
 			IndexScheduleMandates:            governedTriggers.IndexMandates,
 			IndexScheduleMandateGate:         governedTriggers.IndexGate,
 			ControlPool:                      runtimePools.Control,
@@ -2791,6 +2803,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CredentialProbe:               credentialProbeHandler,
 		CredentialConsent:             providerOAuthGoverned.Consent,
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
+		ExecutionSuspensions:          executionSuspensions.handler,
 		MandateAttachments:            governedTriggers.Attachments,
 		CredentialReferencesAdmin:     credentialReferencesHandler,
 		AgentAssertionWellKnown:       eliteaNative.WellKnown,

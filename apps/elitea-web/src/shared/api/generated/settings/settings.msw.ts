@@ -47,6 +47,8 @@ import type { RequestHandlerOptions } from "msw";
 
 import type {
   EntitySettingsUpdateResponse,
+  ExecutionSuspension,
+  ExecutionSuspensionList,
   OkResponse,
   ProjectCloudExecutorSwitch,
   ProjectContextDraft,
@@ -75,6 +77,70 @@ export const getSetProjectCloudExecutorResponseMock = (
   enabled: faker.datatype.boolean(),
   ...overrideResponse,
 });
+
+export const getListProjectExecutionSuspensionsResponseMock = (
+  overrideResponse: Partial<Extract<ExecutionSuspensionList, object>> = {},
+): ExecutionSuspensionList => ({
+  suspensions: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: 12,
+    scope: "agent",
+    project_id: 7,
+    application_id: 31,
+    toolkit_type: null,
+    reason: "The agent sends repeated messages to customers",
+    actor_id: 4,
+    source: "manual",
+    resume_requires: "any_admin",
+    created_at: "2026-10-28T09:15:02Z",
+    cancelled_runs: 2,
+    active: true,
+    resumed_at: null,
+    resumed_by: null,
+    resume_reason: null,
+  })),
+  ...overrideResponse,
+});
+
+export const getCreateProjectExecutionSuspensionResponseMock =
+  (): ExecutionSuspension => ({
+    id: 12,
+    scope: "agent",
+    project_id: 7,
+    application_id: 31,
+    toolkit_type: null,
+    reason: "The agent sends repeated messages to customers",
+    actor_id: 4,
+    source: "manual",
+    resume_requires: "any_admin",
+    created_at: "2026-10-28T09:15:02Z",
+    cancelled_runs: 2,
+    active: true,
+    resumed_at: null,
+    resumed_by: null,
+    resume_reason: null,
+  });
+
+export const getResumeProjectExecutionSuspensionResponseMock =
+  (): ExecutionSuspension => ({
+    id: 12,
+    scope: "agent",
+    project_id: 7,
+    application_id: 31,
+    toolkit_type: null,
+    reason: "The agent sends repeated messages to customers",
+    actor_id: 4,
+    source: "manual",
+    resume_requires: "any_admin",
+    created_at: "2026-10-28T09:15:02Z",
+    cancelled_runs: 2,
+    active: true,
+    resumed_at: null,
+    resumed_by: null,
+    resume_reason: null,
+  });
 
 export const getGenerateProjectContextDraftResponseMock = (
   overrideResponse: Partial<Extract<ProjectContextDraft, object>> = {},
@@ -188,6 +254,84 @@ export const getSetProjectCloudExecutorMockHandler = (
   );
 };
 
+export const getListProjectExecutionSuspensionsMockHandler = (
+  overrideResponse?:
+    | ExecutionSuspensionList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ExecutionSuspensionList> | ExecutionSuspensionList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/execution_suspensions/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListProjectExecutionSuspensionsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateProjectExecutionSuspensionMockHandler = (
+  overrideResponse?:
+    | ExecutionSuspension
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExecutionSuspension> | ExecutionSuspension),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/execution_suspensions/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateProjectExecutionSuspensionResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getResumeProjectExecutionSuspensionMockHandler = (
+  overrideResponse?:
+    | ExecutionSuspension
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ExecutionSuspension> | ExecutionSuspension),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/execution_suspensions/prompt_lib/:projectId/:suspensionId\\:resume",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getResumeProjectExecutionSuspensionResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGenerateProjectContextDraftMockHandler = (
   overrideResponse?:
     | ProjectContextDraft
@@ -269,6 +413,9 @@ export const getReplaceParticipantSettingsMockHandler = (
 export const getSettingsMock = () => [
   getGetProjectCloudExecutorMockHandler(),
   getSetProjectCloudExecutorMockHandler(),
+  getListProjectExecutionSuspensionsMockHandler(),
+  getCreateProjectExecutionSuspensionMockHandler(),
+  getResumeProjectExecutionSuspensionMockHandler(),
   getGenerateProjectContextDraftMockHandler(),
   getPatchEntitySettingsMockHandler(),
   getReplaceParticipantSettingsMockHandler(),

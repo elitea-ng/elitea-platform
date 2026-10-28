@@ -833,7 +833,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// activator and migration source of credential references (#1124).
 	// Nullable columns only; 0192 is claimed by another branch. No data, no
 	// permission.
-	require.EqualValues(t, 193, Head(shared))
+	//
+	// 194: shared/0194_execution_suspensions.sql, the kill switch
+	// (elitea_runtime.execution_suspensions, agent_execution_jobs
+	// .application_id) and the safety.suspend grant to platform and project
+	// admins (ADR-0041 decision 1, #1493). No data.
+	require.EqualValues(t, 194, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -48,6 +48,7 @@ import (
 	v2mandateattachments "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/mandateattachments"
 	v2memories "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/memories"
 	v2pipelinetriggers "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
+	v2safety "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/safety"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	v2social "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/social"
 	v2tags "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/tags"
@@ -256,6 +257,9 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// ADR-0039 (#1151): the external agent identity admin operations,
 		// mounted on the same condition.
 		ExternalAgentIdentityAdmin: &v2agentidentity.ExternalHandler{},
+		// ADR-0041 (issue 1493): the kill switch's admin and project
+		// operations, mounted when the composition root builds the service.
+		ExecutionSuspensions: &v2safety.Handler{},
 		// Mounted only with the governance flag on (issue 1122).
 		MandateAttachments: &v2mandateattachments.Handler{},
 		// ADR-0039 (#1124): the credential reference and agent toolkit
