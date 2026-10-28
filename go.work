@@ -1,7 +1,9 @@
 go 1.26.9
 
 use (
+	./conformance/governed
 	./conformance/nativeclient
+	./deploy/governed-mocks
 	./libs/go/authlib
 	./libs/go/egresslib
 	./libs/go/eventslib

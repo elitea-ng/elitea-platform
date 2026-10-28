@@ -1,0 +1,13 @@
+{
+  "toolkit_security": {
+    "sensitive_tools": {
+      "*": [
+        "delete_file",
+        "remove_index"
+      ],
+      "jira": [
+        "add_comments"
+      ]
+    }
+  }
+}

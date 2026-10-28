@@ -75,3 +75,7 @@ apps/deepwiki-ui/dist/
 # Local screenshot scratch from browser validation runs; never committed.
 .shots/
 .shots-tmp/
+
+# The governed conformance run's evidence: test logs, database dumps, the NATS tap
+# and the canary list (deploy/scripts/governed-conformance.sh). Never committed.
+.governed-evidence/
