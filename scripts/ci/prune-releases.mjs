@@ -22,7 +22,7 @@
 //     org's packages (GitHub answers "Invalid argument"). Each must be this
 //     repository's, and not a release image or chart, a CI image (`ci-*`) or
 //     in KEEP_PACKAGES; one that is not refuses the whole run before anything
-//     is deleted.
+//     is deleted. A name with no package is warned about and skipped.
 //
 // The package lists are publish.yml's rollback arrays, read as
 // prune-prereleases.mjs reads them.
@@ -152,16 +152,20 @@ export async function main({
       return 2;
     }
   }
-  // Checked before anything is deleted: a package of another repository, or a
-  // typo, refuses the run.
+  // Checked before anything is deleted: a package of another repository
+  // refuses the run. A missing one is only warned about, since a rerun that
+  // carries on after a stop finds the packages it already deleted missing;
+  // the dry run shows a typo.
+  const del = deleter({ github, dryRun, deadline, now, sleep, log });
   const retiredFound = [];
+  if (retired.length) await del.budget(retired.length);
   for (const name of retired) {
     let pkg;
     try {
       ({ data: pkg } = await github.rest.packages.getPackageForOrganization({ package_type: "container", package_name: name, org }));
     } catch (error) {
       if (error && error.status === 404) {
-        log(`retired package ${name}: no such package; skipped`);
+        log(`::warning::retired package ${name}: no such package; skipped`);
         continue;
       }
       throw new Error(`GET package ${name} failed: ${error && error.message}`);
@@ -179,7 +183,6 @@ export async function main({
   log(`${dryRun ? "DRY RUN: nothing is deleted. " : ""}${releases.length} release(s); keeping ${kept.length}: ${kept.map((r) => r.tag_name).join(", ")}`);
   log(`deleting ${doomedStable.length} stable release(s) and ${doomedPre.length} pre-release(s); untagged package versions older than ${cutoff || "nothing"} go too`);
   const tags = doomedTags(doomed, keptStable);
-  const del = deleter({ github, dryRun, deadline, now, sleep, log });
 
   let deleted = 0;
   try {
