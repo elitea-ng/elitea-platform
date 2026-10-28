@@ -274,6 +274,12 @@ func applyOverlay(base *Pack, o platformconfig.BrandingOverlay) (*Pack, error) {
 	setString(&merged.Brand.Hue, o.Hue)
 	setOptional(&merged.Brand.OnBrand, o.OnBrand)
 	setString(&merged.Typography.FontFamily, o.FontFamily)
+	if o.FontFamily != "" {
+		// An overlay that names its own UI family gets it on headings too:
+		// the product default's display stack (Sora) is part of the default
+		// look, not a separate setting the overlay can see.
+		merged.Typography.FontFamilyDisplay = nil
+	}
 	setString(&merged.Typography.FontFamilyMono, o.FontFamilyMono)
 	setNumber(&merged.Typography.BaseSize, o.BaseSize)
 	setNumber(&merged.Typography.Scale, o.Scale)

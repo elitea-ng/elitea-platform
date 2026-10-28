@@ -80,7 +80,7 @@ const voicewaveIconStyle = { width: '1rem', height: '1rem' };
  * The filled accent disc both composer end-buttons render as.
  *
  * Baseline `ComponentsLib/Chat/UserInput.jsx:693-704`'s `styles.sendButton`:
- * a 1.75rem square filled `primary.main` (`#6ae8fa`), icon in
+ * a 1.75rem square filled `primary.main` (`#4A4DE8` by default), icon in
  * `icon.fill.send`, `background.button.primary.disabled` when disabled — and
  * `NewChatInput.jsx:361-365` is what supplies those three values. Measured
  * live on next.elitea.ai: `28×28`, `border-radius: 50%`,

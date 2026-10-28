@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { fontFaceRule, fontFaceStylesheet, isSameOriginAssetPath } from './fontFaces';
+import { fontFaceRule, fontFaceStylesheet, isSameOriginAssetPath, resolveFontUrl } from './fontFaces';
 import { DEFAULT_BRAND_PACK } from './tokens';
 
 afterEach(() => {
@@ -66,9 +66,16 @@ describe('fontFaceRule', () => {
 });
 
 describe('fontFaceStylesheet', () => {
-  it('is empty for the default pack (no fontFaces declared)', () => {
-    expect(DEFAULT_BRAND_PACK.typography.fontFaces).toBeUndefined();
-    expect(fontFaceStylesheet(DEFAULT_BRAND_PACK)).toBe('');
+  it('declares the three brand faces of the default pack (brand guide v3), same-origin', () => {
+    expect(DEFAULT_BRAND_PACK.typography.fontFaces?.map((face) => face.family)).toEqual(['Manrope', 'Sora', 'JetBrains Mono']);
+    const css = fontFaceStylesheet(DEFAULT_BRAND_PACK);
+    expect(css.split('\n')).toHaveLength(3);
+    expect(css).toContain('src:url("./brand/fonts/manrope.woff2") format("woff2")');
+  });
+
+  it('is empty for a pack with no fontFaces', () => {
+    const { fontFaces: _omitted, ...rest } = DEFAULT_BRAND_PACK.typography;
+    expect(fontFaceStylesheet({ typography: rest })).toBe('');
   });
 
   it('joins accepted faces and logs each refused one', () => {
@@ -88,5 +95,21 @@ describe('fontFaceStylesheet', () => {
     expect(css).toContain('url("/b.woff2")');
     expect(css).not.toContain('evil.example');
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('resolveFontUrl', () => {
+  it('keeps ./ paths under a relative or root base (the main SPA; nginx serves brand/ at any depth)', () => {
+    expect(resolveFontUrl('./brand/fonts/sora.woff2', './')).toBe('./brand/fonts/sora.woff2');
+    expect(resolveFontUrl('./brand/fonts/sora.woff2', '/')).toBe('./brand/fonts/sora.woff2');
+  });
+
+  it('anchors ./ paths to an absolute base, so nested admin routes still find the face', () => {
+    expect(resolveFontUrl('./brand/fonts/sora.woff2', '/admin/app/')).toBe('/admin/app/brand/fonts/sora.woff2');
+    expect(fontFaceRule({ family: 'Sora', url: './brand/fonts/sora.woff2' }, '/admin/app/')).toContain('url("/admin/app/brand/fonts/sora.woff2")');
+  });
+
+  it('leaves root-relative and served asset paths alone', () => {
+    expect(resolveFontUrl('/api/v2/branding/assets/font/abc.woff2', '/admin/app/')).toBe('/api/v2/branding/assets/font/abc.woff2');
   });
 });

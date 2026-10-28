@@ -1,10 +1,10 @@
 /**
  * `@font-face` generation from `pack.typography.fontFaces` (ADR-0024 WP3).
  *
- * The pack's `typography.fontFamily` names Montserrat, but until now nothing
- * declared where Montserrat comes from: there was no `@font-face` and no
- * font file, so every deployment silently fell through to the next family in
- * the stack. A pack now lists its self-hosted faces and this module turns
+ * A pack's `typography.fontFamily` names a family, but before this module
+ * nothing declared where it comes from: there was no `@font-face` and no font
+ * file, so every deployment silently fell through to the next family in the
+ * stack. A pack now lists its self-hosted faces and this module turns
  * them into the one stylesheet the provider injects (`<style data-el-fonts>`,
  * `app/providers/BrandDocumentHead.tsx`).
  *
@@ -38,12 +38,24 @@ function cssStringLiteral(value: string): string {
   return `"${value.replace(/["\\]/g, '').replace(/\s+/g, ' ').trim()}"`;
 }
 
+/**
+ * A `./`-relative face URL resolved against an ABSOLUTE build base. The main
+ * SPA builds with base `./` and nginx serves `brand/` from any depth
+ * (spa.conf), so it keeps the relative form. The admin console builds with
+ * base `/admin/app/` and is served by Go with no such alias, so on a nested
+ * console route `./brand/…` would resolve one directory too deep.
+ */
+export function resolveFontUrl(url: string, base: string = import.meta.env.BASE_URL): string {
+  if (!url.startsWith('./') || !base.startsWith('/') || base === '/') return url;
+  return `${base.endsWith('/') ? base : `${base}/`}${url.slice(2)}`;
+}
+
 /** One `@font-face` rule, or `undefined` when the face is refused. */
-export function fontFaceRule(face: BrandFontFace): string | undefined {
+export function fontFaceRule(face: BrandFontFace, base?: string): string | undefined {
   if (!isSameOriginAssetPath(face.url)) return undefined;
   const declarations = [
     `font-family:${cssStringLiteral(face.family)}`,
-    `src:url(${cssStringLiteral(face.url)}) format("woff2")`,
+    `src:url(${cssStringLiteral(resolveFontUrl(face.url, base))}) format("woff2")`,
     `font-display:swap`,
   ];
   if (face.weight !== undefined && FONT_WEIGHT_RE.test(face.weight.trim())) {
@@ -56,7 +68,8 @@ export function fontFaceRule(face: BrandFontFace): string | undefined {
 /**
  * The full stylesheet for a pack: one rule per accepted face, refused faces
  * logged once each. An empty string means "inject nothing", which is what
- * the default pack (no `fontFaces`) produces.
+ * a pack with no `fontFaces` produces. The default pack declares the three
+ * brand faces (brand guide v3: Manrope, Sora, JetBrains Mono).
  */
 export function fontFaceStylesheet(pack: Pick<BrandPack, 'typography'>): string {
   const faces = pack.typography.fontFaces ?? [];

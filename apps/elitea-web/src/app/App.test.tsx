@@ -35,7 +35,7 @@ const realProcessEnv = (g['process'] as { env: Record<string, string | undefined
  */
 function providerFingerprintPresent(): boolean {
   const styleText = [...document.querySelectorAll('style')].map((s) => s.textContent ?? '').join('\n');
-  return styleText.toLowerCase().includes(`--el-palette-primary-main:${DEFAULT_BRAND_PACK.schemes.dark['primary.main']}`);
+  return styleText.toLowerCase().includes(`--el-palette-primary-main:${String(DEFAULT_BRAND_PACK.schemes.dark['primary.main']).toLowerCase()}`);
 }
 
 beforeEach(() => {

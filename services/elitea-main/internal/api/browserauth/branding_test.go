@@ -52,10 +52,10 @@ func TestLoginBrandFromPack_AllowlistsEveryValue(t *testing.T) {
 		`@font-face{font-family:"Inter";src:url("/api/v2/branding/assets/font/`,
 		";font-weight:100 900}",
 		`:root{font-family:"Inter", Arial, sans-serif}`,
-		":root{--radius-md:14px;--radius-lg:12px;--radius-pill:9999px}",
+		// No display stack stated: headings use the UI family.
+		`:root{--font-display:"Inter", Arial, sans-serif}`,
+		":root{--radius-md:14px;--radius-lg:14px;--radius-pill:9999px}",
 		`body{background-image:url("/api/v2/branding/assets/login-art/`,
-		// The operator's artwork replaces the generated rings.
-		".auth-backdrop{display:none}",
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("brand css lacks %q:\n%s", want, css)
@@ -157,7 +157,7 @@ func TestFormPageRendersTheBrandUnderTheHashedCSP(t *testing.T) {
 	recorder = httptest.NewRecorder()
 	mount(handler).ServeHTTP(recorder, request)
 	plain := recorder.Body.String()
-	if !strings.Contains(plain, "<title>Elitea login</title>") || strings.Contains(plain, `class="brand-logo"`) ||
+	if !strings.Contains(plain, "<title>Elitea AI login</title>") || strings.Contains(plain, `class="brand-logo"`) ||
 		!strings.Contains(plain, `class="brand-mark"`) || strings.Count(plain, "<style>") != 1 {
 		t.Fatalf("unbranded page: %s", plain)
 	}

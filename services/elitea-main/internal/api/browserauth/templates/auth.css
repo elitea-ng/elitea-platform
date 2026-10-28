@@ -1,128 +1,129 @@
 /*
  * The sign-in pages (`/auth/login`, `/auth/form/login`): one stylesheet,
- * pinned by hash in the CSP. Tokens follow the web app's default brand pack
- * (shared/brand/tokens/default.pack.json); a served pack overrides the
- * `--brand-*`, `--page-*`, `--card-*`, `--text-*` and `--radius-*` inputs in a
- * second hash-pinned style element (branding.go).
+ * pinned by hash in the CSP (page.go computes the hash from these bytes at
+ * start-up). The fallback tokens are the Elitea AI brand (guide v3,
+ * libs/ts/client-core/src/brand/tokens.json): "Paper" for light, "Ink" for
+ * dark. A served pack overrides the `--brand-*`, `--on-brand-*`, `--page-*`,
+ * `--card-*`, `--text-*`, `--signal-*`, `--radius-*` and `--font-display`
+ * inputs in a second hash-pinned style element (branding.go).
+ *
+ * Brand rules: the accent (indigo) is the one primary action colour in both
+ * schemes, with white text on it. Links and the focus ring use the signal
+ * colour: indigo on light, cyan on dark. Neutrals carry the rest. The page is
+ * flat: no gradient, no glow, no decorative art.
  *
  * Scheme: light by default; dark when the OS asks for it and the page has no
  * explicit `data-el-scheme`, or when `data-el-scheme="dark"` (set from the
  * app's `el-mode` key by the hash-pinned inline script). Without script the
  * OS preference decides. The dark token block is stated twice for that reason.
+ *
+ * Fonts: the web app serves the brand faces at /app/brand/fonts/ on the same
+ * origin, and the page CSP has `font-src 'self'`. If a face does not load,
+ * the stack falls back to the system UI font.
  */
+@font-face {
+  font-family: "Manrope";
+  src: url("/app/brand/fonts/manrope.woff2") format("woff2");
+  font-weight: 400 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Sora";
+  src: url("/app/brand/fonts/sora.woff2") format("woff2");
+  font-weight: 700 800;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: light;
-  font-family: "Montserrat", "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --accent: var(--brand-light, #c428dd);
+  font-family: "Manrope", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display-default: "Sora", "Manrope", system-ui, sans-serif;
+  --accent: var(--brand-light, #4a4de8);
   --on-accent: var(--on-brand-light, #ffffff);
-  --accent-fill: var(--accent);
-  --page: var(--page-light, #f3f7fc);
+  --accent-hover: var(--accent);
+  --signal: var(--signal-light, var(--accent));
+  --page: var(--page-light, #ffffff);
   --card: var(--card-light, #ffffff);
-  --text: var(--text-light, #0e131d);
-  --muted: #545864;
-  --line: rgb(61 68 86 / 14%);
-  --card-border: rgb(61 68 86 / 12%);
-  --control: rgb(255 255 255 / 72%);
-  --control-border: #8a8f99;
-  --control-hover: rgb(61 68 86 / 6%);
-  --input: rgb(61 68 86 / 4%);
-  --glow-1: var(--accent);
-  --glow-2: #29a3f5;
-  --art-opacity: 0.42;
-  --glow-strength: 14%;
-  --wordmark: #0e131d;
-  --shadow: 0 1px 2px rgb(14 19 29 / 6%), 0 24px 64px -12px rgb(14 19 29 / 18%);
-  --error-bg: #fdeced;
-  --error-border: #d71616;
-  --error-text: #9e0f0f;
+  --text: var(--text-light, #0b0b18);
+  --muted: #5a6478;
+  --line: #e2e6f0;
+  --card-border: #e2e6f0;
+  --control: #ffffff;
+  --control-border: #7c86a0;
+  --control-hover: rgb(11 11 24 / 4%);
+  --input: #ffffff;
+  --shadow: 0 1px 2px rgb(11 11 24 / 6%), 0 4px 16px rgb(11 11 24 / 6%);
+  --error-bg: rgb(185 28 28 / 10%);
+  --error-border: #b91c1c;
+  --error-text: #b91c1c;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-el-scheme="light"]) {
     color-scheme: dark;
-    --accent: var(--brand-dark, #6ae8fa);
-    --on-accent: var(--on-brand-dark, #0e131d);
-    --accent-fill: var(--accent);
-    --page: var(--page-dark, #0b111b);
-    --card: var(--card-dark, #181f2a);
-    --text: var(--text-dark, #ffffff);
-    --muted: #a9b7c1;
-    --line: rgb(255 255 255 / 12%);
-    --card-border: rgb(255 255 255 / 9%);
-    --control: rgb(255 255 255 / 3%);
-    --control-border: #6b7280;
-    --control-hover: rgb(255 255 255 / 7%);
-    --input: rgb(255 255 255 / 5%);
-    --glow-2: #dd42bb;
-    --art-opacity: 0.62;
-    --glow-strength: 18%;
-    --wordmark: #53e2fb;
-    --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 32px 80px -16px rgb(0 0 0 / 65%);
-    --error-bg: rgb(215 22 22 / 14%);
-    --error-border: #e74444;
-    --error-text: #ffb3ae;
+    --accent: var(--brand-dark, #4a4de8);
+    --on-accent: var(--on-brand-dark, #ffffff);
+    --accent-hover: var(--accent);
+    --signal: var(--signal-dark, #00bfe6);
+    --page: var(--page-dark, #0b0b18);
+    --card: var(--card-dark, #12172b);
+    --text: var(--text-dark, #f2f4fa);
+    --muted: #9aa3b8;
+    --line: #232a45;
+    --card-border: #232a45;
+    --control: #1a2036;
+    --control-border: #6b7590;
+    --control-hover: rgb(242 244 250 / 6%);
+    --input: #1a2036;
+    --shadow: none;
+    --error-bg: rgb(248 113 113 / 10%);
+    --error-border: #f87171;
+    --error-text: #f87171;
   }
 }
 
 :root[data-el-scheme="dark"] {
   color-scheme: dark;
-  --accent: var(--brand-dark, #6ae8fa);
-  --on-accent: var(--on-brand-dark, #0e131d);
-  --accent-fill: var(--accent);
-  --page: var(--page-dark, #0b111b);
-  --card: var(--card-dark, #181f2a);
-  --text: var(--text-dark, #ffffff);
-  --muted: #a9b7c1;
-  --line: rgb(255 255 255 / 12%);
-  --card-border: rgb(255 255 255 / 9%);
-  --control: rgb(255 255 255 / 3%);
-  --control-border: #6b7280;
-  --control-hover: rgb(255 255 255 / 7%);
-  --input: rgb(255 255 255 / 5%);
-  --glow-2: #dd42bb;
-  --art-opacity: 0.62;
-  --glow-strength: 18%;
-  --wordmark: #53e2fb;
-  --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 32px 80px -16px rgb(0 0 0 / 65%);
-  --error-bg: rgb(215 22 22 / 14%);
-  --error-border: #e74444;
-  --error-text: #ffb3ae;
+  --accent: var(--brand-dark, #4a4de8);
+  --on-accent: var(--on-brand-dark, #ffffff);
+  --accent-hover: var(--accent);
+  --signal: var(--signal-dark, #00bfe6);
+  --page: var(--page-dark, #0b0b18);
+  --card: var(--card-dark, #12172b);
+  --text: var(--text-dark, #f2f4fa);
+  --muted: #9aa3b8;
+  --line: #232a45;
+  --card-border: #232a45;
+  --control: #1a2036;
+  --control-border: #6b7590;
+  --control-hover: rgb(242 244 250 / 6%);
+  --input: #1a2036;
+  --shadow: none;
+  --error-bg: rgb(248 113 113 / 10%);
+  --error-border: #f87171;
+  --error-text: #f87171;
 }
 
-/* Light scheme: filled accents sit a shade deeper than the token, so white
-   text on the product default (#c428dd, 4.49:1) clears AA (about 5.2:1). */
+/* The hover fill is one step darker on light and one step lighter on dark,
+   as primaryHover is in the tokens. It is derived from the accent, so a
+   white-labelled hue gets a matching step. Browsers without color-mix keep
+   the accent itself. */
 @supports (color: color-mix(in srgb, red, blue)) {
   :root {
-    --accent-fill: color-mix(in srgb, var(--accent) 90%, #000000);
+    --accent-hover: color-mix(in srgb, var(--accent) 86%, #000000);
   }
 
   @media (prefers-color-scheme: dark) {
     :root:not([data-el-scheme="light"]) {
-      --accent-fill: var(--accent);
+      --accent-hover: color-mix(in srgb, var(--accent) 88%, #ffffff);
     }
   }
 
   :root[data-el-scheme="dark"] {
-    --accent-fill: var(--accent);
-  }
-}
-
-/* The second glow colour is the brand hue turned around the wheel, so a
-   white-labelled hue gets matching art; browsers without relative colours
-   keep the static pair above. */
-@supports (color: oklch(from red l c h)) {
-  :root {
-    --glow-2: oklch(from var(--accent) 0.7 0.15 calc(h - 120));
-  }
-
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-el-scheme="light"]) {
-      --glow-2: oklch(from var(--accent) 0.62 0.22 calc(h + 130));
-    }
-  }
-
-  :root[data-el-scheme="dark"] {
-    --glow-2: oklch(from var(--accent) 0.62 0.22 calc(h + 130));
+    --accent-hover: color-mix(in srgb, var(--accent) 88%, #ffffff);
   }
 }
 
@@ -145,81 +146,10 @@ body {
   padding: 56px 16px;
   overflow-x: hidden;
   background-color: var(--page);
-  background-image:
-    radial-gradient(340px circle at calc(50% - 350px) calc(50% + 80px), color-mix(in srgb, var(--glow-2) var(--glow-strength), transparent), transparent),
-    radial-gradient(280px circle at calc(50% + 360px) calc(50% - 170px), color-mix(in srgb, var(--glow-1) var(--glow-strength), transparent), transparent),
-    radial-gradient(ellipse 60% 55% at 50% 45%, color-mix(in srgb, var(--glow-1) var(--glow-strength), transparent) 0%, transparent 70%);
-  background-attachment: fixed;
   color: var(--text);
   font-size: 15px;
-  line-height: 1.5;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
-}
-
-/* Decorative art: two translucent wireframe rings in the brand colours. */
-.auth-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.auth-defs {
-  position: absolute;
-  width: 0;
-  height: 0;
-}
-
-.torus-stop-1 {
-  stop-color: var(--glow-1);
-}
-
-.torus-stop-2 {
-  stop-color: var(--glow-2);
-}
-
-.ring {
-  position: absolute;
-  overflow: visible;
-  opacity: var(--art-opacity);
-  filter: drop-shadow(0 0 18px color-mix(in srgb, var(--glow-1) 35%, transparent));
-}
-
-.ring use {
-  fill: none;
-  stroke-width: 0.45;
-  stroke-opacity: 0.85;
-}
-
-.ring-a {
-  width: 540px;
-  height: 540px;
-  left: calc(50% - 620px);
-  top: calc(50% - 190px);
-  transform: rotate(-20deg);
-  animation: ring-drift-a 18s ease-in-out infinite alternate;
-}
-
-.ring-b {
-  width: 420px;
-  height: 420px;
-  left: calc(50% + 150px);
-  top: calc(50% - 380px);
-  transform: rotate(28deg);
-  animation: ring-drift-b 22s ease-in-out infinite alternate;
-}
-
-@keyframes ring-drift-a {
-  to {
-    transform: rotate(-15deg) translateY(-14px);
-  }
-}
-
-@keyframes ring-drift-b {
-  to {
-    transform: rotate(33deg) translateY(12px);
-  }
 }
 
 .auth-shell {
@@ -259,20 +189,23 @@ body {
   white-space: nowrap;
 }
 
+/* The built-in lockup: the four-bar mark in its fixed brand colours and the
+   wordmark in currentColor, so the wordmark follows the scheme text. */
 .brand-mark {
   display: block;
   width: auto;
   height: 40px;
-  color: var(--wordmark);
+  color: var(--text);
 }
 
 .brand-name {
   margin: 0;
   color: var(--text);
+  font-family: var(--font-display, var(--font-display-default));
   font-size: 1.75rem;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 1.2;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
 }
 
 .brand-tagline {
@@ -284,11 +217,8 @@ body {
 .card-signin {
   width: 100%;
   border: 1px solid var(--card-border);
-  border-radius: var(--radius-lg, 16px);
+  border-radius: var(--radius-lg, 14px);
   background: var(--card);
-  background: color-mix(in srgb, var(--card) 84%, transparent);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
-  backdrop-filter: blur(20px) saturate(140%);
   box-shadow: var(--shadow);
 }
 
@@ -299,9 +229,11 @@ body {
 h1 {
   margin: 0;
   color: var(--text);
+  font-family: var(--font-display, var(--font-display-default));
   font-size: 1.5rem;
-  font-weight: 600;
-  line-height: 1.3;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
   text-align: center;
 }
 
@@ -333,13 +265,13 @@ h1 {
   background: var(--control);
   color: var(--text);
   font-size: 0.9375rem;
-  font-weight: 500;
+  font-weight: 600;
   text-decoration: none;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
 }
 
 .provider-button:hover {
-  border-color: var(--accent);
+  border-color: var(--text);
   background: var(--control-hover);
 }
 
@@ -359,7 +291,7 @@ h1 {
   right: 18px;
   padding: 1px 10px;
   border-radius: var(--radius-pill, 9999px);
-  background: var(--accent-fill);
+  background: var(--accent);
   color: var(--on-accent);
   font-size: 0.6875rem;
   font-weight: 700;
@@ -403,7 +335,7 @@ h1 {
 .field-label {
   color: var(--text);
   font-size: 0.875rem;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .form-control {
@@ -416,7 +348,7 @@ h1 {
   background: var(--input);
   color: var(--text);
   font: inherit;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.12s ease;
 }
 
 .form-control::placeholder {
@@ -428,7 +360,7 @@ h1 {
 }
 
 .form-control:focus {
-  border-color: var(--accent);
+  border-color: var(--signal);
 }
 
 .form-control[aria-invalid="true"] {
@@ -441,9 +373,9 @@ h1 {
   height: 40px;
   margin-top: 12px;
   padding: 0 16px;
-  border: 1px solid var(--accent-fill);
+  border: 1px solid var(--accent);
   border-radius: var(--radius-pill, 9999px);
-  background: var(--accent-fill);
+  background: var(--accent);
   color: var(--on-accent);
   font: inherit;
   font-size: 14px;
@@ -451,27 +383,23 @@ h1 {
   letter-spacing: 0.01em;
   line-height: 1;
   cursor: pointer;
-  box-shadow: 0 8px 24px -8px color-mix(in srgb, var(--accent) 70%, transparent);
-  transition: filter 0.15s ease, box-shadow 0.15s ease;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
 }
 
 .sign-in-button:hover {
-  filter: brightness(1.08) saturate(1.05);
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
 }
 
-.sign-in-button:active {
-  filter: brightness(0.94);
-}
-
-/* The ring is the text colour, which the scheme keeps at AA contrast against
-   the page and the card whatever the brand hue is; the halo carries the hue. */
+/* The focus ring is 2px in the signal colour with a 2px offset (tokens.json
+   `focus`): indigo on light, cyan on dark. */
 .provider-button:focus-visible,
 .sign-in-button:focus-visible,
 .theme-toggle:focus-visible,
-.form-control:focus-visible {
-  outline: 2px solid var(--text);
+.form-control:focus-visible,
+.consent-switch:focus-visible {
+  outline: 2px solid var(--signal);
   outline-offset: 2px;
-  box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .field-error {
@@ -516,15 +444,13 @@ h1 {
   padding: 0;
   border: 1px solid var(--card-border);
   border-radius: var(--radius-pill, 9999px);
-  background: color-mix(in srgb, var(--card) 80%, transparent);
+  background: var(--card);
   color: var(--text);
   cursor: pointer;
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
 }
 
 .theme-toggle:hover {
-  border-color: var(--accent);
+  border-color: var(--text);
 }
 
 .theme-toggle[hidden],
@@ -556,30 +482,9 @@ h1 {
   .form-signin {
     padding: 28px 20px 24px;
   }
-
-  .ring-a {
-    width: 320px;
-    height: 320px;
-    left: -170px;
-    top: auto;
-    bottom: -90px;
-  }
-
-  .ring-b {
-    width: 240px;
-    height: 240px;
-    left: auto;
-    right: -120px;
-    top: -70px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ring-a,
-  .ring-b {
-    animation: none;
-  }
-
   .provider-button,
   .form-control,
   .sign-in-button {
@@ -606,14 +511,18 @@ h1 {
 .consent-cancel {
   background: transparent;
   color: var(--text);
-  box-shadow: none;
-  border-color: var(--card-border);
+  border-color: var(--control-border);
+}
+
+.consent-cancel:hover {
+  background: var(--control-hover);
+  border-color: var(--text);
 }
 
 .consent-switch {
   display: block;
   margin-top: 16px;
-  color: var(--muted);
+  color: var(--signal);
   font-size: 0.875rem;
   text-align: center;
 }

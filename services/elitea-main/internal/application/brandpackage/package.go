@@ -544,11 +544,18 @@ func (s *Service) Parse(data []byte) (*Imported, []Problem) {
 			fail("brand-pack.json", "assets.%s must be a file in the package (assets/…), a path on the deployment (/…) or the product placeholder (./brand/…), got %q", field.name, value)
 		}
 	}
-	if len(pack.Typography.FontFaces) > 2 {
+	// The product default declares its own faces as document-relative
+	// placeholders (`./brand/fonts/…`); like the asset placeholders above they
+	// mean "the compiled default" and import as "inherit", so they neither
+	// count toward the two-face limit nor need a file in the package.
+	if countCustomFaces(pack.Typography.FontFaces) > 2 {
 		fail("brand-pack.json", "typography.fontFaces may hold at most 2 faces")
 	}
 	for i, face := range pack.Typography.FontFaces {
 		label := fmt.Sprintf("fontFaces[%d]", i)
+		if isPlaceholderPath(face.URL) {
+			continue
+		}
 		if strings.HasPrefix(face.URL, "assets/") {
 			content, present := files[face.URL]
 			if !present {
@@ -568,6 +575,17 @@ func (s *Service) Parse(data []byte) (*Imported, []Problem) {
 	}
 	imported.Warnings = warnings
 	return imported, problems
+}
+
+// countCustomFaces counts the faces that are not product-default placeholders.
+func countCustomFaces(faces []v2branding.FontFace) int {
+	n := 0
+	for _, face := range faces {
+		if !isPlaceholderPath(face.URL) {
+			n++
+		}
+	}
+	return n
 }
 
 // isPlaceholderPath admits the product default's document-relative
@@ -648,6 +666,9 @@ func ValuesFromPack(pack, base *v2branding.Pack) map[string]any {
 	}
 	faces := make([]any, 0, len(pack.Typography.FontFaces))
 	for _, face := range pack.Typography.FontFaces {
+		if isPlaceholderPath(face.URL) {
+			continue // the product default's own face: inherit, store nothing
+		}
 		entry := map[string]any{"family": face.Family, "url": face.URL}
 		if face.Weight != nil {
 			entry["weight"] = *face.Weight

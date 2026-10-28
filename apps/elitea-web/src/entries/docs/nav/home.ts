@@ -9,7 +9,7 @@ export const homeTab: NavTab = {
       kind: 'group',
       title: 'Welcome',
       pages: [
-        { kind: 'page', slug: '', title: 'Elitea Docs' },
+        { kind: 'page', slug: '', title: 'Elitea AI Docs' },
         { kind: 'page', slug: 'home/introduction', title: 'Overview of the Elitea platform' },
         { kind: 'page', slug: 'home/onboarding-tips', title: 'Onboarding tips' },
       ],

@@ -69,15 +69,14 @@ test('RES01: the Help Center page loads with all five cards, correctly labelled'
     page.getByText('Guides, documentation, and release notes to support your work.'),
   ).toBeVisible();
 
-  // Title Case in the DOM (`ResourceCardConfig.ts`'s `defaultTitle`) — the
-  // all-caps look on screen is `text-transform: uppercase` styling, not the
-  // actual text content, so an exact match must use the real casing.
+  // Sentence case in the DOM and on screen (`ResourceCardConfig.ts`'s
+  // `defaultTitle`, brand guide v3). The titles are not uppercase-styled.
   const expectations: readonly [keyof typeof CARD_TESTIDS, string, string][] = [
     ['documentation', 'Documentation', 'API reference, guides, and platform concepts'],
-    ['releaseNotes', 'Release Notes', 'Product updates, improvements, and fixes'],
-    ['videoLibrary', 'Video Library', 'Product walkthroughs and recorded sessions'],
+    ['releaseNotes', 'Release notes', 'Product updates, improvements, and fixes'],
+    ['videoLibrary', 'Video library', 'Product walkthroughs and recorded sessions'],
     ['tutorials', 'Tutorials', 'Step-by-step guides and use cases'],
-    ['interactiveTours', 'Interactive Tours', 'Guided tours to explore key features and workflows'],
+    ['interactiveTours', 'Interactive tours', 'Guided tours to explore key features and workflows'],
   ];
   for (const [key, title, description] of expectations) {
     const c = card(page, key);

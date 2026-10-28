@@ -41,7 +41,7 @@ export interface ResourceLink {
  * Resolves a card's links. A NON-EMPTY admin-configured value in
  * `configValues` (`configValues[config.linksKey]`) always wins; with none,
  * falls back to the card's own `defaultLinks` (#891/ELITEA-0967,0972,0973,
- * 0975 — a fresh deployment showed "No links configured" on every card
+ * 0975 — a fresh deployment showed an empty state on every card
  * because no card shipped a default) — `[]` only when the card declares no
  * `defaultLinks` at all (Video Library: no real content exists to default
  * to, see that config entry's own comment).
@@ -72,7 +72,7 @@ const pageSx: SxProps<Theme> = (t: Theme): SystemStyleObject<Theme> => ({
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
-  backgroundColor: t.vars.palette.background?.tabPanel ?? t.palette.background.default,
+  backgroundColor: t.vars.palette.background.tabPanel,
 });
 
 const contentSx: SxProps<Theme> = (t: Theme): SystemStyleObject<Theme> => ({
@@ -91,10 +91,10 @@ const contentSx: SxProps<Theme> = (t: Theme): SystemStyleObject<Theme> => ({
   // the element itself) plus an explicit `outline` on focus is the same
   // fix axe's own rule doc recommends for a scrolling container with no
   // native affordance of its own.
-  // Same focus-ring shape `EntityCard.tsx` already uses for its own
-  // keyboard-focusable, otherwise chrome-less container.
+  // The brand focus ring (2px solid signal). The offset is inset here,
+  // because this container fills the page and an outer ring would be clipped.
   '&:focus-visible': {
-    outline: `0.125rem solid ${t.vars.palette.border.lines}`,
+    outline: `0.125rem solid ${t.vars.palette.focus.ring}`,
     outlineOffset: '-0.125rem',
   },
 });
@@ -106,29 +106,34 @@ const introSx: SxProps<Theme> = (t: Theme): SystemStyleObject<Theme> => ({
   gap: '0.5rem',
   textAlign: 'center',
   py: '1rem',
-  color: t.palette.text.secondary,
+  color: t.vars.palette.text.secondary,
   width: '100%',
 });
 
 const gridSx: SxProps<Theme> = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fill, minmax(23.75rem, 31.25rem))',
+  // `min(100%, …)` lets one card shrink to a phone-width column instead of
+  // overflowing the page horizontally.
+  gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 23.75rem), 31.25rem))',
   gap: '1rem',
   justifyContent: 'center',
 };
 
+/** Links use the brand `signal` colour; the underline shows on hover only (`underline="hover"`). */
 const linkSx: SxProps<Theme> = (t: Theme): SystemStyleObject<Theme> => ({
-  color: t.palette.text?.metrics ?? t.palette.text.secondary,
+  color: t.vars.palette.text.link,
   cursor: 'pointer',
   alignSelf: 'flex-start',
   textDecorationColor: 'currentColor',
-  '&:hover': {
-    color: t.palette.primary.main,
+  borderRadius: t.vars.shape.radiusSm,
+  '&:focus-visible': {
+    outline: `0.125rem solid ${t.vars.palette.focus.ring}`,
+    outlineOffset: '0.125rem',
   },
 });
 
 const linkUndefinedSx: SxProps<Theme> = (t: Theme): SystemStyleObject<Theme> => ({
-  color: t.palette.text.disabled,
+  color: t.vars.palette.text.primary,
   display: 'block',
   fontStyle: 'italic',
 });
@@ -140,15 +145,20 @@ const linkRowSx: SxProps<Theme> = (t: Theme): SystemStyleObject<Theme> => ({
   gap: t.spacing(1),
 });
 
-/** "Latest" pill — reuses the app's own chip tokens (`palette.suggestionChip`), not an invented color. */
+/** "Latest" chip — a neutral outlined pill: hairline border, muted text, no fill. */
 const badgeSx: SxProps<Theme> = (t: Theme): SystemStyleObject<Theme> => ({
-  color: t.vars.palette.suggestionChip.text.default,
-  backgroundColor: t.vars.palette.suggestionChip.background.default,
-  border: `0.0625rem solid ${t.vars.palette.suggestionChip.border}`,
+  color: t.vars.palette.text.primary,
+  backgroundColor: 'transparent',
+  border: `0.0625rem solid ${t.vars.palette.border.cardsOutlines}`,
   borderRadius: t.vars.shape.radiusPill,
   padding: t.spacing(0.125, 0.75),
   lineHeight: 1.5,
   flexShrink: 0,
+});
+
+/** Empty-state copy: muted text, so that it does not look like a link. */
+const emptySx: SxProps<Theme> = (t: Theme): SystemStyleObject<Theme> => ({
+  color: t.vars.palette.text.primary,
 });
 
 /**
@@ -183,9 +193,9 @@ const HelpCenterPage = memo((): ReactNode => {
         aria-label={t('pages.helpCenter.contentRegion', 'Help Center content')}
       >
         <Box sx={introSx}>
-          <Typography variant="headingLarge">Explore Help Center</Typography>
+          <Typography variant="headingLarge">{t('pages.helpCenter.heading', 'Explore Help Center')}</Typography>
           <Typography variant="bodyMedium">
-            Guides, documentation, and release notes to support your work.
+            {t('pages.helpCenter.intro', 'Guides, documentation, and release notes to support your work.')}
           </Typography>
         </Box>
         <Box sx={gridSx}>
@@ -198,7 +208,6 @@ const HelpCenterPage = memo((): ReactNode => {
                 key={config.enabledKey}
                 title={config.defaultTitle}
                 description={config.defaultDescription}
-                colorScheme={config.colorScheme}
                 tourTargetId={config.tourTargetId}
                 icon={
                   <config.Icon
@@ -218,7 +227,7 @@ const HelpCenterPage = memo((): ReactNode => {
                           href={link.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          underline="always"
+                          underline="hover"
                           sx={linkSx}
                           variant="bodyMedium"
                         >
@@ -242,16 +251,20 @@ const HelpCenterPage = memo((): ReactNode => {
                         variant="bodyMedium"
                         sx={linkUndefinedSx}
                       >
-                        {link.title} (undefined)
+                        {t('pages.helpCenter.linkWithoutUrl', '{{title}} (undefined)', { title: link.title })}
                       </Typography>
                     ),
                   )}
                 {!hasLinks && (
                   <Typography
                     variant="bodySmall"
-                    color="text.disabled"
+                    sx={emptySx}
                   >
-                    No links configured
+                    {config.emptyMessage?.() ??
+                      t(
+                        'pages.helpCenter.empty.generic',
+                        'No links yet. An administrator can add links in Admin › Features › Help Center.',
+                      )}
                   </Typography>
                 )}
               </ResourceCard>

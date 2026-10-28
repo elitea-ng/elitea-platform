@@ -82,9 +82,9 @@ func TestResolver_Layering(t *testing.T) {
 		if snap.Pack.Product.Name != "Acme AI" || snap.Pack.Brand.Hue != "#FF6600" {
 			t.Errorf("overlay not applied: %+v", snap.Pack.Product)
 		}
-		// The base is the UI's compiled default: Montserrat, 406 tokens per
-		// scheme. DefaultPack() has Roboto and empty schemes.
-		if !strings.Contains(snap.Pack.Typography.FontFamily, "Montserrat") {
+		// The base is the UI's compiled default: Manrope, 408 tokens per
+		// scheme. DefaultPack() has empty schemes.
+		if !strings.Contains(snap.Pack.Typography.FontFamily, "Manrope") {
 			t.Errorf("base should be the product default, got font %q", snap.Pack.Typography.FontFamily)
 		}
 		// The overlay changed the hue, so the base's stated tokens are dropped
@@ -108,7 +108,7 @@ func TestResolver_Layering(t *testing.T) {
 				len(snap.Pack.Schemes.Light), len(snap.Pack.Schemes.Dark))
 		}
 		// The SAME hue keeps them: nothing to re-derive.
-		same := NewResolver(ResolverConfig{loadOverlay: overlayLoader(platformconfig.BrandingOverlay{Hue: "#6ae8fa", ProductName: "X"}, nil)})
+		same := NewResolver(ResolverConfig{loadOverlay: overlayLoader(platformconfig.BrandingOverlay{Hue: "#4a4de8", ProductName: "X"}, nil)})
 		if got := same.Current(ctx); len(got.Pack.Schemes.Light) == 0 {
 			t.Fatal("the product default's own hue dropped its tokens")
 		}

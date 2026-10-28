@@ -113,8 +113,8 @@ test('J30: brand pack loads logo, primary colour, and product name without rebui
   // won, so "without rebuild" was exactly the property that did not hold.
   //
   // THIS TEST SERVES ITS OWN PACK. Do not "simplify" it into a colour-literal
-  // assertion against the deployment's pack: the LIGHT scheme's compiled
-  // primary computes to `#C428DD`, which is precisely the hue elitea-main's
+  // assertion against the deployment's pack: the compiled primary computes to
+  // `#4A4DE8` (brand guide v3), which is precisely the hue elitea-main's
   // built-in default pack ships, so a literal check would have reported the
   // brand channel as working while it was entirely unwired. Serving a distinct
   // pack is what makes the assertion discriminating.
@@ -202,12 +202,12 @@ test('J30: brand pack loads logo, primary colour, and product name without rebui
     getComputedStyle(document.documentElement).getPropertyValue('--el-palette-primary-main').trim(),
   );
   expect(primary).not.toBe('');
-  // `#6ae8fa` here is the compiled-in dark primary, i.e. channel C did not
+  // `#4a4de8` here is the compiled-in primary, i.e. channel C did not
   // drive the palette. The usual cause is not a broken channel but a REJECTED
   // pack: `parseBrandPack` degrades silently to channel A (logging a warn) on
   // any schema violation in `shellPack` above. With this pack the derived
-  // value is `#fa6aca` — the reference cyan rotated onto `brand.hue`.
-  expect(primary.toLowerCase()).not.toBe('#6ae8fa');
+  // value is the reference indigo rotated onto `brand.hue`.
+  expect(primary.toLowerCase()).not.toBe('#4a4de8');
 
   // 4. ...and drive the product name in the document title
   //    (`widgets/app-shell/ui/PageTitleSetter.tsx`).

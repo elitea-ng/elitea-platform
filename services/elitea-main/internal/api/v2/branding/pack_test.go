@@ -378,14 +378,14 @@ func TestParsePack_CaseVariantKeysNeverClobber(t *testing.T) {
 
 // TestDefaultPack_IsSchemaValid pins the degradation floor: the built-in
 // default must itself survive the validator it degrades from, and must carry
-// the mandated identity (id "default", product name "Elitea").
+// the mandated identity (id "default", product name "Elitea AI").
 func TestDefaultPack_IsSchemaValid(t *testing.T) {
 	def := branding.DefaultPack()
 	if def.ID != "default" {
 		t.Errorf("default pack id: got %q, want \"default\"", def.ID)
 	}
-	if def.Product.Name != "Elitea" {
-		t.Errorf("default pack product name: got %q, want \"Elitea\"", def.Product.Name)
+	if def.Product.Name != "Elitea AI" {
+		t.Errorf("default pack product name: got %q, want \"Elitea AI\"", def.Product.Name)
 	}
 
 	data, err := json.Marshal(def)

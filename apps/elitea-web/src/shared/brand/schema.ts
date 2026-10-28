@@ -78,6 +78,11 @@ export const BrandPack = z
     typography: z.object({
       fontFamily: z.string(), // must resolve to a self-hosted @font-face
       fontFamilyMono: z.string(),
+      // Additive and OPTIONAL: the heading/display stack (brand guide v3:
+      // Sora). Absent means headings use `fontFamily`. The Go mirror
+      // (`pack.go`) carries the same optional field, and an overlay that sets
+      // its own `fontFamily` drops it (`resolver.go`).
+      fontFamilyDisplay: z.string().optional(),
       baseSize: z.number().min(12).max(18).default(14),
       scale: z.number().min(1.05).max(1.5).default(1.2),
       // [ADR-0024 WP3] Additive and OPTIONAL: the self-hosted faces that make
@@ -86,7 +91,8 @@ export const BrandPack = z
       // `/api/v2/branding/assets/font/<digest>.woff2` — and the generator
       // drops anything else, so the schema stays a plain string here to keep
       // the two mirrors field-for-field identical. The default pack declares
-      // none: with no face the browser falls through `fontFamily`'s stack.
+      // the three brand faces (`./brand/fonts/*.woff2`, brand guide v3); a
+      // pack with no face falls through `fontFamily`'s stack.
       fontFaces: z
         .array(
           z.object({

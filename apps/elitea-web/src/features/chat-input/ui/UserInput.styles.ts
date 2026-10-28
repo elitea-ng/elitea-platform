@@ -81,8 +81,10 @@ function webUserInputStyles(isFocused: boolean, isDragOver: boolean, isRecording
 
   const getInputBorder = (theme: Theme): string => {
     if (isRecording) return theme.vars.palette.primary.main;
-    if (!isFocused) return 'transparent';
-    return `linear-gradient(0deg, ${theme.vars.palette.background.userInputBorderDark} 0%, ${theme.vars.palette.background.userInputBorderLight} 100%)`;
+    // Control boundary at rest (brand guide v3: borderStrong, ≥3:1).
+    if (!isFocused) return theme.vars.palette.border.hover;
+    // Flat focus ring colour (brand guide v3: no gradients in UI chrome).
+    return theme.vars.palette.background.userInputBorderLight;
   };
 
   return {

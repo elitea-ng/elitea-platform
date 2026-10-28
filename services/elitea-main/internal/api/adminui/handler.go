@@ -87,6 +87,11 @@ func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	assetsDir := filepath.Join(h.cfg.StaticDir, "assets")
 	r.Handle("/assets/*", http.StripPrefix(h.cfg.BasePath+"/assets/", http.FileServer(http.Dir(assetsDir))))
+	// The default brand pack's typefaces (brand guide v3): the admin build
+	// copies apps/elitea-web/public/brand/fonts to <StaticDir>/brand/fonts and
+	// the console requests them at <BasePath>/brand/fonts/*.woff2.
+	brandDir := filepath.Join(h.cfg.StaticDir, "brand")
+	r.Handle("/brand/*", http.StripPrefix(h.cfg.BasePath+"/brand/", http.FileServer(http.Dir(brandDir))))
 	r.Get("/*", h.ServeSPA)
 	r.Get("/", h.ServeSPA)
 	return r

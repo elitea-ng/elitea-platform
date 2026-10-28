@@ -55,7 +55,7 @@ export const projectContextStyles = {
       border: `0.0625rem solid ${palette.border.table}`,
       overflow: 'hidden',
       '& .cm-editor': { backgroundColor: palette.background.codeMirrorEditor },
-      '&:focus-within': { borderColor: palette.primary.main },
+      '&:focus-within': { borderColor: palette.focus.ring },
       '& .cm-theme': { width: '100%' },
       '& .cm-gutters': {
         backgroundColor: 'transparent',
