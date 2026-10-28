@@ -884,6 +884,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if credentialBroker != nil {
 		runtimeCredentialBroker = credentialBroker
 	}
+	// A governed run's client token is scoped to the model gateway and its
+	// project's artifacts (#1461): the issuer for the content server, the
+	// validator for those routes. Empty with the flag off.
+	runTokens, err := runTokensAtBoot(credentialAdmission, formGraph, pool)
+	if err != nil {
+		return err
+	}
 
 	// A deployment where nobody can sign in through a browser is legal (an
 	// API-only install), but it is never what a first install meant.
@@ -2082,6 +2089,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ActorTokenIssuer:                 runtimeActorTokens,
 			ProjectTokenValidator:            runtimeProjectTokens,
 			ProjectSystemTokenSource:         runtimeSystemTokens,
+			RunTokens:                        runTokens.Issuer,
 			// elitea-vector's token introspection (ADR-0031) reads callback
 			// grants over the main pool, where the minting facades write them.
 			CallbackTokenFacts: dbrepos.NewCallbackTokenGrants(pool),
@@ -2909,6 +2917,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CurrentModelDefault:            currentModelDefault,
 		GatewayProxy:                   gatewayProxy,
 		GatewayProjectResolver:         gatewayProjectResolver,
+		RunTokens:                      runTokens.Validator,
 		ConfigConnectionChecker:        configConnectionChecker,
 		PredictCompleter:               predictCompleter,
 		GatewayStatus:                  gatewayStatus,
