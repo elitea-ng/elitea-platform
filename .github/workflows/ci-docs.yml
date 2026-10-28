@@ -14,8 +14,9 @@ on:
       - "apps/elitea-web/src/**"
       # The palette the diagrams are drawn in.
       - "libs/ts/client-core/src/brand/tokens.json"
-      # The nginx locations that serve the built site.
+      # The nginx locations that serve the built site, and its CSP.
       - "apps/elitea-web/nginx/spa.conf"
+      - "apps/elitea-web/nginx/docs-security-headers.conf"
       - ".github/workflows/ci-docs.yml"
       - ".github/actions/npm-cache/**"
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).

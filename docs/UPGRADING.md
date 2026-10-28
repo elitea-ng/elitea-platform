@@ -16,7 +16,10 @@ newest entry is first.
   deployment that
   replaces the image's nginx config must route `/docs/` the way
   `apps/elitea-web/nginx/spa.conf` does: static files with
-  `try_files $uri $uri/ =404`, not a fallback to one HTML shell.
+  `try_files $uri $uri/ =404`, not a fallback to one HTML shell. The
+  standalone and E2E compose stacks now build the image's `spa` target,
+  which serves only a placeholder at `/docs/`; read the docs locally with
+  `npm run dev` in `apps/elitea-docs`.
 
 ## Governance follow-ups
 

@@ -143,10 +143,12 @@ describe('Content-Security-Policy in nginx/security-headers.conf', () => {
   });
 });
 
-/** Top-level `location ... { }` blocks of spa.conf with their bodies. */
+const withoutComments = (conf: string): string => conf.replace(/^\s*#.*$/gm, '');
+
+/** Top-level `location ... { }` blocks of spa.conf with their bodies (comments removed). */
 function locationBlocks(conf: string): { head: string; body: string }[] {
   const blocks: { head: string; body: string }[] = [];
-  const stripped = conf.replace(/^\s*#.*$/gm, '');
+  const stripped = withoutComments(conf);
   const start = /\blocation\s+([^{]+)\{/g;
   for (let match = start.exec(stripped); match !== null; match = start.exec(stripped)) {
     let depth = 1;
@@ -176,8 +178,8 @@ describe('nginx/spa.conf', () => {
     (head, body) => {
       // The docs site (apps/elitea-docs, served under /docs/) is a separate
       // static build with its own inline scripts, so its locations carry its
-      // own header set (apps/elitea-docs/nginx/security-headers.conf, installed
-      // as docs-security-headers.conf). A head may carry a modifier
+      // own header set (nginx/docs-security-headers.conf, checked against the
+      // docs build by apps/elitea-docs/scripts/check-dist.mjs). A head may carry a modifier
       // (`= /docs/…`) or be a regex (`~ ^/docs/…`).
       const path = head.replace(/^(?:[=~^*]+\s*)+/, '');
       const snippet = path.startsWith('/docs/') ? 'docs-security-headers.conf' : 'security-headers.conf';
@@ -186,7 +188,12 @@ describe('nginx/spa.conf', () => {
   );
 
   it('sets no add_header at server level that a location would silently drop', () => {
-    const outsideLocations = locationBlocks(SPA_CONF).reduce((rest, block) => rest.replace(block.body, ''), SPA_CONF);
+    // The bodies come without comments, so they are cut from the same text: a
+    // comment inside a location would otherwise leave its body uncut.
+    const outsideLocations = locationBlocks(SPA_CONF).reduce(
+      (rest, block) => rest.replace(block.body, ''),
+      withoutComments(SPA_CONF),
+    );
     expect(outsideLocations).not.toMatch(/^\s*add_header\s/m);
   });
 

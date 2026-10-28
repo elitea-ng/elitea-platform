@@ -9,7 +9,7 @@
  *    heading would steal its anchor);
  *  - every docs link the web app hard-codes (`docsLink('…')`, `*_DOCS_PATH = '…'`
  *    and '/docs/…' literals in apps/elitea-web/src) names a page and anchor that exist;
- *  - every inline <script> is listed by hash in nginx/security-headers.conf,
+ *  - every inline <script> is listed by hash in apps/elitea-web/nginx/docs-security-headers.conf,
  *    the CSP the web image serves /docs/ with (no 'unsafe-inline').
  *    `--write-csp` rewrites that list from the build instead.
  *
@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DIST = join(ROOT, 'dist');
-const CSP_FILE = join(ROOT, 'nginx/security-headers.conf');
+const CSP_FILE = join(ROOT, '../elitea-web/nginx/docs-security-headers.conf');
 const base = process.env.DOCS_BASE ?? '/docs/';
 const writeCsp = process.argv.includes('--write-csp');
 

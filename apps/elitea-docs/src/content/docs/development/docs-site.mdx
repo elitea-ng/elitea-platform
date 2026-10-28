@@ -15,6 +15,8 @@ npm run build        # dist/, with the Pagefind search index
 npm run preview      # serve dist/ the way nginx will
 ```
 
+The standalone and browser-test stacks build the web image's `spa` target, which has only a placeholder at `/docs/`, so a docs-only change never rebuilds them. Use `npm run dev` here to read the docs locally.
+
 `DOCS_BASE` sets the base path and defaults to `/docs/`, where the web image's nginx serves the site. The GitHub Pages workflow builds with `/elitea-platform/` instead. The search index is built from the rendered pages at build time (Pagefind), so nothing generated is committed.
 
 ## Add a page
@@ -50,7 +52,7 @@ A `Screenshot` with an `id` shows `src/screenshots/<id>.webp`. Each id must be i
 | `npm run build` | The site builds |
 | `npm run check:dist` | Every internal link and anchor in `dist/` resolves, no page repeats an id, the web app's hard-coded docs links name real pages, and every inline script's hash is in the docs Content-Security-Policy |
 
-The docs CSP is `nginx/security-headers.conf`, installed in the web image as `docs-security-headers.conf`. When a Starlight upgrade or a new component changes an inline script, run `node scripts/check-dist.mjs --write-csp` after a build to rewrite the hashes, and commit the result.
+The docs CSP is `apps/elitea-web/nginx/docs-security-headers.conf`, which the web image installs beside its own. When a Starlight upgrade or a new component changes an inline script, run `node scripts/check-dist.mjs --write-csp` after a build to rewrite the hashes, and commit the result.
 
 {/* source: apps/elitea-docs/astro.config.ts (base, Pagefind, plugins) */}
 {/* source: apps/elitea-docs/scripts/content.test.mjs, apps/elitea-docs/scripts/check-dist.mjs */}
