@@ -270,34 +270,42 @@ run_phase() {
   return "$status"
 }
 
+# collect_evidence and scan run as `scan || status=1`, where bash ignores
+# set -e, so every step checks its own status: a failed copy or dump must fail
+# the scan, never leave a gap the scanner reads as clean.
 collect_evidence() {
   echo "→ Collecting evidence into ${EVIDENCE}…"
-  mkdir -p "$EVIDENCE"
-  stack compose cp governed-nats-tap:/evidence/nats-tap.bin "${EVIDENCE}/nats-tap.bin"
+  mkdir -p "$EVIDENCE" || return 1
+  # Drop the previous collection (phases write canaries.json, which stays),
+  # so a copy that fails here cannot be satisfied by a stale file.
+  rm -f "${EVIDENCE}"/nats-tap.bin "${EVIDENCE}"/pg-*.sql "${EVIDENCE}"/audit-*.jsonl \
+    "${EVIDENCE}/compose-logs.txt" "${EVIDENCE}/mocks-journal.json" || return 1
+  stack compose cp governed-nats-tap:/evidence/nats-tap.bin "${EVIDENCE}/nats-tap.bin" || return 1
   local databases
   databases="$(stack compose exec -T postgres psql -U elitea -d elitea -tAc \
-    "SELECT datname FROM pg_database WHERE NOT datistemplate AND datname <> 'postgres'" | tr -d '\r')"
+    "SELECT datname FROM pg_database WHERE NOT datistemplate AND datname <> 'postgres'" | tr -d '\r')" || return 1
+  [ -n "$databases" ] || { echo "ERROR: no databases listed for the evidence dump." >&2; return 1; }
   for db in $databases; do
-    stack compose exec -T postgres pg_dump -U elitea -d "$db" > "${EVIDENCE}/pg-${db}.sql"
+    stack compose exec -T postgres pg_dump -U elitea -d "$db" > "${EVIDENCE}/pg-${db}.sql" || return 1
   done
   stack compose exec -T postgres psql -U elitea -d elitea -tAc \
-    "SELECT event FROM elitea_runtime.security_audit_outbox ORDER BY seq" > "${EVIDENCE}/audit-outbox.jsonl"
+    "SELECT event FROM elitea_runtime.security_audit_outbox ORDER BY seq" > "${EVIDENCE}/audit-outbox.jsonl" || return 1
   stack compose exec -T postgres psql -U elitea -d elitea -tAc \
-    "SELECT event FROM elitea_identity.security_audit_events ORDER BY seq" > "${EVIDENCE}/audit-events.jsonl"
-  stack compose logs --no-color --timestamps > "${EVIDENCE}/compose-logs.txt"
-  curl -fsS "http://127.0.0.1:${GOVERNED_MOCKS_ADMIN_PORT:-18480}/__journal" > "${EVIDENCE}/mocks-journal.json"
+    "SELECT event FROM elitea_identity.security_audit_events ORDER BY seq" > "${EVIDENCE}/audit-events.jsonl" || return 1
+  stack compose logs --no-color --timestamps > "${EVIDENCE}/compose-logs.txt" || return 1
+  curl -fsS "http://127.0.0.1:${GOVERNED_MOCKS_ADMIN_PORT:-18480}/__journal" > "${EVIDENCE}/mocks-journal.json" || return 1
 }
 
 scan() {
-  collect_evidence
+  collect_evidence || { echo "ERROR: evidence collection failed; the scan would prove nothing." >&2; return 1; }
   echo "→ Canary scan: negative self-test first…"
-  (cd "$SUITE" && go run ./cmd/canary-scan -selftest)
+  (cd "$SUITE" && go run ./cmd/canary-scan -selftest) || { echo "ERROR: the canary scanner failed its self-test." >&2; return 1; }
   if [ ! -s "${EVIDENCE}/canaries.json" ]; then
     echo "ERROR: no canaries were seeded (${EVIDENCE}/canaries.json); the scan would prove nothing." >&2
-    exit 1
+    return 1
   fi
   (cd "$SUITE" && go run ./cmd/canary-scan -canaries "${EVIDENCE}/canaries.json" -dir "$EVIDENCE" \
-      -require nats-tap.bin,pg-elitea.sql,compose-logs.txt,audit-outbox.jsonl)
+      -require nats-tap.bin,pg-elitea.sql,compose-logs.txt,audit-outbox.jsonl) || return 1
 }
 
 up() {
