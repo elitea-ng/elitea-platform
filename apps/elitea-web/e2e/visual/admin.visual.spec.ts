@@ -79,6 +79,8 @@
  * project runs only against the standalone E2E stack, whose Postgres volume is
  * created and seeded by that script.
  */
+import { fileURLToPath } from 'node:url';
+
 import { test, expect, type Locator, type Page } from '@playwright/test';
 
 import { BASE_URL, STORAGE_STATE } from '../../playwright.config';
@@ -117,6 +119,16 @@ function adminVolatileRegions(page: Page): Locator[] {
     page.getByTestId('admin-schedules-time'),
   ];
 }
+
+/**
+ * A mask hides a cell's pixels but not its text's width, and the Schedules
+ * table lays its columns out from content: `Last run` reads "never" or a
+ * timestamp depending on whether a routine already ran when the screenshot
+ * is taken, and every column left of it moved a few pixels between two runs
+ * of the same code. Collapsing the masked text's width for the screenshot
+ * keeps the layout a function of the headers; the cells stay masked.
+ */
+const ADMIN_SCREENSHOT_STYLE = fileURLToPath(new URL('./admin-screenshot.css', import.meta.url));
 
 /**
  * The admin shell, settled and pinned.
@@ -445,6 +457,7 @@ for (const route of ADMIN_ROUTES) {
     await expect(page).toHaveScreenshot(`${route.name}.png`, {
       fullPage: false,
       mask: adminVolatileRegions(page),
+      stylePath: ADMIN_SCREENSHOT_STYLE,
       ...SNAPSHOT_TOLERANCE,
     });
   });
@@ -532,6 +545,7 @@ for (const route of ADMIN_ROUTES.filter((r) => r.light)) {
     await expect(page).toHaveScreenshot(`${route.name}-light.png`, {
       fullPage: false,
       mask: adminVolatileRegions(page),
+      stylePath: ADMIN_SCREENSHOT_STYLE,
       ...SNAPSHOT_TOLERANCE,
     });
   });
