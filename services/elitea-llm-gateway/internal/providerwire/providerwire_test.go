@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -165,5 +167,25 @@ func TestMarshalSortedIndentIsCompactAndSorted(t *testing.T) {
 	}
 	if want := `{"a":["<x>",2],"b":1}`; string(got) != want {
 		t.Fatalf("MarshalSortedIndent = %s, want %s", got, want)
+	}
+}
+
+// TestBifrostVersionIsTheVerifiedOne fails on any bifrost/core bump. The link
+// target is bound by name only, so a new release must be re-checked: the
+// variable still exists, it is still a sonic.API, and MarshalSortedIndent
+// still encodes provider bodies through it. From v1.8.0 bifrost sends compact
+// bodies itself; delete this package instead.
+func TestBifrostVersionIsTheVerifiedOne(t *testing.T) {
+	mod, err := os.ReadFile("../../go.mod")
+	if err != nil {
+		t.Fatalf("read go.mod: %v", err)
+	}
+	got := regexp.MustCompile(`(?m)^\s*github\.com/maximhq/bifrost/core (\S+)`).FindSubmatch(mod)
+	if got == nil {
+		t.Fatal("go.mod requires no github.com/maximhq/bifrost/core")
+	}
+	if string(got[1]) != verifiedBifrostVersion {
+		t.Fatalf("bifrost/core is %s; providerwire was verified against %s only. Re-verify its link target, "+
+			"or delete the package if the new release sends compact provider bodies", got[1], verifiedBifrostVersion)
 	}
 }

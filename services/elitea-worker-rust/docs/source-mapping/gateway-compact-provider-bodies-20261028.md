@@ -88,9 +88,11 @@ same wire shape without a 358-commit dependency upgrade.
 ## Changed paths
 
 - `services/elitea-llm-gateway/internal/providerwire/providerwire.go` (new):
-  - links bifrost's unexported provider-body encoder `providers/utils.sortedAPI` (`:50`);
-  - replaces it once, at package init (`:64-67`), with `compactAPI`. `compactAPI` keeps `SortMapKeys` and answers
-    `MarshalIndent` with `Marshal` (`:58`).
+  - links bifrost's unexported provider-body encoder `providers/utils.sortedAPI` (`:65`);
+  - replaces it once, at package init (`:80-91`), with `compactAPI`. `compactAPI` keeps `SortMapKeys` and answers
+    `MarshalIndent` with `Marshal` (`:73`).
+  - `init` refuses to start on a nil link target (`:81`). It also refuses to start when bifrost's own
+    `MarshalSortedIndent` still answers indented after the swap (`:86`).
 - `services/elitea-llm-gateway/internal/server/server.go:28`: the package that initialises bifrost core imports
   `providerwire`, so the gateway binary always carries it.
 - `services/elitea-llm-gateway/go.mod`: `github.com/bytedance/sonic` is now a direct requirement. Same version. `go mod
@@ -101,7 +103,7 @@ same wire shape without a 358-commit dependency upgrade.
 
 ## Tests
 
-`GOWORK=off go test -race -count=1 ./...` in `services/elitea-llm-gateway`: 20 packages, all `ok`, no new skips.
+`GOWORK=off go test -race -count=1 ./...` in `services/elitea-llm-gateway`: 20 packages, all `ok`, no new skips (4 new tests).
 `golangci-lint run ./...` at the CI-pinned v2.9.0: `0 issues`.
 
 | Test | Proves | Without the fix |
@@ -109,10 +111,16 @@ same wire shape without a 358-commit dependency upgrade.
 | `TestProviderBodiesAreCompact` | The refused run's request goes through real bifrost core and the vLLM provider to a fake upstream. The upstream body equals its `json.Compact` form. The active-instruction text and the tool declaration are intact. | Fails: "upstream body carries insignificant whitespace (928 bytes, 720 compact)" |
 | `TestMarshalSortedIndentIsCompactAndSorted` | The replaced encoder sorts keys and adds no whitespace. | Fails: indented output |
 | `TestServerLinksCompactProviderBodies` | `internal/server`, which initialises bifrost core, carries the override. Dropping the import fails it. | Fails |
+| `TestBifrostVersionIsTheVerifiedOne` | `go.mod` requires bifrost/core `v1.7.15`, the release the link target was verified against. Any bump fails until it is re-verified, or the package is deleted for v1.8.0 or later. | n/a (guard) |
+
+Fail-closed check: with the link target renamed to a symbol that does not exist, the `internal/server` tests stop at
+start-up with `panic: providerwire: bifrost providers/utils.sortedAPI is not linked; re-verify against bifrost/core
+v1.7.15`. That run was made, then reverted.
 
 ### Live proof against the real upstream
 
-A scratch program (not committed) ran real bifrost core with the vLLM provider against `https://dev.elitea.ai/llm`. It
+A scratch program (not committed, built at `ad19a0da0`) ran real bifrost core with the vLLM provider against
+`https://dev.elitea.ai/llm`. It
 used the stack's credential and sent the refused run's request. It was built twice: as main is today, and with
 `providerwire` linked.
 
@@ -125,7 +133,7 @@ after   OK answered 3 chars: "Hi!"
 
 ## Performance
 
-- Mechanism: `providerwire.go:58`. One sonic `Marshal` replaces `MarshalIndent`. Sonic's indent pass is skipped.
+- Mechanism: `providerwire.go:73`. One sonic `Marshal` replaces `MarshalIndent`. Sonic's indent pass is skipped.
 - Measured:
   - the refused run's body went from 928 to 720 bytes (−22 %, `TestProviderBodiesAreCompact` output without the fix);
   - a 40-tool request with a 2 KB system text went from 44,017 to 19,822 bytes (−55 %).
@@ -138,10 +146,16 @@ Not affected. The change is wire formatting only. No state, checkpoint or identi
 ## Resilience
 
 - An edge refusal that the indented shape triggered can no longer happen on this path.
-- The link is by symbol name. If a bifrost upgrade renames or removes `providers/utils.sortedAPI`, the gateway fails
-  to build. It does not silently go back to indented bodies. `TestProviderBodiesAreCompact` pins the wire effect.
-- `init` is idempotent (`providerwire.go:65`). It runs before any provider can dispatch, after
-  `providers/utils` initialised the variable, because of the import order.
+- A linkname checks neither that the target exists nor its type. A missing target still builds and leaves the local
+  variable nil. Three guards make the seam fail closed:
+  - `TestBifrostVersionIsTheVerifiedOne` blocks any bifrost bump until the target is re-verified;
+  - `init` refuses a nil target;
+  - `init` probes the encoder bifrost really uses and refuses an indented answer.
+
+  The gateway therefore cannot start sending indented bodies again unnoticed, and cannot start on a target it has not
+  checked.
+- `init` runs before any provider can dispatch, after `providers/utils` initialised the variable, because of the
+  import order.
 - Known gap: `providers/utils.MergeExtraParamsIntoJSON` re-indents with `encoding/json` when a caller sends fields
   bifrost does not model while extra-parameter passthrough is on. The Worker sends no such fields. Other callers that
   add free-form extras can still produce an indented body. bifrost ≥ v1.8.0 closes it (follow-up).
@@ -158,9 +172,9 @@ Not affected. The change is wire formatting only. No state, checkpoint or identi
 | Secrets | Yes (evidence only) | The replay resolved the stack's credential in process and printed only lengths and statuses. Diff secret-scanned. No credential in code, tests or this document. |
 | Supply chain | Yes | No version change. `sonic` moved from indirect to direct. `govulncheck ./...`: 1 standard-library finding, GO-2026-6809 (`crypto/x509@go1.26.9`, fixed in go1.26.10). It is the toolchain, not this diff, and it is pre-existing. 0 findings in imported packages. |
 
-The `go:linkname` reaches into a third-party package's unexported variable. It is a deliberate, documented seam that
-lasts until the bifrost upgrade. It only swaps the encoder object. It does not change memory layout or call
-conventions.
+The linkname reaches into a third-party package's unexported variable. It is a deliberate, documented seam that lasts
+until the bifrost upgrade. It writes one interface value, of the type verified for v1.7.15. A version pin and start-up
+probes guard it (Resilience).
 
 ## Recovery guarantee rows
 

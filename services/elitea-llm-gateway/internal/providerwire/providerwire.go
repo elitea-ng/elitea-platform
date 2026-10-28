@@ -30,20 +30,35 @@
 //     bifrost/core v1.8.0 sends compact bodies on both paths; upgrading to it
 //     removes the need for this package.
 //
-// The link is by symbol name. If a bifrost upgrade renames or removes
-// providers/utils.sortedAPI, the gateway stops building instead of silently
-// sending indented bodies again, and TestProviderBodiesAreCompact pins the
-// effect on the wire.
+// # Safety of the link
+//
+// A linkname binds by symbol name only. It checks neither that the target
+// exists (a missing target leaves this variable nil and still builds) nor
+// its type. Three guards make the seam fail closed instead:
+//
+//   - TestBifrostVersionIsTheVerifiedOne pins bifrost/core to
+//     verifiedBifrostVersion, the release whose sortedAPI was read and found
+//     to be a sonic.API. Any bump fails CI until the target is re-verified (or,
+//     from v1.8.0, this package is deleted).
+//   - init refuses a nil target: the gateway does not start.
+//   - init then asks bifrost's own MarshalSortedIndent for a probe and refuses
+//     to start unless the answer is compact, so the effect is proved on the
+//     symbol bifrost really uses.
 package providerwire
 
 import (
-	_ "unsafe" // go:linkname
+	_ "unsafe" // for go:linkname
 
 	"github.com/bytedance/sonic"
 	// The linked variable is declared and initialised by this package; the
 	// import orders its initialisation before this package's init.
-	_ "github.com/maximhq/bifrost/core/providers/utils"
+	providerUtils "github.com/maximhq/bifrost/core/providers/utils"
 )
+
+// verifiedBifrostVersion is the bifrost/core release whose
+// providers/utils.sortedAPI this package was checked against: a package-level
+// sonic.API, used by MarshalSortedIndent for every converted provider body.
+const verifiedBifrostVersion = "v1.7.15"
 
 // sortedAPI is bifrost's providers/utils encoder (sonic, SortMapKeys).
 //
@@ -60,9 +75,17 @@ func (c compactAPI) MarshalIndent(v any, _, _ string) ([]byte, error) {
 }
 
 // init runs after providers/utils initialised sortedAPI and before any
-// provider can dispatch, so no request reads a half-set value.
+// provider can dispatch, so no request reads a half-set value. It refuses to
+// let the process start on a seam it cannot prove (see "Safety of the link").
 func init() {
-	if _, done := sortedAPI.(compactAPI); !done {
-		sortedAPI = compactAPI{sortedAPI}
+	if sortedAPI == nil {
+		panic("providerwire: bifrost providers/utils.sortedAPI is not linked; re-verify against bifrost/core " +
+			verifiedBifrostVersion)
+	}
+	sortedAPI = compactAPI{sortedAPI}
+	probe, err := providerUtils.MarshalSortedIndent(map[string]any{"b": "<x>", "a": 1}, "", "  ")
+	if err != nil || string(probe) != `{"a":1,"b":"<x>"}` {
+		panic("providerwire: bifrost provider bodies are still indented; re-verify against bifrost/core " +
+			verifiedBifrostVersion)
 	}
 }
