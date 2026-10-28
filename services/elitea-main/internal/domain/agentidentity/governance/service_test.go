@@ -437,3 +437,56 @@ func TestApproveBindingAcceptsAPendingActivationExternalIdentity(t *testing.T) {
 		}
 	}
 }
+
+// #1462: a re-pin moves an active binding to the computed digest as a new
+// proposal of the same binding; the re-pinner cannot approve it.
+func TestRepinBindingIsReapprovedByASecondPerson(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	b, err := f.service.ProposeBinding(ctx, proposal(externalID), "100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.TransitionBinding(ctx, b.ID, agentidentity.ActionApprove, "200"); err != nil {
+		t.Fatal(err)
+	}
+	computed := [32]byte{7}
+	var seen agentidentity.AgentIdentityBinding
+	digestOf := func(_ context.Context, current agentidentity.AgentIdentityBinding) ([32]byte, error) {
+		seen = current
+		return computed, nil
+	}
+	repinned, err := f.service.RepinBinding(ctx, b.ID, "200", digestOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen.ID != b.ID || repinned.ID != b.ID || repinned.State != agentidentity.BindingProposed || repinned.DefinitionDigest != computed ||
+		repinned.ProposedBy != "200" || repinned.ApprovedBy != "" || repinned.PolicyRevisionID != "rev-test" {
+		t.Fatalf("repinned %+v", repinned)
+	}
+	if _, err := f.service.TransitionBinding(ctx, b.ID, agentidentity.ActionApprove, "200"); !errors.Is(err, agentidentity.ErrSelfApproval) {
+		t.Fatalf("the re-pinner approves: %v", err)
+	}
+	active, err := f.service.TransitionBinding(ctx, b.ID, agentidentity.ActionApprove, "100")
+	if err != nil || active.State != agentidentity.BindingActive || active.DefinitionDigest != computed {
+		t.Fatalf("approve the re-pin: %+v %v", active, err)
+	}
+	if _, err := f.service.RepinBinding(ctx, b.ID, "100", digestOf); !errors.Is(err, agentidentity.ErrDefinitionDigestCurrent) {
+		t.Fatalf("re-pin to the pinned digest: %v", err)
+	}
+	unreadable := func(context.Context, agentidentity.AgentIdentityBinding) ([32]byte, error) {
+		return [32]byte{}, agentidentity.ErrDefinitionUnreadable
+	}
+	if _, err := f.service.RepinBinding(ctx, b.ID, "100", unreadable); !errors.Is(err, agentidentity.ErrDefinitionUnreadable) {
+		t.Fatalf("unreadable version: %v", err)
+	}
+	f.revisions.set([]agentidentity.IdentityMode{agentidentity.IdentityModeEliteaNative}, time.Hour)
+	if _, err := f.service.RepinBinding(ctx, b.ID, "100", func(context.Context, agentidentity.AgentIdentityBinding) ([32]byte, error) {
+		return [32]byte{6}, nil
+	}); !errors.Is(err, agentidentity.ErrIdentityModeNotAllowed) {
+		t.Fatalf("re-pin of a mode the revision no longer allows: %v", err)
+	}
+	if _, err := f.service.RepinBinding(ctx, b.ID, "100", nil); err == nil {
+		t.Fatal("a re-pin without a digest source succeeded")
+	}
+}

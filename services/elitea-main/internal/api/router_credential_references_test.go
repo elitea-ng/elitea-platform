@@ -13,6 +13,7 @@ import (
 
 var credentialReferenceRoutes = []string{
 	"GET /api/v2/admin/credential_references",
+	"POST /api/v2/admin/credential_references",
 	"GET /api/v2/admin/credential_references/{id}",
 	"POST /api/v2/admin/credential_references/{id}:activate",
 	"POST /api/v2/admin/credential_references/{id}:retire",
@@ -46,6 +47,7 @@ func TestCredentialReferenceRoutesAreUnmountedWhenTheDependencyIsNil(t *testing.
 	const id = "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f11"
 	for _, probe := range []struct{ method, path string }{
 		{http.MethodGet, "/api/v2/admin/credential_references?project_id=7"},
+		{http.MethodPost, "/api/v2/admin/credential_references"},
 		{http.MethodGet, "/api/v2/admin/credential_references/" + id},
 		{http.MethodPost, "/api/v2/admin/credential_references/" + id + ":activate"},
 		{http.MethodPost, "/api/v2/admin/credential_references/" + id + ":retire"},
@@ -74,5 +76,11 @@ func TestCredentialReferenceRoutesAreMountedAndGatedWhenTheDependencyIsSet(t *te
 	got := serveStatus(t, router, http.MethodPost, "/api/v2/admin/credential_references/0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e0f11:activate")
 	if got == http.StatusNotFound || got == http.StatusOK || got == http.StatusInternalServerError {
 		t.Errorf("activate without the permission = %d, want a gate refusal", got)
+	}
+	// Creating from scratch (#1482) is gated like the other writes.
+	got = serveStatus(t, router, http.MethodPost, "/api/v2/admin/credential_references")
+	if got == http.StatusNotFound || got == http.StatusCreated || got == http.StatusInternalServerError ||
+		got == http.StatusServiceUnavailable || got == http.StatusBadRequest {
+		t.Errorf("create without the permission = %d, want a gate refusal", got)
 	}
 }

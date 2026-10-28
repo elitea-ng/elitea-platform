@@ -604,8 +604,15 @@ WHERE agent_binding_id = $1::uuid AND toolkit_id = $2 AND tenant_project_id = $3
 	})
 }
 
-// StagedReference is one reference migrate-references stages.
+// StagedReference is one reference to stage: from an existing toolkit
+// configuration by migrate-references, or from scratch by the admin API
+// (POST /api/v2/admin/credential_references, #1482). Both write it the same
+// way, through StageReference.
 type StagedReference struct {
+	// ID is the new reference's id. Empty: StageReference draws one from
+	// newID. The admin API sets it first, because its secret store check
+	// names the reference it is made for.
+	ID              string
 	TenantProjectID int64
 	ProviderType    string
 	TargetIdentity  string
@@ -613,10 +620,25 @@ type StagedReference struct {
 	Backend         string
 	Locator         string
 	Generation      int64
-	MigratedFrom    string
+	// MigratedFrom is migrate-references' source key, which makes a rerun
+	// idempotent. Empty for a reference created from scratch: it has no
+	// source, and every call stages a new reference.
+	MigratedFrom string
 	// StagedBy is the operator's auth_core user id (CanonicalUserID).
 	StagedBy string
 }
+
+// Staging constants shared by migrate-references and the admin API's create
+// route (#1482), so both stage the same shape.
+const (
+	// CredentialReferenceOAuthLocator is the locator of an oauth_delegated
+	// reference: its material is the consent grant, not a stored secret.
+	CredentialReferenceOAuthLocator = "oauth_grant"
+	// CredentialReferenceStagingScope is the SecretStore workload scope of
+	// the staging paths (the Vault role <prefix>-credential-migration): the
+	// migration's copy, and the create route's metadata-only locator check.
+	CredentialReferenceStagingScope = "credential-migration"
+)
 
 // StageResult says what StageReference found or wrote.
 type StageResult struct {
@@ -662,13 +684,17 @@ WHERE `+liveMigratedFrom, tenantProjectID, migratedFrom))
 // StageReference upserts the target binding and inserts the reference in
 // `staged`, with its audit event, in one transaction. A live reference
 // already staged from the same source is returned unchanged (Created false);
-// a retired one is not, so a rerun after a retire stages its replacement.
+// a retired one is not, so a rerun after a retire stages its replacement. A
+// reference with no source (created from scratch) is always inserted.
 func (s *CredentialReferences) StageReference(ctx context.Context, staged StagedReference, newID func() string) (StageResult, error) {
 	if err := s.writeReady(); err != nil {
 		return StageResult{}, err
 	}
-	if staged.TenantProjectID <= 0 || staged.MigratedFrom == "" || !staged.Class.Valid() {
-		return StageResult{}, errors.New("credential references: a staged reference needs a tenant, a class, a source and a stager")
+	if staged.TenantProjectID <= 0 || !staged.Class.Valid() || newID == nil {
+		return StageResult{}, errors.New("credential references: a staged reference needs a tenant, a class and a stager")
+	}
+	if staged.ID != "" && !agentIdentityIsUUID(staged.ID) {
+		return StageResult{}, errors.New("credential references: a staged reference id must be a uuid")
 	}
 	stagerID, stager, err := CanonicalUserID(staged.StagedBy)
 	if err != nil {
@@ -694,7 +720,14 @@ RETURNING id::text`, newID(), staged.TenantProjectID, staged.ProviderType, stage
 	if err != nil {
 		return StageResult{}, fmt.Errorf("stage the target binding: %w", err)
 	}
-	id := newID()
+	id := staged.ID
+	if id == "" {
+		id = newID()
+	}
+	var migratedFrom *string
+	if staged.MigratedFrom != "" {
+		migratedFrom = &staged.MigratedFrom
+	}
 	tag, err := tx.Exec(ctx, `
 INSERT INTO elitea_identity.credential_references
     (id, tenant_project_id, class, backend, locator, provider_type, target_binding_id, generation, state,
@@ -702,13 +735,19 @@ INSERT INTO elitea_identity.credential_references
 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7::uuid, $8, 'staged', $9, $9, $10)
 ON CONFLICT (tenant_project_id, migrated_from) WHERE migrated_from IS NOT NULL AND state <> 'retired' DO NOTHING`,
 		id, staged.TenantProjectID, string(staged.Class), staged.Backend, staged.Locator, staged.ProviderType,
-		targetID, staged.Generation, stagerID, staged.MigratedFrom)
+		targetID, staged.Generation, stagerID, migratedFrom)
 	if err != nil {
 		return StageResult{}, fmt.Errorf("stage the credential reference: %w", err)
 	}
 	created := tag.RowsAffected() == 1
-	rec, err := scanCredentialReference(tx.QueryRow(ctx, `SELECT `+credentialReferenceColumns+` FROM `+credentialReferenceFrom+`
+	var rec CredentialReferenceRecord
+	if migratedFrom == nil {
+		rec, err = scanCredentialReference(tx.QueryRow(ctx, `SELECT `+credentialReferenceColumns+` FROM `+credentialReferenceFrom+`
+WHERE r.id = $1::uuid`, id))
+	} else {
+		rec, err = scanCredentialReference(tx.QueryRow(ctx, `SELECT `+credentialReferenceColumns+` FROM `+credentialReferenceFrom+`
 WHERE `+liveMigratedFrom, staged.TenantProjectID, staged.MigratedFrom))
+	}
 	if err != nil {
 		return StageResult{}, err
 	}
@@ -716,8 +755,12 @@ WHERE `+liveMigratedFrom, staged.TenantProjectID, staged.MigratedFrom))
 		// Nothing was written; nothing to audit.
 		return StageResult{Record: rec}, nil
 	}
+	origin := "origin.migrate_references"
+	if migratedFrom == nil {
+		origin = "origin.admin_api"
+	}
 	event := credentialReferenceEvent(rec.withoutTime(), "credential_reference.stage", stager,
-		"state.staged", "class."+string(rec.Class))
+		"state.staged", "class."+string(rec.Class), origin)
 	if err := s.audit.Append(ctx, tx, event); err != nil {
 		return StageResult{}, fmt.Errorf("audit staging: %w", err)
 	}
@@ -727,8 +770,9 @@ WHERE `+liveMigratedFrom, staged.TenantProjectID, staged.MigratedFrom))
 	return StageResult{Record: rec, Created: true}, nil
 }
 
-// SetCopiedGeneration records the Vault version a --copy-to vault write
-// created on the staged reference that was staged for it at generation 0,
+// SetCopiedGeneration records the version a migration write created (a
+// --copy-to vault copy, or a composite key map's pgvault version 1) on the
+// staged reference that was staged for it at generation 0,
 // with its audit event. A reference already at that generation succeeds
 // unchanged (a concurrent run finished first); any other state or
 // generation is ErrCredentialReferenceTransition.
@@ -756,7 +800,10 @@ func (s *CredentialReferences) SetCopiedGeneration(ctx context.Context, id strin
 	if current.Generation == generation && current.State == credentialgrant.ReferenceStaged {
 		return current, nil
 	}
-	if current.Generation != 0 || current.State != credentialgrant.ReferenceStaged || current.Backend != "vault" {
+	// A pgvault secret has one version: a composite key map written to a
+	// new pgvault name (#1481) is version 1.
+	writable := current.Backend == "vault" || (current.Backend == "pgvault" && generation == 1)
+	if current.Generation != 0 || current.State != credentialgrant.ReferenceStaged || !writable {
 		return CredentialReferenceRecord{}, ErrCredentialReferenceTransition
 	}
 	if _, err := tx.Exec(ctx, `UPDATE elitea_identity.credential_references SET generation = $2, updated_at = $3
@@ -779,17 +826,23 @@ WHERE id = $1::uuid`, id, generation, s.now().UTC()); err != nil {
 	return written, nil
 }
 
-// RecordSecretCopy appends the audit decision that names a --copy-to vault
-// secret read (decisionID is the StoreContext.DecisionID of the read).
-func (s *CredentialReferences) RecordSecretCopy(ctx context.Context, tenantProjectID int64, referenceID, decisionID, actor string) error {
+// RecordSecretCopy appends the audit decision that names a migration's
+// secret read (decisionID is the StoreContext.DecisionID of the read):
+// `credential_reference.copy_to_vault` for a --copy-to vault copy, and
+// `credential_reference.copy_to_pgvault` for a composite key map written to
+// a new pgvault name (#1481).
+func (s *CredentialReferences) RecordSecretCopy(ctx context.Context, tenantProjectID int64, referenceID, decisionID, actor, backend string) error {
 	if err := s.writeReady(); err != nil {
 		return err
+	}
+	if backend != "vault" && backend != "pgvault" {
+		return fmt.Errorf("credential references: no secret copy to backend %q", backend)
 	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		return s.audit.Append(ctx, tx, securityaudit.SecurityEvent{
 			Type:            securityaudit.TypeDecision,
 			TenantProjectID: tenantProjectID,
-			Action:          "credential_reference.copy_to_vault",
+			Action:          "credential_reference.copy_to_" + backend,
 			Effect:          securityaudit.EffectAllow,
 			Reasons:         []string{"operator.migrate_references"},
 			PrincipalRef:    auditUserRef(actor),

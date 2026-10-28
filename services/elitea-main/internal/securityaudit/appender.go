@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // Appender writes one event in the caller's transaction.
@@ -63,6 +64,8 @@ type PostgresAppender struct {
 	source string
 	now    func() time.Time
 	newID  func() (uuid.UUID, error)
+	// headLockWait times the chain-head lock of each append (#1480).
+	headLockWait metric.Float64Histogram
 }
 
 // NewPostgresAppender builds the appender. source is the CloudEvents source
@@ -75,7 +78,14 @@ func NewPostgresAppender(source string) (*PostgresAppender, error) {
 	if err := checkString("source", source); err != nil {
 		return nil, err
 	}
-	return &PostgresAppender{source: source, now: time.Now, newID: uuid.NewV7}, nil
+	return &PostgresAppender{source: source, now: time.Now, newID: uuid.NewV7, headLockWait: newHeadLockWait(nil)}, nil
+}
+
+// WithMeter records the appender's head-lock histogram on meter instead of
+// the global one.
+func (a *PostgresAppender) WithMeter(meter metric.Meter) *PostgresAppender {
+	a.headLockWait = newHeadLockWait(meter)
+	return a
 }
 
 // Append chains e after the partition head and writes it to the outbox.
@@ -113,7 +123,10 @@ func (a *PostgresAppender) AppendRecord(ctx context.Context, tx pgx.Tx, e Securi
 		lastSeq  int64
 		lastHash []byte
 	)
-	if err := tx.QueryRow(ctx, lockHeadSQL, partition).Scan(&lastSeq, &lastHash); err != nil {
+	lockStarted := time.Now()
+	err := tx.QueryRow(ctx, lockHeadSQL, partition).Scan(&lastSeq, &lastHash)
+	recordHeadLockWait(ctx, a.headLockWait, e.TenantProjectID, err, time.Since(lockStarted))
+	if err != nil {
 		return Record{}, fmt.Errorf("%w: lock partition head: %w", ErrAppendFailed, err)
 	}
 	if len(lastHash) != len(Hash{}) {

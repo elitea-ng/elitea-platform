@@ -289,6 +289,50 @@ func TestAgentIdentityBindingConcurrentApprovalsGiveOneSuccess(t *testing.T) {
 	require.Equal(t, [32]byte{2}, active.DefinitionDigest)
 }
 
+// #1462: a re-pin writes the new digest and proposer on the same row, the
+// approver CHECK holds against the new proposer, and the one-live index
+// refuses a re-pin onto a digest another live binding of the version holds.
+func TestAgentIdentityBindingRepinWritesDigestAndProposer(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedAgentIdentityPolicyRevision(t, pool)
+	store := NewAgentIdentityBindings(pool, agentIdentityAudit(t))
+	ctx := context.Background()
+
+	created, err := store.CreateBinding(ctx, proposedTestBinding(t, "0192f5e2-7c3a-7b1e-8a9d-000000000031", 8, 2))
+	require.NoError(t, err)
+	_, err = store.TransitionBinding(ctx, created.ID, approveBy("201"))
+	require.NoError(t, err)
+	repin := func(digest [32]byte, actor string) func(agentidentity.AgentIdentityBinding) (agentidentity.AgentIdentityBinding, error) {
+		return func(current agentidentity.AgentIdentityBinding) (agentidentity.AgentIdentityBinding, error) {
+			return current.Repin(digest, actor, time.Now().UTC())
+		}
+	}
+	repinned, err := store.TransitionBinding(ctx, created.ID, repin([32]byte{3}, "201"))
+	require.NoError(t, err)
+	stored, err := store.Get(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, repinned, stored)
+	require.Equal(t, agentidentity.BindingProposed, stored.State)
+	require.Equal(t, [32]byte{3}, stored.DefinitionDigest)
+	require.Equal(t, "201", stored.ProposedBy)
+	require.Empty(t, stored.ApprovedBy)
+	require.Equal(t, int64(2), stored.RevocationEpoch)
+
+	_, err = store.TransitionBinding(ctx, created.ID, approveBy("201"))
+	require.ErrorIs(t, err, agentidentity.ErrSelfApproval)
+	active, err := store.TransitionBinding(ctx, created.ID, approveBy("100"))
+	require.NoError(t, err)
+	require.Equal(t, agentidentity.BindingActive, active.State)
+	found, err := store.ActiveForDefinition(ctx, 7, 8, [32]byte{3})
+	require.NoError(t, err)
+	require.Equal(t, created.ID, found.ID)
+
+	other, err := store.CreateBinding(ctx, proposedTestBinding(t, "0192f5e2-7c3a-7b1e-8a9d-000000000032", 8, 4))
+	require.NoError(t, err)
+	_, err = store.TransitionBinding(ctx, other.ID, repin([32]byte{3}, "100"))
+	require.ErrorIs(t, err, agentidentity.ErrDuplicateBinding)
+}
+
 func TestMandatesRoundTripAndApproverCheck(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	seedAgentIdentityPolicyRevision(t, pool)

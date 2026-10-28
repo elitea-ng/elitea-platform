@@ -146,6 +146,36 @@ func (s *Service) ProposeBinding(ctx context.Context, proposal agentidentity.Pro
 	return s.bindings.CreateBinding(ctx, binding)
 }
 
+// RepinBinding moves a binding to the definition digest digestOf computes
+// for it (#1462), read under the binding's row lock. It is a proposal: the
+// mode must be allowed by the active revision, the actor becomes the
+// proposer and a different user must approve it (agentidentity.Repin).
+func (s *Service) RepinBinding(ctx context.Context, id, actor string,
+	digestOf func(context.Context, agentidentity.AgentIdentityBinding) ([32]byte, error)) (agentidentity.AgentIdentityBinding, error) {
+	if digestOf == nil {
+		return agentidentity.AgentIdentityBinding{}, errors.New("agent identity governance: a definition digest source is required")
+	}
+	revision, err := s.revision(ctx)
+	if err != nil {
+		return agentidentity.AgentIdentityBinding{}, err
+	}
+	return s.bindings.TransitionBinding(ctx, id, func(current agentidentity.AgentIdentityBinding) (agentidentity.AgentIdentityBinding, error) {
+		if !revision.Document.AllowsIdentityMode(current.Mode) {
+			return agentidentity.AgentIdentityBinding{}, agentidentity.ErrIdentityModeNotAllowed
+		}
+		digest, err := digestOf(ctx, current)
+		if err != nil {
+			return agentidentity.AgentIdentityBinding{}, err
+		}
+		next, err := current.Repin(digest, actor, s.now())
+		if err != nil {
+			return agentidentity.AgentIdentityBinding{}, err
+		}
+		next.PolicyRevisionID = revision.ID
+		return next, nil
+	})
+}
+
 // ListBindings lists bindings.
 func (s *Service) ListBindings(ctx context.Context, filter agentidentity.ListFilter) ([]agentidentity.AgentIdentityBinding, error) {
 	return s.bindings.ListBindings(ctx, filter)

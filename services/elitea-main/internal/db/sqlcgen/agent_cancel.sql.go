@@ -337,3 +337,52 @@ func (q *Queries) ProjectCurrentAgentStop(ctx context.Context, arg ProjectCurren
 	)
 	return i, err
 }
+
+const projectGovernedContinuationRefusal = `-- name: ProjectGovernedContinuationRefusal :one
+UPDATE chat_message_group AS response
+SET is_streaming = FALSE,
+    meta = (response.meta
+            - 'hitl_interrupt'
+            - 'hitl_interrupts'
+            - 'authorization_requests'
+            - 'node_recovery_required_v1')
+        || jsonb_build_object(
+            'is_error', TRUE,
+            'error', $1::text,
+            'error_code', $2::text,
+            'governed_refusal_code', $3::text
+        ),
+    updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
+WHERE response.id = $4::integer
+  AND response.task_id = $5::text
+  AND response.meta ->> 'execution_generation'
+      = $6::text
+RETURNING response.id
+`
+
+type ProjectGovernedContinuationRefusalParams struct {
+	ErrorMessage           string `db:"error_message" json:"error_message"`
+	ErrorCode              string `db:"error_code" json:"error_code"`
+	RefusalCode            string `db:"refusal_code" json:"refusal_code"`
+	ResponseMessageGroupID int32  `db:"response_message_group_id" json:"response_message_group_id"`
+	ExecutionID            string `db:"execution_id" json:"execution_id"`
+	ExecutionGeneration    string `db:"execution_generation" json:"execution_generation"`
+}
+
+// A governed continuation that admission refused (#1485) settles its paused
+// answer as an error: the pause keys go, as for a stop, and `is_error` with
+// the safe reason replaces them. Unlike a stop it never deletes the turn: the
+// question was answered up to the pause, and the reason is the answer.
+func (q *Queries) ProjectGovernedContinuationRefusal(ctx context.Context, arg ProjectGovernedContinuationRefusalParams) (int32, error) {
+	row := q.db.QueryRow(ctx, projectGovernedContinuationRefusal,
+		arg.ErrorMessage,
+		arg.ErrorCode,
+		arg.RefusalCode,
+		arg.ResponseMessageGroupID,
+		arg.ExecutionID,
+		arg.ExecutionGeneration,
+	)
+	var id int32
+	err := row.Scan(&id)
+	return id, err
+}

@@ -57,6 +57,21 @@ func (s activityCancellationStore) CancelCurrentAgent(ctx context.Context, reque
 	return outcome, err
 }
 
+// activityGovernedRefusalSettler notifies after a refused governed
+// continuation settled its paused turn (#1485).
+type activityGovernedRefusalSettler struct {
+	next     agentexecutionapp.GovernedRefusalSettler
+	activity *conversationactivity.Notifier
+}
+
+func (s activityGovernedRefusalSettler) SettleGovernedRefusal(ctx context.Context, request agentexecutionapp.GovernedRefusalSettlement) (bool, error) {
+	settled, err := s.next.SettleGovernedRefusal(ctx, request)
+	if err == nil && settled {
+		s.activity.MessageChanged(ctx, request.ProjectID, request.ResponseMessageID)
+	}
+	return settled, err
+}
+
 // agentOutputPrefix is the logical output id prefix of an agent
 // execution's terminal output (output.AgentExecutionFrame). A settlement
 // commits only against the durable terminal output it names, so the prefix
