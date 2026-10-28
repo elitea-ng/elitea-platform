@@ -1,0 +1,125 @@
+name: CI — Governed-profile conformance
+
+# ADR-0039 P6b (issue #1124): the governed credential profile, end to end, on
+# the full standalone stack with deploy/docker-compose.governed.yml (OpenBao
+# with TLS and cas_required KV v2, the Entra/Jira/Graph doubles in
+# deploy/governed-mocks, the inbound MCP issuer, the NATS tap).
+# deploy/scripts/governed-conformance.sh owns the lifecycle: it walks one
+# stack through the flag-off, flag-on, old-worker, restored and rollback
+# phases, runs conformance/governed against each (GOV-001 to GOV-010 and the
+# rollback test), holds every skip to scripts/go/declared-skips.txt, and ends
+# with the secret canary scan over the NATS tap, every database dump, every
+# container log (the OTLP collector's debug export included) and the audit
+# outbox. The scan's negative self-test runs first, so a blind scanner fails.
+#
+# Its own workflow rather than a lane in ci-web-e2e.yml: the governed overlay
+# adds an image the build-once jobs do not build (governed-mocks), the run is
+# long, and it is wanted nightly and on demand rather than on every stack
+# change. Pull requests run it only when they touch the suite or its stack.
+
+on:
+  pull_request:
+    paths:
+      - "conformance/governed/**"
+      - "deploy/docker-compose.governed.yml"
+      - "deploy/governed/**"
+      - "deploy/governed-mocks/**"
+      - "deploy/scripts/governed-conformance.sh"
+      - ".github/workflows/ci-governed-conformance.yml"
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # The parts that need no stack: the canary scanner and its negative
+  # self-test, the declared-skip checker, the flag-off golden-vector pin
+  # (GOV-001's unit leg), and a compile of the tagged suite and the mocks.
+  unit:
+    name: Scanner, skip ledger, golden vectors
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          cache: false
+          go-version-file: go.work
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
+          cache-dependency-path: go.work.sum
+      - name: Vet and test the suite module
+        working-directory: conformance/governed
+        run: |
+          go vet ./...
+          go vet -tags conformance ./...
+          go build -tags conformance ./...
+          go test -count=1 ./...
+      - name: Canary scanner negative self-test
+        working-directory: conformance/governed
+        run: go run ./cmd/canary-scan -selftest
+      - name: Vet and build the governed mocks
+        working-directory: deploy/governed-mocks
+        run: |
+          go vet ./...
+          go build ./...
+
+  stack:
+    name: Governed profile on the standalone stack
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          cache: false
+          go-version-file: go.work
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
+          cache-dependency-path: go.work.sum
+      - name: Build the stack images (shared cache, read only)
+        # The base stack only: governed-mocks is not a bake target, and the
+        # script builds it (STANDALONE_SKIP_BUILD=1 builds that one image).
+        uses: ./.github/actions/build-stack-images
+        with:
+          compose-files: |
+            docker-compose.standalone-full.yml
+            docker-compose.standalone-rust-agent.yml
+          cache-hcl: |
+            ci/bake-cache.hcl
+            ci/bake-cache-rust.hcl
+          targets: standalone-rust
+          mount-cache-suffix: rust
+          cache-write: "false"
+      - name: Run the governed conformance phases and the canary scan
+        env:
+          COMPOSE_BIN: docker compose
+          CI: "true"
+          STANDALONE_SKIP_BUILD: "1"
+          STANDALONE_WORKER: rust
+          STANDALONE_PROJECT: elitea-governed-conformance-ci
+          STANDALONE_PORT: "8094"
+          ELITEA_GOVERNED_EVIDENCE_DIR: ${{ github.workspace }}/.governed-evidence
+        run: bash deploy/scripts/governed-conformance.sh run
+      - name: Upload the run's evidence (test logs and the scan's inputs)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: governed-conformance-evidence
+          # The canary list is uploaded with the rest: every value in it is a
+          # random test string that authenticates nothing outside this run.
+          path: .governed-evidence/
+          if-no-files-found: ignore
+          retention-days: 7

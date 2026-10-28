@@ -13,6 +13,11 @@ on:
       # its helpers' unit tests, vet and lint run here; the suite itself is
       # behind the `conformance` tag and runs in ci-web-e2e.yml.
       - "conformance/nativeclient/**"
+      # The governed-profile conformance module and its provider doubles
+      # (ADR-0039 P6b) are in go.work too: their unit tests, vet and lint run
+      # here; the stack suite runs in ci-governed-conformance.yml.
+      - "conformance/governed/**"
+      - "deploy/governed-mocks/**"
       - "go.work"
       - "go.work.sum"
       - ".github/workflows/ci-go.yml"
