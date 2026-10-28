@@ -1,40 +1,31 @@
 /**
- * The desktop's left sidebar, workspace-first: search (the command palette),
- * "Local work" — each opened folder, expandable to the threads run in it
- * (`LocalWorkSection.tsx`) — then a compact, collapsible "Elitea" list that
- * opens the web features in the main area, and Settings at the bottom.
+ * The desktop's left sidebar: search (the command palette), the project
+ * switcher (`ProjectSwitcher.tsx`) — everything under it belongs to that
+ * project — then "Local work", the project's opened folders, expandable to
+ * the threads run in them (`LocalWorkSection.tsx`), the Chats with their
+ * folders, then Applications, Artifacts and the "Workshop" group (agents,
+ * pipelines, skills, toolkits and MCPs, `WorkshopGroup.tsx`), and the account menu at the
+ * bottom (`AccountMenu.tsx`), which also carries Credentials, Catalog and help.
  *
- * Each folder carries its project binding (its menu re-binds it), so there is
- * no global project switcher over the folders; the project the Elitea pages
- * work in is a quiet caption on that section.
+ * A folder belongs to one project and shows under it; moving it to another
+ * asks first. A folder with no project yet shows under every project.
  */
 import { useEffect, useMemo, useState } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
-import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
 import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
 import AppsOutlinedIcon from '@mui/icons-material/AppsOutlined';
-import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
-import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import ChatBubbleOutlineOutlinedIcon from '@mui/icons-material/ChatBubbleOutlineOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import HelpOutlineOutlinedIcon from '@mui/icons-material/HelpOutlineOutlined';
-import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
-import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import SearchIcon from '@mui/icons-material/Search';
-import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
-import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
-import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
 import ViewSidebarOutlinedIcon from '@mui/icons-material/ViewSidebarOutlined';
 import Box from '@mui/material/Box';
 import ButtonBase from '@mui/material/ButtonBase';
 import IconButton from '@mui/material/IconButton';
-import Menu from '@mui/material/Menu';
-import MenuItem from '@mui/material/MenuItem';
 import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
@@ -44,30 +35,27 @@ import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { computeIsSelectedProjectPublic } from '@/widgets/sidebar';
 
-import { eliteaItems, selectedEliteaItem, type EliteaItemValue } from '../lib/eliteaSections';
+import { ACCOUNT_MENU_ITEMS, WORKSHOP_ITEMS, eliteaItems, selectedEliteaItem, type EliteaItem, type EliteaItemValue } from '../lib/eliteaSections';
 import type { ShellAction } from '../lib/shellActions';
 import { SIDEBAR_TINT_OPACITY } from '../lib/sidebarTint';
 import { useDesktopLayout } from '../model/desktopLayout.store';
-import { useChatsSectionOpen, useEliteaSectionOpen } from '../model/useEliteaSectionOpen';
+import { useChatsSectionOpen } from '../model/useEliteaSectionOpen';
+import { useSwitchProject } from '../model/useSwitchProject';
+import { AccountMenu } from './AccountMenu';
 import { ChatsSection } from './ChatsSection';
 import type { ShellLocation } from '../model/useShellLocation';
 import { LocalWorkSection } from './LocalWorkSection';
 import { ShellRow, SectionCaption } from './rows';
+import { ProjectSwitcher } from './ProjectSwitcher';
 import { modKey } from './shortcutLabel';
 import { TitleBarSpacer } from './TitleBarSpacer';
+import { WORKSHOP_ICONS, WorkshopGroup } from './WorkshopGroup';
 
-const ITEM_ICONS: Record<EliteaItemValue, React.JSX.Element> = {
+const ITEM_ICONS: Partial<Record<EliteaItemValue, React.JSX.Element>> = {
+  ...WORKSHOP_ICONS,
   chat: <ChatBubbleOutlineOutlinedIcon />,
-  agents: <SmartToyOutlinedIcon />,
-  pipelines: <AccountTreeOutlinedIcon />,
-  skills: <AutoAwesomeOutlinedIcon />,
-  toolkits: <BuildOutlinedIcon />,
-  mcps: <HubOutlinedIcon />,
-  credentials: <KeyOutlinedIcon />,
   applications: <AppsOutlinedIcon />,
   artifacts: <Inventory2OutlinedIcon />,
-  catalog: <StorefrontOutlinedIcon />,
-  help: <HelpOutlineOutlinedIcon />,
 };
 
 export interface DesktopSidebarProps {
@@ -79,50 +67,6 @@ export interface DesktopSidebarProps {
   onSelectProject: (projectId: string, projectName: string) => void;
 }
 
-function ProjectCaption({
-  projects,
-  selectedProjectId,
-  onSelectProject,
-}: Pick<DesktopSidebarProps, 'projects' | 'selectedProjectId' | 'onSelectProject'>): React.JSX.Element {
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const current = projects.find((p) => String(p.id) === selectedProjectId);
-  return (
-    <>
-      <ButtonBase
-        aria-haspopup="menu"
-        aria-label={t('desktop.shell.eliteaProject', 'Project: {{name}}', { name: current?.name ?? '' })}
-        onClick={(event) => setAnchor(event.currentTarget)}
-        sx={(theme: Theme) => ({ borderRadius: theme.vars.shape.radiusSm, paddingX: 0.5, color: theme.vars.palette.text.metrics })}
-      >
-        <Typography variant="bodySmall" component="span" sx={{ maxWidth: '8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {current?.name ?? ''}
-        </Typography>
-        <ExpandMoreIcon sx={{ width: '0.875rem', height: '0.875rem' }} />
-      </ButtonBase>
-      <Menu anchorEl={anchor} open={anchor !== null} onClose={() => setAnchor(null)} slotProps={{ list: { dense: true } }}>
-        {projects
-          .filter((project) => !project.suspended)
-          .map((project) => (
-            <MenuItem
-              key={project.id}
-              selected={String(project.id) === selectedProjectId}
-              onClick={() => {
-                setAnchor(null);
-                onSelectProject(String(project.id), project.name);
-              }}
-            >
-              {project.name}
-            </MenuItem>
-          ))}
-      </Menu>
-    </>
-  );
-}
-
-/** The room the Chats row's hover actions take: two buttons, or three with New folder. */
-const TWO_ACTIONS = '3.75rem';
-const THREE_ACTIONS = '5.5rem';
-
 interface ChatsRowActionsProps {
   readonly open: boolean;
   readonly onToggle: () => void;
@@ -130,9 +74,15 @@ interface ChatsRowActionsProps {
   readonly onNewFolder?: (() => void) | undefined;
 }
 
-/** The Chats row's hover actions: a new chat, a new folder, and the disclosure of the conversations under it. */
-function ChatsRowActions({ open, onToggle, onNewFolder }: ChatsRowActionsProps): React.JSX.Element {
+/** The Chats caption's actions: a new chat, a new folder, and the disclosure of the conversations under it. */
+/** A new chat, even on `/chat` itself: `create=1` (`processes/chat/ui/useCreateChatReset.ts`). */
+function useStartChat(): () => void {
   const navigate = useNavigate();
+  return () => void navigate({ to: '/chat', search: { create: '1' } as never });
+}
+
+function ChatsRowActions({ open, onToggle, onNewFolder }: ChatsRowActionsProps): React.JSX.Element {
+  const startChat = useStartChat();
   const newChat = t('desktop.chats.new', 'New chat');
   const newFolder = t('desktop.chats.newFolder', 'New folder');
   const disclosure = open ? t('desktop.chats.hide', 'Hide chats') : t('desktop.chats.show', 'Show chats');
@@ -146,8 +96,7 @@ function ChatsRowActions({ open, onToggle, onNewFolder }: ChatsRowActionsProps):
         </Tooltip>
       )}
       <Tooltip title={newChat}>
-        {/* `create=1` starts a new chat even on `/chat` itself (`processes/chat/ui/useCreateChatReset.ts`). */}
-        <IconButton size="small" aria-label={newChat} data-testid="shell-chats-new" onClick={() => void navigate({ to: '/chat', search: { create: '1' } as never })}>
+        <IconButton size="small" aria-label={newChat} data-testid="shell-chats-new" onClick={startChat}>
           <AddOutlinedIcon fontSize="inherit" />
         </IconButton>
       </Tooltip>
@@ -166,18 +115,19 @@ function isChatPath(pathname: string): boolean {
 }
 
 /**
- * Opening the chat expands the Elitea section and the Chats disclosure, so its
- * conversations are on screen. It runs on each navigation to a chat route, not
+ * Opening the chat expands the Chats disclosure, so its conversations are on screen. It runs on each navigation to a chat route, not
  * on every render: a person who collapses them on the chat page keeps them
  * collapsed until the next navigation.
  */
-function useExpandOnChat(pathname: string, expandElitea: () => void, expandChats: () => void): void {
+function useExpandOnChat(pathname: string, expandChats: () => void): void {
   const onChat = isChatPath(pathname);
   useEffect(() => {
-    if (!onChat) return;
-    expandElitea();
-    expandChats();
-  }, [onChat, pathname, expandElitea, expandChats]);
+    if (onChat) expandChats();
+  }, [onChat, pathname, expandChats]);
+}
+
+function isWorkshopItem(item: EliteaItem): boolean {
+  return WORKSHOP_ITEMS.has(item.value);
 }
 
 /** Which Elitea row is highlighted: on a conversation (or the archived page) its own row is, not Chats. */
@@ -188,15 +138,19 @@ function highlightedItem(pathname: string, selected: EliteaItemValue | undefined
 
 export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
   const { location, run, permissions, selectedProjectId } = props;
+  const switchProject = useSwitchProject(location.pathname, props.onSelectProject);
+  const newChat = useStartChat();
   const items = useMemo(
     () => eliteaItems(permissions, computeIsSelectedProjectPublic(selectedProjectId)),
     [permissions, selectedProjectId],
   );
-  const selected = selectedEliteaItem(location.pathname, items);
+  const sidebarItems = items.filter((item) => !ACCOUNT_MENU_ITEMS.has(item.value));
+  const topItems = sidebarItems.filter((item) => !isWorkshopItem(item));
+  const selected = selectedEliteaItem(location.pathname, sidebarItems);
   const vibrancy = useDesktopLayout((state) => state.platform.vibrancy);
-  const [eliteaOpen, toggleElitea, expandElitea] = useEliteaSectionOpen();
   const [chatsOpen, toggleChats, expandChats] = useChatsSectionOpen();
-  useExpandOnChat(location.pathname, expandElitea, expandChats);
+  useExpandOnChat(location.pathname, expandChats);
+  const hasChat = topItems.some((item) => item.value === 'chat');
   const [creatingFolder, setCreatingFolder] = useState(false);
   const onNewFolder = permissions.has(PERMISSIONS.chat.folders.create)
     ? () => {
@@ -243,7 +197,8 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
           </Tooltip>
         }
       />
-      <Box sx={{ paddingX: 1, paddingBottom: 0.5 }}>
+      {/* One rhythm down the sidebar: each block is a caption (12px above, 2px below) and its rows; no block adds a gap of its own. */}
+      <Box sx={{ paddingX: 1 }}>
         <ButtonBase
           onClick={() => run({ type: 'command_palette' })}
           sx={(theme: Theme) => ({
@@ -267,43 +222,40 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
           </Typography>
         </ButtonBase>
       </Box>
+      <Box component="section" aria-label={t('desktop.shell.project', 'Project')} sx={{ paddingX: 1 }}>
+        <SectionCaption>{t('desktop.shell.project', 'Project')}</SectionCaption>
+        <ProjectSwitcher projects={props.projects} selectedProjectId={selectedProjectId} onSelectProject={switchProject} />
+      </Box>
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingX: 1 }}>
-        <LocalWorkSection location={location} run={run} projects={props.projects} />
+        <LocalWorkSection location={location} run={run} projects={props.projects} projectId={selectedProjectId} />
         <Box component="nav" aria-label={t('desktop.shell.elitea', 'Elitea')}>
-          <SectionCaption
-            expanded={eliteaOpen}
-            onToggle={toggleElitea}
-            action={<ProjectCaption projects={props.projects} selectedProjectId={selectedProjectId} onSelectProject={props.onSelectProject} />}
-          >
-            {t('desktop.shell.elitea', 'Elitea')}
-          </SectionCaption>
-          <Box component="ul" sx={{ margin: 0, padding: 0, listStyle: 'none' }}>
-            {(eliteaOpen ? items : items.filter((item) => item.value === selected)).map((item) => (
-              <li key={item.value}>
-                <ShellRow
-                  testId={`shell-elitea-${item.value}`}
-                  icon={ITEM_ICONS[item.value]}
-                  label={item.label}
-                  selected={highlighted === item.value}
-                  onClick={() => run({ type: 'go', to: item.url })}
-                  {...(item.value === 'chat'
-                    ? { ariaExpanded: chatsOpen, trailingOnHover: true, trailingRoom: onNewFolder === undefined ? TWO_ACTIONS : THREE_ACTIONS, trailing: <ChatsRowActions open={chatsOpen} onToggle={toggleChats} onNewFolder={onNewFolder} /> }
-                    : {})}
-                />
-                {item.value === 'chat' && chatsOpen && (
-                  <ChatsSection projectId={selectedProjectId} pathname={location.pathname} creatingFolder={creatingFolder} onCreatingFolderDone={() => setCreatingFolder(false)} canArchive={permissions.has(PERMISSIONS.chat.archive)} canMoveToFolder={permissions.has(PERMISSIONS.chat.folders.update)} />
-                )}
-              </li>
-            ))}
+          {hasChat && (
+            <>
+              <SectionCaption onOpen={newChat} testId="shell-chats-caption" action={<ChatsRowActions open={chatsOpen} onToggle={toggleChats} onNewFolder={onNewFolder} />}>
+                {t('widgets.sidebar.nav.chat', 'Chats')}
+              </SectionCaption>
+              {chatsOpen && (
+                <ChatsSection projectId={selectedProjectId} pathname={location.pathname} creatingFolder={creatingFolder} onCreatingFolderDone={() => setCreatingFolder(false)} canArchive={permissions.has(PERMISSIONS.chat.archive)} canMoveToFolder={permissions.has(PERMISSIONS.chat.folders.update)} />
+              )}
+            </>
+          )}
+          <Box component="ul" sx={{ margin: 0, padding: 0, paddingTop: 1.5, listStyle: 'none' }}>
+            {topItems
+              .filter((item) => item.value !== 'chat')
+              .map((item) => (
+                <li key={item.value}>
+                  <ShellRow testId={`shell-elitea-${item.value}`} icon={ITEM_ICONS[item.value]} label={item.label} selected={highlighted === item.value} onClick={() => run({ type: 'go', to: item.url })} />
+                </li>
+              ))}
+            <WorkshopGroup items={sidebarItems.filter(isWorkshopItem)} selected={highlighted} run={run} />
           </Box>
         </Box>
       </Box>
       <Box sx={(theme: Theme) => ({ paddingX: 1, paddingY: 0.5, borderTop: `1px solid ${theme.vars.palette.divider}` })}>
-        <ShellRow
-          icon={<SettingsOutlinedIcon />}
-          label={t('desktop.shell.settings', 'Settings')}
-          selected={location.pathname.startsWith('/settings')}
-          onClick={() => run({ type: 'settings' })}
+        <AccountMenu
+          items={items.filter((item) => ACCOUNT_MENU_ITEMS.has(item.value))}
+          run={run}
+          selected={location.pathname.startsWith('/settings') || ACCOUNT_MENU_ITEMS.has(selectedEliteaItem(location.pathname, items) ?? 'chat')}
         />
       </Box>
     </Box>

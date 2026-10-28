@@ -1,9 +1,6 @@
 /**
- * The composer's steering controls (`useSteering`):
- *
- * - "Stop and send", while a turn runs: stop the turn, then send the text as the next turn.
- * - The texts that did not start the next turn (`UnsentSteers`): they go back into the input, so the person can
- *   change them, and "Send again" sends what the input holds.
+ * The texts that did not start the next turn (`UnsentSteers`, `useSteering`): they go back into the input, so the
+ * person can change them, and "Send again" sends what the input holds.
  */
 import { useEffect, useRef, type RefObject } from 'react';
 
@@ -14,15 +11,16 @@ import { t } from '@/shared/i18n';
 
 import { nextTurnMessage, type UnsentSteers } from './useSteering';
 
-/** The part of the input handle these controls use. */
-interface DraftInput {
+/** The part of the input handle these controls (and `SteeringQueue`'s Edit) use. */
+export interface DraftInput {
   getInputContent(): string;
   setValue(value: string): void;
 }
 
 /**
  * Put the unsent texts into the input once per `id`, before what the person typed since. `onRestored` tells the
- * composer that the input has text now.
+ * composer that the input has text now. A tick later than the effect: the input restores the thread's saved draft
+ * (`draftKey`) in its own effect, and this puts the texts before that draft instead of over it.
  */
 export function useRestoredDraft(input: RefObject<DraftInput | null>, unsent: UnsentSteers | undefined, onRestored: () => void): void {
   const restored = useRef<number | null>(null);
@@ -33,24 +31,16 @@ export function useRestoredDraft(input: RefObject<DraftInput | null>, unsent: Un
   const id = unsent?.id;
   const text = unsent?.text;
   useEffect(() => {
-    const handle = input.current;
-    if (id === undefined || text === undefined || handle === null || restored.current === id) return;
-    restored.current = id;
-    handle.setValue(nextTurnMessage([text, handle.getInputContent()]));
-    latestRestored.current();
+    if (id === undefined || text === undefined || restored.current === id) return undefined;
+    const timer = window.setTimeout(() => {
+      const handle = input.current;
+      if (handle === null) return;
+      restored.current = id;
+      handle.setValue(nextTurnMessage([text, handle.getInputContent()]));
+      latestRestored.current();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [input, id, text]);
-}
-
-/** "Stop and send": shown while a turn runs, when the page offers it (`shown`). */
-export function StopAndSend({ shown, disabled, onClick }: { shown: boolean; disabled: boolean; onClick: () => void }): React.JSX.Element | null {
-  if (!shown) return null;
-  return (
-    <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-      <Button size="small" variant="outlined" color="error" data-testid="workspace-stop-and-send" disabled={disabled} onClick={onClick}>
-        {t('workspace.steer.stopAndSend', 'Stop and send')}
-      </Button>
-    </Box>
-  );
 }
 
 /** "Send again": shown when texts did not start the next turn and no turn runs. It sends what the input holds. */

@@ -665,6 +665,11 @@
     "description": "Review project-wide adoption, cost, and health metrics, and track budget consumption for the project or yourself."
   },
   {
+    "slug": "menus/settings/desktop-account-menu",
+    "title": "Desktop account menu",
+    "description": "The account button at the foot of the desktop app's sidebar: settings, usage, credentials, catalog, appearance, language, help, release notes, troubleshooting, sign-out, and bug reports."
+  },
+  {
     "slug": "menus/settings/memory",
     "title": "Memory",
     "description": "Configure context-window management for your conversations, and manage the facts Elitea remembers about you across every conversation."

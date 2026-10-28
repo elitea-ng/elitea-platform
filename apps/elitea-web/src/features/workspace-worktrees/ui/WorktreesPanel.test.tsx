@@ -12,7 +12,18 @@ function renderPanel(ipc: FakeWorktreeIpc): void {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   renderWithTheme(
     <QueryClientProvider client={client}>
-      <WorktreesPanel workspaceId="w1" workspaceName="repo" ipc={ipc} />
+      <WorktreesPanel
+        workspaceId="w1"
+        workspaceName="repo"
+        ipc={ipc}
+        // The sidebar draws the row; here the branch, the counts and the actions are enough.
+        renderEntry={({ entry, counts, actions }) => (
+          <span>
+            {entry.branch} {counts}
+            {actions}
+          </span>
+        )}
+      />
     </QueryClientProvider>,
   );
 }
@@ -21,7 +32,7 @@ const clean = fakeWorktreeEntry({ thread_uuid: 'u-clean', branch: 'elitea/aaaaaa
 const dirty = fakeWorktreeEntry({ thread_uuid: 'u-dirty', branch: 'elitea/bbbbbbbb', ahead: 1, dirty: 3 });
 
 describe('WorktreesPanel', () => {
-  it('lists each task with its branch, ahead and uncommitted counts', async () => {
+  it('hands each task to the sidebar with its branch, ahead and uncommitted counts', async () => {
     renderPanel(createFakeWorktreeIpc({ entries: [clean, dirty] }));
     const rows = await screen.findAllByTestId('worktree-row');
     expect(rows).toHaveLength(2);
@@ -147,29 +158,5 @@ describe('WorktreesPanel', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Undo anyway' }));
     expect(await within(dialog).findByText('Undone: 1 files restored to before the merge.')).toBeInTheDocument();
     expect(ipc.calls.undo).toEqual([['cp-1'], ['cp-1', true]]);
-  });
-
-  it('makes a new parallel task for a fresh thread UUID and lists it', async () => {
-    const user = userEvent.setup();
-    const ipc = createFakeWorktreeIpc();
-    renderPanel(ipc);
-    await user.click(await screen.findByRole('button', { name: 'New parallel task' }));
-    expect(await screen.findByTestId('worktree-row')).toHaveTextContent('elitea/');
-    expect(ipc.calls.create).toHaveLength(1);
-    const [workspaceId, uuid] = ipc.calls.create[0] as [string, string];
-    expect(workspaceId).toBe('w1');
-    expect(uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-  });
-
-  it('says why a task could not be made: the host\'s reason, never a guess about ownership', async () => {
-    const user = userEvent.setup();
-    const ipc = createFakeWorktreeIpc();
-    const reason = '/work/repo/.git/config sets `core.hookspath` (a hooks path)';
-    ipc.failNext('create', 'unsafe_repository', reason);
-    renderPanel(ipc);
-    await user.click(await screen.findByRole('button', { name: 'New parallel task' }));
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(`Parallel tasks cannot use this repository: ${reason}`);
-    expect(alert).not.toHaveTextContent('another user');
   });
 });

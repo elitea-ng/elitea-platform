@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AppProviders } from '@/app/providers/AppProviders';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
+import { archiveLocalThread, archivedThreadIds } from '@/shared/desktop/archivedThreads';
 import { server } from '@/test/setup';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 
@@ -97,6 +98,17 @@ describe('ArchivedChatsPage', () => {
     expect(screen.getByText('Spike: socket.io removal')).toBeInTheDocument();
   });
 
+  it('brings a Local work thread archived on the desktop back to its folder', async () => {
+    archiveLocalThread('61');
+    archiveLocalThread('99');
+    const user = userEvent.setup();
+    mount();
+    await screen.findByText('Old sprint retro');
+    await user.click(within(rowOf('Old sprint retro')).getByTestId('archived-conversation-unarchive'));
+    await waitFor(() => expect(unarchived).toEqual(['61']));
+    await waitFor(() => expect([...archivedThreadIds()]).toEqual(['99']));
+  });
+
   it('offers no Unarchive without the archive right (the server would answer 403)', async () => {
     server.use(http.get(`${BASE}/auth/permissions/prompt_lib/42`, () => HttpResponse.json([])));
     mount();
@@ -114,5 +126,16 @@ describe('ArchivedChatsPage', () => {
     expect(await screen.findByText('Failed to unarchive the conversation')).toBeInTheDocument();
     expect(screen.getByText('Old sprint retro')).toBeInTheDocument();
     expect(unarchived).toEqual([]);
+  });
+
+  it('keeps a Local work thread hidden when the unarchive fails', async () => {
+    unarchiveStatus = 500;
+    archiveLocalThread('61');
+    const user = userEvent.setup();
+    mount();
+    await screen.findByText('Old sprint retro');
+    await user.click(within(rowOf('Old sprint retro')).getByTestId('archived-conversation-unarchive'));
+    expect(await screen.findByText('Failed to unarchive the conversation')).toBeInTheDocument();
+    expect(archivedThreadIds().has('61')).toBe(true);
   });
 });

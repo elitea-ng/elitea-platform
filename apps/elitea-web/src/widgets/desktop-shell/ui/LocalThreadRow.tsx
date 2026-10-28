@@ -2,8 +2,9 @@
  * One thread of a folder in the sidebar's "Local work" section: its title
  * (bold while unread), its activity glyph and its cloud badge. An earlier
  * attempt sits under its rewound thread. Its context menu opens it, opens it
- * in the web chat, copies its link and renames it in place
- * (`threadNames.RenameField`: the conversation's own rename).
+ * in the web chat, copies its link, renames it in place
+ * (`threadNames.RenameField`: the conversation's own rename), and archives or
+ * deletes it (`useThreadLifecycle`); the hover "⋯" has the same entries.
  */
 import { useState } from 'react';
 
@@ -20,8 +21,11 @@ import { conversationLink, copyText } from '../lib/conversationLink';
 import type { ShellAction } from '../lib/shellActions';
 import { useLocalThreadActivity } from '../model/localThreadActivity';
 import { useContextMenu, type ContextAction } from '../model/useContextMenu';
+import { lifecycleActions, useThreadLifecycle } from '../model/useThreadLifecycle';
+import { RowMenu } from './ConversationRow';
 import { CHILD_INDENT, ShellRow } from './rows';
 import { ThreadCloudBadge } from './ThreadCloudBadge';
+import { ThreadLifecycleDialog } from './ThreadLifecycleDialog';
 
 type WorkspaceThread = ReturnType<typeof readThreads>[number];
 type Run = (action: ShellAction) => void;
@@ -57,6 +61,11 @@ export function LocalThreadRow({ workspace, thread, uuid, selected, run, status 
   const [renaming, setRenaming] = useState(false);
   const indent = thread.earlierAttemptOf === undefined ? CHILD_INDENT : 2 * CHILD_INDENT;
   const projectId = workspace.project_id;
+  const label = threadLabel(thread);
+  const lifecycle = useThreadLifecycle(
+    { workspaceId: workspace.id, folderId: workspace.parent_id ?? workspace.id, projectId, conversationId: thread.id, title: label },
+    { open: selected, inWorkspace: selected, run },
+  );
   if (renaming && projectId !== null) {
     return (
       <Box sx={{ display: 'flex', paddingY: 0.25, paddingRight: 1, paddingLeft: indent + 1 }}>
@@ -64,17 +73,29 @@ export function LocalThreadRow({ workspace, thread, uuid, selected, run, status 
       </Box>
     );
   }
+  const items = [...threadActions(workspace, thread, run, projectId === null ? undefined : () => setRenaming(true)), { separator: true } as const, ...lifecycleActions(lifecycle)];
   return (
-    <ShellRow
-      testId="shell-thread"
-      onContextMenu={(event) => showMenu(event, threadActions(workspace, thread, run, projectId === null ? undefined : () => setRenaming(true)))}
-      indent={indent}
-      label={threadLabel(thread)}
-      selected={selected}
-      bold={!selected && activityTitleBold(activity)}
-      status={<ConversationActivityGlyph kind={activityGlyph(activity)} />}
-      onClick={() => run({ type: 'open_workspace', workspaceId: workspace.id, conversationId: thread.id })}
-      trailing={uuid === undefined ? undefined : <ThreadCloudBadge status={status} />}
-    />
+    <>
+      <ShellRow
+        testId="shell-thread"
+        onContextMenu={(event) => showMenu(event, items)}
+        indent={indent}
+        label={label}
+        selected={selected}
+        bold={!selected && activityTitleBold(activity)}
+        // The cloud badge sits with the activity glyph; on hover both give way to the "⋯".
+        status={
+          <>
+            <ConversationActivityGlyph kind={activityGlyph(activity)} />
+            {uuid !== undefined && <ThreadCloudBadge status={status} />}
+          </>
+        }
+        onClick={() => run({ type: 'open_workspace', workspaceId: workspace.id, conversationId: thread.id })}
+        trailingOnHover
+        trailingRoom="2rem"
+        trailing={<RowMenu items={items} label={t('desktop.shell.threadMore', 'More for {{name}}', { name: label })} testId="shell-thread-more" />}
+      />
+      <ThreadLifecycleDialog lifecycle={lifecycle} title={label} />
+    </>
   );
 }

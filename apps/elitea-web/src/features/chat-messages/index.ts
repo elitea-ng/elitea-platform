@@ -60,6 +60,7 @@ export type { ChatStreamContext } from './lib/chatStreamReducer';
 export { useChatSteering } from './model/useChatSteering';
 export type { ChatSteeringModel, SteeringOffer, UseChatSteeringParams } from './model/useChatSteering';
 export { applySteeringEvent } from './model/chatSteering.store';
+export { useOwnPendingSteering } from './model/ownPendingSteering';
 // Reload mid-turn: observe the seeded in-flight turn again (#6654).
 export { findReattachableTurn } from './lib/chatStreamReattach';
 export type { ReattachableTurn } from './lib/chatStreamReattach';

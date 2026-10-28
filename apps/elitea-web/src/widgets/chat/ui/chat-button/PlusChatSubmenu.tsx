@@ -6,12 +6,12 @@ import AddIcon from '@mui/icons-material/Add';
 import SearchIcon from '@mui/icons-material/Search';
 import Box from '@mui/material/Box';
 import ButtonBase from '@mui/material/ButtonBase';
-import InputAdornment from '@mui/material/InputAdornment';
-import MenuItem from '@mui/material/MenuItem';
+import InputBase from '@mui/material/InputBase';
 import MenuList from '@mui/material/MenuList';
 import Switch from '@mui/material/Switch';
-import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
+
+import { MenuRow, MenuRowIcon, MenuRowText, menuRowSx } from '@/shared/ui/native-menu';
 
 import type { Theme } from '@mui/material/styles';
 
@@ -54,8 +54,7 @@ function filterSubmenuItems(items: PlusChatSubmenuItem[], searchValue: string): 
 }
 
 /**
- * Label for the single disabled status `MenuItem` shown in place of the
- * items list — while loading, or once the (possibly filtered) list is
+ * The quiet status line shown in place of the items list — while loading, or once the (possibly filtered) list is
  * empty — and `null` when the items list itself should render instead.
  */
 function submenuStatusLabel(
@@ -114,70 +113,45 @@ export const PlusChatSubmenu = memo(
         {/*
           * The header: search, then the "Create …" row (#6629). Both stay at
           * the top while the list below scrolls, so "Create Agent" is one
-          * click away however long the list is. The create row is a plain
-          * button, not a `MenuItem`: it sits outside the `MenuList` below, and
-          * a `MenuItem` throws without that list's context.
+          * click away however long the list is. The search is the project
+          * picker's plain field (no underline), the create row a native menu
+          * row; it is a button, not a `MenuItem`, because it sits outside
+          * the `MenuList` below and a `MenuItem` throws without that list's
+          * context.
           */}
-        <Box
-          sx={{
-            borderBottom: '0.0625rem solid',
-            borderColor: 'border.lines',
-          }}
-          data-testid="plus-submenu-header"
-        >
-          <Box sx={{ padding: '0.25rem 1rem' }}>
-            <TextField
-              inputRef={searchRef}
-              size="small"
-              placeholder={searchPlaceholder}
-              value={searchValue}
-              onChange={onSearchChange}
-              variant="standard"
-              fullWidth
-              sx={{ color: 'text.primary' }}
-              slotProps={{
-                input: {
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <SearchIcon
-                        aria-hidden
-                        data-testid="plus-submenu-search-icon"
-                        sx={submenuIconSx}
-                      />
-                    </InputAdornment>
-                  ),
-                },
-              }}
-            />
-          </Box>
+        <Box data-testid="plus-submenu-header">
+          <InputBase
+            inputRef={searchRef}
+            fullWidth
+            placeholder={searchPlaceholder}
+            value={searchValue}
+            onChange={onSearchChange}
+            inputProps={{ 'aria-label': searchPlaceholder }}
+            startAdornment={<SearchIcon aria-hidden data-testid="plus-submenu-search-icon" sx={submenuIconSx} />}
+            sx={(theme: Theme) => ({
+              ...theme.typography.labelSmall,
+              gap: 1,
+              paddingX: 1.5,
+              paddingY: 1,
+              borderBottom: `1px solid ${theme.vars.palette.divider}`,
+            })}
+          />
           {showCreateNew && (
-            <ButtonBase
-              onClick={onCreateNew}
-              data-testid="plus-submenu-create-new"
-              sx={(theme: Theme) => ({
-                display: 'flex',
-                justifyContent: 'flex-start',
-                width: '100%',
-                padding: '0.5rem 1rem',
-                height: '2.5rem',
-                gap: 0.75,
-                color: theme.vars.palette.text.secondary,
-                '&:hover, &:focus-visible': {
-                  backgroundColor: theme.vars.palette.action.hover,
-                },
-              })}
-            >
-              <AddIcon
-                aria-hidden
-                data-testid="plus-submenu-create-icon"
-                sx={submenuIconSx}
-              />
-              <Typography variant="bodyMedium">{createNewLabel}</Typography>
-            </ButtonBase>
+            <Box sx={{ paddingX: 0.5, paddingTop: 0.5 }}>
+              <ButtonBase
+                onClick={onCreateNew}
+                data-testid="plus-submenu-create-new"
+                sx={(theme: Theme) => ({ ...menuRowSx(theme), width: '100%', justifyContent: 'flex-start' })}
+              >
+                <MenuRowIcon>
+                  <AddIcon aria-hidden data-testid="plus-submenu-create-icon" sx={submenuIconSx} />
+                </MenuRowIcon>
+                <MenuRowText>{createNewLabel}</MenuRowText>
+              </ButtonBase>
+            </Box>
           )}
         </Box>
 
-        {/* Items list */}
         {/*
           * #6629: one fixed height for every submenu, the Modules list's.
           * The lists used to size to their rows, so each category opened at
@@ -190,6 +164,7 @@ export const PlusChatSubmenu = memo(
             overflowY: 'auto',
             display: 'flex',
             flexDirection: 'column',
+            padding: 0.5,
           }}
           onScroll={onScroll}
         >
@@ -199,36 +174,19 @@ export const PlusChatSubmenu = memo(
             * ("MUI: MenuListContext is missing…") when it is absent, so a
             * `MenuItem` rendered under a bare `Popper`/`Paper` crashes the
             * whole chat on the first submenu open. `MenuList` is the
-            * provider (same fix already in place in
-            * `ChatInternalToolsConfigButton.tsx` and
-            * `features/pipelines/ui/FStringAutocompletePopper.tsx`); it also
-            * restores the arrow-key roving focus these rows should have had.
-            * `disablePadding` keeps the previous flush-to-the-edges spacing.
+            * provider; it also gives the rows arrow-key roving focus.
             */}
           <MenuList disablePadding sx={{ outline: 'none' }}>
-            {/* Items */}
             {filteredItems.map((item) => (
-              <MenuItem
+              <MenuRow
                 key={item.key}
                 onClick={handleItemClick(item)}
                 disabled={item.pending === true}
-                // The rows carry no accessible name of their own — the label is
-                // a nested `Typography`, so the accessibility tree reports an
-                // unnamed `menuitem` and a journey can only reach them by text
-                // content. `data-item-key` is the same identity the list is
-                // keyed on, which is what lets a test address ONE row when two
-                // entities share a display name.
+                // `data-item-key` is the same identity the list is keyed on,
+                // which is what lets a test address ONE row when two entities
+                // share a display name.
                 data-testid="plus-submenu-item"
                 data-item-key={item.key}
-                sx={{
-                  padding: '0.5rem 1rem',
-                  height: '2.5rem',
-                  gap: 1,
-                  color: 'text.secondary',
-                  '&:hover': {
-                    backgroundColor: 'action.hover',
-                  },
-                }}
               >
                 {item.checked !== undefined && (
                   <Switch
@@ -239,32 +197,26 @@ export const PlusChatSubmenu = memo(
                     onChange={handleItemClick(item)}
                   />
                 )}
-                <Typography variant="bodyMedium">{item.label}</Typography>
-              </MenuItem>
+                <MenuRowText>{item.label}</MenuRowText>
+              </MenuRow>
             ))}
-
-            {/* Loading / empty / no-results status row */}
-            {statusLabel !== null && (
-              <MenuItem disabled sx={{ padding: '0.5rem 1rem' }}>
-                <Typography variant="bodyMedium" color="text.secondary">
-                  {statusLabel}
-                </Typography>
-              </MenuItem>
-            )}
-
           </MenuList>
+
+          {/* Loading / empty / no-results: quiet text in the list, not a row. */}
+          {statusLabel !== null && (
+            <Typography
+              variant="bodySmall"
+              sx={(theme: Theme) => ({ paddingX: 1, paddingY: 1, color: theme.vars.palette.text.metrics })}
+            >
+              {statusLabel}
+            </Typography>
+          )}
 
           {/* Toggle placeholder (reserved for future use) */}
           {showToggle && (
-            <Box
-              sx={(theme: Theme) => ({
-                padding: '0.5rem 1rem',
-                color: theme.vars.palette.text.disabled,
-                fontSize: theme.typography.bodySmall.fontSize,
-              })}
-            >
+            <Typography variant="bodySmall" sx={(theme: Theme) => ({ paddingX: 1, paddingY: 1, color: theme.vars.palette.text.disabled })}>
               {t('widgets.chat.plusChatSubmenu.togglePlaceholder', 'Toggle options coming soon')}
-            </Box>
+            </Typography>
           )}
         </Box>
       </Box>
@@ -274,9 +226,10 @@ export const PlusChatSubmenu = memo(
 
 PlusChatSubmenu.displayName = 'PlusChatSubmenu';
 
-/** #6629: the search and plus glyphs take the default icon colour (Gray10 dark, Light10 light). */
+/** #6629: the search and plus glyphs at 16px, in the menu icons' quiet colour. */
 const submenuIconSx = (theme: Theme) => ({
   width: '1rem',
   height: '1rem',
-  color: theme.vars.palette.icon.fill.default,
+  flexShrink: 0,
+  color: theme.vars.palette.text.metrics,
 });

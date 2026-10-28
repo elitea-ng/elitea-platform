@@ -209,7 +209,7 @@ export const NewChatInput = forwardRef(function NewChatInput(
       }}
       slotProps={{
         container: { onDrop },
-        field: { placeholder },
+        field: { placeholder, draftKey: content.draftKey },
         mention: mentions,
         highlight: { ranges: content.slashHighlights },
         sendButton: { tooltipOfSendButton: content.tooltipOfSendButton, keepWhileStreaming: state.allowSendWhileStreaming },

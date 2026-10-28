@@ -1,5 +1,6 @@
 /**
- * The composer footer's language-server chip (#1236): which languages' servers
+ * The composer footer's language-server icon (#1236), a 16px mark beside the
+ * context ring whose tooltip and accessible name say which languages' servers
  * give this folder's edits their diagnostics, seeded from `lsp_status` when it
  * mounts and kept current by `lsp://event` (IPC.md "Language servers"); an
  * event older than what a language shows (a smaller `seq`) is dropped. Nothing
@@ -9,9 +10,10 @@
  */
 import { useEffect, useState } from 'react';
 
+import DataObjectOutlinedIcon from '@mui/icons-material/DataObjectOutlined';
 import Box from '@mui/material/Box';
+import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
 
 import { lspStatus, onLspEvent, tauriLspInvoke, tauriLspListen, type LspEvent, type LspLanguage, type LspSnapshot, type LspState } from '@/shared/desktop/lspIpc';
 import { t } from '@/shared/i18n';
@@ -97,11 +99,21 @@ export default function LspChip({ workspaceId }: { workspaceId: string }): React
   if (entries.length === 0) return null;
   const label = entries.map(([language, status]) => `${languageLabel(language)} ${stateLabel(status.state)}`).join(' · ');
   const details = entries.map(([language, status]) => status.message ?? `${languageLabel(language)}: ${stateLabel(status.state)}`).join('\n');
+  const troubled = entries.some(([, status]) => status.state === 'crashed');
   return (
-    <Tooltip title={<Box sx={{ whiteSpace: 'pre-line' }}>{t('workspace.lsp.tooltip', 'Diagnostics after edits, from language servers on this computer:')}{`\n${details}`}</Box>}>
-      <Typography component="span" variant="labelSmall" aria-label={t('workspace.lsp.aria', 'Language servers: {{label}}', { label })} sx={{ color: 'text.secondary', px: 0.75, whiteSpace: 'nowrap' }}>
-        {label}
-      </Typography>
+    <Tooltip title={<Box sx={{ whiteSpace: 'pre-line' }}>{`${label}\n`}{t('workspace.lsp.tooltip', 'Diagnostics after edits, from language servers on this computer:')}{`\n${details}`}</Box>}>
+      <Box
+        component="span"
+        data-testid="lsp-status"
+        sx={(theme: Theme) => ({
+          display: 'inline-flex',
+          flexShrink: 0,
+          color: troubled ? theme.vars.palette.error.main : theme.vars.palette.text.metrics,
+          '& svg': { width: '1rem', height: '1rem' },
+        })}
+      >
+        <DataObjectOutlinedIcon titleAccess={t('workspace.lsp.aria', 'Language servers: {{label}}', { label })} />
+      </Box>
     </Tooltip>
   );
 }

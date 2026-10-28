@@ -2,8 +2,8 @@
  * The live transcript of one turn: streamed text (Markdown, as in chat), each step's reasoning as a
  * folded "Thinking" block (`ThinkingBlock`), tool rows (local or remote, with a collapsible result),
  * each `spawn_agent` call's sub-agents under its row (`SubAgentLanes`), a background process's output under its
- * `run_command` row (`ToolProcessOutput`), a message sent while the turn ran (`SteerMessage`), the status line and
- * the cancel button.
+ * `run_command` row (`ToolProcessOutput`), a message sent while the turn ran (`SteerMessage`) and the status line, quiet
+ * text with a small spinner while the turn runs. Stop is the composer's (its round button, or Esc Esc).
  */
 import { useState, type MouseEvent } from 'react';
 
@@ -25,6 +25,7 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
+import { conversationBubbleSx } from '@/shared/ui/conversation-column';
 
 import { lanesOf } from '../model/subAgentEvents';
 import { isTerminalPhase, type TranscriptItem, type TurnView } from '../model/turnReducer';
@@ -176,8 +177,8 @@ function ToolRow({ item }: { item: ToolItem }): React.JSX.Element {
 
 export interface TurnTranscriptProps {
   view: TurnView;
+  /** The turn runs here: the status line shows a spinner until the turn ends. */
   busy: boolean;
-  onCancel: () => void;
   /** The turn's commit failed after `done`: send it again (absent: the notice offers no Retry). */
   onRetryCommit?: (executionId: string) => Promise<void>;
   /** Right-click on the agent's text (the desktop's native context menu: Copy). */
@@ -259,14 +260,14 @@ function RetryNotice({ view }: { view: TurnView }): React.JSX.Element | null {
   );
 }
 
-export function TurnTranscript({ view, busy, onCancel, onRetryCommit, onTextContextMenu, onRetryTurn, onContinue }: TurnTranscriptProps): React.JSX.Element {
+export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, onRetryTurn, onContinue }: TurnTranscriptProps): React.JSX.Element {
   const showStatus = view.phase !== null;
   return (
     <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       {view.items.map((item) =>
         item.type === 'text' ? (
           // The chat's own renderer; raw HTML from the model is dropped, not rendered.
-          <Box key={item.key} onContextMenu={onTextContextMenu === undefined ? undefined : (event: MouseEvent) => onTextContextMenu(item.text, event)}>
+          <Box key={item.key} sx={conversationBubbleSx(false)} onContextMenu={onTextContextMenu === undefined ? undefined : (event: MouseEvent) => onTextContextMenu(item.text, event)}>
             <Markdown renderHtml={false} data-testid="turn-text">
               {item.text}
             </Markdown>
@@ -299,15 +300,16 @@ export function TurnTranscript({ view, busy, onCancel, onRetryCommit, onTextCont
           </Tooltip>
         )}
         {showStatus && view.phase !== null && (
-          <Typography variant="bodySmall" component="output" data-testid="turn-status">
+          <Typography
+            variant="bodySmall"
+            component="output"
+            data-testid="turn-status"
+            sx={(theme: Theme) => ({ display: 'inline-flex', alignItems: 'center', gap: 0.75, color: theme.vars.palette.text.metrics })}
+          >
+            {busy && !isTerminalPhase(view.phase) && <CircularProgress size="0.75rem" color="inherit" aria-hidden />}
             {phaseLabel(view.phase)}
             {view.message !== undefined && ` — ${view.message}`}
           </Typography>
-        )}
-        {busy && !isTerminalPhase(view.phase) && (
-          <Button size="small" color="error" variant="outlined" onClick={onCancel}>
-            {t('workspace.cancel', 'Cancel')}
-          </Button>
         )}
       </Box>
     </Box>

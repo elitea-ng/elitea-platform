@@ -214,8 +214,15 @@ test.describe('DeepWiki chat', () => {
     const drawer = page.getByTestId('wiki-chat-drawer');
     await expect(drawer).toBeVisible();
 
-    await drawer.getByRole('button', { name: 'Attach wiki pages' }).click();
-    await page.getByText('architecture / router', { exact: true }).click();
+    // The drawer is still settling (the pinned version's manifest arrives
+    // after it opens), and a click in that window can land on a picker that
+    // re-renders without its menu: the person clicks again, so does the test.
+    const option = page.getByText('architecture / router', { exact: true });
+    await expect(async () => {
+      await drawer.getByRole('button', { name: 'Attach wiki pages' }).click();
+      await expect(option).toBeVisible({ timeout: 2_000 });
+    }).toPass({ timeout: 20_000 });
+    await option.click();
     await page.keyboard.press('Escape');
 
     // The chip is the reader's own record of what the next question carries.

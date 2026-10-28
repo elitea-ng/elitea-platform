@@ -99,7 +99,9 @@ async function readStoredApplication(page: Page, pipeline: CreatedPipeline): Pro
 
 /** Open the editor and wait for the configuration form to be on screen and populated. */
 async function openConfigurationForm(page: Page, pipeline: CreatedPipeline): Promise<void> {
-  await page.goto(`${BASE_URL}/app/pipelines/latest/${pipeline.pipelineId}`);
+  // `domcontentloaded`, not `load`: the panel below is the readiness signal. On a webkit leg
+  // `load` once never fired (a straggling subresource) and the goto ate the whole 90 s budget.
+  await page.goto(`${BASE_URL}/app/pipelines/latest/${pipeline.pipelineId}`, { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('edit-pipeline-configuration-panel')).toBeVisible({ timeout: 30_000 });
   // Populated, not merely mounted: the detail fetch resolves after the first
   // render, and typing into a field the page is about to re-seed loses the

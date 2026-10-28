@@ -34,7 +34,46 @@ export const stopIconStyle = { width: '1rem', height: '1rem' };
  * `background.onboardingBody`). It is chosen for those VALUES, which match the
  * baseline pair exactly in both schemes, not for its name.
  */
-export function userInputStyles(isFocused: boolean, isDragOver: boolean, isRecording: boolean) {
+/**
+ * The desktop's composer (`native`): a plain text box the way a native app
+ * draws one — a hairline border, an accent ring on focus, no gradient rim
+ * or glow — with 20px lines (`COMPOSER_LINE_PX`, the resize handle's step)
+ * and a compact footer row.
+ */
+function nativeContainer(theme: Theme, isFocused: boolean, isDragOver: boolean, isRecording: boolean) {
+  const active = isFocused || isRecording;
+  return {
+    display: 'flex',
+    flexDirection: 'column',
+    width: '100%',
+    padding: '.5rem .5rem .375rem .75rem',
+    alignItems: 'flex-start',
+    borderRadius: theme.vars.shape.radiusMd,
+    background: isDragOver ? theme.vars.palette.background.button.drawerMenu.hover : theme.vars.palette.background.card.hover,
+    border: `1px ${isDragOver ? 'dashed' : 'solid'} ${active || isDragOver ? theme.vars.palette.primary.main : theme.vars.palette.divider}`,
+    // The focus ring: the accent border doubled, as a native text view draws it.
+    boxShadow: active ? `0 0 0 1px ${theme.vars.palette.primary.main}` : 'none',
+    boxSizing: 'border-box',
+    gap: '.375rem',
+    transition: 'border-color 120ms, box-shadow 120ms',
+    position: 'relative',
+  };
+}
+
+export function userInputStyles(isFocused: boolean, isDragOver: boolean, isRecording: boolean, native = false) {
+  const base = webUserInputStyles(isFocused, isDragOver, isRecording);
+  if (!native) return base;
+  return {
+    ...base,
+    gradientBorder: (theme: Theme) => ({ width: '100%', padding: '0', borderRadius: theme.vars.shape.radiusMd, background: 'transparent' }),
+    container: (theme: Theme) => nativeContainer(theme, isFocused, isDragOver, isRecording),
+    mirrorDiv: { ...base.mirrorDiv, lineHeight: '1.25rem' },
+    textField: { ...base.textField, lineHeight: '1.25rem' },
+    footer: { ...base.footer, minHeight: '1.75rem' },
+  };
+}
+
+function webUserInputStyles(isFocused: boolean, isDragOver: boolean, isRecording: boolean) {
   const getInputBackground = (theme: Theme): string =>
     isFocused || isRecording
       ? theme.vars.palette.background.card.hover
@@ -150,4 +189,4 @@ export function userInputStyles(isFocused: boolean, isDragOver: boolean, isRecor
   };
 }
 
-export type UserInputStyles = ReturnType<typeof userInputStyles>;
+export type UserInputStyles = ReturnType<typeof webUserInputStyles>;

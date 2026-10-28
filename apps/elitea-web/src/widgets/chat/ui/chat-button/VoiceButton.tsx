@@ -10,6 +10,7 @@ import Tooltip from '@mui/material/Tooltip';
 import { voiceHooks } from '@/features/chat-input';
 import { useVoiceFeatureFlags } from '@/shared/lib/hooks/useVoiceFeatureFlags';
 import { t } from '@/shared/i18n';
+import { ComposerIconButton } from '@/shared/ui/native-composer';
 
 /**
  * Chat button primitive: VoiceButton
@@ -105,6 +106,29 @@ export interface VoiceButtonProps {
   onError?: (message: string) => void;
   inputRef?: RefObject<VoiceButtonInputHandle | null>;
   projectId?: string | undefined;
+  /** The desktop composer's look: one plain mic, pressed while recording; pressing it again stops (`NativeMicButton`). */
+  native?: boolean;
+}
+
+/**
+ * The desktop's mic: one `ComposerIconButton` that starts dictation and,
+ * pressed (accent) while recording, stops it — where the web shows a second
+ * Stop button beside a disabled mic.
+ */
+function NativeMicButton({ ui, isRecording, disabled, onStart, onStop }: {
+  readonly ui: VoiceButtonUiState;
+  readonly isRecording: boolean;
+  readonly disabled: boolean;
+  readonly onStart: () => void;
+  readonly onStop: () => void;
+}) {
+  const label = isRecording ? t('widgets.chat.voiceButton.stopDictationTitle', 'Stop dictation') : ui.tooltipTitle;
+  const blocked = isRecording ? disabled : ui.micDisabled;
+  return (
+    <ComposerIconButton label={label} pressed={isRecording} disabled={blocked} onClick={isRecording ? onStop : onStart}>
+      <MicIcon />
+    </ComposerIconButton>
+  );
 }
 
 
@@ -176,7 +200,7 @@ function deriveVoiceButtonUiState(disabled: boolean, isRecording: boolean, isAdm
 
 export const VoiceButton = memo(
   forwardRef<VoiceButtonHandle, VoiceButtonProps>(
-    ({ disabled = false, onRecordingChange, onError, inputRef, projectId }, ref) => {
+    ({ disabled = false, onRecordingChange, onError, inputRef, projectId, native = false }, ref) => {
       const voiceFlags = useVoiceFeatureFlags();
       // Text before/after the cursor at the moment recording started, plus the
       // finalized voice text accumulated so far this session — same 3-ref
@@ -296,6 +320,9 @@ export const VoiceButton = memo(
       if (!voiceFlags.enabled) return null;
 
       const ui = deriveVoiceButtonUiState(disabled, isRecording, voiceFlags.temporarilyDisabled);
+      if (native) {
+        return <NativeMicButton ui={ui} isRecording={isRecording} disabled={disabled} onStart={handleStartRecording} onStop={handleStopRecording} />;
+      }
 
       return (
         <Box

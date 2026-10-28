@@ -16,7 +16,7 @@
  * Restoring is the host's job (`checkpoint_restore`); this card only asks, and
  * then re-reads `turn_changes` so what it shows is what is on disk now.
  */
-import { useState, type MouseEvent, type ReactNode } from 'react';
+import { useId, useState, type MouseEvent, type ReactNode } from 'react';
 
 import { useMutation, useQuery, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
 
@@ -39,6 +39,7 @@ import { parseUnifiedDiff } from '@/shared/lib/unifiedDiff';
 import { DiffView } from '@/shared/ui/DiffView';
 
 import { describeWorkspaceError } from '../model/describeWorkspaceError';
+import { PanelFileRow, PanelTurnHeader } from './ChangesPanelParts';
 
 /** The host's codes that say why (busy, expired, no checkpoint, not the newest, …) are described; anything else gets the generic `fallback`. */
 const ACTIONABLE = new Set(['workspace_busy', 'turn_expired', 'no_checkpoint', 'undo_not_latest', 'file_changed_since', 'session_replaced', 'already_undone']);
@@ -52,8 +53,12 @@ export interface ChangedFilesCardProps {
   turnId: string;
   /** Bumped to ask for the "Undo turn" confirmation from outside (the composer's `/undo`). */
   undoRequest?: number;
-  /** `panel`: the desktop's changes side panel — no frame, rows stacked for a narrow column. */
+  /** `panel`: the desktop's Changes tab — a collapsible turn header (`label`) over dense one-line rows, actions on hover. */
   variant?: 'card' | 'panel';
+  /** The panel's turn header: the turn's prompt. */
+  label?: string | undefined;
+  /** The panel's turn starts expanded (the newest does; older ones start folded). */
+  defaultExpanded?: boolean | undefined;
   /** Extra per-file actions (the desktop's "Reveal in Finder" / "Open"). */
   fileActions?: ((file: ChangedFile) => ReactNode) | undefined;
   /** Right-click on a file row (the desktop's native context menu). */
@@ -84,25 +89,14 @@ interface FileRowProps {
   busy: boolean;
   /** `undefined`: read-only (a recorded turn). */
   onRevert: (() => void) | undefined;
-  stacked: boolean;
   fileActions: ((file: ChangedFile) => ReactNode) | undefined;
   onContextMenu: ((file: ChangedFile, event: MouseEvent) => void) | undefined;
 }
 
-/** The card's heading; the side panel has its own. */
-function CardTitle({ hidden }: { hidden: boolean }): React.JSX.Element | null {
-  return hidden ? null : <Typography variant="headingSmall">{t('workspace.changes.title', 'Changed files')}</Typography>;
-}
+const PANEL_SX = { display: 'flex', flexDirection: 'column' } as const;
+const FRAME_SX = (theme: Theme) => ({ border: `1px solid ${theme.vars.palette.divider}`, borderRadius: theme.vars.shape.radiusMd, padding: 1.5 });
 
-/** A frame (card) or none (the side panel stacks rows on its own). */
-function frameSx(stacked: boolean) {
-  return (theme: Theme) =>
-    stacked
-      ? { display: 'flex', flexDirection: 'column', gap: 1 }
-      : { border: `1px solid ${theme.vars.palette.divider}`, borderRadius: theme.vars.shape.radiusMd, padding: 1.5 };
-}
-
-function FileRow({ file, busy, onRevert, stacked, fileActions, onContextMenu }: FileRowProps): React.JSX.Element {
+function FileRow({ file, busy, onRevert, fileActions, onContextMenu }: FileRowProps): React.JSX.Element {
   const actions = fileActions === undefined ? null : fileActions(file);
   const [open, setOpen] = useState(false);
   const diffId = `diff-${file.path}`;
@@ -131,22 +125,16 @@ function FileRow({ file, busy, onRevert, stacked, fileActions, onContextMenu }: 
       component="li"
       data-testid="changed-file"
       onContextMenu={onContextMenu === undefined ? undefined : (event: MouseEvent) => onContextMenu(file, event)}
-      sx={(theme: Theme) => ({ listStyle: 'none', paddingY: 0.5, borderBottom: stacked ? `1px solid ${theme.vars.palette.divider}` : undefined })}
+      sx={{ listStyle: 'none', paddingY: 0.5 }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
         <Chip size="small" variant="outlined" label={statusLabel(file.status)} />
-        <Typography variant="labelMedium" sx={{ wordBreak: 'break-all', flex: stacked ? 1 : undefined, minWidth: 0 }}>
+        <Typography variant="labelMedium" sx={{ wordBreak: 'break-all', minWidth: 0 }}>
           {file.path}
         </Typography>
-        {!stacked && counts}
-        {!stacked && buttons}
+        {counts}
+        {buttons}
       </Box>
-      {stacked && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          {counts}
-          {buttons}
-        </Box>
-      )}
       {file.diff !== '' && (
         <Collapse in={open} unmountOnExit>
           <Box id={diffId} sx={{ paddingTop: 1, overflowX: 'auto' }}>
@@ -162,7 +150,7 @@ function FileRow({ file, busy, onRevert, stacked, fileActions, onContextMenu }: 
  * The undo confirmation's open state; a new `request` value opens it once
  * (adjusted during render, not in an effect).
  */
-function useConfirmation(request: number): [boolean, (open: boolean) => void] {
+function useConfirmation(request: number | undefined): [boolean, (open: boolean) => void] {
   const [open, setOpen] = useState(false);
   const [seen, setSeen] = useState(request);
   if (request !== seen) {
@@ -198,7 +186,6 @@ function useChanges(ipc: WorkspaceIpc, turnId: string, recorded: readonly Change
 
 interface SummaryProps {
   files: readonly ChangedFile[];
-  stacked: boolean;
   /** `undefined`: read-only or undone, no undo button. */
   onUndo: (() => void) | undefined;
   /** An older turn: "Restore folder to before this turn" instead of "Undo turn". */
@@ -207,12 +194,12 @@ interface SummaryProps {
   undone: boolean;
 }
 
-function Summary({ files, stacked, onUndo, older, undoDisabled, undone }: SummaryProps): React.JSX.Element {
+function Summary({ files, onUndo, older, undoDisabled, undone }: SummaryProps): React.JSX.Element {
   const added = files.reduce((sum, file) => sum + file.added, 0);
   const removed = files.reduce((sum, file) => sum + file.removed, 0);
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-      <CardTitle hidden={stacked} />
+      <Typography variant="headingSmall">{t('workspace.changes.title', 'Changed files')}</Typography>
       <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
         {files.length === 1
           ? t('workspace.changes.summaryOne', '1 file, +{{added}} -{{removed}}', { added, removed })
@@ -316,10 +303,37 @@ interface RestoreRequest {
   confirmOlder?: boolean;
 }
 
-export function ChangedFilesCard({ ipc, turnId, undoRequest = 0, variant, fileActions, onFileContextMenu, files: recorded }: ChangedFilesCardProps): React.JSX.Element | null {
-  const stacked = variant === 'panel';
+type RowProps = FileRowProps;
+
+/** The rows: the card's, or the panel's dense ones under its folding header. */
+function TurnRows({ panel, expanded, listId, files, rowProps }: { panel: boolean; expanded: boolean; listId: string; files: readonly ChangedFile[]; rowProps: (file: ChangedFile) => RowProps }): React.JSX.Element {
+  if (!panel) {
+    return (
+      <Box component="ul" sx={{ margin: 0, padding: 0 }}>
+        {files.map((file) => (
+          <FileRow key={file.path} {...rowProps(file)} />
+        ))}
+      </Box>
+    );
+  }
+  return (
+    <Collapse in={expanded} unmountOnExit>
+      <Box component="ul" id={listId} sx={{ margin: 0, padding: 0 }}>
+        {files.map((file) => (
+          <PanelFileRow key={file.path} {...rowProps(file)} />
+        ))}
+      </Box>
+    </Collapse>
+  );
+}
+
+export function ChangedFilesCard(props: ChangedFilesCardProps): React.JSX.Element | null {
+  const { ipc, turnId, undoRequest, variant, fileActions, onFileContextMenu, files: recorded, label, defaultExpanded } = props;
+  const panel = variant === 'panel';
   const readOnly = recorded !== undefined;
   const queryClient = useQueryClient();
+  const listId = useId();
+  const [expanded, setExpanded] = useState(defaultExpanded !== false);
   const [confirmingUndo, setConfirmingUndo] = useConfirmation(undoRequest);
   const changes = useChanges(ipc, turnId, recorded);
   const restore = useMutation({
@@ -333,36 +347,32 @@ export function ChangedFilesCard({ ipc, turnId, undoRequest = 0, variant, fileAc
   if (!changes.isError && files.length === 0 && !restore.isSuccess) return null;
   const older = !changes.latest;
   const canRestore = !readOnly && !undone;
+  const summary = {
+    files,
+    onUndo: canRestore ? () => setConfirmingUndo(true) : undefined,
+    older,
+    undoDisabled: restore.isPending || files.length === 0,
+    undone,
+  };
+  const rowProps = (file: ChangedFile): RowProps => ({
+    file,
+    busy: restore.isPending,
+    fileActions,
+    onContextMenu: onFileContextMenu,
+    onRevert: canRestore ? () => restore.mutate({ path: file.path }) : undefined,
+  });
+  const rows = <TurnRows panel={panel} expanded={expanded} listId={listId} files={files} rowProps={rowProps} />;
 
   return (
     <Box
       data-testid="changed-files-card"
       component="section"
       aria-label={t('workspace.changes.title', 'Changed files')}
-      sx={frameSx(stacked)}
+      sx={panel ? PANEL_SX : FRAME_SX}
     >
-      <Summary
-        files={files}
-        stacked={stacked}
-        onUndo={canRestore ? () => setConfirmingUndo(true) : undefined}
-        older={older}
-        undoDisabled={restore.isPending || files.length === 0}
-        undone={undone}
-      />
+      {panel ? <PanelTurnHeader label={label} expanded={expanded} onToggle={() => setExpanded((value) => !value)} listId={listId} {...summary} /> : <Summary {...summary} />}
       <CardAlerts changes={changes} restore={restore} />
-      <Box component="ul" sx={{ margin: 0, padding: 0 }}>
-        {files.map((file) => (
-          <FileRow
-            key={file.path}
-            file={file}
-            busy={restore.isPending}
-            stacked={stacked}
-            fileActions={fileActions}
-            onContextMenu={onFileContextMenu}
-            onRevert={canRestore ? () => restore.mutate({ path: file.path }) : undefined}
-          />
-        ))}
-      </Box>
+      {rows}
       <UndoDialog
         open={confirmingUndo && canRestore}
         older={older}
@@ -371,7 +381,7 @@ export function ChangedFilesCard({ ipc, turnId, undoRequest = 0, variant, fileAc
         onClose={() => setConfirmingUndo(false)}
         onConfirm={() => {
           setConfirmingUndo(false);
-          restore.mutate(older ? { confirmOlder: true } : {});
+          restore.mutate({ confirmOlder: older });
         }}
       />
     </Box>

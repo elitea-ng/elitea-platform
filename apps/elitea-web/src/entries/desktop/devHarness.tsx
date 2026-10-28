@@ -140,7 +140,7 @@ const API: [string, RegExp, unknown][] = [
   ['POST', /\/elitea_core\/messages\/prompt_lib\/42\/c0ffee00-0000-4000-8000-000000000072$/, { task_id: 'exec-1', events_url: '/api/v2/executions/42/exec-1/events', response_message_id: 'e3f5b0f2-8a3c-4d9a-9a1e-0c2b7f5d1a44' }],
   ['GET', /\/elitea_core\/conversations\/prompt_lib\/42/, { rows: [], total: 0 }],
   ['POST', /\/elitea_core\/participants\//, []],
-  ['GET', /\/social\/author/, { id: 3, name: 'Me' }],
+  ['GET', /\/social\/author/, { id: 3, name: 'Alex K', email: 'alex@example.com' }],
   ['GET', /\/auth\/permissions\/prompt_lib\/42$/, ['get', 'create', 'update', 'delete'].map((verb) => ({ name: `models.chat.folders.${verb}`, enabled: true }))],
 ];
 

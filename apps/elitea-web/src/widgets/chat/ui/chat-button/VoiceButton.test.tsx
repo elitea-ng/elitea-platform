@@ -181,3 +181,17 @@ describe('dictation insertion point (#933)', () => {
     expect(withDictationSeparator('')).toBe('');
   });
 });
+
+describe('VoiceButton — the desktop look (native)', () => {
+  it('is one mic that starts dictation and, pressed while recording, stops it', async () => {
+    serveFlags(true, false);
+    render(<Harness><VoiceButton native /></Harness>);
+    const mic = await screen.findByRole('button', { name: 'Start voice input' });
+    expect(mic).toHaveAttribute('aria-pressed', 'false');
+    mic.click();
+    const pressed = await screen.findByRole('button', { name: 'Stop dictation' });
+    expect(pressed).toHaveAttribute('aria-pressed', 'true');
+    // One control: no separate Stop beside it, as the web draws.
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+  });
+});

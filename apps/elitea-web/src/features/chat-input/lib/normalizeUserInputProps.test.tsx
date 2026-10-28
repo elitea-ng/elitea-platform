@@ -5,6 +5,7 @@ import {
   resolveAttachmentsProps,
   resolveCallbacks,
   resolveField,
+  resolveFooterControls,
   resolveHighlightRanges,
   resolveMention,
   resolveTooltip,
@@ -119,5 +120,25 @@ describe('renderAttachmentList', () => {
 
   it('returns null when the slot itself is not provided', () => {
     expect(renderAttachmentList([new File(['x'], 'a.txt')], undefined, undefined, false)).toBeNull();
+  });
+});
+
+describe('resolveFooterControls', () => {
+  const running = { isStreaming: true, isUploading: false };
+  it('shows Send alone while no turn runs', () => {
+    expect(resolveFooterControls({ isStreaming: false, isUploading: false, keepSendWhileStreaming: true, oneButton: true })).toEqual({ showStop: false, showSend: true });
+  });
+  it('shows Stop alone during a turn for a host that does not queue', () => {
+    expect(resolveFooterControls({ ...running, keepSendWhileStreaming: undefined, oneButton: true, hasText: true })).toEqual({ showStop: true, showSend: false });
+  });
+  it('shows both on the web for a host that queues', () => {
+    expect(resolveFooterControls({ ...running, keepSendWhileStreaming: true })).toEqual({ showStop: true, showSend: true });
+  });
+  it('shows one round button on the desktop: Stop while the input is empty, Send once it holds text', () => {
+    expect(resolveFooterControls({ ...running, keepSendWhileStreaming: true, oneButton: true, hasText: false })).toEqual({ showStop: true, showSend: false });
+    expect(resolveFooterControls({ ...running, keepSendWhileStreaming: true, oneButton: true, hasText: true })).toEqual({ showStop: false, showSend: true });
+  });
+  it('keeps Send, not Stop, while a file uploads', () => {
+    expect(resolveFooterControls({ isStreaming: true, isUploading: true, keepSendWhileStreaming: true, oneButton: true })).toEqual({ showStop: false, showSend: true });
   });
 });

@@ -7,7 +7,7 @@ import type { ReactElement } from 'react';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
-import { useChatBoxVoiceFeedback } from './ChatBoxInputSlots';
+import { useChatBoxVoiceFeedback } from './ChatBoxVoiceFeedback';
 
 describe('useChatBoxVoiceFeedback', () => {
   it('issue 932: tracks the dictation recording flag the composer needs', () => {

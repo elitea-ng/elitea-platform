@@ -14,7 +14,7 @@ import type { ClientPolicy } from '@/security/policy';
  *   (only renames and settings do), so `updated_at` alone would drop a
  *   long-lived thread messaged yesterday. A transcript is kept or dropped as
  *   a unit, so an offline thread is never silently missing its middle.
- *   Notifications go by `created_at`.
+ *   Notifications go by `created_at`, composer drafts by their last change.
  * - Size: while the live pages exceed `offline_max_mb`, the least recently
  *   active conversations (server update or last opened here) go first, then the oldest notifications. Freed pages
  *   are returned to the file system (`incremental_vacuum`).
@@ -61,6 +61,8 @@ export async function enforceRetention(
       result.conversations += await deleteConversations(tx, `${SERVER_ACTIVITY} < ?`, [cutoff]);
       const gone = await tx.run('DELETE FROM notifications WHERE COALESCE(created_ms, 0) < ?', [cutoff]);
       result.notifications += gone.changes;
+      // Unsent composer text (src/features/chat/composerDrafts.ts) by its last change.
+      await tx.run('DELETE FROM drafts WHERE updated_ms < ?', [cutoff]);
     });
   }
 

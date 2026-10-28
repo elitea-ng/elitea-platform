@@ -597,10 +597,12 @@ the app moved into the Elitea platform repository. The files and how they are ma
     spring; static dots under reduced motion)
   - the screen-reader announcement is "{Agent} is responding". The text is announced on
     completion, not token by token.
-- **Action row** (under a completed agent message, 36 pt icon buttons with a 44/48 hit
-  area, `textSecondary`):
-  - left group: copy, like, dislike, read aloud
-  - right: regenerate.
+- **Action row** (below the bubble of the latest completed agent message, one compact
+  left-aligned row: 32 pt plain buttons with 16 pt outlined glyphs in `textTertiary`, 44/48
+  hit areas that touch):
+  - copy, like, dislike, read aloud, regenerate, then "…" (copy code, share, fork).
+  - Older answers show it while a screen reader runs; otherwise their actions are the
+    long press.
   - **Like and dislike** are toggles (`accessibilityState.selected`). The selected one is
     filled in `accent`. Dislike opens an optional reason sheet.
   - **Read aloud** uses `expo-speech` (on-device TTS, a new dependency). While speaking,

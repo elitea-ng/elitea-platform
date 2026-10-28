@@ -63,10 +63,11 @@ describe('ApplicationAnswerThinking', () => {
     expect(order.at(-1)).toBe('Summarise');
   });
 
-  it('cannot be collapsed while truly streaming and becomes collapsible once parked', () => {
+  it('stays folded while streaming and after, until the reader opens it', () => {
     const list = actions([coord('c1', 'Plan')]);
     const { rerender } = renderWithTheme(<ApplicationAnswerThinking isStreaming actions={list} />);
     const button = () => screen.getByRole('button', { name: /Thought for/ });
+    expect(button().getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(button());
     expect(button().getAttribute('aria-expanded')).toBe('true');
     rerender(<ApplicationAnswerThinking isStreaming={false} actions={list} />);

@@ -58,6 +58,7 @@ export const homeTab: NavTab = {
         { kind: 'page', slug: 'menus/settings/memory', title: 'Memory' },
         { kind: 'page', slug: 'menus/settings/personal-tokens', title: 'Personal tokens' },
         { kind: 'page', slug: 'menus/settings/notifications', title: 'Notifications' },
+        { kind: 'page', slug: 'menus/settings/desktop-account-menu', title: 'Desktop account menu' },
       ],
     },
     {

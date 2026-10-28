@@ -1,6 +1,9 @@
 /**
  * Runs a `ShellAction`. The single dispatcher behind the shortcuts, the
  * palette, the sidebar and the host's `app://command`.
+ *
+ * A folder opened with no project yet joins `projectId`, the project the
+ * sidebar is on, so it is listed where it was opened (`LocalWorkSection.tsx`).
  */
 import { useCallback } from 'react';
 
@@ -8,6 +11,7 @@ import { useNavigate, useRouter } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { describeWorkspaceError, lastLocation, useWorkspaceIpc } from '@/features/workspace';
+import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
 import type { ShellAction } from '../lib/shellActions';
@@ -15,7 +19,7 @@ import { useDesktopLayout } from './desktopLayout.store';
 
 export const WORKSPACE_LIST_KEY = ['workspace', 'list'] as const;
 
-export function useShellActions(): (action: ShellAction) => void {
+export function useShellActions(projectId?: string): (action: ShellAction) => void {
   const navigate = useNavigate();
   const router = useRouter();
   const ipc = useWorkspaceIpc();
@@ -35,6 +39,16 @@ export function useShellActions(): (action: ShellAction) => void {
   const refreshWorkspaces = useCallback(
     (): Promise<void> => queryClient.invalidateQueries({ queryKey: WORKSPACE_LIST_KEY }),
     [queryClient],
+  );
+
+  /** A folder with no project joins the sidebar's; one that has a project keeps it. */
+  const adopt = useCallback(
+    async (workspace: Pick<Workspace, 'id' | 'project_id'> | undefined): Promise<void> => {
+      const target = Number(projectId);
+      if (workspace === undefined || workspace.project_id !== null || ipc === undefined || projectId === undefined || !Number.isInteger(target)) return;
+      await ipc.bindProject(workspace.id, target).catch(() => undefined);
+    },
+    [ipc, projectId],
   );
 
   return useCallback(
@@ -77,13 +91,18 @@ export function useShellActions(): (action: ShellAction) => void {
           ipc?.open().then(
             async (workspace) => {
               if (workspace === null) return;
+              await adopt(workspace);
               await refreshWorkspaces();
               openWorkspace(workspace.id);
             },
             (error: unknown) => layout.setNotice(describeWorkspaceError(error)),
           );
         },
-        workspaces_changed: (a) => void refreshWorkspaces().then(() => openWorkspace(a.workspaceId)),
+        workspaces_changed: (a) =>
+          void refreshWorkspaces()
+            .then(() => adopt(queryClient.getQueryData<Workspace[]>(WORKSPACE_LIST_KEY)?.find((workspace) => workspace.id === a.workspaceId)))
+            .then(refreshWorkspaces)
+            .then(() => openWorkspace(a.workspaceId)),
         notice: (a) => layout.setNotice(a.message === '' ? t('desktop.shell.openFolderFailed', 'That folder could not be opened.') : a.message),
         // A thread on screen takes dropped files as image attachments (the host refuses what is not an image, and says why).
         files_dropped: (a) => {
@@ -94,6 +113,6 @@ export function useShellActions(): (action: ShellAction) => void {
       };
       (handlers[action.type] as (a: ShellAction) => void)(action);
     },
-    [ipc, navigate, openWorkspace, refreshWorkspaces, router],
+    [adopt, ipc, navigate, openWorkspace, queryClient, refreshWorkspaces, router],
   );
 }

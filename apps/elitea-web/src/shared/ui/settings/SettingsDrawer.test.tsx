@@ -47,7 +47,7 @@ const EVERY_TAB_ID = [
  * `SettingsDrawer` reads `useLocation`, so it needs a router. The drawer is
  * mounted at /settings/secrets, which makes "Secrets" the active tab.
  */
-function renderDrawer(onItemClick = vi.fn()) {
+function renderDrawer(onItemClick = vi.fn(), variant: 'web' | 'native' = 'web') {
   const rootRoute = createRootRoute();
   const settingsRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -56,6 +56,7 @@ function renderDrawer(onItemClick = vi.fn()) {
       <SettingsDrawer
         sections={SECTIONS}
         onItemClick={onItemClick}
+        variant={variant}
       />
     ),
   });
@@ -142,5 +143,15 @@ describe('SettingsDrawer', () => {
     await waitFor(() => {
       expect(onItemClick).toHaveBeenCalledWith('tokens');
     });
+  });
+
+  it('in the desktop look, names sections as captions and keeps the rows working', async () => {
+    const user = userEvent.setup();
+    const { onItemClick } = renderDrawer(vi.fn(), 'native');
+    expect(await screen.findByText('Project')).toBeInTheDocument();
+    expect(screen.getByText('Personal')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Secrets' })).toHaveAttribute('aria-current', 'page');
+    await user.click(screen.getByRole('button', { name: 'Profile' }));
+    expect(onItemClick).toHaveBeenCalledWith('profile');
   });
 });

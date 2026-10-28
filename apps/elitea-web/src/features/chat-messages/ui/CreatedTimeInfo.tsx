@@ -45,7 +45,7 @@ function computeDisplayTime(time: string): string {
 }
 
 /**
- * `CreatedTimeInfo` — the right-hand end of a message's caption line.
+ * `CreatedTimeInfo` — the muted time at the end of a message's action row (`MessageMeta`).
  * Recomputed every 30s while mounted (baseline: the same `setInterval`), so
  * "less than a minute ago" advances without a remount.
  *

@@ -122,6 +122,24 @@ describe('PlusChatSubmenu header and size (#6629)', () => {
   });
 });
 
+describe('PlusChatSubmenu native look', () => {
+  it('draws the search as a plain field and the empty state as quiet text, not a row', () => {
+    render(
+      <Harness>
+        <PlusChatSubmenu items={[]} showCreateNew onCreateNew={vi.fn()} createNewLabel="Create Toolkit" emptyMessage="Nothing available" />
+      </Harness>,
+    );
+    const search = screen.getByRole('textbox', { name: 'Search...' });
+    // A bare field, not a standard `TextField`: no form-control wrapper, no underline.
+    expect(search.closest('[class*="FormControl"]')).toBeNull();
+    expect(screen.queryAllByRole('menuitem')).toHaveLength(0);
+    const empty = screen.getByText('Nothing available');
+    expect(screen.getByTestId('plus-submenu-list')).toContainElement(empty);
+    expect(empty.closest('[role="menuitem"]')).toBeNull();
+    expect(screen.getByTestId('plus-submenu-create-new')).toHaveTextContent('Create Toolkit');
+  });
+});
+
 describe('UsersParticipantDropdown footer renders outside a Menu', () => {
   it('renders the "All users" row under a bare Paper', async () => {
     const onSelectAll = vi.fn();

@@ -40,32 +40,49 @@ function traceStepName(step: MessageTraceStep): string {
   return step.model_name ?? step.kind;
 }
 
+function StepDetail({ reference, step }: { readonly reference: TraceReference; readonly step: MessageTraceStep }): ReactNode {
+  const detail = useGetMessageTrace(reference.projectId, step.id, { message_group_id: reference.messageGroupId });
+  const data = detail.data?.data as MessageTraceStepDetail | undefined;
+  return <Box>
+    {detail.isFetching && <Typography component="output">{t('common.loading', 'Loading...')}</Typography>}
+    {detail.isError && <Box role="alert">{t('features.chatMessages.traceReadFailed', 'Execution details could not be loaded.')}<Button onClick={() => { void detail.refetch(); }}>{t('common.retry', 'Retry')}</Button></Box>}
+    {data && <TraceDetail detail={data} />}
+    {data?.id === step.id && data.message_group_id === reference.messageGroupId && <CodeDebugTraceArtifact
+      attrs={data.attrs}
+      projectId={reference.projectId}
+      scopeKey={JSON.stringify([reference.conversationId, reference.messageGroupId, data.id])}
+    />}
+  </Box>;
+}
+
+function stepTitle(step: MessageTraceStep): string {
+  return [step.parent_agent_name, traceStepName(step), step.is_error ? t('common.error', 'Error') : undefined].filter(Boolean).join(' · ');
+}
+
+/**
+ * The steps of one answer. A single step is shown as it is, under its name —
+ * a second fold inside "Execution details" would only hide the one thing there
+ * is; several steps each fold, their detail fetched when opened.
+ */
 function TracePanel({ reference }: { readonly reference: TraceReference }): ReactNode {
   const [selected, setSelected] = useState<MessageTraceStep>();
   const summary = useListMessageTraces(reference.projectId, Number(reference.conversationId), { message_group_ids: String(reference.messageGroupId) }, { query: { enabled: false } });
   const listing = summary.data?.data as { rows?: MessageTraceStep[] } | undefined;
   const steps = listing?.rows ?? reference.steps;
-  const detail = useGetMessageTrace(reference.projectId, selected?.id ?? 0, { message_group_id: reference.messageGroupId }, { query: { enabled: selected !== undefined } });
-  const data = detail.data?.data as MessageTraceStepDetail | undefined;
+  const only = steps.length === 1 ? steps[0] : undefined;
   return <Box>
     {reference.failed && !summary.isSuccess && <Box role="alert">
       {t('features.chatMessages.traceReadFailed', 'Execution details could not be loaded.')}
       <Button onClick={() => { void summary.refetch(); }} disabled={summary.isFetching}>{t('common.retry', 'Retry')}</Button>
     </Box>}
-    {steps.map(step => <BasicAccordion key={step.id} uppercase={false} expanded={selected?.id === step.id}
+    {only !== undefined ? <Box data-testid="trace-single-step">
+      <Typography variant="labelSmall" component="div" sx={{ color: 'text.secondary', mb: 0.5 }}>{stepTitle(only)}</Typography>
+      <StepDetail reference={reference} step={only} />
+    </Box> : steps.map(step => <BasicAccordion key={step.id} uppercase={false} expanded={selected?.id === step.id}
       onChange={(_event, expanded) => { setSelected(expanded ? step : undefined); }}
       items={[{
-        title: [step.parent_agent_name, traceStepName(step), step.is_error ? t('common.error', 'Error') : undefined].filter(Boolean).join(' · '),
-        content: selected?.id === step.id ? <Box>
-          {detail.isFetching && <Typography component="output">{t('common.loading', 'Loading...')}</Typography>}
-          {detail.isError && <Box role="alert">{t('features.chatMessages.traceReadFailed', 'Execution details could not be loaded.')}<Button onClick={() => { void detail.refetch(); }}>{t('common.retry', 'Retry')}</Button></Box>}
-          {data && <TraceDetail detail={data} />}
-          {data?.id === selected?.id && data?.message_group_id === reference.messageGroupId && <CodeDebugTraceArtifact
-            attrs={data.attrs}
-            projectId={reference.projectId}
-            scopeKey={JSON.stringify([reference.conversationId, reference.messageGroupId, data.id])}
-          />}
-        </Box> : null,
+        title: stepTitle(step),
+        content: selected?.id === step.id ? <StepDetail reference={reference} step={step} /> : null,
       }]} />)}
   </Box>;
 }
@@ -73,8 +90,14 @@ function TracePanel({ reference }: { readonly reference: TraceReference }): Reac
 export function PersistedMessageTrace({ value }: { readonly value: unknown }): ReactNode {
   const reference = readReference(value);
   if (!reference || (!reference.failed && reference.steps.length === 0)) return null;
-  return <BasicAccordion uppercase={false} defaultExpanded={false} items={[{
+  return <PersistedTraceFold reference={reference} />;
+}
+
+/** "Execution details", folded; its steps mount (and fetch) only once it is opened. */
+function PersistedTraceFold({ reference }: { readonly reference: TraceReference }): ReactNode {
+  const [open, setOpen] = useState(false);
+  return <BasicAccordion uppercase={false} expanded={open} onChange={(_event, expanded) => { setOpen(expanded); }} items={[{
     title: t('features.chatMessages.executionDetails', 'Execution details'),
-    content: <TracePanel reference={reference} />,
+    content: open ? <TracePanel reference={reference} /> : null,
   }]} />;
 }

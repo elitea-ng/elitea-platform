@@ -1,0 +1,142 @@
+---
+title: "Desktop account menu"
+description: "The account button at the foot of the desktop app's sidebar: settings, usage, credentials, catalog, appearance, language, help, release notes, troubleshooting, sign-out, and bug reports."
+---
+
+In the Elitea desktop app, the foot of the left sidebar shows who you are signed in as and which organization you are connected to: your picture, your name, and the deployment's name (for example **Alex K · Acme Enterprise**). Select it to open the account menu. The bug button beside it files a bug report.
+
+## What the menu holds
+
+| Item | What it does |
+|------|--------------|
+| *Your email* | The account you are signed in with. It is a label, not a link. |
+| **Settings** (⌘, / Ctrl+,) | Opens Settings in a window over the app. Close it with the × button, Escape or a click outside it to return to the page you were on. |
+| **Usage** | Opens Settings › Usage. It appears only when usage reporting is enabled for you. |
+| **Credentials** | Opens the Credentials page. It appears only if you can see credentials. |
+| **Catalog** | Opens the Elitea Catalog. |
+| **Appearance** | Choose **System**, **Light** or **Dark**. The choice is saved to your account, so the web app follows it too. |
+| **Language** | Choose the app's language (see [Language](#language)). The window reloads in the new language: your session, folders and threads stay, but a message you have not sent yet is lost. |
+| **Get help** | Opens the Help Center ([Help and support](/menus/help-and-support)). |
+| **What's new** | Opens the release notes of the version you are running, on GitHub, in your browser. The version number is shown beside it. A nightly build opens the releases list at its entry. |
+| **Troubleshoot** | Opens Settings › Troubleshoot, where you can run the app's diagnostics. |
+| **Sign out** | Signs this computer out of the deployment and returns to the connect screen. |
+
+**Appearance** and **Language** open their choices beside the menu when you point at them, as menus in your operating system do; a click, or the right arrow key, opens them too. The left arrow key or Esc goes back. Every submenu in the app works this way, for example the agent's **Version** and the **Step limit**.
+
+Credentials, Catalog and the Help Center used to be rows in the sidebar. They moved to this menu so the list holds only the places you work in. The command palette (⌘K / Ctrl+K) still finds all of them.
+
+## The sidebar and its project
+
+The top of the sidebar shows the **project** you are working in, under the search box. Everything below it belongs to that project. Select it to switch to another project: type part of a project's name to narrow the list, then use the arrow keys and Return, or click one. The list loads more projects as you scroll, so it stays quick when you belong to hundreds of projects.
+
+If a thread from a folder in the current project is open when you switch, the app closes it and shows the start screen of the new project.
+
+- **Local work** lists the folders you opened in this project. Select the **Local work** heading to open the page with all your folders. A folder you open joins the selected project. A folder that has no project yet, for example one opened before projects were assigned, shows in every project marked **No project** until you give it one.
+- To move a folder to another project, use its **⋯** menu (**Move to project**) or its right-click menu (**Project**). The app asks you to confirm first. After the move, the folder shows under the other project, and its next threads use that project's models, credentials and budget. The files and past threads stay on your computer.
+- Select the **Chats** heading to start a new chat, as **+** beside it does. **Chats** lists your chat folders and the date groups the app makes, such as **Today** and **Previous 7 days**. Each shows a folder icon that opens and closes. **Archived** opens your archived chats.
+- **Applications** and **Artifacts** follow.
+- **Workshop** groups Agents, Pipelines, Skills, Toolkits & Indexes and MCPs. Select it to open or close the group; the app remembers your choice. It is closed until you first open it, and it opens by itself when you go to one of its pages, for example from the command palette or a link.
+
+## The message box
+
+Chats and Local work threads share one message box. Drag its top edge to make it taller or shorter (or focus the edge and use the arrow keys; double-click resets it). What you type and do not send stays with that chat or thread until you come back.
+
+In a Local work thread the row under the text holds, from the left:
+
+- **+** to attach images (you can also paste or drop them).
+- The mode: **Act** (edits with approvals), **Plan** (plans, changes nothing) or **Bypass** (no approvals; the app warns you the first time).
+- The agent and its version (point at **Version** to see the versions), and the model.
+- **⋯** with **Step limit**: how many steps a turn may take. Point at it to pick the default, a preset, **Unlimited** or a number of your own.
+- In a new thread of a git folder, **Work in**: **This folder**, or **New worktree** (see [Work in a worktree](#work-in-a-worktree)).
+- **Send to cloud**, or **Take back** for a thread running in the cloud (see [Send a thread to the cloud](#send-a-thread-to-the-cloud)), the language-server status, the index icon, and a ring showing how much of the model's context the thread uses. Select the ring to open the **Context** tab.
+- **Send**, which becomes **Stop** while a turn runs.
+
+The index icon shows the state of the folder's code index by its colour: grey when it is ready or off, the accent colour while it builds, orange when it is out of date and red after an error. Point at it to read the state, for example *Index ready · 257.3K entities*; select it to open the **Index** tab on the right, where the index settings are.
+
+While a turn runs, in a chat or a thread, that round button is **Stop** until you type, then **Send** again: what you send waits in the **Queued** list at the top of the message box. Each queued message has **Send now** (stop the turn and send this message first), **Edit** (take it back into the message box) and **Remove**. Press **Esc** twice quickly to stop the turn from anywhere on the page; a single Esc still just closes a menu or dialog.
+
+### Send a thread to the cloud
+
+A thread that may move to the cloud shows **Send to cloud** in the row under the text. Select it to review what is sent and send the thread. The small **⌄** beside it opens **Handoff settings…**, where you choose what stays on your computer.
+
+While the thread runs in the cloud, the same place shows **Take back**: select it to review the cloud's changes and apply them to your folder. Its **⌄** holds **Erase cloud copy…**, **Open in chat** and **Handoff settings…**. While the thread is on its way back it shows **Returning** and cannot be selected.
+
+When a thread cannot move (your deployment or project has the cloud executor off, or the thread has no messages yet), nothing is shown: the thread runs on your computer.
+
+### The Changes tab
+
+The **Changes** tab on the right lists what each turn changed, newest first. Each turn is one line: the start of your message, the number of files and the lines added and removed. Select it to fold or unfold the turn; the newest turn starts unfolded. Point at a turn for **Undo** (or **Restore folder** after an undo).
+
+Each file is one row: its name, its folder in grey, the lines added and removed and a coloured letter, **M** modified, **A** added, **D** deleted or **R** renamed. Select a row to open its diff below it. Point at the row, or move to it with the keyboard, for **Reveal in Finder**, **Open** and **Revert**.
+
+### The thread's title
+
+The thread's title at the top (folder › thread) opens a card with the folder's path, **Reveal in Finder** and **Copy Path**. To move the folder to another project, use the folder's menus in the sidebar.
+
+## Language
+
+The desktop app is available in:
+
+| Language | | Language | |
+|---|---|---|---|
+| English | `en` | Русский | `ru` |
+| Deutsch | `de` | Українська | `uk` |
+| Español | `es` | 日本語 | `ja` |
+| Français | `fr` | 한국어 | `ko` |
+| Français (Canada) | `fr-CA` | 简体中文 | `zh-CN` |
+| Italiano | `it` | 繁體中文 | `zh-TW` |
+| Nederlands | `nl` | العربية | `ar` |
+| Polski | `pl` | עברית | `he` |
+| Português (Brasil) | `pt-BR` | فارسی | `fa` |
+| | | اردو | `ur` |
+
+Until you choose one, the app follows your operating system's preferred languages and picks the closest one it has. For example, Canadian French opens in Français (Canada), Belgian French in Français, and Hong Kong Chinese in 繁體中文. If none of your system's languages is available, the app opens in English.
+
+Arabic, Hebrew, Persian and Urdu are written right to left. In those languages the whole window is mirrored: the sidebar is on the right, and arrows and disclosure chevrons point the other way. File names, paths, code and product names keep their own direction.
+
+The app's menu bar (File, Edit, View…) and the menu-bar icon's menu follow the same language.
+
+Your choice applies to this computer only. Signing out clears it, so the next person to sign in on a shared computer gets their system's language.
+
+Strings that have no translation yet are shown in English. Names of products and technical terms, such as MCP, DeepWiki or GitHub, are not translated. The translations are new, so if a label reads wrong, report it with the bug button.
+
+## Work in a worktree
+
+A worktree is a separate copy of a git folder on its own branch. The agent works there while you keep using the folder, or while another thread works in it, so several tasks run side by side without touching each other's files.
+
+A new thread in a git folder starts with **Work in** set to **New worktree**. Write your message and send it: the app makes the worktree on a new `elitea/…` branch from the folder's current commit, opens the worktree's thread and sends the message there. To work in the folder itself, set **Work in** to **This folder** before you send.
+
+The app remembers your choice for each folder: after you pick **This folder**, the folder's next new thread starts on **This folder** too, until you pick **New worktree** again. **New thread in a worktree** in the folder's **⋯** or right-click menu always starts on **New worktree**.
+
+A worktree shows under its folder in the sidebar, as one of the folder's threads with a branch icon, the thread's title, and how many commits it is ahead and how many files are not committed. Hover over the name to see the branch and where the worktree is. Hover actions:
+
+- **Diff** shows what the task changed.
+- **Merge back** previews the merge into the folder, then applies it as uncommitted changes. You can undo it.
+- **Remove** deletes the worktree; the app asks first when it has uncommitted work. Its branch stays when it has commits.
+
+A worktree is never listed as a folder of its own, on the **Local work** page or in the command palette.
+
+## Archive and delete threads
+
+Each thread under **Local work** has **Archive** and **Delete…** in its **⋯** menu (hover over the thread) and in its right-click menu. They work the same for a thread that runs on this computer and one you sent to the cloud.
+
+- **Archive** archives the thread's conversation, as archiving a chat does. The thread leaves **Local work** and shows under **Archived** in the **Chats** section. Unarchive it there and it shows under its folder again.
+- **Delete…** asks first, then deletes the conversation and the thread's history on this computer. It can't be undone.
+
+When the thread works in a worktree, archiving or deleting it also removes the worktree. The app asks first, with **Also remove its worktree** checked; clear it to keep the worktree. The worktree's `elitea/…` branch stays when it has commits. When the worktree has changes that were never committed, the app asks again: **Remove anyway** deletes those changes, **Keep the worktree** leaves it in the sidebar.
+
+Unarchiving a thread whose worktree was removed restores its conversation, but the thread does not show under **Local work** again: its worktree is gone.
+
+If the thread you archive or delete is open, the app opens a new thread in its folder.
+
+## When the app cannot reach your deployment
+
+At launch, or after your computer wakes, the network may not be up yet. The app keeps asking your deployment who you are, after 1, 2, 4 and 8 seconds and then every 15 seconds, and opens your work as soon as it answers. You don't need to restart it. If it stays on "Loading…", check your connection or VPN.
+
+## Report a bug
+
+The bug button opens a new issue in the public [elitea-ng/elitea-platform](https://github.com/elitea-ng/elitea-platform/issues) repository in your browser. The issue is prefilled with headings for what happened, what you expected and the steps to reproduce it, plus your app version, platform and language. Review it before you submit it. You need a GitHub account.
+
+<Note>
+The repository is public. The report never includes your deployment's address, your organization or your identity, and you should not add them, or any tokens or customer data. If logs would help, Settings › Troubleshoot shows them.
+</Note>

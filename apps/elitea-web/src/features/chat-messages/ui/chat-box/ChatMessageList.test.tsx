@@ -28,6 +28,12 @@ import { server } from '../../../../test/setup';
 import type { MessageGroupWire, MessageParticipantWire } from '@/entities/message';
 
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
+
+/** A reply's Delete is a row in its ⋯ menu (`ApplicationAnswerActions`): open every reply's menu, then look. */
+function openReplyMenusAndFind(testId: string): HTMLElement | null {
+  for (const more of screen.queryAllByTestId('answer-more-actions')) fireEvent.click(more);
+  return screen.queryByTestId(testId);
+}
 import { convertMessagesToChatHistory } from '../../lib/convertMessagesToChatHistory';
 import { ChatMessageList } from './ChatMessageList';
 
@@ -211,7 +217,7 @@ describe('ChatMessageList question-edit eligibility', () => {
     expect(screen.getByLabelText(EDIT_LABEL)).toBeInTheDocument();
     // The AI answer's delete goes through `canDeleteAiMessage`, i.e. the
     // question's author — the same hatch, on the other control.
-    expect(screen.getByLabelText('Delete')).toBeInTheDocument();
+    expect(openReplyMenusAndFind('answer-delete')).not.toBeNull();
   });
 
   it('withholds edit AND delete on a question that states NO author, when the reader IS known', () => {
@@ -222,7 +228,32 @@ describe('ChatMessageList question-edit eligibility', () => {
     expect(chatHistory[0]?.userId).toBeUndefined();
     renderList(chatHistory, '6');
     expect(screen.queryByLabelText(EDIT_LABEL)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Delete')).not.toBeInTheDocument();
+    expect(openReplyMenusAndFind('answer-delete')).toBeNull();
+  });
+});
+
+/**
+ * Which side a question is drawn on — the reader's own on the right, anyone
+ * else's on the left under their name. Decided by the same author ids as the
+ * edit gate, but layout is not a permission: an unstated side draws as the
+ * reader's own rather than as a stranger's.
+ */
+describe('ChatMessageList question side', () => {
+  it("draws the reader's own question on the right with no name", () => {
+    renderList(buildPersistedTranscript(6), '6');
+    expect(screen.getByTestId('user-message')).toHaveStyle({ alignItems: 'flex-end' });
+    expect(screen.queryByTestId('chat-message-author')).toBeNull();
+  });
+
+  it("draws someone else's question on the left under their name", () => {
+    renderList(buildPersistedTranscript(7), '6');
+    expect(screen.getByTestId('user-message')).toHaveStyle({ alignItems: 'flex-start' });
+    expect(screen.getByTestId('chat-message-author')).toHaveTextContent('Reader');
+  });
+
+  it('draws an unattributed question, or one read before the reader resolves, as the reader\'s own', () => {
+    renderList(buildPersistedTranscript(undefined), '6');
+    expect(screen.getByTestId('user-message')).toHaveStyle({ alignItems: 'flex-end' });
   });
 });
 
@@ -422,6 +453,8 @@ describe('ChatMessageList persisted assistant attribution', () => {
       </QueryClientProvider>
     );
     const view = render(buildList('Default model'));
+    // Two assistants answer here, so each reply is captioned with its own.
+    expect(screen.getAllByTestId('chat-message-author')).toHaveLength(2);
     expect(screen.getByText('Pipeline Alpha')).toBeVisible();
     expect(screen.getByText('Pipeline Beta')).toBeVisible();
     expect(screen.queryByText('Default model')).toBeNull();

@@ -79,8 +79,9 @@ export interface ThemeScope {
  *  - `breakpoints` is set (see above);
  *  - `defaultColorScheme` is set.
  */
-export function buildEliteaTheme(pack: BrandPack, scope?: ThemeScope) {
+export function buildEliteaTheme(pack: BrandPack, scope?: ThemeScope, direction: 'ltr' | 'rtl' = 'ltr') {
   return createTheme({
+    direction,
     cssVariables:
       scope === undefined
         ? {

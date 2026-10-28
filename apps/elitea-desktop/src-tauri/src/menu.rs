@@ -15,29 +15,26 @@ use tauri::{AppHandle, Manager as _, Wry};
 
 use crate::app_events;
 use crate::commands::AppState;
+use crate::labels::text;
 
-/// Menu items forwarded to the UI unchanged: (menu id = command id, label,
-/// accelerator).
-pub const FORWARDED: &[(&str, &str, Option<&str>)] = &[
-    ("new_thread", "New Thread", Some("CmdOrCtrl+N")),
-    ("settings", "Settings…", Some("CmdOrCtrl+,")),
-    ("command_palette", "Command Palette…", Some("CmdOrCtrl+K")),
-    ("toggle_sidebar", "Toggle Sidebar", Some("CmdOrCtrl+\\")),
-    (
-        "toggle_changes",
-        "Toggle Inspector",
-        Some("CmdOrCtrl+Alt+\\"),
-    ),
-    ("back", "Back", Some("CmdOrCtrl+[")),
-    ("forward", "Forward", Some("CmdOrCtrl+]")),
+/// Menu items forwarded to the UI unchanged: (menu id = command id = label
+/// key in `labels.rs`, accelerator).
+pub const FORWARDED: &[(&str, Option<&str>)] = &[
+    ("new_thread", Some("CmdOrCtrl+N")),
+    ("settings", Some("CmdOrCtrl+,")),
+    ("command_palette", Some("CmdOrCtrl+K")),
+    ("toggle_sidebar", Some("CmdOrCtrl+\\")),
+    ("toggle_changes", Some("CmdOrCtrl+Alt+\\")),
+    ("back", Some("CmdOrCtrl+[")),
+    ("forward", Some("CmdOrCtrl+]")),
     // Thread menu: acts on the thread on screen (the UI no-ops without one).
-    ("send_to_cloud", "Send to Cloud…", Some("CmdOrCtrl+Shift+U")),
-    ("open_in_chat", "Open in Chat", None),
-    ("toggle_plan", "Plan Mode", Some("CmdOrCtrl+Shift+P")),
-    ("choose_agent", "Choose Agent…", Some("CmdOrCtrl+L")),
+    ("send_to_cloud", Some("CmdOrCtrl+Shift+U")),
+    ("open_in_chat", None),
+    ("toggle_plan", Some("CmdOrCtrl+Shift+P")),
+    ("choose_agent", Some("CmdOrCtrl+L")),
     // Folder menu: the folder of the thread on screen.
-    ("index_settings", "Index Settings…", None),
-    ("handoff_settings", "Handoff Settings…", None),
+    ("index_settings", None),
+    ("handoff_settings", None),
 ];
 
 const OPEN_FOLDER: &str = "open_folder";
@@ -71,15 +68,15 @@ pub fn zoom_step(current: f64, up: bool) -> f64 {
 }
 
 fn forwarded(app: &AppHandle, id: &str) -> tauri::Result<MenuItem<Wry>> {
-    let (id, label, accelerator) = FORWARDED
+    let (id, accelerator) = FORWARDED
         .iter()
-        .find(|(known, _, _)| *known == id)
+        .find(|(known, _)| *known == id)
         .copied()
-        .unwrap_or((id, id, None));
-    MenuItem::with_id(app, id, label, true, accelerator)
+        .unwrap_or((id, None));
+    MenuItem::with_id(app, id, text(id), true, accelerator)
 }
 
-/// The whole menu bar.
+/// The whole menu bar, labelled in the app's language (`labels.rs`).
 ///
 /// # Errors
 ///
@@ -87,7 +84,7 @@ fn forwarded(app: &AppHandle, id: &str) -> tauri::Result<MenuItem<Wry>> {
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let about = PredefinedMenuItem::about(
         app,
-        Some("About Elitea"),
+        Some(&text("about")),
         Some(
             AboutMetadataBuilder::new()
                 .name(Some("Elitea"))
@@ -97,15 +94,20 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     )?;
     let separator = || PredefinedMenuItem::separator(app);
 
-    let open_folder =
-        MenuItem::with_id(app, OPEN_FOLDER, "Open Folder…", true, Some("CmdOrCtrl+O"))?;
-    let mut file = SubmenuBuilder::new(app, "File")
+    let open_folder = MenuItem::with_id(
+        app,
+        OPEN_FOLDER,
+        text("open_folder"),
+        true,
+        Some("CmdOrCtrl+O"),
+    )?;
+    let mut file = SubmenuBuilder::new(app, text("file"))
         .item(&forwarded(app, "new_thread")?)
         .item(&open_folder)
         .item(&separator()?)
         .item(&PredefinedMenuItem::close_window(
             app,
-            Some("Close Window"),
+            Some(&text("close_window")),
         )?);
     if !cfg!(target_os = "macos") {
         // No app menu here: Settings and Quit live in File.
@@ -113,21 +115,24 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             .item(&separator()?)
             .item(&forwarded(app, "settings")?)
             .item(&separator()?)
-            .item(&PredefinedMenuItem::quit(app, None)?);
+            .item(&PredefinedMenuItem::quit(app, Some(&text("quit")))?);
     }
     let file = file.build()?;
 
-    let edit = SubmenuBuilder::new(app, "Edit")
-        .item(&PredefinedMenuItem::undo(app, None)?)
-        .item(&PredefinedMenuItem::redo(app, None)?)
+    let edit = SubmenuBuilder::new(app, text("edit"))
+        .item(&PredefinedMenuItem::undo(app, Some(&text("undo")))?)
+        .item(&PredefinedMenuItem::redo(app, Some(&text("redo")))?)
         .item(&separator()?)
-        .item(&PredefinedMenuItem::cut(app, None)?)
-        .item(&PredefinedMenuItem::copy(app, None)?)
-        .item(&PredefinedMenuItem::paste(app, None)?)
-        .item(&PredefinedMenuItem::select_all(app, None)?)
+        .item(&PredefinedMenuItem::cut(app, Some(&text("cut")))?)
+        .item(&PredefinedMenuItem::copy(app, Some(&text("copy")))?)
+        .item(&PredefinedMenuItem::paste(app, Some(&text("paste")))?)
+        .item(&PredefinedMenuItem::select_all(
+            app,
+            Some(&text("select_all")),
+        )?)
         .build()?;
 
-    let mut view = SubmenuBuilder::new(app, "View")
+    let mut view = SubmenuBuilder::new(app, text("view"))
         .item(&forwarded(app, "command_palette")?)
         .item(&separator()?)
         .item(&forwarded(app, "toggle_sidebar")?)
@@ -141,7 +146,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             .item(&MenuItem::with_id(
                 app,
                 RELOAD,
-                "Reload",
+                text("reload"),
                 true,
                 Some("CmdOrCtrl+R"),
             )?)
@@ -151,59 +156,62 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&MenuItem::with_id(
             app,
             ZOOM_RESET,
-            "Actual Size",
+            text("zoom_reset"),
             true,
             Some("CmdOrCtrl+0"),
         )?)
         .item(&MenuItem::with_id(
             app,
             ZOOM_IN,
-            "Zoom In",
+            text("zoom_in"),
             true,
             Some("CmdOrCtrl+="),
         )?)
         .item(&MenuItem::with_id(
             app,
             ZOOM_OUT,
-            "Zoom Out",
+            text("zoom_out"),
             true,
             Some("CmdOrCtrl+-"),
         )?)
         .item(&separator()?)
-        .item(&PredefinedMenuItem::fullscreen(app, None)?)
+        .item(&PredefinedMenuItem::fullscreen(
+            app,
+            Some(&text("fullscreen")),
+        )?)
         .build()?;
 
-    let thread = SubmenuBuilder::new(app, "Thread")
+    let thread = SubmenuBuilder::new(app, text("thread"))
         .item(&forwarded(app, "send_to_cloud")?)
         .item(&forwarded(app, "open_in_chat")?)
         .item(&separator()?)
         .item(&forwarded(app, "toggle_plan")?)
         .item(&forwarded(app, "choose_agent")?)
         .build()?;
-    let folder = SubmenuBuilder::new(app, "Folder")
+    let folder = SubmenuBuilder::new(app, text("folder"))
         .item(&forwarded(app, "index_settings")?)
         .item(&forwarded(app, "handoff_settings")?)
         .build()?;
 
     // These two ids make Tauri register them with the OS, which adds its
     // window list and the help search box.
-    let window = SubmenuBuilder::with_id(app, tauri::menu::WINDOW_SUBMENU_ID, "Window")
-        .item(&PredefinedMenuItem::minimize(app, None)?)
-        .item(&PredefinedMenuItem::maximize(app, Some("Zoom"))?)
+    let window = SubmenuBuilder::with_id(app, tauri::menu::WINDOW_SUBMENU_ID, text("window"))
+        .item(&PredefinedMenuItem::minimize(app, Some(&text("minimize")))?)
+        .item(&PredefinedMenuItem::maximize(app, Some(&text("maximize")))?)
         .build()?;
 
-    let mut help = SubmenuBuilder::with_id(app, tauri::menu::HELP_SUBMENU_ID, "Help")
+    let mut help = SubmenuBuilder::with_id(app, tauri::menu::HELP_SUBMENU_ID, text("help_menu"))
         .item(&MenuItem::with_id(
             app,
             HELP,
-            "Elitea Help",
+            text("help"),
             true,
             None::<&str>,
         )?)
         .item(&MenuItem::with_id(
             app,
             RUN_DIAGNOSTICS,
-            "Run Diagnostics…",
+            text("run_diagnostics"),
             true,
             None::<&str>,
         )?);
@@ -220,13 +228,16 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 .item(&separator()?)
                 .item(&forwarded(app, "settings")?)
                 .item(&separator()?)
-                .item(&PredefinedMenuItem::services(app, None)?)
+                .item(&PredefinedMenuItem::services(app, Some(&text("services")))?)
                 .item(&separator()?)
-                .item(&PredefinedMenuItem::hide(app, None)?)
-                .item(&PredefinedMenuItem::hide_others(app, None)?)
-                .item(&PredefinedMenuItem::show_all(app, None)?)
+                .item(&PredefinedMenuItem::hide(app, Some(&text("hide")))?)
+                .item(&PredefinedMenuItem::hide_others(
+                    app,
+                    Some(&text("hide_others")),
+                )?)
+                .item(&PredefinedMenuItem::show_all(app, Some(&text("show_all")))?)
                 .item(&separator()?)
-                .item(&PredefinedMenuItem::quit(app, None)?)
+                .item(&PredefinedMenuItem::quit(app, Some(&text("quit")))?)
                 .build()?,
         );
     }
@@ -244,7 +255,7 @@ pub fn on_event(app: &AppHandle, event: &MenuEvent) {
         return;
     }
     let id = event.id().as_ref();
-    if let Some((command, _, _)) = FORWARDED.iter().find(|(known, _, _)| *known == id) {
+    if let Some((command, _)) = FORWARDED.iter().find(|(known, _)| *known == id) {
         app_events::show_main(app);
         app_events::emit(app, command, None);
         return;
@@ -331,7 +342,7 @@ mod tests {
 
     #[test]
     fn every_forwarded_item_is_an_app_command_id_with_a_unique_shortcut() {
-        let ids: Vec<&str> = FORWARDED.iter().map(|(id, _, _)| *id).collect();
+        let ids: Vec<&str> = FORWARDED.iter().map(|(id, _)| *id).collect();
         assert_eq!(
             ids,
             [
@@ -350,7 +361,7 @@ mod tests {
                 "handoff_settings"
             ]
         );
-        let mut shortcuts: Vec<&str> = FORWARDED.iter().filter_map(|(_, _, a)| *a).collect();
+        let mut shortcuts: Vec<&str> = FORWARDED.iter().filter_map(|(_, a)| *a).collect();
         shortcuts.extend([
             "CmdOrCtrl+O",
             "CmdOrCtrl+R",
@@ -362,6 +373,13 @@ mod tests {
         assert_eq!(unique.len(), shortcuts.len());
         for accelerator in shortcuts {
             assert!(accelerator.starts_with("CmdOrCtrl+"), "{accelerator}");
+        }
+        // Every forwarded item has a label (`labels.rs`).
+        for id in ids {
+            assert!(
+                crate::labels::KEYS.iter().any(|(key, _)| *key == id),
+                "{id}"
+            );
         }
     }
 }

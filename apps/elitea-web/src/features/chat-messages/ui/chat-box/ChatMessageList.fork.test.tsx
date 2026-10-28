@@ -2,7 +2,8 @@
  * "Fork from here" (client contract 1.11) on the message rows: offered on
  * user and assistant messages that are settled, withheld on a reply still
  * streaming or waiting for an approval, and absent when the host wires no
- * fork handler.
+ * fork handler. A user message offers it as a button; an assistant reply as a
+ * row in its action row's ⋯ menu (`ApplicationAnswerActions`).
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from '@mui/material/styles';
@@ -28,6 +29,15 @@ function renderList(chatHistory: readonly ChatMessage[], onForkFromMessage?: (me
   );
 }
 
+/** Opens the reply's ⋯ menu, if it has one, and returns its "Fork from here" row. */
+function replyForkRow(row: HTMLElement): HTMLElement | null {
+  const more = within(row).queryByTestId('answer-more-actions');
+  if (!more) return null;
+  fireEvent.click(more);
+  const menus = screen.getAllByRole('menu', { hidden: true });
+  return within(menus[menus.length - 1] as HTMLElement).queryByTestId('message-fork');
+}
+
 const settled = [
   { id: 'q1', role: 'user', name: 'Reader', userId: '6', content: 'first question', createdAt: '2026-10-20T10:00:00Z' },
   { id: 'a1', role: 'assistant', name: 'agent', content: 'first answer', createdAt: '2026-10-20T10:00:01Z' },
@@ -39,10 +49,12 @@ describe('ChatMessageList — Fork from here', () => {
     const onFork = vi.fn();
     renderList(settled, onFork);
     const rows = screen.getAllByTestId('chat-message-item');
-    expect(screen.getAllByRole('button', { name: 'Fork from here' })).toHaveLength(3);
-    fireEvent.click(within(rows[1] as HTMLElement).getByRole('button', { name: 'Fork from here' }));
+    expect(screen.getAllByRole('button', { name: 'Fork from here' })).toHaveLength(2);
     fireEvent.click(within(rows[0] as HTMLElement).getByRole('button', { name: 'Fork from here' }));
-    expect(onFork.mock.calls).toEqual([['a1'], ['q1']]);
+    const replyFork = replyForkRow(rows[1] as HTMLElement);
+    expect(replyFork).toHaveTextContent('Fork from here');
+    fireEvent.click(replyFork as HTMLElement);
+    expect(onFork.mock.calls).toEqual([['q1'], ['a1']]);
   });
 
   it('withholds it on a reply that is still streaming or waits for an approval', () => {
@@ -56,16 +68,17 @@ describe('ChatMessageList — Fork from here', () => {
       vi.fn(),
     );
     const rows = screen.getAllByTestId('chat-message-item');
-    const forkIn = (index: number) => within(rows[index] as HTMLElement).queryByRole('button', { name: 'Fork from here' });
-    expect(forkIn(0)).not.toBeNull();
-    expect(forkIn(1)).not.toBeNull();
-    expect(forkIn(2)).toBeNull();
-    expect(forkIn(3)).not.toBeNull();
-    expect(forkIn(4)).toBeNull();
+    const userFork = (index: number) => within(rows[index] as HTMLElement).queryByRole('button', { name: 'Fork from here' });
+    expect(userFork(0)).not.toBeNull();
+    expect(userFork(3)).not.toBeNull();
+    expect(replyForkRow(rows[2] as HTMLElement)).toBeNull();
+    expect(replyForkRow(rows[4] as HTMLElement)).toBeNull();
+    expect(replyForkRow(rows[1] as HTMLElement)).not.toBeNull();
   });
 
   it('shows no fork control when the host wires no fork handler', () => {
     renderList(settled);
     expect(screen.queryByRole('button', { name: 'Fork from here' })).toBeNull();
+    for (const row of screen.getAllByTestId('chat-message-item')) expect(replyForkRow(row)).toBeNull();
   });
 });

@@ -7,7 +7,6 @@
  */
 import { ThemeProvider } from '@mui/material/styles';
 import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -20,14 +19,13 @@ import {
   getRemoveChatExecutionSteeringMockHandler,
   getSteerChatExecutionMockHandler,
   getSteerChatExecutionResponseMock,
-  getUpdateChatExecutionSteeringMockHandler,
-  getUpdateChatExecutionSteeringResponseMock,
 } from '@/shared/api/generated/chat/chat.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import type { SteeringError, SteeringMessage } from '@/shared/api/generated/model';
 import { server } from '@/test/setup';
 
 import { SteeringMessages } from '../ui/chat-box/SteeringMessages';
+import { useOwnPendingSteering } from './ownPendingSteering';
 import { applySteeringEvent, useChatSteeringStore } from './chatSteering.store';
 import { useChatSteering, type UseChatSteeringParams } from './useChatSteering';
 
@@ -283,10 +281,9 @@ describe('SteeringMessages', () => {
   const ids = (...values: string[]) => new Set(values);
 
   function Harness(props: { readonly live: boolean; readonly transcript: ReadonlySet<string> }) {
-    const model = useChatSteering({ conversationKey: KEY, isStreaming: props.live, streamTarget: () => target, send: vi.fn(), queueAfterTurn: vi.fn() });
     return (
       <ThemeProvider theme={theme}>
-        <SteeringMessages responseMessageId={RESPONSE} transcriptIds={props.transcript} isLive={props.live} model={model} />
+        <SteeringMessages responseMessageId={RESPONSE} transcriptIds={props.transcript} isLive={props.live} />
       </ThemeProvider>
     );
   }
@@ -304,20 +301,16 @@ describe('SteeringMessages', () => {
     expect(screen.queryByTestId('chat-steering-messages')).toBeNull();
   });
 
-  it('the author edits a pending message in place (PATCH)', async () => {
-    const edited = getUpdateChatExecutionSteeringResponseMock();
-    let body: unknown;
-    server.use(getUpdateChatExecutionSteeringMockHandler(async ({ request }) => { body = await request.json(); return edited; }));
+  it('leaves the reader\'s own pending messages to the composer\'s queue (useOwnPendingSteering)', () => {
     useChatSteeringStore.getState().addOwn(RESPONSE, { projectId: '7', conversationKey: KEY }, EXAMPLE.id);
     act(() => { applySteeringEvent('steer.queued', EXAMPLE); });
     render(<Harness live transcript={ids()} />);
-    await userEvent.click(screen.getByTestId('chat-steering-edit-button'));
-    const input = screen.getByRole('textbox', { name: 'Edit the waiting message' });
-    await userEvent.clear(input);
-    await userEvent.type(input, edited.content);
-    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => { expect(screen.getByText(edited.content)).toBeTruthy(); });
-    expect(body).toEqual({ content: edited.content });
+    expect(screen.queryByTestId('chat-steering-messages')).toBeNull();
+    const { result, rerender } = renderHook(({ live }) => useOwnPendingSteering(KEY, live), { initialProps: { live: true } });
+    expect(result.current.map((item) => item.id)).toEqual([EXAMPLE.id]);
+    expect(renderHook(() => useOwnPendingSteering('another', true)).result.current).toEqual([]);
+    rerender({ live: false });
+    expect(result.current).toEqual([]);
   });
 
   it('steer.dropped removes the message from the view', () => {

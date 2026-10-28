@@ -14,6 +14,7 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 import { ArrowRightIcon } from '@/shared/ui/icons/arrow-right-icon';
+import { MenuRowIcon, MenuRowText, menuRowSx } from '@/shared/ui/native-menu';
 
 import { AttachmentButton } from './AttachmentButton';
 import type { MenuItemDef, SubmenuKey } from './PlusChatButton.helpers';
@@ -68,18 +69,16 @@ export interface MainMenuListProps {
   readonly attachRow: ReactNode;
 }
 
-const rowSx = (theme: Theme) => ({
-  display: 'flex',
-  alignItems: 'center',
-  gap: 1,
-  padding: '0.375rem 1rem',
-  height: '2.75rem',
-  cursor: 'pointer',
-  color: theme.vars.palette.text.secondary,
-  '&:hover': { backgroundColor: theme.vars.palette.action.hover },
-});
+/** A row of the main menu: the native menu row (`menuRowSx`), clickable. */
+const rowSx = (theme: Theme) => ({ ...menuRowSx(theme), cursor: 'pointer' });
 
-const menuIconSx = { width: '1.25rem', height: '1.25rem', flexShrink: 0 } as const;
+/** The submenu chevron: smaller than the row's icon, in its quiet colour. */
+const chevronSx = (theme: Theme) => ({
+  display: 'flex',
+  flexShrink: 0,
+  color: theme.vars.palette.text.metrics,
+  '& svg': { width: '0.75rem', height: '0.75rem' },
+});
 
 /**
  * The "+" menu's top level: the attach-files row, then the expandable
@@ -106,7 +105,7 @@ const menuIconSx = { width: '1.25rem', height: '1.25rem', flexShrink: 0 } as con
  */
 export function MainMenuList({ items, onSelectSubmenu, attachRow }: MainMenuListProps): ReactNode {
   return (
-    <Box role="menu">
+    <Box role="menu" sx={{ padding: 0.5 }}>
       {attachRow}
       {items.map(({ key, label, submenu, Icon }) => (
         <Box
@@ -124,9 +123,9 @@ export function MainMenuList({ items, onSelectSubmenu, attachRow }: MainMenuList
             }
           }}
         >
-          <Icon style={menuIconSx} />
-          <Typography variant="labelMedium" sx={{ flex: 1 }}>{label}</Typography>
-          <ArrowRightIcon style={menuIconSx} />
+          <MenuRowIcon><Icon /></MenuRowIcon>
+          <MenuRowText>{label}</MenuRowText>
+          <Box component="span" aria-hidden sx={chevronSx}><ArrowRightIcon /></Box>
         </Box>
       ))}
     </Box>
@@ -135,7 +134,8 @@ export function MainMenuList({ items, onSelectSubmenu, attachRow }: MainMenuList
 
 /**
  * The surface both the main menu and its submenu sit on — one component so
- * the two papers cannot drift apart in radius, border or elevation.
+ * the two papers cannot drift apart in radius, border or elevation. It is
+ * the app's menu paper (`MuiMenu`'s): the only border either menu draws.
  */
 export function MenuPaper({ children, fixedWidth = false }: { readonly children: ReactNode; readonly fixedWidth?: boolean }): ReactNode {
   return (
@@ -143,7 +143,7 @@ export function MenuPaper({ children, fixedWidth = false }: { readonly children:
       elevation={8}
       data-testid={fixedWidth ? 'plus-submenu-paper' : 'plus-menu-paper'}
       sx={(theme: Theme) => ({
-        minWidth: '17.5rem',
+        minWidth: '15rem',
         // #6629: every submenu is the same width, whatever its rows hold.
         ...(fixedWidth ? { width: '17.5rem' } : {}),
         borderRadius: theme.vars.shape.radiusMd,

@@ -6,11 +6,11 @@ import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
 
 import { useAllowedAttachmentTypes } from '@/entities/attachment';
 import { t } from '@/shared/i18n';
 import { ATTACHMENT_LIMITS, getRemainingAttachmentCapacity, validateAttachmentFiles } from '@/shared/lib/attachments';
+import { MenuRowHint, MenuRowIcon, MenuRowText, menuRowSx } from '@/shared/ui/native-menu';
 import { useSelectedProjectId } from '../../lib/useSelectedProjectId';
 
 /**
@@ -286,27 +286,18 @@ function AttachmentMenuRow({ isDisabled, remaining, onActivate }: {
       }}
       sx={attachRowSx(isDisabled)}
     >
-      <AttachFileIcon fontSize="small" />
-      <Typography variant="labelMedium" sx={{ flex: 1 }}>
-        {t('widgets.chat.attachmentButton.attachFilesLabel', 'Attach Files')}
-      </Typography>
-      <Typography variant="labelSmall" sx={{ color: 'text.disabled' }}>
-        {t('widgets.chat.attachmentButton.filesLeftCounter', '{{count}} left', { count: remaining })}
-      </Typography>
+      <MenuRowIcon><AttachFileIcon /></MenuRowIcon>
+      <MenuRowText>{t('widgets.chat.attachmentButton.attachFilesLabel', 'Attach Files')}</MenuRowText>
+      <MenuRowHint>{t('widgets.chat.attachmentButton.filesLeftCounter', '{{count}} left', { count: remaining })}</MenuRowHint>
     </Box>
   );
 }
 
-/** The `showLabel` row's styling — matches the "+" menu's other rows (`PlusChatButton.parts.tsx`'s `rowSx`). */
+/** The `showLabel` row's styling — the "+" menu's other rows (`PlusChatButton.parts.tsx`): the native menu row. */
 function attachRowSx(isDisabled: boolean) {
   return (theme: Theme) => ({
-    display: 'flex',
-    alignItems: 'center',
-    gap: 1,
-    padding: '0.375rem 1rem',
-    height: '2.75rem',
+    ...menuRowSx(theme),
     cursor: isDisabled ? 'default' : 'pointer',
-    color: isDisabled ? theme.vars.palette.text.disabled : theme.vars.palette.text.secondary,
-    ...(isDisabled ? {} : { '&:hover': { backgroundColor: theme.vars.palette.action.hover } }),
+    ...(isDisabled ? { color: theme.vars.palette.text.disabled, '&&:hover, &&:focus-visible': { background: 'none' } } : {}),
   });
 }

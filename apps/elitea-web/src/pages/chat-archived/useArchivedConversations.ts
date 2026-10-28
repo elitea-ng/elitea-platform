@@ -8,15 +8,20 @@
  * hook's refresh (`useArchiveConversation`, which every list calls) reaches
  * them; a row acted on here leaves the screen at once and stays gone while
  * the refetch runs.
+ *
+ * On the desktop, an unarchived conversation that was a Local work thread
+ * (archived from the sidebar) shows under its folder again
+ * (`unarchiveLocalThread`).
  */
 import { useCallback, useMemo, useState } from 'react';
 
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 
 import { conversationApi } from '@/entities/conversation';
 import { useArchiveConversation } from '@/features/chat-conversation-list';
 import { getListConversationsQueryKey, listConversations } from '@/shared/api/generated/chat/chat';
 import type { ConversationListing, ConversationSummary } from '@/shared/api/generated/model';
+import { LOCAL_THREADS_KEY, unarchiveLocalThread } from '@/shared/desktop/archivedThreads';
 
 const ARCHIVED_PAGE_SIZE = 50;
 
@@ -37,6 +42,7 @@ export interface ArchivedConversations {
 export function useArchivedConversations(projectId: string | undefined): ArchivedConversations {
   const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string | undefined>(undefined);
+  const queryClient = useQueryClient();
   const params = { archived: 'only', limit: ARCHIVED_PAGE_SIZE } as const;
   const query = useInfiniteQuery({
     queryKey: [...getListConversationsQueryKey(projectId ?? '', params), 'infinite'],
@@ -59,9 +65,10 @@ export function useArchivedConversations(projectId: string | undefined): Archive
       hide(id);
       void unarchiveRequest({ id }).then((ok) => {
         if (!ok) setGone((current) => new Set([...current].filter((entry) => entry !== id)));
+        else if (unarchiveLocalThread(id)) void queryClient.invalidateQueries({ queryKey: LOCAL_THREADS_KEY });
       });
     },
-    [hide, unarchiveRequest],
+    [hide, queryClient, unarchiveRequest],
   );
 
   const remove = useCallback(

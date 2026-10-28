@@ -185,7 +185,6 @@ it('downloads the same receipt through the persisted trace detail fallback', asy
   renderPipelinesRoute(<PersistedMessageTrace value={{ projectId: '2', conversationId: '501', messageGroupId: 51,
     steps: [step], failed: false }} />, '/pipelines/all/143', { projectId: '2' });
   await user.click(await screen.findByRole('button', { name: 'Execution details' }));
-  await user.click(screen.getByRole('button', { name: 'debug_probe / debug export' }));
   expect(await screen.findByText('Code debug · debug_probe · attempt 1')).toBeVisible();
   expect(artifactReads).toBe(0);
   await verifyDownload(user);

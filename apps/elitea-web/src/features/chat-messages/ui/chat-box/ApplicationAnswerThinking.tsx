@@ -7,7 +7,7 @@
  * see `ApplicationAnswer.tsx`'s module doc).
  */
 import type { ReactNode, SyntheticEvent } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
@@ -275,15 +275,10 @@ export function ApplicationAnswerThinking({
   /*
    * The panel's own open state is always defined, so the accordion stays
    * controlled for its whole life (MUI fixes controlled-vs-uncontrolled on
-   * first render). Reference rule (`ApplicationThinkView.jsx`):
-   * `expanded={isStreaming || expanded}`, `onChange` disabled while truly
-   * streaming, and a live tree stays expanded once it settles or parks —
-   * the reader may then collapse it.
+   * first render). Folded to its one line — while the model is still
+   * thinking too — until the reader opens it.
    */
   const [openedByReader, setOpenedByReader] = useState(false);
-  useEffect(() => {
-    if (isStreaming) setOpenedByReader(true);
-  }, [isStreaming]);
   const handleToggle = useCallback((_event: SyntheticEvent, value: boolean) => {
     setOpenedByReader(value);
   }, []);
@@ -302,8 +297,8 @@ export function ApplicationAnswerThinking({
       uppercase={false}
       showMode="left"
       defaultExpanded={false}
-      expanded={isStreaming || openedByReader}
-      {...(isStreaming ? {} : { onChange: handleToggle })}
+      expanded={openedByReader}
+      onChange={handleToggle}
       slotSx={{ root: { width: '100%' }, ...thinkingSlotSx }}
       items={[
         {

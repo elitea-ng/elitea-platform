@@ -1,6 +1,6 @@
 /**
- * A17 — the queue MODEL (where a send goes, when the queue drains) and the
- * "Waiting messages" strip.
+ * A17 — the queue MODEL (where a send goes, when the queue drains). Its rows
+ * are `ChatBoxComposerQueue`'s (`ChatBoxComposerQueue.test.tsx`).
  *
  * ## Why these assertions and not the obvious ones
  *
@@ -27,11 +27,9 @@ import type { ChatMessage } from '@/features/chat-messages';
 
 import { DRAFT_CONVERSATION_KEY, useQueuedMessagesStore } from '../model/queuedMessages.store';
 import {
-  ChatBoxQueuedMessages,
   ChatBoxSteeringOffer,
   chatBoxQueueKey,
   useChatBoxQueuedMessages,
-  type ChatBoxQueuedMessagesModel,
   type QueuedSendOutcome,
 } from './ChatBoxQueuedMessages';
 
@@ -107,6 +105,22 @@ describe('where a send goes', () => {
     act(() => { result.current.onSend('   \t '); });
     expect(result.current.items).toHaveLength(0);
     expect(onSendNow).not.toHaveBeenCalled();
+  });
+});
+
+describe('Send now on a waiting message', () => {
+  it('delivers the promoted message first when the turn settles', async () => {
+    const send = vi.fn(resolving());
+    const { result, rerender } = renderModel({ isStreaming: true, onSendNow: vi.fn(), send });
+    act(() => { result.current.onSend('first'); });
+    let added: string | undefined;
+    act(() => { added = result.current.enqueue('sent now'); });
+    expect(added).toBe(result.current.items[1]?.id);
+    act(() => { result.current.onPromote(added ?? ''); });
+    expect(result.current.items.map((row) => row.text)).toEqual(['sent now', 'first']);
+
+    rerender({ isStreaming: false, onSendNow: vi.fn(), send });
+    await waitFor(() => { expect(send).toHaveBeenCalledWith({ question: 'sent now' }); });
   });
 });
 
@@ -274,63 +288,5 @@ describe('chatBoxQueueKey', () => {
     await waitFor(() => {
       expect(result.current.items.map((row) => row.text)).toEqual(['typed on a brand-new chat']);
     });
-  });
-});
-
-/* ── the strip ───────────────────────────────────────────────────────────── */
-
-function stripModel(items: readonly { id: string; text: string; queuedAt: number }[], onRemove = vi.fn()): ChatBoxQueuedMessagesModel {
-  return { items, onSend: vi.fn(), enqueue: vi.fn(), onRemove, decorate: (messages) => messages };
-}
-
-describe('ChatBoxQueuedMessages', () => {
-  it('renders nothing at all while the queue is empty (ELITEA-2869)', () => {
-    render(<ChatBoxQueuedMessages queue={stripModel([])} />, { wrapper });
-    expect(screen.queryByTestId('chat-queued-messages')).toBeNull();
-  });
-
-  it('counts the waiting messages and shows each with a Queued status', () => {
-    render(
-      <ChatBoxQueuedMessages
-        queue={stripModel([
-          { id: '1', text: 'First queued message', queuedAt: 1 },
-          { id: '2', text: 'Second queued message', queuedAt: 2 },
-        ])}
-      />,
-      { wrapper },
-    );
-    expect(screen.getByTestId('chat-queued-count')).toHaveTextContent('Waiting messages · 2');
-    const rows = screen.getAllByTestId('chat-queued-item');
-    // Chronological, first at top — the order they will be delivered in.
-    expect(rows[0]).toHaveTextContent('First queued message');
-    expect(rows[1]).toHaveTextContent('Second queued message');
-    expect(screen.getAllByTestId('chat-queued-status')).toHaveLength(2);
-  });
-
-  /*
-   * The i18next pluralization trap, pinned. `{{count}}` in the bundle value is
-   * ALSO the option that selects a `_one`/`_other` suffixed key, and this
-   * bundle carries neither — so the SINGULAR case is the one that would
-   * silently degrade if that fallback ever changed. Both counts are asserted
-   * against the real `en.json`, not against the call-site fallback.
-   */
-  it('counts one waiting message as well as many', () => {
-    render(<ChatBoxQueuedMessages queue={stripModel([{ id: '1', text: 'only one', queuedAt: 1 }])} />, { wrapper });
-    expect(screen.getByTestId('chat-queued-count')).toHaveTextContent('Waiting messages · 1');
-  });
-
-  it('removes the row the reader points at, not the first one', async () => {
-    const onRemove = vi.fn();
-    render(
-      <ChatBoxQueuedMessages
-        queue={stripModel([
-          { id: 'a', text: 'keep', queuedAt: 1 },
-          { id: 'b', text: 'drop', queuedAt: 2 },
-        ], onRemove)}
-      />,
-      { wrapper },
-    );
-    await userEvent.click(screen.getAllByTestId('chat-queued-remove')[1] as HTMLElement);
-    expect(onRemove).toHaveBeenCalledWith('b');
   });
 });

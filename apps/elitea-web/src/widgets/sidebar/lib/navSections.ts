@@ -28,6 +28,7 @@
  * outside this file's ownership fence).
  */
 import { isPublicProject } from '@/entities/project';
+import { t } from '@/shared/i18n';
 import { getConfig } from '@/shared/config';
 import { PERMISSION_GROUPS } from '@/shared/lib/permissions';
 
@@ -58,30 +59,30 @@ export function navSections(): readonly NavSection[] {
   return [
     {
       items: [
-        { value: 'chat', label: 'Chats', url: '/chat' },
-        { value: 'agents', label: 'Agents', url: '/agents' },
-        { value: 'pipelines', label: 'Pipelines', url: '/pipelines' },
+        { value: 'chat', label: t('widgets.sidebar.nav.chat', 'Chats'), url: '/chat' },
+        { value: 'agents', label: t('widgets.sidebar.nav.agents', 'Agents'), url: '/agents' },
+        { value: 'pipelines', label: t('widgets.sidebar.nav.pipelines', 'Pipelines'), url: '/pipelines' },
         // Desktop build only (ADR-0029 D0). A literal MODE test, not a helper
         // call: the bundler folds it, so the web bundle carries no trace.
-        ...(import.meta.env.MODE === 'desktop' ? [{ value: 'workspaces' as const, label: 'Workspaces', url: '/workspaces' }] : []),
+        ...(import.meta.env.MODE === 'desktop' ? [{ value: 'workspaces' as const, label: t('widgets.sidebar.nav.workspaces', 'Workspaces'), url: '/workspaces' }] : []),
       ],
     },
     {
       items: [
-        { value: 'skills', label: 'Skills', url: '/skills' },
+        { value: 'skills', label: t('widgets.sidebar.nav.skills', 'Skills'), url: '/skills' },
         // The row reads "Toolkits & Indexes" in production, and it is one row
         // for both things: `SidebarBody.jsx:137` in the old app gives it that
         // label, that breadcrumb and that tooltip. This app shortened it to
         // "Toolkits", which names half of what the row opens. The PAGE title
         // is a separate surface and keeps its own string.
-        { value: 'toolkits', label: 'Toolkits & Indexes', url: '/toolkits' },
-        { value: 'mcps', label: 'MCPs', url: '/mcps' },
-        { value: 'credentials', label: 'Credentials', url: '/credentials' },
-        { value: 'applications', label: 'Applications', url: '/apps' },
+        { value: 'toolkits', label: t('widgets.sidebar.nav.toolkits', 'Toolkits & Indexes'), url: '/toolkits' },
+        { value: 'mcps', label: t('widgets.sidebar.nav.mcps', 'MCPs'), url: '/mcps' },
+        { value: 'credentials', label: t('widgets.sidebar.nav.credentials', 'Credentials'), url: '/credentials' },
+        { value: 'applications', label: t('widgets.sidebar.nav.applications', 'Applications'), url: '/apps' },
       ],
     },
     {
-      items: [{ value: 'artifacts', label: 'Artifacts', url: '/artifacts' }],
+      items: [{ value: 'artifacts', label: t('widgets.sidebar.nav.artifacts', 'Artifacts'), url: '/artifacts' }],
     },
   ];
 }

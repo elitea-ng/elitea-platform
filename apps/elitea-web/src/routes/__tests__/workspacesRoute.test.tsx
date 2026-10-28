@@ -102,17 +102,19 @@ describe('the Workspaces route in the real app shell', () => {
     expect(within(folder).getByText('proj')).toBeInTheDocument();
     // Rows follow the web nav's permission filter (this user has none): the ungated ones show.
     expect(within(sidebar).getByTestId('shell-elitea-applications')).toBeInTheDocument();
-    expect(within(sidebar).getByTestId('shell-elitea-catalog')).toBeInTheDocument();
+    // Catalog lives in the account menu at the sidebar's foot.
+    expect(within(sidebar).queryByTestId('shell-elitea-catalog')).toBeNull();
+    expect(within(sidebar).getByTestId('shell-account')).toBeInTheDocument();
     expect(within(sidebar).queryByTestId('shell-elitea-chat')).toBeNull();
 
     fireEvent.click(within(folder).getByRole('button', { name: 'New thread' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/w1'));
 
-    fireEvent.click(within(within(sidebar).getByTestId('shell-elitea-catalog')).getByRole('button'));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/elitea-catalog'));
+    fireEvent.click(within(within(sidebar).getByTestId('shell-elitea-applications')).getByRole('button'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/apps'));
     // Off the folders, the title row names the page (no back button); Local work stays in the sidebar.
     expect(await screen.findByTestId('page-title')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Local work' })).toBeNull();
+    for (const bar of screen.getAllByTestId('title-bar')) expect(within(bar).queryByRole('button', { name: 'Local work' })).toBeNull();
     expect(within(sidebar).getByRole('navigation', { name: 'Local work' })).toBeInTheDocument();
   });
 

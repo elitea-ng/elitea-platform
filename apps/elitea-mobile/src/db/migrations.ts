@@ -23,7 +23,9 @@ import type { Db } from '@/db/sql';
  *   writer (sync, retention, a tombstone, a dropped project) maintains the
  *   index without knowing about it (src/db/search.ts);
  * - `conversation_ops` (3): list actions (rename, pin, delete) waiting for
- *   the workspace (src/sync/conversationOps.ts).
+ *   the workspace (src/sync/conversationOps.ts);
+ * - `drafts` (5): the composer's unsent text per conversation
+ *   (src/features/chat/composerDrafts.ts).
  *
  * `messages` has no foreign key to `conversations`: a transcript may be
  * synced for a conversation the list filter does not include (a shared one).
@@ -183,6 +185,17 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 4,
     sql: `
       ALTER TABLE conversations ADD COLUMN list_kind TEXT NOT NULL DEFAULT 'chat';
+    `,
+  },
+  {
+    // Unsent composer text, keyed `<project id>:<conversation ref | new>`.
+    version: 5,
+    sql: `
+      CREATE TABLE drafts (
+        key TEXT PRIMARY KEY NOT NULL,
+        text TEXT NOT NULL,
+        updated_ms INTEGER NOT NULL
+      );
     `,
   },
 ];

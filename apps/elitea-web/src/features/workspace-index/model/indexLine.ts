@@ -1,6 +1,5 @@
 /**
- * The folder's index as one quiet line for the toolbar's island when nothing
- * else runs: "Index ready · 12.4K entities", "Index stale". `null` when there
+ * The folder's index as one quiet line (the composer footer icon's tooltip): "Index ready · 12.4K entities", "Index stale". `null` when there
  * is nothing worth saying (off, still reading, building — the island shows a
  * build itself) or without a host. Reads the same query the page's settings
  * dialog does, so it costs no extra request.

@@ -89,7 +89,8 @@ export function DefaultMarkdown({
     }
     const rawHtml = inline
       ? marked.parseInline(markdown, { renderer, async: false })
-      : marked.parse(markdown, { renderer, async: false });
+      // marked ends a block with "\n"; under `Markdown`'s `pre-wrap` that newline is a blank line under every paragraph.
+      : marked.parse(markdown, { renderer, async: false }).trimEnd();
     return sanitizeMarkdownHtml(rawHtml);
   }, [markdown, renderHtml, inline]);
 
