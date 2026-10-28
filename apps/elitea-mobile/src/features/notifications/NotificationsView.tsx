@@ -150,7 +150,7 @@ export function NotificationRow({ row, a11y, onOpen }: { row: InboxRow; a11y?: S
   const label = notificationLabel(view, row.age, unread);
   const leading = (
     <View style={styles.leading}>
-      <View style={[styles.dot, { backgroundColor: unread ? colors.accent : 'transparent' }]} />
+      <View style={[styles.dot, { backgroundColor: unread ? colors.dot : 'transparent' }]} />
       <IconTile icon={view.icon} size={36} tone={view.icon === 'mention' ? 'accent' : 'secondary'} />
     </View>
   );

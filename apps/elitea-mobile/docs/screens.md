@@ -9,9 +9,10 @@ surface.
 
 | | Light | Dark |
 |---|---|---|
-| Gradient | pink mist → lavender → mint | plum-black → indigo-black → green-black |
-| Glass | white α .72 | `#2A2631` α .72 |
-| Accent | product rose `#B4306A` (or the corrected workspace accent) | `#FF8CB8` with dark `accentOn` |
+| Ground | flat Paper `#FFFFFF` (brand v3: no gradients) | flat Ink `#0B0B18` |
+| Glass | white α .72 | `#1A2036` α .72 |
+| Accent (signal: links, focus, active) | indigo `#4A4DE8` (or the corrected workspace accent) | cyan `#00BFE6` with Ink `accentOn` |
+| Primary (filled buttons, send) | indigo `#4A4DE8`, white label | indigo `#4A4DE8`, white label |
 | Status bar | `dark-content` | `light-content` |
 
 - The status bar is set from the scheme via `expo-status-bar` `style="auto"`.
@@ -100,7 +101,7 @@ G ──────────────────────────
 
 - **No Elitea mark on this screen.** The workspace identity must dominate it (design-system
   §3.5 and §5).
-- The pack's accent is **not** applied yet. Buttons are product rose, so the workspace
+- The pack's accent is **not** applied yet. Buttons are the product indigo, so the workspace
   cannot style the trust decision.
 
 ### 1c. Sign-in
@@ -182,8 +183,8 @@ G ──────────────────────────
 - **iOS:** on scroll the greeting collapses and an inline "Home" title appears in a glass
   nav bar. The bell stays. **Android:** an M3 medium top app bar, which behaves the same
   way.
-- **Dark:** the cards are glass `#2A2631` α .72 with a top hairline. The accent "Alex" is
-  `#FF8CB8`.
+- **Dark:** the cards are glass `#1A2036` α .72 with a top hairline. The accent "Alex" is
+  cyan `#00BFE6`.
 
 ## 3. Chat list (tab 2, "Chats")
 
