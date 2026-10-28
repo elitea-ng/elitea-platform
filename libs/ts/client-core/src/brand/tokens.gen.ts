@@ -210,6 +210,21 @@ export const BRAND_TOKENS = {
     "dark": "Elevation is a lighter surface step (bg → surface → elevated), never a shadow.",
     "light": "0 1px 2px rgba(11, 11, 24, 0.06), 0 4px 16px rgba(11, 11, 24, 0.06)"
   },
+  "chart": {
+    "dark": [
+      "#4A4DE8",
+      "#00BFE6",
+      "#7A5CFF",
+      "#9AA3B8"
+    ],
+    "light": [
+      "#4A4DE8",
+      "#0E7490",
+      "#7A5CFF",
+      "#5A6478"
+    ],
+    "rule": "Series take this order. Semantic colours only for semantic series; never orange."
+  },
   "contrast": [
     {
       "fg": "text",

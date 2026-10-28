@@ -56,3 +56,15 @@ describe('brand tokens', () => {
     }
   });
 });
+
+describe('chart order', () => {
+  for (const scheme of ['dark', 'light'] as const) {
+    it(`${scheme}: every series clears 3:1 against bg and avoids the dot`, () => {
+      const bg = BRAND_TOKENS.schemes[scheme].bg;
+      for (const colour of BRAND_TOKENS.chart[scheme]) {
+        assert.notEqual(colour, BRAND_TOKENS.palette.orange.value);
+        assert.ok(contrast(colour, bg) >= 3, `${colour} on ${bg} is ${contrast(colour, bg).toFixed(2)}:1`);
+      }
+    });
+  }
+});
