@@ -197,11 +197,12 @@ renumbered 192 → 194), verify-profile 50/0.
 | re-park of an answered child (two-card attempt) | 16 | the model called the two tools sequentially, so the exact two-cards-in-one-pause shape is proven by Main PG only; the answered child re-parked with its next call; decided across tabs and reloads; joined; 5 CONSUMED |
 | On Error `stop` with open cards | 16 | run FAILED 17:59:04.742; its 3 open cards CANCELLED 4 ms later by the run's claim; the tab shows no card; a late decision → 409 |
 
-**REVIEW-1470 delta smoke.** Images `2a2-62e6d07fa` (main `sha256:11832c33…`, worker `sha256:d21d3be8…`, web
-`sha256:3884fc0f…`), binary-checked for `graph.parallel.ledger_unavailable` (worker), `governed_credential_refused` and
-`agent_execution_jobs_client_message` (main); fanpar ledger updated for 0194's new index; verify-profile 50/0. Case 1
-(chat 27): three asks answered from a reloaded second tab in reverse order, the other tab dropped each card live, joined,
-reload keeps it.
+**REVIEW-1470 delta smoke.** Images `2a2-32189842a` built from the #1470 head (main `sha256:664eee6c…`, worker
+`sha256:40a6f9fe…`, web `sha256:57e389b4…`), binary-checked for `graph.parallel.ledger_unavailable` and
+`parked_execution_id` (worker), `governed_credential_refused` and `agent_execution_jobs_client_message` (main), and for
+the absence of FU-247's `__elitea_parallel_llm_inputs_v1`; fanpar ledger updated for 0194's new index; verify-profile
+50/0. Case 1 (chat 27): three asks answered from a reloaded second tab in reverse order, the other tab dropped each card
+live, joined, reload keeps it.
 
 Fixtures, stated honestly: project 118 "Rust instruction revision acceptance" on the real-model dump `d5e966074`.
 Created in the UI: every pipeline ("FP …"), the MCP toolkit (saved through the JSON view because MCP tool discovery
