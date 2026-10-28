@@ -28,6 +28,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 
 import { t } from "@/shared/i18n";
+import { pressToOpen } from "@/shared/ui/native-menu";
 
 const hover = (theme: Theme) => ({
   background: theme.vars.palette.background.button.drawerMenu.hover,
@@ -147,7 +148,7 @@ export function ComposerPicker({
             aria-label={
               typeof value === "string" ? `${label}: ${value}` : label
             }
-            onClick={(event) => setAnchor(event.currentTarget)}
+            {...pressToOpen(setAnchor)}
             sx={(theme: Theme) => ({
               minWidth: 0,
               flexShrink: 1,
@@ -226,7 +227,7 @@ export function ComposerMoreMenu({
         data-testid={testId}
         aria-haspopup="menu"
         aria-expanded={anchor !== null}
-        onClick={(event) => setAnchor(event.currentTarget)}
+        {...pressToOpen(setAnchor)}
       >
         {icon}
       </ComposerIconButton>

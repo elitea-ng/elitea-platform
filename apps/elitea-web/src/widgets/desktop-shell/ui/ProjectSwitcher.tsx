@@ -15,6 +15,7 @@ import Typography from '@mui/material/Typography';
 
 import type { Project } from '@/entities/project';
 import { t } from '@/shared/i18n';
+import { pressToOpen } from '@/shared/ui/native-menu';
 
 import { ProjectPicker } from './ProjectPicker';
 
@@ -35,7 +36,7 @@ export function ProjectSwitcher({ projects, selectedProjectId, onSelectProject }
         aria-haspopup="listbox"
         aria-expanded={anchor !== null}
         aria-label={t('desktop.shell.eliteaProject', 'Project: {{name}}', { name })}
-        onClick={(event) => setAnchor(event.currentTarget)}
+        {...pressToOpen(setAnchor)}
         sx={(theme: Theme) => ({
           width: '100%',
           justifyContent: 'flex-start',

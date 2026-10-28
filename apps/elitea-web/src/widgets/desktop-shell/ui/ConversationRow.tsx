@@ -28,7 +28,7 @@ import type { Theme } from '@mui/material/styles';
 
 import type { Conversation } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
-import { MenuDivider, MenuRow, MenuRowText } from '@/shared/ui/native-menu';
+import { MenuDivider, MenuRow, MenuRowText, pressToOpen } from '@/shared/ui/native-menu';
 import { activityGlyph, activityTitleBold, useRowActivity } from '@/shared/lib/conversationActivity';
 import { ConversationActivityGlyph } from '@/shared/ui/ConversationActivity';
 import { BaseModal } from '@/shared/ui/BaseModal';
@@ -104,7 +104,7 @@ export function RowMenu({ items, label, testId = 'shell-conversation-more' }: { 
   const close = (): void => setAnchor(null);
   return (
     <>
-      <IconButton size="small" aria-label={label} aria-haspopup="menu" data-testid={testId} onClick={(event) => setAnchor(event.currentTarget)}>
+      <IconButton size="small" aria-label={label} aria-haspopup="menu" data-testid={testId} {...pressToOpen(setAnchor)}>
         <MoreHorizIcon fontSize="inherit" />
       </IconButton>
       <Menu anchorEl={anchor} open={anchor !== null} onClose={close} slotProps={{ list: { dense: true }, paper: { sx: { minWidth: '12rem' } } }}>

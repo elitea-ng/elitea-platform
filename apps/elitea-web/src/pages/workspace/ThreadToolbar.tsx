@@ -27,7 +27,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { readThreads, threadNames, threadsQueryKey } from '@/features/workspace';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
-import { MenuDivider, MenuHeader, MenuRow, MenuRowText } from '@/shared/ui/native-menu';
+import { MenuDivider, MenuHeader, MenuRow, MenuRowText, pressToOpen } from '@/shared/ui/native-menu';
 import { ActivityIsland, conversationLink, copyText as copy, selectInspectorShown, ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { PanelToggle } from './sessionParts';
@@ -176,7 +176,7 @@ function Overflow({ conversationId, onIndexSettings, onFork, onCreateAgent, onRe
   return (
     <>
       <Tooltip title={t('workspace.more', 'More')}>
-        <IconButton size="small" data-testid="thread-more" aria-label={t('workspace.more', 'More')} aria-haspopup="menu" onClick={(event) => setAnchor(event.currentTarget)}>
+        <IconButton size="small" data-testid="thread-more" aria-label={t('workspace.more', 'More')} aria-haspopup="menu" {...pressToOpen(setAnchor)}>
           <MoreHorizIcon fontSize="inherit" />
         </IconButton>
       </Tooltip>

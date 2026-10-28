@@ -45,7 +45,7 @@ import { bugReportUrl, whatsNewUrl } from '../lib/accountLinks';
 import type { EliteaItem, EliteaItemValue } from '../lib/eliteaSections';
 import type { ShellAction } from '../lib/shellActions';
 import { useHostInfo } from '../model/useHostInfo';
-import { MenuDivider, MenuHeader, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText, NativeSubmenu } from '@/shared/ui/native-menu';
+import { MenuDivider, MenuHeader, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText, NativeSubmenu, pressToOpen } from '@/shared/ui/native-menu';
 import { modKey } from './shortcutLabel';
 
 type ThemeMode = 'system' | 'light' | 'dark';
@@ -143,7 +143,7 @@ function AccountButton({ author, tenant, label, expanded, selected, onOpen }: Ac
       aria-haspopup="menu"
       aria-expanded={expanded}
       aria-label={label}
-      onClick={(event) => onOpen(event.currentTarget)}
+      {...pressToOpen(onOpen)}
       sx={(theme: Theme) => ({
         flex: 1,
         minWidth: 0,

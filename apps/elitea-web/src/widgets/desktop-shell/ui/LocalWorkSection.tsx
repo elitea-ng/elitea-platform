@@ -37,7 +37,7 @@ import { preferWorktree, WorktreesPanel } from '@/features/workspace-worktrees';
 import type { HandoffStatus } from '@/shared/desktop/handoffIpc';
 import { openedFolders, type Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
-import { MenuDivider, MenuHeader, MenuRow, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
+import { MenuDivider, MenuHeader, MenuRow, MenuRowIcon, MenuRowText, pressToOpen } from '@/shared/ui/native-menu';
 import { ActivityGroupSummary } from '@/shared/ui/ConversationActivity';
 
 import type { ShellAction } from '../lib/shellActions';
@@ -194,7 +194,7 @@ function FolderMenu({ workspace, projects, run, onBind, onRemove }: FolderMenuPr
         size="small"
         aria-label={t('desktop.shell.folderMenu', 'More for {{name}}', { name: workspace.name })}
         aria-haspopup="menu"
-        onClick={(event) => setAnchor(event.currentTarget)}
+        {...pressToOpen(setAnchor)}
       >
         <MoreHorizIcon fontSize="inherit" />
       </IconButton>
