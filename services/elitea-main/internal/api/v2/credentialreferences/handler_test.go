@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialadapters"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
@@ -24,6 +25,7 @@ type fakeStore struct {
 	state    credentialgrant.ReferenceState
 	actors   []string
 	attached repos.ToolkitAttachment
+	staged   []repos.StagedReference
 }
 
 func (s *fakeStore) record() repos.CredentialReferenceRecord {
@@ -83,11 +85,36 @@ func (s *fakeStore) UnpinToolkit(_ context.Context, _ string, target repos.Toolk
 	return nil
 }
 
+func (s *fakeStore) StageReference(_ context.Context, staged repos.StagedReference, newID func() string) (repos.StageResult, error) {
+	if _, _, err := repos.CanonicalUserID(staged.StagedBy); err != nil {
+		return repos.StageResult{}, err
+	}
+	s.actors, s.staged = append(s.actors, staged.StagedBy), append(s.staged, staged)
+	return repos.StageResult{Created: true, Record: repos.CredentialReferenceRecord{
+		CredentialReference: credentialgrant.CredentialReference{ID: staged.ID, TenantProjectID: staged.TenantProjectID,
+			Class: staged.Class, Backend: staged.Backend, Locator: staged.Locator, ProviderType: staged.ProviderType,
+			TargetBindingID: newID(), Generation: staged.Generation, State: credentialgrant.ReferenceStaged},
+		TargetIdentity: staged.TargetIdentity, StagedBy: staged.StagedBy,
+	}}, nil
+}
+
 func router(t *testing.T, store Store, userID string) http.Handler {
+	t.Helper()
+	return routerWith(t, store, userID, nil)
+}
+
+func routerWith(t *testing.T, store Store, userID string, locators Locators) http.Handler {
 	t.Helper()
 	h, err := New(store)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if locators != nil {
+		registry, err := credentialadapters.NewBuiltinRegistry()
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.WithCreate(locators, registry)
 	}
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
@@ -96,6 +123,7 @@ func router(t *testing.T, store Store, userID string) http.Handler {
 		})
 	})
 	r.Get("/credential_references", h.List)
+	r.Post("/credential_references", h.Create)
 	r.Get("/credential_references/{id}", h.Get)
 	r.Post("/credential_references/{id}:activate", h.Activate)
 	r.Post("/credential_references/{id}:retire", h.Retire)

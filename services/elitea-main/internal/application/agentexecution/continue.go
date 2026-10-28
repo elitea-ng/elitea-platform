@@ -686,6 +686,14 @@ func (service *CurrentApplicationStartService) ContinueCurrentAgent(
 		TriggerOrigin: request.TriggerOrigin,
 	})
 	if err != nil {
+		// A governed resume that admission refuses never runs again: settle
+		// the paused turn so the approval card does not wait on a decision
+		// every answer to which is refused (#1485). The caller still gets
+		// the refusal.
+		var governed *GovernedCredentialAdmissionError
+		if errors.As(err, &governed) {
+			service.settleGovernedRefusal(ctx, request, governed)
+		}
 		return CurrentApplicationStartOutcome{}, err
 	}
 	return CurrentApplicationStartOutcome{

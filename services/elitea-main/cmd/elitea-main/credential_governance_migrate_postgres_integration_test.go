@@ -401,7 +401,10 @@ func TestMigrateReferencesCopiesToVaultThroughTheLedger(t *testing.T) {
 	seedMigrateWorld(t, pool)
 	source := &fakeSecretStore{backend: secretstore.BackendPGVault, values: map[string][]string{migrateTestSecretName: {"jira-token"}}}
 	vault := &fakeSecretStore{backend: secretstore.BackendVault, values: map[string][]string{}}
-	deps := migrateDeps{secrets: func(func(string) (string, bool), *pgxpool.Pool) (migrateSecrets, error) {
+	deps := migrateDeps{secrets: func(_ func(string) (string, bool), _ *pgxpool.Pool, needVault bool) (migrateSecrets, error) {
+		if !needVault {
+			t.Fatal("--copy-to vault opened the stores without Vault")
+		}
 		return migrateSecrets{source: source, vault: vault, mount: "kv"}, nil
 	}}
 	args := []string{"--apply", "--operator", "100", "--project", "7", "--copy-to", "vault", "--policy-revision", "2026-10-r1", "--json"}
@@ -599,5 +602,121 @@ func TestMigrateReferencesReportsUnreadableSettings(t *testing.T) {
 		if !ok || got.Action != "skipped" || got.Reason != "settings_unreadable" || got.ToolkitType != "jira" {
 			t.Fatalf("%v: toolkit 10 = %+v (reported %v), want skipped settings_unreadable", args, got, ok)
 		}
+	}
+}
+
+const (
+	migrateTestAPIKeyName  = "fedcba9876543210fedcba9876543210"
+	migrateTestCloudConfig = "55555555-5555-4555-8555-555555555555"
+	migrateTestKeyMap      = `{"token":"atlassian-api-token","username":"bot@acme.example"}`
+)
+
+// seedBasicAuth adds a Jira Cloud basic-auth configuration (no token, a
+// sealed api_key and an email) and toolkit 11 that names it.
+func seedBasicAuth(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `
+INSERT INTO p_7.configuration (uuid, project_id, elitea_title, type, data) VALUES
+  ('`+migrateTestCloudConfig+`', 7, 'jira-cloud', 'jira',
+   '{"base_url": "https://cloud.atlassian.net", "username": "bot@acme.example", "api_key": "{{secret.`+migrateTestAPIKeyName+`}}"}');
+INSERT INTO p_7.elitea_tools (id, type, name, settings) VALUES
+  (11, 'jira', 'cloud', '{"jira_configuration": {"elitea_title": "jira-cloud", "private": false}}')`); err != nil {
+		t.Fatalf("seed basic auth: %v", err)
+	}
+}
+
+// #1481: a Jira Cloud basic-auth configuration is staged as ONE secret
+// holding the key map {"token","username"}, in pgvault at a new name (or at
+// the --copy-to vault path, same bytes), through the ledger. A token
+// configuration still references its existing token-only secret.
+func TestMigrateReferencesStagesBasicAuthAsOneKeyMap(t *testing.T) {
+	pool, dsn := newMigrateTestDatabase(t)
+	seedMigrateWorld(t, pool)
+	seedBasicAuth(t, pool)
+	keyMapName := "governed_" + strings.ReplaceAll(migrateTestCloudConfig, "-", "")
+
+	// The dry run proposes the key map and writes nothing.
+	code, items, out := runMigrateForTest(t, dsn, migrateDeps{}, "--project", "7", "--json")
+	if code != 0 {
+		t.Fatalf("dry run exit %d: %s", code, out)
+	}
+	if got := byToolkit(items)[11]; got.Action != "propose" || got.Backend != "pgvault" || got.Locator != keyMapName ||
+		got.Material != "token+username" || got.SecretLocation != "pgvault:"+keyMapName+"@<new>" {
+		t.Fatalf("dry-run cloud = %+v", got)
+	}
+	if got := byToolkit(items)[1]; got.Locator != migrateTestSecretName || got.Material != "token" || got.Generation != 1 {
+		t.Fatalf("dry-run token jira = %+v", got)
+	}
+
+	source := &fakeSecretStore{backend: secretstore.BackendPGVault, values: map[string][]string{
+		migrateTestSecretName: {"jira-token"}, migrateTestAPIKeyName: {"atlassian-api-token"},
+	}}
+	opened := 0
+	deps := migrateDeps{secrets: func(_ func(string) (string, bool), _ *pgxpool.Pool, needVault bool) (migrateSecrets, error) {
+		opened++
+		if needVault {
+			t.Fatal("a pgvault key map opened Vault")
+		}
+		return migrateSecrets{source: source}, nil
+	}}
+	args := []string{"--apply", "--operator", "100", "--project", "7", "--policy-revision", "2026-10-r1", "--json"}
+	code, items, out = runMigrateForTest(t, dsn, deps, args...)
+	if code != 0 {
+		t.Fatalf("apply exit %d: %s", code, out)
+	}
+	cloud := byToolkit(items)[11]
+	if cloud.Action != "staged" || cloud.Backend != "pgvault" || cloud.Locator != keyMapName || cloud.Generation != 1 ||
+		cloud.State != "staged" {
+		t.Fatalf("cloud = %+v", cloud)
+	}
+	if got := source.values[keyMapName]; len(got) != 1 || got[0] != migrateTestKeyMap {
+		t.Fatalf("the key map holds %q", got)
+	}
+	if got := source.values[migrateTestAPIKeyName]; len(got) != 1 || got[0] != "atlassian-api-token" {
+		t.Fatal("the configuration's own secret changed")
+	}
+	if jira := byToolkit(items)[1]; jira.Locator != migrateTestSecretName || jira.Generation != 1 || source.writes != 1 || opened != 1 {
+		t.Fatalf("token jira = %+v, writes %d, opened %d", jira, source.writes, opened)
+	}
+	var committed int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM elitea_identity.secret_write_ledger
+WHERE state = 'committed' AND backend = 'pgvault' AND locator_path = $1 AND credential_ref_id = $2`,
+		keyMapName, cloud.CredentialReferenceID).Scan(&committed); err != nil {
+		t.Fatal(err)
+	}
+	if committed != 1 {
+		t.Fatalf("committed ledger rows = %d, want 1", committed)
+	}
+	var audits int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM elitea_runtime.security_audit_outbox
+WHERE event::text LIKE '%credential_reference.copy_to_pgvault%' AND event::text LIKE '%' || $1 || '%'`,
+		cloud.CredentialReferenceID).Scan(&audits); err != nil {
+		t.Fatal(err)
+	}
+	if audits == 0 {
+		t.Fatal("no copy_to_pgvault audit decision names the key map's reference")
+	}
+	// A rerun writes nothing and finds the reference.
+	code, items, out = runMigrateForTest(t, dsn, deps, args...)
+	if code != 0 || byToolkit(items)[11].Action != "exists" || source.writes != 1 {
+		t.Fatalf("rerun exit %d, cloud %+v, writes %d: %s", code, byToolkit(items)[11], source.writes, out)
+	}
+
+	// --copy-to vault writes the same key map to the Vault path.
+	vault := &fakeSecretStore{backend: secretstore.BackendVault, values: map[string][]string{}}
+	vaultDeps := migrateDeps{secrets: func(func(string) (string, bool), *pgxpool.Pool, bool) (migrateSecrets, error) {
+		return migrateSecrets{source: source, vault: vault, mount: "kv"}, nil
+	}}
+	code, items, out = runMigrateForTest(t, dsn, vaultDeps, "--apply", "--operator", "100", "--project", "7",
+		"--copy-to", "vault", "--policy-revision", "2026-10-r1", "--json")
+	if code != 0 {
+		t.Fatalf("copy exit %d: %s", code, out)
+	}
+	path := "elitea/projects/7/credentials/" + migrateTestCloudConfig
+	if got := byToolkit(items)[11]; got.Backend != "vault" || got.Locator != path || got.Generation != 1 {
+		t.Fatalf("vault cloud = %+v", got)
+	}
+	if got := vault.values[path]; len(got) != 1 || got[0] != migrateTestKeyMap {
+		t.Fatalf("Vault holds %q", got)
 	}
 }

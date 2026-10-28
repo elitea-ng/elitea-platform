@@ -2,6 +2,7 @@
 // and the agent toolkit bindings (ADR-0039, issue #1124):
 //
 //	GET    /api/v2/admin/credential_references?project_id=N
+//	POST   /api/v2/admin/credential_references                 {"project_id", "provider_type", "target_identity", "class", "backend", "locator", "generation"}
 //	GET    /api/v2/admin/credential_references/{id}
 //	POST   /api/v2/admin/credential_references/{id}:activate   {}
 //	POST   /api/v2/admin/credential_references/{id}:retire     {}
@@ -45,12 +46,20 @@ type Store interface {
 	Detach(ctx context.Context, referenceID string, target repos.ToolkitAttachment, actor string) (repos.ToolkitAttachmentResult, error)
 	PinToolkit(ctx context.Context, agentBindingID string, target repos.ToolkitAttachment, actor string) (repos.AgentToolkitPin, error)
 	UnpinToolkit(ctx context.Context, agentBindingID string, target repos.ToolkitAttachment, actor string) error
+	StageReference(ctx context.Context, staged repos.StagedReference, newID func() string) (repos.StageResult, error)
 }
 
 var _ Store = (*repos.CredentialReferences)(nil)
 
 // Handler serves the routes.
-type Handler struct{ store Store }
+type Handler struct {
+	store Store
+	// locators and providers serve Create (WithCreate); ids is a test seam
+	// for new ids.
+	locators  Locators
+	providers Providers
+	ids       func() string
+}
 
 // New builds the handler. A nil store is refused.
 func New(store Store) (*Handler, error) {

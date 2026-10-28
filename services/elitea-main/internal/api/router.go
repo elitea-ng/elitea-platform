@@ -89,6 +89,7 @@ import (
 	handoffapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	platformauth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/runtoken"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/buildinfo"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
@@ -668,6 +669,14 @@ type RouterConfig struct {
 	// in the production router.
 	GatewayProxy           http.Handler
 	GatewayProjectResolver apimw.PersonalProjectResolver
+	// RunTokens authenticates a governed run's run token (#1461) on /llm
+	// (audience runtoken.AudienceModelGateway) and on the five artifact
+	// routes the worker's ArtifactObjectService calls reach, in the token's
+	// own project (runtoken.AudienceArtifacts). Every other route refuses
+	// that token with 403 whether or not this is set; nil leaves those
+	// groups refusing it too, which is the state of a deployment that issues
+	// none.
+	RunTokens apimw.RunTokenValidator
 	// ConfigConnectionChecker performs the real, minimal provider round trip
 	// backing /configurations/check_connection(s) (#319). nil leaves those
 	// routes reporting an honest "not available" failure rather than the
@@ -1003,7 +1012,59 @@ type ArtifactDeps struct {
 	// the minimum client version), applied directly after Authenticate as
 	// the group applies them. Nil applies none.
 	Gates []func(http.Handler) http.Handler
+	// RunTokenAuthenticate is Authenticate that also admits a governed
+	// run's run token in its own project (#1461). It wraps ONLY the five
+	// routes the worker's ArtifactObjectService calls reach (the first group
+	// below); nil uses Authenticate there too.
+	RunTokenAuthenticate func(http.Handler) http.Handler
 }
+
+// chainArtifactMiss is the artifact subrouter's 404 and 405: authentication
+// and the API group's gates, then the miss answer.
+func chainArtifactMiss(authenticate func(http.Handler) http.Handler, gates []func(http.Handler) http.Handler, miss http.Handler) http.HandlerFunc {
+	for i := len(gates) - 1; i >= 0; i-- {
+		miss = gates[i](miss)
+	}
+	return authenticate(miss).ServeHTTP
+}
+
+// artifactMethods are the methods artifactMethodNotAllowed probes for Allow.
+var artifactMethods = []string{
+	http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+	http.MethodPatch, http.MethodDelete, http.MethodOptions,
+}
+
+// artifactMethodNotAllowed is chi's own 405 (an Allow header naming the
+// methods the path serves, an empty body), rebuilt because a custom 405
+// handler is not handed chi's method list.
+func artifactMethodNotAllowed(routes chi.Routes) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if rctx := chi.RouteContext(r.Context()); rctx != nil && rctx.RoutePath != "" {
+			path = rctx.RoutePath
+		}
+		for _, method := range artifactMethods {
+			if routes.Match(chi.NewRouteContext(), method, path) {
+				w.Header().Add("Allow", method)
+			}
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+// runTokenScope admits a governed run's run token (#1461) on one route group
+// for audience, or nil when no validator is composed (the group then refuses
+// the token with 403, as every other group does).
+func runTokenScope(validator apimw.RunTokenValidator, audience string, project func(*http.Request) string) *apimw.RunTokenScope {
+	if validator == nil {
+		return nil
+	}
+	return &apimw.RunTokenScope{Audience: audience, Validator: validator, Project: project}
+}
+
+// artifactRouteProject is the project an artifact route names: its
+// {projectID} path parameter.
+func artifactRouteProject(r *http.Request) string { return chi.URLParam(r, "projectID") }
 
 // mountArtifactRoutes registers all 24 artifact routes (13 from S7, plus
 // S16's 3 native-multipart continuation routes, plus the 5 S3-shaped ones
@@ -1075,90 +1136,134 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 			deps.Handler.ListBucketPermissions, deps.Handler.SetBucketPermissions, deps.Handler.DeleteBucketPermission
 	}
 
+	runTokenAuthenticate := deps.RunTokenAuthenticate
+	if runTokenAuthenticate == nil {
+		runTokenAuthenticate = deps.Authenticate
+	}
+	// authenticated applies one authentication and then the API group's
+	// gates, in the group's order.
+	authenticated := func(r chi.Router, authenticate func(http.Handler) http.Handler) {
+		r.Use(authenticate)
+		for _, gate := range deps.Gates {
+			r.Use(gate)
+		}
+	}
+	// The root router's miss answer, captured before the artifact subrouter
+	// declares its own: a path under /api/v2/artifacts that matches no route
+	// is still authenticated first (401 without a credential, then 404), as
+	// it was when one authentication wrapped the whole subrouter.
+	var notFound http.Handler = http.HandlerFunc(http.NotFound)
+	if mux, ok := r.(interface{ NotFoundHandler() http.HandlerFunc }); ok {
+		notFound = mux.NotFoundHandler()
+	}
+
 	r.Group(func(r chi.Router) {
 		// NoStore never replaces a value a handler chose. Object downloads
 		// state their own ("private, no-store", artifacts streamObject);
 		// every other artifact answer gets the group's no-store from here.
 		r.Use(apimw.NoStore)
-		r.Use(deps.Authenticate)
-		for _, gate := range deps.Gates {
-			r.Use(gate)
-		}
 		r.Route("/api/v2/artifacts", func(r chi.Router) {
-			// Bucket plane — S8.
-			r.With(view).Get("/buckets/{projectID}", listBuckets)
-			r.With(create).Post("/buckets/{projectID}", createBucket)
-			r.With(view).Get("/buckets/{projectID}/{bucket}", getBucket)
-			r.With(edit).Patch("/buckets/{projectID}/{bucket}", updateBucket)
-			r.With(del).Delete("/buckets/{projectID}/{bucket}", deleteBucket)
+			r.NotFound(chainArtifactMiss(deps.Authenticate, deps.Gates, notFound))
+			// A known path asked with a method it does not serve is
+			// authenticated and gated first too (401, then 426 or 503, then
+			// 405), as under one authentication.
+			r.MethodNotAllowed(chainArtifactMiss(deps.Authenticate, deps.Gates, artifactMethodNotAllowed(r)))
 
-			// Object plane — S9. The three key-bearing routes use a trailing
-			// chi wildcard, not the spec's literal {key} — see S7/S9 for why.
-			r.With(view).Get("/objects/{projectID}/{bucket}", listObjects)
-			r.With(create).Post("/objects/{projectID}/{bucket}", uploadObject)
-			r.With(del).Post("/objects/{projectID}/{bucket}:batchDelete", batchDeleteObjects)
-			r.With(view).Get("/objects/{projectID}/{bucket}/*", downloadObject)
-			r.With(view).Head("/objects/{projectID}/{bucket}/*", statObject)
-			r.With(del).Delete("/objects/{projectID}/{bucket}/*", deleteObject)
+			// The worker's routes (#1461). These five, and no other route,
+			// are the ones elitea-main's ArtifactObjectService calls reach
+			// for the worker (internal/transport/artifactgrpc: CreateBucket,
+			// ListObjects, PutObject, GetObject, Stat), so they are the only
+			// artifact routes a governed run's run token is admitted on, and
+			// only in its own project. Every other artifact route refuses
+			// the token with 403.
+			r.Group(func(r chi.Router) {
+				authenticated(r, runTokenAuthenticate)
+				r.With(create).Post("/buckets/{projectID}", createBucket)
+				r.With(view).Get("/objects/{projectID}/{bucket}", listObjects)
+				r.With(create).Post("/objects/{projectID}/{bucket}", uploadObject)
+				r.With(view).Get("/objects/{projectID}/{bucket}/*", downloadObject)
+				r.With(view).Head("/objects/{projectID}/{bucket}/*", statObject)
+			})
 
-			// The SDK's by-filepath object read (#978), an ALIAS of the
-			// download above and nothing else: same handler, same `view`
-			// tier, same per-bucket access list, same content type by
-			// extension.
-			//
-			// The SDK builds this URL itself —
-			// `{base}/api/v2/artifacts/artifact/default/{project_id}` +
-			// `/{bucket}/{key}` (elitea-sdk runtime/clients/client.py:126,
-			// :1235) — and it is the ONLY way a toolkit turns a
-			// `/{bucket}/{filename}` tool argument into bytes
-			// (`download_artifact_by_filepath` →
-			// `ArtifactClient.get_raw_content_by_filepath`). Nothing served
-			// it here, so every qTest `upload_attachment_to_test_run` and
-			// `add_file_to_test_case` answered "Resource not found" for a
-			// valid path as loudly as for a typo.
-			//
-			// `default` is the legacy MODE segment the SDK still sends. It is
-			// a literal here for the reason the bucket-permission routes give
-			// above: this surface resolves PermissionModeDefault
-			// unconditionally, so the segment names nothing the router reads
-			// — but it is in the URL the SDK sends, so it has to be matched.
-			//
-			// The response is raw bytes: `download_artifact` returns
-			// `data.content` and every caller treats it as the file, so a
-			// JSON envelope here would reach the toolkit as the file's
-			// contents.
-			r.With(view).Get("/artifact/default/{projectID}/{bucket}/*", downloadObject)
+			// Every other artifact route: a user's credential only.
+			r.Group(func(r chi.Router) {
+				authenticated(r, deps.Authenticate)
+				// Bucket plane — S8.
+				r.With(view).Get("/buckets/{projectID}", listBuckets)
+				r.With(view).Get("/buckets/{projectID}/{bucket}", getBucket)
+				r.With(edit).Patch("/buckets/{projectID}/{bucket}", updateBucket)
+				r.With(del).Delete("/buckets/{projectID}/{bucket}", deleteBucket)
 
-			// Transfer grants — S15. create for both: grant creation is
-			// explicitly create per S11; commit is the write half of the same
-			// grant lifecycle and the plan does not distinguish it.
-			r.With(create).Post("/grants/{projectID}/{bucket}", createTransferGrant)
-			r.With(create).Post("/grants/{projectID}/{grantID}:commit", commitTransferGrant)
+				// Object plane — S9. The three key-bearing routes use a
+				// trailing chi wildcard, not the spec's literal {key} — see
+				// S7/S9 for why.
+				r.With(del).Post("/objects/{projectID}/{bucket}:batchDelete", batchDeleteObjects)
+				r.With(del).Delete("/objects/{projectID}/{bucket}/*", deleteObject)
 
-			// Native multipart upload continuation — S16. Same permission
-			// tier as the grant routes above: a part presign, a complete, and
-			// an abort are all steps of the same create-time write lifecycle
-			// CreateTransferGrant started, not a distinct RBAC category the
-			// plan introduces.
-			r.With(create).Post("/grants/{projectID}/{grantID}/parts/{partNumber}", presignUploadPart)
-			r.With(create).Post("/grants/{projectID}/{grantID}:completeMultipart", completeMultipartUpload)
-			r.With(create).Post("/grants/{projectID}/{grantID}:abortMultipart", abortMultipartUpload)
+				// The SDK's by-filepath object read (#978), an ALIAS of the
+				// download above and nothing else: same handler, same `view`
+				// tier, same per-bucket access list, same content type by
+				// extension.
+				//
+				// The SDK builds this URL itself —
+				// `{base}/api/v2/artifacts/artifact/default/{project_id}` +
+				// `/{bucket}/{key}` (elitea-sdk runtime/clients/client.py:126,
+				// :1235) — and it is the ONLY way a toolkit turns a
+				// `/{bucket}/{filename}` tool argument into bytes
+				// (`download_artifact_by_filepath` →
+				// `ArtifactClient.get_raw_content_by_filepath`). Nothing served
+				// it here, so every qTest `upload_attachment_to_test_run` and
+				// `add_file_to_test_case` answered "Resource not found" for a
+				// valid path as loudly as for a typo.
+				//
+				// `default` is the legacy MODE segment the SDK still sends. It is
+				// a literal here for the reason the bucket-permission routes give
+				// above: this surface resolves PermissionModeDefault
+				// unconditionally, so the segment names nothing the router reads
+				// — but it is in the URL the SDK sends, so it has to be matched.
+				//
+				// The response is raw bytes: `download_artifact` returns
+				// `data.content` and every caller treats it as the file, so a
+				// JSON envelope here would reach the toolkit as the file's
+				// contents.
+				r.With(view).Get("/artifact/default/{projectID}/{bucket}/*", downloadObject)
 
-			// Per-bucket access lists — the legacy `bucket_permissions`
-			// resource module. The MODE segment legacy carries
-			// (`/bucket_permissions/default/{pid}`) is dropped here, as it is
-			// on every other artifact route above: this surface resolves
-			// PermissionModeDefault unconditionally, so a mode in the path
-			// would name something the router does not read.
-			//
-			// The GET stays at the `.view` tier, because a member needs their
-			// own row to know what a bucket allows them. The full list is for
-			// a caller who may EDIT it (#6725): aclListScope marks that
-			// caller, and the handler answers everyone else their own row.
-			r.With(aclView, aclListScope).Get("/bucket_permissions/{projectID}", listBucketPermissions)
-			r.With(aclEdit).Put("/bucket_permissions/{projectID}", setBucketPermissions)
-			r.With(aclEdit).Delete("/bucket_permissions/{projectID}", deleteBucketPermission)
+				// Transfer grants — S15. create for both: grant creation is
+				// explicitly create per S11; commit is the write half of the same
+				// grant lifecycle and the plan does not distinguish it.
+				r.With(create).Post("/grants/{projectID}/{bucket}", createTransferGrant)
+				r.With(create).Post("/grants/{projectID}/{grantID}:commit", commitTransferGrant)
+
+				// Native multipart upload continuation — S16. Same permission
+				// tier as the grant routes above: a part presign, a complete, and
+				// an abort are all steps of the same create-time write lifecycle
+				// CreateTransferGrant started, not a distinct RBAC category the
+				// plan introduces.
+				r.With(create).Post("/grants/{projectID}/{grantID}/parts/{partNumber}", presignUploadPart)
+				r.With(create).Post("/grants/{projectID}/{grantID}:completeMultipart", completeMultipartUpload)
+				r.With(create).Post("/grants/{projectID}/{grantID}:abortMultipart", abortMultipartUpload)
+
+				// Per-bucket access lists — the legacy `bucket_permissions`
+				// resource module. The MODE segment legacy carries
+				// (`/bucket_permissions/default/{pid}`) is dropped here, as it is
+				// on every other artifact route above: this surface resolves
+				// PermissionModeDefault unconditionally, so a mode in the path
+				// would name something the router does not read.
+				//
+				// The GET stays at the `.view` tier, because a member needs their
+				// own row to know what a bucket allows them. The full list is for
+				// a caller who may EDIT it (#6725): aclListScope marks that
+				// caller, and the handler answers everyone else their own row.
+				r.With(aclView, aclListScope).Get("/bucket_permissions/{projectID}", listBucketPermissions)
+				r.With(aclEdit).Put("/bucket_permissions/{projectID}", setBucketPermissions)
+				r.With(aclEdit).Delete("/bucket_permissions/{projectID}", deleteBucketPermission)
+			})
 		})
+	})
+
+	r.Group(func(r chi.Router) {
+		r.Use(apimw.NoStore)
+		authenticated(r, deps.Authenticate)
 
 		// S3-shaped bucket listing and object read — the two calls the SDK's
 		// artifact toolkit actually performs, and therefore the ones an index
@@ -1429,6 +1534,24 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	if cfg.SAMLHandler == nil {
 		cfg.SAMLHandler = cfg.Auth.SAMLHandler
 	}
+	// The one authentication configuration every user-facing mount of this
+	// router uses. Each Auth below is built from it, never from its own
+	// literal: a literal that missed SessionSecret or SessionStore was the
+	// 401 re-auth loop class. A route group that also admits a governed
+	// run's run token adds only its RunTokens scope (withRunTokens).
+	baseAuth := apimw.AuthConfig{
+		Validator:                  cfg.AuthValidator,
+		PrincipalValidator:         cfg.PrincipalValidator,
+		FormSessions:               cfg.Auth.FormSessions,
+		SessionSecret:              cfg.SessionSecret,
+		SessionStore:               cfg.Auth.SessionStore,
+		RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
+	}
+	withRunTokens := func(scope *apimw.RunTokenScope) apimw.AuthConfig {
+		config := baseAuth
+		config.RunTokens = scope
+		return config
+	}
 
 	// The project-create pipeline, built ONCE and shared by every mount that
 	// needs it: the projects route, the support assistant, and the two readers
@@ -1639,18 +1762,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			nativeAddresses = cfg.SCIMClientAddresses
 		}
 		nativeHandler = nativeapi.New(nativeapi.Config{
-			Registry:     cfg.NativeClients,
-			Store:        cfg.NativeStore,
-			PublicOrigin: cfg.PublicOrigin,
-			Pages:        browserauth.NewNativePages(brandingResolver),
-			Authenticate: apimw.Auth(apimw.AuthConfig{
-				Validator:                  cfg.AuthValidator,
-				PrincipalValidator:         cfg.PrincipalValidator,
-				FormSessions:               cfg.Auth.FormSessions,
-				SessionSecret:              cfg.SessionSecret,
-				SessionStore:               cfg.Auth.SessionStore,
-				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
-			}),
+			Registry:      cfg.NativeClients,
+			Store:         cfg.NativeStore,
+			PublicOrigin:  cfg.PublicOrigin,
+			Pages:         browserauth.NewNativePages(brandingResolver),
+			Authenticate:  apimw.Auth(baseAuth),
 			Addresses:     nativeAddresses,
 			Audit:         auditRecorder,
 			SecureCookies: cfg.NativeSecureCookies,
@@ -1861,14 +1977,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// the same object store, the same attachment metadata tables, the same
 	// AddAttachments code, not a second implementation of any of them.
 	var convHandler *v2convs.Handler
-	authenticate := apimw.Auth(apimw.AuthConfig{
-		Validator:                  cfg.AuthValidator,
-		PrincipalValidator:         cfg.PrincipalValidator,
-		FormSessions:               cfg.Auth.FormSessions,
-		SessionSecret:              cfg.SessionSecret,
-		SessionStore:               cfg.Auth.SessionStore,
-		RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
-	})
+	authenticate := apimw.Auth(baseAuth)
 	// The API group's post-authentication gates, built ONCE and applied to
 	// every /api/v2 surface that authenticates a user: the group below, the
 	// artifact routes, and the root-mounted reviewed routes
@@ -1907,6 +2016,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		Authenticate: authenticate,
 		Resolver:     artifactResolver,
 		Gates:        apiGates,
+		// The worker's five artifact routes also admit a governed run's
+		// run token, in the project the route names only (#1461).
+		RunTokenAuthenticate: apimw.Auth(withRunTokens(runTokenScope(cfg.RunTokens, runtoken.AudienceArtifacts, artifactRouteProject))),
 	})
 	// Construct these collaborators before either route family is mounted.
 	// The REST toolkit surface, the internal MCP toolkit builder and the MCP
@@ -2068,14 +2180,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		// same position — in front of their own Auth — so every /api/v2
 		// answer carries the directive whichever composition served it.
 		r.Use(apimw.NoStore)
-		r.Use(apimw.Auth(apimw.AuthConfig{
-			Validator:                  cfg.AuthValidator,
-			PrincipalValidator:         cfg.PrincipalValidator,
-			FormSessions:               cfg.Auth.FormSessions,
-			SessionSecret:              cfg.SessionSecret,
-			SessionStore:               cfg.Auth.SessionStore,
-			RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
-		}))
+		r.Use(apimw.Auth(baseAuth))
 
 		// Maintenance, then the minimum client version, directly after
 		// authentication: apiGates (built above, where the ordering is
@@ -2805,6 +2910,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(bindingsApprove).Post("/agent_identities/{id}:approve", agentIdentities.ApproveBinding)
 					r.With(bindingsManage).Post("/agent_identities/{id}:suspend", agentIdentities.SuspendBinding)
 					r.With(bindingsManage).Post("/agent_identities/{id}:revoke", agentIdentities.RevokeBinding)
+					// #1462: a re-pin is a new proposal; :approve re-activates it.
+					r.With(bindingsManage).Post("/agent_identities/{id}:repin", agentIdentities.RepinBinding)
 					r.With(mandatesRead).Get("/mandates", agentIdentities.ListMandates)
 					r.With(mandatesManage).Post("/mandates", agentIdentities.CreateMandate)
 					r.With(mandatesApprove).Post("/mandates/{id}:approve", agentIdentities.ApproveMandate)
@@ -2838,8 +2945,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// reference, like approving a binding, makes governed use
 				// possible, so it needs approve, and the stager can never be
 				// the activator (the store and the 0193 CHECK enforce it).
-				// Listing needs manage OR approve; retire, attach, detach and
-				// the toolkit pin need manage.
+				// Listing needs manage OR approve; creating a staged reference
+				// from scratch (#1482), retire, attach, detach and the toolkit
+				// pin need manage.
 				if cfg.CredentialReferencesAdmin != nil {
 					references := cfg.CredentialReferencesAdmin
 					referencesManage := central(v2agentidentity.PermissionBindingsManage)
@@ -2849,6 +2957,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						v2agentidentity.PermissionBindingsManage, v2agentidentity.PermissionBindingsApprove,
 					)
 					r.With(referencesRead).Get("/credential_references", references.List)
+					r.With(referencesManage).Post("/credential_references", references.Create)
 					r.With(referencesRead).Get("/credential_references/{id}", references.Get)
 					r.With(referencesApprove).Post("/credential_references/{id}:activate", references.Activate)
 					r.With(referencesManage).Post("/credential_references/{id}:retire", references.Retire)
@@ -5111,14 +5220,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// to catch.
 	mountLLM := func(proxy http.Handler, resolver apimw.PersonalProjectResolver) {
 		r.Group(func(r chi.Router) {
-			r.Use(apimw.Auth(apimw.AuthConfig{
-				Validator:                  cfg.AuthValidator,
-				PrincipalValidator:         cfg.PrincipalValidator,
-				FormSessions:               cfg.Auth.FormSessions,
-				SessionSecret:              cfg.SessionSecret,
-				SessionStore:               cfg.Auth.SessionStore,
-				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
-			}))
+			// A governed run's run token reaches the model gateway here.
+			r.Use(apimw.Auth(withRunTokens(runTokenScope(cfg.RunTokens, runtoken.AudienceModelGateway, nil))))
 			// The session cookie authenticates /llm, and the browser voice
 			// client POSTs audio here with it. A cookie-authenticated write
 			// must prove it came from this origin (CSRF from a same-site

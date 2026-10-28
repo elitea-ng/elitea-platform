@@ -186,3 +186,98 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 }
 
 var _ agentexecutionapp.CurrentAgentCancellationStore = (*CurrentAgentCancelRepository)(nil)
+
+type governedRefusalQuerier interface {
+	CancelCurrentAgentExecution(
+		context.Context,
+		sqlcgen.CancelCurrentAgentExecutionParams,
+	) (sqlcgen.CancelCurrentAgentExecutionRow, error)
+	ProjectGovernedContinuationRefusal(
+		context.Context,
+		sqlcgen.ProjectGovernedContinuationRefusalParams,
+	) (int32, error)
+}
+
+// SettleGovernedRefusal settles the paused turn of a governed continuation
+// that admission refused (#1485). It cancels the paused execution with the
+// same ownership-checked statement a stop uses, then projects the answer as
+// an error with the pause keys cleared. Unlike a stop it never deletes the
+// turn. settled=false when the stop statement found nothing to cancel: the
+// turn was settled or stopped already, or the actor may not stop it.
+func (repository *CurrentAgentCancelRepository) SettleGovernedRefusal(
+	ctx context.Context,
+	request agentexecutionapp.GovernedRefusalSettlement,
+) (bool, error) {
+	cancel := agentexecutionapp.CurrentAgentCancelRequest{
+		ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
+		ResponseMessageID: request.ResponseMessageID,
+	}
+	if repository == nil || repository.projects == nil || cancel.Validate() != nil ||
+		request.Reason == "" || len(request.Reason) > 256 || request.Code == "" {
+		return false, agentexecutionapp.ErrInvalidCurrentAgentCancel
+	}
+	projectID, valid := currentAgentDatabaseID(request.ProjectID)
+	if !valid {
+		return false, agentexecutionapp.ErrInvalidCurrentAgentCancel
+	}
+	responseMessageID, err := currentPGUUID(request.ResponseMessageID)
+	if err != nil {
+		return false, agentexecutionapp.ErrInvalidCurrentAgentCancel
+	}
+	settled := false
+	err = repository.projects.WithinProjectTx(
+		ctx,
+		request.ProjectID,
+		pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite},
+		func(tx sqlExecutor) error {
+			queries, ok := tx.(governedRefusalQuerier)
+			if !ok {
+				return errors.New("governed refusal settlement query is unavailable")
+			}
+			row, queryErr := queries.CancelCurrentAgentExecution(ctx, sqlcgen.CancelCurrentAgentExecutionParams{
+				ResponseMessageID: responseMessageID,
+				ProjectID:         projectID,
+				ActorUserID:       request.ActorUserID,
+			})
+			if errors.Is(queryErr, pgx.ErrNoRows) {
+				return nil
+			}
+			if queryErr != nil {
+				return fmt.Errorf("cancel the refused governed continuation: %w", queryErr)
+			}
+			if row.ResponseMessageGroupID <= 0 || row.ExecutionID == "" || row.ClientExecutionGeneration == "" {
+				return errors.New("governed refusal settlement target is incomplete")
+			}
+			if err := cancelNodeRecovery(ctx, tx, row.ExecutionID, uint64(row.Generation)); err != nil {
+				return err
+			}
+			if err := cancelCodeToolkitChildren(ctx, tx, row.ExecutionID, int64(row.Generation)); err != nil {
+				return err
+			}
+			_, projectionErr := queries.ProjectGovernedContinuationRefusal(ctx, sqlcgen.ProjectGovernedContinuationRefusalParams{
+				ErrorMessage:           request.Reason,
+				ErrorCode:              agentexecutionapp.GovernedRefusalErrorCode,
+				RefusalCode:            request.Code,
+				ResponseMessageGroupID: row.ResponseMessageGroupID,
+				ExecutionID:            row.ExecutionID,
+				ExecutionGeneration:    row.ClientExecutionGeneration,
+			})
+			if errors.Is(projectionErr, pgx.ErrNoRows) {
+				// The answer is gone (a concurrent stop deleted the turn):
+				// the job is cancelled and there is nothing left to project.
+				return nil
+			}
+			if projectionErr != nil {
+				return fmt.Errorf("project the refused governed continuation: %w", projectionErr)
+			}
+			settled = true
+			return nil
+		},
+	)
+	if err != nil {
+		return false, err
+	}
+	return settled, nil
+}
+
+var _ agentexecutionapp.GovernedRefusalSettler = (*CurrentAgentCancelRepository)(nil)

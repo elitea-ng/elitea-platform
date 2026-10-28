@@ -137,6 +137,10 @@ type Dependencies struct {
 	ActorTokenIssuer                 storage.ActorTokenIssuer
 	ProjectTokenValidator            storage.ProjectTokenValidator
 	ProjectSystemTokenSource         ProjectSystemTokenSource
+	// RunTokens mints a governed-pinned run's run-scoped
+	// client token (#1461). Built at the composition root with the governed
+	// pins; nil leaves every run's client token the actor's PAT.
+	RunTokens storage.RunTokenIssuer
 	// CallbackTokenFacts reads callback token grants for elitea-vector's
 	// token introspection (ADR-0031). Required only when
 	// Config.VectorIntrospectionClients is set; ProjectTokenValidator then
@@ -825,6 +829,14 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// base version, under the caller's folder visibility. Same setter
 		// idiom and admission pool.
 		agentStart = agentStart.WithProjectSkills(repos.NewProjectSkillsRepo(dependencies.AdmissionPool))
+		// A governed continuation that admission refuses settles its paused
+		// turn through the stop's repository (#1485). Only a governed
+		// admission refuses that way, so it is inert with governance off.
+		var governedRefusals agentexecutionapp.GovernedRefusalSettler = agentCancellation
+		if dependencies.ConversationActivity != nil {
+			governedRefusals = activityGovernedRefusalSettler{next: agentCancellation, activity: dependencies.ConversationActivity}
+		}
+		agentStart = agentStart.WithGovernedRefusalSettlement(governedRefusals)
 		// @mention notifications (#977). Same setter idiom, same admission
 		// pool. The composer has always put the tagged users on the wire; the
 		// start route used to REFUSE the field and nothing wrote a row, so a
@@ -1592,6 +1604,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct runtime worker client-token context: %w", err)
 		}
 		runtimeToken.WithWorkspaceContext(newWorkspaceContextResolver(dependencies))
+		if dependencies.RunTokens != nil {
+			runtimeToken.WithRunTokens(dependencies.RunTokens)
+		}
 	}
 	// nestedApplicationVersions is what makes agent-as-tool executable at all:
 	// without this route the native worker reaches
