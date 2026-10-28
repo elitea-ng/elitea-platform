@@ -17,6 +17,7 @@ import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalance
 import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
+import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
 import PaletteOutlinedIcon from '@mui/icons-material/PaletteOutlined';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
@@ -252,6 +253,14 @@ export function navGroups(): readonly AdminNavGroup[] {
           label: t('pages.admin.nav.audit', 'Audit Trail'),
           icon: HistoryOutlinedIcon,
           anyPermission: ['models.admin.audit_trail.view'],
+        },
+        {
+          id: 'retention',
+          path: '/retention',
+          label: t('pages.admin.nav.retention', 'Data retention'),
+          icon: GavelOutlinedIcon,
+          // Shared migration 0195 grants both to super_admin and admin.
+          anyPermission: ['retention.manage', 'legal_hold.manage'],
         },
         {
           id: 'tasks',

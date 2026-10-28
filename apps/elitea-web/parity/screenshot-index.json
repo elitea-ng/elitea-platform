@@ -719,6 +719,16 @@
     },
     {
       "file": null,
+      "route": "/admin/app/retention",
+      "targetComponent": "src/pages/admin/Retention.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Data retention and legal holds (ADR-0042 decision 4, issue 1495). WIRED and NOT snapshotted yet — see the EXEMPT entry in scripts/check-visual-coverage.mjs.",
+      "surface": "admin",
+      "baseline": null
+    },
+    {
+      "file": null,
       "route": "/admin/app/governance",
       "targetComponent": "src/pages/admin/GatewayGovernance.tsx",
       "theme": "dark",
