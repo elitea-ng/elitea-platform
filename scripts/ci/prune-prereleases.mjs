@@ -8,9 +8,13 @@
 // WHAT. A nightly a day, and a dev pre-release per dispatch, each publish a
 // GitHub pre-release, its tag, every release image at three tags (the
 // multi-arch `<version>` and `<version>-linux-{amd64,arm64}`) and every chart.
-// Kept forever, they would outnumber the releases a hundred to one. So for ONE
-// channel per run: the newest `keep` pre-releases stay, and every older one
-// goes, with its images, charts, GitHub release and tag.
+// Kept forever, they would outnumber the releases a hundred to one. So after a
+// pre-release of ONE channel, the newest `keep` of that channel stay, and every
+// older one goes, with its images, charts, GitHub release and tag. After a
+// stable release (channel `release`, with its `tag`), every pre-release of
+// either channel cut before it goes: each previewed a release that now exists.
+// Stable releases are never deleted here; release-retention.yml does that, by
+// hand (scripts/ci/prune-releases.mjs).
 //
 // WHICH PRE-RELEASES. A GitHub release flagged `prerelease` whose tag is
 // `v<x>.<y>.<z>-<channel>.<digits and dots>` — exactly the forms publish.yml
@@ -23,7 +27,8 @@
 //
 // WHICH VERSIONS. A package version is deleted only when EVERY tag it carries
 // belongs to a doomed pre-release. One also carrying a tag nothing doomed
-// minted (`latest`, a stable version) is kept and reported.
+// minted (`latest`, a stable version) is kept and reported. The cosign
+// signature of a deleted manifest (the `sha256-<digest>` tag) goes with it.
 //
 // ORDER. Packages first, then the GitHub release, then the tag: a run that
 // fails half way leaves the release listed, so the next run selects it again.
@@ -36,17 +41,26 @@ import { pyRepr } from "./py-compat.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const CHANNELS = new Set(["nightly", "dev"]);
-const SUFFIXES = ["", "-linux-amd64", "-linux-arm64"];
+export const SUFFIXES = ["", "-linux-amd64", "-linux-arm64"];
 
 export function isPrereleaseTag(tag, channel) {
   return CHANNELS.has(channel) && new RegExp(`^v\\d+\\.\\d+\\.\\d+-${channel}\\.\\d+(?:\\.\\d+)*$`).test(tag);
 }
+
+const isAnyPrerelease = (r) => r.prerelease && [...CHANNELS].some((c) => isPrereleaseTag(r.tag_name, c));
 
 /** The pre-releases of `channel` beyond the newest `keep`, newest first. */
 export function select(releases, channel, keep) {
   const own = releases.filter((r) => r.prerelease && isPrereleaseTag(r.tag_name, channel));
   own.sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
   return own.slice(keep);
+}
+
+/** Every pre-release, of either channel, created before the release `tag`; null when there is no such release. */
+export function selectSuperseded(releases, tag) {
+  const release = releases.find((r) => r.tag_name === tag && !r.prerelease);
+  if (!release) return null;
+  return releases.filter((r) => isAnyPrerelease(r) && r.created_at < release.created_at);
 }
 
 /** The `NAME=("a" "b" ...)` bash array of publish.yml. */
@@ -56,7 +70,7 @@ export function bashArray(text, name) {
   return [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
 }
 
-const tagsOf = (version) => ((version.metadata || {}).container || {}).tags || [];
+export const tagsOf = (version) => ((version.metadata || {}).container || {}).tags || [];
 
 /**
  * The versions of one package to delete: every tag they carry is one of
@@ -73,7 +87,17 @@ export function doomedVersions(versions, doomedTags) {
   return [remove, kept];
 }
 
-async function listVersions(github, org, name) {
+/** The cosign signatures (`sha256-<digest>` tags) of the `removed` manifests, which no other manifest needs. */
+export function signaturesOf(versions, removed) {
+  const sigs = new Set();
+  for (const version of removed) {
+    const hex = String(version.name || "").replace(/^sha256:/, "");
+    if (hex) for (const suffix of ["", ".sig", ".att"]) sigs.add(`sha256-${hex}${suffix}`);
+  }
+  return versions.filter((v) => tagsOf(v).length > 0 && tagsOf(v).every((t) => sigs.has(t)));
+}
+
+export async function listVersions(github, org, name) {
   try {
     return await github.paginate(github.rest.packages.getAllPackageVersionsForPackageOwnedByOrg, {
       package_type: "container",
@@ -87,7 +111,7 @@ async function listVersions(github, org, name) {
   }
 }
 
-async function ignore404(call, what) {
+export async function ignore404(call, what) {
   try {
     await call();
   } catch (error) {
@@ -97,12 +121,16 @@ async function ignore404(call, what) {
 }
 
 /** Returns 0, or 2 for a bad argument. A failed API call throws. */
-export async function main({ github, owner, repo, org, channel, keep, root = ROOT, log = console.log }) {
-  if (!CHANNELS.has(channel)) {
-    log(`::error::channel must be one of ${[...CHANNELS].join(", ")}; got ${pyRepr(String(channel))}`);
+export async function main({ github, owner, repo, org, channel, keep, tag, root = ROOT, log = console.log }) {
+  if (!CHANNELS.has(channel) && channel !== "release") {
+    log(`::error::channel must be release or one of ${[...CHANNELS].join(", ")}; got ${pyRepr(String(channel))}`);
     return 2;
   }
-  if (!Number.isInteger(keep) || keep < 1) {
+  if (channel === "release" && !/^v\d+\.\d+\.\d+$/.test(String(tag))) {
+    log(`::error::a release prune needs the stable tag just released; got ${pyRepr(String(tag))}`);
+    return 2;
+  }
+  if (channel !== "release" && (!Number.isInteger(keep) || keep < 1)) {
     log(`::error::keep must be an integer of at least 1; got ${pyRepr(String(keep))}`);
     return 2;
   }
@@ -120,8 +148,18 @@ export async function main({ github, owner, repo, org, channel, keep, root = ROO
   }
 
   const releases = await github.paginate(github.rest.repos.listReleases, { owner, repo, per_page: 100 });
-  const doomed = select(releases, channel, keep);
-  log(`${channel}: ${releases.filter((r) => r.prerelease && isPrereleaseTag(r.tag_name, channel)).length} pre-release(s), keeping ${keep}, deleting ${doomed.length}`);
+  let doomed;
+  if (channel === "release") {
+    doomed = selectSuperseded(releases, tag);
+    if (doomed === null) {
+      log(`::error::no stable release ${pyRepr(String(tag))} is listed`);
+      return 2;
+    }
+    log(`${tag}: deleting the ${doomed.length} pre-release(s) cut before it`);
+  } else {
+    doomed = select(releases, channel, keep);
+    log(`${channel}: ${releases.filter((r) => r.prerelease && isPrereleaseTag(r.tag_name, channel)).length} pre-release(s), keeping ${keep}, deleting ${doomed.length}`);
+  }
   if (!doomed.length) return 0;
 
   const versions = doomed.map((r) => r.tag_name.slice(1));
@@ -136,7 +174,8 @@ export async function main({ github, owner, repo, org, channel, keep, root = ROO
       log(`${name}: no such package; skipped`);
       continue;
     }
-    const [remove, kept] = doomedVersions(all, tags);
+    const [manifests, kept] = doomedVersions(all, tags);
+    const remove = [...manifests, ...signaturesOf(all, manifests)];
     for (const version of kept) {
       log(`::warning::${name}: version ${version.id} carries ${pyRepr(tagsOf(version))}, not only doomed pre-release tags; kept`);
     }
@@ -151,9 +190,9 @@ export async function main({ github, owner, repo, org, channel, keep, root = ROO
   }
 
   for (const release of doomed) {
-    if (!release.prerelease || !isPrereleaseTag(release.tag_name, channel)) {
+    if (channel === "release" ? !isAnyPrerelease(release) : !release.prerelease || !isPrereleaseTag(release.tag_name, channel)) {
       // The rule, again, at the point of no return.
-      throw new Error(`refusing to delete ${release.tag_name}: not a ${channel} pre-release`);
+      throw new Error(`refusing to delete ${release.tag_name}: not a ${channel === "release" ? "" : `${channel} `}pre-release`);
     }
     await ignore404(() => github.rest.repos.deleteRelease({ owner, repo, release_id: release.id }), `DELETE release ${release.tag_name}`);
     await ignore404(() => github.rest.git.deleteRef({ owner, repo, ref: `tags/${release.tag_name}` }), `DELETE tag ${release.tag_name}`);

@@ -138,3 +138,33 @@ test("an API failure other than 404 fails the run", async () => {
   github.packages["elitea-main"] = [ver(10, ["6.1.0-dev.1"])];
   await assert.rejects(run(github), /DELETE elitea-main version 10 failed: Server Error/);
 });
+
+test("a stable release takes every pre-release cut before it, of either channel", () => {
+  const releases = [
+    rel(1, "v6.1.0-nightly.20261001.10", 1),
+    rel(2, "v6.1.0-dev.11", 2),
+    rel(3, "v6.1.0", 3, false),
+    rel(4, "v6.2.0-nightly.20261004.12", 4),
+    rel(5, "v6.0.9-rc.1", 1),
+  ];
+  assert.deepEqual(p.selectSuperseded(releases, "v6.1.0").map((r) => r.id), [1, 2]);
+  assert.equal(p.selectSuperseded(releases, "v9.9.9"), null);
+});
+
+test("a deleted manifest takes its cosign signature, and only its own", () => {
+  const index = { id: 1, name: "sha256:aa", metadata: { container: { tags: ["6.1.0-dev.1"] } } };
+  const versions = [index, ver(2, ["sha256-aa"]), ver(3, ["sha256-bb"]), ver(4, ["sha256-aa", "6.0.0"]), ver(5, [])];
+  assert.deepEqual(p.signaturesOf(versions, [index]).map((v) => v.id), [2]);
+});
+
+test("a release run deletes the pre-releases before it and never the release", async () => {
+  const github = new FakeGithub([rel(1, "v6.1.0-dev.1", 1), rel(2, "v6.1.0", 2, false), rel(3, "v6.2.0-nightly.20261003.4", 3)], {
+    "elitea-main": [ver(10, ["6.1.0-dev.1"]), ver(11, ["6.1.0", "latest"]), ver(12, ["6.2.0-nightly.20261003.4"])],
+  });
+  const [code] = await run(github, { channel: "release", tag: "v6.1.0" });
+  assert.equal(code, 0);
+  assert.deepEqual(github.calls, ["pkg/elitea-main/10", "release/1", "ref/tags/v6.1.0-dev.1"]);
+  const [missing, lines] = await run(new FakeGithub([], {}), { channel: "release", tag: "v6.1.0" });
+  assert.equal(missing, 2);
+  assert.match(lines.at(-1), /no stable release/);
+});
