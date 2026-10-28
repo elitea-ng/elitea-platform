@@ -115,6 +115,8 @@ updates:
       - /libs/go/rpclib
       - /libs/proto/gen/go
       - /conformance/nativeclient
+      - /conformance/governed
+      - /deploy/governed-mocks
     multi-ecosystem-group: weekly
     patterns: ["*"]
     ignore:
