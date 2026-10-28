@@ -1148,7 +1148,15 @@ async fn postgres_a_member_whose_tool_cannot_run_fails_its_branch_not_the_run() 
 /// The wake of a parked fan-out of saved-pipeline branches (contract §8.1):
 /// the parked fresh turn, an empty input and only the wake marker.
 fn wake_request(on_error: &str) -> super::super::request::AgentExecutionRequest {
-    let mut request = request_for(on_error, "pipeline");
+    wake_request_for(on_error, "pipeline")
+}
+
+/// [`wake_request`] for branches whose saved participant is `agent_type`.
+fn wake_request_for(
+    on_error: &str,
+    agent_type: &str,
+) -> super::super::request::AgentExecutionRequest {
+    let mut request = request_for(on_error, agent_type);
     request.payload.user_input = super::super::request::UserInput::Text(String::new());
     request.payload.meta.insert(
         crate::agents::graph::fanout_wake::FANOUT_WAKE_META_KEY.to_owned(),
@@ -1159,6 +1167,95 @@ fn wake_request(on_error: &str) -> super::super::request::AgentExecutionRequest 
             "parked_generation": GENERATION}),
     );
     request
+}
+
+/// FU-246: three saved Agent members ask the user and the activation parks;
+/// one card is answered while parked; the wake (a new execution) resumes only
+/// that member's Agent with the answer, the others park again with their
+/// cards, and no legacy pause frame is raised.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_wake_resumes_the_answered_agent_branch_and_parks_the_rest() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let connector = || {
+        Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::new(AtomicUsize::new(0)),
+            read_only: false,
+        })
+    };
+    let (first, _) = assembler(
+        &db.pool,
+        (0..3)
+            .map(|_| TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()))
+            .collect(),
+        connector(),
+        asking_agent(),
+    );
+    let request = request("continue");
+    let invocation = first
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the fan-out: {error}"));
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .expect("the activation parks");
+    assert_eq!(cards.len(), 3, "{cards:?}");
+    let third = cards[2]["interrupt_key"]
+        .as_str()
+        .expect("the third card's key")
+        .to_owned();
+    ledger.decide(&third, "answer", Some("Staging"));
+
+    let (woken, captured) = assembler(
+        &db.pool,
+        vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+            "third done",
+        ))],
+        connector(),
+        asking_agent(),
+    );
+    let wake = wake_request_for("continue", "agent");
+    let invocation = woken
+        .with_fanout_decisions_for_tests(ledger.client(2))
+        .assemble(claim(&wake, 2))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
+    let (members, cards) = run_collecting(invocation)
+        .await
+        .expect("the wake resumes the answered member and parks again");
+    assert_eq!(
+        model_requests(&captured),
+        1,
+        "only the answered member calls the model"
+    );
+    let resumed = String::from_utf8_lossy(&captured.lock().expect("requests")[0].body).into_owned();
+    assert!(resumed.contains("Staging"), "{resumed}");
+    assert!(
+        members
+            .iter()
+            .any(|member| member["fanout_v1"]["member"] == "third" && member["status"] == "end"),
+        "{members:?}"
+    );
+    assert!(
+        cards
+            .iter()
+            .filter(|card| card["interrupt_key"] != third.as_str())
+            .count()
+            >= 2,
+        "{cards:?}"
+    );
+    db.pool.close().await;
 }
 
 /// Browser finding 2026-10-27: saved-pipeline branches that ask the user park,
