@@ -75,6 +75,11 @@
     "description": "Console and operator settings: identity, e-mail, egress, budgets, workers, observability and maintenance."
   },
   {
+    "slug": "deployment/credential-governance-runbook",
+    "title": "Credential governance runbook",
+    "description": "Operating the governed credential profile: prerequisites, the enable order (governed workers first, then the flag), staging credential references with migrate-references, activation and attachment, drain, rollback checks, and incident response by revoking a binding, mandate, grant or credential reference."
+  },
+  {
     "slug": "deployment/credential-governance",
     "title": "Enterprise credential governance",
     "description": "The off-by-default governed credential profile: the boot flag, policy revisions, the execution security context and governed workers, agent identity bindings, external identities, credential grants, Entra delegation, the credential broker, the Vault/OpenBao secret store and the security audit chain."

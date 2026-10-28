@@ -40,6 +40,7 @@ import (
 	v2credentialconsent "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialconsent"
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
 	v2credentialprobe "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialprobe"
+	v2credentialreferences "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialreferences"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	v2discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/discovery"
@@ -709,6 +710,11 @@ type RouterConfig struct {
 	// 1122). Set only with the credential governance flag on; nil mounts
 	// none of its routes.
 	MandateAttachments *v2mandateattachments.Handler
+	// CredentialReferencesAdmin serves the credential reference lifecycle,
+	// toolkit attachment and agent toolkit binding routes (ADR-0039, issue
+	// 1124). Set only with the credential governance flag on; nil mounts
+	// none of its routes.
+	CredentialReferencesAdmin *v2credentialreferences.Handler
 	// AgentAssertionWellKnown serves the Elitea-native agent assertion JWKS
 	// and issuer metadata (ADR-0039, issue 1153). The composition root sets
 	// it only with the credential governance flag on and at least one
@@ -2824,6 +2830,32 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						r.Put("/index_schedules/{projectID}/{toolkitID}/{indexName}", attachments.AttachIndexSchedule)
 						r.Delete("/index_schedules/{projectID}/{toolkitID}/{indexName}", attachments.DetachIndexSchedule)
 					})
+				}
+
+				// Credential references and agent toolkit bindings (ADR-0039,
+				// issue 1124). Mounted only with the governance flag on. They
+				// reuse the binding permissions of shared 0181: activating a
+				// reference, like approving a binding, makes governed use
+				// possible, so it needs approve, and the stager can never be
+				// the activator (the store and the 0193 CHECK enforce it).
+				// Listing needs manage OR approve; retire, attach, detach and
+				// the toolkit pin need manage.
+				if cfg.CredentialReferencesAdmin != nil {
+					references := cfg.CredentialReferencesAdmin
+					referencesManage := central(v2agentidentity.PermissionBindingsManage)
+					referencesApprove := central(v2agentidentity.PermissionBindingsApprove)
+					referencesRead := apimw.RequireCentralPermissions(
+						permissionResolver, platformauth.PermissionModeAdministration,
+						v2agentidentity.PermissionBindingsManage, v2agentidentity.PermissionBindingsApprove,
+					)
+					r.With(referencesRead).Get("/credential_references", references.List)
+					r.With(referencesRead).Get("/credential_references/{id}", references.Get)
+					r.With(referencesApprove).Post("/credential_references/{id}:activate", references.Activate)
+					r.With(referencesManage).Post("/credential_references/{id}:retire", references.Retire)
+					r.With(referencesManage).Post("/credential_references/{id}:attach", references.Attach)
+					r.With(referencesManage).Post("/credential_references/{id}:detach", references.Detach)
+					r.With(referencesManage).Put("/agent_identities/{id}/toolkits/{toolkitID}", references.PinToolkit)
+					r.With(referencesManage).Delete("/agent_identities/{id}/toolkits/{toolkitID}", references.UnpinToolkit)
 				}
 
 				// External agent identities (ADR-0039, issue 1151). Mounted

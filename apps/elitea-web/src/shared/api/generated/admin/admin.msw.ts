@@ -48,6 +48,7 @@ import type { RequestHandlerOptions } from "msw";
 import type {
   AgentIdentityBinding,
   AgentIdentityBindingListResponse,
+  AgentToolkitPin,
   BackgroundJobListResponse,
   BrandingAsset,
   BrandingPackageReport,
@@ -56,6 +57,9 @@ import type {
   CredentialConsentResult,
   CredentialConsentStart,
   CredentialProbeResult,
+  CredentialReference,
+  CredentialReferenceAttachment,
+  CredentialReferenceListResponse,
   CredentialUseGrant,
   CredentialUseGrantListResponse,
   ExternalAgentIdentity,
@@ -848,6 +852,191 @@ export const getDetachIndexScheduleMandateResponseMock =
     project_id: 7,
     resource_id: "12:docs",
   });
+
+export const getListCredentialReferencesResponseMock = (
+  overrideResponse: Partial<
+    Extract<CredentialReferenceListResponse, object>
+  > = {},
+): CredentialReferenceListResponse => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.uuid(),
+    tenant_project_id: faker.number.int(),
+    class: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    backend: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    locator: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    provider_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    target_binding_id: faker.string.uuid(),
+    target_identity: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    generation: faker.number.int(),
+    state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    staged_by: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    activated_by: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    last_transition_by: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    migrated_from: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  ...overrideResponse,
+});
+
+export const getGetCredentialReferenceResponseMock = (
+  overrideResponse: Partial<Extract<CredentialReference, object>> = {},
+): CredentialReference => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  class: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  backend: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  locator: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  target_binding_id: faker.string.uuid(),
+  target_identity: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  generation: faker.number.int(),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  staged_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  activated_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  last_transition_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  migrated_from: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getActivateCredentialReferenceResponseMock = (
+  overrideResponse: Partial<Extract<CredentialReference, object>> = {},
+): CredentialReference => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  class: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  backend: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  locator: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  target_binding_id: faker.string.uuid(),
+  target_identity: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  generation: faker.number.int(),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  staged_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  activated_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  last_transition_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  migrated_from: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getRetireCredentialReferenceResponseMock = (
+  overrideResponse: Partial<Extract<CredentialReference, object>> = {},
+): CredentialReference => ({
+  id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  class: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  backend: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  locator: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  provider_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  target_binding_id: faker.string.uuid(),
+  target_identity: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  generation: faker.number.int(),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  staged_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  activated_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  last_transition_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  migrated_from: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getAttachCredentialReferenceResponseMock = (
+  overrideResponse: Partial<
+    Extract<CredentialReferenceAttachment, object>
+  > = {},
+): CredentialReferenceAttachment => ({
+  project_id: faker.number.int(),
+  toolkit_id: faker.number.int(),
+  field: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  credential_reference_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  toolkit_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
+export const getDetachCredentialReferenceResponseMock = (
+  overrideResponse: Partial<
+    Extract<CredentialReferenceAttachment, object>
+  > = {},
+): CredentialReferenceAttachment => ({
+  project_id: faker.number.int(),
+  toolkit_id: faker.number.int(),
+  field: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  credential_reference_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  toolkit_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
+export const getPinAgentToolkitResponseMock = (
+  overrideResponse: Partial<Extract<AgentToolkitPin, object>> = {},
+): AgentToolkitPin => ({
+  agent_binding_id: faker.string.uuid(),
+  tenant_project_id: faker.number.int(),
+  toolkit_id: faker.number.int(),
+  toolkit_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
 
 export const getListExternalAgentIdentitiesResponseMock = (
   overrideResponse: Partial<
@@ -3125,6 +3314,214 @@ export const getDetachIndexScheduleMandateMockHandler = (
   );
 };
 
+export const getListCredentialReferencesMockHandler = (
+  overrideResponse?:
+    | CredentialReferenceListResponse
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        | Promise<CredentialReferenceListResponse>
+        | CredentialReferenceListResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/credential_references",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListCredentialReferencesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetCredentialReferenceMockHandler = (
+  overrideResponse?:
+    | CredentialReference
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<CredentialReference> | CredentialReference),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/credential_references/:id",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetCredentialReferenceResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getActivateCredentialReferenceMockHandler = (
+  overrideResponse?:
+    | CredentialReference
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CredentialReference> | CredentialReference),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/credential_references/:id\\:activate",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getActivateCredentialReferenceResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRetireCredentialReferenceMockHandler = (
+  overrideResponse?:
+    | CredentialReference
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CredentialReference> | CredentialReference),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/credential_references/:id\\:retire",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRetireCredentialReferenceResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getAttachCredentialReferenceMockHandler = (
+  overrideResponse?:
+    | CredentialReferenceAttachment
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) =>
+        Promise<CredentialReferenceAttachment> | CredentialReferenceAttachment),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/credential_references/:id\\:attach",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getAttachCredentialReferenceResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDetachCredentialReferenceMockHandler = (
+  overrideResponse?:
+    | CredentialReferenceAttachment
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) =>
+        Promise<CredentialReferenceAttachment> | CredentialReferenceAttachment),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/credential_references/:id\\:detach",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getDetachCredentialReferenceResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getPinAgentToolkitMockHandler = (
+  overrideResponse?:
+    | AgentToolkitPin
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<AgentToolkitPin> | AgentToolkitPin),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/admin/agent_identities/:id/toolkits/:toolkitId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getPinAgentToolkitResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUnpinAgentToolkitMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/admin/agent_identities/:id/toolkits/:toolkitId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
 export const getListExternalAgentIdentitiesMockHandler = (
   overrideResponse?:
     | ExternalAgentIdentityListResponse
@@ -4113,6 +4510,14 @@ export const getAdminMock = () => [
   getDetachPipelineTriggerMandateMockHandler(),
   getAttachIndexScheduleMandateMockHandler(),
   getDetachIndexScheduleMandateMockHandler(),
+  getListCredentialReferencesMockHandler(),
+  getGetCredentialReferenceMockHandler(),
+  getActivateCredentialReferenceMockHandler(),
+  getRetireCredentialReferenceMockHandler(),
+  getAttachCredentialReferenceMockHandler(),
+  getDetachCredentialReferenceMockHandler(),
+  getPinAgentToolkitMockHandler(),
+  getUnpinAgentToolkitMockHandler(),
   getListExternalAgentIdentitiesMockHandler(),
   getCreateExternalAgentIdentityMockHandler(),
   getListExternalAgentIdentityDriftFindingsMockHandler(),

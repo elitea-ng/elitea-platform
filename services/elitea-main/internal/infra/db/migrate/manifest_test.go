@@ -828,7 +828,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// elitea_identity.agent_identity_provider_health (pass lease and outage
 	// state per provider) and external_identity_drift_findings (#1154). No
 	// data, no permission.
-	require.EqualValues(t, 191, Head(shared))
+	//
+	// 193: shared/0193_credential_reference_lifecycle.sql, the stager,
+	// activator and migration source of credential references (#1124).
+	// Nullable columns only; 0192 is claimed by another branch. No data, no
+	// permission.
+	require.EqualValues(t, 193, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
