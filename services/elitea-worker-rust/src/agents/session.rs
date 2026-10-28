@@ -3762,7 +3762,11 @@ mod public_application_metadata_tests {
         let original = application.as_object().expect("application");
         let projected = public_application_details(original).expect("bounded public metadata");
         assert_eq!(projected["version_details"]["tools"][0]["name"], "jira");
-        assert!(projected["version_details"]["tools"][0].get("settings").is_none());
+        assert!(
+            projected["version_details"]["tools"][0]
+                .get("settings")
+                .is_none()
+        );
         assert!(!projected.to_string().contains("canary-token"));
         assert_eq!(
             original["version_details"]["tools"][0]["settings"]["jira_configuration"]["token"],
