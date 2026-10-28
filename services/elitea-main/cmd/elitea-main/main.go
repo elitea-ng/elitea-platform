@@ -356,7 +356,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
-	credentialReferencesHandler, err := credentialReferencesAdmin(credentialAdmission, pool, securityInvalidations)
+	// The governed secret stores, built once (on first use, flag on only)
+	// and shared by the reference admin API and the credential broker.
+	governedStores := onceSecretStores(os.LookupEnv, pool)
+	credentialReferencesHandler, err := credentialReferencesAdmin(credentialAdmission, credentialRevision, governedStores, pool, securityInvalidations)
 	if err != nil {
 		return err
 	}
@@ -898,7 +901,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
-	credentialBroker, err := credentialBrokerAtBoot(credentialAdmission, os.LookupEnv, pool, credentialDecider,
+	credentialBroker, err := credentialBrokerAtBoot(credentialAdmission, governedStores, pool, credentialDecider,
 		credentialGovernanceStore, agentIdentity.Broker, entraGoverned, providerOAuthGoverned.Tokens, credentialCatalog, credentialRevision,
 		securityInvalidations, governedMCPComposed.authorizations(), logger)
 	if err != nil {
@@ -908,6 +911,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var runtimeCredentialBroker storage.CredentialRedeemer
 	if credentialBroker != nil {
 		runtimeCredentialBroker = credentialBroker
+	}
+	// A governed run's client token is scoped to the model gateway and its
+	// project's artifacts (#1461): the issuer for the content server, the
+	// validator for those routes. Empty with the flag off.
+	runTokens, err := runTokensAtBoot(credentialAdmission, formGraph, pool)
+	if err != nil {
+		return err
 	}
 
 	// A deployment where nobody can sign in through a browser is legal (an
@@ -2108,6 +2118,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ActorTokenIssuer:                 runtimeActorTokens,
 			ProjectTokenValidator:            runtimeProjectTokens,
 			ProjectSystemTokenSource:         runtimeSystemTokens,
+			RunTokens:                        runTokens.Issuer,
 			// elitea-vector's token introspection (ADR-0031) reads callback
 			// grants over the main pool, where the minting facades write them.
 			CallbackTokenFacts: dbrepos.NewCallbackTokenGrants(pool),
@@ -2943,6 +2954,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CurrentModelDefault:            currentModelDefault,
 		GatewayProxy:                   gatewayProxy,
 		GatewayProjectResolver:         gatewayProjectResolver,
+		RunTokens:                      runTokens.Validator,
 		ConfigConnectionChecker:        configConnectionChecker,
 		PredictCompleter:               predictCompleter,
 		GatewayStatus:                  gatewayStatus,

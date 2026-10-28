@@ -232,6 +232,11 @@ type CurrentApplicationStartService struct {
 	// (project_skills.go). A service without it refuses a request that picks
 	// a project skill.
 	projectSkills CurrentProjectSkillResolver
+	// governedRefusals is optional — attached via
+	// WithGovernedRefusalSettlement (governed_refusal.go, #1485). A service
+	// without it answers a refused governed continuation and leaves the
+	// pause open.
+	governedRefusals GovernedRefusalSettler
 }
 
 // WithAttachmentImages attaches the reader that lets an attached IMAGE reach

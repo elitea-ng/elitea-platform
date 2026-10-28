@@ -3,6 +3,7 @@ package runtimecomposition
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,6 +12,7 @@ import (
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
 // governedAgentCredentials composes the agent admission step that resolves
@@ -24,7 +26,9 @@ func governedAgentCredentials(admission profile.Admission, pool *pgxpool.Pool) (
 	if pool == nil {
 		return nil, errors.New("governed agent credentials need the admission pool")
 	}
-	// Reads only: no grant, binding or audit event is written here.
+	// Reads only: no grant or binding is written here. The one write is the
+	// audit decision of a binding whose definition digest is not the run's
+	// version's (#1462).
 	grants := repos.NewCredentialGrants(pool, nil)
 	resolver, err := configurationapp.NewGovernedReferenceResolver(grants, grants, grants, nil)
 	if err != nil {
@@ -34,8 +38,16 @@ func governedAgentCredentials(admission profile.Admission, pool *pgxpool.Pool) (
 	if err != nil {
 		return nil, err
 	}
+	audit, err := securityaudit.NewPostgresAppender("elitea-main")
+	if err != nil {
+		return nil, fmt.Errorf("construct the definition digest security audit appender: %w", err)
+	}
+	definitions, err := repos.NewAgentDefinitionDigests(pool, audit)
+	if err != nil {
+		return nil, err
+	}
 	return agentexecutionapp.NewGovernedCredentials(resolver, repos.NewAgentIdentityBindings(pool, nil),
-		governedToolkitSource{repository: toolkits}, repos.NewAgentAdmissionReplays(pool))
+		governedToolkitSource{repository: toolkits}, repos.NewAgentAdmissionReplays(pool), definitions)
 }
 
 // governedToolkitSource reads a toolkit's stored row from the run's project.

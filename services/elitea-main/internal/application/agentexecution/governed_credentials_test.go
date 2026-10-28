@@ -2,6 +2,7 @@ package agentexecution
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -23,16 +24,50 @@ const (
 )
 
 type fakeGovernedBindings struct {
-	id    string
-	calls int
+	id     string
+	digest [32]byte
+	calls  int
 }
 
-func (f *fakeGovernedBindings) UsableBindingForVersion(_ context.Context, tenant, version int64) (string, bool, error) {
+func (f *fakeGovernedBindings) UsableBindingForVersion(_ context.Context, tenant, version int64) (string, [32]byte, bool, error) {
 	f.calls++
 	if tenant != 7 || version != 4 {
-		return "", false, errors.New("unexpected binding lookup")
+		return "", [32]byte{}, false, errors.New("unexpected binding lookup")
 	}
-	return f.id, f.id != "", nil
+	return f.id, f.digest, f.id != "", nil
+}
+
+// frozenDefinitionDigest is the computed digest of version 4 in the fakes:
+// the binding pins it unless a test says otherwise.
+var frozenDefinitionDigest = [32]byte{0x44, 0x04}
+
+// fakeGovernedDefinitions answers the computed digest of version 4 of
+// application 3 in project 7 and records every audited mismatch.
+type fakeGovernedDefinitions struct {
+	digest     [32]byte
+	missing    bool
+	err        error
+	calls      int
+	mismatches []string
+}
+
+func (f *fakeGovernedDefinitions) DefinitionDigest(_ context.Context, tenant, application, version int64) ([32]byte, bool, error) {
+	f.calls++
+	if tenant != 7 || application != 3 || version != 4 {
+		return [32]byte{}, false, errors.New("unexpected definition lookup")
+	}
+	if f.err != nil {
+		return [32]byte{}, false, f.err
+	}
+	return f.digest, !f.missing, nil
+}
+
+func (f *fakeGovernedDefinitions) RecordDefinitionMismatch(_ context.Context, tenant int64, binding string, application, version int64) error {
+	if tenant != 7 || application != 3 || version != 4 {
+		return errors.New("unexpected mismatch record")
+	}
+	f.mismatches = append(f.mismatches, binding)
+	return nil
 }
 
 type fakeGovernedToolkits map[int64]map[string]any
@@ -105,23 +140,29 @@ func (f *fakeAdmissionReplays) AgentAdmissionReplay(_ context.Context, scope, ke
 }
 
 func governedWorld(t *testing.T, stored fakeGovernedToolkits, bound ...int64) (*GovernedCredentials, *fakeGovernedResolver, *fakeGovernedBindings) {
-	credentials, resolver, bindings, _ := governedWorldWithReplays(t, stored, bound...)
+	credentials, resolver, bindings, _, _ := governedWorldWithDefinitions(t, stored, bound...)
 	return credentials, resolver, bindings
 }
 
 func governedWorldWithReplays(t *testing.T, stored fakeGovernedToolkits, bound ...int64) (*GovernedCredentials, *fakeGovernedResolver, *fakeGovernedBindings, *fakeAdmissionReplays) {
+	credentials, resolver, bindings, replays, _ := governedWorldWithDefinitions(t, stored, bound...)
+	return credentials, resolver, bindings, replays
+}
+
+func governedWorldWithDefinitions(t *testing.T, stored fakeGovernedToolkits, bound ...int64) (*GovernedCredentials, *fakeGovernedResolver, *fakeGovernedBindings, *fakeAdmissionReplays, *fakeGovernedDefinitions) {
 	t.Helper()
 	resolver := &fakeGovernedResolver{toolkits: stored, bound: map[int64]bool{}}
 	for _, id := range bound {
 		resolver.bound[id] = true
 	}
-	bindings := &fakeGovernedBindings{id: frozenBinding}
+	bindings := &fakeGovernedBindings{id: frozenBinding, digest: frozenDefinitionDigest}
 	replays := &fakeAdmissionReplays{}
-	credentials, err := NewGovernedCredentials(resolver, bindings, stored, replays)
+	definitions := &fakeGovernedDefinitions{digest: frozenDefinitionDigest}
+	credentials, err := NewGovernedCredentials(resolver, bindings, stored, replays, definitions)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return credentials, resolver, bindings, replays
+	return credentials, resolver, bindings, replays, definitions
 }
 
 func jiraRef(fields map[string]any) map[string]any {
@@ -219,7 +260,8 @@ func TestGovernedFreezeWritesTheExactReferences(t *testing.T) {
 			t.Fatalf("toolkit %d got a reference: %v", id, settings[id])
 		}
 	}
-	if freeze == nil || freeze.AgentBindingID != frozenBinding || freeze.ApplicationID != 3 || freeze.ApplicationVersionID != 4 {
+	if freeze == nil || freeze.AgentBindingID != frozenBinding || freeze.ApplicationID != 3 || freeze.ApplicationVersionID != 4 ||
+		!freeze.DefinitionChecked || freeze.DefinitionDigest != frozenDefinitionDigest {
 		t.Fatalf("freeze %+v", freeze)
 	}
 	want := []GovernedCredentialReference{
@@ -366,7 +408,7 @@ func TestGovernedFreezeOfDigestOnlyToolkitsKeepsTheInputBytes(t *testing.T) {
 
 func TestGovernedFreezeRefusesTwoReferencesInOneToolkit(t *testing.T) {
 	stored := fakeGovernedToolkits{21: {
-		"jira_configuration": map[string]any{"elitea_title": "a", "private": false, "credential_reference_id": frozenReference},
+		"jira_configuration":  map[string]any{"elitea_title": "a", "private": false, "credential_reference_id": frozenReference},
 		"other_configuration": map[string]any{"elitea_title": "b", "private": false, "credential_reference_id": frozenReference},
 	}}
 	credentials, _, _ := governedWorld(t, stored, 21)
@@ -395,5 +437,97 @@ func TestGovernedFreezeOfAnUnboundOrAdhocRun(t *testing.T) {
 	input, freeze, err = credentials.Freeze(context.Background(), adhoc)
 	if err != nil || input != adhoc.Input || freeze != nil || bindings.calls != calls {
 		t.Fatalf("adhoc: freeze %+v err=%v", freeze, err)
+	}
+}
+
+// #1462 acceptance: a binding whose digest is not the computed digest of
+// the run's version binds nothing. The run is admitted with no agent
+// identity (so the decision denies every governed credential use), nothing
+// is resolved, the input is unchanged, and the mismatch is audited.
+func TestGovernedFreezeOfAMismatchingBindingBindsNothing(t *testing.T) {
+	stored := fakeGovernedToolkits{21: jiraRef(map[string]any{"elitea_title": "jira-prod", "private": false, "credential_reference_id": frozenReference})}
+	credentials, resolver, bindings, _, definitions := governedWorldWithDefinitions(t, stored, 21)
+	bindings.digest = [32]byte{0x99}
+	request := governedSubmit(t, 21)
+	input, freeze, err := credentials.Freeze(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input != request.Input || freeze == nil || freeze.AgentBindingID != "" || len(freeze.References) != 0 ||
+		!freeze.DefinitionChecked || freeze.DefinitionDigest != frozenDefinitionDigest {
+		t.Fatalf("freeze %+v", freeze)
+	}
+	if len(resolver.governed) != 0 {
+		t.Fatal("a credential was resolved for an unbound run")
+	}
+	if len(definitions.mismatches) != 1 || definitions.mismatches[0] != frozenBinding {
+		t.Fatalf("audited mismatches %v", definitions.mismatches)
+	}
+
+	// Submit admits the run: denied at use, not refused at admission.
+	store := successfulRecordingStore()
+	service := testAdmissionService(t, store).WithGovernedCredentials(credentials)
+	if _, err := service.Submit(context.Background(), governedSubmit(t, 21)); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if got := store.admission.GovernedCredentials; got == nil || got.AgentBindingID != "" || !got.DefinitionChecked {
+		t.Fatalf("admitted freeze %+v", got)
+	}
+}
+
+// A version the tenant project does not hold digests to zero, which no
+// binding pins; a read error refuses the admission.
+func TestGovernedFreezeOfAnUnreadableVersion(t *testing.T) {
+	stored := fakeGovernedToolkits{21: jiraRef(map[string]any{"elitea_title": "jira-prod", "private": false, "credential_reference_id": frozenReference})}
+	credentials, _, _, _, definitions := governedWorldWithDefinitions(t, stored, 21)
+	definitions.missing = true
+	_, freeze, err := credentials.Freeze(context.Background(), governedSubmit(t, 21))
+	if err != nil || freeze.AgentBindingID != "" || freeze.DefinitionDigest != ([32]byte{}) || len(definitions.mismatches) != 1 {
+		t.Fatalf("missing version: freeze %+v err=%v", freeze, err)
+	}
+	definitions.missing, definitions.err = false, errors.New("database down")
+	if _, _, err := credentials.Freeze(context.Background(), governedSubmit(t, 21)); err == nil {
+		t.Fatal("a definition read error admitted the run")
+	}
+}
+
+// A run that carries its captured root source must have been admitted with
+// the same bytes: a source of another digest (the version was edited since)
+// binds nothing; the matching one binds as before.
+func TestGovernedFreezeComparesTheCapturedSource(t *testing.T) {
+	stored := fakeGovernedToolkits{21: jiraRef(map[string]any{"elitea_title": "jira-prod", "private": false, "credential_reference_id": frozenReference})}
+	withSource := func(digest [32]byte) SubmitRequest {
+		request := governedSubmit(t, 21)
+		var application map[string]any
+		if err := json.Unmarshal(request.Input.GetApplication(), &application); err != nil {
+			t.Fatal(err)
+		}
+		application["source_definition"] = map[string]any{"source_definition_sha256": hex.EncodeToString(digest[:])}
+		raw, err := json.Marshal(application)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Input.Application = raw
+		return request
+	}
+	credentials, _, _, _, definitions := governedWorldWithDefinitions(t, stored, 21)
+	_, freeze, err := credentials.Freeze(context.Background(), withSource([32]byte{0x01}))
+	if err != nil || freeze.AgentBindingID != "" || len(definitions.mismatches) != 1 {
+		t.Fatalf("edited source: freeze %+v err=%v", freeze, err)
+	}
+	_, freeze, err = credentials.Freeze(context.Background(), withSource(frozenDefinitionDigest))
+	if err != nil || freeze.AgentBindingID != frozenBinding || len(freeze.References) != 1 {
+		t.Fatalf("matching source: freeze %+v err=%v", freeze, err)
+	}
+}
+
+// An unbound run reads no definition (the admission cost is unchanged), and
+// the freeze does not compare digests in the transaction.
+func TestGovernedFreezeOfAnUnboundRunReadsNoDefinition(t *testing.T) {
+	credentials, _, bindings, _, definitions := governedWorldWithDefinitions(t, fakeGovernedToolkits{}, 21)
+	bindings.id = ""
+	_, freeze, err := credentials.Freeze(context.Background(), governedSubmit(t, 21))
+	if err != nil || freeze.DefinitionChecked || definitions.calls != 0 {
+		t.Fatalf("freeze %+v calls %d err=%v", freeze, definitions.calls, err)
 	}
 }

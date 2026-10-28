@@ -29,6 +29,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -55,6 +56,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/provideroauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore/backends"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/secretstore/pgvault"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
@@ -385,6 +387,15 @@ func agentIdentityAdmin(admission profile.Admission, revision profile.PolicyRevi
 	if err != nil {
 		return agentIdentityComposition{}, err
 	}
+	if pool != nil {
+		// Binding views carry the computed digest of their version, the
+		// one admission compares with (#1462), so an operator can re-pin.
+		definitions, err := repos.NewAgentDefinitionDigests(pool, nil)
+		if err != nil {
+			return agentIdentityComposition{}, fmt.Errorf("construct agent definition digests: %w", err)
+		}
+		admin.WithDefinitionDigests(definitions)
+	}
 	sessions := repos.NewAgentSessions(pool, audit)
 	providers, err := agentIdentityProviders(sources, sessions)
 	if err != nil {
@@ -521,13 +532,56 @@ func entraDelegations(entra *entraGovernance) authzcompose.DelegationReader {
 	return entra.Delegations
 }
 
+// governedSecretStores builds the governed SecretStore set: the built-in
+// vault (pgvault) is the default backend; Vault/OpenBao joins it when
+// configured (#1113). Called only with the flag on, by the credential broker
+// (reads) and the credential reference admin API (a metadata-only check that
+// a locator names a secret, #1482).
+func governedSecretStores(lookup func(string) (string, bool), pool *pgxpool.Pool) (map[string]secretstore.SecretStore, error) {
+	masterKey, err := encodedVaultMasterKeyFromEnv(lookup)
+	if err != nil {
+		return nil, fmt.Errorf("vault: %w", err)
+	}
+	vaultReader, err := storage.NewPostgresSecretVaultLoader(pool, masterKey)
+	if err != nil {
+		return nil, fmt.Errorf("vault: %w", err)
+	}
+	vaultWriter, err := repos.NewCurrentSecretVaultRepository(pool, masterKey)
+	if err != nil {
+		return nil, fmt.Errorf("vault: %w", err)
+	}
+	pg, err := pgvault.New(pool, vaultReader, vaultWriter)
+	if err != nil {
+		return nil, fmt.Errorf("vault: %w", err)
+	}
+	stores, _, err := backends.NewFromEnv(lookup, pg)
+	if err != nil {
+		return nil, fmt.Errorf("secret stores: %w", err)
+	}
+	return stores, nil
+}
+
+// secretStoresAtBoot yields the governed SecretStore set. One value is
+// built per process (onceSecretStores) and shared by the broker and the
+// credential reference admin API, so both read through the same clients
+// (one Vault/OpenBao client and token renewal, not two). Nothing is built
+// until a flag-on composition asks for it.
+type secretStoresAtBoot func() (map[string]secretstore.SecretStore, error)
+
+// onceSecretStores builds governedSecretStores at most once.
+func onceSecretStores(lookup func(string) (string, bool), pool *pgxpool.Pool) secretStoresAtBoot {
+	return sync.OnceValues(func() (map[string]secretstore.SecretStore, error) {
+		return governedSecretStores(lookup, pool)
+	})
+}
+
 // credentialBrokerAtBoot builds the governed credential broker (#1118). Nil
 // with the flag off: RedeemCredential then answers Unimplemented and no
 // statement runs. With the flag on every dependency is required, and a
 // construction error refuses boot.
 func credentialBrokerAtBoot(
 	admission profile.Admission,
-	lookup func(string) (string, bool),
+	secretStores secretStoresAtBoot,
 	pool *pgxpool.Pool,
 	decider *authzcompose.Decider,
 	pins profile.PinReader,
@@ -550,27 +604,9 @@ func credentialBrokerAtBoot(
 	if err != nil {
 		return nil, fmt.Errorf("construct credential broker security audit appender: %w", err)
 	}
-	// The built-in vault (pgvault) is the default backend; Vault/OpenBao
-	// joins it when configured (#1113).
-	masterKey, err := encodedVaultMasterKeyFromEnv(lookup)
+	stores, err := secretStores()
 	if err != nil {
-		return nil, fmt.Errorf("credential broker vault: %w", err)
-	}
-	vaultReader, err := storage.NewPostgresSecretVaultLoader(pool, masterKey)
-	if err != nil {
-		return nil, fmt.Errorf("credential broker vault: %w", err)
-	}
-	vaultWriter, err := repos.NewCurrentSecretVaultRepository(pool, masterKey)
-	if err != nil {
-		return nil, fmt.Errorf("credential broker vault: %w", err)
-	}
-	pg, err := pgvault.New(pool, vaultReader, vaultWriter)
-	if err != nil {
-		return nil, fmt.Errorf("credential broker vault: %w", err)
-	}
-	stores, _, err := backends.NewFromEnv(lookup, pg)
-	if err != nil {
-		return nil, fmt.Errorf("credential broker secret stores: %w", err)
+		return nil, fmt.Errorf("credential broker %w", err)
 	}
 	store, err := credentialbroker.NewPostgresStore(pool, audit)
 	if err != nil {

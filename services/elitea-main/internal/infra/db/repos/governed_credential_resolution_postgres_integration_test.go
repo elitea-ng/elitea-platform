@@ -37,6 +37,21 @@ const (
 
 type storedToolkits map[int64]map[string]any
 
+// fixedDefinitions computes one digest for every version (#1462).
+type fixedDefinitions struct {
+	digest     [32]byte
+	mismatches []string
+}
+
+func (d *fixedDefinitions) DefinitionDigest(context.Context, int64, int64, int64) ([32]byte, bool, error) {
+	return d.digest, true, nil
+}
+
+func (d *fixedDefinitions) RecordDefinitionMismatch(_ context.Context, _ int64, binding string, _, _ int64) error {
+	d.mismatches = append(d.mismatches, binding)
+	return nil
+}
+
 func (s storedToolkits) StoredToolkit(_ context.Context, _ int64, id int64) (string, map[string]any, bool, error) {
 	settings, ok := s[id]
 	return "jira", settings, ok, nil
@@ -98,7 +113,8 @@ VALUES ($1::uuid, 7, $2::uuid, 21, $3::uuid, $4::uuid, ARRAY['use'], ARRAY['jira
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials, err := agentexecutionapp.NewGovernedCredentials(resolver, NewAgentIdentityBindings(pool, nil), stored, NewAgentAdmissionReplays(pool))
+	definitions := &fixedDefinitions{digest: [32]byte(bytes.Repeat([]byte{9}, 32))}
+	credentials, err := agentexecutionapp.NewGovernedCredentials(resolver, NewAgentIdentityBindings(pool, nil), stored, NewAgentAdmissionReplays(pool), definitions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +155,8 @@ VALUES ($1::uuid, 7, $2::uuid, 21, $3::uuid, $4::uuid, ARRAY['use'], ARRAY['jira
 	// The admission transaction writes the list into the security context.
 	exec(`
 INSERT INTO elitea_runtime.execution_admission_profiles (execution_id, profile, policy_revision_id, policy_digest)
-VALUES ('resolution-1', 'elitea.credential-profile.governed.v1', $1, $2), ('resolution-2', 'elitea.credential-profile.governed.v1', $1, $2)`,
+VALUES ('resolution-1', 'elitea.credential-profile.governed.v1', $1, $2), ('resolution-2', 'elitea.credential-profile.governed.v1', $1, $2),
+       ('resolution-3', 'elitea.credential-profile.governed.v1', $1, $2), ('resolution-4', 'elitea.credential-profile.governed.v1', $1, $2)`,
 		revision.ID, revision.Digest[:])
 	record := func(executionID string, freeze *agentexecutionapp.GovernedCredentialFreeze) (securitycontext.Reference, error) {
 		var ref securitycontext.Reference
@@ -175,6 +192,34 @@ VALUES ('resolution-1', 'elitea.credential-profile.governed.v1', $1, $2), ('reso
 	if _, err := record("resolution-2", &moved); !errors.Is(err, ErrGovernedBindingChanged) {
 		t.Fatalf("binding changed: %v", err)
 	}
+
+	// #1462: the binding pins another definition than the computed one.
+	// Freeze binds nothing and audits it; the transaction admits the run
+	// with no agent identity, so the decision denies every governed use.
+	definitions.digest = [32]byte(bytes.Repeat([]byte{8}, 32))
+	_, mismatched, err := credentials.Freeze(ctx, submit(21))
+	if err != nil || mismatched.AgentBindingID != "" || len(mismatched.References) != 0 || len(definitions.mismatches) != 1 {
+		t.Fatalf("mismatch freeze %+v err=%v", mismatched, err)
+	}
+	ref, err = record("resolution-3", mismatched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT context_bytes FROM elitea_runtime.execution_security_contexts WHERE execution_id = 'resolution-3'`).Scan(&bytesStored); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err = securitycontext.Verify(bytesStored, ref)
+	if err != nil || decoded.GetAgentBindingId() != "" {
+		t.Fatalf("mismatch context binds %q err=%v", decoded.GetAgentBindingId(), err)
+	}
+	// The transaction compares again: a freeze that bound the binding at a
+	// digest the binding no longer pins is refused as a changed binding.
+	stale := *freeze
+	stale.DefinitionChecked, stale.DefinitionDigest = true, definitions.digest
+	if _, err := record("resolution-4", &stale); !errors.Is(err, ErrGovernedBindingChanged) {
+		t.Fatalf("stale digest: %v", err)
+	}
+	definitions.digest = [32]byte(bytes.Repeat([]byte{9}, 32))
 
 	// A reference of another tenant is not found: nothing is looked up
 	// outside the run's tenant project.

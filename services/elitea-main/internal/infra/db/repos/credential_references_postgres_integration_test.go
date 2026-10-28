@@ -110,6 +110,49 @@ VALUES ($1::uuid, 7, 'static_secret', 'pgvault', 'x', 'jira', $2::uuid, 1)`, noS
 	require.Equal(t, "https://acme.atlassian.net", listed[0].TargetIdentity)
 }
 
+// #1482: a reference created from scratch (the admin API) has no source.
+// It is staged under the id the caller chose, shares the target binding of
+// its canonical identity, is never deduplicated, is audited as the admin
+// API's, and is activated by the same two-person rule.
+func TestCredentialReferenceStagedFromScratchHasNoSource(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	store := NewCredentialReferences(pool, agentIdentityAudit(t))
+	migrated := stageRefTest(t, store, "configuration:44444444-4444-4444-8444-444444444444:pgvault")
+	stage := func(id string) StageResult {
+		t.Helper()
+		result, err := store.StageReference(ctx, StagedReference{
+			ID: id, TenantProjectID: 7, ProviderType: "jira", TargetIdentity: "https://acme.atlassian.net",
+			Class: credentialgrant.ClassStaticSecret, Backend: "vault", Locator: "elitea/projects/7/credentials/jira-new",
+			Generation: 2, StagedBy: "100",
+		}, newRefTestID)
+		require.NoError(t, err)
+		return result
+	}
+	first, second := uuid.NewString(), uuid.NewString()
+	a, b := stage(first), stage(second)
+	require.True(t, a.Created)
+	require.True(t, b.Created, "a reference with no source is never deduplicated")
+	require.Equal(t, first, a.Record.ID)
+	require.Equal(t, second, b.Record.ID)
+	require.Equal(t, "", a.Record.MigratedFrom)
+	require.Equal(t, migrated.Record.TargetBindingID, a.Record.TargetBindingID, "one target per canonical identity")
+	require.Equal(t, credentialgrant.ReferenceStaged, a.Record.State)
+	require.Equal(t, "100", a.Record.StagedBy)
+	require.Equal(t, int64(2), a.Record.Generation)
+
+	var events int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.security_audit_outbox
+WHERE event::text LIKE '%origin.admin_api%' AND event::text LIKE '%' || $1 || '%'`, first).Scan(&events))
+	require.Equal(t, 1, events)
+
+	_, err := store.Transition(ctx, first, CredentialReferenceActivate, "100")
+	require.ErrorIs(t, err, ErrCredentialReferenceSelfActive)
+	active, err := store.Transition(ctx, first, CredentialReferenceActivate, "200")
+	require.NoError(t, err)
+	require.Equal(t, credentialgrant.ReferenceActive, active.State)
+}
+
 type recordingNotifier struct{ changes []epoch.Change }
 
 func (n *recordingNotifier) Notify(_ context.Context, changes ...epoch.Change) {
@@ -342,6 +385,27 @@ func TestCredentialReferenceVaultCopyGenerationGatesActivation(t *testing.T) {
 	active, err := store.Transition(ctx, staged.Record.ID, CredentialReferenceActivate, "200")
 	require.NoError(t, err)
 	require.EqualValues(t, 3, active.Generation)
+}
+
+// A composite basic-auth key map in pgvault (#1481) is staged at generation
+// 0 too, and takes version 1, the only version a pgvault secret has.
+func TestCredentialReferencePGVaultKeyMapTakesVersionOne(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	store := NewCredentialReferences(pool, agentIdentityAudit(t))
+	staged, err := store.StageReference(ctx, StagedReference{
+		TenantProjectID: 7, ProviderType: "jira", TargetIdentity: "https://cloud.atlassian.net",
+		Class: credentialgrant.ClassStaticSecret, Backend: "pgvault", Locator: "governed_99999999999949998999999999999999",
+		MigratedFrom: "configuration:99999999-9999-4999-8999-999999999999:pgvault", StagedBy: "100",
+	}, newRefTestID)
+	require.NoError(t, err)
+	_, err = store.SetCopiedGeneration(ctx, staged.Record.ID, 2, "100")
+	require.ErrorIs(t, err, ErrCredentialReferenceTransition, "pgvault holds version 1 only")
+	copied, err := store.SetCopiedGeneration(ctx, staged.Record.ID, 1, "100")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, copied.Generation)
+	require.NoError(t, store.RecordSecretCopy(ctx, 7, staged.Record.ID, newRefTestID(), "100", "pgvault"))
+	require.Error(t, store.RecordSecretCopy(ctx, 7, staged.Record.ID, newRefTestID(), "100", "s3"))
 }
 
 // Concurrent stagings of one target identity all succeed and share one
