@@ -12,6 +12,8 @@ import (
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -49,6 +51,7 @@ type fakeGovernedResolver struct {
 	toolkits fakeGovernedToolkits
 	bound    map[int64]bool
 	governed []bool
+	revoked  bool
 }
 
 func (f *fakeGovernedResolver) digest(id int64) [32]byte {
@@ -68,7 +71,7 @@ func (f *fakeGovernedResolver) Resolve(ctx context.Context, _ int64, binding str
 		return configurationapp.GovernedResolution{}, configurationapp.ErrGovernedToolkitNotBound
 	case digest != f.digest(toolkit):
 		return configurationapp.GovernedResolution{}, configurationapp.ErrGovernedToolkitDigestMismatch
-	case binding != frozenBinding:
+	case binding != frozenBinding || f.revoked:
 		return configurationapp.GovernedResolution{}, configurationapp.ErrGovernedGrantMissing
 	}
 	return configurationapp.GovernedResolution{ToolkitID: toolkit, CredentialReferenceID: ref.CredentialReferenceID,
@@ -85,18 +88,40 @@ func (f *fakeGovernedResolver) BindToolkit(_ context.Context, _ int64, _ string,
 	return true, nil
 }
 
+// fakeAdmissionReplays answers one committed admission when found.
+type fakeAdmissionReplays struct {
+	outcome executionapp.AdmissionOutcome
+	digest  runtimedomain.Digest
+	found   bool
+	calls   int
+}
+
+func (f *fakeAdmissionReplays) AgentAdmissionReplay(_ context.Context, scope, key string) (executionapp.AdmissionOutcome, runtimedomain.Digest, bool, error) {
+	f.calls++
+	if scope != "tenant/7/19" || key != "message-1" {
+		return executionapp.AdmissionOutcome{}, runtimedomain.Digest{}, false, errors.New("unexpected replay lookup")
+	}
+	return f.outcome, f.digest, f.found, nil
+}
+
 func governedWorld(t *testing.T, stored fakeGovernedToolkits, bound ...int64) (*GovernedCredentials, *fakeGovernedResolver, *fakeGovernedBindings) {
+	credentials, resolver, bindings, _ := governedWorldWithReplays(t, stored, bound...)
+	return credentials, resolver, bindings
+}
+
+func governedWorldWithReplays(t *testing.T, stored fakeGovernedToolkits, bound ...int64) (*GovernedCredentials, *fakeGovernedResolver, *fakeGovernedBindings, *fakeAdmissionReplays) {
 	t.Helper()
 	resolver := &fakeGovernedResolver{toolkits: stored, bound: map[int64]bool{}}
 	for _, id := range bound {
 		resolver.bound[id] = true
 	}
 	bindings := &fakeGovernedBindings{id: frozenBinding}
-	credentials, err := NewGovernedCredentials(resolver, bindings, stored)
+	replays := &fakeAdmissionReplays{}
+	credentials, err := NewGovernedCredentials(resolver, bindings, stored, replays)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return credentials, resolver, bindings
+	return credentials, resolver, bindings, replays
 }
 
 func jiraRef(fields map[string]any) map[string]any {
@@ -114,13 +139,28 @@ func governedSubmit(t *testing.T, toolkitIDs ...int64) SubmitRequest {
 	if err != nil {
 		t.Fatal(err)
 	}
+	const (
+		question     = "ee92ccbd-3312-4c72-b20b-fddf224e7c0e"
+		conversation = "8bc66e50-46c4-4e2c-94ec-daec6c596ac0"
+		response     = "061e2c58-2e09-5853-a006-532b082a0433"
+	)
 	input := validAgentInput()
 	input.Application = application
+	input.ExecutionGeneration = proto.String(question)
 	return SubmitRequest{
-		Identity:     executionapp.AdmissionIdentity{TenantID: "tenant", ResourceProjectID: "7", ProjectionProjectID: "7", ActorID: "19"},
-		CapabilityID: executiondomain.AgentApplicationCapability,
-		Input:        input,
-		CurrentTurn:  &CurrentApplicationTurn{ApplicationID: 3, ApplicationVersionID: 4},
+		Identity:        executionapp.AdmissionIdentity{TenantID: "tenant", ResourceProjectID: "7", ProjectionProjectID: "7", ActorID: "19"},
+		IdempotencyKey:  "message-1",
+		CapabilityID:    executiondomain.AgentApplicationCapability,
+		ClientStreamID:  conversation,
+		ClientMessageID: response,
+		SIOEvent:        "chat_predict",
+		Input:           input,
+		CurrentTurn: &CurrentApplicationTurn{
+			ProjectID: 7, ActorUserID: 19, ConversationUUID: conversation, TargetParticipantID: 21,
+			ApplicationID: 3, ApplicationVersionID: 4, QuestionID: question,
+			QuestionItemID: "3d3f33b7-e629-4db7-b4ee-c2914067897a", ResponseMessageID: response,
+			QuestionMeta: []byte(`{}`), UserInput: "hello",
+		},
 	}
 }
 
@@ -227,10 +267,7 @@ func TestGovernedFreezeRefusesWithTypedErrors(t *testing.T) {
 			credentials, _, _ := governedWorld(t, fakeGovernedToolkits{21: jiraRef(c.ref)}, bound...)
 			store := successfulRecordingStore()
 			service := testAdmissionService(t, store).WithGovernedCredentials(credentials)
-			request := governedSubmit(t, 21)
-			request.IdempotencyKey, request.ClientStreamID, request.ClientMessageID, request.SIOEvent =
-				"message-1", "conversation-1", "message-1", "chat_predict"
-			_, err := service.Submit(context.Background(), request)
+			_, err := service.Submit(context.Background(), governedSubmit(t, 21))
 			var refused *GovernedCredentialAdmissionError
 			if !errors.Is(err, c.want) || !errors.As(err, &refused) || refused.Code != c.code || refused.ToolkitID != 21 {
 				t.Fatalf("err = %v", err)
@@ -239,6 +276,91 @@ func TestGovernedFreezeRefusesWithTypedErrors(t *testing.T) {
 				t.Fatal("a refused admission reached the store")
 			}
 		})
+	}
+}
+
+// A retry of a committed admission (same idempotency key) replays it before
+// anything is resolved, so a grant revoked since does not refuse it. The
+// request digest is the client's request, not the frozen input: a governed
+// admission digests exactly as an ungoverned one of the same request.
+func TestGovernedRetryReplaysTheCommittedAdmission(t *testing.T) {
+	stored := fakeGovernedToolkits{21: jiraRef(map[string]any{"elitea_title": "jira-prod", "private": false, "credential_reference_id": frozenReference})}
+	credentials, resolver, _, replays := governedWorldWithReplays(t, stored, 21)
+	store := successfulRecordingStore()
+	service := testAdmissionService(t, store).WithGovernedCredentials(credentials)
+	first, err := service.Submit(context.Background(), governedSubmit(t, 21))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.admission.GovernedCredentials == nil || len(store.admission.GovernedCredentials.References) != 1 {
+		t.Fatalf("freeze %+v", store.admission.GovernedCredentials)
+	}
+	committed := store.admission.Record.RequestDigest
+	plain := successfulRecordingStore()
+	if _, err := testAdmissionService(t, plain).Submit(context.Background(), governedSubmit(t, 21)); err != nil {
+		t.Fatal(err)
+	}
+	if plain.admission.Record.RequestDigest != committed {
+		t.Fatal("the request digest covers the frozen input, not the client's request")
+	}
+	if string(plain.admission.Record.InputBundle.Entries[0].Content) == string(store.admission.Record.InputBundle.Entries[0].Content) {
+		t.Fatal("the governed bundle does not carry the frozen reference")
+	}
+
+	resolver.revoked = true
+	replays.outcome, replays.digest, replays.found = first, committed, true
+	retryStore := successfulRecordingStore()
+	retry := testAdmissionService(t, retryStore).WithGovernedCredentials(credentials)
+	calls := len(resolver.governed)
+	outcome, err := retry.Submit(context.Background(), governedSubmit(t, 21))
+	if err != nil {
+		t.Fatalf("replay after revocation: %v", err)
+	}
+	if outcome.ExecutionID != first.ExecutionID || outcome.CommandID != first.CommandID || outcome.Created {
+		t.Fatalf("replay outcome %+v, want the original %+v", outcome, first)
+	}
+	if len(resolver.governed) != calls || retryStore.admission.Record.Job.ID != "" {
+		t.Fatal("a replay was resolved or reached the store again")
+	}
+
+	// A different request under the same key is a conflict, not a freeze.
+	changed := governedSubmit(t, 21)
+	changed.Input.UserInput = []byte(`"other"`)
+	if _, err := retry.Submit(context.Background(), changed); !errors.Is(err, executionapp.ErrIdempotencyConflict) {
+		t.Fatalf("conflict: %v", err)
+	}
+	if len(resolver.governed) != calls {
+		t.Fatal("a conflicting retry was resolved")
+	}
+}
+
+// A malformed request is refused before any governed read.
+func TestGovernedAdmissionValidatesBeforeReading(t *testing.T) {
+	credentials, resolver, bindings, replays := governedWorldWithReplays(t, fakeGovernedToolkits{}, 21)
+	service := testAdmissionService(t, successfulRecordingStore()).WithGovernedCredentials(credentials)
+	request := governedSubmit(t, 21)
+	request.CurrentTurn.QuestionID = "3d3f33b7-e629-4db7-b4ee-c2914067897b"
+	if _, err := service.Submit(context.Background(), request); !errors.Is(err, ErrInvalidAgentAdmission) {
+		t.Fatalf("err = %v", err)
+	}
+	if replays.calls != 0 || bindings.calls != 0 || len(resolver.governed) != 0 {
+		t.Fatal("a malformed request was read before it was refused")
+	}
+}
+
+// A toolkit frozen at its digest alone leaves the input untouched: the same
+// message and the same bytes.
+func TestGovernedFreezeOfDigestOnlyToolkitsKeepsTheInputBytes(t *testing.T) {
+	stored := fakeGovernedToolkits{41: {"base_url": "https://sharepoint.example.test"}}
+	credentials, _, _ := governedWorld(t, stored, 41)
+	request := governedSubmit(t, 41)
+	original := append([]byte(nil), request.Input.GetApplication()...)
+	input, freeze, err := credentials.Freeze(context.Background(), request)
+	if err != nil || freeze == nil || len(freeze.References) != 1 || freeze.References[0].CredentialReferenceID != "" {
+		t.Fatalf("freeze %+v err=%v", freeze, err)
+	}
+	if input != request.Input || string(input.GetApplication()) != string(original) {
+		t.Fatal("a digest-only freeze rewrote the input")
 	}
 }
 

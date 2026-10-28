@@ -11,8 +11,10 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
 
 // GovernedAgentBindings answers the usable agent binding of an application
@@ -26,6 +28,13 @@ type GovernedAgentBindings interface {
 // configuration references unexpanded) from the run's project.
 type GovernedToolkitSource interface {
 	StoredToolkit(ctx context.Context, projectID, toolkitID int64) (toolkitType string, settings map[string]any, found bool, err error)
+}
+
+// AgentAdmissionReplays reads a committed admission by its idempotency
+// scope and key, with the request digest it was admitted under.
+// found=false when there is none.
+type AgentAdmissionReplays interface {
+	AgentAdmissionReplay(ctx context.Context, scope, key string) (outcome executionapp.AdmissionOutcome, digest runtimedomain.Digest, found bool, err error)
 }
 
 // GovernedCredentialFreeze is what admission resolved for a governed run of
@@ -73,14 +82,32 @@ type GovernedCredentials struct {
 	resolver configurationapp.GovernedResolver
 	bindings GovernedAgentBindings
 	toolkits GovernedToolkitSource
+	replays  AgentAdmissionReplays
 }
 
 // NewGovernedCredentials builds the admission step.
-func NewGovernedCredentials(resolver configurationapp.GovernedResolver, bindings GovernedAgentBindings, toolkits GovernedToolkitSource) (*GovernedCredentials, error) {
-	if resolver == nil || bindings == nil || toolkits == nil {
-		return nil, errors.New("governed credentials: resolver, binding reader and toolkit source are required")
+func NewGovernedCredentials(resolver configurationapp.GovernedResolver, bindings GovernedAgentBindings, toolkits GovernedToolkitSource, replays AgentAdmissionReplays) (*GovernedCredentials, error) {
+	if resolver == nil || bindings == nil || toolkits == nil || replays == nil {
+		return nil, errors.New("governed credentials: resolver, binding reader, toolkit source and replay reader are required")
 	}
-	return &GovernedCredentials{resolver: resolver, bindings: bindings, toolkits: toolkits}, nil
+	return &GovernedCredentials{resolver: resolver, bindings: bindings, toolkits: toolkits, replays: replays}, nil
+}
+
+// replay answers the committed admission a retry names (found=true), so a
+// retry is never re-resolved: the freeze is the original admission's. A
+// different request under the same key is an idempotency conflict.
+func (g *GovernedCredentials) replay(ctx context.Context, scope, key string, requestDigest runtimedomain.Digest) (executionapp.AdmissionOutcome, bool, error) {
+	outcome, digest, found, err := g.replays.AgentAdmissionReplay(ctx, scope, key)
+	switch {
+	case err != nil:
+		return executionapp.AdmissionOutcome{}, false, fmt.Errorf("governed credentials: read the idempotent admission: %w", err)
+	case !found:
+		return executionapp.AdmissionOutcome{}, false, nil
+	case digest != requestDigest:
+		return executionapp.AdmissionOutcome{}, false, executionapp.ErrIdempotencyConflict
+	}
+	outcome.Created = false
+	return outcome, true, nil
 }
 
 // WithGovernedCredentials makes admission resolve and freeze governed
@@ -167,6 +194,8 @@ func (g *GovernedCredentials) Freeze(ctx context.Context, request SubmitRequest)
 		if ref == nil {
 			continue
 		}
+		// A toolkit frozen at its digest alone is not rewritten.
+		rewrote := ref.CredentialReferenceID != ""
 		if slices.ContainsFunc(freeze.References, func(r GovernedCredentialReference) bool { return r.ToolkitID == ref.ToolkitID }) {
 			// The same toolkit twice resolves the same way; freeze it once.
 			if !slices.Contains(freeze.References, *ref) {
@@ -176,7 +205,9 @@ func (g *GovernedCredentials) Freeze(ctx context.Context, request SubmitRequest)
 		} else {
 			freeze.References = append(freeze.References, *ref)
 		}
-		tools[index], changed = rewritten, true
+		if rewrote {
+			tools[index], changed = rewritten, true
+		}
 	}
 	slices.SortFunc(freeze.References, func(a, b GovernedCredentialReference) int {
 		switch {

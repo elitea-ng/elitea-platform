@@ -194,22 +194,27 @@ func (c Context) Validate() error {
 // toolkit.
 func CredentialReferenceFor(message *runtimev1.ExecutionSecurityContextV1, toolkitID int64) (CredentialReference, bool) {
 	for _, ref := range message.GetCredentialReferences() {
-		if ref.GetToolkitId() != toolkitID {
-			continue
+		if ref.GetToolkitId() == toolkitID {
+			return CredentialReferenceOf(ref)
 		}
-		digest := ref.GetToolkitDigest()
-		if digest.GetAlgorithm() != runtimev1.DigestAlgorithmV1_DIGEST_ALGORITHM_V1_SHA256 ||
-			len(digest.GetValue()) != len(runtimedomain.Digest{}) {
-			return CredentialReference{}, false
-		}
-		out := CredentialReference{
-			ToolkitID: ref.GetToolkitId(), CredentialReferenceID: ref.GetCredentialReferenceId(),
-			TargetBindingID: ref.GetTargetBindingId(), Generation: ref.GetGeneration(),
-		}
-		copy(out.ToolkitDigest[:], digest.GetValue())
-		return out, true
 	}
 	return CredentialReference{}, false
+}
+
+// CredentialReferenceOf converts one frozen reference; false when its
+// toolkit digest is not a SHA-256.
+func CredentialReferenceOf(ref *runtimev1.GovernedCredentialReferenceV1) (CredentialReference, bool) {
+	digest := ref.GetToolkitDigest()
+	if digest.GetAlgorithm() != runtimev1.DigestAlgorithmV1_DIGEST_ALGORITHM_V1_SHA256 ||
+		len(digest.GetValue()) != len(runtimedomain.Digest{}) {
+		return CredentialReference{}, false
+	}
+	out := CredentialReference{
+		ToolkitID: ref.GetToolkitId(), CredentialReferenceID: ref.GetCredentialReferenceId(),
+		TargetBindingID: ref.GetTargetBindingId(), Generation: ref.GetGeneration(),
+	}
+	copy(out.ToolkitDigest[:], digest.GetValue())
+	return out, true
 }
 
 func validRef(value string, required bool) bool {

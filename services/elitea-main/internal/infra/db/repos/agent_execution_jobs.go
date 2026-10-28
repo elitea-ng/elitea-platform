@@ -1193,6 +1193,30 @@ func insertCurrentTurnAttachments(
 	return nil
 }
 
+// AgentAdmissionReplays reads committed agent admissions by idempotency key
+// (agentexecution.AgentAdmissionReplays): the same lookup AdmitAgentExecution
+// replays with.
+type AgentAdmissionReplays struct {
+	pool *pgxpool.Pool
+}
+
+// NewAgentAdmissionReplays builds the reader over pool.
+func NewAgentAdmissionReplays(pool *pgxpool.Pool) *AgentAdmissionReplays {
+	return &AgentAdmissionReplays{pool: pool}
+}
+
+// AgentAdmissionReplay answers the committed admission of scope and key.
+func (r *AgentAdmissionReplays) AgentAdmissionReplay(ctx context.Context, scope, key string) (executionapp.AdmissionOutcome, runtimedomain.Digest, bool, error) {
+	outcome, digest, err := loadAgentAdmission(ctx, sqlcgen.New(r.pool), scope, key)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return executionapp.AdmissionOutcome{}, runtimedomain.Digest{}, false, nil
+	case err != nil:
+		return executionapp.AdmissionOutcome{}, runtimedomain.Digest{}, false, err
+	}
+	return outcome, digest, true, nil
+}
+
 func resourceProjectIDUnchecked(value string) int64 {
 	projectID, _ := strconv.ParseInt(value, 10, 64)
 	return projectID
