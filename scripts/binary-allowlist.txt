@@ -135,3 +135,11 @@ apps/elitea-web/public/brand/fonts/*.woff2
 # LE-03 icon pack's master rasters, offered as downloads. Exact directory.
 brand/assets/icons/*.png
 brand/assets/icons/*.ico
+
+# The approved LE-03 icon pack, committed exactly as delivered (four variants x
+# macos/windows/android/ios/github/web). Its vector sources are generated beside
+# it (brand/assets/icon-pack/src/, gen-brand.mjs) and re-rasterised by
+# brand/scripts/render-icon-pack.mjs.
+brand/assets/icon-pack/*/*/*.png
+brand/assets/icon-pack/*/*/*.ico
+brand/assets/icon-pack/icon-pack-preview.png
