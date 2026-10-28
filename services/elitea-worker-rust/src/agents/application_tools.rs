@@ -1181,16 +1181,31 @@ fn exact_application_call<'a>(
     container_invocation_id: &str,
     parent_call_id: &str,
 ) -> Result<(&'a Event, adk_rust::ToolCallView<'a>, usize), NativeAgentAssemblyError> {
-    let mut matched = None;
+    let mut matched: Option<(&Event, adk_rust::ToolCallView<'_>, usize)> = None;
     for event in events
         .iter()
         .filter(|event| event.invocation_id == container_invocation_id)
     {
         for (ordinal, call) in event.tool_calls().into_iter().enumerate() {
-            if call.call_id == Some(parent_call_id)
-                && matched.replace((event, call, ordinal + 1)).is_some()
-            {
-                return Err(invalid_configuration());
+            if call.call_id == Some(parent_call_id) {
+                // FU-246: a fixed Parallel member's own call is re-announced
+                // unchanged when its paused Agent resumes; that is the same
+                // call, not a second one.
+                if let Some((previous, first, _)) = &matched
+                    && previous
+                        .provider_metadata
+                        .contains_key(super::events::FANOUT_MEMBER_CALL_KEY)
+                    && event
+                        .provider_metadata
+                        .contains_key(super::events::FANOUT_MEMBER_CALL_KEY)
+                    && first.name == call.name
+                    && first.args == call.args
+                {
+                    continue;
+                }
+                if matched.replace((event, call, ordinal + 1)).is_some() {
+                    return Err(invalid_configuration());
+                }
             }
         }
     }

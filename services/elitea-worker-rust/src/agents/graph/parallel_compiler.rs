@@ -562,7 +562,14 @@ impl CompilerParallelBranches {
             .applications
             .install_scope_resume(&events, resolved)
             .await
-            .map_err(|_| refused("the member's nested decision could not be installed"))?;
+            .map_err(|error| {
+                refused(&format!(
+                    "the member's nested decision could not be installed ({})",
+                    error
+                        .cause()
+                        .map_or("invalid_configuration", |cause| cause.code())
+                ))
+            })?;
         Ok(crate::agents::graph::resume::PipelineResume::empty().into_state())
     }
 

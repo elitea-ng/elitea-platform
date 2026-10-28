@@ -1129,6 +1129,12 @@ impl NativeAgentRuntimeError {
         self.upstream.as_ref().map(|error| error.code)
     }
 
+    /// The upstream failure's message, for test assertions and diagnostics.
+    #[cfg(test)]
+    pub(crate) fn upstream_message_for_tests(&self) -> Option<&str> {
+        self.upstream.as_ref().map(|error| error.message.as_str())
+    }
+
     /// The sanitized delegated-authorization requirement this failure carries,
     /// when it is a remote server's `401` challenge rather than a fault (#982).
     ///

@@ -422,9 +422,9 @@ async fn run_keyed_deciding(
         match run.next_event().await {
             Err(error) => {
                 return Err(format!(
-                    "{error} {:?} {}",
+                    "{error} {:?} {:?}",
                     error.upstream_code(),
-                    error.diagnostic_detail()
+                    error.upstream_message_for_tests()
                 ));
             }
             Ok(Some(event)) => {
@@ -560,6 +560,78 @@ async fn postgres_effectful_fanout_child_may_have_started_stops_the_node() {
         return;
     };
     scenario(&url, "effect", "stop").await;
+}
+
+/// FU-246: two saved Agent members need a sensitive-tool approval; each raises
+/// its own card, one is approved and one rejected live, only the approved call
+/// runs, once, and the pipeline joins with no legacy pause frame.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_fanout_agent_branches_approve_and_reject_their_own_calls() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let (platform, model_facade, captured) = saved_runtime(
+        vec![
+            TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
+            TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
+            TestModelGatewayOutcome::Response(pipeline_text_response("done")),
+            TestModelGatewayOutcome::Response(pipeline_text_response("done")),
+            TestModelGatewayOutcome::Response(pipeline_text_response("done")),
+        ],
+        effectful_agent(),
+    );
+    let assembler = PipelineNativeAgentAssembler::postgres(
+        db.pool.clone(),
+        SessionLimits::default(),
+        CheckpointLimits::default(),
+        sensitive_pipeline_mcp_policy(),
+        platform,
+        model_facade,
+    )
+    .with_mcp_connector(Arc::new(PipelineMcpConnector {
+        connections: Arc::new(AtomicUsize::new(0)),
+        tool_calls: Arc::clone(&tool_calls),
+        read_only: false,
+    }))
+    .with_fixed_parallel_for_tests()
+    .with_fanout_decisions_for_tests(ledger.client(1));
+    let request = request("continue");
+    let invocation = assembler
+        .assemble(claim(&request, 1))
+        .await
+        .expect("assemble the fan-out pipeline");
+    let (_, cards) = run_deciding(invocation, &|card| {
+        let key = card["interrupt_key"].as_str().expect("card key");
+        match (card["fanout_v1"]["member"].as_str(), card["kind"].as_str()) {
+            (Some("first"), Some("tool_guard")) => ledger.decide(key, "approve", None),
+            (Some("second"), Some("tool_guard")) => ledger.decide(key, "reject", None),
+            other => panic!("unexpected card {other:?}"),
+        }
+    })
+    .await
+    .expect("the approved and rejected members resume and the pipeline completes");
+    assert_eq!(cards.len(), 2, "{cards:?}");
+    assert_eq!(
+        tool_calls.load(Ordering::Acquire),
+        1,
+        "only the approved call runs, once"
+    );
+    assert_eq!(model_requests(&captured), 5);
+    let entries = joined(&db.pool).await.expect("joined entries");
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    for entry in &entries {
+        assert_eq!(entry["status"], "succeeded", "{entries:?}");
+    }
+    db.pool.close().await;
 }
 
 /// FU-246: a member whose saved Agent asks the user pauses with its own card
