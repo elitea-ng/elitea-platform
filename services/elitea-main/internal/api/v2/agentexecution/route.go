@@ -671,6 +671,12 @@ func writeStartError(writer http.ResponseWriter, err error) {
 			"message":   "The previous agent response is still being finalized. Please retry shortly.",
 			"retryable": true,
 		})
+	case errors.Is(err, agentexecutionapp.ErrConversationLegalHold):
+		writeJSON(writer, http.StatusConflict, map[string]any{
+			"error":     "legal_hold",
+			"message":   "This conversation is under legal hold. Its messages cannot be regenerated or edited.",
+			"retryable": false,
+		})
 	case errors.Is(err, agentexecutionapp.ErrLocalWorkTurn):
 		writeJSON(writer, http.StatusConflict, map[string]any{
 			"error":     "local_work_turn",

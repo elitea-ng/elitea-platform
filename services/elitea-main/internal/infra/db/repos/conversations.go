@@ -1086,7 +1086,7 @@ func (r *ConversationsRepo) Delete(ctx context.Context, projectID, conversationI
 		return nil, err
 	}
 	if held {
-		return nil, apierr.Conflict("conversation is under legal hold and cannot be deleted")
+		return nil, legalHoldRefusal()
 	}
 
 	attachments, err := deleteConversationInTx(ctx, transaction, projectID, id)
@@ -1576,6 +1576,16 @@ func (r *ConversationsRepo) CreateCanvas(ctx context.Context, projectID string, 
 	// item is deleted). A refusal leaves the message as it was.
 	if startsAt < 0 || endsAt > len(oldContent) {
 		return nil, apierr.BadRequest("canvas_content_starts_at and canvas_content_ends_at must lie inside the message content")
+	}
+	// The carve deletes the original text item, so a held transcript
+	// (ADR-0042 decision 4) is refused before it is rewritten.
+	var conversationID int64
+	if err := r.pool.QueryRow(ctx, fmt.Sprintf(`SELECT conversation_id FROM %s.chat_message_group WHERE id = $1`, s),
+		messageGroupID).Scan(&conversationID); err != nil {
+		return nil, fmt.Errorf("fetch message conversation: %w", err)
+	}
+	if err := refuseIfHeld(ctx, r.pool, projectID, conversationID); err != nil {
+		return nil, err
 	}
 
 	// 2. Slice content
@@ -2231,6 +2241,11 @@ func (r *ConversationsRepo) DeleteAttachments(ctx context.Context, projectID, co
 	if err != nil {
 		return err
 	}
+	// The handler asks ConversationHeld before it deletes the bytes; this is
+	// the same refusal for any other caller of the repository.
+	if err := refuseIfHeld(ctx, r.pool, projectID, id); err != nil {
+		return err
+	}
 	q := fmt.Sprintf(`UPDATE %s.chat_conversations SET meta = (COALESCE(meta, '{}')::jsonb - 'attachments') WHERE id = $1`, s)
 	if _, err := r.pool.Exec(ctx, q, id); err != nil {
 		return fmt.Errorf("conversations: delete attachments: %w", err)
@@ -2336,6 +2351,12 @@ func (r *ConversationsRepo) DeleteMessages(ctx context.Context, projectID, conve
 		return fmt.Errorf("conversations: delete messages: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
+
+	// A legal hold keeps the transcript (ADR-0042 decision 4): clearing it
+	// would delete everything the hold exists to keep.
+	if err := refuseIfHeld(ctx, transaction, projectID, id); err != nil {
+		return err
+	}
 
 	items := fmt.Sprintf(`DELETE FROM %s.chat_message_items
 		WHERE message_group_id IN (SELECT id FROM %s.chat_message_group WHERE conversation_id = $1)`, s, s)
@@ -2455,6 +2476,7 @@ func (r *ConversationsRepo) DeleteMessage(ctx context.Context, projectID, groupU
 	// error.
 	inspect := fmt.Sprintf(`
 		SELECT mg.id,
+			conv.id,
 			conv.author_id::text,
 			author.entity_name,
 			COALESCE(author.entity_meta->>'id', ''),
@@ -2473,13 +2495,13 @@ func (r *ConversationsRepo) DeleteMessage(ctx context.Context, projectID, groupU
 		LEFT JOIN %s.chat_message_group paired ON paired.id = mg.reply_to_id
 		WHERE mg.uuid = $1::uuid`, s, s, s, s, s)
 
-	var groupID int64
+	var groupID, conversationID int64
 	var conversationAuthorID, authorEntityName, authorEntityID, contextIncluded string
 	var isLast bool
 	var pairedID *int64
 	var pairedUUID, pairedContextIncluded string
 	if err := transaction.QueryRow(ctx, inspect, groupUID).Scan(
-		&groupID, &conversationAuthorID, &authorEntityName, &authorEntityID, &contextIncluded, &isLast,
+		&groupID, &conversationID, &conversationAuthorID, &authorEntityName, &authorEntityID, &contextIncluded, &isLast,
 		&pairedID, &pairedUUID, &pairedContextIncluded,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -2506,6 +2528,11 @@ func (r *ConversationsRepo) DeleteMessage(ctx context.Context, projectID, groupU
 	}
 	if !isLast {
 		return result, apierr.BadRequest("only the last message in the conversation can be deleted")
+	}
+	// After the author check, so a caller who may not touch the message
+	// learns nothing about holds; before anything is read for deletion.
+	if err := refuseIfHeld(ctx, transaction, projectID, conversationID); err != nil {
+		return result, err
 	}
 
 	doomed := []int64{groupID}

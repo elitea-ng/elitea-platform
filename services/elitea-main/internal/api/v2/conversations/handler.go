@@ -1901,12 +1901,33 @@ func (h *Handler) AddAttachments(w http.ResponseWriter, r *http.Request) {
 // bytes at the same moment (legacy/plugins/elitea_core/api/v2/
 // attachments.py:240, `mc.remove_file(bucket_name, filename)`); this is that
 // parity baseline.
+// LegalHoldReader reports whether an active legal hold covers a
+// conversation. *repos.ConversationsRepo implements it.
+type LegalHoldReader interface {
+	ConversationHeld(ctx context.Context, projectID, conversationID string) (bool, error)
+}
+
 func (h *Handler) DeleteAttachments(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeConversation(w, r) {
 		return
 	}
 	projectID := chi.URLParam(r, "projectID")
 	conversationID := chi.URLParam(r, "conversationID")
+
+	// A legal hold keeps the files a held transcript carries (ADR-0042
+	// decision 4). Asked BEFORE the bytes go: the repository's own refusal
+	// comes after them, too late to keep anything.
+	if holds, ok := h.repo.(LegalHoldReader); ok {
+		held, err := holds.ConversationHeld(r.Context(), projectID, conversationID)
+		if err != nil {
+			apierr.Write(w, err)
+			return
+		}
+		if held {
+			apierr.Write(w, apierr.Conflict("conversation is under legal hold and cannot be changed"))
+			return
+		}
+	}
 
 	// Bytes first, meta last. If the byte delete fails we must NOT strip the
 	// meta: the meta is the only thing left in the product that names those

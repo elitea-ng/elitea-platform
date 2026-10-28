@@ -15,12 +15,12 @@ What is enforced:
 
 - A maximum age per data class. Data older than the maximum is deleted in bounded batches.
 - Platform bounds. A project may set its own maximum for conversations only, and only inside the platform bounds.
-- Legal hold on a project, an agent or a user. While a hold is active, the retention sweep skips every conversation it covers. A user's own delete of such a conversation is refused (HTTP 409).
+- Legal hold on a project, an agent or a user. While a hold is active, the retention sweep skips every conversation it covers. A user's change that would remove or overwrite content of such a conversation is refused with HTTP 409: deleting the conversation, clearing its messages, deleting a message, deleting its attachments, moving message text into a canvas, and regenerating or editing a message.
 
 What is not enforced:
 
 - A **minimum** age does not stop a user from deleting their own conversation. It only bounds the shortest maximum a project may choose. Use a legal hold to stop a deletion.
-- A legal hold covers conversations. It does not block deleting a whole project, a user account or a single message.
+- A legal hold covers conversations. It does not block deleting a whole project or a user account.
 - Attachments have no separate maximum. They are deleted with their conversation.
 - The reserved classes `step_content` and `step_record` have no data yet and cannot be set.
 

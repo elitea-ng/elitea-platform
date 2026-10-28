@@ -751,6 +751,15 @@ func resetCurrentAgentResponse(
 	if !ok {
 		return executionapp.ErrInvalidAdmission
 	}
+	// A legal hold (ADR-0042 decision 4) keeps the answer this reset would
+	// delete and the question an edit would overwrite.
+	held, err := conversationHeldByUUID(ctx, tx, turn.ProjectID, turn.ConversationUUID)
+	if err != nil {
+		return err
+	}
+	if held {
+		return agentexecutionapp.ErrConversationLegalHold
+	}
 	// Read BEFORE the reset strips the answer's cloud markers: whether this
 	// regenerate rewinds a handed-off thread's cloud ref (decision 7).
 	rewind, err := readCloudRegenerateRewind(ctx, tx, turn.ProjectID, turn.ConversationUUID, turn.ResponseMessageID)

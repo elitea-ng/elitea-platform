@@ -46,6 +46,12 @@ var (
 	// newest one of a handed-off thread: only the newest turn's commit can be
 	// rewound. The route answers 409 `cloud_turn_not_newest`.
 	ErrCloudTurnNotNewest = errors.New("only the newest cloud turn can be regenerated")
+	// ErrConversationLegalHold refuses regenerating (and editing) a turn of a
+	// conversation an active legal hold covers (ADR-0042 decision 4): the
+	// regeneration deletes the stored answer and an edit overwrites the
+	// question, both content the hold keeps. The route answers 409
+	// `legal_hold`.
+	ErrConversationLegalHold = errors.New("conversation is under legal hold")
 )
 
 // CurrentApplicationTurn is the immutable current-chat side of one durable

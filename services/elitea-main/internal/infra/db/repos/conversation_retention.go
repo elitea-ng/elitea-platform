@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	retentionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/conversationretention"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // Conversation retention (ADR-0042 decision 4, issue #1495).
@@ -49,10 +50,24 @@ const conversationHeldSQL = `EXISTS (
 	                  AND p.entity_meta->>'id' = h.agent_id::text
 	                  AND COALESCE(p.entity_meta->>'project_id', $1::text) = h.project_id::text))))`
 
+// holdQuerier is the read a hold check needs: a pool for a route that writes
+// in one statement, the caller's transaction otherwise.
+type holdQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// legalHoldRefusal is the answer every user-driven destructive path gives on a
+// held conversation (ADR-0042 decision 4): delete, clear, delete a message,
+// delete its attachments, carve a canvas out of a message, and regenerate or
+// edit a turn. One message and one status, so the client renders one thing.
+func legalHoldRefusal() error {
+	return apierr.Conflict("conversation is under legal hold and cannot be changed")
+}
+
 // legalHoldsPresent reports whether shared 0195 has run. Repository fixtures
 // build tenant tables without the shared schema, the same reason
 // deleteConversationPin guards social_pins.
-func legalHoldsPresent(ctx context.Context, q pgx.Tx) (bool, error) {
+func legalHoldsPresent(ctx context.Context, q holdQuerier) (bool, error) {
 	var present bool
 	if err := q.QueryRow(ctx, `SELECT to_regclass('elitea_runtime.legal_holds') IS NOT NULL`).Scan(&present); err != nil {
 		return false, fmt.Errorf("conversations: legal hold lookup: %w", err)
@@ -62,7 +77,7 @@ func legalHoldsPresent(ctx context.Context, q pgx.Tx) (bool, error) {
 
 // conversationHeld reports whether an active legal hold covers the
 // conversation.
-func conversationHeld(ctx context.Context, tx pgx.Tx, projectID string, id int64) (bool, error) {
+func conversationHeld(ctx context.Context, tx holdQuerier, projectID string, id int64) (bool, error) {
 	present, err := legalHoldsPresent(ctx, tx)
 	if err != nil || !present {
 		return false, err
@@ -80,6 +95,47 @@ func conversationHeld(ctx context.Context, tx pgx.Tx, projectID string, id int64
 		return false, fmt.Errorf("conversations: legal hold lookup: %w", err)
 	}
 	return held, nil
+}
+
+// conversationHeldByUUID is conversationHeld for a conversation addressed by
+// its uuid; a conversation that does not exist is not held.
+func conversationHeldByUUID(ctx context.Context, q holdQuerier, projectID int64, conversationUUID string) (bool, error) {
+	project := strconv.FormatInt(projectID, 10)
+	var id int64
+	err := q.QueryRow(ctx, fmt.Sprintf(`SELECT id FROM %s.chat_conversations WHERE uuid = $1::uuid`, schema(project)),
+		conversationUUID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("conversations: legal hold lookup: %w", err)
+	}
+	return conversationHeld(ctx, q, project, id)
+}
+
+// refuseIfHeld answers legalHoldRefusal when an active hold covers the
+// conversation, nil otherwise.
+func refuseIfHeld(ctx context.Context, q holdQuerier, projectID string, id int64) error {
+	held, err := conversationHeld(ctx, q, projectID, id)
+	if err != nil {
+		return err
+	}
+	if held {
+		return legalHoldRefusal()
+	}
+	return nil
+}
+
+// ConversationHeld reports whether an active legal hold covers the
+// conversation (numeric id or uuid). The conversation-wide attachment delete
+// asks before it removes any bytes, because it removes them before the row
+// write that would otherwise refuse.
+func (r *ConversationsRepo) ConversationHeld(ctx context.Context, projectID, conversationID string) (bool, error) {
+	id, err := r.resolveConversationID(ctx, projectID, conversationID)
+	if err != nil {
+		return false, err
+	}
+	return conversationHeld(ctx, r.pool, projectID, id)
 }
 
 // RetentionTenantProjects lists the projects whose tenant schema carries the
