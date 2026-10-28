@@ -42,8 +42,8 @@ test("a deleted stable release takes its <major>.<minor> only when no kept relea
 
 test("a package loses doomed versions, their signatures and old untagged versions only", () => {
   const versions = [
-    ver(1, ["5.0.0"], 1, "sha256:aa"),
-    ver(2, ["sha256-aa"], 1),
+    ver(1, ["5.0.0"], 1, `sha256:${"a".repeat(64)}`),
+    ver(2, [`sha256-${"a".repeat(64)}`], 1),
     ver(3, [], 1),
     ver(4, [], 3),
     ver(5, ["6.0.0", "latest"], 4),
@@ -53,6 +53,13 @@ test("a package loses doomed versions, their signatures and old untagged version
   assert.deepEqual(remove.map((v) => v.id), [1, 2, 3]);
   assert.deepEqual(kept.map((v) => v.id), [6]);
   assert.deepEqual(p.planPackage(versions, new Set(), null).remove, []);
+});
+
+test("orphaned signatures go; a signature of a live manifest stays", () => {
+  const A = "a".repeat(64);
+  const B = "b".repeat(64);
+  const versions = [ver(1, ["6.0.0"], 4, `sha256:${A}`), ver(2, [`sha256-${A}`], 4), ver(3, [`sha256-${B}`], 4)];
+  assert.deepEqual(p.planPackage(versions, new Set(), null).remove.map((v) => v.id), [3]);
 });
 
 test("retired packages are this repository's, and never a live, CI or kept one", () => {
@@ -76,6 +83,7 @@ class FakeGithub {
     this.rest = {
       repos: { listReleases: { endpoint: "releases" }, deleteRelease: async ({ release_id }) => record(`release/${release_id}`) },
       git: { deleteRef: async ({ ref }) => record(`ref/${ref}`) },
+      rateLimit: { get: async () => ({ data: { resources: { core: { remaining: 5000, reset: 0 } } } }) },
       packages: {
         getAllPackageVersionsForPackageOwnedByOrg: { endpoint: "versions" },
         listPackagesForOrganization: { endpoint: "packages" },
@@ -119,7 +127,7 @@ test("a run deletes packages, retired packages when asked, then releases, then t
   const github = world();
   const [code, lines] = await run(github, { deleteRetired: true });
   assert.equal(code, 0);
-  assert.deepEqual(github.calls, ["pkg/elitea-main/10", "pkg/elitea-main/11", "package/old-image", "release/1", "ref/tags/v5.0.0"]);
+  assert.deepEqual(github.calls, ["pkg/elitea-main/10", "pkg/elitea-main/11", "package/old-image", "ref/tags/v5.0.0", "release/1"]);
   assert.equal(lines.at(-1), "1 release(s) and 2 package version(s) deleted");
 });
 

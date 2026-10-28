@@ -1256,7 +1256,9 @@ jobs:
     needs: [release, chart]
     if: needs.release.outputs.new_release_published == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Rate-limit waits can be long; the prune stops itself at its deadline
+    # below, and the next release's prune carries on.
+    timeout-minutes: 90
     permissions:
       contents: write
       packages: write
@@ -1283,6 +1285,7 @@ jobs:
               channel: process.env.CHANNEL,
               keep: Number(process.env.PRERELEASE_KEEP),
               tag: process.env.TAG,
+              deadline: Date.now() + 75 * 60 * 1000,
             });
             if (code !== 0) core.setFailed(`scripts/ci/prune-prereleases.mjs exited ${code}`);
 
