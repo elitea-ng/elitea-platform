@@ -81,6 +81,14 @@ If any of these fail, fix that first — most downstream errors trace back to on
   </Accordion>
 </AccordionGroup>
 
+## Desktop app issues
+
+<AccordionGroup>
+  <Accordion title="The desktop app shows &quot;[Error] System env missing&quot; after sign-in">
+    The desktop app 7.3.0 shows this page after sign-in, listing `VITE_SERVER_URL`, `VITE_BASE_URI` and `VITE_PUBLIC_PROJECT_ID`. Nothing is wrong with your deployment or your settings: the app read its configuration before sign-in had supplied it, and kept the empty result. Install a newer desktop release. Signing out or reinstalling 7.3.0 does not help.
+  </Accordion>
+</AccordionGroup>
+
 <Tip title="Reading an error message">
 Look at the end of the message for the real cause — one failure can cascade into another. For pipelines, the error usually names the node ("During task with name 'Agent1'"); open that node's configuration first.
 </Tip>
