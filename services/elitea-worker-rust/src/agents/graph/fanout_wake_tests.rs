@@ -107,7 +107,27 @@ fn a_marker_outside_the_schema_is_refused() {
         marker[key] = value;
         cases.push(marker);
     }
-    for missing in ["schema", "response_message_id", "decision_revision"] {
+    for (key, value) in [
+        (
+            "parked_execution_id",
+            json!("0123456789ABCDEF0123456789ABCDEF"),
+        ),
+        ("parked_execution_id", json!("0123456789abcdef")),
+        ("parked_execution_id", json!(7)),
+        ("parked_generation", json!(0)),
+        ("parked_generation", json!("1")),
+    ] {
+        let mut marker = valid.clone();
+        marker[key] = value;
+        cases.push(marker);
+    }
+    for missing in [
+        "schema",
+        "response_message_id",
+        "decision_revision",
+        "parked_execution_id",
+        "parked_generation",
+    ] {
         let mut marker = valid.clone();
         marker.as_object_mut().expect("object").remove(missing);
         cases.push(marker);
@@ -190,4 +210,23 @@ fn a_wake_marker_on_a_non_empty_input_is_refused() {
             "{name}"
         );
     }
+}
+
+/// REVIEW-1470 #5: the only foreign root checkpoint a wake may re-enter is the
+/// one its parked execution (and generation) wrote.
+#[test]
+fn only_the_parked_execution_is_the_parked_writer() {
+    let wake = FanoutWake::from_payload(&wake_payload(fixture(VALID)))
+        .expect("valid marker")
+        .expect("a wake");
+    assert!(wake.is_parked_writer(Some(&json!(["0123456789abcdef0123456789abcdef", 1]))));
+    for writer in [
+        json!(["fedcba9876543210fedcba9876543210", 1]),
+        json!(["0123456789abcdef0123456789abcdef", 2]),
+        json!(["0123456789abcdef0123456789abcdef", "1"]),
+        json!("0123456789abcdef0123456789abcdef"),
+    ] {
+        assert!(!wake.is_parked_writer(Some(&writer)), "{writer}");
+    }
+    assert!(!wake.is_parked_writer(None));
 }

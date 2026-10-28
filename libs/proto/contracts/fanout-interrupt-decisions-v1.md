@@ -370,8 +370,10 @@ decision transaction take it):
 The continuation is a new continuation kind `fanout_wake` (new value next to `hitl`, `authorization`, `output_limit`,
 `static` in `CurrentContinuationKind`, `continue.go:32-38`), idempotency key
 `continue-interrupt/{responseMessageID}/{decision_revision}`. Its payload carries **no decisions**, only
-`payload.meta.fanout_wake_v1 = {schema, response_message_id, decision_revision}` (`fanout-wake`). The Worker re-enters
-the pending fan-out node and fetches.
+`payload.meta.fanout_wake_v1 = {schema, response_message_id, decision_revision, parked_execution_id,
+parked_generation}` (`fanout-wake`). The Worker re-enters the pending fan-out node and fetches. A wake re-enters a root
+checkpoint written by another execution only when that writer is exactly `[parked_execution_id, parked_generation]`;
+any other writer is refused (`graph.fanout.wake_without_park`).
 
 ### 8.1 Wake admission (v1.1)
 

@@ -51,7 +51,7 @@ func TestFanoutWakeInputKeepsFrozenFieldsAndCarriesOnlyTheMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"fanout_wake_v1":{"decision_revision":3,"response_message_id":"10000000-0000-4000-8000-000000000002","schema":"elitea.pipeline.fanout-wake.v1"},"keep":1}`
+	want := `{"fanout_wake_v1":{"decision_revision":3,"parked_execution_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","parked_generation":1,"response_message_id":"10000000-0000-4000-8000-000000000002","schema":"elitea.pipeline.fanout-wake.v1"},"keep":1}`
 	if string(input.GetMeta()) != want || input.GetHitlResume() || input.GetShouldContinue() || input.HitlAction != nil ||
 		string(input.GetHitlDecisions()) != `[]` || string(input.GetUserInput()) != `""` || input.GetThreadId() != "thread-1" ||
 		string(input.GetLlm()) != `{"kwargs":{"model":"model-1"}}` || validateAuthoritativeInput(input) != nil {

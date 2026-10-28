@@ -20,12 +20,15 @@ const OTHER_CONTINUATION_META_KEYS: [&str; 2] = [
     "pipeline_static_resume_v1",
 ];
 
-/// A validated wake marker. It names the parked response and the decision
-/// revision that admitted the wake; it carries no decision.
+/// A validated wake marker. It names the parked response, the decision
+/// revision that admitted the wake and the parked execution; it carries no
+/// decision.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FanoutWake {
     response_message_id: String,
     decision_revision: u64,
+    parked_execution_id: String,
+    parked_generation: u64,
 }
 
 impl FanoutWake {
@@ -60,8 +63,9 @@ impl FanoutWake {
         Ok(Some(wake))
     }
 
-    /// Strict `fanout-wake.schema.json`: exactly three members, the schema
-    /// constant, a lowercase non-nil UUID and a revision in `1..=i64::MAX`.
+    /// Strict `fanout-wake.schema.json`: exactly five members, the schema
+    /// constant, a lowercase non-nil UUID, a revision in `1..=i64::MAX`, and
+    /// the parked execution (32 lowercase hex) and generation (`>= 1`).
     fn parse(value: &Value) -> Result<Self, FanoutWakeError> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -69,21 +73,39 @@ impl FanoutWake {
             schema: String,
             response_message_id: String,
             decision_revision: i64,
+            parked_execution_id: String,
+            parked_generation: i64,
         }
         let marker = Marker::deserialize(value).map_err(|_| FanoutWakeError::MalformedMarker)?;
         if marker.schema != FANOUT_WAKE_SCHEMA
             || !valid_response_message_id(&marker.response_message_id)
+            || !valid_execution_id(&marker.parked_execution_id)
         {
             return Err(FanoutWakeError::MalformedMarker);
         }
-        let decision_revision = u64::try_from(marker.decision_revision)
-            .ok()
-            .filter(|revision| *revision >= 1)
-            .ok_or(FanoutWakeError::MalformedMarker)?;
+        let positive = |value: i64| {
+            u64::try_from(value)
+                .ok()
+                .filter(|value| *value >= 1)
+                .ok_or(FanoutWakeError::MalformedMarker)
+        };
         Ok(Self {
             response_message_id: marker.response_message_id,
-            decision_revision,
+            decision_revision: positive(marker.decision_revision)?,
+            parked_execution_id: marker.parked_execution_id,
+            parked_generation: positive(marker.parked_generation)?,
         })
+    }
+
+    /// Whether `writer` (a root checkpoint's `elitea.pipeline.execution.v1`
+    /// metadata) is the parked execution this wake was admitted against: the
+    /// only foreign root checkpoint a wake may re-enter.
+    pub(crate) fn is_parked_writer(&self, writer: Option<&Value>) -> bool {
+        writer
+            == Some(&serde_json::json!([
+                self.parked_execution_id,
+                self.parked_generation
+            ]))
     }
 
     // The strict marker is the proof; the restore fetch reads the claim's ledger.
@@ -97,6 +119,14 @@ impl FanoutWake {
     pub(crate) const fn decision_revision(&self) -> u64 {
         self.decision_revision
     }
+}
+
+/// 32 lowercase hex characters (schema pattern).
+fn valid_execution_id(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// Lowercase canonical UUID text, not the nil UUID (schema pattern).

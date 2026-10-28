@@ -2,13 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "elitea.pipeline.fanout-wake.v1",
   "title": "fanout_wake continuation marker",
-  "description": "payload.meta.fanout_wake_v1 of a continuation admitted by Main for a parked execution. It carries no decisions; the continuation fetches them.",
+  "description": "payload.meta.fanout_wake_v1 of a continuation admitted by Main for a parked execution. It carries no decisions; the continuation fetches them. It names the parked execution: a reclaimed wake re-enters a root checkpoint only when that execution wrote it.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema",
     "response_message_id",
-    "decision_revision"
+    "decision_revision",
+    "parked_execution_id",
+    "parked_generation"
   ],
   "properties": {
     "schema": {
@@ -24,6 +26,17 @@
       }
     },
     "decision_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "parked_execution_id": {
+      "type": "string",
+      "minLength": 32,
+      "maxLength": 32,
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "parked_generation": {
       "type": "integer",
       "minimum": 1,
       "maximum": 9223372036854775807

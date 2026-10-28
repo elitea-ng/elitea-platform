@@ -265,7 +265,8 @@ WHERE binding.execution_id = $1`, wakeExecution).Scan(&sio, &stream, &generation
 	if err := proto.Unmarshal(content, &input); err != nil {
 		t.Fatal(err)
 	}
-	wantMeta := `{"fanout_wake_v1":{"decision_revision":1,"response_message_id":"` + response +
+	wantMeta := `{"fanout_wake_v1":{"decision_revision":1,"parked_execution_id":"` + w.executions[response] +
+		`","parked_generation":1,"response_message_id":"` + response +
 		`","schema":"elitea.pipeline.fanout-wake.v1"},"keep":true}`
 	if string(input.GetMeta()) != wantMeta || input.GetHitlResume() || input.GetShouldContinue() ||
 		string(input.GetUserInput()) != `""` || string(input.GetHitlDecisions()) != `[]` || input.HitlAction != nil ||

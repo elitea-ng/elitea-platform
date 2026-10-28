@@ -34,17 +34,35 @@ func FanoutWakeIdempotencyKey(responseMessageID string, decisionRevision int64) 
 }
 
 // FanoutWakeMeta writes the wake input's meta member
-// {"fanout_wake_v1": {decision_revision, response_message_id, schema}} in the
-// contract canonical form (keys sorted, compact). Every other meta member of
-// a wake input is the parked execution's frozen meta, without any resume
-// marker; the Worker re-enters the parked node and fetches.
-func FanoutWakeMeta(responseMessageID string, decisionRevision int64) (json.RawMessage, error) {
-	if !noderecovery.ValidResponseMessageID(responseMessageID) || decisionRevision < 1 {
+// {"fanout_wake_v1": {decision_revision, parked_execution_id,
+// parked_generation, response_message_id, schema}} in the contract canonical
+// form (keys sorted, compact). Every other meta member of a wake input is the
+// parked execution's frozen meta, without any resume marker; the Worker
+// re-enters the parked node and fetches. The parked execution names the only
+// writer whose root checkpoint a reclaimed wake may re-enter.
+func FanoutWakeMeta(responseMessageID string, decisionRevision int64, parkedExecutionID string, parkedGeneration int64) (json.RawMessage, error) {
+	if !noderecovery.ValidResponseMessageID(responseMessageID) || decisionRevision < 1 ||
+		!validParkedExecutionID(parkedExecutionID) || parkedGeneration < 1 {
 		return nil, errInvalidFanoutWake
 	}
-	// Only ASCII ids and an integer: encoding/json output is already canonical.
+	// Only ASCII ids and integers: encoding/json output is already canonical.
 	return json.RawMessage(`{"decision_revision":` + strconv.FormatInt(decisionRevision, 10) +
+		`,"parked_execution_id":"` + parkedExecutionID +
+		`","parked_generation":` + strconv.FormatInt(parkedGeneration, 10) +
 		`,"response_message_id":"` + responseMessageID + `","schema":"` + FanoutWakeSchema + `"}`), nil
+}
+
+// validParkedExecutionID is the schema's 32 lowercase hex execution id.
+func validParkedExecutionID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	for _, c := range id {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 var (
@@ -164,7 +182,7 @@ func FanoutWakeInput(target FanoutWakeTarget) (*runtimev1.AgentExecutionInputV1,
 	for _, marker := range fanoutWakeResumeMarkers {
 		delete(meta, marker)
 	}
-	wake, err := FanoutWakeMeta(turn.ResponseMessageID, turn.DecisionRevision)
+	wake, err := FanoutWakeMeta(turn.ResponseMessageID, turn.DecisionRevision, turn.ParkedExecutionID, turn.ParkedGeneration)
 	if err != nil {
 		return nil, err
 	}

@@ -1191,7 +1191,10 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             .inspect_checkpoint(
                 &plan,
                 profile.definition(),
-                matches!(start, super::runtime::PipelineNativeStart::FanoutWake(_)),
+                match &start {
+                    super::runtime::PipelineNativeStart::FanoutWake(wake) => Some(wake),
+                    _ => None,
+                },
             )
             .await
             .map(|(evidence, _)| evidence)
@@ -1340,7 +1343,10 @@ impl PipelineNativeAgentAssembler {
                     .inspect_checkpoint(
                         &plan,
                         profile.definition(),
-                        matches!(start, super::runtime::PipelineNativeStart::FanoutWake(_)),
+                        match &start {
+                            super::runtime::PipelineNativeStart::FanoutWake(wake) => Some(wake),
+                            _ => None,
+                        },
                     )
                     .await?;
                 wake_rerun = frontier == super::session::RecoveryFrontier::WakePark;

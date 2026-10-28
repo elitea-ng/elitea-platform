@@ -11,15 +11,25 @@ func TestFanoutWakeMetaIsTheContractFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := FanoutWakeMeta("10000000-0000-4000-8000-000000000043", 2)
+	const parked = "0123456789abcdef0123456789abcdef"
+	got, err := FanoutWakeMeta("10000000-0000-4000-8000-000000000043", 2, parked, 1)
 	if err != nil || !bytes.Equal(got, fixture) {
 		t.Fatalf("wake meta:\n%s\n%s", got, fixture)
 	}
 	for _, bad := range []struct {
-		response string
-		revision int64
-	}{{"10000000-0000-4000-8000-000000000043", 0}, {"00000000-0000-0000-0000-000000000000", 1}, {"not-a-uuid", 1}} {
-		if _, err := FanoutWakeMeta(bad.response, bad.revision); err == nil {
+		response   string
+		revision   int64
+		execution  string
+		generation int64
+	}{
+		{"10000000-0000-4000-8000-000000000043", 0, parked, 1},
+		{"00000000-0000-0000-0000-000000000000", 1, parked, 1},
+		{"not-a-uuid", 1, parked, 1},
+		{"10000000-0000-4000-8000-000000000043", 1, "", 1},
+		{"10000000-0000-4000-8000-000000000043", 1, "0123456789ABCDEF0123456789ABCDEF", 1},
+		{"10000000-0000-4000-8000-000000000043", 1, parked, 0},
+	} {
+		if _, err := FanoutWakeMeta(bad.response, bad.revision, bad.execution, bad.generation); err == nil {
 			t.Errorf("%+v accepted", bad)
 		}
 	}

@@ -39,7 +39,7 @@ const ON_ERROR_ENV: &str = "ELITEA_FANOUT_EFFECT_PG_ON_ERROR";
 const PHASE_ENV: &str = "ELITEA_FANOUT_EFFECT_PG_PHASE";
 /// `effect` (effectful tool in flight), `read_only` (I) or `mid_model` (R).
 const MODE_ENV: &str = "ELITEA_FANOUT_EFFECT_PG_MODE";
-const EXECUTION: &str = "execution-fanout-effect";
+const EXECUTION: &str = "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e";
 const GENERATION: u64 = 3;
 /// The tool saw its own boundary in `PostgreSQL`, then the process died.
 const CRASH_EXIT_CODE: i32 = 87;
@@ -879,7 +879,9 @@ fn wake_request(on_error: &str) -> super::super::request::AgentExecutionRequest 
         crate::agents::graph::fanout_wake::FANOUT_WAKE_META_KEY.to_owned(),
         json!({"schema": "elitea.pipeline.fanout-wake.v1",
             "response_message_id": "10000000-0000-4000-8000-000000000043",
-            "decision_revision": 1}),
+            "decision_revision": 1,
+            "parked_execution_id": EXECUTION,
+            "parked_generation": GENERATION}),
     );
     request
 }

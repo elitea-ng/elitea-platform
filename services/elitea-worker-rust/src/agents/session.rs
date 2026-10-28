@@ -1546,7 +1546,7 @@ impl PipelineStateServices {
             .await
             .map_err(|_| invalid_configuration())?;
         // A node recovery resumes this execution's own node attempt only.
-        let (evidence, _) = self.inspect_checkpoint(plan, definition, false).await?;
+        let (evidence, _) = self.inspect_checkpoint(plan, definition, None).await?;
         let projector = definition
             .node_result_projector(&receipt.node_id, &plan.execution_id, plan.generation)
             .map_err(|_| invalid_configuration())?;
@@ -1596,7 +1596,7 @@ impl PipelineStateServices {
         &self,
         plan: &OrdinaryNativeAgentPlan,
         definition: &PipelineDefinition,
-        wake: bool,
+        wake: Option<&super::graph::fanout_wake::FanoutWake>,
     ) -> Result<(ValidatedModelCheckpoint, RecoveryFrontier), NativeAgentAssemblyError> {
         let checkpoint = self
             .checkpointer
@@ -1607,9 +1607,12 @@ impl PipelineStateServices {
         let writer = checkpoint.metadata.get("elitea.pipeline.execution.v1");
         let frontier = if writer == Some(&serde_json::json!([plan.execution_id, plan.generation])) {
             RecoveryFrontier::Own
-        } else if wake && writer.is_some() && !checkpoint.pending_nodes.is_empty() {
+        } else if wake.is_some_and(|wake| wake.is_parked_writer(writer))
+            && !checkpoint.pending_nodes.is_empty()
+        {
             // A wake lost before its first root save: the latest root checkpoint
-            // is still the park an earlier execution wrote, which it re-enters.
+            // is still the park that the parked execution named by the wake
+            // wrote, which it re-enters. Any other writer is refused.
             RecoveryFrontier::WakePark
         } else {
             return Err(invalid_configuration());
@@ -2443,7 +2446,7 @@ async fn resolve_pipeline_start(
             }
             Some(resume)
         }
-        PipelineNativeStart::FanoutWake(_) => {
+        PipelineNativeStart::FanoutWake(wake) => {
             restore_pipeline_session(state, plan).await?;
             // A wake re-enters the parked fan-out node with unchanged business
             // state: an explicit resume with an empty resume state, so the
@@ -2455,7 +2458,12 @@ async fn resolve_pipeline_start(
                 .load(plan.session_id.as_ref())
                 .await
                 .map_err(|_| dependency_unavailable())?;
-            if parked.is_none_or(|checkpoint| checkpoint.pending_nodes.is_empty()) {
+            // The parked frontier must be the one the parked execution wrote.
+            if parked.is_none_or(|checkpoint| {
+                checkpoint.pending_nodes.is_empty()
+                    || !wake
+                        .is_parked_writer(checkpoint.metadata.get("elitea.pipeline.execution.v1"))
+            }) {
                 return Err(fanout_wake_without_park());
             }
             Some(super::graph::resume::PipelineResume::empty())
@@ -4109,8 +4117,14 @@ mod fanout_start_tests {
     }
 
     /// Resolve a wake against a session and a root frontier of `pending` nodes.
+    /// The parked execution the wake fixture names (`fanout-wake-v1.json`).
+    fn parked_writer() -> serde_json::Value {
+        serde_json::json!(["0123456789abcdef0123456789abcdef", 1])
+    }
+
     async fn resolve_wake(
         pending: Option<Vec<String>>,
+        writer: serde_json::Value,
     ) -> Result<Option<super::super::graph::resume::PipelineResume>, NativeAgentAssemblyError> {
         let request = ordinary_request(AgentExecutionKind::Application);
         let profile = OrdinaryNoToolProfile::validate(&request).expect("profile");
@@ -4140,10 +4154,9 @@ mod fanout_start_tests {
                 2,
                 pending,
             );
-            parked.metadata.insert(
-                "elitea.pipeline.execution.v1".to_owned(),
-                serde_json::json!(["execution-parked", 1]),
-            );
+            parked
+                .metadata
+                .insert("elitea.pipeline.execution.v1".to_owned(), writer);
             checkpointer.save(&parked).await.expect("parked frontier");
         }
         let state = PipelineStateServices {
@@ -4174,7 +4187,7 @@ mod fanout_start_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn a_wake_resumes_the_parked_frontier_with_an_empty_resume_state() {
-        let resume = resolve_wake(Some(vec!["gather".to_owned()]))
+        let resume = resolve_wake(Some(vec!["gather".to_owned()]), parked_writer())
             .await
             .expect("a parked frontier admits the wake")
             .expect("a wake is an explicit resume, so the turn reads the parked frontier");
@@ -4184,10 +4197,31 @@ mod fanout_start_tests {
         );
     }
 
+    /// REVIEW-1470 #5: a wake re-enters only the frontier the parked execution
+    /// it was admitted against wrote; another execution's (or another
+    /// generation's) root checkpoint is refused typed.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_wake_never_enters_a_frontier_another_execution_wrote() {
+        for writer in [
+            serde_json::json!(["fedcba9876543210fedcba9876543210", 1]),
+            serde_json::json!(["0123456789abcdef0123456789abcdef", 2]),
+        ] {
+            let Err(error) = resolve_wake(Some(vec!["gather".to_owned()]), writer.clone()).await
+            else {
+                panic!("a foreign frontier was re-entered: {writer}");
+            };
+            assert_eq!(
+                error.cause().map(NativeAgentAssemblyCause::code),
+                Some("graph.fanout.wake_without_park"),
+                "{writer}"
+            );
+        }
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn a_wake_without_a_parked_frontier_never_runs_as_a_fresh_turn() {
         for pending in [None, Some(Vec::new())] {
-            let Err(error) = resolve_wake(pending.clone()).await else {
+            let Err(error) = resolve_wake(pending.clone(), parked_writer()).await else {
                 panic!("no parked graph to continue: {pending:?}");
             };
             assert_eq!(error.code(), NativeAgentAssemblyErrorCode::InvalidInput);
