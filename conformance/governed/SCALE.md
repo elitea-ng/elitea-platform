@@ -77,6 +77,29 @@ Observations:
 - Revocation to deny is about one redemption's duration, because the broker
   re-reads the epochs on every redemption; it does not wait for the fan-out.
 
+## Limit: one audit chain per team
+
+Owner decision on #1480: keep one hash chain per team and publish the ceiling.
+Every governed decision and redemption appends to its team's chain, and the
+append locks the chain's head row (`elitea_runtime.security_audit_heads`) until
+the transaction commits. One team's governed credential use is therefore
+serial on commit latency. Measured above, PostgreSQL 18 with stock settings:
+
+| Load | Throughput | p99 |
+|---|---|---|
+| Spread across teams | about 970 redemptions/s | 47 ms |
+| One team | about 400 redemptions/s (the ceiling) | 277 ms |
+
+The ceiling moves with commit latency (disk, `synchronous_commit`, network to
+PostgreSQL), not with replicas: adding Main replicas does not raise it.
+Different teams do not contend.
+
+Watch `elitea_security_audit_head_lock_wait_seconds{partition,result}`, the
+time each append waited for its chain head. `partition` is `tenant` or
+`platform`; there is no tenant label. A p99 that climbs towards the commit
+time of a redemption means one or more teams are at the ceiling. The
+broker's `elitea_credential_redeem_duration_seconds` then rises with it.
+
 ## Reproduce
 
 ```bash

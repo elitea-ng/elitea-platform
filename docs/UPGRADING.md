@@ -6,6 +6,14 @@ newest entry is first.
 
 ## Governance follow-ups
 
+* **elitea-main: new metric
+  `elitea_security_audit_head_lock_wait_seconds{partition,result}`
+  (#1480).** It times each security audit append's wait for its team's
+  chain head. One team's governed credential use is serial on commit time:
+  about 400 redemptions/s on PostgreSQL 18 with stock settings (the
+  "Limits" section of the credential governance page). Nothing to
+  configure; add it to dashboards and alert on its p99 if one team drives
+  heavy governed load.
 * **`migrate-references`: Jira Cloud and Confluence Cloud basic auth
   (#1481).** A configuration with no `token`, a sealed `api_key` and a
   `username` is now staged as one composite secret holding
