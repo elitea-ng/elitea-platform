@@ -1,6 +1,6 @@
 ---
 title: "Runtime safety"
-description: "Controls that stop or limit agent execution while it runs. The suspension and kill switch stops one agent, one toolkit type, one project or the whole platform, including runs in flight."
+description: "Controls that stop or limit agent execution while it runs. The suspension and kill switch stops one agent, one toolkit type, one project or the whole platform. Agent, project and platform suspensions also cancel the runs in flight."
 ---
 
 Runtime safety controls act on agent execution while it runs, not on configuration. This page describes the controls of ADR-0041.
@@ -39,7 +39,7 @@ When a suspension is created, the platform does these steps:
 
    A scheduled pipeline run that is refused is recorded as `failed` with the detail `skipped: an administrator suspended execution (execution_suspended)`.
 
-2. **Runs in flight are cancelled.** In the same database transaction that saves the suspension, the platform sets the desired state of each covered run to `CANCELLED`. This is the same cancel that the admin **Tasks** page uses. The worker stops the run at its next lease renewal. The `cancelled_runs` field of the suspension gives the number of runs it cancelled. A platform suspension cancels every run in flight.
+2. **Runs in flight are cancelled (agent, project and platform scopes).** In the same database transaction that saves the suspension, the platform sets the desired state of each covered run to `CANCELLED`. This is the same cancel that the admin **Tasks** page uses. The worker stops the run at its next lease renewal. The `cancelled_runs` field of the suspension gives the number of runs it cancelled. A platform suspension cancels every run in flight. A `toolkit_type` suspension cancels nothing, and its `cancelled_runs` is always 0. A run that is being admitted while the suspension is saved is either refused or cancelled: admission and the suspension are serialised in the database, so no run escapes both.
 
 3. **Toolkit calls are refused at the worker.** For the `toolkit_type` scope, the suspended types are frozen into the guardrail policy of each new run. The worker removes the tools of a suspended type from the agent's tool set, and it refuses a call of that type with the code `execution_suspended`. Standalone toolkit tool calls of that type are refused at admission.
 
@@ -74,7 +74,7 @@ A suspension stays active until it is resumed. Resuming lets new runs start agai
 | `POST /api/v2/elitea_core/execution_suspensions/prompt_lib/{project_id}` | Suspend an agent of the project, or the project |
 | `POST /api/v2/elitea_core/execution_suspensions/prompt_lib/{project_id}/{id}:resume` | Resume a suspension of the project |
 
-The body of a create is `{"scope", "project_id", "application_id", "toolkit_type", "reason", "resume_requires", "confirm"}`. Only the fields of the scope are necessary. A second suspension of the same target is refused with 409 `already_suspended`, and the answer includes the active suspension.
+The body of a create is `{"scope", "project_id", "application_id", "toolkit_type", "reason", "resume_requires", "confirm"}`. Only the fields of the scope are necessary. `project_id` and `application_id` must be between 1 and 2147483647; any other value is refused with 400. A second suspension of the same target is refused with 409 `already_suspended`, and the answer includes the active suspension.
 
 **Self-test.** The routine `main.kill_switch_selftest` runs once a day by default. It suspends a synthetic agent, checks that admission refuses it within the stop target of 10 seconds, resumes it, and checks that admission accepts it again. It does not stage a real run. It does not run while maintenance mode is on. Change its schedule, or turn it off, in **Admin › Schedules & Tasks**. Each pass writes an audit event. A successful pass sets the Prometheus gauge `elitea_kill_switch_selftest_last_success_timestamp` (Unix seconds). Alert when the gauge is older than two schedule periods.
 

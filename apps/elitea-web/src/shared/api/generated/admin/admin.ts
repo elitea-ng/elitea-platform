@@ -4774,7 +4774,7 @@ export const getCreateExecutionSuspensionUrl = () => {
 };
 
 /**
- * The kill switch (ADR-0041 decision 1). Admission refuses every new run the suspension covers with the typed error `execution_suspended`, and the same transaction cancels the in-flight runs it covers (platform, project and agent scopes; `cancelled_runs` gives the count). A toolkit_type suspension refuses calls of that toolkit type at the worker. The platform scope needs `confirm` set to `STOP`. Gated on `safety.suspend` in the administration mode. The audit record of the request carries the action safety.suspension.created.
+ * The kill switch (ADR-0041 decision 1). Admission refuses every new run the suspension covers with the typed error `execution_suspended`, and the same transaction cancels the in-flight runs it covers (platform, project and agent scopes; `cancelled_runs` gives the count). A toolkit_type suspension cancels nothing: new runs and new tool calls through admission are refused, and runs already in flight keep the toolkit until they end. The platform scope needs `confirm` set to `STOP`. Gated on `safety.suspend` in the administration mode. The audit record of the request carries the action safety.suspension.created.
  * @summary Suspend execution of an agent, a project, a toolkit type or the platform
  */
 export const createExecutionSuspension = async (

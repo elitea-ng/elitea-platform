@@ -91,7 +91,11 @@ func TestExpiredConversationIsDeletedAndItsAttachmentsJournalled(t *testing.T) {
 	recentID, _, _ := seedConversationWithParticipant(t, repo, "question")
 
 	cutoff := time.Now().Add(-365 * 24 * time.Hour)
-	candidates, held, err := repo.ExpiredConversations(ctx, 1, cutoff, 10)
+	candidates, err := repo.ExpiredConversations(ctx, 1, cutoff, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := repo.HeldExpiredConversations(ctx, 1, cutoff)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +168,11 @@ func TestLegalHoldKeepsConversation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", hold.Scope, err)
 		}
-		candidates, heldCount, err := repo.ExpiredConversations(ctx, 1, cutoff, 10)
+		candidates, err := repo.ExpiredConversations(ctx, 1, cutoff, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		heldCount, err := repo.HeldExpiredConversations(ctx, 1, cutoff)
 		if err != nil {
 			t.Fatal(err)
 		}

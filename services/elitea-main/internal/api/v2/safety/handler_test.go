@@ -174,3 +174,37 @@ func TestNilHandlerAnswersUnavailable(t *testing.T) {
 		}
 	}
 }
+
+// Project and application ids are PostgreSQL integers: an id outside
+// 1..MaxInt32 is a 400 and never reaches the service, where it would have
+// been narrowed into another project's id.
+func TestCreateRefusesIDsOutsideTheIntegerRange(t *testing.T) {
+	t.Parallel()
+	service := &fakeService{}
+	h := router(t, service)
+	for _, body := range []string{
+		`{"scope":"project","project_id":4294967297,"reason":"x"}`,
+		`{"scope":"project","project_id":2147483648,"reason":"x"}`,
+		`{"scope":"project","project_id":0,"reason":"x"}`,
+		`{"scope":"agent","project_id":7,"application_id":2147483648,"reason":"x"}`,
+		`{"scope":"agent","project_id":7,"application_id":-1,"reason":"x"}`,
+	} {
+		recorder, _ := do(t, h, http.MethodPost, "/admin/execution_suspensions", body)
+		if recorder.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d %s", body, recorder.Code, recorder.Body)
+		}
+	}
+	recorder, _ := do(t, h, http.MethodPost, "/core/execution_suspensions/prompt_lib/7",
+		`{"scope":"agent","application_id":9223372036854775807,"reason":"x"}`)
+	if recorder.Code != http.StatusBadRequest {
+		t.Errorf("project surface: status = %d", recorder.Code)
+	}
+	if len(service.requests) != 0 {
+		t.Fatalf("an out-of-range id reached the service: %+v", service.requests)
+	}
+	recorder, _ = do(t, h, http.MethodPost, "/admin/execution_suspensions",
+		`{"scope":"project","project_id":2147483647,"reason":"x"}`)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("the largest integer id: status = %d %s", recorder.Code, recorder.Body)
+	}
+}

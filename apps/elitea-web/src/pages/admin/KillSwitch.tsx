@@ -3,7 +3,8 @@
  * and Suspend for every scope, the platform-wide stop included.
  *
  * A suspension makes admission refuse the runs it covers with
- * `execution_suspended` and cancels the runs in flight; see the embedded
+ * `execution_suspended`; agent, project and platform suspensions also cancel
+ * the runs in flight (a toolkit type suspension does not); see the embedded
  * docs page Runtime safety, section Suspension and kill switch. The list
  * refreshes every ten seconds, so a stop made by another administrator or by
  * the scheduled self-test shows here without a reload.
@@ -76,7 +77,7 @@ export function AdminKillSwitch(props: AdminKillSwitchProps = {}): ReactNode {
       <Typography variant="bodyMedium" color="text.secondary" sx={subtitleSx}>
         {t(
           'pages.admin.killSwitch.subtitle',
-          'Stop an agent, a project, a toolkit type or the whole platform. New runs are refused and runs in flight are cancelled until a suspension is resumed.',
+          'Stop an agent, a project, a toolkit type or the whole platform. New runs are refused until a suspension is resumed. Agent, project and platform suspensions also cancel the runs in flight; a toolkit type suspension does not.',
         )}
       </Typography>
 

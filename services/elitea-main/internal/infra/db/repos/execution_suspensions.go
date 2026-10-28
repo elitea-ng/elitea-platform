@@ -74,15 +74,15 @@ func suspensionCancelSQL(target safety.Target) (string, []any, bool) {
 WHERE ` + cancellableJobPredicate, nil, true
 	case safety.ScopeProject:
 		return `UPDATE elitea_runtime.execution_jobs AS j SET desired_state = 'CANCELLED'
-WHERE (j.resource_project_id = $1 OR j.projection_project_id = $1)
-  AND ` + cancellableJobPredicate, []any{int32(target.ProjectID)}, true
+WHERE (j.resource_project_id = $1::bigint OR j.projection_project_id = $1::bigint)
+  AND ` + cancellableJobPredicate, []any{target.ProjectID}, true
 	case safety.ScopeAgent:
 		return `UPDATE elitea_runtime.execution_jobs AS j SET desired_state = 'CANCELLED'
 FROM elitea_runtime.agent_execution_jobs AS a
 WHERE a.execution_id = j.execution_id AND a.generation = j.generation
-  AND a.application_id = $2
-  AND j.resource_project_id = $1
-  AND ` + cancellableJobPredicate, []any{int32(target.ProjectID), target.ApplicationID}, true
+  AND a.application_id = $2::bigint
+  AND j.resource_project_id = $1::bigint
+  AND ` + cancellableJobPredicate, []any{target.ProjectID, target.ApplicationID}, true
 	}
 	return "", nil, false
 }
@@ -159,9 +159,11 @@ func (r *ExecutionSuspensionRepository) CreateSuspension(
 		return safety.Suspension{}, fmt.Errorf("take the admission fence: %w", err)
 	}
 
-	var projectID *int32
+	// int64 end to end: an id past the integer column is refused by the
+	// column's own cast, never narrowed into another project's id.
+	var projectID *int64
 	if s.Target.Scope == safety.ScopeProject || s.Target.Scope == safety.ScopeAgent {
-		id := int32(s.Target.ProjectID)
+		id := s.Target.ProjectID
 		projectID = &id
 	}
 	var key *string
@@ -171,7 +173,7 @@ func (r *ExecutionSuspensionRepository) CreateSuspension(
 	row := tx.QueryRow(ctx, `
 INSERT INTO elitea_runtime.execution_suspensions
     (scope, project_id, scope_key, reason, actor_id, source, resume_requires)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+VALUES ($1, $2::bigint, $3, $4, $5, $6, $7)
 ON CONFLICT DO NOTHING
 RETURNING `+suspensionColumns,
 		string(s.Target.Scope), projectID, key, s.Reason, s.ActorID, string(s.Source), string(s.ResumeRequires))
@@ -287,15 +289,15 @@ func (r *ExecutionSuspensionRepository) ListSuspensions(
 	if limit <= 0 {
 		limit = 200
 	}
-	var projectID *int32
+	var projectID *int64
 	if filter.ProjectID > 0 {
-		id := int32(filter.ProjectID)
+		id := filter.ProjectID
 		projectID = &id
 	}
 	rows, err := r.pool.Query(ctx, `
 SELECT `+suspensionColumns+` FROM elitea_runtime.execution_suspensions
 WHERE ($1::boolean IS FALSE OR resumed_at IS NULL)
-  AND ($2::integer IS NULL OR project_id = $2)
+  AND ($2::bigint IS NULL OR project_id = $2::bigint)
 ORDER BY created_at DESC, id DESC
 LIMIT $3`, filter.ActiveOnly, projectID, limit)
 	if err != nil {

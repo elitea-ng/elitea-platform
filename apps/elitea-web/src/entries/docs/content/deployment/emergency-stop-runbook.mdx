@@ -27,7 +27,7 @@ For a platform stop, use `two_person` unless only one administrator is available
 Use the narrowest scope that stops the damage:
 
 1. One agent misbehaves: suspend the **agent**.
-2. A toolkit or its credential is compromised (for example a leaked GitHub token): suspend the **toolkit type**. Runs that were already in flight keep their tools; if they must stop too, also suspend their project.
+2. A toolkit or its credential is compromised (for example a leaked GitHub token): suspend the **toolkit type**. New runs and new tool calls through admission are refused; runs already in flight keep the toolkit until they end. If they must stop too, also suspend their project.
 3. A whole project is affected, or you do not know which agent is the cause: suspend the **project**.
 4. The incident is platform-wide, or you cannot find the scope fast enough: suspend the **platform**.
 
@@ -53,13 +53,13 @@ curl -sS -X POST "$ELITEA/api/v2/admin/execution_suspensions" \
   -d '{"scope":"platform","reason":"INC-42","resume_requires":"two_person","confirm":"STOP"}'
 ```
 
-The answer is the new suspension. `cancelled_runs` is the number of runs in flight that it cancelled. A 409 `already_suspended` means a suspension of that target is already active; the answer includes it.
+The answer is the new suspension. `cancelled_runs` is the number of runs in flight that it cancelled. It is always 0 for a toolkit type: that scope cancels no run. A 409 `already_suspended` means a suspension of that target is already active; the answer includes it.
 </Step>
 <Step title="Check that new runs are refused">
 Start a run that the suspension covers, for example a chat with the agent. It must be refused with HTTP 409 and the code `execution_suspended`. Every replica refuses within 10 seconds (the stop target): the change is sent on NATS at once, and each replica also reads the table again after 10 seconds at most, in case a message is lost.
 </Step>
 <Step title="Check that runs in flight stopped">
-Open **Admin › Tasks** and filter on the kind and the status `RUNNING`. The covered runs show `CANCELLING`, then `CANCELLED` when their worker renews its lease. A worker that does not renew its lease loses it, and the run does not continue.
+Open **Admin › Tasks** and filter on the kind and the status `RUNNING`. The covered runs show `CANCELLING`, then `CANCELLED` when their worker renews its lease. A worker that does not renew its lease loses it, and the run does not continue. Skip this step for a toolkit type: its runs in flight are not cancelled.
 </Step>
 <Step title="Record the evidence">
 Open **Admin › Audit Trail** and find the action `safety.suspension.created`. Keep the suspension id with the incident record.

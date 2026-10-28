@@ -593,7 +593,7 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 	}
 	// The run's agent, so an agent suspension (shared 0194, the kill switch)
 	// can find and cancel it. An ad hoc chat has none and keeps NULL.
-	if applicationID := agentApplicationID(admission); applicationID > 0 {
+	if applicationID := admission.ApplicationID(); applicationID > 0 {
 		if _, err := tx.Exec(ctx, `
 UPDATE elitea_runtime.agent_execution_jobs SET application_id = $3
 WHERE execution_id = $1 AND generation = $2`,
@@ -669,7 +669,7 @@ WHERE execution_id = $1 AND generation = $2`,
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert agent command outbox: %w", err)
 	}
 	facts := recordFacts(admission.Record, timing.AdmittedAt, agentApplicationVersionID(admission))
-	facts.applicationID, facts.governed = agentApplicationID(admission), admission.GovernedCredentials
+	facts.applicationID, facts.governed = admission.ApplicationID(), admission.GovernedCredentials
 	if _, err := admitExecutionProfile(ctx, tx, pgxRows(tx), r.policy.CredentialProfile, agentAdmissionPin(admission),
 		facts); err != nil {
 		return executionapp.AdmissionOutcome{}, err
@@ -1478,19 +1478,6 @@ func agentApplicationVersionID(admission agentexecutionapp.Admission) int64 {
 		return admission.CurrentRegenerateTurn.ApplicationVersionID
 	case admission.CurrentContinueTurn != nil:
 		return admission.CurrentContinueTurn.ApplicationVersionID
-	}
-	return 0
-}
-
-// agentApplicationID is agentApplicationVersionID's application.
-func agentApplicationID(admission agentexecutionapp.Admission) int64 {
-	switch {
-	case admission.CurrentTurn != nil:
-		return admission.CurrentTurn.ApplicationID
-	case admission.CurrentRegenerateTurn != nil:
-		return admission.CurrentRegenerateTurn.ApplicationID
-	case admission.CurrentContinueTurn != nil:
-		return admission.CurrentContinueTurn.ApplicationID
 	}
 	return 0
 }

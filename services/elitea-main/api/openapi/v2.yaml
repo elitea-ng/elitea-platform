@@ -6463,8 +6463,11 @@ components:
       type: object
       additionalProperties: false
       description: >
-        The platform row of one data class. An absent or null `max_age_days`
-        keeps the data forever; an absent `min_age_days` is 0.
+        The platform row of one data class. The PUT replaces the row, so all
+        three fields are required and an omitted one is refused with 400,
+        never reset to a default. A null `max_age_days` keeps the data
+        forever.
+      required: [min_age_days, max_age_days, allow_project_override]
       properties:
         min_age_days: { type: integer, minimum: 0 }
         max_age_days: { type: integer, minimum: 1, nullable: true }
@@ -6823,12 +6826,19 @@ components:
           type: integer
           format: int64
           minimum: 1
-          description: The project of a project or agent suspension. The project surface takes it from the path.
+          maximum: 2147483647
+          description: >
+            The project of a project or agent suspension. The project surface
+            takes it from the path. Outside 1 to 2147483647 the request is
+            refused with 400.
         application_id:
           type: integer
           format: int64
           minimum: 1
-          description: The agent of an agent suspension.
+          maximum: 2147483647
+          description: >
+            The agent of an agent suspension. Outside 1 to 2147483647 the
+            request is refused with 400.
         toolkit_type:
           type: string
           description: The toolkit type of a toolkit_type suspension, for example github.
@@ -17218,8 +17228,10 @@ paths:
         the suspension covers with the typed error `execution_suspended`, and
         the same transaction cancels the in-flight runs it covers (platform,
         project and agent scopes; `cancelled_runs` gives the count). A
-        toolkit_type suspension refuses calls of that toolkit type at the
-        worker. The platform scope needs `confirm` set to `STOP`. Gated on
+        toolkit_type suspension cancels nothing: new runs and new tool calls
+        through admission are refused, and runs already in flight keep the
+        toolkit until they end. The platform scope needs `confirm` set to
+        `STOP`. Gated on
         `safety.suspend` in the administration mode. The audit record of the
         request carries the action safety.suspension.created.
       tags: [admin]
@@ -17434,9 +17446,9 @@ paths:
                 $ref: '#/components/schemas/RetentionPolicy'
         '400':
           description: >
-            An unknown data class, a maximum below the class floor or the
-            minimum, keep forever on the gateway log, a maximum on attachments,
-            or project overrides on a class that takes none
+            A missing field, an unknown data class, a maximum below the class
+            floor or the minimum, keep forever on the gateway log, a maximum on
+            attachments, or project overrides on a class that takes none
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

@@ -11,7 +11,7 @@ import type { ExecutionSuspensionRow } from '@/features/kill-switch';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
-import { PLATFORM_STOP_CONFIRMATION, suspensionBody } from './AdminSuspendDialog';
+import { MAX_SUSPENSION_ID, PLATFORM_STOP_CONFIRMATION, suspensionBody } from './AdminSuspendDialog';
 import { AdminKillSwitch } from './KillSwitch';
 import { renderAdminRoute } from './__tests__/testRouter';
 
@@ -120,10 +120,30 @@ describe('suspensionBody', () => {
       application_id: 31,
     });
     expect(suspensionBody({ ...base, scope: 'project', projectId: '-1' })).toBeUndefined();
+    // Ids past a PostgreSQL integer are refused here and by the API (400).
+    expect(suspensionBody({ ...base, scope: 'project', projectId: String(MAX_SUSPENSION_ID + 1) })).toBeUndefined();
+    expect(suspensionBody({ ...base, scope: 'project', projectId: String(MAX_SUSPENSION_ID) })).toMatchObject({
+      project_id: MAX_SUSPENSION_ID,
+    });
     expect(suspensionBody({ ...base, scope: 'toolkit_type', toolkitType: ' GitHub ' })).toMatchObject({
       toolkit_type: 'github',
     });
     expect(suspensionBody({ ...base, scope: 'project', projectId: '7', reason: '  ' })).toBeUndefined();
+  });
+
+  it('says what each scope does to the runs in flight', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminKillSwitch refetchInterval={false} />);
+    await screen.findByTestId('kill-switch-row-12');
+
+    await user.click(screen.getByTestId('kill-switch-open'));
+    expect(screen.getByTestId('kill-switch-effect')).toHaveTextContent('its runs in flight are cancelled');
+    await user.click(screen.getByRole('combobox', { name: 'Scope' }));
+    await user.click(await screen.findByRole('option', { name: 'Toolkit type' }));
+    // A toolkit type suspension cancels nothing: the copy must not claim it does.
+    const effect = screen.getByTestId('kill-switch-effect');
+    expect(effect).toHaveTextContent('runs already in flight keep the toolkit until they end');
+    expect(effect).not.toHaveTextContent('cancelled');
   });
 
   it('sends the platform stop through the dialog only after STOP', async () => {

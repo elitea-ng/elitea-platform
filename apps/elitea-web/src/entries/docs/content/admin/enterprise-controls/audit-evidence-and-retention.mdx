@@ -59,6 +59,8 @@ For `admin_audit` and `security_audit`, the deployment settings `AUDIT_RETENTION
   </Step>
 </Steps>
 
+With the API, `PUT /api/v2/admin/retention/policies/{data_class}` replaces the row: send all of `min_age_days`, `max_age_days` (`null` keeps forever) and `allow_project_override`. A request that omits one is refused with 400; nothing is reset to a default.
+
 If you make the platform maximum shorter, the shorter value also applies to every project whose override is now longer. The stored override is not changed.
 
 A sweep deletes nothing while maintenance mode is on. The conversation sweep also deletes nothing when it cannot read the maintenance switch.

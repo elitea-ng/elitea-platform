@@ -42,7 +42,7 @@
   {
     "slug": "admin/enterprise-controls/runtime-safety",
     "title": "Runtime safety",
-    "description": "Controls that stop or limit agent execution while it runs. The suspension and kill switch stops one agent, one toolkit type, one project or the whole platform, including runs in flight."
+    "description": "Controls that stop or limit agent execution while it runs. The suspension and kill switch stops one agent, one toolkit type, one project or the whole platform. Agent, project and platform suspensions also cancel the runs in flight."
   },
   {
     "slug": "admin/enterprise-controls/shared-responsibility",

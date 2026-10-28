@@ -145,14 +145,37 @@ func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"policies": out})
 }
 
-type platformUpdate struct {
-	MinAgeDays           *int `json:"min_age_days"`
-	MaxAgeDays           *int `json:"max_age_days"`
-	AllowProjectOverride bool `json:"allow_project_override"`
+// required is a body field that must be present; null is a value (for
+// max_age_days, keep forever), absence is not.
+type required[T any] struct {
+	set   bool
+	value *T
 }
 
-// SetPlatformPolicy replaces the platform row of a data class. max_age_days
-// null or absent means keep forever.
+func (r *required[T]) UnmarshalJSON(data []byte) error {
+	r.set = true
+	if string(data) == "null" {
+		r.value = nil
+		return nil
+	}
+	var v T
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	r.value = &v
+	return nil
+}
+
+type platformUpdate struct {
+	MinAgeDays           required[int]  `json:"min_age_days"`
+	MaxAgeDays           required[int]  `json:"max_age_days"`
+	AllowProjectOverride required[bool] `json:"allow_project_override"`
+}
+
+// SetPlatformPolicy replaces the platform row of a data class. The PUT is a
+// replace, so every field is required: an omitted field used to reset the
+// row's minimum to 0 and its override switch to off without saying so.
+// max_age_days null means keep forever.
 func (h *Handler) SetPlatformPolicy(w http.ResponseWriter, r *http.Request) {
 	if !h.ready(w) {
 		return
@@ -166,16 +189,19 @@ func (h *Handler) SetPlatformPolicy(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	minDays := 0
-	if body.MinAgeDays != nil {
-		minDays = *body.MinAgeDays
+	if !body.MinAgeDays.set || body.MinAgeDays.value == nil || !body.MaxAgeDays.set ||
+		!body.AllowProjectOverride.set || body.AllowProjectOverride.value == nil {
+		apierr.Write(w, apierr.BadRequest(
+			"min_age_days, max_age_days (null keeps forever) and allow_project_override are all required"))
+		return
 	}
 	audit.Annotate(r.Context(), audit.Annotation{
 		EventType: "retention", Action: "retention.policy.update", EntityType: "retention_policy",
-		EntityName: string(class) + " " + describeMax(body.MaxAgeDays),
+		EntityName: string(class) + " " + describeMax(body.MaxAgeDays.value),
 	})
 	stored, err := h.store.SetPlatformPolicy(r.Context(), retention.Policy{
-		Class: class, MinAgeDays: minDays, MaxAgeDays: body.MaxAgeDays, AllowProjectOverride: body.AllowProjectOverride,
+		Class: class, MinAgeDays: *body.MinAgeDays.value, MaxAgeDays: body.MaxAgeDays.value,
+		AllowProjectOverride: *body.AllowProjectOverride.value,
 	}, userID)
 	if err != nil {
 		apierr.Write(w, err)

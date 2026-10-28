@@ -40,6 +40,7 @@ type fakeStore struct {
 	journal       []Cleanup
 	tenantsListed int
 	selects       int
+	heldCounts    int
 	nextJournalID int64
 }
 
@@ -56,23 +57,29 @@ func (f *fakeStore) RetentionTenantProjects(context.Context) ([]int64, error) {
 	return out, nil
 }
 
-func (f *fakeStore) ExpiredConversations(_ context.Context, projectID int64, cutoff time.Time, limit int) ([]Candidate, int64, error) {
+func (f *fakeStore) ExpiredConversations(_ context.Context, projectID int64, cutoff time.Time, limit int) ([]Candidate, error) {
 	f.selects++
 	var out []Candidate
-	var held int64
 	for _, c := range f.conversations {
-		if c.project != projectID || !c.lastActivity.Before(cutoff) {
-			continue
-		}
-		if c.held {
-			held++
+		if c.project != projectID || !c.lastActivity.Before(cutoff) || c.held {
 			continue
 		}
 		if len(out) < limit {
 			out = append(out, Candidate{ID: c.id, LastActivity: c.lastActivity})
 		}
 	}
-	return out, held, nil
+	return out, nil
+}
+
+func (f *fakeStore) HeldExpiredConversations(_ context.Context, projectID int64, cutoff time.Time) (int64, error) {
+	f.heldCounts++
+	var held int64
+	for _, c := range f.conversations {
+		if c.project == projectID && c.lastActivity.Before(cutoff) && c.held {
+			held++
+		}
+	}
+	return held, nil
 }
 
 func (f *fakeStore) DeleteExpiredConversation(_ context.Context, projectID, id int64, cutoff time.Time) (Outcome, int, error) {
@@ -323,5 +330,10 @@ func TestPassBudgetTruncates(t *testing.T) {
 	}
 	if stats.Deleted != 3 || !stats.Truncated || len(store.conversations) != 2 {
 		t.Fatalf("stats = %+v, left %d", stats, len(store.conversations))
+	}
+	// Two batches, one held count: the full-tenant count runs once per
+	// project per pass, not once per batch.
+	if store.selects != 2 || store.heldCounts != 1 {
+		t.Fatalf("selects %d held counts %d, want 2 and 1", store.selects, store.heldCounts)
 	}
 }

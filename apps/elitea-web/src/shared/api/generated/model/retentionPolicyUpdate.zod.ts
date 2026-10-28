@@ -46,12 +46,12 @@ export const retentionPolicyUpdateMinAgeDaysMin = 0;
 
 export const RetentionPolicyUpdate = zod
   .object({
-    min_age_days: zod.int().min(retentionPolicyUpdateMinAgeDaysMin).optional(),
-    max_age_days: zod.int().min(1).nullish(),
-    allow_project_override: zod.boolean().optional(),
+    min_age_days: zod.int().min(retentionPolicyUpdateMinAgeDaysMin),
+    max_age_days: zod.int().min(1).nullable(),
+    allow_project_override: zod.boolean(),
   })
   .describe(
-    "The platform row of one data class. An absent or null `max_age_days` keeps the data forever; an absent `min_age_days` is 0.\n",
+    "The platform row of one data class. The PUT replaces the row, so all three fields are required and an omitted one is refused with 400, never reset to a default. A null `max_age_days` keeps the data forever.\n",
   );
 
 export type RetentionPolicyUpdate = zod.input<typeof RetentionPolicyUpdate>;

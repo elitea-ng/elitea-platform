@@ -44,20 +44,6 @@ func projectOf(value string) int64 {
 	return id
 }
 
-// agentAdmissionApplicationID is the agent of an agent admission; 0 for an
-// ad hoc chat.
-func agentAdmissionApplicationID(admission agentexecutionapp.Admission) int64 {
-	switch {
-	case admission.CurrentTurn != nil:
-		return admission.CurrentTurn.ApplicationID
-	case admission.CurrentRegenerateTurn != nil:
-		return admission.CurrentRegenerateTurn.ApplicationID
-	case admission.CurrentContinueTurn != nil:
-		return admission.CurrentContinueTurn.ApplicationID
-	}
-	return 0
-}
-
 // fence runs the gate's cached check and, when it passes, marks ctx for the
 // store's in-transaction re-check.
 func fence(ctx context.Context, gate *safety.Gate, subject safety.Subject) (context.Context, error) {
@@ -77,7 +63,7 @@ func (s suspensionAgentAdmissionStore) AdmitAgentExecution(
 ) (executionapp.AdmissionOutcome, error) {
 	ctx, err := fence(ctx, s.gate, safety.Subject{
 		ProjectID:     projectOf(admission.Record.Job.ResourceProjectID),
-		ApplicationID: agentAdmissionApplicationID(admission),
+		ApplicationID: admission.ApplicationID(),
 	})
 	if err != nil {
 		return executionapp.AdmissionOutcome{}, err

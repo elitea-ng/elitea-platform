@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -207,6 +208,18 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, actor safetyapp
 	if err := decoder.Decode(&body); err != nil {
 		apierr.WriteStatus(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+	// Both ids are PostgreSQL integers: a value outside 1..MaxInt32 names
+	// nothing, and is refused here rather than narrowed into an id that does.
+	for _, field := range []struct {
+		name  string
+		value *int64
+	}{{"project_id", body.ProjectID}, {"application_id", body.ApplicationID}} {
+		if field.value != nil && (*field.value < 1 || *field.value > safetyapp.MaxTargetID) {
+			apierr.WriteStatus(w, http.StatusBadRequest,
+				fmt.Sprintf("%s must be between 1 and %d", field.name, safetyapp.MaxTargetID))
+			return
+		}
 	}
 	target := safetyapp.Target{Scope: safetyapp.Scope(body.Scope), ToolkitType: body.ToolkitType}
 	if body.ProjectID != nil {

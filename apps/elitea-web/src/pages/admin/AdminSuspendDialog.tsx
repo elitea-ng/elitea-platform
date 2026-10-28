@@ -76,9 +76,12 @@ const EMPTY: FormState = {
   confirm: '',
 };
 
+/** The largest project or agent id the API accepts (a PostgreSQL integer). */
+export const MAX_SUSPENSION_ID = 2_147_483_647;
+
 const positive = (value: string): number | undefined => {
   const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= MAX_SUSPENSION_ID ? parsed : undefined;
 };
 
 /** The request body, or undefined while the form is not complete. */
@@ -106,6 +109,28 @@ export function suspensionBody(form: FormState): ExecutionSuspensionCreate | und
     }
     default:
       return form.scope satisfies never;
+  }
+}
+
+/**
+ * What a suspension of the scope does to runs. Only agent, project and
+ * platform suspensions cancel the runs in flight; a toolkit type suspension
+ * refuses new admissions, and an agent run already in flight keeps the
+ * guardrails it froze at admission until it ends.
+ */
+function scopeEffect(scope: Exclude<Scope, 'platform'>): string {
+  switch (scope) {
+    case 'agent':
+      return t('pages.admin.killSwitch.effect.agent', 'New runs of this agent are refused, and its runs in flight are cancelled.');
+    case 'project':
+      return t('pages.admin.killSwitch.effect.project', 'New runs of this project are refused, and its runs in flight are cancelled.');
+    case 'toolkit_type':
+      return t(
+        'pages.admin.killSwitch.effect.toolkitType',
+        'New runs and new tool calls through admission are refused; runs already in flight keep the toolkit until they end.',
+      );
+    default:
+      return scope satisfies never;
   }
 }
 
@@ -181,6 +206,11 @@ export function AdminSuspendDialog({ open, pending, error, onClose, onSubmit }: 
               <MenuItem key={rule} value={rule}>{resumeRuleLabel(rule)}</MenuItem>
             ))}
           </TextField>
+          {form.scope !== 'platform' && (
+            <Alert severity="info" data-testid="kill-switch-effect">
+              {scopeEffect(form.scope)}
+            </Alert>
+          )}
           {form.scope === 'platform' && (
             <>
               <Alert severity="error">

@@ -21,6 +21,7 @@ package safety
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -116,8 +117,17 @@ type Target struct {
 // ErrInvalidTarget is a malformed scope, key or reason.
 var ErrInvalidTarget = errors.New("invalid suspension target")
 
+// MaxTargetID is the largest project or application id a target may name:
+// both are PostgreSQL integers (execution_suspensions.project_id, the tenant
+// application ids), so a larger id names nothing and must not be narrowed
+// into one that does.
+const MaxTargetID = math.MaxInt32
+
 // Normalize validates t and returns it with the canonical toolkit key.
 func (t Target) Normalize() (Target, error) {
+	if t.ProjectID > MaxTargetID || t.ApplicationID > MaxTargetID {
+		return Target{}, fmt.Errorf("%w: project_id and application_id are at most %d", ErrInvalidTarget, MaxTargetID)
+	}
 	switch t.Scope {
 	case ScopePlatform:
 		if t.ProjectID != 0 || t.ApplicationID != 0 || t.ToolkitType != "" {

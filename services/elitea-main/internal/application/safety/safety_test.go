@@ -541,3 +541,20 @@ func TestAdmissionSubjectRoundTrips(t *testing.T) {
 		t.Fatalf("subject = %+v %t", got, ok)
 	}
 }
+
+// A target past the PostgreSQL integer range is invalid, not narrowed.
+func TestTargetRefusesIDsPastTheIntegerRange(t *testing.T) {
+	t.Parallel()
+	for _, target := range []Target{
+		{Scope: ScopeProject, ProjectID: MaxTargetID + 1},
+		{Scope: ScopeProject, ProjectID: 1 << 32},
+		{Scope: ScopeAgent, ProjectID: 7, ApplicationID: MaxTargetID + 1},
+	} {
+		if _, err := target.Normalize(); !errors.Is(err, ErrInvalidTarget) {
+			t.Errorf("%+v: err = %v, want ErrInvalidTarget", target, err)
+		}
+	}
+	if _, err := (Target{Scope: ScopeProject, ProjectID: MaxTargetID}).Normalize(); err != nil {
+		t.Fatalf("the largest integer id: %v", err)
+	}
+}

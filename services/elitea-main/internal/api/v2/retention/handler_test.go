@@ -37,7 +37,9 @@ func (f *fakeStore) SetProjectOverride(_ context.Context, p retention.Policy, _ 
 	return p, nil
 }
 
-func (f *fakeStore) DeleteProjectOverride(context.Context, retention.DataClass, int64) error { return nil }
+func (f *fakeStore) DeleteProjectOverride(context.Context, retention.DataClass, int64) error {
+	return nil
+}
 
 func (f *fakeStore) ListHolds(context.Context, bool) ([]retention.Hold, error) { return nil, nil }
 
@@ -81,11 +83,12 @@ func serve(t *testing.T, h *Handler, method, pattern, target, body string) (*htt
 func TestPolicyUpdateIsStoredAndAnnotated(t *testing.T) {
 	store := &fakeStore{}
 	rec, annotation := serve(t, NewHandler(store), http.MethodPut, "/retention/policies/{dataClass}",
-		"/retention/policies/conversation", `{"max_age_days": 365, "allow_project_override": true}`)
+		"/retention/policies/conversation", `{"min_age_days": 30, "max_age_days": 365, "allow_project_override": true}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
-	if store.actor != 5 || store.platform.MaxAgeDays == nil || *store.platform.MaxAgeDays != 365 {
+	if store.actor != 5 || store.platform.MaxAgeDays == nil || *store.platform.MaxAgeDays != 365 ||
+		store.platform.MinAgeDays != 30 || !store.platform.AllowProjectOverride {
 		t.Fatalf("stored %+v by %d", store.platform, store.actor)
 	}
 	if annotation.Action != "retention.policy.update" || !strings.Contains(annotation.EntityName, "365") {
@@ -95,9 +98,37 @@ func TestPolicyUpdateIsStoredAndAnnotated(t *testing.T) {
 
 func TestInvalidPolicyIsRefused(t *testing.T) {
 	rec, _ := serve(t, NewHandler(&fakeStore{}), http.MethodPut, "/retention/policies/{dataClass}",
-		"/retention/policies/gateway_request_log", `{"max_age_days": null}`)
+		"/retention/policies/gateway_request_log",
+		`{"min_age_days": 0, "max_age_days": null, "allow_project_override": false}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400", rec.Code)
+	}
+}
+
+// The PUT replaces the row, so every field is required: an omitted field
+// used to reset min_age_days to 0 and allow_project_override to false
+// silently. null max_age_days is a value (keep forever), not an omission.
+func TestPolicyUpdateRequiresEveryField(t *testing.T) {
+	for _, body := range []string{
+		`{"max_age_days": 365, "allow_project_override": true}`,
+		`{"min_age_days": 30, "allow_project_override": true}`,
+		`{"min_age_days": 30, "max_age_days": 365}`,
+		`{"min_age_days": null, "max_age_days": 365, "allow_project_override": true}`,
+		`{"min_age_days": 30, "max_age_days": 365, "allow_project_override": null}`,
+		`{}`,
+	} {
+		store := &fakeStore{}
+		rec, _ := serve(t, NewHandler(store), http.MethodPut, "/retention/policies/{dataClass}",
+			"/retention/policies/conversation", body)
+		if rec.Code != http.StatusBadRequest || store.actor != 0 {
+			t.Errorf("%s: status %d, stored by %d; want 400 and nothing stored", body, rec.Code, store.actor)
+		}
+	}
+	store := &fakeStore{}
+	rec, _ := serve(t, NewHandler(store), http.MethodPut, "/retention/policies/{dataClass}",
+		"/retention/policies/conversation", `{"min_age_days": 0, "max_age_days": null, "allow_project_override": false}`)
+	if rec.Code != http.StatusOK || store.platform.MaxAgeDays != nil {
+		t.Fatalf("keep forever: status %d, stored %+v", rec.Code, store.platform)
 	}
 }
 

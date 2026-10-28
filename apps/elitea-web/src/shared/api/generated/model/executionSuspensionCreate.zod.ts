@@ -42,6 +42,10 @@
  */
 import * as zod from "zod";
 
+export const executionSuspensionCreateProjectIdMax = 2147483647;
+
+export const executionSuspensionCreateApplicationIdMax = 2147483647;
+
 export const executionSuspensionCreateReasonMax = 1024;
 
 export const ExecutionSuspensionCreate = zod.object({
@@ -53,15 +57,19 @@ export const ExecutionSuspensionCreate = zod.object({
   project_id: zod
     .int()
     .min(1)
+    .max(executionSuspensionCreateProjectIdMax)
     .optional()
     .describe(
-      "The project of a project or agent suspension. The project surface takes it from the path.",
+      "The project of a project or agent suspension. The project surface takes it from the path. Outside 1 to 2147483647 the request is refused with 400.\n",
     ),
   application_id: zod
     .int()
     .min(1)
+    .max(executionSuspensionCreateApplicationIdMax)
     .optional()
-    .describe("The agent of an agent suspension."),
+    .describe(
+      "The agent of an agent suspension. Outside 1 to 2147483647 the request is refused with 400.\n",
+    ),
   toolkit_type: zod
     .string()
     .optional()

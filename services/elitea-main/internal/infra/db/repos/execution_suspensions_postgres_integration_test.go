@@ -172,3 +172,30 @@ VALUES ('toolkit_type', 'Git Hub', 'x', 1)`); err == nil {
 		t.Fatal("a non-canonical toolkit key must be refused")
 	}
 }
+
+// An id past the integer column is refused by the database, never narrowed:
+// int32(1<<32 + 1) is project 1, and the old cast suspended it.
+func TestExecutionSuspensions_OutOfRangeProjectIsRefusedNotNarrowed(t *testing.T) {
+	repo, pool := newSuspensionRepo(t)
+	seedExecutionJob(t, pool, "susp-narrow", "index.ingest.v1", "RUNNING", "RUNNING", 1)
+	for _, target := range []safety.Target{
+		{Scope: safety.ScopeProject, ProjectID: 1<<32 + 1},
+		{Scope: safety.ScopeAgent, ProjectID: 1<<32 + 1, ApplicationID: 31},
+	} {
+		if _, err := repo.CreateSuspension(t.Context(), safety.NewSuspension{
+			Target: target, Reason: "x", ActorID: 7, Source: safety.SourceManual, ResumeRequires: safety.ResumeAnyAdmin,
+		}); err == nil {
+			t.Fatalf("%+v: an out-of-range project was stored", target)
+		}
+	}
+	if got := desiredState(t, pool, "susp-narrow"); got != "RUNNING" {
+		t.Fatalf("project 1's run was cancelled by an out-of-range id: %s", got)
+	}
+	active, err := repo.LoadActiveSuspensions(t.Context())
+	if err != nil || len(active) != 0 {
+		t.Fatalf("active = %+v, %v", active, err)
+	}
+	if listed, err := repo.ListSuspensions(t.Context(), safety.ListFilter{ProjectID: 1<<32 + 1}); err != nil || len(listed) != 0 {
+		t.Fatalf("list of an out-of-range project = %+v, %v", listed, err)
+	}
+}

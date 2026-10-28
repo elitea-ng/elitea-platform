@@ -158,12 +158,11 @@ func (r *ConversationsRepo) RetentionTenantProjects(ctx context.Context) ([]int6
 
 // ExpiredConversations returns up to limit conversations of the project whose
 // last activity is before cutoff and that no active legal hold covers, oldest
-// first, plus the number of expired conversations a hold kept.
-func (r *ConversationsRepo) ExpiredConversations(ctx context.Context, projectID int64, cutoff time.Time, limit int) ([]retentionapp.Candidate, int64, error) {
+// first.
+func (r *ConversationsRepo) ExpiredConversations(ctx context.Context, projectID int64, cutoff time.Time, limit int) ([]retentionapp.Candidate, error) {
 	s := schema(strconv.FormatInt(projectID, 10))
 	activity := fmt.Sprintf(conversationActivitySQL, s)
 	held := fmt.Sprintf(conversationHeldSQL, s)
-	utcCutoff := cutoff.UTC()
 
 	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
 		SELECT id, last_activity FROM (
@@ -172,9 +171,9 @@ func (r *ConversationsRepo) ExpiredConversations(ctx context.Context, projectID 
 		) expired
 		 WHERE last_activity < ($2::timestamptz AT TIME ZONE 'UTC') AND NOT held
 		 ORDER BY last_activity, id
-		 LIMIT $3`, s, activity, held), projectID, utcCutoff, limit)
+		 LIMIT $3`, s, activity, held), projectID, cutoff.UTC(), limit)
 	if err != nil {
-		return nil, 0, fmt.Errorf("conversation retention: candidates: %w", err)
+		return nil, fmt.Errorf("conversation retention: candidates: %w", err)
 	}
 	candidates, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (retentionapp.Candidate, error) {
 		var c retentionapp.Candidate
@@ -182,20 +181,28 @@ func (r *ConversationsRepo) ExpiredConversations(ctx context.Context, projectID 
 		return c, err
 	})
 	if err != nil {
-		return nil, 0, fmt.Errorf("conversation retention: candidates: %w", err)
+		return nil, fmt.Errorf("conversation retention: candidates: %w", err)
 	}
+	return candidates, nil
+}
 
+// HeldExpiredConversations counts the project's conversations whose last
+// activity is before cutoff and that an active legal hold keeps. It reads
+// the whole tenant, so the sweep asks once per project per pass.
+func (r *ConversationsRepo) HeldExpiredConversations(ctx context.Context, projectID int64, cutoff time.Time) (int64, error) {
+	s := schema(strconv.FormatInt(projectID, 10))
 	var heldCount int64
 	if err := r.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT count(*) FROM (
 		    SELECT %[2]s AS last_activity, %[3]s AS held
 		      FROM %[1]s.chat_conversations c
 		) expired
-		 WHERE last_activity < ($2::timestamptz AT TIME ZONE 'UTC') AND held`, s, activity, held),
-		projectID, utcCutoff).Scan(&heldCount); err != nil {
-		return nil, 0, fmt.Errorf("conversation retention: held count: %w", err)
+		 WHERE last_activity < ($2::timestamptz AT TIME ZONE 'UTC') AND held`,
+		s, fmt.Sprintf(conversationActivitySQL, s), fmt.Sprintf(conversationHeldSQL, s)),
+		projectID, cutoff.UTC()).Scan(&heldCount); err != nil {
+		return 0, fmt.Errorf("conversation retention: held count: %w", err)
 	}
-	return candidates, heldCount, nil
+	return heldCount, nil
 }
 
 // DeleteExpiredConversation deletes one conversation the sweep selected,

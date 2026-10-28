@@ -111,7 +111,10 @@ type Policies interface {
 // Store is the conversation side.
 type Store interface {
 	RetentionTenantProjects(ctx context.Context) ([]int64, error)
-	ExpiredConversations(ctx context.Context, projectID int64, cutoff time.Time, limit int) ([]Candidate, int64, error)
+	ExpiredConversations(ctx context.Context, projectID int64, cutoff time.Time, limit int) ([]Candidate, error)
+	// HeldExpiredConversations counts the expired conversations a hold keeps.
+	// A full-tenant count, so the sweep asks once per project per pass.
+	HeldExpiredConversations(ctx context.Context, projectID int64, cutoff time.Time) (int64, error)
 	DeleteExpiredConversation(ctx context.Context, projectID, conversationID int64, cutoff time.Time) (Outcome, int, error)
 	ClaimAttachmentCleanup(ctx context.Context, limit int, lease time.Duration) ([]Cleanup, error)
 	CompleteAttachmentCleanup(ctx context.Context, ids []int64) error
@@ -287,22 +290,25 @@ func (s *Sweeper) Sweep(ctx context.Context) (Stats, error) {
 		}
 		stats.Projects++
 		cutoff := now.Add(-time.Duration(*maxDays) * 24 * time.Hour)
-		heldCounted := false
+		// Counted once per project per pass, before the batches: the held
+		// set does not shrink as they delete unheld rows, and the count
+		// reads the whole tenant.
+		if held, err := s.store.HeldExpiredConversations(ctx, projectID, cutoff); err != nil {
+			stats.Errors++
+			s.errors.Add(ctx, 1, metric.WithAttributes(attribute.String("stage", "select")))
+			s.logger.Error("conversation retention: held count failed", "project_id", projectID, "err", err)
+		} else {
+			stats.SkippedHold += held
+			s.skippedHold.Add(ctx, held)
+		}
 		for budget > 0 {
 			limit := min(s.cfg.BatchSize, budget)
-			candidates, held, err := s.store.ExpiredConversations(ctx, projectID, cutoff, limit)
+			candidates, err := s.store.ExpiredConversations(ctx, projectID, cutoff, limit)
 			if err != nil {
 				stats.Errors++
 				s.errors.Add(ctx, 1, metric.WithAttributes(attribute.String("stage", "select")))
 				s.logger.Error("conversation retention: candidate read failed", "project_id", projectID, "err", err)
 				break
-			}
-			if !heldCounted {
-				// Counted once per project per pass: the held set does not
-				// shrink as the batches delete unheld rows.
-				stats.SkippedHold += held
-				s.skippedHold.Add(ctx, held)
-				heldCounted = true
 			}
 			if len(candidates) > 0 {
 				if lag := cutoff.Sub(candidates[0].LastActivity.UTC()); lag > oldestLag {
