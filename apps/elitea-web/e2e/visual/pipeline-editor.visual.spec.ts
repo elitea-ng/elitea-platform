@@ -460,6 +460,10 @@ test('@visual pipeline-editor-authored-graph', async ({ page }) => {
   await expect(page.getByTestId('node-admission-issues')).toHaveCount(0);
   await expect(page.getByTestId('graph-admission-gate')).toHaveCount(0);
   await expect(page.getByTestId('edit-pipeline-test-chat-disabled')).toBeVisible({ timeout: 20_000 });
+  // The last menu click leaves the pointer where the menu item was, which can
+  // be over the canvas's State toggle: one baseline caught its hover fill, the
+  // next run its resting outline. Park it, as `admin.visual.spec.ts` does.
+  await page.mouse.move(0, 0);
   // Once more after the assertions above: each one can move focus, and focus
   // moves scroll.
   await pinScrollToTop(page);
