@@ -1353,6 +1353,161 @@ async fn postgres_a_wake_resumes_the_answered_pipeline_branch_and_parks_the_rest
     db.pool.close().await;
 }
 
+/// FU-249: a saved child pipeline whose root is a fixed Parallel of three
+/// inline LLM nodes that may ask the user.
+fn parallel_child_pipeline() -> Value {
+    let branch = |id: &str| {
+        format!(
+            "  - id: ask_{id}\n    type: llm\n    input_mapping:\n      task: {{type: fixed, value: 'Ask about {id}'}}\n    input: [messages]\n    output: [{id}]\n    tool_names:\n      ask_user: [\"ask_user\"]\n"
+        )
+    };
+    json!({
+        "agent_type": "pipeline",
+        "instructions": format!(
+            "state:\n  input: str\n  messages: list\n  a: str\n  b: str\n  c: str\n  joined: list\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{{id: a, node: ask_a}}, {{id: b, node: ask_b}}, {{id: c, node: ask_c}}]\n    max_concurrency: 1\n    wait: all\n    on_error: continue\n    output: [joined]\n    transition: END\n{}{}{}",
+            branch("a"),
+            branch("b"),
+            branch("c"),
+        ),
+        "meta": {"internal_tools": ["ask_user"]}, "variables": [], "tools": [],
+        "llm_settings": null
+    })
+}
+
+/// FU-249: the root pipeline runs the saved child through its `delegate` Agent node.
+fn child_parallel_request() -> super::super::request::AgentExecutionRequest {
+    agent_pipeline_request("release-agent", "pipeline")
+}
+
+/// [`child_parallel_request`] as the wake of the parked run.
+fn child_parallel_wake() -> super::super::request::AgentExecutionRequest {
+    let mut request = child_parallel_request();
+    request.payload.user_input = super::super::request::UserInput::Text(String::new());
+    request.payload.meta.insert(
+        crate::agents::graph::fanout_wake::FANOUT_WAKE_META_KEY.to_owned(),
+        json!({"schema": "elitea.pipeline.fanout-wake.v1",
+            "response_message_id": "10000000-0000-4000-8000-000000000043",
+            "decision_revision": 1,
+            "parked_execution_id": EXECUTION,
+            "parked_generation": GENERATION}),
+    );
+    request
+}
+
+/// The child Parallel's rows on the child thread (`<root>/delegate`), oldest
+/// first: whether each carries the Agent node's activation stamp.
+async fn child_parallel_rows(pool: &sqlx::PgPool) -> Vec<bool> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT metadata::text LIKE '%elitea.pipeline.application-activation.v1%' \
+         FROM elitea_runtime.agent_graph_checkpoints \
+         WHERE thread_id LIKE '%/delegate' ORDER BY save_ordinal",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("read the child thread rows")
+}
+
+/// The latest child-thread state's `joined` entries.
+async fn child_joined(pool: &sqlx::PgPool) -> Option<Vec<Value>> {
+    let state = sqlx::query_scalar::<_, String>(
+        "SELECT state FROM elitea_runtime.agent_graph_checkpoints \
+         WHERE thread_id LIKE '%/delegate' AND state LIKE '%\"joined\"%' \
+         ORDER BY save_ordinal DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .expect("read the joined child checkpoint")?;
+    let state: Value = serde_json::from_str(&state).expect("child state JSON");
+    state["joined"].as_array().cloned()
+}
+
+/// FU-249: a fixed Parallel inside a saved child pipeline (root pipeline →
+/// Agent node → saved pipeline). Its three branches ask, raise one card each
+/// and the run parks; every row the child's Parallel wrote on the child thread
+/// carries the Agent node's activation stamp. All three are answered while
+/// parked; the wake (a new execution) re-enters the child and the Parallel
+/// resumes each branch with its answer, joins, and the root completes.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_parallel_in_a_saved_child_pipeline_parks_and_a_wake_completes_it() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let (first, captured) = assembler(
+        &db.pool,
+        (0..3)
+            .map(|_| TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()))
+            .collect(),
+        pipeline_connector(),
+        parallel_child_pipeline(),
+    );
+    let request = child_parallel_request();
+    let invocation = first
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "assemble the child fan-out: {error} {:?}",
+                error
+                    .cause()
+                    .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code)
+            )
+        });
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .expect("the child's Parallel parks the run");
+    assert_eq!(model_requests(&captured), 3);
+    assert_eq!(cards.len(), 3, "{cards:?}");
+    for (card, branch) in cards.iter().zip(["a", "b", "c"]) {
+        assert_eq!(card["kind"], "ask_user");
+        assert_eq!(card["fanout_v1"]["member"], branch);
+    }
+    let rows = child_parallel_rows(&db.pool).await;
+    assert!(!rows.is_empty());
+    assert!(rows.iter().all(|stamped| *stamped), "{rows:?}");
+    for (card, answer) in cards.iter().zip(["red", "green", "blue"]) {
+        ledger.decide(
+            card["interrupt_key"].as_str().expect("a card key"),
+            "answer",
+            Some(answer),
+        );
+    }
+
+    let (woken, captured) = assembler(
+        &db.pool,
+        ["the saddle is red", "the bridle is green", "the stirrup is blue"]
+            .into_iter()
+            .map(|text| TestModelGatewayOutcome::Response(pipeline_text_response(text)))
+            .collect(),
+        pipeline_connector(),
+        parallel_child_pipeline(),
+    );
+    let wake = child_parallel_wake();
+    let invocation = woken
+        .with_fanout_decisions_for_tests(ledger.client(2))
+        .assemble(claim(&wake, 2))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .expect("the wake completes the child's Parallel and the root");
+    assert!(cards.is_empty(), "no card is raised again: {cards:?}");
+    assert_eq!(model_requests(&captured), 3, "each answered branch calls the model once");
+    let joined = child_joined(&db.pool).await.expect("the child's join");
+    assert_eq!(joined.len(), 3, "{joined:?}");
+    let rows = child_parallel_rows(&db.pool).await;
+    assert!(rows.iter().all(|stamped| *stamped), "{rows:?}");
+    db.pool.close().await;
+}
+
 fn pipeline_connector() -> Arc<PipelineMcpConnector> {
     Arc::new(PipelineMcpConnector {
         connections: Arc::new(AtomicUsize::new(0)),

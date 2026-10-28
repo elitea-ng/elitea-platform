@@ -1,5 +1,7 @@
 //! Separate visits to one fixed ADK subgraph thread without deleting receipts.
 
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use adk_graph::checkpoint::RetentionPolicy;
@@ -78,6 +80,43 @@ impl ApplicationActivationCheckpointer {
         })
     }
 
+    /// The row `save` would write for `checkpoint`: a save on this node's
+    /// child thread (or a descendant) carries the open activation. A writer
+    /// that must append atomically through the inner store (a fixed Parallel
+    /// inside the child, FU-249) stamps with this and appends itself.
+    /// A row outside that family is borrowed unchanged.
+    pub fn stamp<'a>(&self, checkpoint: &'a Checkpoint) -> Result<Cow<'a, Checkpoint>, GraphError> {
+        let Some(activation) = self.activation()? else {
+            return Ok(Cow::Borrowed(checkpoint));
+        };
+        let thread = activation.child_thread();
+        if checkpoint.thread_id != thread
+            && !checkpoint.thread_id.starts_with(&format!("{thread}/"))
+        {
+            return Ok(Cow::Borrowed(checkpoint));
+        }
+        let mut checkpoint = checkpoint.clone();
+        let mut family = match checkpoint.metadata.remove(ACTIVATION_METADATA_KEY) {
+            Some(Value::Object(family)) => family,
+            None => serde_json::Map::new(),
+            Some(_) => return Err(activation_error()),
+        };
+        if family.len() > 3 {
+            return Err(activation_error());
+        }
+        family.insert(
+            thread,
+            serde_json::to_value(&activation).map_err(|_| activation_error())?,
+        );
+        if family.len() > 3 {
+            return Err(activation_error());
+        }
+        checkpoint
+            .metadata
+            .insert(ACTIVATION_METADATA_KEY.to_owned(), Value::Object(family));
+        Ok(Cow::Owned(checkpoint))
+    }
+
     fn activation(&self) -> Result<Option<ApplicationActivation>, GraphError> {
         self.active
             .lock()
@@ -85,21 +124,47 @@ impl ApplicationActivationCheckpointer {
             .map_err(|_| activation_error())
     }
 
+    /// Whether a row of `thread_id` (its metadata, and whether it has pending
+    /// nodes) is visible to the open activation: `false` for a completed
+    /// earlier visit, a refusal for an unfinished or unproven one. A reader
+    /// that holds only a row's head (a fixed Parallel's parent probe, FU-249)
+    /// decides with this exactly as `load` does.
+    pub fn admits(
+        &self,
+        thread_id: &str,
+        metadata: &HashMap<String, Value>,
+        pending: bool,
+    ) -> Result<bool, GraphError> {
+        Self::admitted(thread_id, metadata, pending, self.activation()?.as_ref())
+    }
+
     fn for_activation(
         checkpoint: Checkpoint,
         activation: Option<&ApplicationActivation>,
     ) -> Result<Option<Checkpoint>, GraphError> {
+        let admitted = Self::admitted(
+            &checkpoint.thread_id,
+            &checkpoint.metadata,
+            !checkpoint.pending_nodes.is_empty(),
+            activation,
+        )?;
+        Ok(admitted.then_some(checkpoint))
+    }
+
+    fn admitted(
+        thread_id: &str,
+        metadata: &HashMap<String, Value>,
+        pending: bool,
+        activation: Option<&ApplicationActivation>,
+    ) -> Result<bool, GraphError> {
         let Some(activation) = activation else {
-            return Ok(Some(checkpoint));
+            return Ok(true);
         };
         let thread = activation.child_thread();
-        if checkpoint.thread_id != thread
-            && !checkpoint.thread_id.starts_with(&format!("{thread}/"))
-        {
-            return Ok(Some(checkpoint));
+        if thread_id != thread && !thread_id.starts_with(&format!("{thread}/")) {
+            return Ok(true);
         }
-        let family = checkpoint
-            .metadata
+        let family = metadata
             .get(ACTIVATION_METADATA_KEY)
             .and_then(Value::as_object)
             .ok_or_else(activation_error)?;
@@ -115,12 +180,12 @@ impl ApplicationActivationCheckpointer {
             return Err(activation_error());
         }
         if recorded == *activation {
-            return Ok(Some(checkpoint));
+            return Ok(true);
         }
         // A completed previous visit starts a new activation. An unfinished or
         // unproven visit cannot be treated as a fresh run and repeat effects.
-        if checkpoint.pending_nodes.is_empty() && recorded.parent_step < activation.parent_step {
-            Ok(None)
+        if !pending && recorded.parent_step < activation.parent_step {
+            Ok(false)
         } else {
             Err(activation_error())
         }
@@ -151,35 +216,7 @@ impl Drop for ApplicationActivationGuard {
 #[async_trait]
 impl Checkpointer for ApplicationActivationCheckpointer {
     async fn save(&self, checkpoint: &Checkpoint) -> Result<String, GraphError> {
-        let Some(activation) = self.activation()? else {
-            return self.inner.save(checkpoint).await;
-        };
-        let thread = activation.child_thread();
-        if checkpoint.thread_id != thread
-            && !checkpoint.thread_id.starts_with(&format!("{thread}/"))
-        {
-            return self.inner.save(checkpoint).await;
-        }
-        let mut checkpoint = checkpoint.clone();
-        let mut family = match checkpoint.metadata.remove(ACTIVATION_METADATA_KEY) {
-            Some(Value::Object(family)) => family,
-            None => serde_json::Map::new(),
-            Some(_) => return Err(activation_error()),
-        };
-        if family.len() > 3 {
-            return Err(activation_error());
-        }
-        family.insert(
-            thread,
-            serde_json::to_value(&activation).map_err(|_| activation_error())?,
-        );
-        if family.len() > 3 {
-            return Err(activation_error());
-        }
-        checkpoint
-            .metadata
-            .insert(ACTIVATION_METADATA_KEY.to_owned(), Value::Object(family));
-        self.inner.save(&checkpoint).await
+        self.inner.save(self.stamp(checkpoint)?.as_ref()).await
     }
 
     async fn load(&self, thread_id: &str) -> Result<Option<Checkpoint>, GraphError> {

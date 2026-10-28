@@ -1544,6 +1544,14 @@ impl NativePipelineApplicationResolver {
         participant: NativePipelineApplicationParticipant,
         checkpointer: Arc<dyn adk_rust::graph::Checkpointer>,
     ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
+        Self::resolved_with(participant, checkpointer, None)
+    }
+
+    fn resolved_with(
+        participant: NativePipelineApplicationParticipant,
+        checkpointer: Arc<dyn adk_rust::graph::Checkpointer>,
+        fanout: Option<Arc<crate::agents::graph::compiler::ParallelCompilerBinding>>,
+    ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
         match participant {
             NativePipelineApplicationParticipant::ScopedAgent { tool, scope, .. } => {
                 Ok(ResolvedApplicationParticipant::ScopedAgent { tool, scope })
@@ -1556,7 +1564,14 @@ impl NativePipelineApplicationResolver {
                 runtimes,
                 events,
                 display_name,
-            } => definition
+            } => {
+                // FU-249: the child's Parallel binds the run's binding rebased
+                // on the child's own checkpoint chain.
+                let runtimes = match fanout {
+                    Some(binding) => runtimes.with_parallel(binding),
+                    None => runtimes,
+                };
+                definition
                 .compile_subgraph_with_runtime(checkpointer, &runtimes)
                 .map(|graph| ResolvedApplicationParticipant::Pipeline {
                     graph: Arc::new(graph),
@@ -1565,7 +1580,8 @@ impl NativePipelineApplicationResolver {
                     events: Some(events),
                     display_name,
                 })
-                .map_err(|_| ApplicationExecutionError::Unavailable),
+                .map_err(|_| ApplicationExecutionError::Unavailable)
+            }
         }
     }
 }
@@ -1632,6 +1648,28 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
             return Err(ApplicationExecutionError::Unavailable);
         }
         Self::resolved(participant.clone(), checkpointer)
+    }
+    fn resolve_node_in_fanout(
+        &self,
+        node: &str,
+        selection: &PipelineApplicationSelection,
+        checkpointer: Arc<dyn adk_rust::graph::Checkpointer>,
+        binding: Arc<crate::agents::graph::compiler::ParallelCompilerBinding>,
+    ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
+        let participant = if self.nodes.is_empty() {
+            self.participants.get(selection.alias())
+        } else {
+            self.nodes
+                .get(node)
+                .filter(|(alias, _)| alias == selection.alias())
+                .map(|(_, participant)| participant)
+        };
+        match participant {
+            Some(participant @ NativePipelineApplicationParticipant::Pipeline { .. }) => {
+                Self::resolved_with(participant.clone(), checkpointer, Some(binding))
+            }
+            _ => Err(ApplicationExecutionError::Unavailable),
+        }
     }
     fn resolve(
         &self,
@@ -1986,10 +2024,14 @@ pub(super) async fn materialize_saved_pipeline_tool(
             .ok_or_else(invalid_pipeline_tool_scope)?,
     )?;
     let scoped_proof = scopes.has_ordinary_applications();
-    // FU-249: a Parallel binds its checkpoint authority to the started root only, so a
-    // pipeline run as an Agent's tool that holds one, or runs a child that does, is refused
-    // typed before any model call instead of failing when the tool is called.
-    let parallel = definition.first_parallel_node().map_or_else(
+    // FU-249: a saved pipeline reached from the root graph through pipeline Agent nodes
+    // only runs as a subgraph, and its Parallel binds through the run's binding. A
+    // pipeline run as an Agent's tool that holds one, or runs a child that does, is
+    // refused typed before any model call instead of failing when the tool is called.
+    let parallel = if runtime.materialization.is_graph_path() {
+        Ok(())
+    } else {
+        definition.first_parallel_node().map_or_else(
         || crate::agents::graph::compiler::refuse_child_parallel(&bound.runtimes),
         |node| {
             Err(PipelineConfigurationError::FanoutChildUnsupported {
@@ -1997,7 +2039,8 @@ pub(super) async fn materialize_saved_pipeline_tool(
                 refusal: crate::agents::graph::compiler::FanoutChildRefusal::ContainsParallel,
             })
         },
-    );
+        )
+    };
     if let Err(refusal) = parallel {
         return Err(super::runtime::pipeline_configuration_assembly_error(
             &refusal,

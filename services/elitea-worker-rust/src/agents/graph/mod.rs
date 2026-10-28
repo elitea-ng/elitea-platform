@@ -92,6 +92,7 @@ pub(crate) use node_recovery_runtime::tests::direct_tool_tests::{
 };
 mod parallel;
 mod parallel_cards;
+mod parallel_child_authority;
 #[cfg(test)]
 mod parallel_tests;
 mod pipeline_result;

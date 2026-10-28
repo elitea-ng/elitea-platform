@@ -410,6 +410,19 @@ pub(crate) trait PipelineApplicationResolver: Send + Sync {
     ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
         self.resolve(selection, checkpointer)
     }
+
+    /// A saved child pipeline that holds a fixed Parallel (FU-249), compiled
+    /// with the run's binding rebased on `checkpointer` (the very authority
+    /// the binding holds). Only a resolver that compiles saved pipelines can.
+    fn resolve_node_in_fanout(
+        &self,
+        _node_id: &str,
+        _selection: &PipelineApplicationSelection,
+        _checkpointer: Arc<dyn Checkpointer>,
+        _binding: Arc<super::compiler::ParallelCompilerBinding>,
+    ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
+        Err(ApplicationExecutionError::Unavailable)
+    }
 }
 
 /// One exact saved participant after claim-bound materialization.
@@ -469,6 +482,29 @@ impl ApplicationNode {
         resolver: &dyn PipelineApplicationResolver,
         checkpointer: Arc<dyn Checkpointer>,
     ) -> Result<Self, ApplicationExecutionError> {
+        Self::build(definition, state_types, resolver, checkpointer, None)
+    }
+
+    /// An Agent node whose saved child pipeline holds a fixed Parallel
+    /// (FU-249): the child's Parallel appends through this node's activation
+    /// overlay to the parent's authority.
+    pub(super) fn new_in_fanout(
+        definition: ApplicationNodeDefinition,
+        state_types: BTreeMap<String, String>,
+        resolver: &dyn PipelineApplicationResolver,
+        checkpointer: Arc<dyn Checkpointer>,
+        fanout: super::compiler::ChildFanout,
+    ) -> Result<Self, ApplicationExecutionError> {
+        Self::build(definition, state_types, resolver, checkpointer, Some(fanout))
+    }
+
+    fn build(
+        definition: ApplicationNodeDefinition,
+        state_types: BTreeMap<String, String>,
+        resolver: &dyn PipelineApplicationResolver,
+        checkpointer: Arc<dyn Checkpointer>,
+        fanout: Option<super::compiler::ChildFanout>,
+    ) -> Result<Self, ApplicationExecutionError> {
         let graph_call_owner = resolver.graph_call_owner(definition.id());
         let activation_enabled = graph_call_owner.is_some();
         #[cfg(test)]
@@ -481,8 +517,26 @@ impl ApplicationNode {
         let child_checkpointer: Arc<dyn Checkpointer> = activation_checkpointer
             .as_ref()
             .map_or_else(|| checkpointer.clone(), |owner| owner.clone());
-        let participant =
-            resolver.resolve_node(definition.id(), definition.selection(), child_checkpointer)?;
+        let participant = match fanout {
+            None => {
+                resolver.resolve_node(definition.id(), definition.selection(), child_checkpointer)?
+            }
+            Some(fanout) => {
+                let authority = Arc::new(
+                    super::parallel_child_authority::ChildParallelAuthority::new(
+                        child_checkpointer,
+                        activation_checkpointer.clone(),
+                        fanout.parent,
+                    ),
+                );
+                resolver.resolve_node_in_fanout(
+                    definition.id(),
+                    definition.selection(),
+                    authority.clone(),
+                    fanout.binding.rebased(authority),
+                )?
+            }
+        };
         if !definition.variables.is_empty() {
             match &participant {
                 ResolvedApplicationParticipant::Pipeline { variable_types, .. } => {

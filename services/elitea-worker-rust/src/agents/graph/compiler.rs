@@ -79,7 +79,7 @@ use map_compiler::validate_map_ownership;
 pub(crate) use parallel_compiler::refuse_child_parallel;
 use parallel_compiler::validate_parallel_ownership;
 #[allow(unused_imports)] // The binding is staged behind the Parallel gate.
-pub(crate) use parallel_compiler::{ParallelCompilerBinding, RootSessionSource};
+pub(crate) use parallel_compiler::{ChildFanout, ParallelCompilerBinding, RootSessionSource};
 
 pub(crate) const MAX_PIPELINE_YAML_BYTES: usize = 512 * 1024;
 pub(crate) use elitea_agent_runtime::graph::PIPELINE_YAML_BUDGET;
@@ -1316,7 +1316,11 @@ impl PipelineDefinition {
                 "the pipeline agent name is malformed",
             ));
         }
-        refuse_child_parallel(runtimes)?;
+        // FU-249: a saved child pipeline's Parallel binds through the run's
+        // binding; without one (a pipeline run as an Agent's tool) it is refused.
+        if runtimes.parallel.is_none() {
+            refuse_child_parallel(runtimes)?;
+        }
         let (checkpointer, bound_runtimes) =
             self.bind_parallel_authority(checkpointer, runtimes)?;
         let (checkpointer, bound_runtimes) =
@@ -1723,12 +1727,21 @@ impl PipelineDefinition {
         };
         let transition = node.transition().map(ToOwned::to_owned);
         let node_id = node.id().to_owned();
-        let application = ApplicationNode::new(
-            node.clone(),
-            self.state.clone(),
-            resolver.as_ref(),
-            Arc::clone(checkpointer),
-        )
+        let application = match runtimes.child_fanout(node.id())? {
+            None => ApplicationNode::new(
+                node.clone(),
+                self.state.clone(),
+                resolver.as_ref(),
+                Arc::clone(checkpointer),
+            ),
+            Some(fanout) => ApplicationNode::new_in_fanout(
+                node.clone(),
+                self.state.clone(),
+                resolver.as_ref(),
+                Arc::clone(checkpointer),
+                fanout,
+            ),
+        }
         .map_err(|_| {
             PipelineConfigurationError::Unsupported(
                 "the selected pipeline Agent participant is unavailable",
