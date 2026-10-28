@@ -189,7 +189,11 @@ func TestAnMCPTokenForServerAIsRefusedForServerB(t *testing.T) {
 		t.Fatalf("server B accepted server A's token: %d", status)
 	}
 	// The grant of target B is a different grant: the broker never asks for
-	// A's when the reference names B.
+	// A's when the reference names B. A run admitted with B's toolkit
+	// reference froze B (#1119), so the frozen-reference check passes and
+	// the target binding is what decides.
+	w.context.CredentialReferences[0].CredentialReferenceID = tReferenceB
+	w.context.CredentialReferences[0].TargetBindingID = tTargetB
 	req := mcpRequest(t, w, "echo")
 	req.Invocation.InvocationID, req.Invocation.CredentialReferenceID = tInvocation2, tReferenceB
 	w.grants.grants[0].CredentialReferenceID, w.grants.grants[0].TargetBindingID = tReferenceB, tTargetB
