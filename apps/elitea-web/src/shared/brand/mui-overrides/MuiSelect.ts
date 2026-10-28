@@ -19,10 +19,10 @@ export const MuiSelect: EliteaComponents['MuiSelect'] = {
       props: { variant: 'standard' },
       style: ({ theme }) => ({
         '&.MuiInput-underline:before': {
-          borderBottom: `0.0625rem solid ${theme.vars.palette.border.lines}`,
+          borderBottom: `0.0625rem solid ${theme.vars.palette.border.hover}`,
         },
         '&:not(.Mui-error).MuiInput-underline.Mui-focused:after': {
-          borderBottom: `0.0625rem solid ${theme.vars.palette.primary.main}`,
+          borderBottom: `0.0625rem solid ${theme.vars.palette.focus.ring}`,
         },
         '&:not(.Mui-error).MuiInput-underline.Mui-disabled:before': {
           borderBottom: `0.0625rem solid ${theme.vars.palette.border.lines}`,

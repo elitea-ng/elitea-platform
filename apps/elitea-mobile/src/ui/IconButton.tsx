@@ -56,8 +56,8 @@ export function IconButton({
   const design = useDesign();
   const { colors } = design;
   const fill =
-    variant === 'filled' ? colors.accent : variant === 'tonal' ? colors.accentSoft : variant === 'glass' ? colors.surfaceGlass.opaqueFallback : 'transparent';
-  const tone: TextTone = variant === 'filled' ? 'onAccent' : variant === 'tonal' ? 'accentSoftOn' : selected ? 'accent' : 'primary';
+    variant === 'filled' ? colors.primary : variant === 'tonal' ? colors.accentSoft : variant === 'glass' ? colors.surfaceGlass.opaqueFallback : 'transparent';
+  const tone: TextTone = variant === 'filled' ? 'onPrimary' : variant === 'tonal' ? 'accentSoftOn' : selected ? 'accent' : 'primary';
   // A plain icon button has no frame of its own, so its frame IS the target.
   const frame = variant === 'plain' ? Math.max(size, hitTarget()) : size;
   return (

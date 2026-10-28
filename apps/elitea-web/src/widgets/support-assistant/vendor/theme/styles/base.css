@@ -10,16 +10,15 @@
  * and an air-gapped install would simply render a fallback face after a
  * timeout.
  *
- * The family below is UNCHANGED. Montserrat is already this app's face — see
- * `shared/ui/settings/SettingsDrawer.tsx` and `widgets/sidebar`'s
- * `ProjectAvatar` — so the widget inherits whatever the deployment loads for
- * the rest of the UI, and the `sans-serif` fallback is what it always was.
+ * The family is INHERITED: the widget mounts inside this app's document, so
+ * it takes the brand pack's UI face (Manrope by default, brand guide v3, or
+ * whatever a deployment's pack loads) from `<body>`, like the rest of the UI.
  */
 
 .elitea-assistant-container {
   position: fixed;
   z-index: 2147483647;
-  font-family: 'Montserrat', sans-serif;
+  font-family: inherit;
   font-size: 0.875rem;
   line-height: 1.5;
   box-sizing: border-box;

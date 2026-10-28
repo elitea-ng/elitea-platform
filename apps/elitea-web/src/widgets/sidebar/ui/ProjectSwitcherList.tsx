@@ -123,7 +123,8 @@ export function ProjectSwitcherList({ projects, selectedProjectId, noneLabel, op
           sx={(theme: Theme) => ({
             ...fadeSx,
             top: 0,
-            background: `linear-gradient(to bottom, ${theme.vars.palette.background.secondary}, transparent)`,
+            // A hairline, not a gradient fade (brand guide v3: flat UI).
+            borderTop: `0.0625rem solid ${theme.vars.palette.border.sidebarDivider}`,
           })}
         />
       )}
@@ -134,7 +135,7 @@ export function ProjectSwitcherList({ projects, selectedProjectId, noneLabel, op
           sx={(theme: Theme) => ({
             ...fadeSx,
             bottom: 0,
-            background: `linear-gradient(to top, ${theme.vars.palette.background.secondary}, transparent)`,
+            borderBottom: `0.0625rem solid ${theme.vars.palette.border.sidebarDivider}`,
           })}
         />
       )}
@@ -142,11 +143,11 @@ export function ProjectSwitcherList({ projects, selectedProjectId, noneLabel, op
   );
 }
 
-/** The shared geometry of the two scroll fades: a 24px band that lets clicks pass through. */
+/** The shared geometry of the two scroll edges: a hairline at the clipped edge that lets clicks pass through. */
 const fadeSx = {
   position: 'absolute',
   left: 0,
   right: 0,
-  height: '1.5rem',
+  height: 0,
   pointerEvents: 'none',
 } as const;

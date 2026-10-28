@@ -276,7 +276,7 @@ func TestFormPageUsesSelfContainedCurrentPresentation(t *testing.T) {
 	}
 	body := recorder.Body.String()
 	for _, marker := range []string{
-		"<title>Elitea login</title>",
+		"<title>Elitea AI login</title>",
 		`data-auth-form="form"`,
 		`class="card card-signin"`,
 		`class="form-control"`,

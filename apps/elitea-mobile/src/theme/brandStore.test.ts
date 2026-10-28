@@ -59,11 +59,11 @@ it('persists the mapped theme and restores it at launch for the same workspace',
   __resetBrandThemeForTests();
   await restoreBrandTheme(FIXTURE_ORIGIN);
   expect(getBrandTheme()).toMatchObject({ productName: 'Elitea', light: theme.light, dark: theme.dark });
-  expect(resolvePalette('dark', getBrandTheme()?.dark).accent).toBe('#6ae8fa');
+  expect(resolvePalette('dark', getBrandTheme()?.dark).accent).toBe('#4a4de8');
 });
 
 it('persists and re-validates the unfiltered accent source', async () => {
-  expect(theme.accentSource).toMatchObject({ hue: '#6ae8fa', lightAccent: '#c428dd' });
+  expect(theme.accentSource).toMatchObject({ hue: '#4a4de8', lightAccent: '#4a4de8' });
   setBrandTheme(theme, PACK_URL);
   await flush();
   __resetBrandThemeForTests();

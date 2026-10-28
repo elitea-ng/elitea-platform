@@ -123,8 +123,12 @@ func TestPackJSON_UnbrandedServesTheProductDefault(t *testing.T) {
 	}
 	pack := decodePack(t, rec)
 	def := ProductDefault()
-	if pack.ID != def.ID || pack.Brand.Hue != def.Brand.Hue || pack.Brand.Hue == DefaultPack().Brand.Hue {
-		t.Errorf("served id %q hue %q, want the product default's %q %q", pack.ID, pack.Brand.Hue, def.ID, def.Brand.Hue)
+	// DefaultPack() has the same hue now, so its EMPTY schemes are what
+	// tell the two apart: the product default states its scheme tokens.
+	if pack.ID != def.ID || pack.Brand.Hue != def.Brand.Hue || len(pack.Schemes.Light) == 0 ||
+		len(pack.Schemes.Light) != len(def.Schemes.Light) {
+		t.Errorf("served id %q hue %q with %d light tokens, want the product default's %q %q with %d",
+			pack.ID, pack.Brand.Hue, len(pack.Schemes.Light), def.ID, def.Brand.Hue, len(def.Schemes.Light))
 	}
 	// The product default's "./brand/…" placeholders are document-relative:
 	// they resolve under the web app's /app/, where its image serves them
@@ -161,7 +165,7 @@ func TestPackJSON_DatabaseLayerOverProductDefault(t *testing.T) {
 	if pack.Assets.Favicon != "data:image/svg+xml;base64,PHN2Zy8+" {
 		t.Errorf("a data: URI must pass through, got %q", pack.Assets.Favicon)
 	}
-	if len(pack.Typography.FontFaces) != 1 || !strings.HasPrefix(pack.Typography.FontFaces[0].URL, "https://elitea.example.com/api/v2/branding/assets/font/") {
+	if len(pack.Typography.FontFaces) != 4 || !strings.HasPrefix(pack.Typography.FontFaces[0].URL, "https://elitea.example.com/api/v2/branding/assets/font/") {
 		t.Errorf("fontFaces = %+v", pack.Typography.FontFaces)
 	}
 	// The resolver's own pack is not modified by absolutisation.

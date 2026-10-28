@@ -69,17 +69,15 @@ const styles = {
   labelRunning: (theme: Theme) => ({
     fontWeight: 600,
     whiteSpace: 'nowrap',
-    background: `linear-gradient(90deg, ${theme.vars.palette.text.secondary} 0%, ${theme.vars.palette.text.secondary} 35%, ${theme.vars.palette.text.primary} 50%, ${theme.vars.palette.text.secondary} 65%, ${theme.vars.palette.text.secondary} 100%)`,
-    backgroundSize: '200% auto',
-    color: 'transparent',
-    WebkitBackgroundClip: 'text',
-    backgroundClip: 'text',
-    WebkitTextFillColor: 'transparent',
-    animation: 'subAgentNameShimmer 1.8s linear infinite',
-    '@keyframes subAgentNameShimmer': {
-      '0%': { backgroundPosition: '200% center' },
-      '100%': { backgroundPosition: '-200% center' },
+    // A flat opacity pulse, not a gradient shimmer (brand guide v3: flat UI);
+    // removed under prefers-reduced-motion like every brand animation.
+    color: theme.vars.palette.text.secondary,
+    animation: 'subAgentNamePulse 1.8s ease-in-out infinite',
+    '@keyframes subAgentNamePulse': {
+      '0%, 100%': { opacity: 1 },
+      '50%': { opacity: 0.55 },
     },
+    '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
   }),
   spinner: (theme: Theme) => ({ color: theme.vars.palette.text.secondary, flexShrink: 0 }),
   details: {

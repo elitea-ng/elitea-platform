@@ -83,13 +83,13 @@ describe('resolveDesign', () => {
   it('a brand changes only the accent family; neutrals, status and focus stay the product defaults', () => {
     const d = resolveDesign({ scheme: 'light', platform: 'ios', brand: brandInputFrom(theme()) });
     expect(d.branded).toBe(true);
-    expect(d.colors.accent).toBe('#08786c'); // teal, corrected incl. the tinted gradient stop
+    expect(d.colors.accent).toBe('#027f72'); // teal, corrected against the flat grounds
     for (const key of ['background', 'surface', 'textPrimary', 'textTertiary', 'focus', 'danger', 'success', 'chip'] as const) {
       expect([key, d.colors[key]]).toEqual([key, colors.light[key]]);
     }
   });
 
-  it('productDefault keeps product rose', () => {
+  it('productDefault keeps the product default', () => {
     const d = resolveDesign({ scheme: 'light', platform: 'ios', brand: brandInputFrom(theme({ productDefault: true })) });
     expect(d.colors.accent).toBe(colors.light.accent);
     expect(d.branded).toBe(false);

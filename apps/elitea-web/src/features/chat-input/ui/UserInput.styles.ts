@@ -81,8 +81,10 @@ function webUserInputStyles(isFocused: boolean, isDragOver: boolean, isRecording
 
   const getInputBorder = (theme: Theme): string => {
     if (isRecording) return theme.vars.palette.primary.main;
-    if (!isFocused) return 'transparent';
-    return `linear-gradient(0deg, ${theme.vars.palette.background.userInputBorderDark} 0%, ${theme.vars.palette.background.userInputBorderLight} 100%)`;
+    // Control boundary at rest (brand guide v3: borderStrong, ≥3:1).
+    if (!isFocused) return theme.vars.palette.border.hover;
+    // Flat focus ring colour (brand guide v3: no gradients in UI chrome).
+    return theme.vars.palette.background.userInputBorderLight;
   };
 
   return {
@@ -107,7 +109,9 @@ function webUserInputStyles(isFocused: boolean, isDragOver: boolean, isRecording
       background: isDragOver ? `${theme.vars.palette.primary.main}15` : getInputBackground(theme),
       border: isDragOver
         ? `0.125rem dashed ${theme.vars.palette.primary.main}`
-        : `0.0625rem solid ${isFocused || isRecording ? 'transparent' : theme.vars.palette.border.lines}`,
+        : // The wrapper's 1px padding draws the one edge (borderStrong at rest);
+          // a second line here would double it.
+          '0.0625rem solid transparent',
       boxSizing: 'border-box',
       gap: '1.5rem',
       transition: 'all 0.2s ease-in-out',
@@ -115,6 +119,11 @@ function webUserInputStyles(isFocused: boolean, isDragOver: boolean, isRecording
       ...(isDragOver && { boxShadow: `0 0.25rem 0.75rem ${theme.vars.palette.primary.main}30` }),
     }),
     textFieldWrapper: {
+      // Kerning a long unbroken run in a variable web font costs ~100x a plain
+      // layout (437 ms vs 4 ms for a 100k-character paste, measured in Chromium);
+      // the composer and its mirror both turn it off so their glyphs stay aligned.
+      fontKerning: 'none',
+      '& textarea': { fontKerning: 'none' },
       flex: 1,
       display: 'flex',
       flexDirection: 'column',
@@ -135,6 +144,7 @@ function webUserInputStyles(isFocused: boolean, isDragOver: boolean, isRecording
       fontWeight: 500,
       lineHeight: '1.5rem',
       fontFamily: 'inherit',
+      fontKerning: 'none',
       '&::-webkit-scrollbar': { display: 'none' },
       scrollbarWidth: 'none',
     },

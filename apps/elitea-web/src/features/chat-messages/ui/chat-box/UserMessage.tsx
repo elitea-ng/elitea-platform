@@ -38,6 +38,9 @@ function userMessageContainerSx(isOwn: boolean) {
     alignSelf: 'stretch',
     width: '100%',
     gap: 0.5,
+    // User text is arbitrary: kerning one long unbroken run in the brand web
+    // font costs ~100x a plain layout (see `UserInput.styles.ts`).
+    fontKerning: 'none',
     ...replyActionsRevealSx,
   } as const;
 }

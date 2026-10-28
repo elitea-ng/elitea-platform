@@ -76,11 +76,11 @@ describe('BrandThemeProvider', () => {
     // hex string would "pass" a substring check against arbitrary CSS).
     expect(styleText.toLowerCase()).not.toContain(UNUSED_PROBE_COLOUR);
     // GREEN: the default pack's actual brand hue (`brand.hue` /
-    // `schemes.dark['primary.main']`, tokens/default.pack.json, "#6ae8fa")
+    // `schemes.dark['primary.main']`, tokens/default.pack.json, "#4A4DE8")
     // IS present in the stylesheet CssBaseline forced MUI to inject — the
     // theme's real, resolved output, not the theme object in isolation.
     expect(styleText.toLowerCase()).toContain(
-      `--el-palette-primary-main:${DEFAULT_BRAND_PACK.schemes.dark['primary.main']}`,
+      `--el-palette-primary-main:${String(DEFAULT_BRAND_PACK.schemes.dark['primary.main']).toLowerCase()}`,
     );
   });
 
@@ -90,7 +90,11 @@ describe('BrandThemeProvider', () => {
       brand: { hue: HOSTILE_PROBE_COLOUR },
       schemes: {
         ...DEFAULT_BRAND_PACK.schemes,
+        // Both schemes: since brand guide v3 the default light and dark
+        // primaries are the same indigo, so a dark-only override would leave
+        // the default value in the light block.
         dark: { ...DEFAULT_BRAND_PACK.schemes.dark, 'primary.main': HOSTILE_PROBE_COLOUR },
+        light: { ...DEFAULT_BRAND_PACK.schemes.light, 'primary.main': HOSTILE_PROBE_COLOUR },
       },
     });
 
@@ -103,7 +107,7 @@ describe('BrandThemeProvider', () => {
     const styleText = renderedStyleText().toLowerCase();
     expect(styleText).toContain(`--el-palette-primary-main:${HOSTILE_PROBE_COLOUR}`);
     expect(styleText).not.toContain(
-      `--el-palette-primary-main:${DEFAULT_BRAND_PACK.schemes.dark['primary.main']}`,
+      `--el-palette-primary-main:${String(DEFAULT_BRAND_PACK.schemes.dark['primary.main']).toLowerCase()}`,
     );
   });
 
@@ -142,8 +146,9 @@ describe('BrandThemeProvider', () => {
     expect(style?.textContent).toContain('url("/api/v2/branding/assets/font/abc.woff2") format("woff2")');
     expect(style?.textContent).toContain('font-display:swap');
 
+    const { fontFaces: _omitted, ...typographyWithoutFaces } = DEFAULT_BRAND_PACK.typography;
     rerender(
-      <BrandThemeProvider pack={DEFAULT_BRAND_PACK}>
+      <BrandThemeProvider pack={{ ...DEFAULT_BRAND_PACK, typography: typographyWithoutFaces }}>
         <button type="button">probe</button>
       </BrandThemeProvider>,
     );

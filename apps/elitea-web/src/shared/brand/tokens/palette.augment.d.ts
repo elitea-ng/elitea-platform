@@ -96,6 +96,9 @@ declare module '@mui/material/styles' {
       added: string;
       removed: string;
     };
+    focus: {
+      ring: string;
+    };
     icon: {
       fill: {
         active: string;

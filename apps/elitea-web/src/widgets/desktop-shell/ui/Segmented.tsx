@@ -63,7 +63,7 @@ export function Segmented<T extends string>({ value, options, onChange, ariaLabe
               color: selected ? theme.vars.palette.text.primary : theme.vars.palette.text.secondary,
               background: selected ? theme.vars.palette.background.paper : 'transparent',
               boxShadow: selected ? `0 0 0 0.5px color-mix(in srgb, ${theme.vars.palette.text.primary} 24%, transparent), 0 1px 2px color-mix(in srgb, ${theme.vars.palette.text.primary} 18%, transparent)` : 'none',
-              '&:has(input:focus-visible)': { outline: `3px solid color-mix(in srgb, ${theme.vars.palette.primary.main} 45%, transparent)` },
+              '&:has(input:focus-visible)': { outline: `2px solid ${theme.vars.palette.focus.ring}` },
             })}
           >
             <Box

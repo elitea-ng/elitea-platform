@@ -70,7 +70,7 @@ export function ChatEmptyState({
                   design.elevation.e1,
                   { backgroundColor: colors.surfaceGlass.opaqueFallback, borderColor: colors.separator, borderRadius: radius.card, padding: space.cardPadding },
                 ]}>
-                <Icon name="agent" size={18} tone="accent" />
+                <Icon name="agent" size={18} tone="ai" />
                 <Text variant="callout" numberOfLines={clamp(3)} style={styles.flex}>
                   {text}
                 </Text>

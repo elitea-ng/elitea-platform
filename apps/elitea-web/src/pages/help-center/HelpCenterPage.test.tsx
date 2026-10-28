@@ -25,7 +25,7 @@ const videoLibraryConfig = RESOURCE_CARD_CONFIGS[2]!;
  * `GET /admin/plugin_config_values/prompt_lib/resources` — the section the admin
  * Configuration page writes (unit A14, issue #200). Before that the hook made no
  * request at all, and the endpoint it would have called returned chat and upload
- * limits, which is why every card rendered "No links configured".
+ * limits, which is why every card rendered an empty state.
  *
  * So these tests assert the WIRING, not just the layout: a page that fell back to
  * its defaults on every response would still render six cards.
@@ -191,11 +191,17 @@ describe('HelpCenterPage', () => {
       expect(await screen.findByText(config.defaultTitle)).toBeInTheDocument();
     }
     // #891: cards with a real `defaultLinks` (Documentation, Release Notes,
-    // Tutorials) now render THAT instead of the placeholder — only the two
+    // Tutorials) now render THAT instead of the empty state — only the two
     // cards with no real content left (Video Library, Interactive Tours)
-    // still show it.
+    // still show it. The empty state names the state and the place where an
+    // administrator adds the links.
     const cardsWithNoDefault = RESOURCE_CARD_CONFIGS.filter((config) => config.defaultLinks === undefined);
-    expect(screen.getAllByText('No links configured')).toHaveLength(cardsWithNoDefault.length);
+    expect(screen.getAllByText(/An administrator can add links in Admin › Features › Help Center\./)).toHaveLength(
+      cardsWithNoDefault.length,
+    );
+    expect(screen.getByText(/^No videos yet\./)).toBeInTheDocument();
+    expect(screen.getByText(/^No tours yet\./)).toBeInTheDocument();
+    expect(screen.queryByText('No links configured')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Getting Started' })).toBeInTheDocument();
     expect(screen.getByText('Latest', { exact: true })).toBeInTheDocument();
   });

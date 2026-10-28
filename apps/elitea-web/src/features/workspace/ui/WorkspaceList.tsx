@@ -105,7 +105,7 @@ export function WorkspaceList({ workspaces, projects, onSelect, onContextMenu, i
                 outline: 'none',
                 background: selected ? `color-mix(in srgb, ${theme.vars.palette.primary.main} 16%, transparent)` : index % 2 === 1 ? `color-mix(in srgb, ${theme.vars.palette.text.primary} 3%, transparent)` : 'transparent',
                 '&:hover': selected ? {} : { background: `color-mix(in srgb, ${theme.vars.palette.text.primary} 6%, transparent)` },
-                '&:focus-visible': { boxShadow: `inset 0 0 0 2px color-mix(in srgb, ${theme.vars.palette.primary.main} 55%, transparent)` },
+                '&:focus-visible': { boxShadow: `inset 0 0 0 2px ${theme.vars.palette.focus.ring}` },
               })}
             >
               <Box component="td" sx={cellSx}>

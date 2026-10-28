@@ -15,13 +15,13 @@ import type { Theme } from '@mui/material/styles';
  *
  * MUI's default `ListItemButton` focus treatment is a translucent overlay that
  * is nearly invisible against this nav's own hover/selected tints, so keyboard
- * users could not tell where they were. `primary.main` clears 3:1 against both
+ * users could not tell where they were. `focus.ring` clears 3:1 against both
  * schemes' sidebar backgrounds (pinned in `AdminNav.test.tsx`).
  */
 export function focusRing(theme: Theme): Record<string, unknown> {
   return {
     '&:focus-visible': {
-      outline: `0.125rem solid ${theme.vars.palette.primary.main}`,
+      outline: `0.125rem solid ${theme.vars.palette.focus.ring}`,
       outlineOffset: '0.125rem',
     },
   };

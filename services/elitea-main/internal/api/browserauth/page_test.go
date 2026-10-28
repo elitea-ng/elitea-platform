@@ -101,10 +101,16 @@ func TestTheStylesheetCarriesBothSchemes(t *testing.T) {
 		"@media (prefers-color-scheme: dark)",
 		`:root:not([data-el-scheme="light"])`,
 		`:root[data-el-scheme="dark"]`,
-		"--accent: var(--brand-light, #c428dd);",
-		"--accent: var(--brand-dark, #6ae8fa);",
+		"--accent: var(--brand-light, #4a4de8);",
+		"--accent: var(--brand-dark, #4a4de8);",
+		"--on-accent: var(--on-brand-light, #ffffff);",
+		"--on-accent: var(--on-brand-dark, #ffffff);",
+		"--signal: var(--signal-light, var(--accent));",
+		"--signal: var(--signal-dark, var(--brand-dark, #00bfe6));",
+		"outline: 2px solid var(--signal);",
+		"outline-offset: 2px;",
 		"@media (prefers-reduced-motion: reduce)",
-		"animation: none;",
+		"transition: none;",
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("stylesheet lacks %q", want)
@@ -119,6 +125,38 @@ func TestTheStylesheetCarriesBothSchemes(t *testing.T) {
 	// The light scheme is the default: no script, no OS preference.
 	if !strings.HasPrefix(strings.TrimSpace(css[strings.Index(css, ":root {"):]), ":root {\n  color-scheme: light;") {
 		t.Error("the default :root rule is not the light scheme")
+	}
+}
+
+// The brand is flat (guide v3): no gradient, no glow, no translucent blur,
+// and no colour from the kill list in tokens.json.
+func TestTheStylesheetIsFlatAndUsesNoRetiredColour(t *testing.T) {
+	css := strings.ToLower(authStyleSource)
+	partials := strings.ToLower(authPartialsSource)
+	for _, forbidden := range []string{
+		"gradient(", "backdrop-filter", "drop-shadow", "brightness(", "animation:",
+		"#edeafa", "#f0eefe", "#b333d5", "#b12ed4", "#e04bf0", "#c428dd", "#f47cff", "#f551f9",
+		"#6878f8", "#284858", "#3f7f8a", "#6ae8fa", "#83efff", "montserrat",
+	} {
+		if strings.Contains(css, forbidden) {
+			t.Errorf("stylesheet contains %q", forbidden)
+		}
+		if strings.Contains(partials, forbidden) {
+			t.Errorf("partials contain %q", forbidden)
+		}
+	}
+	if strings.Contains(partials, "<lineargradient") || strings.Contains(partials, "<radialgradient") {
+		t.Error("partials contain an SVG gradient")
+	}
+	// The brand faces come from the web app on the same origin.
+	for _, want := range []string{
+		`src: url("/app/brand/fonts/manrope.woff2") format("woff2");`,
+		`src: url("/app/brand/fonts/sora.woff2") format("woff2");`,
+		`font-family: "Manrope", system-ui,`,
+	} {
+		if !strings.Contains(authStyleSource, want) {
+			t.Errorf("stylesheet lacks %q", want)
+		}
 	}
 }
 
@@ -180,26 +218,27 @@ func TestProviderButtonsShowARecognisableLogo(t *testing.T) {
 
 func TestThePackSchemeTokensReachBothSchemes(t *testing.T) {
 	pack := v2branding.DefaultPack()
-	pack.Brand.Hue = "#6AE8FA"
+	pack.Brand.Hue = "#00BFE6"
 	pack.Schemes.Light = map[string]string{
-		"primary.main":            "rgba(196, 40, 221, 1)",
+		"primary.main":            "rgba(74, 77, 232, 1)",
 		"text.button.primary":     "rgba(248, 252, 255, 1)",
 		"background.default":      "rgba(248, 252, 255, 1)",
 		"background.card.default": "#FFFFFF",
-		"text.secondary":          "#0E131D",
+		"text.secondary":          "#0B0B18",
+		"focus.ring":              "#4A4DE8",
 	}
-	pack.Schemes.Dark = map[string]string{"background.default": "#0E131D"}
+	pack.Schemes.Dark = map[string]string{"background.default": "#0B0B18"}
 	css := string(loginBrandFromPack(pack).Style)
-	want := ":root{--brand-light:rgba(196, 40, 221, 1);--on-brand-light:rgba(248, 252, 255, 1);" +
-		"--page-light:rgba(248, 252, 255, 1);--card-light:#ffffff;--text-light:#0e131d;" +
+	want := ":root{--brand-light:rgba(74, 77, 232, 1);--on-brand-light:rgba(248, 252, 255, 1);" +
+		"--page-light:rgba(248, 252, 255, 1);--card-light:#ffffff;--text-light:#0b0b18;--signal-light:#4a4de8;" +
 		// No dark accent stated: the hue, with the ink that reads on it.
-		"--brand-dark:#6ae8fa;--on-brand-dark:#0e131d;--page-dark:#0e131d}"
+		"--brand-dark:#00bfe6;--on-brand-dark:#0b0b18;--page-dark:#0b0b18}"
 	if !strings.Contains(css, want) {
 		t.Fatalf("brand css = %s\nwant it to contain %s", css, want)
 	}
 	for background, ink := range map[string]string{
-		"#6ae8fa": "#0e131d", "#c428dd": "#ffffff", "#ff6600": "#0e131d", "#0b5ed7": "#ffffff",
-		"rgba(26, 35, 126, 1)": "#ffffff", "#fe0": "#0e131d", "#1a237eff": "#ffffff", "rgb(300, 0, 0)": "",
+		"#00bfe6": "#0b0b18", "#4a4de8": "#ffffff", "#ff6600": "#0b0b18", "#0b5ed7": "#ffffff",
+		"rgba(26, 35, 126, 1)": "#ffffff", "#fe0": "#0b0b18", "#1a237eff": "#ffffff", "rgb(300, 0, 0)": "",
 		"linear-gradient(red, blue)": "",
 	} {
 		if got := readableInk(background); got != ink {
@@ -279,7 +318,7 @@ func TestTheProductNameIsATextWordmarkWhateverTheLogo(t *testing.T) {
 }
 
 // The built-in logo is the product's own: a renamed product without a logo
-// shows its name, never Elitea's mark.
+// shows its name, never the Elitea AI mark.
 func TestTheBuiltInLogoIsOnlyForTheDefaultProduct(t *testing.T) {
 	renamed := v2branding.DefaultPack()
 	renamed.Product.Name = "Acme"

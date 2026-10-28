@@ -12,8 +12,16 @@ import { typeScale } from '../typeScale';
  * it gets this root too; `MuiInputLabel.ts` restates the same variant and
  * adds the shrink geometry.
  */
+/*
+ * A focused label takes the focus ring's colour (brand guide v3: `signal`),
+ * not MUI's `primary.main`: dark Indigo is 2.69:1 on `elevated`, under AA for
+ * text. An error label keeps MUI's error colour.
+ */
 export const MuiFormLabel: EliteaComponents['MuiFormLabel'] = {
   styleOverrides: {
-    root: ({ theme }) => typeScale(theme.typography.labelMedium),
+    root: ({ theme }) => ({
+      ...typeScale(theme.typography.labelMedium),
+      '&.Mui-focused:not(.Mui-error)': { color: theme.vars.palette.focus.ring },
+    }),
   },
 };

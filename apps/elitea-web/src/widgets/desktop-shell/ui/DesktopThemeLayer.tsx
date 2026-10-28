@@ -67,11 +67,12 @@ export function DesktopThemeLayer({ children, transparentPage = false }: { child
           // Only real links are hands.
           'a[href], a[href] *': { cursor: 'pointer' },
           '[data-tauri-drag-region]': { cursor: 'default' },
-          // A pointer never draws a ring; the keyboard draws the system accent's.
+          // A pointer never draws a ring; the keyboard draws the brand focus ring
+          // (brand guide v3: 2px in the scheme's signal colour, 2px offset).
           '*:focus': { outline: 'none' },
           '*:focus-visible': {
-            outline: `3px solid color-mix(in srgb, ${theme.vars.palette.primary.main} 45%, transparent)`,
-            outlineOffset: 0,
+            outline: `2px solid ${theme.vars.palette.focus.ring}`,
+            outlineOffset: 2,
             borderRadius: 4,
           },
           'input:focus-visible, textarea:focus-visible': { outline: 'none' },

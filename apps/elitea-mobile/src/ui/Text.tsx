@@ -12,6 +12,8 @@ export type TextTone =
   | 'tertiary'
   | 'accent'
   | 'onAccent'
+  | 'onPrimary'
+  | 'ai'
   | 'accentSoftOn'
   | 'danger'
   | 'dangerOn'
@@ -25,6 +27,8 @@ const TONE: Record<TextTone, keyof SemanticColors> = {
   tertiary: 'textTertiary',
   accent: 'accent',
   onAccent: 'accentOn',
+  onPrimary: 'primaryOn',
+  ai: 'aiText',
   accentSoftOn: 'accentSoftOn',
   danger: 'danger',
   dangerOn: 'dangerOn',

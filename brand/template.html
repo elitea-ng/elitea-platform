@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en-GB">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Elitea AI brand guide</title>
+    <meta name="description" content="The Elitea AI brand guide: name, LE-03 mark, colour, type, voice and design tokens, for people and agents." />
+    <meta name="theme-color" content="#0B0B18" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)" />
+    <link rel="icon" href="assets/elitea-app-icon.svg" type="image/svg+xml" />
+    <link rel="alternate" type="text/markdown" href="BRAND.md" title="Elitea AI brand guide (Markdown)" />
+    <link rel="alternate" type="application/json" href="tokens.json" title="Elitea AI design tokens" />
+    <link rel="preload" href="fonts/manrope.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="fonts/sora.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="styles.css" />
+    <script>
+      // Applied before first paint so a stored theme never flashes.
+      try {
+        var stored = localStorage.getItem('elitea-brand-theme');
+        if (stored === 'light' || stored === 'dark') document.documentElement.setAttribute('data-theme', stored);
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to the guide</a>
+    <div class="wrap">
+      <header class="topbar">
+        {{mark}}
+        <p class="name">Elitea AI<small>BRAND GUIDE · V{{version}}</small></p>
+        <a class="agent-link" href="llms.txt">llms.txt</a>
+        <a class="agent-link" href="BRAND.md">BRAND.md</a>
+        <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Colour theme: system">System</button>
+      </header>
+      <main id="main">
+        <div class="hero">
+          <p class="eyebrow">Brand guide · v{{version}}</p>
+          <h1>The Elitea AI <span class="alt">brand guide.</span></h1>
+          {{lede}}
+        </div>
+        <nav class="pills" aria-label="Sections">{{nav}}</nav>
+        {{sections}}
+      </main>
+      <footer class="foot">
+        <p><strong>One primary. Two hues a screen. Orange is the dot.</strong></p>
+        <p>Generated from <code>libs/ts/client-core/src/brand/tokens.json</code> and <code>brand/BRAND.md</code> in <a href="https://github.com/elitea-ng/elitea-platform">elitea-ng/elitea-platform</a>. Contrast ratios computed per WCAG 2.2 at build time.</p>
+      </footer>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="brand.js" defer></script>
+  </body>
+</html>

@@ -55,6 +55,8 @@ interface VariantSpec {
   textTransform?: 'uppercase';
   /** Variants the baseline paints with `theme.palette.text.secondary`. */
   secondaryText?: true;
+  /** Heading variants render in the display family (brand guide v3: Sora). */
+  display?: true;
 }
 
 /** The four rungs this scale uses. */
@@ -62,9 +64,9 @@ type Rung = -1 | 0 | 1 | 2;
 const RUNGS: readonly Rung[] = [-1, 0, 1, 2];
 
 const VARIANTS = {
-  headingLarge: { step: 2, lineHeight: 1.4, fontWeight: 600, secondaryText: true },
-  headingMedium: { step: 1, lineHeight: 1.5, fontWeight: 600, secondaryText: true },
-  headingSmall: { step: 0, lineHeight: 1.43, fontWeight: 600, secondaryText: true },
+  headingLarge: { step: 2, lineHeight: 1.4, fontWeight: 700, letterSpacing: '-0.01em', secondaryText: true, display: true },
+  headingMedium: { step: 1, lineHeight: 1.5, fontWeight: 700, letterSpacing: '-0.01em', secondaryText: true, display: true },
+  headingSmall: { step: 0, lineHeight: 1.43, fontWeight: 700, secondaryText: true, display: true },
   labelMedium: { step: 0, lineHeight: 1.43, fontWeight: 500 },
   bodyMedium: { step: 0, lineHeight: 1.43, fontWeight: 400 },
   labelSmall: { step: -1, lineHeight: 1.4, fontWeight: 500 },
@@ -159,11 +161,13 @@ export function toTypography(
   cssVarPrefix: string = CSS_VAR_PREFIX,
 ): TypographyVariantsOptions {
   const { fontFamily, fontFamilyMono, baseSize, scale } = typography;
+  const fontFamilyDisplay = typography.fontFamilyDisplay ?? fontFamily;
   const ladder = ladderPx(baseSize, scale);
   const variants = {} as Record<EliteaTypographyVariant, CSSProperties>;
 
   for (const [name, spec] of Object.entries(VARIANTS) as [EliteaTypographyVariant, VariantSpec][]) {
     variants[name] = {
+      ...(spec.display === undefined ? {} : { fontFamily: fontFamilyDisplay }),
       fontStyle: 'normal',
       fontWeight: spec.fontWeight,
       fontSize: rem(ladder[spec.step]),
@@ -176,14 +180,18 @@ export function toTypography(
     };
   }
 
-  const aliases: Record<string, TypeScale> = {};
+  const aliases: Record<string, TypeScale & { fontFamily?: CSSProperties['fontFamily'] }> = {};
   for (const [stock, target] of Object.entries(STOCK_ALIASES)) {
-    aliases[stock] = typeScale(variants[target]);
+    const source = variants[target];
+    // The scale is copied (never the colour, see `typeScale`); a heading
+    // alias (h1–h6, subtitle1) also takes the display family.
+    aliases[stock] = source.fontFamily === undefined ? typeScale(source) : { ...typeScale(source), fontFamily: source.fontFamily };
   }
 
   return {
     fontFamily,
     fontFamilyMono,
+    fontFamilyDisplay,
     fontSize: baseSize,
     // MainTheme.js:114 verbatim — disables the ligature substitutions that
     // made identifiers in code-adjacent UI unreadable.

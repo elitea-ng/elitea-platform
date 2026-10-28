@@ -16,8 +16,8 @@ export interface SidebarHeaderProps {
 
 /**
  * Ported from `SidebarBody.jsx`'s sticky header block (the home/toggle
- * button + socket dot, SHELL-012). Renders `LogoMarkIcon` — the gradient
- * brand ORB — which is what production shows here.
+ * button + socket dot, SHELL-012). Renders `LogoMarkIcon` — the flat
+ * LE-03 brand mark.
  *
  * It used to render `LogoIcon`, the full WORDMARK, as a documented
  * substitution for the mark asset the icon port had not carried over. That

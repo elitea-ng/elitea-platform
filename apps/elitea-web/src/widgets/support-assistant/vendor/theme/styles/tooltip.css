@@ -9,12 +9,12 @@
   z-index: 2147483647;
   padding: 0.25rem 0.5rem;
   border-radius: 0.25rem;
-  background: rgb(233, 235, 240);
-  color: rgba(14, 19, 29, 1);
+  background: #E2E6F0;
+  color: #0B0B18;
   font-size: 0.75rem;
   line-height: 1.4;
   font-weight: 500;
-  font-family: 'Montserrat', sans-serif;
+  font-family: inherit;
   max-width: 20rem;
   word-wrap: break-word;
   pointer-events: none;

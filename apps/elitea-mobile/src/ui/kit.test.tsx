@@ -336,8 +336,8 @@ describe('glass (§1.3)', () => {
 
   it('draws the fallback colour at α .92, or fully opaque', () => {
     expect(withAlpha('#26222C', 0.5)).toBe('rgba(38, 34, 44, 0.5)');
-    expect(glassFill(dark.colors.surfaceGlass, 'tinted')).toBe('rgba(38, 34, 44, 0.92)');
-    expect(glassFill(dark.colors.surfaceGlass, 'opaque')).toBe('#26222C');
+    expect(glassFill(dark.colors.surfaceGlass, 'tinted')).toBe('rgba(26, 32, 54, 0.92)');
+    expect(glassFill(dark.colors.surfaceGlass, 'opaque')).toBe('#1A2036');
   });
 
   it('the gradient follows the 160° token angle', () => {

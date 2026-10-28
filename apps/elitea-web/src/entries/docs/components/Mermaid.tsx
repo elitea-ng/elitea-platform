@@ -16,8 +16,48 @@ import { useEffect, useId, useState } from 'react';
 
 import { t } from '@/shared/i18n';
 
+import { BRAND_TOKENS } from '@elitea/client-core/brand';
+
 export interface MermaidProps {
   readonly chart: string;
+}
+
+/**
+ * Mermaid's `base` theme, set in the brand tokens (guide v3): diagrams sit on
+ * the docs' own surfaces with neutral nodes, Indigo edges and the UI fonts,
+ * instead of Mermaid's stock palettes.
+ */
+function brandMermaidTheme(theme: 'dark' | 'default') {
+  const t = BRAND_TOKENS.schemes[theme === 'dark' ? 'dark' : 'light'];
+  return {
+    theme: 'base' as const,
+    fontFamily: BRAND_TOKENS.typography.ui.stack,
+    themeVariables: {
+      darkMode: theme === 'dark',
+      background: t.bg,
+      fontFamily: BRAND_TOKENS.typography.ui.stack,
+      primaryColor: t.elevated,
+      primaryTextColor: t.text,
+      primaryBorderColor: t.borderStrong,
+      secondaryColor: t.surface,
+      tertiaryColor: t.surface,
+      lineColor: t.textMuted,
+      textColor: t.text,
+      mainBkg: t.elevated,
+      nodeBorder: t.borderStrong,
+      clusterBkg: t.surface,
+      clusterBorder: t.border,
+      edgeLabelBackground: t.bg,
+      actorBkg: t.elevated,
+      actorBorder: t.borderStrong,
+      actorTextColor: t.text,
+      signalColor: t.textMuted,
+      signalTextColor: t.text,
+      noteBkgColor: t.surface,
+      noteBorderColor: t.border,
+      noteTextColor: t.text,
+    },
+  };
 }
 
 function currentTheme(): 'dark' | 'default' {
@@ -44,7 +84,7 @@ export function Mermaid({ chart }: MermaidProps) {
     let cancelled = false;
     async function render() {
       const { default: mermaid } = await import('mermaid');
-      mermaid.initialize({ startOnLoad: false, theme, securityLevel: 'strict' });
+      mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', ...brandMermaidTheme(theme) });
       try {
         const result = await mermaid.render(id, chart);
         if (!cancelled) setSvg(result.svg);

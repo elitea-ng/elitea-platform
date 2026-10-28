@@ -3,9 +3,9 @@ import { memo, useEffect, useState } from 'react';
 
 import MaintenanceTips from './MaintenanceTips';
 
-import MaintenanceLogo from '@/entries/maintenance/assets/maintenance-logo.svg?react';
 import ChatWelcomeImage from '@/entries/maintenance/assets/chat-welcome.png';
 import { t } from '@/shared/i18n';
+import { LogoIcon } from '@/shared/ui/icons/logo-icon';
 import { sanitizeSplashHtml } from '@/shared/ui/lib/sanitizeSplashHtml';
 
 import { VITE_MAINTENANCE_START, VITE_MAINTENANCE_END, VITE_MAINTENANCE_MESSAGE } from '../constants';
@@ -74,12 +74,15 @@ const MaintenancePage = memo(() => {
         }}
       >
         <Box
-          sx={{
-            width: '6.1875rem',
+          sx={(theme) => ({
+            // The LE-03 lockup (1703 × 372): its wordmark paints in
+            // `currentColor`, so the box sets the strong text colour.
+            width: '5.75rem',
             height: '1.25rem',
-          }}
+            color: theme.vars.palette.text.secondary,
+          })}
         >
-          <MaintenanceLogo />
+          <LogoIcon aria-hidden style={{ width: '100%', height: '100%' }} />
         </Box>
         <Box
           sx={(theme) => ({

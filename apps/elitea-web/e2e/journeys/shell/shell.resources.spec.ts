@@ -69,15 +69,14 @@ test('RES01: the Help Center page loads with all five cards, correctly labelled'
     page.getByText('Guides, documentation, and release notes to support your work.'),
   ).toBeVisible();
 
-  // Title Case in the DOM (`ResourceCardConfig.ts`'s `defaultTitle`) — the
-  // all-caps look on screen is `text-transform: uppercase` styling, not the
-  // actual text content, so an exact match must use the real casing.
+  // Sentence case in the DOM and on screen (`ResourceCardConfig.ts`'s
+  // `defaultTitle`, brand guide v3). The titles are not uppercase-styled.
   const expectations: readonly [keyof typeof CARD_TESTIDS, string, string][] = [
     ['documentation', 'Documentation', 'API reference, guides, and platform concepts'],
-    ['releaseNotes', 'Release Notes', 'Product updates, improvements, and fixes'],
-    ['videoLibrary', 'Video Library', 'Product walkthroughs and recorded sessions'],
+    ['releaseNotes', 'Release notes', 'Product updates, improvements, and fixes'],
+    ['videoLibrary', 'Video library', 'Product walkthroughs and recorded sessions'],
     ['tutorials', 'Tutorials', 'Step-by-step guides and use cases'],
-    ['interactiveTours', 'Interactive Tours', 'Guided tours to explore key features and workflows'],
+    ['interactiveTours', 'Interactive tours', 'Guided tours to explore key features and workflows'],
   ];
   for (const [key, title, description] of expectations) {
     const c = card(page, key);
@@ -176,32 +175,33 @@ test('RES04: a theme switch preserves the Help Center page and its cards', async
 });
 
 /* ────────────────────────────────────────────────────────────────────────
- * onetest: ELITEA-0969, ELITEA-0970 — each card has a distinct, legible
- * background in both Light and Dark mode, and switching theme changes it.
- * Ported as an OBSERVABLE-STATE check (distinct, non-empty gradients that
- * change with theme) rather than the manual case's named swatches ("peach",
- * "lavender", …), which this design system does not expose as strings —
- * the tokens are gradients (`shared/brand/tokens/default.pack.json`'s
- * `background.resourceCard.<scheme>.card`), not flat named colours.
+ * onetest: ELITEA-0969, ELITEA-0970 — each card has a legible background in
+ * both Light and Dark mode, and switching theme changes it.
+ * Ported as an OBSERVABLE-STATE check. The manual cases name one swatch per
+ * card ("peach", "lavender", …); brand guide v3 retired those washes, so
+ * every card now shares ONE neutral surface (`ResourceCard.tsx`'s
+ * `background.modal.simple`). The check is therefore: a real, opaque fill,
+ * the same on every card, and different between the two schemes.
  * ──────────────────────────────────────────────────────────────────────── */
-test('RES05: each card has a distinct background, correct in Light and Dark mode', async ({ page }) => {
+test('RES05: every card has the one neutral card surface, correct in Light and Dark mode', async ({ page }) => {
   const readBackgrounds = async (): Promise<Record<string, string>> => {
     const out: Record<string, string> = {};
     for (const key of Object.keys(CARD_TESTIDS) as (keyof typeof CARD_TESTIDS)[]) {
-      out[key] = await card(page, key).evaluate((el) => getComputedStyle(el).backgroundImage);
+      out[key] = await card(page, key).evaluate((el) => getComputedStyle(el).backgroundColor);
     }
     return out;
   };
+  const transparent = ['transparent', 'rgba(0, 0, 0, 0)'];
 
   await page.goto(PERSONALIZATION_PAGE, { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Dark', exact: true }).click();
   await gotoHelpCenter(page);
   const dark = await readBackgrounds();
   for (const [key, bg] of Object.entries(dark)) {
-    expect(bg, `${key} card must have a real background in dark mode`).not.toBe('none');
+    expect(transparent, `${key} card must have a real background in dark mode`).not.toContain(bg);
   }
-  // Every card's background is distinct from every other card's.
-  expect(new Set(Object.values(dark)).size).toBe(Object.values(dark).length);
+  // One card style for every section — no per-card colour.
+  expect(new Set(Object.values(dark)).size).toBe(1);
   // Text is legible — the icon/title text nodes are visible against it.
   await expect(card(page, 'documentation').getByText('Documentation')).toBeVisible();
 
@@ -210,9 +210,9 @@ test('RES05: each card has a distinct background, correct in Light and Dark mode
   await gotoHelpCenter(page);
   const light = await readBackgrounds();
   for (const [key, bg] of Object.entries(light)) {
-    expect(bg, `${key} card must have a real background in light mode`).not.toBe('none');
+    expect(transparent, `${key} card must have a real background in light mode`).not.toContain(bg);
   }
-  expect(new Set(Object.values(light)).size).toBe(Object.values(light).length);
+  expect(new Set(Object.values(light)).size).toBe(1);
   await expect(card(page, 'documentation').getByText('Documentation')).toBeVisible();
 
   // And the theme switch itself changed every card's background.
@@ -229,21 +229,24 @@ test('RES05: each card has a distinct background, correct in Light and Dark mode
  * onetest: ELITEA-0967 — #891 fixed: `ResourceCardConfig.ts` now ships real
  * `defaultLinks` for the Documentation card (real embedded-docs pages, see
  * that file's own header), so a fresh deployment renders an actual `<a>` to
- * hover — `linkSx`'s `&:hover` rule (`HelpCenterPage.tsx`) already applied,
- * unchanged; the fix was giving the card something to apply it to.
+ * hover — the link's hover underline (`HelpCenterPage.tsx`) has something to apply
+ * to; the fix was giving the card a link.
  * ──────────────────────────────────────────────────────────────────────── */
 test('RES06: a card link shows a hover highlight', async ({ page }) => {
   await gotoHelpCenter(page);
   const link = card(page, 'documentation').getByRole('link').first();
   await expect(link, 'a Documentation link must be present by default').toBeVisible({ timeout: 5_000 });
-  const before = await link.evaluate((el) => getComputedStyle(el).color);
+  // Brand guide v3: links keep the signal colour and gain an underline on
+  // hover (`underline="hover"` in `HelpCenterPage.tsx`) — no colour shift.
+  const decoration = (): Promise<string> => link.evaluate((el) => getComputedStyle(el).textDecorationLine);
+  expect(await decoration()).not.toContain('underline');
   await link.hover();
   await expect
-    .poll(async () => link.evaluate((el) => getComputedStyle(el).color), {
-      message: 'hovering a resource link must change its colour (linkSx\'s &:hover rule)',
+    .poll(decoration, {
+      message: 'hovering a resource link must underline it (underline="hover")',
       timeout: 3_000,
     })
-    .not.toBe(before);
+    .toContain('underline');
 });
 
 /* ────────────────────────────────────────────────────────────────────────

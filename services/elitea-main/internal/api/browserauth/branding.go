@@ -28,10 +28,10 @@ package browserauth
 // The brand reaches the stylesheet as custom properties (`--brand-light`,
 // `--brand-dark`, `--page-dark`, `--radius-lg`, ...) that templates/auth.css
 // reads with the product default as the fallback, so a pack restyles both
-// colour schemes and the ring art without the brand rules knowing selectors.
+// colour schemes without the brand rules knowing selectors.
 //
 // Without a brand source, or with nothing served, the page renders the
-// product default: the name "Elitea" and its built-in logo.
+// product default: the name "Elitea AI" and its built-in logo.
 
 import (
 	"bytes"
@@ -54,8 +54,10 @@ type BrandSource interface {
 	Current(ctx context.Context) v2branding.Snapshot
 }
 
-// DefaultProductName is what the page says when no pack names a product.
-const DefaultProductName = "Elitea"
+// DefaultProductName is what the page says when no pack names a product. It
+// is also the name of the product default pack, so a served default pack
+// keeps the built-in logo (DefaultLogo).
+const DefaultProductName = "Elitea AI"
 
 // loginBrand is what the template renders.
 type loginBrand struct {
@@ -145,6 +147,15 @@ func loginBrandFromPack(pack *v2branding.Pack) loginBrand {
 	}
 	if family := cssFontFamily(pack.Typography.FontFamily); family != "" {
 		fmt.Fprintf(&css, ":root{font-family:%s}", family)
+		// Headings use the pack's display stack. A pack without one uses its
+		// UI family on headings too, not the product default's display face.
+		display := family
+		if pack.Typography.FontFamilyDisplay != nil {
+			if stated := cssFontFamily(*pack.Typography.FontFamilyDisplay); stated != "" {
+				display = stated
+			}
+		}
+		fmt.Fprintf(&css, ":root{--font-display:%s}", display)
 	}
 	var radii []string
 	for _, radius := range []struct {
@@ -164,9 +175,8 @@ func loginBrandFromPack(pack *v2branding.Pack) loginBrand {
 	}
 	if pack.Assets.LoginArt != nil {
 		if art := cssSafeAssetPath(*pack.Assets.LoginArt); art != "" {
-			// The operator's artwork replaces the generated rings.
-			fmt.Fprintf(&css, "body{background-image:url(%q);background-size:cover;background-position:center}"+
-				".auth-backdrop{display:none}", art)
+			// The operator's artwork goes on the flat page background.
+			fmt.Fprintf(&css, "body{background-image:url(%q);background-size:cover;background-position:center}", art)
 		}
 	}
 	if css.Len() > 0 {
@@ -181,19 +191,22 @@ type cssVariable struct{ name, value string }
 
 // schemeTokens maps the web app's scheme token ids (default.pack.json) to the
 // page's per-scheme inputs. The muted text colour is deliberately not taken
-// from the pack: the app's `text.primary` is below AA on the light card.
+// from the pack: a white-labelled `text.primary` is not always AA on the
+// card. `focus.ring` is the signal colour (links and the focus ring); without
+// it, the stylesheet uses the accent on light and cyan on dark.
 var schemeTokens = []struct{ id, name string }{
 	{"primary.main", "brand"},
 	{"text.button.primary", "on-brand"},
 	{"background.default", "page"},
 	{"background.card.default", "card"},
 	{"text.secondary", "text"},
+	{"focus.ring", "signal"},
 }
 
 // brandSchemeVariables derives the page's colour inputs for both schemes. A
 // token the pack states for a scheme wins; otherwise the accent is the brand
 // hue, and the text on it is the pack's onBrand or, without one, whichever of
-// white and the default ink reads better on it.
+// white and the brand Ink reads better on it.
 func brandSchemeVariables(pack *v2branding.Pack) []cssVariable {
 	hue := cssHexColour(pack.Brand.Hue)
 	onBrand := ""
@@ -244,9 +257,10 @@ func cssSchemeColour(value string) string {
 	return strings.ToLower(value)
 }
 
-// readableInk is #ffffff or #0e131d, whichever contrasts more with an opaque
-// colour that cssSchemeColour admitted (#RGB, #RRGGBB, #RRGGBBAA, rgb(),
-// rgba()); "" when the value cannot be read. Alpha is ignored.
+// readableInk is #ffffff or #0b0b18 (the brand Ink), whichever contrasts
+// more with an opaque colour that cssSchemeColour admitted (#RGB, #RRGGBB,
+// #RRGGBBAA, rgb(), rgba()); "" when the value cannot be read. Alpha is
+// ignored.
 func readableInk(background string) string {
 	rgb, ok := parseSchemeColour(background)
 	if !ok {
@@ -262,11 +276,11 @@ func readableInk(background string) string {
 		}
 		luminance += weight * c
 	}
-	// #0e131d has a relative luminance of about 0.0065.
-	if (1.05)/(luminance+0.05) >= (luminance+0.05)/(0.0065+0.05) {
+	// #0b0b18 has a relative luminance of about 0.0038.
+	if (1.05)/(luminance+0.05) >= (luminance+0.05)/(0.0038+0.05) {
 		return "#ffffff"
 	}
-	return "#0e131d"
+	return "#0b0b18"
 }
 
 // parseSchemeColour reads the channels of a colour in one of the admitted

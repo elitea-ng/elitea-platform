@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { cpSync, readFileSync } from 'node:fs';
 import { URL, fileURLToPath } from 'node:url';
 
 import mdx from '@mdx-js/rollup';
@@ -237,7 +237,6 @@ function configFor(mode: string): UserConfig {
 
   if (mode === 'admin') {
     return {
-      plugins: basePlugins,
       root: resolvePath('./src/entries/admin'),
       base: '/admin/app/',
       // Copied verbatim into dist/admin. Holds `assets/scheme-init.js` and
@@ -246,6 +245,21 @@ function configFor(mode: string): UserConfig {
       // admits no second inline script, so the first-paint scheme script
       // has to be a same-origin FILE under that directory.
       publicDir: resolvePath('./src/entries/admin/public'),
+      // The default pack's fontFaces are `./brand/fonts/*.woff2`. The console
+      // resolves them against its base (`/admin/app/brand/fonts/…`, see
+      // shared/brand/fontFaces.ts) and the adminui handler serves `/brand/*`
+      // from dist/admin/brand, so the typefaces are copied there rather than
+      // into a second publicDir copy.
+      plugins: [
+        ...basePlugins,
+        {
+          name: 'elitea-admin-brand-fonts',
+          apply: 'build',
+          closeBundle() {
+            cpSync(resolvePath('./public/brand/fonts'), resolvePath('./dist/admin/brand/fonts'), { recursive: true });
+          },
+        },
+      ],
       build: {
         outDir: resolvePath('./dist/admin'),
         emptyOutDir: true,
@@ -342,9 +356,10 @@ function configFor(mode: string): UserConfig {
       // workflow builds with DOCS_BASE=/elitea-platform/ so asset URLs match
       // the Pages subpath (decision 6).
       base: process.env['DOCS_BASE'] ?? '/docs/',
-      // No favicon/static-asset directory yet — the entry's favicon is an
-      // inline data URI in index.html, same trick the maintenance entry's
-      // scheme-init script uses for its own no-second-request constraint.
+      // No public directory: the favicon, the LE-03 mark and the brand fonts
+      // are referenced by relative path from ../../../public/brand/ (index.html,
+      // App.tsx, styles.css), so Vite emits them as hashed assets under `base`
+      // and the same source works at /docs/ and at the Pages subpath.
       publicDir: false,
       build: {
         outDir: resolvePath('./dist/docs'),
