@@ -329,7 +329,20 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		"profile", string(credentialAdmission.Profile()),
 		"policy_revision", credentialRevision.ID,
 		"continuation_guard", credentialAdmission.ContinuationGuard())
-	if err := startSecurityAuditRelay(ctx, credentialAdmission, credentialRevision, pool, logger); err != nil {
+	auditExport, closeAuditExport, err := auditExportAtBoot(ctx, os.LookupEnv, credentialAdmission, pool, logger)
+	if err != nil {
+		return err
+	}
+	if closeAuditExport != nil {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := closeAuditExport(shutdownCtx); runErr == nil && err != nil {
+				runErr = fmt.Errorf("shut down audit export: %w", err)
+			}
+		}()
+	}
+	if err := startSecurityAuditRelay(ctx, credentialAdmission, credentialRevision, pool, logger, securityAuditExporter(auditExport)); err != nil {
 		return err
 	}
 	// agentIdentity.Broker opens the run-scoped agent session at a governed

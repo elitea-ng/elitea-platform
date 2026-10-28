@@ -4,6 +4,41 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Audit export to a SIEM (#1494, off by default)
+
+* **elitea-main: OTLP logs and signed webhook export of audit evidence
+  (ADR-0042 decision 3).** Set `main.env.ELITEA_AUDIT_EXPORT_OTLP_ENDPOINT`
+  and/or `ELITEA_AUDIT_EXPORT_WEBHOOK_URL` (with
+  `ELITEA_AUDIT_EXPORT_WEBHOOK_KEYS_FILE`) to export security audit events
+  and `centry.audit_events` as the `elitea.audit.v1` envelope
+  (`libs/jsonschema/audit/v1`). Both empty, as in every earlier release:
+  nothing changes, no relay starts, nothing dials out.
+* **Shared migration 0196** adds `elitea_runtime.audit_export_cursors` and
+  `audit_export_dead_letters`. No data, no permission, no change to an
+  existing table. The migration job applies it.
+* **With export on, the security audit relay changes meaning.** Without an
+  exporter it marked an outbox row exported when the row reached the durable
+  store. With one, a row stays pending until the receiver accepted it, so an
+  unreachable receiver grows the outbox backlog (the existing
+  `security_audit.backlog` figure and the new lag alert) instead of being
+  ignored. The outbox retention job deletes only exported rows, so an outage
+  also delays that cleanup. Nothing is dropped.
+* **Existing `audit_events` history is not exported by default.** The relay
+  starts at the newest row when it first runs. Set
+  `ELITEA_AUDIT_EXPORT_AUDIT_EVENTS_FROM=beginning` before the first start to
+  replay the table.
+* **New listener and chart objects.** With an exporter set, elitea-main serves
+  Prometheus `/metrics` on `:9464` (`ELITEA_AUDIT_EXPORT_METRICS_ADDR`; empty
+  disables it). The chart declares the port, renders a PodMonitor and a
+  PrometheusRule (`EliteaAuditExportLag`, `EliteaAuditExportBacklog`,
+  `EliteaAuditExportDeadLettered`) where `monitoring.coreos.com/v1` is served,
+  and mounts the optional Secret `main.auditExport.secretName` for the
+  webhook keys and OTLP headers. Where `networkPolicies` are on, name your
+  Prometheus in `networkPolicies.main.metricsFrom` to let it reach the port.
+* A webhook on a private or loopback address needs
+  `ELITEA_AUDIT_EXPORT_EGRESS_ALLOWLIST` to name it; plain `http` is accepted
+  only then. The OTLP endpoint is operator-set and is not subject to it.
+
 ## P6b
 
 * **Policy revision field `asserted_user_identity_modes` (optional).**
