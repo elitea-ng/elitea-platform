@@ -104,6 +104,46 @@ func TestStartDecodesTheBodyAndMapsErrors(t *testing.T) {
 	}
 }
 
+type fakeReferences struct {
+	requirement provideroauth.AuthorizationRequirement
+	opened      []int64
+}
+
+func (f *fakeReferences) Open(_ string, tenantProjectID, userID int64) (provideroauth.AuthorizationRequirement, error) {
+	f.opened = append(f.opened, tenantProjectID, userID)
+	if tenantProjectID != f.requirement.Key.TenantProjectID || userID != f.requirement.Key.SubjectUserID {
+		return provideroauth.AuthorizationRequirement{}, errors.New("not the caller's")
+	}
+	return f.requirement, nil
+}
+
+// An authorization_reference (#1123) resolves to its bindings for the
+// caller; without a reference opener, or for a reference that does not open
+// for the caller, nothing is started.
+func TestStartResolvesAnAuthorizationReference(t *testing.T) {
+	body := `{"project_id":7,"authorization_reference":"mar_x"}`
+	flow := &fakeFlow{}
+	h, _ := New(flow, nil)
+	if rec := serve(t, h, nil, http.MethodPost, "/credential_consent/mcp:start", body); rec.Code != http.StatusBadRequest || flow.lastStart.UserID != 0 {
+		t.Fatalf("no opener: status %d, started %+v", rec.Code, flow.lastStart)
+	}
+	refs := &fakeReferences{requirement: provideroauth.AuthorizationRequirement{Key: provideroauth.GrantKey{
+		TenantProjectID: 7, Provider: "mcp", SubjectUserID: 11, AgentBindingID: "a", TargetBindingID: "b",
+	}}}
+	h, _ = New(flow, nil, WithAuthorizationReferences(refs))
+	if rec := serve(t, h, nil, http.MethodPost, "/credential_consent/mcp:start", body); rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if got := flow.lastStart; got.AgentBindingID != "a" || got.TargetBindingID != "b" || got.UserID != 11 || refs.opened[1] != 11 {
+		t.Fatalf("started %+v, opened %v", got, refs.opened)
+	}
+	refs.requirement.Key.SubjectUserID = 12
+	flow.lastStart = provideroauth.StartRequest{}
+	if rec := serve(t, h, nil, http.MethodPost, "/credential_consent/mcp:start", body); rec.Code != http.StatusBadRequest || flow.lastStart.UserID != 0 {
+		t.Fatalf("another user's reference: status %d, started %+v", rec.Code, flow.lastStart)
+	}
+}
+
 func TestCallbackChecksThePermissionAndAudits(t *testing.T) {
 	use := fakeResolver{perms: []string{credentialgrant.PermissionUse}}
 	cases := []struct {

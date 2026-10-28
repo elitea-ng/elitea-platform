@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/provideroauth"
 )
 
@@ -30,9 +31,19 @@ type mockServer struct {
 	cimd     bool
 	resource string // overrides the metadata's resource when set
 
+	// issuer overrides the authorization server the metadata names.
+	issuer string
+
 	mu         sync.Mutex
 	tokenForms []url.Values
 	registered int
+	requests   int
+}
+
+func (m *mockServer) requestCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.requests
 }
 
 func newMockServer(t *testing.T, cimd bool) *mockServer {
@@ -44,7 +55,11 @@ func newMockServer(t *testing.T, cimd bool) *mockServer {
 		if m.resource != "" {
 			resource = m.resource
 		}
-		writeJSONT(w, map[string]any{"resource": resource, "authorization_servers": []string{m.URL + "/as"}, "scopes_supported": []string{"tools.call"}})
+		issuer := m.URL + "/as"
+		if m.issuer != "" {
+			issuer = m.issuer
+		}
+		writeJSONT(w, map[string]any{"resource": resource, "authorization_servers": []string{issuer}, "scopes_supported": []string{"tools.call"}})
 	})
 	mux.HandleFunc("/.well-known/oauth-authorization-server/as", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSONT(w, map[string]any{
@@ -71,7 +86,12 @@ func newMockServer(t *testing.T, cimd bool) *mockServer {
 			"token_type": "Bearer", "expires_in": 600, "scope": "tools.call",
 		})
 	})
-	m.Server = httptest.NewTLSServer(mux)
+	m.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.requests++
+		m.mu.Unlock()
+		mux.ServeHTTP(w, r)
+	}))
 	t.Cleanup(m.Close)
 	return m
 }
@@ -97,7 +117,29 @@ func writeJSONT(w http.ResponseWriter, v any) {
 
 func newService(t *testing.T, m *mockServer, dcr bool) *Service {
 	t.Helper()
-	s, err := New(Config{RedirectURI: testRedirect, ClientMetadataURL: testCIMD, AllowDynamicRegistration: dcr, HTTPClient: m.Client()})
+	return newGuardedService(t, m, dcr, allowOnly(t, m))
+}
+
+// allowOnly is the operator allowlist naming exactly m's loopback address
+// and port, as ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST would for a private
+// identity provider.
+func allowOnly(t *testing.T, m *mockServer) *egress.Guard {
+	t.Helper()
+	u, err := url.Parse(m.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowlist, err := egress.ParseAllowlist([]string{u.Host})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return egress.New(allowlist)
+}
+
+func newGuardedService(t *testing.T, m *mockServer, dcr bool, guard *egress.Guard) *Service {
+	t.Helper()
+	s, err := New(Config{RedirectURI: testRedirect, ClientMetadataURL: testCIMD, AllowDynamicRegistration: dcr,
+		Guard: guard, HTTPClient: m.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,8 +275,39 @@ func TestClientMetadataDocument(t *testing.T) {
 }
 
 func TestNewRefusesAForeignRedirect(t *testing.T) {
-	if _, err := New(Config{RedirectURI: "https://elitea.example.com/api/v2/credential_consent/jira:callback", ClientMetadataURL: testCIMD}); err == nil {
+	if _, err := New(Config{RedirectURI: "https://elitea.example.com/api/v2/credential_consent/jira:callback", ClientMetadataURL: testCIMD,
+		Guard: egress.New(nil)}); err == nil {
 		t.Fatal("a jira redirect URI was accepted")
+	}
+	if _, err := New(Config{RedirectURI: testRedirect, ClientMetadataURL: testCIMD}); err == nil {
+		t.Fatal("a service without the egress guard was built")
+	}
+}
+
+// SSRF (#1123 review): every request goes through the MCP authorization
+// egress guard. A tenant's MCP server on a loopback address the operator
+// did not allow is never fetched, and metadata naming a loopback
+// authorization server the allowlist does not cover is refused before any
+// connection is made to it.
+func TestMetadataNamingAPrivateHostIsRefusedBeforeAnyConnection(t *testing.T) {
+	m := newMockServer(t, true)
+	if _, _, err := newGuardedService(t, m, true, egress.New(nil)).Begin(context.Background(), m.target()); !errors.Is(err, ErrMetadata) {
+		t.Fatalf("a loopback MCP server with no allowlist: %v", err)
+	}
+	if got := m.requestCount(); got != 0 {
+		t.Fatalf("the refused loopback server got %d requests", got)
+	}
+
+	internal := newMockServer(t, true)
+	m.issuer = internal.URL + "/as"
+	if _, _, err := newService(t, m, true).Begin(context.Background(), m.target()); !errors.Is(err, ErrMetadata) {
+		t.Fatalf("metadata naming an internal authorization server: %v", err)
+	}
+	if got := internal.requestCount(); got != 0 {
+		t.Fatalf("the internal authorization server got %d requests", got)
+	}
+	if got := m.requestCount(); got == 0 {
+		t.Fatal("the allowed MCP server's metadata was never read")
 	}
 }
 

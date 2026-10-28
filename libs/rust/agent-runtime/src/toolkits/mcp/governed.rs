@@ -8,15 +8,22 @@
 //!
 //! - building the toolkit redeems `mcp.tools.list` ONCE (empty resource),
 //!   lists the server's tools over a session that carries only that token,
-//!   keeps the tools' declarations and drops the session and the token;
+//!   keeps the tools' declarations and drops the session and the token. The
+//!   connections are listed concurrently, at most
+//!   [`MAX_CONCURRENT_LISTINGS`] at a time. A listing the server refuses or
+//!   cannot answer (a 401 for a narrow scope, a timeout, a malformed list)
+//!   leaves that one connection out, named in the run notice; it does not
+//!   end the run;
 //! - each tool call redeems `mcp.tool.call` on `mcp:tool/<name>`, opens a
 //!   FRESH session with only `Authorization: Bearer <token>` to that one
-//!   server, calls the tool and drops the session and the token with the
-//!   call's frame.
+//!   server, lists the tools on that session and calls the tool through
+//!   ADK's own MCP tool (task polling and input rounds included), and drops
+//!   the session and the token with the call's frame.
 //!
 //! A fresh session per call costs one MCP `initialize` and one `tools/list`
 //! more per call than the legacy path. That is accepted for now: no session,
-//! client or token outlives the one invocation its envelope was minted for.
+//! client or token outlives the one invocation its envelope was minted for,
+//! and the call runs on the one execution path every MCP tool uses.
 //!
 //! Only a saved direct `mcp` toolkit is governable: a connection with no
 //! toolkit id Main can bind a grant to, a prebuilt or internal server, or a
@@ -30,14 +37,15 @@ use std::time::Duration;
 
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
+use futures::stream::{self, StreamExt as _};
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
 use super::{
     BoundedMcpTool, MAX_MCP_SERVERS, McpAuthorizationRequiredTool, McpConnector,
-    McpMaterializationError, McpMaterializationErrorCode, RemoteMcpConfig, contains_tool_name,
-    dependency_unavailable, discover_tools, invalid_configuration, materialized_toolset_error,
-    resource_exhausted, select_tools, selection_description,
+    McpMaterializationError, McpMaterializationErrorCode, McpSession, RemoteMcpConfig,
+    contains_tool_name, dependency_unavailable, discover_tools, invalid_configuration,
+    materialized_toolset_error, resource_exhausted, select_tools, selection_description,
 };
 use crate::toolkits::delegated_auth::{
     DelegatedAuthorizationCatalog, DelegatedAuthorizationRequirement, delegated_authorization_error,
@@ -57,6 +65,13 @@ use crate::toolkits::snapshot::{AdmittedToolSnapshot, FrozenToolKind, FrozenTool
 /// The tool call id of the listing redemption: a build has no model tool
 /// call, and Main requires a non-empty printable one.
 const LISTING_TOOL_CALL_ID: &str = "elitea.mcp.tools.list";
+
+/// How many governed listings one build runs at a time.
+pub(crate) const MAX_CONCURRENT_LISTINGS: usize = 4;
+
+/// The reason code of a connection whose listing its server refused or
+/// could not answer.
+const LISTING_FAILED: &str = "governed.mcp_listing_failed";
 
 /// The governed MCP half of an agent's toolsets.
 #[derive(Default)]
@@ -88,6 +103,7 @@ pub async fn materialize_governed_mcp_toolsets(
         return Err(resource_exhausted());
     }
     let mut out = GovernedMcpToolsets::default();
+    let mut admitted = Vec::with_capacity(references.len());
     for reference in references {
         let Some(server) = GovernedServer::admit(reference)? else {
             tracing::warn!(
@@ -103,8 +119,22 @@ pub async fn materialize_governed_mcp_toolsets(
             ));
             continue;
         };
-        let server = Arc::new(server);
-        match list(&server, connector.as_ref(), governed).await? {
+        admitted.push((reference, Arc::new(server)));
+    }
+    // Each listing redeems and dials its own server; they run together,
+    // bounded, and come back in the snapshot's order.
+    // The futures are built first: a stream that maps through a borrowing
+    // closure is not `Send` for every lifetime the worker's spawn needs.
+    let pending = admitted
+        .iter()
+        .map(|(_, server)| list(server, connector.as_ref(), governed))
+        .collect::<Vec<_>>();
+    let listings = stream::iter(pending)
+        .buffered(MAX_CONCURRENT_LISTINGS)
+        .collect::<Vec<_>>()
+        .await;
+    for ((reference, server), listing) in admitted.into_iter().zip(listings) {
+        match listing? {
             Listing::Tools(tools) => {
                 let tools = tools
                     .into_iter()
@@ -122,10 +152,10 @@ pub async fn materialize_governed_mcp_toolsets(
             Listing::Authorization(requirement) => {
                 authorization_placeholders(reference, &server, policy, requirement, &mut out)?;
             }
-            Listing::Refused(error) => {
+            Listing::Refused(reason_code) => {
                 tracing::warn!(
                     event = "agent_toolkit_refused",
-                    reason_code = error.code(),
+                    reason_code,
                     toolkit_type = reference.tool_type(),
                     toolkit_id = reference.tool_id(),
                     "a governed MCP listing was refused; the connection was left out"
@@ -236,12 +266,18 @@ impl GovernedServer {
 enum Listing {
     Tools(Vec<ToolDeclaration>),
     Authorization(DelegatedAuthorizationRequirement),
-    Refused(GovernedError),
+    /// Left out for this reason code; the rest of the run goes on.
+    Refused(&'static str),
 }
 
 /// Redeem `mcp.tools.list`, list the server's tools over a session carrying
 /// only that token, and keep their declarations. The session, its tools
 /// and the token drop before this returns.
+///
+/// Only an error of the worker or of Main's broker as a whole (no operation,
+/// no invocation id, the redeem RPC unavailable, a client the worker cannot
+/// build) ends the run. Anything this one server answers or fails to answer
+/// is [`Listing::Refused`].
 async fn list(
     server: &GovernedServer,
     connector: &dyn McpConnector,
@@ -260,31 +296,49 @@ async fn list(
         Err(GovernedError::RedeemUnavailable {
             retryable: true, ..
         }) => return Err(dependency_unavailable()),
-        Err(error) => return Ok(Listing::Refused(error)),
+        Err(error) => return Ok(Listing::Refused(error.code())),
     };
-    let token = access_token(&envelope).map_err(|_| invalid_configuration())?;
+    let token = match access_token(&envelope) {
+        Ok(token) => token,
+        Err(error) => return Ok(Listing::Refused(error.code())),
+    };
     drop(envelope);
     let config = server.session_config(token);
     let session = match connector.connect_session(&config).await {
         Ok(session) => session,
-        // The server refused the redeemed token: never fall back to the
-        // browser flow on a governed run.
-        Err(error) if error.code() == McpMaterializationErrorCode::AuthorizationRequired => {
-            return Ok(Listing::Refused(GovernedError::CredentialDenied(
-                "MCP_SERVER_REJECTED".to_owned(),
-            )));
+        // The worker could not build the client: not this server's answer.
+        Err(error) if error.code() == McpMaterializationErrorCode::InvalidConfiguration => {
+            return Err(error);
         }
-        Err(error) => return Err(error),
+        // The server refused the redeemed token (never a fallback to the
+        // browser flow on a governed run) or did not answer.
+        Err(error) => {
+            return Ok(Listing::Refused(
+                if error.code() == McpMaterializationErrorCode::AuthorizationRequired {
+                    "governed.mcp_token_rejected"
+                } else {
+                    LISTING_FAILED
+                },
+            ));
+        }
     };
-    let (tools, _) = discover_tools(&config, &session).await?;
+    let listed = declarations(server, &config, &session).await;
+    drop(session);
+    Ok(listed.map_or(Listing::Refused(LISTING_FAILED), Listing::Tools))
+}
+
+/// The selected tools' declarations from one `tools/list`.
+async fn declarations(
+    server: &GovernedServer,
+    config: &RemoteMcpConfig,
+    session: &McpSession,
+) -> Result<Vec<ToolDeclaration>, McpMaterializationError> {
+    let (tools, _) = discover_tools(config, session).await?;
     let tools = select_tools(tools, config.selected_tools(), config.excluded_tools())?;
-    let declarations = tools
+    tools
         .iter()
         .map(|tool| ToolDeclaration::of(tool.as_ref(), server.name()))
-        .collect::<Result<Vec<_>, _>>()?;
-    drop(tools);
-    drop(session);
-    Ok(Listing::Tools(declarations))
+        .collect()
 }
 
 /// The envelope's access token, copied into zeroizing memory.
@@ -420,7 +474,8 @@ impl GovernedMcpTool {
         drop(envelope);
         // 3. A fresh session to the frozen endpoint, the token its only
         //    credential; the tool, the session and the token drop with this
-        //    frame.
+        //    frame. The call goes through ADK's own MCP tool from a listing
+        //    on this session: one execution path for every MCP tool.
         let config = self.server.session_config(token);
         let session = self
             .connector

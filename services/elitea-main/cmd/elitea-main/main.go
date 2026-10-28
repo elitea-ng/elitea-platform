@@ -850,12 +850,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// Governed MCP (#1123): the inbound resource server and remote MCP
 	// OAuth, which joins provider OAuth custody below. Empty with the flag
 	// off.
-	governedMCPComposed, err := governedMCPAtBoot(credentialAdmission, os.LookupEnv, pool, vaultMasterKey, publicOrigin, logger)
+	governedMCPComposed, err := governedMCPAtBoot(credentialAdmission, os.LookupEnv, pool, vaultMasterKey, publicOrigin,
+		mcpAuthorizationEgressGuard, logger)
 	if err != nil {
 		return err
 	}
 	providerOAuthGoverned, err := providerOAuthWithMCPAtBoot(credentialAdmission, os.LookupEnv, pool,
-		vaultMasterKey, governedMCPComposed.Outbound, logger)
+		vaultMasterKey, governedMCPComposed, logger)
 	if err != nil {
 		return err
 	}

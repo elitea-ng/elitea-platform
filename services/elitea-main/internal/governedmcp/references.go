@@ -44,7 +44,8 @@ var ErrReferenceInvalid = errors.New("governed MCP: the authorization reference 
 // the native MCP OAuth start answers, the value is an opaque printable
 // token (the worker's bound is 4 KiB), and it resolves server side to the
 // consent start (tenant project, agent binding, target binding) for the
-// same user. #1061's start handler opens it with Open.
+// same user: POST /api/v2/credential_consent/mcp:start takes it as
+// authorization_reference and opens it with Open (credentialconsent).
 type References struct {
 	aead cipher.AEAD
 	ttl  time.Duration

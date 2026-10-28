@@ -13,6 +13,7 @@ import (
 	v2mcp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/mcp"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/governedmcp"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 	identityoidc "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identity/oidc"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/provideroauth"
 )
@@ -57,7 +58,8 @@ func (g governedMCP) authorizations() provideroauth.AuthorizationReferences {
 //     DEPLOYMENT_URL (the resource URI cannot follow Host).
 //   - outbound, with ELITEA_GOVERNED_MCP_OAUTH_ENABLED=true: remote MCP
 //     OAuth held in provider OAuth custody and released by the broker. It
-//     needs DEPLOYMENT_URL and the vault master key.
+//     needs DEPLOYMENT_URL and the vault master key, and reaches every
+//     server through egressGuard.
 //
 // A partial or malformed configuration refuses boot.
 func governedMCPAtBoot(
@@ -66,6 +68,7 @@ func governedMCPAtBoot(
 	pool *pgxpool.Pool,
 	masterKey func() ([]byte, error),
 	publicOrigin string,
+	egressGuard *egress.Guard,
 	logger *slog.Logger,
 ) (governedMCP, error) {
 	if !admission.Governed() {
@@ -140,6 +143,9 @@ func governedMCPAtBoot(
 		RedirectURI:              origin + provideroauth.CallbackPathPrefix + governedmcp.ProviderType + provideroauth.CallbackPathSuffix,
 		ClientMetadataURL:        origin + governedmcp.ClientMetadataPath,
 		AllowDynamicRegistration: allowDCR,
+		// The MCP OAuth proxies' guard (ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST):
+		// the tenant's server names the authorization server Main calls.
+		Guard: egressGuard,
 	})
 	if err != nil {
 		return governedMCP{}, err
