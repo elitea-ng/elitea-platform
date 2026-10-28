@@ -121,5 +121,8 @@ jobs:
           # The canary list is uploaded with the rest: every value in it is a
           # random test string that authenticates nothing outside this run.
           path: .governed-evidence/
-          if-no-files-found: ignore
+          # The directory itself is hidden, and upload-artifact skips hidden
+          # paths unless told otherwise, so nothing was ever uploaded.
+          include-hidden-files: true
+          if-no-files-found: error
           retention-days: 7

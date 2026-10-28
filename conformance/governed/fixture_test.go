@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -542,8 +543,17 @@ func (w *world) settled(ctx context.Context, t *testing.T, as *persona, fixture 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var last map[string]any
+	var seen []map[string]any
+	// eventually fails through t.Fatal, which still runs this: say what the
+	// turn looked like, not only that it never settled.
+	defer func() {
+		if t.Failed() {
+			t.Logf("last messages seen: %s", summarizeMessages(seen))
+		}
+	}()
 	eventually(ctx, t, 2*time.Second, "the turn to settle", func() bool {
 		list := w.messages(ctx, t, as, fixture)
+		seen = list
 		if len(list) == 0 {
 			return false
 		}
@@ -556,6 +566,22 @@ func (w *world) settled(ctx context.Context, t *testing.T, as *persona, fixture 
 		return metadataOf(last)["hitl_interrupt"] == nil
 	})
 	return last
+}
+
+// summarizeMessages renders the fields that say where a turn stopped:
+// streaming, the HITL state and the message text, cut short.
+func summarizeMessages(list []map[string]any) string {
+	var out []string
+	for _, message := range list {
+		raw := messageRaw(message)
+		if len(raw) > 300 {
+			raw = raw[:300] + "…"
+		}
+		out = append(out, fmt.Sprintf("{id=%v role=%v streaming=%v hitl=%v meta_keys=%v text=%q}",
+			message["id"], message["role"], message["is_streaming"], metadataOf(message)["hitl_interrupt"] != nil,
+			slices.Sorted(maps.Keys(metadataOf(message))), raw))
+	}
+	return "[" + strings.Join(out, " ") + "]"
 }
 
 // interrupt waits for the turn to pause on a HITL decision and returns it.

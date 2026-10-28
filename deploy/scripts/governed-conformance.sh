@@ -273,6 +273,9 @@ run_phase() {
     ELITEA_GOVERNED_EVIDENCE_DIR="$EVIDENCE" \
       go test -tags conformance -count=1 -v -timeout "${GOVERNED_TEST_TIMEOUT:-60m}" -run "^${test}\$" .
   ) 2>&1 | tee "$log" || status=$?
+  # The next phase recreates elitea-main and the worker, which drops their
+  # logs, so each phase keeps its own. The canary scan reads these too.
+  stack compose logs --no-color --timestamps > "${EVIDENCE}/compose-logs-${phase}.txt" 2>&1 || status=1
   (cd "$SUITE" && go run ./cmd/skip-check -declared "${REPO_ROOT}/scripts/go/declared-skips.txt" \
       -package "$SUITE_PACKAGE" "$log") || status=1
   return "$status"
