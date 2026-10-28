@@ -1366,15 +1366,25 @@ async fn parked_with_the_third_answered(
     pool: &sqlx::PgPool,
     ledger: &Arc<crate::agents::graph::fanout_test_ledger::TestLedger>,
 ) -> String {
+    parked_with_the_third_answered_for(pool, ledger, "pipeline", asking_pipeline()).await
+}
+
+/// [`parked_with_the_third_answered`] for saved participants of `agent_type`.
+async fn parked_with_the_third_answered_for(
+    pool: &sqlx::PgPool,
+    ledger: &Arc<crate::agents::graph::fanout_test_ledger::TestLedger>,
+    agent_type: &str,
+    details: Value,
+) -> String {
     let (first, _) = assembler(
         pool,
         (0..3)
             .map(|_| TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()))
             .collect(),
         pipeline_connector(),
-        asking_pipeline(),
+        details,
     );
-    let request = request_for("continue", "pipeline");
+    let request = request_for("continue", agent_type);
     let invocation = first
         .with_fanout_decisions_for_tests(ledger.client(1))
         .assemble(claim(&request, 1))
@@ -1445,6 +1455,91 @@ async fn postgres_a_wake_lost_before_its_first_root_save_recovers_as_the_wake() 
             >= 2,
         "{cards:?}"
     );
+    db.pool.close().await;
+}
+
+/// FU-246: the wake applied the answer to a saved Agent member's card, and the
+/// process was lost while that member's resumed Agent was in its model call.
+/// The reclaim (production recovery under the wake's own execution) resumes
+/// that Agent with the answer: the answer is never asked again, the answered
+/// member never raises a new card, and the unanswered members park again.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_wake_lost_mid_model_resumes_the_answered_agent_branch() {
+    const WAKE_EXECUTION: &str = "execution-fanout-wake";
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the fan-out effect PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let third =
+        parked_with_the_third_answered_for(&db.pool, &ledger, "agent", asking_agent()).await;
+
+    let (lost, lost_requests) = assembler(
+        &db.pool,
+        vec![TestModelGatewayOutcome::Pending],
+        pipeline_connector(),
+        asking_agent(),
+    );
+    let wake = wake_request_for("continue", "agent");
+    let invocation = lost
+        .with_fanout_decisions_for_tests(ledger.client(2))
+        .assemble(AuthorizedNativeAssembly::from_authorized(
+            &wake,
+            test_runtime_context_authority(),
+            test_session_authority_for_reclaim(WAKE_EXECUTION, GENERATION, 2),
+            Arc::new(TestStateWriterLease::current()),
+            AuthorizedNativeCommandBinding::fixture_for_execution(WAKE_EXECUTION),
+        ))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the wake: {error}"));
+    let outcome =
+        tokio::time::timeout(Duration::from_millis(800), run_collecting(invocation)).await;
+    assert!(
+        outcome.is_err(),
+        "the answered member's Agent waits in its model call: {outcome:?}"
+    );
+    assert_eq!(model_requests(&lost_requests), 1);
+
+    let (woken, captured) = assembler(
+        &db.pool,
+        vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+            "third done",
+        ))],
+        pipeline_connector(),
+        asking_agent(),
+    );
+    let woken = woken.with_fanout_decisions_for_tests(ledger.client(3));
+    let invocation = recovered(&woken, &wake, WAKE_EXECUTION, 3)
+        .await
+        .unwrap_or_else(|error| panic!("the lost wake recovers: {error}"));
+    let (members, cards) = run_collecting(invocation)
+        .await
+        .expect("the recovered wake finishes the answered member and parks again");
+    assert_eq!(
+        model_requests(&captured),
+        1,
+        "only the answered member's step: {members:?}"
+    );
+    let resumed = String::from_utf8_lossy(&captured.lock().expect("requests")[0].body).into_owned();
+    assert!(resumed.contains("red"), "{resumed}");
+    assert!(
+        members
+            .iter()
+            .any(|member| member["fanout_v1"]["member"] == "third" && member["status"] == "end"),
+        "{members:?}"
+    );
+    let keys = cards
+        .iter()
+        .filter_map(|card| card["interrupt_key"].as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(keys.len(), 2, "{cards:?}");
+    assert!(!keys.contains(third.as_str()), "{cards:?}");
     db.pool.close().await;
 }
 
