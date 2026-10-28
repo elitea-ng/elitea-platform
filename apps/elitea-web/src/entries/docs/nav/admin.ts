@@ -29,6 +29,7 @@ export const adminTab: NavTab = {
       pages: [
         { kind: 'page', slug: 'admin/enterprise-controls/overview', title: 'Control catalogue' },
         { kind: 'page', slug: 'admin/enterprise-controls/shared-responsibility', title: 'Shared responsibility' },
+        { kind: 'page', slug: 'admin/enterprise-controls/audit-evidence-and-retention', title: 'Audit evidence and retention' },
         { kind: 'page', slug: 'admin/enterprise-controls/evidence-guide', title: 'Evidence guide for auditors' },
       ],
     },
