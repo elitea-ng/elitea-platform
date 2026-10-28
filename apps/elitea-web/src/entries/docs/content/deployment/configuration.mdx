@@ -116,6 +116,49 @@ See [DeepWiki and Inventory](/menus/deepwiki-and-inventory) for the product-faci
 
 Traces flow over OpenTelemetry to the chart's own `otelCollector` (on by default, `otel/opentelemetry-collector-contrib`), which receives OTLP from elitea-main, elitea-scheduler and elitea-main's own tracing ingest proxy. The shipped pipeline exports to `debug` (log-only) — swap the `otelCollector.config` exporter for a real sink (an OTLP/HTTP endpoint, a vendor backend) before relying on traces outliving the pod. There is no bundled Langfuse or third-party APM integration; every other component's `OTEL_EXPORTER_OTLP_ENDPOINT` should point at the collector's Service (`http://<fullname>:4318` in-namespace).
 
+## Export audit evidence to a SIEM
+
+Set any of these as `main.env` keys. Both endpoints empty (the default) means export is off: no relay starts, no listener opens, nothing dials out. A bad value refuses the boot. What the export does and does not guarantee is in [Audit trail](/admin/audit-trail#export-to-your-siem); the event format is in the [audit event schema reference](/reference/audit-event-schema).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ELITEA_AUDIT_EXPORT_OTLP_ENDPOINT` | empty | OTLP logs receiver. For `http`, the collector's base URL (`/v1/logs` is appended); for `grpc`, `host:port` or a URL whose scheme picks TLS (`https`) or plaintext (`http`). |
+| `ELITEA_AUDIT_EXPORT_OTLP_PROTOCOL` | `http` | `http` or `grpc`. |
+| `ELITEA_AUDIT_EXPORT_OTLP_HEADERS_FILE` | empty | Absolute path of a JSON object of request headers (an API key for a hosted SIEM). |
+| `ELITEA_AUDIT_EXPORT_WEBHOOK_URL` | empty | Signed webhook receiver. `https`, or `http` only when the allowlist below names the receiver. No credentials in the URL. |
+| `ELITEA_AUDIT_EXPORT_WEBHOOK_KEYS_FILE` | empty | Absolute path of the signing keys file. Required with the webhook URL. |
+| `ELITEA_AUDIT_EXPORT_EGRESS_ALLOWLIST` | empty | Same grammar as `ELITEA_WEBHOOK_EGRESS_ALLOWLIST`. A receiver on a private address must be named here; link-local, multicast, reserved and cloud-metadata addresses stay refused. |
+| `ELITEA_AUDIT_EXPORT_AUDIT_EVENTS` | `true` | Also export the admin audit trail (`centry.audit_events`), not only security audit events. |
+| `ELITEA_AUDIT_EXPORT_AUDIT_EVENTS_FROM` | `now` | `now` starts at the newest audit trail row; `beginning` replays the table on the first run. |
+| `ELITEA_AUDIT_EXPORT_BATCH_SIZE` | `200` | Events per pass, 1 to 5000. The webhook sends 100 per request. |
+| `ELITEA_AUDIT_EXPORT_INTERVAL` | `5s` | Pause between audit trail passes, 1s to 1h. |
+| `ELITEA_AUDIT_EXPORT_MAX_PERMANENT_ATTEMPTS` | `5` | How many times the receiver may refuse the same batch as malformed (400, 413, 422) before it is dead-lettered. |
+| `ELITEA_AUDIT_EXPORT_METRICS_ADDR` | `:9464` | Listener for the export's Prometheus `/metrics`. Empty disables it. |
+
+The webhook keys and OTLP headers are files, never environment values. Put them in a Kubernetes Secret and let the chart mount it:
+
+```bash
+kubectl -n elitea create secret generic audit-export \
+  --from-file=webhook-keys.json --from-file=otlp-headers.json
+
+helm upgrade elitea ./elitea --reuse-values \
+  --set main.auditExport.secretName=audit-export \
+  --set-string main.env.ELITEA_AUDIT_EXPORT_WEBHOOK_URL=https://siem.example.com/elitea \
+  --set-string main.env.ELITEA_AUDIT_EXPORT_WEBHOOK_KEYS_FILE=/etc/elitea/audit-export/webhook-keys.json
+```
+
+The keys file is read at start and again every 30 seconds, so a rotated key needs no restart:
+
+```json
+{"keys":[{"id":"2026-10","secret":"<at least 32 characters>","created":"2026-10-01T00:00:00Z"}]}
+```
+
+To rotate, give your receiver the new key first, then list it beside the old one with a later `created`. Elitea signs with the newest key and names it in the `X-Elitea-Key-Id` header; the receiver verifies with whichever it holds. Remove the old key once nothing needs it. At most two keys are accepted.
+
+<Note>
+`main.auditExport.metrics` shapes the PodMonitor and the alert rules (`lagSeconds`, default 900; `backlogEvents`, default 10000). Where network policies are on, name your Prometheus in `networkPolicies.main.metricsFrom` so it can reach port 9464. The export needs shared migration 0196, applied by the normal migration job.
+</Note>
+
 ## Enterprise credential governance
 
 Off by default. `main.env.ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED` pins every new run to a governed profile and an immutable policy revision, mounts the agent identity admin API, and can require an external Vault/OpenBao store. See [Enterprise credential governance](/deployment/credential-governance) before you turn it on.

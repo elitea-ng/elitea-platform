@@ -833,7 +833,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// activator and migration source of credential references (#1124).
 	// Nullable columns only; 0192 is claimed by another branch. No data, no
 	// permission.
-	require.EqualValues(t, 193, Head(shared))
+	//
+	// 196: shared/0196_audit_export.sql, the SIEM audit export's id cursor
+	// (elitea_runtime.audit_export_cursors) and dead-letter list
+	// (audit_export_dead_letters) (#1494). 0194 and 0195 are claimed by other
+	// branches. No data, no permission.
+	require.EqualValues(t, 196, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

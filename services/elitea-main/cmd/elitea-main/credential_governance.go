@@ -122,13 +122,15 @@ func credentialGovernancePrerequisites(lookup func(string) (string, bool), pool 
 }
 
 // startSecurityAuditRelay runs the security audit relay (#1114) for a
-// governed process. Flag off: no relay goroutine starts.
-func startSecurityAuditRelay(ctx context.Context, admission profile.Admission, revision profile.PolicyRevision, pool *pgxpool.Pool, logger *slog.Logger) error {
+// governed process. Flag off: no relay goroutine starts. exporter is the SIEM
+// export (#1494), or nil.
+func startSecurityAuditRelay(ctx context.Context, admission profile.Admission, revision profile.PolicyRevision, pool *pgxpool.Pool, logger *slog.Logger, exporter securityaudit.Exporter) error {
 	if !admission.Governed() {
 		return nil
 	}
 	relay, err := securityaudit.NewRelay(pool, securityaudit.RelayConfig{
 		BacklogAlertThreshold: revision.Document.AuditBacklogAlertThreshold,
+		Exporter:              exporter,
 		Logger:                logger,
 	})
 	if err != nil {
