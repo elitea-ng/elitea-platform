@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { after, before, test } from 'node:test';
 
 import { build, contrast, expand, renderMarkdown, tokensCss } from '../scripts/build.mjs';
+import { packIco } from '../scripts/render-icon-pack.mjs';
 
 const tokens = JSON.parse(readFileSync(new URL('../../libs/ts/client-core/src/brand/tokens.json', import.meta.url), 'utf8'));
 let out;
@@ -85,4 +86,14 @@ test('the markdown subset renders lists, tables, code and escapes HTML', () => {
 test('the build reads the fonts it ships from the web app, not a copy', () => {
   assert.equal(read('fonts/sora.woff2').length > 0, true);
   assert.ok(existsSync(join(dirname(new URL(import.meta.url).pathname), '../../apps/elitea-web/public/brand/fonts/sora.woff2')));
+});
+
+test('packIco writes a PNG-payload .ico: header, one entry per size, 256 stored as 0', () => {
+  const pngs = [16, 256].map((size) => ({ size, png: Buffer.from(`png-${size}`) }));
+  const ico = packIco(pngs);
+  assert.deepEqual([ico.readUInt16LE(0), ico.readUInt16LE(2), ico.readUInt16LE(4)], [0, 1, 2]);
+  assert.deepEqual([ico[6], ico[7], ico[22], ico[23]], [16, 16, 0, 0]);
+  const at = (i) => ico.subarray(ico.readUInt32LE(6 + 16 * i + 12), ico.readUInt32LE(6 + 16 * i + 12) + ico.readUInt32LE(6 + 16 * i + 8));
+  assert.equal(at(0).toString(), 'png-16');
+  assert.equal(at(1).toString(), 'png-256');
 });

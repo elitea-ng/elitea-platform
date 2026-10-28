@@ -46,6 +46,45 @@ const MARK_VIEWBOX = '0 0 372 372';
 const TILE = '<rect width="512" height="512" rx="114" fill="#0B0B18"/>';
 
 /**
+ * The LE-03 icon pack's four variants (brand/assets/icon-pack/README.md):
+ * the tile colour, and the mark colour, or null to keep the mark's own colours.
+ */
+const ICON_VARIANTS = [
+  { name: 'colored-light', bg: '#FFFFFF', mark: null },
+  { name: 'colored-dark', bg: '#0B0B18', mark: null },
+  { name: 'bw', bg: '#FFFFFF', mark: '#000000' },
+  { name: 'inverted', bg: '#0B0B18', mark: '#FFFFFF' },
+];
+
+/**
+ * The icon pack's vector sources, one set per variant, measured off the
+ * approved PNGs: the 372-unit mark sits at inset 70 on a 512 grid (macOS
+ * rounds that tile at rx 114, every other square format is full bleed), the
+ * Android adaptive foreground carries the mark 266.67 wide, centred on a
+ * transparent 432 canvas, and the social card centres
+ * a 320 mark on 1280x640. brand/scripts/render-icon-pack.mjs rasterises them.
+ */
+function iconSources(markBody) {
+  const svg = (w, h, inner) => `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" fill="none" xmlns="http://www.w3.org/2000/svg">${inner}</svg>\n`;
+  const out = [];
+  for (const v of ICON_VARIANTS) {
+    const body = v.mark === null ? markBody : markBody.replace(/fill="#[0-9A-Fa-f]{6}"/g, `fill="${v.mark}"`);
+    const n = (x) => +x.toFixed(4);
+    const at = (x, y, size) => `<g transform="translate(${n(x)} ${n(y)}) scale(${n(size / 372)})">${body}</g>`;
+    const dir = `brand/assets/icon-pack/src/${v.name}`;
+    const file = (kind) => `${dir}/elitea-${v.name}-${kind}.svg`;
+    out.push(
+      { path: file('square'), content: svg(512, 512, `<rect width="512" height="512" fill="${v.bg}"/>${at(70, 70, 372)}`) },
+      { path: file('macos'), content: svg(512, 512, `<rect width="512" height="512" rx="114" fill="${v.bg}"/>${at(70, 70, 372)}`) },
+      { path: file('android-foreground'), content: svg(432, 432, at(248 / 3, 248 / 3, 800 / 3)) },
+      { path: file('android-background'), content: svg(432, 432, `<rect width="432" height="432" fill="${v.bg}"/>`) },
+      { path: file('social'), content: svg(1280, 640, `<rect width="1280" height="640" fill="${v.bg}"/>${at(480, 160, 320)}`) },
+    );
+  }
+  return out;
+}
+
+/**
  * Renders every derived copy from the canonical artwork.
  *
  * @param {string} markSvg the canonical mark (one line, no width/height)
@@ -108,6 +147,7 @@ export const BRAND_TOKENS = ${JSON.stringify(tokens, null, 2)} as const;
     // a GitHub README or org profile): the wordmark in each scheme's text colour.
     { path: 'brand/assets/logo/elitea-lockup-on-dark.svg', content: lockupIn(tokens.schemes?.dark?.text) },
     { path: 'brand/assets/logo/elitea-lockup-on-light.svg', content: lockupIn(tokens.schemes?.light?.text) },
+    ...iconSources(body.replace(/<\/svg>$/, '')),
   ];
 }
 
