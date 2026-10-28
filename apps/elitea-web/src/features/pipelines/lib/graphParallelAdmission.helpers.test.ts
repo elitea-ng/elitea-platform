@@ -46,7 +46,7 @@ describe('strict fixed Parallel admission', () => {
     expect(graphParallelIssues(changed(patch))).toEqual([]);
   });
   it('refuses the private Parallel output channels even when declared as lists', () => {
-    for (const key of ['__elitea_parallel_resume_v1', '__elitea_parallel_agent_inputs_v1']) {
+    for (const key of ['__elitea_parallel_resume_v1', '__elitea_parallel_agent_inputs_v1', '__elitea_parallel_llm_inputs_v1']) {
       const value = changed({ output: [key] });
       expect(graphParallelIssues({ ...value, state: { ...value.state, [key]: 'list' } }).length).toBeGreaterThan(0);
     }

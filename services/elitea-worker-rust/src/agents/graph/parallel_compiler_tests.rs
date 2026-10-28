@@ -96,10 +96,12 @@ fn whole_pipeline_admission_enforces_fixed_bounds_and_typed_list_output() {
     assert!(PipelineDefinition::from_yaml(&YAML.replace("joined: list", "joined: dict")).is_err());
     assert!(PipelineDefinition::from_yaml(&YAML.replace("  joined: list\n", "")).is_err());
     assert!(PipelineDefinition::from_yaml(&YAML.replace("joined", "messages")).is_err());
-    assert!(
-        PipelineDefinition::from_yaml(&YAML.replace("topic", "__elitea_parallel_agent_inputs_v1"))
-            .is_err()
-    );
+    for private in [
+        "__elitea_parallel_agent_inputs_v1",
+        "__elitea_parallel_llm_inputs_v1",
+    ] {
+        assert!(PipelineDefinition::from_yaml(&YAML.replace("topic", private)).is_err());
+    }
     let branches = (0..17)
         .map(|index| format!("{{id: b{index}, node: n{index}}}"))
         .collect::<Vec<_>>()

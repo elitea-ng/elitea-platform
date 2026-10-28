@@ -123,6 +123,7 @@ export interface ReservedStateKey {
  */
 export const ReservedStateKeys: readonly ReservedStateKey[] = [
   { key: '__elitea_parallel_agent_inputs_v1', citation: 'compiler.rs:2672 (parallel_application.rs:13)', reason: 'fixed Parallel frozen Agent inputs' },
+  { key: '__elitea_parallel_llm_inputs_v1', citation: 'compiler.rs:2933 (llm.rs:63)', reason: 'fixed Parallel frozen LLM branch inputs' },
   { key: '__elitea_parallel_resume_v1', citation: 'compiler.rs:2671 (parallel.rs:40)', reason: 'fixed Parallel resume channel' },
   // The four private resume/scope channels, held by name, not by literal.
   { key: '__elitea_hitl_resume_v1', citation: 'compiler.rs:2668 (hitl.rs:29)', reason: 'HITL resume channel' },

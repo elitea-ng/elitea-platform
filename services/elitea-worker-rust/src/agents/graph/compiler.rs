@@ -42,7 +42,7 @@ use super::direct_tool::{
 use super::hitl::{HITL_RESUME_STATE_KEY, HitlConfigurationError, HitlNode, HitlNodeDefinition};
 use super::llm::{
     LLM_TOOL_RESUME_STATE_KEY, LlmConfigurationError, LlmNode, LlmNodeDefinition,
-    LlmToolkitSelection, PipelineLlmAgentFactory,
+    LlmToolkitSelection, PARALLEL_LLM_INPUTS_STATE_KEY, PipelineLlmAgentFactory,
 };
 use super::node_events::{PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PipelineNodeEventSender};
 use super::pipeline_result::{
@@ -2929,6 +2929,7 @@ pub(super) fn reserved_user_state_key(key: &str) -> bool {
         || key == DIRECT_TOOL_RESUME_STATE_KEY
         || key == LLM_TOOL_RESUME_STATE_KEY
         || key == super::application::PARALLEL_AGENT_INPUTS_STATE_KEY
+        || key == PARALLEL_LLM_INPUTS_STATE_KEY
         || key == PIPELINE_NODE_EVENT_SCOPE_STATE_KEY
         || key == PIPELINE_RESULT_TRACE_STATE_KEY
         || matches!(
