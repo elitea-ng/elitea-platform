@@ -183,10 +183,23 @@ reload each. Full log: `handoffs/point5-wave1-20261008/2a2/evidence/browser-case
 | 8 nested fan-out | "FP nested" | editor names the node; test chat now shows Main's text |
 | 7 branch failure | 16 | direct branch failed typed and readable after drain |
 
+**REVIEW-1470 rerun on the final head (2026-10-28).** Images `2a2-11662ce86` (main `sha256:492c04ee…`, worker
+`sha256:a1722711…`, web `sha256:044b4ca8…`), binary-checked for `graph.parallel.ledger_fault`, `parked_execution_id`
+(worker) and `graph.fanout.wake_failed.`, `FOR SHARE OF ws, command` (main); same own-DB stack `fanpar` (ledger row
+renumbered 192 → 194), verify-profile 50/0.
+
+| Case | Chat | Result |
+|---|---|---|
+| 1 three asks, reverse order, two tabs | 27 | each answered card dropped in the other tab within 3 s; decision → wake job admitted in 15–18 ms; joined; reload |
+| 4 Worker killed mid-wake (at the wake's model request) | 27 | reclaim resumed the child from its checkpoint; 3 cards CONSUMED once, no new card; joined after reload of both tabs |
+| re-park of an answered child (two-card attempt) | 16 | the model called the two tools sequentially, so the exact two-cards-in-one-pause shape is proven by Main PG only; the answered child re-parked with its next call; decided across tabs and reloads; joined; 5 CONSUMED |
+| On Error `stop` with open cards | 16 | run FAILED 17:59:04.742; its 3 open cards CANCELLED 4 ms later by the run's claim; the tab shows no card; a late decision → 409 |
+
 Fixtures, stated honestly: project 118 "Rust instruction revision acceptance" on the real-model dump `d5e966074`.
 Created in the UI: every pipeline ("FP …"), the MCP toolkit (saved through the JSON view because MCP tool discovery
 from the UI fails, pre-existing), all chats. Set by SQL (`2a2/fixtures.sql`): `meta.internal_tools=["ask_user"]` on
-"FP ask", because the pipeline editor offers only Attachments (EliteaUI parity). No response mocks.
+"FP ask", because the pipeline editor offers only Attachments (EliteaUI parity). No response mocks. For the rerun, two YAML text edits by SQL
+(`2a2/fixtures-1470-twocard.sql`, `fixtures-1470-stop.sql`), restored afterwards (`fixtures-1470-restore.sql`).
 
 ## Defects found by running it (all fixed here)
 
