@@ -92,6 +92,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/events"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/governedmcp"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -721,6 +722,17 @@ type RouterConfig struct {
 	// issue 1121). Set only with the credential governance flag on and at
 	// least one provider OAuth application configured; nil mounts no route.
 	CredentialConsent *v2credentialconsent.Handler
+	// GovernedMCPInbound makes the MCP endpoint an OAuth protected resource
+	// (ADR-0039, issue 1123): the RFC 9728 metadata route, the
+	// resource_metadata challenge on a 401 and audience-checked inbound
+	// tokens. Set only with the credential governance flag on and an
+	// inbound issuer configured; nil leaves the MCP routes, their
+	// authentication and their responses unchanged, and mounts no metadata.
+	GovernedMCPInbound *v2mcp.GovernedInbound
+	// GovernedMCPOutbound serves the Client ID Metadata Document remote MCP
+	// authorization servers fetch (issue 1123). Set only with the flag on
+	// and governed MCP OAuth composed; nil mounts no route.
+	GovernedMCPOutbound *governedmcp.Service
 }
 
 type RuntimeRoutes struct {
@@ -1231,6 +1243,7 @@ func mountMCPServerRoutes(
 	conversationHandler *v2convs.Handler,
 	folderHandler *v2folders.Handler,
 	platformTools *desktopopsapi.PlatformToolBridge,
+	governed *v2mcp.GovernedInbound,
 ) {
 	// The resolver ASKS for the personal project it could not find, for the
 	// reason stated at `withPersonalProjects`: an MCP client authenticates
@@ -1260,6 +1273,11 @@ func mountMCPServerRoutes(
 	// tool through THIS handler's dispatch, so a local turn and a cloud turn
 	// reach the same operations under the same permission checks.
 	platformTools.Bind(platformToolAdapter{handler: handler})
+	// Governed (issue 1123): the resource server runs in front of the
+	// platform authentication; with it nil nothing changes.
+	if governed != nil {
+		authenticate = governed.Wrap(authenticate)
+	}
 	r.Group(func(r chi.Router) {
 		r.Use(authenticate)
 		r.Use(apimw.RequireProjectAccess(pool))
@@ -1660,6 +1678,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r.Get(eliteanative.JWKSPath, cfg.AgentAssertionWellKnown.ServeJWKS)
 		r.Get(eliteanative.MetadataPath, cfg.AgentAssertionWellKnown.ServeMetadata)
 	}
+	// Governed MCP (issue 1123): the MCP endpoint's RFC 9728 metadata and
+	// Main's Client ID Metadata Document. Public for the same reason: an
+	// MCP client or a remote authorization server reads them before it
+	// holds any credential, and they carry URLs only.
+	if cfg.GovernedMCPInbound != nil {
+		r.Get(v2mcp.ProtectedResourceMetadataPrefix+"/app/{projectID}/mcp", cfg.GovernedMCPInbound.ServeMetadata)
+		r.Get(v2mcp.ProtectedResourceMetadataPrefix+"/app/{projectID}/mcp/*", cfg.GovernedMCPInbound.ServeMetadata)
+	}
+	if cfg.GovernedMCPOutbound != nil {
+		r.Get(governedmcp.ClientMetadataPath, cfg.GovernedMCPOutbound.ServeClientMetadata)
+	}
 	// Uploaded brand assets (ADR-0024 decision 3): public for the same
 	// reason as /icons — <img src>, <link rel="icon"> and @font-face fetches
 	// carry no credential. Content-addressed and immutable; the route
@@ -1951,7 +1980,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg.CurrentNotificationStore,
 		cfg.ToolkitArgumentSchemas, cfg.MCPToolkitRun, personalProjects,
 		cfg.InternalConfigurationTools, draftHandler, cfg.ToolkitDiscovery, convHandler, folderHandler,
-		cfg.PlatformMCPTools,
+		cfg.PlatformMCPTools, cfg.GovernedMCPInbound,
 	)
 
 	// SCIM 2.0 provisioning (shared migrations 0096, 0098, 0134).

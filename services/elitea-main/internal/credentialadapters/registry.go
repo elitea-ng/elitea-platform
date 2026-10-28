@@ -82,7 +82,7 @@ func validate(d AdapterDescriptor) error {
 			return fail("auth class %q is declared twice", class)
 		}
 	}
-	if d.TargetKind != TargetBaseURL && d.TargetKind != TargetTenantSite {
+	if d.TargetKind != TargetBaseURL && d.TargetKind != TargetTenantSite && d.TargetKind != TargetResourceURI {
 		return fail("target kind %q is unknown", d.TargetKind)
 	}
 	if d.CanonicalizeTarget == nil {

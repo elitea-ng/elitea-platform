@@ -352,6 +352,10 @@ func callerFromContext(ctx context.Context) securitycontext.Caller {
 	if user, ok := auth.UserFromContext(ctx); ok && user.TokenID != "" {
 		caller.CallingApplicationID = "token:" + user.TokenID
 	}
+	// A verified inbound MCP OAuth token names its client (#1123).
+	if application, ok := auth.CallingApplicationFromContext(ctx); ok {
+		caller.CallingApplicationID = application
+	}
 	return caller
 }
 

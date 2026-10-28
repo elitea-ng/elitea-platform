@@ -80,7 +80,7 @@ func (b *Broker) acquire(ctx context.Context, req RedeemRequest, facts requestFa
 		case credentialgrant.OAuthAuthorityEntraOBO:
 			token, denial = b.exchange(ctx, req, facts)
 		case credentialgrant.OAuthAuthorityProvider:
-			token, denial = b.providerToken(ctx, facts)
+			token, denial = b.providerToken(ctx, req, facts)
 		default:
 			denial = &Denial{Code: CodeClassNotSupported, reason: "oauth_authority_unknown"}
 		}
@@ -185,7 +185,7 @@ func shapeMaterial(raw []byte, keys []string) (map[string][]byte, bool) {
 // binding. A run with no user subject has no such grant and is denied, and
 // so is a decision subject that is not the run's own user (an autonomous
 // mandate's approver).
-func (b *Broker) providerToken(ctx context.Context, facts requestFacts) (obo.AccessToken, *Denial) {
+func (b *Broker) providerToken(ctx context.Context, req RedeemRequest, facts requestFacts) (obo.AccessToken, *Denial) {
 	if b.cfg.ProviderTokens == nil {
 		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "provider_oauth_not_configured"}
 	}
@@ -202,7 +202,7 @@ func (b *Broker) providerToken(ctx context.Context, facts requestFacts) (obo.Acc
 	switch {
 	case err == nil:
 	case errors.Is(err, provideroauth.ErrConsentRequired):
-		return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "provider_consent_required"}
+		return obo.AccessToken{}, b.providerConsentRequired(ctx, req, key)
 	case errors.Is(err, provideroauth.ErrInvalid):
 		return obo.AccessToken{}, &Denial{Code: CodeDenied, reason: "provider_oauth_key_invalid"}
 	case errors.Is(err, provideroauth.ErrProviderNotConfigured):
@@ -214,6 +214,32 @@ func (b *Broker) providerToken(ctx context.Context, facts requestFacts) (obo.Acc
 		return obo.AccessToken{}, &Denial{Code: CodeBackendUnavailable, reason: "oauth_empty_token"}
 	}
 	return obo.AccessToken{Token: token.Token, ExpiresAt: token.ExpiresAt}, nil
+}
+
+// providerConsentRequired answers a provider grant the user has not
+// consented to. A provider whose consent a chat turn can pause for (a
+// remote MCP server, #1123) is AUTHORIZATION_REQUIRED with its opaque
+// reference; any other provider, or a run that is not a chat turn, is
+// denied as before.
+func (b *Broker) providerConsentRequired(ctx context.Context, req RedeemRequest, key provideroauth.GrantKey) *Denial {
+	refused := &Denial{Code: CodeDenied, reason: "provider_consent_required"}
+	if b.cfg.ProviderAuthorizations == nil {
+		return refused
+	}
+	if parseUserID(req.Run.ActorID) != key.SubjectUserID || req.Run.ConversationUUID == "" || req.Run.ResponseMessageID == "" {
+		return refused
+	}
+	reference, err := b.cfg.ProviderAuthorizations.Mint(ctx, provideroauth.AuthorizationRequirement{
+		Key: key, ExecutionID: req.Run.ExecutionID, Generation: req.Run.Generation,
+		ConversationUUID: req.Run.ConversationUUID, ResponseMessageID: req.Run.ResponseMessageID,
+	})
+	switch {
+	case errors.Is(err, provideroauth.ErrProviderNotConfigured):
+		return refused
+	case err != nil || reference == "":
+		return &Denial{Code: CodeBackendUnavailable, reason: "authorization_requirement"}
+	}
+	return &Denial{Code: CodeAuthorizationRequired, AuthorizationReference: reference, reason: "authorization_required"}
 }
 
 // exchange runs the on-behalf-of exchange of an oauth_delegated use. Entra
