@@ -25,7 +25,7 @@
  *   node libs/ts/client-core/scripts/gen-brand.mjs           write the copies
  *   node libs/ts/client-core/scripts/gen-brand.mjs --check   fail when one drifted
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -84,6 +84,7 @@ export const ELITEA_MARK_VIEWBOX = '${MARK_VIEWBOX}';
 export const ELITEA_MARK_ASPECT = ${w} / ${h};
 `;
   const full = fullSvg.endsWith('\n') ? fullSvg : `${fullSvg}\n`;
+  const lockupIn = (color) => (color === undefined ? full : full.replace(/currentColor/g, color));
   const tokens = JSON.parse(tokensJson);
   delete tokens.$comment;
   const tokensTs = `/**
@@ -103,6 +104,10 @@ export const BRAND_TOKENS = ${JSON.stringify(tokens, null, 2)} as const;
     { path: 'apps/elitea-web/public/brand/logo-full.svg', content: full },
     { path: 'apps/elitea-web/src/shared/ui/icons/svg/logo-mark-icon.svg', content: webMark },
     { path: 'apps/elitea-web/src/shared/ui/icons/svg/logo-icon.svg', content: full },
+    // Fixed-colour lockups for places that cannot set currentColor (an <img> in
+    // a GitHub README or org profile): the wordmark in each scheme's text colour.
+    { path: 'brand/assets/logo/elitea-lockup-on-dark.svg', content: lockupIn(tokens.schemes?.dark?.text) },
+    { path: 'brand/assets/logo/elitea-lockup-on-light.svg', content: lockupIn(tokens.schemes?.light?.text) },
   ];
 }
 
@@ -128,6 +133,7 @@ function main(argv) {
   }
   if (!check) {
     for (const { path, content } of artifacts) {
+      mkdirSync(dirname(join(REPO_DIR, path)), { recursive: true });
       writeFileSync(join(REPO_DIR, path), content, 'utf8');
       console.log(`  wrote ${path}`);
     }

@@ -3,7 +3,7 @@ title: "Set up a development environment"
 description: "The toolchain, repository layout, and checks you need before you run Elitea locally or send a change."
 ---
 
-Elitea's platform code lives in one Go-and-TypeScript monorepo, with two Python and Rust services alongside it. This page covers what to install and how the repository is organized. See [Run the standalone stack](/development/standalone-stack) to bring the platform up locally, and [elitea-web development](/development/frontend) or [Backend services](/development/backend) for the day-to-day edit loop.
+Elitea's platform code lives in one monorepo: Go and Rust services, and TypeScript clients. This page covers what to install and how the repository is organized. See [Run the standalone stack](/development/standalone-stack) to bring the platform up locally, and [elitea-web development](/development/frontend) or [Backend services](/development/backend) for the day-to-day edit loop.
 
 ## Install the toolchain
 
@@ -36,11 +36,12 @@ Install `kind` v0.33 or newer, `kubectl`, and Helm (4.3 or newer recommended; 3.
 
 | Path | What's there |
 |---|---|
-| `services/` | Go services (`elitea-main`, `elitea-scheduler`, `elitea-subapp-host`), the standalone `elitea-llm-gateway`, the provider engines (`elitea-deepwiki-engine`, Rust, and `elitea-inventory`, Python), and the agent worker (`elitea-worker-rust`) |
+| `services/` | Go services (`elitea-main`, `elitea-scheduler`, `elitea-subapp-host`, `elitea-egress-proxy`), the standalone `elitea-llm-gateway`, and the Rust services: the agent worker (`elitea-worker-rust`), the DeepWiki and Inventory engines, `elitea-vector`, `elitea-code-runner` and `elitea-doc-extractor` |
 | `apps/` | `elitea-web` (the frontend, a Vite/React monorepo of its own), `elitea-desktop` and `elitea-mobile` |
-| `libs/` | Shared code: `libs/go` (Go libraries consumed across services), `libs/proto` (versioned cross-language contracts), `libs/jsonschema`, `libs/provider` |
+| `libs/` | Shared code: `libs/go` (Go libraries consumed across services), `libs/rust` (Rust crates), `libs/ts` (`client-core`, shared by the three clients, with the brand tokens), `libs/proto` (versioned cross-language contracts), `libs/jsonschema`, `libs/provider` |
 | `gen/` | Generated Go bindings from `libs/proto` |
 | `deploy/` | Compose files, the standalone-stack and e2e-stack scripts, Helm charts, ArgoCD manifests, the kind stack and cert-generation scripts |
+| `brand/` | The brand guide's sources (`BRAND.md`, the site build), published at `/brand/` beside these docs |
 | `tools/` | Repository-local developer scripts |
 | `conformance/`, `testdata/` | Cross-language conformance fixtures and byte vectors the workers and Go services test against |
 
@@ -63,7 +64,7 @@ For `apps/elitea-web`, run `npm run typecheck`, `npm run lint`, and `npm run tes
 
 ## Guardrails
 
-The repository's `AGENTS.md` sets the architectural rules for the replatform: prefer explicit constructor dependencies over service locators; add or version a cross-language contract in `libs/proto/` before depending on an unversioned map or event name; keep API errors typed, logging internal causes with trace and execution identifiers rather than returning raw errors across a trust boundary; enforce authentication, project authorization, and tenant context before mounting product, admin, or storage handlers; use the NATS JetStream command bus for durable asynchronous worker commands and an authenticated mTLS HTTP/JSON API for identity, credential, catalog, and health calls — introduce gRPC only once profiling proves it is needed; treat PostgreSQL as the source of truth for execution state, with the command bus as transport only; and never add credentials, private URLs, or development defaults that act as secrets. Read the full document before touching `services/elitea-main` or the runtime plane.
+The repository's `AGENTS.md` sets the architectural rules: explicit constructor dependencies rather than service locators; a versioned contract in `libs/proto/` before any cross-language map or event name is relied on; typed API errors, with internal causes logged alongside trace and execution identifiers rather than returned across a trust boundary; authentication, project authorization and tenant context enforced before a product, admin or storage handler is mounted; gRPC over mTLS for every synchronous internal call (HTTP/JSON is for browser- and client-facing APIs only), and the NATS JetStream command bus for durable asynchronous worker commands; PostgreSQL as the source of truth for execution state, with the command bus as transport only; and no credentials, private URLs or development defaults that act as secrets. Read the full document before touching `services/elitea-main` or the runtime plane.
 
 ## One-host stack topology
 
@@ -75,7 +76,7 @@ flowchart LR
     Browser -->|HTTP| OIDC[oidc-mock]
     Main -->|"/app, /docs (relayed)"| Web[elitea-web]
     Main -->|mTLS| Gateway[elitea-llm-gateway]
-    Main -->|NATS JetStream| Worker[agent worker: python or rust]
+    Main -->|NATS JetStream| Worker[agent worker, Rust]
     Gateway --> Worker
     Gateway --> LLMMock[llm-mock / a real model]
     Main --> DB[(postgres)]
