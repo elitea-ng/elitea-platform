@@ -870,8 +870,11 @@ catalogue marks `openai_compatible: false` (Anthropic) the body carries
 `cache_control: {type: "ephemeral"}` on the system message (as one text
 part), on the last tool and on the request's last message; the gateway's
 Bifrost core forwards them to Anthropic and reports cache writes as
-`prompt_tokens_details.cache_write_tokens`. A compaction summary call sends
-none.
+`prompt_tokens_details.cache_write_tokens`. With the one-hour cache
+(**Context compaction settings**: `idle: "cache_1h"`, or a custom time of 5
+minutes or more) every breakpoint is `{type: "ephemeral", ttl: "1h"}`. A step
+compaction's summary call sends none; an idle compaction's repeats the last
+request's and moves the last one to its own new message.
 
 ```ts
 type FileChange = {
@@ -1376,6 +1379,108 @@ command except `session_info`.
   each time, and a warning is logged. The Doctor check `sessions` reports an
   untrusted, loose, damaged or newer-schema file; `sessions.tighten` and
   `sessions.move_aside` (moved aside, never deleted) repair it.
+
+## Context compaction settings (`src/compaction_settings.rs`, `src/d0/idle.rs`)
+
+Compaction exists to save money as much as room. A provider's prompt cache bills a
+repeated prefix at 0.1× the input price; once it expires (five minutes after the
+last request by default) the next message pays for the whole thread again,
+uncached. So a long thread left idle is compacted **while its cache is still
+warm**: the summary reads the thread at the cached price, and the next message
+starts from a short summary instead of a cold, full-price history. The settings
+are app-wide (every workspace and thread), kept as `compaction-settings.json` in
+the app data directory; a file that no longer parses or validates reads as the
+defaults (logged).
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `compaction_settings_get` | — | `CompactionSettings` (the defaults until one is saved) |
+| `compaction_settings_set` | `{settings: CompactionSettings}` | the saved `CompactionSettings`, also sent as `compaction-settings-changed`. Every scheduled idle compaction is cancelled (the next turn schedules under the new settings). Rejects with **a string** for a person when a value breaks a rule below, an unknown field is sent, or the file could not be written. |
+| `compaction_idle_hold` | `{workspace_id, conversation_id, hold}` | `null`. `hold: true` while the thread's composer holds unsent text, `false` once it is empty or sent: a held thread is not compacted while idle. `conversation_id` is the id or UUID, in the same form the thread's `agent_turn_start` uses. Rejects `IpcError` `invalid_request` (a malformed `conversation_id`). |
+
+```ts
+type CompactionSettings = {
+  auto: boolean;                     // default true
+  threshold_percent: number | null;  // 40-99; null: the default trigger
+  idle: "cache_5m" | "cache_1h" | "custom" | "off"; // default "cache_5m"
+  idle_minutes: number | null;       // 1-600, required for "custom", null otherwise
+};
+```
+
+* **`auto: false`** turns off every compaction that happens on its own: the step
+  compaction's threshold (**Context window**) and the idle one. `/compact`
+  (`compact: true`) still compacts, and a model refusal for a too-long request
+  still compacts and retries the step once (else the turn could only fail).
+* **`threshold_percent`** starts the step compaction at that share of the usable
+  input (the window minus the output reservation) when that is earlier than the
+  default trigger (window minus the reserve); it never moves it later. An agent
+  version whose `context_settings` turn compaction off still runs without it.
+* **`idle`** sets both how long the prompt cache is asked to live and when an idle
+  thread is compacted, counted from the **start** of the thread's last model
+  request (a cache entry's life starts when it is written):
+
+  | `idle` | Cache asked for | Idle compaction |
+  | --- | --- | --- |
+  | `cache_5m` | five minutes (`{type: "ephemeral"}`) | after 4 minutes |
+  | `cache_1h` | one hour (`{type: "ephemeral", ttl: "1h"}`) | after 55 minutes |
+  | `custom`, 1-4 min | five minutes | after `idle_minutes` |
+  | `custom`, 5-55 min | one hour | after `idle_minutes` |
+  | `custom`, 56-600 min | five minutes (nothing would read an hour's cache, so its 2× writes are not paid) | never: the delay is at or past the cache's end, so the summary would pay full price (the UI warns "later than the cache lasts") |
+  | `off` | five minutes | never |
+
+  A one-hour cache write costs 2× the input price instead of 1.25× (a read is
+  0.1× either way): worth it when the person comes back within the hour. OpenAI
+  and Azure OpenAI cache on their own and take no TTL; only Anthropic
+  breakpoints carry it (**Prompt layout**).
+
+**Idle compaction.** After a local turn on a durable session settles, a check is
+scheduled at its last model request's start plus the delay above (none when `auto`
+is off or the table says never). When it fires the thread is compacted only if:
+
+1. no turn runs or waits in the workspace, and no turn started on the thread since
+   (a new turn cancels the check);
+2. the conversation's own tokens (the last request's `message_tokens`, the context
+   meter's) are at least **60,000** — below that, the next message's cache miss
+   costs less than a summary;
+3. the model is a **paid provider with a prompt cache**: a native Anthropic model
+   (the catalogue's `openai_compatible: false`, which gets breakpoints), or a model
+   whose catalogue row prices `cached_input_cost_per_1m_tokens` below
+   `input_cost_per_1m_tokens` (both above zero: OpenAI, Azure OpenAI). A local or
+   self-hosted model (vLLM, Ollama), a model the catalogue does not describe, and
+   Claude on the OpenAI-compatible route (no breakpoints, nothing cached) never
+   qualify;
+4. the wall clock is still inside the cache's life (five minutes or an hour from
+   the last request's start): a Mac that slept past it finds the cache gone and
+   skips;
+5. the last request was answered without a tool call;
+6. the thread is not held (`compaction_idle_hold`). A check that fires while held
+   runs as soon as the hold is released, under the same rules.
+
+The check is cancelled by a new turn on the thread, `compaction_settings_set`,
+`thread_history_delete`, `workspace_remove`, a sign-out and the app's exit.
+
+The **summary request** is the thread's last model request, byte for byte — same
+model, system message, tool declarations (`tool_choice` unchanged, since changing
+it would drop the cached messages), history and cache breakpoints — followed by
+the model's answer to it as an assistant message and one user message asking for
+the `context_summary` v1 record of "the conversation above" without calling any
+tool (`context_summary::continuation_prompt`, with the agent's
+`summary_instructions`); only the output limit changes (`max_completion_tokens`,
+the summary's 8,192 tokens). On Anthropic the new user message carries the request's last
+breakpoint, so at most four remain. The provider reads everything up to that
+answer from its cache. An answer that calls a tool is refused; one that ignores
+the template is asked for once more (the same body plus that answer and the
+template reminder), then kept as plain text, as a step compaction does. The call
+streams nothing, is spent on the summary lane under the last turn's execution id,
+and goes through the same `/llm` route as the turn.
+
+The summary is stored as a step compaction's is: it stands for everything before
+the cut the step compaction would choose (about the newest 20k tokens stay
+verbatim), as an adk `EventCompaction` marker appended to the thread's session on
+its last committed turn, so the next turn's history starts from it. Then
+`workspace-context-compacted` is sent (**Events**). Any failure (the session is
+busy or changed, the model call fails or calls a tool) is logged and leaves the
+thread as it was: the next message's step compaction still protects it.
 
 ## Local index (`src/index.rs`, `libs/rust/local-index`)
 
@@ -2195,12 +2300,28 @@ type LspEvent = {
 
 ## Events
 
-Eight event names, all emitted to the `main` window only: `app://command`
+Ten event names, all emitted to the `main` window only: `app://command`
 (above), `app://context-menu` (`{request_id, id}`, the outcome of `context_menu_show`),
 `agent://event`, `index://event`, `handoff://event` (Cloud handoff, above),
 `process://event` (Background processes, above), `mcp://event` (Local MCP
-servers, above) and `lsp://event` (Language servers, above). The webview may listen
+servers, above), `lsp://event` (Language servers, above),
+`compaction-settings-changed` (the saved `CompactionSettings`, after every
+`compaction_settings_set`) and `workspace-context-compacted` (below). The webview may listen
 (`core:event:allow-listen` / `allow-unlisten`), never emit.
+
+`workspace-context-compacted`, after an idle compaction landed (**Context
+compaction settings**); the thread's next turn starts from the summary:
+
+```ts
+type WorkspaceContextCompacted = {
+  workspace_id: string;
+  conversation_id: string; // as the thread's turns named it: the UUID, or the numeric id as a string
+  reason: "idle";
+  before_tokens: number;   // the estimated request before (ceil(bytes / 4))
+  after_tokens: number;    // and after the fold
+  context: ContextMeter;   // phase "compacted", used_tokens = after_tokens, no parts
+};
+```
 
 `index://event`:
 
@@ -2396,7 +2517,12 @@ that does not know the field ignores it). An agent version whose
 `context_settings` say `enabled: false`, `enable_summarization: false` or
 `session_compaction: false` runs without compaction; `session_compaction:
 {reserve_tokens?, keep_recent_tokens?, fresh_window?}` tunes it and
-`summary_instructions` guide the summary.
+`summary_instructions` guide the summary. The app's **Context compaction
+settings** apply on top: `auto: false` drops the threshold (only `/compact`
+and the overflow retry compact, and the meter carries no
+`compact_at_tokens`),
+`threshold_percent` can only move the trigger earlier, and neither switches
+on a compaction the agent version turned off.
 
 ```ts
 type ContextMeter = {
@@ -2421,10 +2547,11 @@ type ContextParts = {
 };
 ```
 
-The UI also sends `compact: true` when a thread was idle for 5 minutes and
-its `message_tokens` are at least 40k (the whole request at least 60k for
-a host without `parts`): the provider's prompt cache has expired by then.
-A notice says so, and the person can cancel it or turn it off.
+An idle thread is compacted by the host, not by the UI's next message: while
+the prompt cache is still warm, from the cached last request
+(**Context compaction settings**, "Idle compaction"). The UI tells the host
+when the composer holds unsent text (`compaction_idle_hold`) and shows
+`workspace-context-compacted`.
 
 It carries estimates and budget arithmetic only, never model content. The
 host measures each part of the provider body at the same rate as the whole

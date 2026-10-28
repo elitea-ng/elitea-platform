@@ -74,9 +74,10 @@ use super::definition::{self, Admitted, ModelChoice};
 use super::environment;
 use super::events::{EventEmitter, Phase, Timed, TurnEvents, UsageLane};
 use super::framing;
+use super::idle::{IdleBasis, IdleCompactor, IdleSession, ThreadKey};
 use super::memory::PlatformMemoryStore;
 use super::mentions;
-use super::model::{GatewayTransport, TurnTail};
+use super::model::{GatewayTransport, RequestCapture, TurnTail};
 use super::recorder::{self, FileChange, Recorder, ToolCalls};
 use super::remote_tools::{
     MCP_AUTHORIZATION_WAIT, RemoteContext, RemoteToolProvider, RetryPolicy,
@@ -88,6 +89,7 @@ use super::slash_commands::{self, CommandPick, ExpandedCommand, ListedCommand};
 use super::steering::{self, SteeringInjector, TurnSteering};
 use super::subagents::DesktopSubAgents;
 use super::tools::{AcceptedPlanNote, ObservedToolset, PlanGatedToolset, ToolObserver};
+use crate::compaction_settings::{CompactionSettings, CompactionSettingsStore};
 use crate::history::{
     HistoryStore, NewTurn, Owner, StoredImage, StoredTurn, ThreadCopy, ThreadCopyTarget, TurnTap,
 };
@@ -893,6 +895,11 @@ pub struct AgentHost {
     /// (weak: they hold this host): a sub-agent's `isolation: "worktree"`
     /// gets one. Unset, sub-agents only read.
     worktrees: std::sync::OnceLock<std::sync::Weak<crate::worktrees::WorktreeHost>>,
+    /// The app-wide compaction settings (`crate::compaction_settings`), set
+    /// once at start-up; unset, the defaults.
+    compaction: std::sync::OnceLock<Arc<CompactionSettingsStore>>,
+    /// The threads' idle compactions (`super::idle`).
+    idle: Arc<IdleCompactor>,
     /// Extra toolsets every turn offers (tests: tools that record when they
     /// run).
     #[cfg(test)]
@@ -1076,6 +1083,11 @@ impl AgentHost {
             deps.user_rules_dir.clone(),
             deps.workspaces.clone(),
         ));
+        let busy = BusySet::default();
+        let idle = Arc::new(IdleCompactor::new(deps.emitter.clone(), {
+            let busy = busy.clone();
+            Arc::new(move |workspace_id: &str| busy.held().contains_key(workspace_id))
+        }));
         Ok(Self {
             deps,
             api,
@@ -1084,7 +1096,7 @@ impl AgentHost {
             hooks,
             broker: Arc::new(ApprovalBroker::default()),
             sessions: Mutex::new(HashMap::new()),
-            busy: BusySet::default(),
+            busy,
             turns: Mutex::new(TurnTable::default()),
             owner: Mutex::new(None),
             caches: TurnCaches::default(),
@@ -1092,9 +1104,72 @@ impl AgentHost {
             failed_commits: Mutex::new(HashMap::new()),
             attachments: Attachments::default(),
             worktrees: std::sync::OnceLock::new(),
+            compaction: std::sync::OnceLock::new(),
+            idle,
             #[cfg(test)]
             test_toolsets: Mutex::new(Vec::new()),
         })
+    }
+
+    /// Keep the compaction settings in `store` (set once, at start-up).
+    pub fn set_compaction_store(&self, store: Arc<CompactionSettingsStore>) {
+        let _ = self.compaction.set(store);
+    }
+
+    /// The compaction settings' store (an in-memory one when none was set).
+    #[must_use]
+    pub fn compaction_store(&self) -> Arc<CompactionSettingsStore> {
+        self.compaction
+            .get_or_init(|| Arc::new(CompactionSettingsStore::in_memory()))
+            .clone()
+    }
+
+    fn compaction_settings(&self) -> CompactionSettings {
+        self.compaction
+            .get()
+            .map_or_else(CompactionSettings::default, |store| store.get())
+    }
+
+    /// The compaction settings changed: every scheduled idle compaction is
+    /// cancelled (the next turn schedules under the new ones).
+    pub fn compaction_settings_changed(&self) {
+        self.idle.cancel_all();
+    }
+
+    /// `compaction_idle_hold`: the composer of a thread holds unsent text
+    /// (`hold`), or no longer does (`super::idle`).
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request` for a malformed conversation id.
+    pub fn idle_hold(
+        &self,
+        workspace_id: &str,
+        conversation_id: &Value,
+        hold: bool,
+    ) -> Result<(), TurnError> {
+        let key = ThreadKey {
+            workspace_id: workspace_id.to_owned(),
+            conversation: conversation_key(conversation_id)?,
+        };
+        self.idle.hold(&key, hold);
+        Ok(())
+    }
+
+    /// Run the thread's scheduled idle compaction check now (tests).
+    #[cfg(test)]
+    pub(super) async fn fire_idle(&self, workspace_id: &str, conversation: &str) -> bool {
+        self.idle
+            .fire_pending(&ThreadKey {
+                workspace_id: workspace_id.to_owned(),
+                conversation: conversation.to_owned(),
+            })
+            .await
+    }
+
+    /// The app is quitting: no idle compaction starts or finishes.
+    pub fn cancel_idle_compactions(&self) {
+        self.idle.cancel_all();
     }
 
     /// Give sub-agents task worktrees (#1235): `isolation: "worktree"`.
@@ -1701,6 +1776,14 @@ impl AgentHost {
         // as the person typed it; only the model gets the expansion.
         if let Some(pick) = &request.command {
             request.prompt = slash_commands::literal(pick);
+        }
+        // A new turn cancels the thread's idle compaction (and one under
+        // way), before the turn reads its session.
+        if let Ok(conversation) = conversation_key(&request.conversation_id) {
+            self.idle.turn_started(&ThreadKey {
+                workspace_id: request.workspace_id.clone(),
+                conversation,
+            });
         }
         let turn_id = uuid::Uuid::new_v4().to_string();
         let started_at = chrono::Utc::now().timestamp_millis();
@@ -2648,6 +2731,26 @@ impl AgentHost {
         } else {
             events.status(Phase::Done, None);
         }
+        // The thread's idle compaction, scheduled once the commit landed: a
+        // turn that answered, on a durable session.
+        let idle = turn_context
+            .take_idle()
+            .filter(|_| failure.is_none())
+            .zip(memory.durable_key().zip(self.deps.sessions.as_ref()))
+            .map(|(basis, (key, sessions))| {
+                (
+                    ThreadKey {
+                        workspace_id: request.workspace_id.clone(),
+                        conversation: conversation.clone(),
+                    },
+                    basis,
+                    IdleSession {
+                        service: memory.service.clone(),
+                        store: sessions.store().clone(),
+                        key: key.to_owned(),
+                    },
+                )
+            });
         let lane = lane_key(request.project_id, &conversation_uuid);
         let host = self.clone();
         let retry = self.commit_retry();
@@ -2685,6 +2788,12 @@ impl AgentHost {
                     )
                     .await;
                 events.log_timings();
+                if outcome.is_ok()
+                    && let Some((key, basis, session)) = idle
+                {
+                    host.idle
+                        .turn_ended(key, basis, session, &host.compaction_settings());
+                }
                 host.commit_settled(
                     &execution_id,
                     outcome,
@@ -2851,10 +2960,13 @@ impl AgentHost {
         compact: bool,
         turn_context: &TurnContext,
         summary_model: Option<context::LowTierModel>,
+        prompt_cache: bool,
     ) -> Result<Arc<dyn Llm>, TurnError> {
         let Some(policy) = context::policy(&admitted.version_details) else {
             return Ok(model);
         };
+        // The app's settings: `auto` off and an earlier threshold.
+        let policy = context::with_settings(policy, &self.compaction_settings());
         let budget = match RequestContextBudget::resolve(
             Some(limits),
             &Map::new(),
@@ -2897,7 +3009,34 @@ impl AgentHost {
         })
         .map_err(|e| TurnError::new("model_unavailable", e.to_string()))?
         .adk_model();
-        host.compact_at = policy.trigger_tokens(&budget);
+        // Not automatic: no buffer to show on the meter.
+        host.compact_at = if policy.automatic {
+            policy.trigger_tokens(&budget)
+        } else {
+            0
+        };
+        // What the thread's idle compaction needs once the turn committed:
+        // the agent's own model, quiet, on the summary lane.
+        if let Some(capture) = &transport.capture {
+            turn_context.set_idle(IdleBasis {
+                transport: GatewayTransport {
+                    quiet: true,
+                    lane: UsageLane::Summary,
+                    tail: None,
+                    recorder: None,
+                    capture: None,
+                    ..transport.clone()
+                },
+                model: model_request.clone(),
+                capture: capture.clone(),
+                parts: host.parts.clone(),
+                policy: policy.clone(),
+                budget,
+                max_output_tokens: limits.max_output_tokens,
+                prompt_cache,
+                window_fallback: limits.context_window_fallback,
+            });
+        }
         let compaction = Arc::new(StepCompaction::new(
             policy,
             Arc::new(context::ProviderBudget {
@@ -2906,6 +3045,7 @@ impl AgentHost {
                 replay: transport.replay,
                 tail: transport.tail.clone(),
                 cache_hints: transport.cache_hints,
+                cache_ttl: transport.cache_ttl,
                 parts: host.parts.clone(),
             }),
             summarizer,
@@ -2996,6 +3136,7 @@ impl AgentHost {
             limits,
             replay,
             vision,
+            prompt_cache,
             ..
         } = model_facts;
         // `read_file` returns an image part only to a model that sees images
@@ -3113,8 +3254,12 @@ impl AgentHost {
             lane: UsageLane::Turn,
             tail: Some(tail.clone()),
             // A native Anthropic model: the body carries its cache
-            // breakpoints (`model::Layout`).
+            // breakpoints (`model::Layout`), as long-lived as the app's
+            // compaction settings ask.
             cache_hints: catalogue::takes_cache_hints(replay, &admitted.model.model_name),
+            cache_ttl: self.compaction_settings().cache_ttl(),
+            // The last request, for the thread's idle compaction.
+            capture: Some(Arc::new(RequestCapture::default())),
         };
         let instruction = system_instruction(
             &admitted.instructions,
@@ -3168,6 +3313,7 @@ impl AgentHost {
             request.compact,
             turn_context,
             summary_model,
+            prompt_cache,
         )?;
 
         // Skills and project context: the runtime's instruction authority.
@@ -3609,6 +3755,8 @@ impl AgentHost {
         drop(turns);
         // Images attached under one session are not sent under the next.
         self.attachments.clear();
+        // Nor is an idle summary made under it.
+        self.idle.cancel_all();
         *self
             .owner
             .lock()
@@ -3792,6 +3940,7 @@ impl AgentHost {
         )?;
         // Nothing the agent started outlives the workspace (#1223).
         self.kill_processes(workspace_id).await;
+        self.idle.forget_workspace(workspace_id);
         // The index's refresh stopped and its database closed, and held so
         // until the directory holding it is deleted: nothing reopens it.
         let workspaces = self.deps.workspaces.clone();
@@ -3925,6 +4074,11 @@ impl AgentHost {
         conversation_id: &str,
     ) -> Result<usize, TurnError> {
         let conversation = conversation_key(&Value::String(conversation_id.to_owned()))?;
+        // No idle compaction outlives the thread.
+        self.idle.forget(&ThreadKey {
+            workspace_id: workspace_id.to_owned(),
+            conversation: conversation.clone(),
+        });
         let Some(history) = self.deps.history.clone() else {
             return Ok(0);
         };

@@ -1157,6 +1157,70 @@ impl SessionStore {
         .await
     }
 
+    /// Append a compaction marker made between turns (the idle compaction,
+    /// `d0/idle.rs`) to the session's last committed turn: tagged with that
+    /// turn's execution and answer id, so it is settled like the turn's own
+    /// events (a reopen keeps it, a trim drops it with its turn). `false`,
+    /// and nothing written, when a turn holds the session now or its last
+    /// event is not a committed turn's (a turn still being settled).
+    ///
+    /// # Errors
+    ///
+    /// The store could not be written.
+    pub async fn append_marker(&self, key: &str, marker: Event) -> Result<bool, HostError> {
+        if self.active.lock().contains_key(key) {
+            return Ok(false);
+        }
+        let key = key.to_owned();
+        let active = self.active.clone();
+        self.call("could not append to the session", move |conn| {
+            let tx = conn.transaction()?;
+            // Checked again with the write: a turn that claimed the session
+            // meanwhile wins.
+            if active.lock().contains_key(&key) {
+                return Ok(false);
+            }
+            let last: Option<(i64, String, String, Option<String>)> = tx
+                .query_row(
+                    "SELECT seq, turn_execution_id, executed_by, response_message_id
+                     FROM events WHERE session_key = ?1 ORDER BY seq DESC LIMIT 1",
+                    params![key],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()?;
+            let Some((seq, execution_id, executed_by, Some(response_message_id))) = last else {
+                return Ok(false);
+            };
+            let event = bounded(marker);
+            let json = serde_json::to_string(&event)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            tx.execute(
+                "INSERT INTO events (session_key, seq, turn_execution_id, executed_by,
+                     response_message_id, invocation_id, author, event, bytes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    key,
+                    seq + 1,
+                    execution_id,
+                    executed_by,
+                    response_message_id,
+                    event.invocation_id,
+                    event.author,
+                    json,
+                    i64::try_from(json.len()).unwrap_or(i64::MAX),
+                ],
+            )?;
+            refresh_bytes(&tx, &key)?;
+            tx.execute(
+                "UPDATE sessions SET updated_at = ?2 WHERE session_key = ?1",
+                params![key, now_ms()],
+            )?;
+            tx.commit()?;
+            Ok(true)
+        })
+        .await
+    }
+
     /// Forget one conversation's session.
     ///
     /// # Errors

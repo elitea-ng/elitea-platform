@@ -147,6 +147,40 @@ pub fn takes_cache_hints(replay: ReasoningReplay, model_name: &str) -> bool {
         && (name.contains("claude") || name.contains("anthropic"))
 }
 
+/// Whether `model_name` is a paid provider with a prompt cache an idle
+/// compaction can still read (`super::idle`): a native Anthropic model,
+/// which caches at the body's breakpoints ([`takes_cache_hints`]), or a
+/// model whose catalogue row prices cached input below input
+/// (`cached_input_cost_per_1m_tokens` under `input_cost_per_1m_tokens`,
+/// both above zero): OpenAI and Azure OpenAI cache a repeated prefix of
+/// 1024 tokens or more on their own. A local or self-hosted model (vLLM,
+/// Ollama) prices neither, and an unknown model has no row: neither
+/// qualifies. Nor does Claude on the OpenAI-compatible route: it gets no
+/// breakpoints, so it caches nothing.
+#[must_use]
+pub fn caches_paid_prompts(model: Option<&CatalogueModel>, model_name: &str) -> bool {
+    let replay = ReasoningReplay::of(model);
+    if takes_cache_hints(replay, model_name) {
+        return true;
+    }
+    let name = model_name.to_ascii_lowercase();
+    if name.contains("claude") || name.contains("anthropic") {
+        return false;
+    }
+    let price = |key: &str| -> Option<f64> {
+        match model?.row.get(key)? {
+            Value::Number(number) => number.as_f64(),
+            Value::String(text) => text.trim().parse().ok(),
+            _ => None,
+        }
+        .filter(|price| price.is_finite() && *price > 0.0)
+    };
+    matches!(
+        (price("input_cost_per_1m_tokens"), price("cached_input_cost_per_1m_tokens")),
+        (Some(input), Some(cached)) if cached < input
+    )
+}
+
 /// A catalogue status the session can keep: a 2xx, or a 404 (no catalogue
 /// for the project: it describes no model). Any other (401, 403, 408, 429,
 /// a 5xx) may answer differently on the next turn.
@@ -321,6 +355,38 @@ mod tests {
             ReasoningReplay::Never,
             "claude-sonnet-4-5"
         ));
+    }
+
+    #[test]
+    fn only_paid_providers_with_a_prompt_cache_qualify_for_idle_compaction() {
+        let catalogue = Catalogue::from_body(
+            &json!({"items": [
+                {"name": "claude-sonnet-4-5", "project_id": 1, "openai_compatible": false},
+                {"name": "claude-proxy", "project_id": 1, "openai_compatible": true,
+                 "input_cost_per_1m_tokens": 3, "cached_input_cost_per_1m_tokens": 0.3},
+                {"name": "gpt-5", "project_id": 1, "input_cost_per_1m_tokens": 1.25,
+                 "cached_input_cost_per_1m_tokens": 0.125},
+                {"name": "azure-gpt-4o", "project_id": 1, "input_cost_per_1m_tokens": "2.5",
+                 "cached_input_cost_per_1m_tokens": "1.25"},
+                {"name": "qwen-vllm", "project_id": 1},
+                {"name": "free-local", "project_id": 1, "input_cost_per_1m_tokens": 0,
+                 "cached_input_cost_per_1m_tokens": 0},
+                {"name": "no-discount", "project_id": 1, "input_cost_per_1m_tokens": 1,
+                 "cached_input_cost_per_1m_tokens": 1},
+            ]}),
+            1,
+        );
+        let qualifies = |name: &str| caches_paid_prompts(catalogue.find(name), name);
+        assert!(qualifies("claude-sonnet-4-5"));
+        assert!(qualifies("gpt-5"));
+        assert!(qualifies("azure-gpt-4o"));
+        // Claude without breakpoints, a local model, a free or undiscounted
+        // one, and a model the catalogue does not list do not.
+        assert!(!qualifies("claude-proxy"));
+        assert!(!qualifies("qwen-vllm"));
+        assert!(!qualifies("free-local"));
+        assert!(!qualifies("no-discount"));
+        assert!(!qualifies("unknown"));
     }
 
     #[test]

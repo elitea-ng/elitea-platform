@@ -6466,6 +6466,160 @@ async fn commit_carries_context_summary() {
     assert!(phases[1].0 < first_usage.seq);
 }
 
+/// The idle compaction's summary request: its last message asks for the
+/// continuation record.
+fn is_idle_summary_call(body: &Value) -> bool {
+    last_message(body)["content"]
+        .to_string()
+        .contains("[context checkpoint request]")
+}
+
+/// [`memory_platform`] whose `gpt-test` (200k window) prices cached input:
+/// a paid provider with a prompt cache (OpenAI's kind).
+async fn cached_price_platform(convo: Arc<Mutex<Convo>>, script: Script) -> MockServer {
+    let inner = memory_platform(convo, script);
+    serve(move |req: &Req| {
+        if req.path.starts_with("/api/v2/configurations/models/1?") {
+            let mut body = catalogue(200_000);
+            body["items"][0]["input_cost_per_1m_tokens"] = json!(1.25);
+            body["items"][0]["cached_input_cost_per_1m_tokens"] = json!(0.125);
+            return Res::json(200, &body);
+        }
+        inner(req)
+    })
+    .await
+}
+
+#[tokio::test]
+async fn an_idle_thread_is_compacted_from_its_cached_last_request() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let summaries = Arc::new(AtomicUsize::new(0));
+    let idle_calls = Arc::new(AtomicUsize::new(0));
+    let inner = reading_script(summaries.clone());
+    let counted = idle_calls.clone();
+    let script: Script = Box::new(move |body: &Value| {
+        if is_idle_summary_call(body) {
+            counted.fetch_add(1, Ordering::SeqCst);
+            return say_with_usage(&summary_record("Read big.txt and report."));
+        }
+        inner(body)
+    });
+    let server = cached_price_platform(convo, script).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    // About 9k tokens a read: eight reads pass the 60k worth-it floor and
+    // stay far under the 200k window's own trigger.
+    let text: String = (0..600)
+        .map(|n| format!("line {n:04} of the big file, padded to be long enough to count\n"))
+        .collect();
+    std::fs::write(h.folder.path().join("big.txt"), text).unwrap();
+    run_turn(&h, "read big.txt 8 times").await;
+    commits_settled(&h.host).await;
+    assert_eq!(summaries.load(Ordering::SeqCst), 0, "no in-turn compaction");
+    let last = agent_bodies(&h.server).pop().unwrap();
+    // The check fires (its time is the test's to choose) and compacts.
+    assert!(h.host.fire_idle(&h.workspace_id, "42").await);
+    assert_eq!(idle_calls.load(Ordering::SeqCst), 1);
+    let summary = llm_bodies(&h.server)
+        .into_iter()
+        .find(is_idle_summary_call)
+        .unwrap();
+    // The last request byte for byte, the answer to it, then the ask.
+    let sent = last["messages"].as_array().unwrap();
+    let asked = summary["messages"].as_array().unwrap();
+    assert_eq!(asked[..sent.len()], sent[..]);
+    assert_eq!(asked.len(), sent.len() + 2);
+    assert_eq!(
+        asked[sent.len()],
+        json!({"role": "assistant", "content": "Done reading."})
+    );
+    assert_eq!(summary["tools"], last["tools"]);
+    assert_eq!(summary["tool_choice"], last["tool_choice"]);
+    assert_eq!(summary["model"], last["model"]);
+    // The marker is in the session, and the app heard of it.
+    let rows = h.session_rows();
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.3 == super::context::MARKER_AUTHOR)
+            .count(),
+        1,
+        "{rows:?}"
+    );
+    let compacted = h.emitter.app_events.lock().unwrap().clone();
+    assert_eq!(compacted.len(), 1, "{compacted:?}");
+    let (name, payload) = &compacted[0];
+    assert_eq!(*name, super::idle::EVENT_NAME);
+    assert_eq!(payload["reason"], "idle");
+    assert_eq!(payload["workspace_id"], json!(h.workspace_id));
+    assert_eq!(payload["conversation_id"], "42");
+    let (before, after) = (
+        payload["before_tokens"].as_u64().unwrap(),
+        payload["after_tokens"].as_u64().unwrap(),
+    );
+    assert!(before >= 60_000 && after < before / 2, "{payload}");
+    assert_eq!(payload["context"]["phase"], "compacted");
+    assert!(!payload.to_string().contains("big.txt"), "no content");
+    // The next turn starts from the summary, and summarises nothing again.
+    run_turn(&h, "what next?").await;
+    commits_settled(&h.host).await;
+    let next = agent_bodies(&h.server)
+        .into_iter()
+        .rfind(|body| !is_idle_summary_call(body))
+        .unwrap();
+    assert!(first_message(&next).contains(SUMMARY_MARK), "{next}");
+    assert!(next.to_string().len() < last.to_string().len() / 2);
+    assert_paired(&next);
+    assert_eq!(summaries.load(Ordering::SeqCst), 0);
+    assert_eq!(idle_calls.load(Ordering::SeqCst), 1);
+    // A thread too short to be worth it gets no check at all.
+    assert!(!h.host.fire_idle(&h.workspace_id, "42").await);
+}
+
+#[tokio::test]
+async fn a_new_turn_cancels_the_threads_idle_check() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let idle_calls = Arc::new(AtomicUsize::new(0));
+    let inner = reading_script(Arc::new(AtomicUsize::new(0)));
+    let counted = idle_calls.clone();
+    let script: Script = Box::new(move |body: &Value| {
+        if is_idle_summary_call(body) {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }
+        inner(body)
+    });
+    let server = cached_price_platform(convo, script).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let text: String = (0..600)
+        .map(|n| format!("line {n:04} of the big file, padded to be long enough to count\n"))
+        .collect();
+    std::fs::write(h.folder.path().join("big.txt"), text).unwrap();
+    run_turn(&h, "read big.txt 8 times").await;
+    commits_settled(&h.host).await;
+    // The person sends again before the check: it is gone with the turn's start.
+    let started = h.host.start(turn(&h, "what next?")).await.unwrap();
+    assert!(!h.host.fire_idle(&h.workspace_id, "42").await);
+    until_done_of(&h, &started.turn_id).await;
+    commits_settled(&h.host).await;
+    assert_eq!(idle_calls.load(Ordering::SeqCst), 0);
+    assert!(h.emitter.app_events.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_self_hosted_model_gets_no_idle_compaction() {
+    // `gpt-test` without prices: a self-hosted model, no paid cache.
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let summaries = Arc::new(AtomicUsize::new(0));
+    let server = small_window_platform(200_000, convo, reading_script(summaries)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let text: String = (0..600)
+        .map(|n| format!("line {n:04} of the big file, padded to be long enough to count\n"))
+        .collect();
+    std::fs::write(h.folder.path().join("big.txt"), text).unwrap();
+    run_turn(&h, "read big.txt 8 times").await;
+    commits_settled(&h.host).await;
+    assert!(!h.host.fire_idle(&h.workspace_id, "42").await);
+    assert!(h.emitter.app_events.lock().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn a_transient_catalogue_answer_is_asked_again_next_turn() {
     // 429 first: the turn runs on the fallback and the next turn asks

@@ -233,6 +233,13 @@ impl SessionPlan {
         }
     }
 
+    /// The session's key in the durable store; `None` for the in-memory
+    /// fallback (gone once the turn ends).
+    #[must_use]
+    pub fn durable_key(&self) -> Option<&str> {
+        self.durable.as_ref().map(|durable| durable.key.as_str())
+    }
+
     /// The server created the turn: its events carry the execution's id.
     pub fn retag(&mut self, execution_id: &str) {
         if let Some(scope) = self

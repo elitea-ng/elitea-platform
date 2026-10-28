@@ -57,6 +57,7 @@ use super::api::Credentials;
 use super::catalogue::ReasoningReplay;
 use super::events::{CallUsage, TurnEvents, UsageLane};
 use super::recorder::{self, Recorder};
+use crate::compaction_settings::CacheTtl;
 
 const TOOL_CALL_LIMITS: ToolCallLimits = ToolCallLimits {
     max_calls: 128,
@@ -97,6 +98,51 @@ pub struct GatewayTransport {
     /// a native Anthropic model ([`super::catalogue::takes_cache_hints`]),
     /// and never on a summary call.
     pub cache_hints: bool,
+    /// How long the breakpoints ask the cache to live (the app's
+    /// compaction settings, `crate::compaction_settings`).
+    pub cache_ttl: CacheTtl,
+    /// Where each call's request is kept as it was sent, with its answer
+    /// (the turn's own model only): the idle compaction's continuation
+    /// starts from it (`super::idle`).
+    pub capture: Option<Arc<RequestCapture>>,
+}
+
+/// The last request a turn's own model sent, and what it answered: the
+/// prefix an idle compaction's summary request repeats byte for byte so the
+/// provider's prompt cache serves it (`super::idle`).
+#[derive(Clone, Debug)]
+pub struct CapturedRequest {
+    /// The provider body as it was sent.
+    pub body: Value,
+    /// The adk history it was laid out from (the request's non-`system`
+    /// contents, after elision and any compaction of the turn).
+    pub contents: Vec<Content>,
+    /// The model's answer; `None` while the call runs or after it failed.
+    pub answer: Option<Content>,
+    /// When the call was sent (wall clock: a sleeping Mac's clock moves on).
+    pub started: std::time::SystemTime,
+    /// Whether the body carries breakpoints, and their lifetime.
+    pub cache_hints: bool,
+    pub cache_ttl: CacheTtl,
+    pub replay: ReasoningReplay,
+}
+
+/// The slot a turn's [`CapturedRequest`] is kept in.
+#[derive(Debug, Default)]
+pub struct RequestCapture(Mutex<Option<CapturedRequest>>);
+
+impl RequestCapture {
+    fn slot(&self) -> std::sync::MutexGuard<'_, Option<CapturedRequest>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The last request and its answer, when there is one.
+    #[must_use]
+    pub fn last(&self) -> Option<CapturedRequest> {
+        self.slot().clone()
+    }
 }
 
 /// The turn's volatile context (#1227: the environment's date and git
@@ -145,10 +191,48 @@ impl ModelTransport for GatewayTransport {
                 lane: self.lane,
                 tail: self.tail.clone(),
                 cache_hints: self.cache_hints,
+                cache_ttl: self.cache_ttl,
+                capture: if self.quiet {
+                    None
+                } else {
+                    self.capture.clone()
+                },
                 request,
                 completed: Mutex::new(None),
             }),
         }))
+    }
+}
+
+impl GatewayTransport {
+    /// The model `request` binds to, as [`ModelTransport::bind`] makes it,
+    /// for a host call outside adk (the idle compaction's summary): no
+    /// recorder, no tail, nothing captured.
+    pub(super) fn gateway_model(&self, request: ModelRequest) -> Result<GatewayModel, HostError> {
+        if !valid_execution_id(&self.execution_id) {
+            return Err(HostError::new(
+                HostErrorCode::InvalidConfiguration,
+                "the local turn's execution id is not one the gateway keeps",
+            ));
+        }
+        Ok(GatewayModel {
+            http: self.http.clone(),
+            credentials: self.credentials.clone(),
+            project_id: self.project_id,
+            execution_id: self.execution_id.clone(),
+            events: self.events.clone(),
+            quiet: self.quiet,
+            recorder: None,
+            replay: self.replay,
+            vision: self.vision,
+            lane: self.lane,
+            tail: None,
+            cache_hints: self.cache_hints,
+            cache_ttl: self.cache_ttl,
+            capture: None,
+            request,
+            completed: Mutex::new(None),
+        })
     }
 }
 
@@ -187,6 +271,8 @@ pub struct GatewayModel {
     lane: UsageLane,
     tail: Option<Arc<TurnTail>>,
     cache_hints: bool,
+    cache_ttl: CacheTtl,
+    capture: Option<Arc<RequestCapture>>,
     request: ModelRequest,
     /// The last answer that ended the model's turn (no tool calls).
     completed: Mutex<Option<String>>,
@@ -219,14 +305,81 @@ impl Llm for GatewayModel {
                 },
                 tail: self.tail.as_deref(),
                 cache_hints: self.cache_hints,
+                cache_ttl: self.cache_ttl,
             },
         )?;
+        if let Some(capture) = &self.capture {
+            *capture.slot() = Some(CapturedRequest {
+                body: body.clone(),
+                contents: request
+                    .contents
+                    .iter()
+                    .filter(|content| content.role != "system")
+                    .cloned()
+                    .collect(),
+                answer: None,
+                started: std::time::SystemTime::now(),
+                cache_hints: self.cache_hints,
+                cache_ttl: self.cache_ttl,
+                replay: self.replay,
+            });
+        }
         let started = recorder::now();
+        let (responses, completed, usage) = self.send(&body).await?;
+        // Counted whoever called (a summary, a sub-agent): the turn's total
+        // is what the gateway logged for its execution id.
+        if let Some(usage) = usage {
+            self.events
+                .model_usage(self.lane, &self.request.model_name, usage);
+        }
+        if let Some(capture) = &self.capture
+            && let Some(captured) = capture.slot().as_mut()
+        {
+            captured.answer = Some(answer_content(&responses));
+        }
+        if let Some(recorder) = &self.recorder {
+            let thinking: String = responses
+                .iter()
+                .filter_map(|response| response.content.as_ref())
+                .flat_map(|content| &content.parts)
+                .filter_map(|part| match part {
+                    Part::Thinking { thinking, .. } => Some(thinking.as_str()),
+                    _ => None,
+                })
+                .collect();
+            recorder.thinking_step(
+                &thinking,
+                &self.request.model_name,
+                &started,
+                &recorder::now(),
+            );
+        }
+        if let Some(text) = completed
+            && let Ok(mut slot) = self.completed.lock()
+        {
+            *slot = Some(text);
+        }
+        Ok(Box::pin(futures::stream::iter(
+            responses.into_iter().map(Ok),
+        )))
+    }
+}
+
+impl GatewayModel {
+    /// One call of `body` with its retries (**Model retries**): the adk
+    /// responses, the answer's text when it has no tool calls, and the
+    /// usage of the call that answered (a failed call's billed usage is
+    /// reported to the turn here).
+    #[allow(clippy::type_complexity)]
+    async fn send(
+        &self,
+        body: &Value,
+    ) -> adk_core::Result<(Vec<LlmResponse>, Option<String>, Option<CallUsage>)> {
         let mut retries = 0_u32;
         let first_try = std::time::Instant::now();
         let (responses, completed, usage) = loop {
             let mut reader = StreamReader::new((!self.quiet).then_some(&*self.events));
-            let failure = match self.call(&body, &mut reader).await {
+            let failure = match self.call(body, &mut reader).await {
                 Ok(()) => match reader.finish() {
                     Ok(finished) => break finished,
                     Err(failure) => failure,
@@ -272,41 +425,33 @@ impl Llm for GatewayModel {
             });
             tokio::time::sleep(delay).await;
         };
-        // Counted whoever called (a summary, a sub-agent): the turn's total
-        // is what the gateway logged for its execution id.
+        Ok((responses, completed, usage))
+    }
+
+    /// A host call outside adk (the idle compaction's summary): `body` sent
+    /// as it is, its usage on this model's lane; the answer's text, whether
+    /// it called a tool, and the usage.
+    ///
+    /// # Errors
+    ///
+    /// The call failed after its retries.
+    pub(super) async fn send_body(
+        &self,
+        body: &Value,
+    ) -> adk_core::Result<(String, bool, Option<CallUsage>)> {
+        let (responses, _, usage) = self.send(body).await?;
         if let Some(usage) = usage {
             self.events
                 .model_usage(self.lane, &self.request.model_name, usage);
         }
-        if let Some(recorder) = &self.recorder {
-            let thinking: String = responses
-                .iter()
-                .filter_map(|response| response.content.as_ref())
-                .flat_map(|content| &content.parts)
-                .filter_map(|part| match part {
-                    Part::Thinking { thinking, .. } => Some(thinking.as_str()),
-                    _ => None,
-                })
-                .collect();
-            recorder.thinking_step(
-                &thinking,
-                &self.request.model_name,
-                &started,
-                &recorder::now(),
-            );
-        }
-        if let Some(text) = completed
-            && let Ok(mut slot) = self.completed.lock()
-        {
-            *slot = Some(text);
-        }
-        Ok(Box::pin(futures::stream::iter(
-            responses.into_iter().map(Ok),
-        )))
+        let answer = answer_content(&responses);
+        let calls = answer
+            .parts
+            .iter()
+            .any(|part| matches!(part, Part::FunctionCall { .. }));
+        Ok((user_text(&answer), calls, usage))
     }
-}
 
-impl GatewayModel {
     /// One call: the request, then its stream fed to `reader` until
     /// `[DONE]` or its end. A failure says whether another call may mend it.
     async fn call(&self, body: &Value, reader: &mut StreamReader<'_>) -> Result<(), CallFailure> {
@@ -601,25 +746,32 @@ pub(super) struct Layout<'a> {
     /// Anthropic's four: the stable system message, the last tool, and the
     /// request's last message (so the next step reads the whole prefix).
     pub cache_hints: bool,
+    /// The breakpoints' lifetime: Anthropic's default five minutes, or
+    /// `ttl: "1h"` when the app's compaction settings ask for the one-hour
+    /// cache (`crate::compaction_settings`).
+    pub cache_ttl: CacheTtl,
 }
 
 /// The `cache_control` of a breakpoint.
-fn ephemeral() -> Value {
-    json!({"type": "ephemeral"})
+fn ephemeral(ttl: CacheTtl) -> Value {
+    match ttl {
+        CacheTtl::FiveMinutes => json!({"type": "ephemeral"}),
+        CacheTtl::OneHour => json!({"type": "ephemeral", "ttl": "1h"}),
+    }
 }
 
 /// `message` with a breakpoint on its last content part (a text content
 /// becomes one text part); a message without content is left as it is.
-fn mark_last_part(message: &mut Value) {
+fn mark_last_part(message: &mut Value, ttl: CacheTtl) {
     match message.get_mut("content") {
         Some(Value::String(text)) if !text.is_empty() => {
             let text = std::mem::take(text);
             message["content"] =
-                json!([{"type": "text", "text": text, "cache_control": ephemeral()}]);
+                json!([{"type": "text", "text": text, "cache_control": ephemeral(ttl)}]);
         }
         Some(Value::Array(parts)) => {
             if let Some(part) = parts.last_mut().and_then(Value::as_object_mut) {
-                part.insert("cache_control".into(), ephemeral());
+                part.insert("cache_control".into(), ephemeral(ttl));
             }
         }
         _ => {}
@@ -643,6 +795,7 @@ pub(super) fn request_body(
             images,
             tail: None,
             cache_hints: false,
+            cache_ttl: CacheTtl::FiveMinutes,
         },
     )
 }
@@ -672,6 +825,7 @@ pub(super) fn request_body_in(
         images,
         tail,
         cache_hints,
+        cache_ttl,
     } = layout;
     let invalid = || {
         model_error(
@@ -703,7 +857,7 @@ pub(super) fn request_body_in(
     if !system.is_empty() {
         let mut message = json!({"role": "system", "content": system});
         if cache_hints {
-            mark_last_part(&mut message);
+            mark_last_part(&mut message, cache_ttl);
         }
         messages.push(message);
     }
@@ -748,7 +902,7 @@ pub(super) fn request_body_in(
         && messages.len() > first_turn_message
         && let Some(last) = messages.last_mut()
     {
-        mark_last_part(last);
+        mark_last_part(last, cache_ttl);
     }
     let mut body = Map::new();
     body.insert("model".into(), json!(model.model_name));
@@ -761,7 +915,7 @@ pub(super) fn request_body_in(
                 .and_then(|tools| tools.last_mut())
                 .and_then(Value::as_object_mut)
         {
-            last.insert("cache_control".into(), ephemeral());
+            last.insert("cache_control".into(), ephemeral(cache_ttl));
         }
         body.insert("tools".into(), declared);
         body.insert("tool_choice".into(), json!("auto"));
@@ -781,6 +935,92 @@ pub(super) fn request_body_in(
         );
     }
     Ok(Value::Object(body))
+}
+
+/// The model's answer in `responses` as one adk content (what the session
+/// stores of it: the reasoning, the text and the calls).
+fn answer_content(responses: &[LlmResponse]) -> Content {
+    let mut answer = Content {
+        role: "model".to_owned(),
+        parts: Vec::new(),
+    };
+    for content in responses
+        .iter()
+        .filter(|response| !response.partial)
+        .filter_map(|response| response.content.as_ref())
+    {
+        answer.parts.extend(content.parts.iter().cloned());
+    }
+    answer
+}
+
+/// One message of the idle compaction's continuation (`super::idle`).
+#[derive(Clone, Debug)]
+pub(super) enum Appended {
+    /// The model's answer to the captured request, as the next request's
+    /// history renders it.
+    Answer(Content),
+    User(String),
+    Assistant(String),
+}
+
+/// The idle compaction's summary request (`super::idle`): `last.body` as it
+/// was sent, byte for byte (its model, system message, tool declarations,
+/// `tool_choice`, reasoning effort, history and breakpoints), then
+/// `appended`; only the output limit becomes `max_tokens`. On a body with
+/// breakpoints the last appended message gets one too (Anthropic allows
+/// four: the system message, the last tool, the captured request's last
+/// message and this one), so the summary reads the cached prefix and pays
+/// the full input price only for what follows it. `tool_choice` stays: a
+/// change would drop Anthropic's cached messages; the caller refuses an
+/// answer that calls a tool. `None` for an answer that does not render as
+/// one assistant message without calls (a turn that ended mid-call).
+pub(super) fn continuation_body(
+    last: &CapturedRequest,
+    appended: &[Appended],
+    max_tokens: u32,
+) -> Option<Value> {
+    let mut body = last.body.clone();
+    let messages = body.get_mut("messages")?.as_array_mut()?;
+    for message in appended {
+        match message {
+            Appended::Answer(content) => {
+                let mut rendered = Vec::new();
+                let mut images = Vec::new();
+                append_message(
+                    content,
+                    &mut rendered,
+                    &mut images,
+                    last.replay,
+                    Images::Refuse,
+                )
+                .ok()?;
+                let [assistant] = rendered.as_slice() else {
+                    return None;
+                };
+                if !images.is_empty() || assistant.get("tool_calls").is_some() {
+                    return None;
+                }
+                // An answer with neither text nor calls renders `content:
+                // null`: nothing the next request carries either.
+                if !assistant["content"].is_null() {
+                    messages.push(assistant.clone());
+                }
+            }
+            Appended::User(text) => messages.push(json!({"role": "user", "content": text})),
+            Appended::Assistant(text) => {
+                messages.push(json!({"role": "assistant", "content": text}));
+            }
+        }
+    }
+    if last.cache_hints
+        && let Some(message) = messages.last_mut()
+    {
+        mark_last_part(message, last.cache_ttl);
+    }
+    body.as_object_mut()?
+        .insert("max_completion_tokens".into(), json!(max_tokens));
+    Some(body)
 }
 
 fn append_message(
@@ -1519,6 +1759,7 @@ mod tests {
             images: Images::Send,
             tail,
             cache_hints,
+            cache_ttl: CacheTtl::FiveMinutes,
         }
     }
 
@@ -1626,6 +1867,161 @@ mod tests {
             plain["messages"].as_array().unwrap()[1..4]
         );
         assert!(!plain.to_string().contains("cache_control"));
+    }
+
+    #[test]
+    fn the_one_hour_cache_marks_every_breakpoint_with_its_ttl() {
+        let mut request = thread_request();
+        request
+            .tools
+            .insert("a_tool".into(), json!({"name": "a_tool"}));
+        let body = request_body_in(
+            &model_request(),
+            &request,
+            Layout {
+                cache_ttl: CacheTtl::OneHour,
+                ..layout(None, true)
+            },
+        )
+        .unwrap();
+        let hour = json!({"type": "ephemeral", "ttl": "1h"});
+        assert_eq!(body["messages"][0]["content"][0]["cache_control"], hour);
+        let last = body["messages"].as_array().unwrap().last().unwrap();
+        assert_eq!(last["content"][0]["cache_control"], hour);
+        assert_eq!(body["tools"][0]["cache_control"], hour);
+        // The five-minute cache is Anthropic's default: no ttl.
+        let five = request_body_in(&model_request(), &request, layout(None, true)).unwrap();
+        assert!(!five.to_string().contains("\"ttl\""));
+        // Without hints the TTL changes nothing.
+        let plain = request_body_in(
+            &model_request(),
+            &request,
+            Layout {
+                cache_ttl: CacheTtl::OneHour,
+                ..layout(None, false)
+            },
+        )
+        .unwrap();
+        assert!(!plain.to_string().contains("cache_control"));
+    }
+
+    fn captured(cache_hints: bool) -> CapturedRequest {
+        let mut request = thread_request();
+        request
+            .tools
+            .insert("a_tool".into(), json!({"name": "a_tool"}));
+        let tail = TurnTail {
+            text: "## Environment (this turn)".into(),
+            anchor: "fix the test".into(),
+        };
+        let body = request_body_in(
+            &model_request(),
+            &request,
+            Layout {
+                cache_ttl: CacheTtl::OneHour,
+                ..layout(Some(&tail), cache_hints)
+            },
+        )
+        .unwrap();
+        CapturedRequest {
+            body,
+            contents: request.contents,
+            answer: Some(Content::new("model").with_text("All tests pass now.")),
+            started: std::time::SystemTime::now(),
+            cache_hints,
+            cache_ttl: CacheTtl::OneHour,
+            replay: ReasoningReplay::Never,
+        }
+    }
+
+    #[test]
+    fn the_idle_summary_repeats_the_last_request_then_asks_once() {
+        let last = captured(true);
+        let answer = last.answer.clone().unwrap();
+        let body = continuation_body(
+            &last,
+            &[
+                Appended::Answer(answer.clone()),
+                Appended::User("Summarize.".into()),
+            ],
+            8_192,
+        )
+        .unwrap();
+        let sent = last.body["messages"].as_array().unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        // The prefix is the last request's messages, byte for byte (its
+        // tail, its last message's breakpoint included).
+        assert_eq!(messages[..sent.len()], sent[..]);
+        assert_eq!(
+            serde_json::to_string(&messages[..sent.len()]).unwrap(),
+            serde_json::to_string(&sent[..]).unwrap()
+        );
+        // Then the answer as the next request renders it, and one user
+        // message carrying the fourth breakpoint.
+        assert_eq!(messages.len(), sent.len() + 2);
+        assert_eq!(
+            messages[sent.len()],
+            json!({"role": "assistant", "content": "All tests pass now."})
+        );
+        assert_eq!(
+            messages[sent.len() + 1],
+            json!({"role": "user", "content": [{"type": "text", "text": "Summarize.",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"}}]})
+        );
+        let breakpoints = body.to_string().matches("cache_control").count();
+        assert_eq!(breakpoints, 4, "{body}");
+        // Everything else is the last request's: model, tools, tool_choice,
+        // temperature, stream; only the output limit changes.
+        let mut same = body.clone();
+        same["messages"] = last.body["messages"].clone();
+        same["max_completion_tokens"] = last.body["max_completion_tokens"].clone();
+        assert_eq!(same, last.body);
+        assert_eq!(body["max_completion_tokens"], 8_192);
+        assert_eq!(body["tool_choice"], "auto");
+        // The retry adds the first answer and the template reminder, still
+        // with four breakpoints.
+        let retry = continuation_body(
+            &last,
+            &[
+                Appended::Answer(answer),
+                Appended::User("Summarize.".into()),
+                Appended::Assistant("not json".into()),
+                Appended::User("Again.".into()),
+            ],
+            8_192,
+        )
+        .unwrap();
+        assert_eq!(retry["messages"].as_array().unwrap().len(), sent.len() + 4);
+        assert_eq!(retry.to_string().matches("cache_control").count(), 4);
+        assert_eq!(retry["messages"][sent.len() + 1]["content"], "Summarize.");
+        // Without breakpoints (an OpenAI model), none is added.
+        let plain = captured(false);
+        let body = continuation_body(&plain, &[Appended::User("Summarize.".into())], 100).unwrap();
+        assert!(!body.to_string().contains("cache_control"));
+        assert_eq!(
+            body["messages"].as_array().unwrap().last().unwrap()["content"],
+            "Summarize."
+        );
+    }
+
+    #[test]
+    fn an_answer_that_called_a_tool_cannot_be_continued() {
+        let last = captured(true);
+        let call = Content {
+            role: "model".into(),
+            parts: vec![Part::FunctionCall {
+                name: "read_file".into(),
+                args: json!({"path": "b"}),
+                id: Some("c2".into()),
+                thought_signature: None,
+            }],
+        };
+        assert!(continuation_body(&last, &[Appended::Answer(call)], 100).is_none());
+        let responses = vec![LlmResponse {
+            content: Some(Content::new("model").with_text("done")),
+            ..LlmResponse::default()
+        }];
+        assert_eq!(user_text(&answer_content(&responses)), "done");
     }
 
     #[test]
